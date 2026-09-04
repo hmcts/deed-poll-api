@@ -6,14 +6,18 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import uk.gov.hmcts.reform.deedpoll.db.ContainerDatabase;
 
 /**
- * Base class for integration tests that boot the Spring context. The application has a
- * datasource and runs Flyway on start-up, so booting it needs a database -- a throwaway one
- * per build, never a developer's local instance and never a deployed one.
+ * Base class for tests that boot the Spring context. The application has a datasource and runs
+ * Flyway on start-up, so booting it needs a database -- a throwaway one per build, never a
+ * developer's local instance and never a deployed one.
  *
  * <p>The container is started once for the JVM and shared, rather than per class: starting
  * Postgres costs seconds and the migrations produce the same schema for every context.
+ *
+ * <p>It lives in the {@code test} source set rather than {@code integrationTest} because both need
+ * it -- {@code integrationTest} has {@code test}'s output on its classpath, not the reverse -- and
+ * a second copy would be a second thing to keep in step with {@link ContainerDatabase}.
  */
-public abstract class AbstractPostgresContainerIT {
+public abstract class AbstractPostgresContainerTest {
 
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
 

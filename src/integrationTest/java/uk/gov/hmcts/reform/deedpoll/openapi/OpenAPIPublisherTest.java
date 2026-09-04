@@ -8,7 +8,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.springframework.test.web.servlet.MockMvc;
-import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerIT;
+import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -24,7 +24,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ExtendWith(SpringExtension.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
-class OpenAPIPublisherTest extends AbstractPostgresContainerIT {
+class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private MockMvc mvc;

@@ -190,14 +190,50 @@ parent table only; children follow in task 4, so that neither task is too large 
 
 ### Task 5: JPA entities
 
-- [ ] Entities under `uk.gov.hmcts.reform.deedpoll.entity` for all 6 models, and Java enums for all 11.
-- [ ] Map, do not redesign: `@Column(name = …)` for every mapped name, `@Enumerated(EnumType.STRING)`,
+- [x] Entities under `uk.gov.hmcts.reform.deedpoll.entity` for all 6 models, and Java enums for all 11.
+- [x] Map, do not redesign: `@Column(name = …)` for every mapped name, `@Enumerated(EnumType.STRING)`,
       `BigDecimal` for the numeric, arrays for the `integer[]` columns.
 
-- [ ] Verify: `./gradlew test --tests "*EntityMapping*"` — a Testcontainers test booting the context with
+- [x] Verify: `./gradlew test --tests "*EntityMapping*"` — a Testcontainers test booting the context with
       `spring.jpa.hibernate.ddl-auto=validate` against the Flyway schema. Hibernate then fails the test on any
       mismatch, which is the strongest automatic check available here.
-- [ ] Mark completed
+- [x] Mark completed
+
+> **What task 5 did beyond the checkboxes, and one thing worth knowing.**
+>
+> - **`ddl-auto=validate` is in `application.yaml`, not only in the test**, so every environment
+>   re-runs the assertion on start-up and the application refuses to boot against a schema its
+>   entities disagree with. Two other settings are load-bearing rather than taste:
+>   `globally_quoted_identifiers: true` and `PhysicalNamingStrategyStandardImpl`. The ported columns
+>   are mixed case, and Spring Boot's default naming strategy rewrites `newForename` to
+>   `new_forename` — including names given explicitly in `@Column` — while an unquoted mixed-case
+>   identifier folds to lower case in Postgres. Both would break every read and write.
+> - **`@Enumerated(EnumType.STRING)` alone is not enough** against native Postgres enum columns:
+>   Hibernate then sends the value as `varchar` and Postgres refuses the implicit cast on write.
+>   Each enum field also carries `@JdbcTypeCode(SqlTypes.NAMED_ENUM)`.
+> - **`validate` compares column names case-INSENSITIVELY** — it accepts `"newforename"` for a
+>   column actually called `"newForename"`, and the quoted statement then fails at runtime. Since
+>   every column in this schema is mixed case, that blind spot would have been wide, so
+>   `EntityMappingTest` also writes and re-reads a case and its children. Mutation-checked in both
+>   directions: a genuinely renamed column and a wrong Java type each fail context start-up, and a
+>   case-only rename fails the round-trip test rather than validation.
+> - **Two dependencies added.** `spring-boot-starter-data-jpa` replaces the separately-declared
+>   `spring-boot-starter-jdbc` it contains, and Lombok (accessors only, version from the Boot BOM,
+>   as `pcs-api` does it) — the case entity has over a hundred mapped columns and hand-written
+>   accessors would bury the mapping.
+> - **`AbstractPostgresContainerIT` moved from `integrationTest` to `test` as
+>   `AbstractPostgresContainerTest`**, because task 5's verify runs in the `test` source set and
+>   `integrationTest` has `test`'s output on its classpath but not the reverse. One base class, not
+>   two copies to keep in step with `ContainerDatabase`. `OpenAPIPublisherTest` extends the moved
+>   class.
+> - **Relations are mapped, not just the foreign-key columns**: `@ManyToOne` to the parent and the
+>   document type, with the reference's `notes`/`witnesses`/`documents` collections on the case.
+>   No JPA cascade — the delete cascade stays in the database, where V3 put it — and the collections
+>   are lazy. `EntityMappingTest` also asserts each of the 11 Java enums has the reference's members
+>   in the reference's order, read from the vendored `.prisma` rather than from a hand-written list.
+> - The three multiselect fields keep the reference's names (`iShall`, `iHaveSubscribed`,
+>   `andAlsoMyOld`), which the checkstyle member-name pattern rejects for their second capital;
+>   suppressed on the one class rather than renaming what every TypeScript caller and test says.
 
 ---
 

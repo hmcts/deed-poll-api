@@ -151,7 +151,10 @@ dependencies {
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-actuator'
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-aop'
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-json'
-  implementation group: 'org.springframework.boot', name: 'spring-boot-starter-jdbc'
+  // Brings spring-boot-starter-jdbc with it, so the JDBC starter is no longer declared
+  // separately. Hibernate is configured with ddl-auto=validate: Flyway owns the schema and
+  // the entities are checked against it, never the other way round.
+  implementation group: 'org.springframework.boot', name: 'spring-boot-starter-data-jpa'
   implementation group: 'org.springdoc', name: 'springdoc-openapi-starter-webmvc-ui', version: '2.8.17'
 
   implementation group: 'org.flywaydb', name: 'flyway-core'
@@ -159,6 +162,14 @@ dependencies {
   runtimeOnly group: 'org.postgresql', name: 'postgresql'
 
   implementation group: 'com.github.hmcts.java-logging', name: 'logging', version: '6.1.9'
+
+  /*
+    Accessors only, on the entities. The case entity has over a hundred mapped columns and
+    hand-written getters would bury the mapping this task exists to make readable. Version comes
+    from the Spring Boot BOM, as in pcs-api.
+  */
+  compileOnly group: 'org.projectlombok', name: 'lombok'
+  annotationProcessor group: 'org.projectlombok', name: 'lombok'
 
   implementation group: 'org.apache.logging.log4j', name: 'log4j-api', version: log4JVersion
   implementation group: 'org.apache.logging.log4j', name: 'log4j-to-slf4j', version: log4JVersion
