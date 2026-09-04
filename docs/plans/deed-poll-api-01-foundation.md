@@ -1,17 +1,31 @@
-# deed-poll-api 01 — foundation: schema, domain, caseworker API
+# Plan: deed-poll-api foundation — schema, domain, caseworker API
 
-> **Run this in `hmcts/deed-poll-api`, not here.** It lives in `deed-poll-admin` only because that repo
-> exists today. Copy it to `deed-poll-api/docs/plans/` once that repo has been created from
-> `hmcts/spring-boot-template`, and run Ralphex there.
+## Overview
 
 Plan 1 of 3. This one builds the Spring Boot service, its schema, its domain and the caseworker REST
 surface. **It contains no CCD and no CDAM** — those are plans 02 and 03, deliberately separated because
 they depend on external onboarding that has not happened.
 
-Design context, if a session needs the *why*: `../deed-poll-admin/.business_context/DEED_POLL_API_PLAN.md`.
-Do not re-derive decisions from it; this plan is the executable form.
+The service replaces `apps/api` in the sibling repo `deed-poll-admin`, which is a TypeScript Express app
+whose domain layer is the specification for this port. It will later also serve `deed-poll-web`, the
+citizen-facing service, which is why the API has two endpoint namespaces from the start.
 
----
+### Source material — read these, do not re-derive them
+
+- `../deed-poll-admin/.business_context/DEED_POLL_API_PLAN.md` — every architectural decision and why.
+  Read it for context; do not relitigate it. This plan is its executable form.
+- `../deed-poll-admin/libs/deed-poll/src/` — the domain being ported. **This is the specification.**
+- `../deed-poll-admin/libs/postgres-prisma/prisma/schema/deed-poll.prisma` — the database shape.
+- `../apps/pcs/pcs-api/` — the reference Spring Boot implementation in this estate. Copy its shape.
+
+## Validation Commands
+
+- `./gradlew build`
+
+> Every task, without exception. `build` runs compilation, checkstyle and unit tests via the
+> `uk.gov.hmcts.java` plugin. **A task is not complete with a red build, even if its own new test
+> passes** — a sister repo once shipped a handover claiming green tests on a tree with six type errors.
+> Each task below also carries its own narrower `Verify` command; run both.
 
 ## Guardrails — read these every session
 
@@ -32,18 +46,12 @@ Do not re-derive decisions from it; this plan is the executable form.
   scope to make it green.
 - **One commit per task.** Never amend or force-push a previous task's commit.
 
-### Definition of done, for every task
-
-`./gradlew build` passes. That runs compilation, checkstyle and unit tests via the
-`uk.gov.hmcts.java` plugin. A task is not complete with a red build, even if its own new test passes.
-
 ---
 
-## Task 0 — Populate the empty repo from the template
+### Task 0: Populate the repo from the template
 
-`hmcts/deed-poll-api` exists but is **empty** — created 2026-09-04, zero bytes, no commits. It was not
-created *from* `hmcts/spring-boot-template`, and GitHub cannot apply a template to a repo that already
-exists, so the contents have to be copied in by hand.
+This repo was **not** created from `hmcts/spring-boot-template`, and GitHub cannot apply a template to a
+repo that already exists, so the contents have to be copied in by hand. Its only commit adds this plan.
 
 - [ ] **Stop if this has already run.** If `build.gradle` exists at the repo root, task 0 is done; report
       and move on rather than copying over it.
@@ -54,11 +62,12 @@ exists, so the contents have to be copied in by hand.
       The template has no `docs/` directory, so this plan is not at risk — but verify it survived before
       committing.
 - [ ] `chmod +x gradlew`, then delete `/tmp/sbt`.
-- [ ] Commit as the repo's initial commit, message: `Scaffold from hmcts/spring-boot-template`.
+- [ ] Commit the scaffold. Do not amend the existing commit that added this plan.
 
-**Validate:** `test -f build.gradle && test -f docs/plans/deed-poll-api-01-foundation.md && ./gradlew build`
-— the unmodified template ships a working application and passing tests, so a red build here means the
-copy went wrong, not that the template is broken.
+- [ ] Verify: `test -f build.gradle && test -f docs/plans/deed-poll-api-01-foundation.md && ./gradlew build`
+      — the unmodified template ships a working application and passing tests, so a red build here means the
+      copy went wrong, not that the template is broken.
+- [ ] Mark completed
 
 > **One thing for Steve, not for the agent.** `deed-poll-api`'s default branch is **`main`**, while both
 > `spring-boot-template` and `deed-poll-admin` use **`master`**. HMCTS Jenkins conventions assume `master`
@@ -66,7 +75,7 @@ copy went wrong, not that the template is broken.
 > which `cnp-jenkins-config` expects while doing the Jenkins onboarding, because renaming the default
 > branch is much cheaper now than after the pipeline exists. **Do not let the agent decide this.**
 
-## Task 1 — Rename off the template
+### Task 1: Rename off the template
 
 - [ ] Set `group = 'uk.gov.hmcts.reform'`, base package `uk.gov.hmcts.reform.deedpoll`, artifact and
       application name `deed-poll-api`. The template ships `uk.gov.hmcts.reform.demo` — rename the package
@@ -77,11 +86,12 @@ copy went wrong, not that the template is broken.
       configure them yet**: `id 'hmcts.ccd.sdk' version '6.36.0'` and
       `id 'com.github.hmcts.rse-cft-lib' version '0.19.2360'`. Commented out is fine; plan 02 enables them.
 
-**Validate:** `./gradlew build` and `grep -rn "uk.gov.hmcts.reform.demo" src/ || echo clean`
+- [ ] Verify: `./gradlew build` and `grep -rn "uk.gov.hmcts.reform.demo" src/ || echo clean`
+- [ ] Mark completed
 
 ---
 
-## Task 2 — Vendor the specification
+### Task 2: Vendor the specification
 
 The domain and schema are ported from TypeScript. Those sources are the spec, and a session runs in
 isolation, so they must be inside this repo.
@@ -92,11 +102,12 @@ isolation, so they must be inside this repo.
 - [ ] Add `src/test/resources/reference/README.md` stating: these are verbatim copies used as the port's
       specification and its conformance oracle; never edit them; refresh only by re-copying.
 
-**Validate:** `test -f src/test/resources/reference/deed-poll.prisma && test -d src/test/resources/reference/ts && ./gradlew build`
+- [ ] Verify: `test -f src/test/resources/reference/deed-poll.prisma && test -d src/test/resources/reference/ts && ./gradlew build`
+- [ ] Mark completed
 
 ---
 
-## Task 3 — Postgres and the Flyway baseline: enums and `DeedPoll`
+### Task 3: Postgres and the Flyway baseline: enums and `DeedPoll`
 
 `deed-poll.prisma` defines 6 models and 11 enums in the `public` schema. This task does the enums and the
 parent table only; children follow in task 4, so that neither task is too large to verify.
@@ -111,37 +122,40 @@ parent table only; children follow in task 4, so that neither task is too large 
       **`signaturerecieveddate` with the source's misspelling** — `deed-poll.prisma` documents it as
       deliberate.
 
-**Validate:** `./gradlew test --tests "*SchemaConformance*"` — a new test that parses
-`src/test/resources/reference/deed-poll.prisma`, runs Flyway against Testcontainers, and asserts every
-model field present in the reference has a matching column. Forward coverage only, matching the
-TypeScript harness's own stated limitation.
+- [ ] Verify: `./gradlew test --tests "*SchemaConformance*"` — a new test that parses
+      `src/test/resources/reference/deed-poll.prisma`, runs Flyway against Testcontainers, and asserts every
+      model field present in the reference has a matching column. Forward coverage only, matching the
+      TypeScript harness's own stated limitation.
+- [ ] Mark completed
 
 ---
 
-## Task 4 — Flyway baseline: the child tables
+### Task 4: Flyway baseline: the child tables
 
 - [ ] `V3__children.sql` for `deedpoll_notes`, `deedpoll_witness`, `deedpoll_supportingdocumenttype`,
       `deedpoll_supportingdocument` and `deedpoll_referencecounter`, with the foreign keys and the two
       indexes the reference declares. `DeedPollSupportingDocument.deedPollId` is `onDelete: Cascade` — the
       cascade is intentional and must be reproduced.
 
-**Validate:** `./gradlew test --tests "*SchemaConformance*"` — now green for all 6 models.
+- [ ] Verify: `./gradlew test --tests "*SchemaConformance*"` — now green for all 6 models.
+- [ ] Mark completed
 
 ---
 
-## Task 5 — JPA entities
+### Task 5: JPA entities
 
 - [ ] Entities under `uk.gov.hmcts.reform.deedpoll.entity` for all 6 models, and Java enums for all 11.
 - [ ] Map, do not redesign: `@Column(name = …)` for every mapped name, `@Enumerated(EnumType.STRING)`,
       `BigDecimal` for the numeric, arrays for the `integer[]` columns.
 
-**Validate:** `./gradlew test --tests "*EntityMapping*"` — a Testcontainers test booting the context with
-`spring.jpa.hibernate.ddl-auto=validate` against the Flyway schema. Hibernate then fails the test on any
-mismatch, which is the strongest automatic check available here.
+- [ ] Verify: `./gradlew test --tests "*EntityMapping*"` — a Testcontainers test booting the context with
+      `spring.jpa.hibernate.ddl-auto=validate` against the Flyway schema. Hibernate then fails the test on any
+      mismatch, which is the strongest automatic check available here.
+- [ ] Mark completed
 
 ---
 
-## Task 6 — Reference-number allocation
+### Task 6: Reference-number allocation
 
 - [ ] Port `reference/ts/deed-poll/reference-number.ts` and its allocator. Format is
       `{prefix}{year}-{serial}`, prefix `KBDR` for type 5 (Deed of Relinquishment) else `KBDP`.
@@ -149,12 +163,13 @@ mismatch, which is the strongest automatic check available here.
       lock** (`SELECT … FOR UPDATE`). The reference file's comment explains this replaced a racy
       read-max-and-add-one; do not reintroduce that.
 
-**Validate:** `./gradlew test --tests "*ReferenceNumber*"` — must include a concurrency test proving two
-parallel allocations never return the same serial.
+- [ ] Verify: `./gradlew test --tests "*ReferenceNumber*"` — must include a concurrency test proving two
+      parallel allocations never return the same serial.
+- [ ] Mark completed
 
 ---
 
-## Tasks 7–11 — how to port the domain
+### Notes for tasks 7–11 — how to port the domain
 
 Applies to each of the five tasks below. Read the TypeScript under
 `src/test/resources/reference/ts/`, port the logic to `uk.gov.hmcts.reform.deedpoll.domain`, and port
@@ -163,7 +178,7 @@ schemas become Bean Validation or explicit validators. Keep the nullable-versus-
 reference documents: a PATCH clearing a value and a PATCH omitting it must stay different, and the
 reference tests assert both directions.
 
-## Task 7 — Domain: deed-poll core
+### Task 7: Domain: deed-poll core
 
 - [ ] Port `reference/ts/deed-poll/`. The largest by far — roughly 267 test blocks — including the state
       cascade and the field rules.
@@ -171,23 +186,26 @@ reference tests assert both directions.
       rather than `update`/`find`, because those collided across five modules once barrel-exported. Java
       packages remove that constraint, but keep the names: they are what every test and caller says.
 
-**Validate:** `./gradlew test --tests "*DeedPoll*" --tests "*FieldRules*" --tests "*StateCascade*"`
+- [ ] Verify: `./gradlew test --tests "*DeedPoll*" --tests "*FieldRules*" --tests "*StateCascade*"`
+- [ ] Mark completed
 
-## Task 8 — Domain: notes
+### Task 8: Domain: notes
 
 - [ ] Port `reference/ts/notes/`, roughly 44 test blocks, and its tests.
 - [ ] `createNoteSchema` trims **and** delegates to `validateNoteText`. Both are load-bearing: without the
       trim, `"   "` is accepted as a note and whitespace is stored.
 
-**Validate:** `./gradlew test --tests "*Note*"`
+- [ ] Verify: `./gradlew test --tests "*Note*"`
+- [ ] Mark completed
 
-## Task 9 — Domain: witnesses
+### Task 9: Domain: witnesses
 
 - [ ] Port `reference/ts/witnesses/`, roughly 15 test blocks, and its tests.
 
-**Validate:** `./gradlew test --tests "*Witness*"`
+- [ ] Verify: `./gradlew test --tests "*Witness*"`
+- [ ] Mark completed
 
-## Task 10 — Domain: documents, metadata only
+### Task 10: Domain: documents, metadata only
 
 - [ ] Port `reference/ts/documents/`, roughly 60 test blocks, and its tests — **metadata and the upload
       policy only.**
@@ -196,9 +214,10 @@ reference tests assert both directions.
 - [ ] Keep the upload policy's own framing in a comment: the accepted-type list is the client's declared
       MIME type, so it is hygiene rather than security, and 25 MB is an unresearched figure.
 
-**Validate:** `./gradlew test --tests "*Document*"`
+- [ ] Verify: `./gradlew test --tests "*Document*"`
+- [ ] Mark completed
 
-## Task 11 — Domain: the conformance harness
+### Task 11: Domain: the conformance harness
 
 - [ ] Port `reference/ts/conformance/`, roughly 32 test blocks, against the vendored Dataverse exports.
       This is the proof the migration did not silently drop a column, so it is the last thing that should
@@ -207,11 +226,12 @@ reference tests assert both directions.
       truncated at A–R despite declaring 70 columns, so this asserts forward coverage only — every column
       present must map — and must never be read as a complete column set.
 
-**Validate:** `./gradlew test --tests "*Conformance*"`
+- [ ] Verify: `./gradlew test --tests "*Conformance*"`
+- [ ] Mark completed
 
 ---
 
-## Task 12 — Authentication and the two namespaces
+### Task 12: Authentication and the two namespaces
 
 - [ ] Accept a forwarded IDAM bearer token on `/caseworker/**` — Spring Security as an OAuth2 resource
       server, issuer from configuration. `../deed-poll-admin/apps/api/src/auth/` is the reference for what
@@ -224,13 +244,14 @@ reference tests assert both directions.
 - [ ] Add `AuthTokenGenerator` from `service-auth-provider-java-client` for outbound S2S, configured but
       unused, with a non-working default secret.
 
-**Validate:** `./gradlew test --tests "*Security*"` — must include a test that an unauthenticated request
-to a `/caseworker/**` route is rejected, and an architecture test asserting no class in the citizen
-controller package imports from the caseworker DTO package.
+- [ ] Verify: `./gradlew test --tests "*Security*"` — must include a test that an unauthenticated request
+      to a `/caseworker/**` route is rejected, and an architecture test asserting no class in the citizen
+      controller package imports from the caseworker DTO package.
+- [ ] Mark completed
 
 ---
 
-## Tasks 13–15 — how to build the caseworker surface
+### Notes for tasks 13–15 — how to build the caseworker surface
 
 **Eleven operations, and only eleven.** They are derived from what `deed-poll-admin`'s 8 data-access files
 actually call. **Do not add others** — in particular no deletes, no witness writes, no document-type
@@ -240,7 +261,7 @@ imagined consumer, and not repeating that is the point.
 Separate request and response DTOs per operation under `…deedpoll.api.caseworker.dto`. **Never return an
 entity from a controller.**
 
-## Task 13 — Caseworker reads
+### Task 13: Caseworker reads
 
 - [ ] `GET /caseworker/cases` — the filtered list.
 - [ ] `GET /caseworker/cases/{id}` — one case **with its nested notes, witnesses and documents**. The
@@ -248,9 +269,10 @@ entity from a controller.**
 - [ ] `GET /caseworker/cases/field-rules`
 - [ ] `GET /caseworker/document-types`
 
-**Validate:** `./gradlew test --tests "*CaseworkerReadController*"`
+- [ ] Verify: `./gradlew test --tests "*CaseworkerReadController*"`
+- [ ] Mark completed
 
-## Task 14 — Caseworker case writes
+### Task 14: Caseworker case writes
 
 - [ ] `POST /caseworker/cases` — allocates a reference number via task 6. A create without `dateReceived`
       cannot allocate one and must fail with a 400 rather than a 500; the reference records this as a known
@@ -260,9 +282,10 @@ entity from a controller.**
       reference carries `FieldError[]` for exactly this reason and the UI renders them against individual
       inputs.
 
-**Validate:** `./gradlew test --tests "*CaseworkerCaseController*"`
+- [ ] Verify: `./gradlew test --tests "*CaseworkerCaseController*"`
+- [ ] Mark completed
 
-## Task 15 — Caseworker notes and documents
+### Task 15: Caseworker notes and documents
 
 - [ ] `GET` and `POST /caseworker/cases/{id}/notes`, and `GET`/`PATCH
       /caseworker/cases/{id}/notes/{noteId}`.
@@ -274,11 +297,12 @@ entity from a controller.**
       and its reasoning are in the API plan; the allowlist is what makes it safe.
 - [ ] A child list under a non-existent parent case must 404, not return an empty list with 200.
 
-**Validate:** `./gradlew test --tests "*CaseworkerNote*" --tests "*CaseworkerDocument*"`
+- [ ] Verify: `./gradlew test --tests "*CaseworkerNote*" --tests "*CaseworkerDocument*"`
+- [ ] Mark completed
 
 ---
 
-## Task 16 — Health, readiness and the OpenAPI spec
+### Task 16: Health, readiness and the OpenAPI spec
 
 - [ ] Readiness must check the database **and name the missing tables** if any are absent — being paged for
       "readiness DOWN" with no further detail wastes the diagnosis.
@@ -289,11 +313,23 @@ entity from a controller.**
 - [ ] Publish an OpenAPI spec via springdoc, and wire the `SwaggerPublisherTest` pattern the template
       ships so it can later publish to `hmcts/cnp-api-docs`.
 
-**Validate:** `./gradlew build && ./gradlew test --tests "*Health*"` — including a test that readiness
-returns 503, not 200, when the database is unreachable. Returning 200 on a failed probe is a real defect
-this codebase has already had once.
+- [ ] Verify: `./gradlew build && ./gradlew test --tests "*Health*"` — including a test that readiness
+      returns 503, not 200, when the database is unreachable. Returning 200 on a failed probe is a real defect
+      this codebase has already had once.
+- [ ] Mark completed
 
 ---
+
+## Success criteria
+
+- `./gradlew build` green, and every task's own `Verify` command green.
+- The Flyway schema and the JPA entities both agree with the vendored `deed-poll.prisma`, proved by the
+  schema-conformance test and by Hibernate's `ddl-auto=validate` rather than by inspection.
+- The domain port carries **all** of the reference's test blocks, not a subset. A port with fewer tests is
+  not a port.
+- Eleven caseworker endpoints exist and no twelfth.
+- `/citizen/**` exists, is empty, and shares no DTO with `/caseworker/**`.
+- Nothing in the repo makes a live call to CCD, CDAM, IDAM or payments, and no secret is committed.
 
 ## Out of scope for this plan
 
