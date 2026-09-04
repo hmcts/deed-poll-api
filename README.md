@@ -1,16 +1,20 @@
-# Spring Boot application template
+# deed-poll-api
 
 ## Purpose
 
-The purpose of this template is to speed up the creation of new Spring applications within HMCTS
-and help keep the same standards across multiple teams. If you need to create a new app, you can
-simply use this one as a starting point and build on top of it.
+The backend service for deed poll case management. It serves the caseworker admin service and will
+later also serve the citizen-facing service, which is why it has separate `/caseworker/**` and
+`/citizen/**` namespaces.
+
+It is a port of the TypeScript domain layer in the sibling repo
+[`hmcts/deed-poll-admin`](https://github.com/hmcts/deed-poll-admin) (`libs/deed-poll`), which is the
+specification for this service. Build plans live under [`docs/plans/`](docs/plans).
 
 ## What's inside
 
-The template is a working application with a minimal setup. It contains:
+Scaffolded from [`hmcts/spring-boot-template`](https://github.com/hmcts/spring-boot-template), so it
+contains:
  * application skeleton
- * setup script to prepare project
  * common plugins and libraries
  * [HMCTS Java plugin](https://github.com/hmcts/gradle-java-plugin)
  * docker setup
@@ -24,7 +28,7 @@ The application exposes health endpoint (http://localhost:4550/health) and metri
 
 ## Plugins
 
-The template contains the following plugins:
+The project contains the following plugins:
 
   * HMCTS Java plugin
 
@@ -85,10 +89,6 @@ The template contains the following plugins:
       ./gradlew dependencyUpdates -Drevision=release
     ```
 
-## Setup
-
-Located in `./bin/init.sh`. Simply run and follow the explanation how to execute it.
-
 ## Building and deploying the application
 
 ### Building the application
@@ -119,7 +119,7 @@ Create docker image:
   docker compose build
 ```
 
-Run the distribution (created in `build/install/spring-boot-template` directory)
+Run the distribution (created in `build/install/deed-poll-api` directory)
 by executing the following command:
 
 ```bash
@@ -127,7 +127,7 @@ by executing the following command:
 ```
 
 This will start the API container exposing the application's port
-(set to `4550` in this template app).
+(set to `4550` in `application.yaml`).
 
 In order to test if the application is up, you can call its health endpoint:
 

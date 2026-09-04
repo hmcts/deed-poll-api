@@ -10,10 +10,17 @@ plugins {
     See https://github.com/hmcts/gradle-java-plugin
  */
   id 'uk.gov.hmcts.java' version '0.12.70'
+
+  /*
+    Declared and pinned exactly as pcs-api pins them, but deliberately not enabled: plan 02
+    configures CCD and cftlib once the case type and jurisdiction have been onboarded.
+  */
+  // id 'hmcts.ccd.sdk' version '6.36.0'
+  // id 'com.github.hmcts.rse-cft-lib' version '0.19.2360'
 }
 
 application {
-  mainClass = 'uk.gov.hmcts.reform.demo.Application'
+  mainClass = 'uk.gov.hmcts.reform.deedpoll.Application'
   group = 'uk.gov.hmcts.reform'
   version = '0.0.1'
 }
@@ -102,8 +109,8 @@ tasks.check.dependsOn(integration)
 
 sonarqube {
   properties {
-    property "sonar.projectName", "Reform :: spring-boot-template"
-    property "sonar.projectKey", "uk.gov.hmcts.reform:spring-boot-template"
+    property "sonar.projectName", "Reform :: deed-poll-api"
+    property "sonar.projectKey", "uk.gov.hmcts.reform:deed-poll-api"
   }
 }
 
@@ -158,7 +165,7 @@ dependencies {
 }
 
 bootJar {
-  archiveFileName = "spring-boot-template.jar"
+  archiveFileName = "deed-poll-api.jar"
 
   manifest {
     attributes('Implementation-Version': project.version.toString())

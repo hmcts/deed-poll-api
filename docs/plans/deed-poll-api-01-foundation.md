@@ -77,17 +77,17 @@ repo that already exists, so the contents have to be copied in by hand. Its only
 
 ### Task 1: Rename off the template
 
-- [ ] Set `group = 'uk.gov.hmcts.reform'`, base package `uk.gov.hmcts.reform.deedpoll`, artifact and
+- [x] Set `group = 'uk.gov.hmcts.reform'`, base package `uk.gov.hmcts.reform.deedpoll`, artifact and
       application name `deed-poll-api`. The template ships `uk.gov.hmcts.reform.demo` — rename the package
       directories to match and leave nothing behind.
-- [ ] Update `catalog-info.yaml`: `name: deed-poll-api`, `owner: dcd_deed-poll`, `lifecycle: experimental`.
-- [ ] Keep the template's `Jenkinsfile_template` and rename to `Jenkinsfile_CNP`. Leave its contents alone.
-- [ ] Add the plugin versions this service will need, pinned exactly as `pcs-api` pins them, but **do not
+- [x] Update `catalog-info.yaml`: `name: deed-poll-api`, `owner: dcd_deed-poll`, `lifecycle: experimental`.
+- [x] Keep the template's `Jenkinsfile_template` and rename to `Jenkinsfile_CNP`. Leave its contents alone.
+- [x] Add the plugin versions this service will need, pinned exactly as `pcs-api` pins them, but **do not
       configure them yet**: `id 'hmcts.ccd.sdk' version '6.36.0'` and
       `id 'com.github.hmcts.rse-cft-lib' version '0.19.2360'`. Commented out is fine; plan 02 enables them.
 
-- [ ] Verify: `./gradlew build` and `grep -rn "uk.gov.hmcts.reform.demo" src/ || echo clean`
-- [ ] Mark completed
+- [x] Verify: `./gradlew build` and `grep -rn "uk.gov.hmcts.reform.demo" src/ || echo clean`
+- [x] Mark completed
 
 ---
 

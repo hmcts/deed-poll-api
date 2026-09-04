@@ -1,14 +1,14 @@
 version: '2.1'
 
 services:
-  spring-boot-template:
+  deed-poll-api:
     build:
       context: .
       args:
         - http_proxy
         - https_proxy
         - no_proxy
-    image: hmctspublic.azurecr.io/spring-boot/template
+    image: hmctspublic.azurecr.io/deed-poll/api
     environment:
       # these environment variables are used by java-logging library
       - ROOT_APPENDER
