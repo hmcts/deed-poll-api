@@ -118,21 +118,41 @@ isolation, so they must be inside this repo.
 `deed-poll.prisma` defines 6 models and 11 enums in the `public` schema. This task does the enums and the
 parent table only; children follow in task 4, so that neither task is too large to verify.
 
-- [ ] Add `docker-compose.yml` with Postgres 16 for local development, and Testcontainers Postgres for
+- [x] Add `docker-compose.yml` with Postgres 16 for local development, and Testcontainers Postgres for
       tests.
-- [ ] Write `src/main/resources/db/migration/V1__enums.sql` — all 11 enums, values **in the order the
+- [x] Write `src/main/resources/db/migration/V1__enums.sql` — all 11 enums, values **in the order the
       Prisma file declares them**, because the integer ordinals are load-bearing and are documented in its
       comments.
-- [ ] Write `V2__deed_poll.sql` for `deedpoll_deedpoll`. Reproduce exactly: every `@map` column name,
+- [x] Write `V2__deed_poll.sql` for `deedpoll_deedpoll`. Reproduce exactly: every `@map` column name,
       `numeric(12,2)` for `refundAmount`, `integer[]` for the three multiselects, and
       **`signaturerecieveddate` with the source's misspelling** — `deed-poll.prisma` documents it as
       deliberate.
 
-- [ ] Verify: `./gradlew test --tests "*SchemaConformance*"` — a new test that parses
+- [x] Verify: `./gradlew test --tests "*SchemaConformance*"` — a new test that parses
       `src/test/resources/reference/deed-poll.prisma`, runs Flyway against Testcontainers, and asserts every
       model field present in the reference has a matching column. Forward coverage only, matching the
       TypeScript harness's own stated limitation.
-- [ ] Mark completed
+- [x] Mark completed
+
+> **What task 3 did beyond the checkboxes, and one thing for Steve.**
+>
+> - The migrations are wired into the running application, not just into the test: `application.yaml`
+>   now has the datasource and `spring.flyway`. That made the template's `OpenAPIPublisherTest` need a
+>   database to boot, so it now extends a new `AbstractPostgresContainerIT`. Task 5 reuses that.
+> - `SchemaConformanceTest` asserts more than the checkbox asks: column **type**, `varchar` length,
+>   `numeric` precision/scale, nullability, and every enum's members **in declaration order**. Both
+>   halves were verified by mutation — a `numeric(10,2)` and a reordered enum member each fail it.
+>   Nullability is not asserted for the three `integer[]` columns: a required Prisma list produces a
+>   nullable column, so requiring `NOT NULL` would diverge from the schema being ported.
+> - **Steve: this machine's Docker cannot run Testcontainers unaided.** Two separate faults, both from
+>   the build running inside a container sharing the host daemon. (1) Daemon-allocated ephemeral
+>   published ports are never forwarded — `docker run -p 5432` gives an unreachable port while
+>   `-p 59200:5432` and plain `-P` work. `ContainerDatabase` works around this by reaching containers
+>   over the Docker bridge network instead, which is the right thing for this topology anyway. (2) Ryuk
+>   listens on IPv6 only and its published port is unreachable, so **`./gradlew build` needs
+>   `TESTCONTAINERS_RYUK_DISABLED=true` on this machine** — every build in this plan was validated with
+>   it exported. It is deliberately not set in the repo, so CI keeps the reaper; the README records it.
+>   Worth fixing in Docker Desktop rather than living with, since tasks 4–16 all need a database.
 
 ---
 

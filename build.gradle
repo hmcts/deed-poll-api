@@ -151,7 +151,12 @@ dependencies {
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-actuator'
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-aop'
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-json'
+  implementation group: 'org.springframework.boot', name: 'spring-boot-starter-jdbc'
   implementation group: 'org.springdoc', name: 'springdoc-openapi-starter-webmvc-ui', version: '2.8.17'
+
+  implementation group: 'org.flywaydb', name: 'flyway-core'
+  runtimeOnly group: 'org.flywaydb', name: 'flyway-database-postgresql'
+  runtimeOnly group: 'org.postgresql', name: 'postgresql'
 
   implementation group: 'com.github.hmcts.java-logging', name: 'logging', version: '6.1.9'
 
@@ -162,6 +167,15 @@ dependencies {
 
   testImplementation group: 'org.springframework.boot', name: 'spring-boot-starter-test'
   testImplementation group: 'io.rest-assured', name: 'rest-assured', version: '5.5.7'
+
+  /*
+    Every test that needs a database starts a throwaway Postgres. Nothing in the suite
+    talks to a developer's local database or to a deployed one.
+  */
+  testImplementation group: 'org.testcontainers', name: 'postgresql'
+  testImplementation group: 'org.testcontainers', name: 'junit-jupiter'
+  testRuntimeOnly group: 'org.flywaydb', name: 'flyway-database-postgresql'
+  testRuntimeOnly group: 'org.postgresql', name: 'postgresql'
 }
 
 bootJar {

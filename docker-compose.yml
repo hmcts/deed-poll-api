@@ -22,5 +22,39 @@ services:
       - LOGBACK_REQUIRE_THREAD
       - LOGBACK_REQUIRE_ALERT_LEVEL=false
       - LOGBACK_REQUIRE_ERROR_CODE=false
+      # Reached over the compose network, so the container port, not the published one.
+      - DB_HOST=deed-poll-db
+      - DB_PORT=5432
+      - DB_NAME=deedpoll
+      - DB_USER_NAME=deedpoll
+    depends_on:
+      deed-poll-db:
+        condition: service_healthy
     ports:
       - $SERVER_PORT:$SERVER_PORT
+
+  # Local development database. Tests do NOT use this -- they start their own throwaway
+  # Postgres via Testcontainers, so a test run never depends on, or corrupts, local data.
+  deed-poll-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=deedpoll
+      - POSTGRES_USER=deedpoll
+      # Trust auth so the empty DB_PASSWORD default works locally. This is a throwaway
+      # container on a developer machine; every deployed environment supplies a real
+      # password by environment variable and none is committed here.
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    ports:
+      # Published on 5433, not 5432: the sibling deed-poll-admin stack already binds 5432
+      # and both are routinely running at once while this port is under way.
+      - ${DB_PORT:-5433}:5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deedpoll -d deedpoll"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - deed-poll-db-data:/var/lib/postgresql/data
+
+volumes:
+  deed-poll-db-data:

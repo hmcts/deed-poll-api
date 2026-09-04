@@ -102,6 +102,27 @@ To build the project execute the following command:
   ./gradlew build
 ```
 
+### The database, and what the tests need from Docker
+
+The service uses Postgres, with the schema owned by Flyway (`src/main/resources/db/migration`).
+`docker compose up` starts a local Postgres alongside the API; it is published on **5433**, not
+5432, because the sibling `deed-poll-admin` stack already binds 5432 and both are routinely
+running at once.
+
+Tests never touch that database. Anything needing one starts a throwaway Postgres via
+Testcontainers, so `./gradlew build` requires a working Docker but no local setup.
+
+Two things can make Testcontainers fail on a developer machine for reasons unrelated to the
+code, both when the build itself runs inside a container that shares the host's Docker daemon:
+
+- **Ryuk, the resource reaper, cannot be reached.** It listens on IPv6 inside its container,
+  and some Docker Desktop configurations do not forward that. Export
+  `TESTCONTAINERS_RYUK_DISABLED=true`; containers are still removed on a clean JVM exit, only
+  crash-cleanup is lost. This is deliberately **not** set in the repo, so CI keeps the reaper.
+- **Published ports are not forwarded.** The test harness already handles this by reaching
+  containers over the Docker bridge network in preference to their published port — see
+  `ContainerDatabase` for the detail.
+
 ### Running the application
 
 Create the image of the application by executing the following command:

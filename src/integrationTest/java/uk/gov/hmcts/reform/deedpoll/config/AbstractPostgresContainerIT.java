@@ -1,0 +1,37 @@
+package uk.gov.hmcts.reform.deedpoll.config;
+
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.PostgreSQLContainer;
+import uk.gov.hmcts.reform.deedpoll.db.ContainerDatabase;
+
+/**
+ * Base class for integration tests that boot the Spring context. The application has a
+ * datasource and runs Flyway on start-up, so booting it needs a database -- a throwaway one
+ * per build, never a developer's local instance and never a deployed one.
+ *
+ * <p>The container is started once for the JVM and shared, rather than per class: starting
+ * Postgres costs seconds and the migrations produce the same schema for every context.
+ */
+public abstract class AbstractPostgresContainerIT {
+
+    private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+
+    private static final String JDBC_URL;
+
+    static {
+        POSTGRES.start();
+        // Resolved once, and only after something answers on it -- see ContainerDatabase for
+        // why the container's own URL is not used directly.
+        JDBC_URL = ContainerDatabase.awaitJdbcUrl(POSTGRES);
+    }
+
+    @DynamicPropertySource
+    static void datasourceProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", () -> JDBC_URL);
+        registry.add("spring.datasource.username", POSTGRES::getUsername);
+        registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("spring.datasource.driver-class-name", POSTGRES::getDriverClassName);
+        registry.add("spring.flyway.locations", () -> "classpath:db/migration");
+    }
+}

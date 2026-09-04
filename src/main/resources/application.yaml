@@ -25,27 +25,28 @@ spring:
     import: "optional:configtree:/mnt/secrets/rpe/"
   application:
     name: deed-poll-api
-#  datasource:
-#    driver-class-name: org.postgresql.Driver
-#    url: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}${DB_OPTIONS:}
-#    username: ${DB_USER_NAME}
-#    password: ${DB_PASSWORD}
-#    properties:
-#      charSet: UTF-8
-#    hikari:
-#      minimumIdle: 2
-#      maximumPoolSize: 10
-#      idleTimeout: 10000
-#      poolName: {to-be-defined}HikariCP
-#      maxLifetime: 7200000
-#      connectionTimeout: 30000
-#  jpa:
-#    properties:
-#      hibernate:
-#        jdbc:
-#          lob:
-#            # silence the 'wall-of-text' - unnecessary exception throw about blob types
-#            non_contextual_creation: true
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    # Defaults point at the docker-compose database in docker-compose.yml, published on
+    # 5433 to avoid the sibling deed-poll-admin stack's 5432. The password default is
+    # empty on purpose: no credential is committed, and a deployed environment that
+    # forgets to supply DB_PASSWORD fails to connect rather than connecting as something
+    # unintended.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:deedpoll}${DB_OPTIONS:}
+    username: ${DB_USER_NAME:deedpoll}
+    password: ${DB_PASSWORD:}
+    properties:
+      charSet: UTF-8
+    hikari:
+      minimumIdle: ${DB_POOL_MIN_IDLE:2}
+      maximumPoolSize: ${DB_POOL_MAX_SIZE:10}
+      idleTimeout: 10000
+      poolName: DeedPollHikariCP
+      maxLifetime: 7200000
+      connectionTimeout: 30000
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
 
 azure:
   application-insights:
