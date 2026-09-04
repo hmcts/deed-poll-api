@@ -53,21 +53,21 @@ citizen-facing service, which is why the API has two endpoint namespaces from th
 This repo was **not** created from `hmcts/spring-boot-template`, and GitHub cannot apply a template to a
 repo that already exists, so the contents have to be copied in by hand. Its only commit adds this plan.
 
-- [ ] **Stop if this has already run.** If `build.gradle` exists at the repo root, task 0 is done; report
+- [x] **Stop if this has already run.** If `build.gradle` exists at the repo root, task 0 is done; report
       and move on rather than copying over it.
-- [ ] Shallow-clone the template somewhere outside this repo:
+- [x] Shallow-clone the template somewhere outside this repo:
       `git clone --depth 1 https://github.com/hmcts/spring-boot-template /tmp/sbt`
-- [ ] Copy its contents in, excluding its git history:
+- [x] Copy its contents in, excluding its git history:
       `rsync -a --exclude '.git' /tmp/sbt/ .`
       The template has no `docs/` directory, so this plan is not at risk — but verify it survived before
       committing.
-- [ ] `chmod +x gradlew`, then delete `/tmp/sbt`.
-- [ ] Commit the scaffold. Do not amend the existing commit that added this plan.
+- [x] `chmod +x gradlew`, then delete `/tmp/sbt`.
+- [x] Commit the scaffold. Do not amend the existing commit that added this plan.
 
-- [ ] Verify: `test -f build.gradle && test -f docs/plans/deed-poll-api-01-foundation.md && ./gradlew build`
+- [x] Verify: `test -f build.gradle && test -f docs/plans/deed-poll-api-01-foundation.md && ./gradlew build`
       — the unmodified template ships a working application and passing tests, so a red build here means the
       copy went wrong, not that the template is broken.
-- [ ] Mark completed
+- [x] Mark completed
 
 > **One thing for Steve, not for the agent.** `deed-poll-api`'s default branch is **`main`**, while both
 > `spring-boot-template` and `deed-poll-admin` use **`master`**. HMCTS Jenkins conventions assume `master`
