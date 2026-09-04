@@ -18,8 +18,10 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
@@ -42,10 +44,12 @@ import static org.assertj.core.api.Assertions.fail;
 class SchemaConformanceTest {
 
     /**
-     * Reference models whose tables the Flyway baseline has reached. V1 and V2 cover the
-     * enums and the parent case table; the five child models arrive with V3.
+     * Postgres reports a foreign key's delete rule as a single character. Mapped back to the
+     * reference's vocabulary so a failure names the rule the schema asked for rather than a
+     * letter the reader has to look up.
      */
-    private static final List<String> PORTED_MODELS = List.of("DeedPoll");
+    private static final Map<String, String> DELETE_RULES = Map.of(
+        "a", "NoAction", "r", "Restrict", "c", "Cascade", "n", "SetNull", "d", "SetDefault");
 
     @Container
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
@@ -53,6 +57,8 @@ class SchemaConformanceTest {
     private static PrismaSchema reference;
     private static Map<String, Map<String, Column>> tables;
     private static Map<String, List<String>> enumTypes;
+    private static Set<String> indexedColumns;
+    private static List<ForeignKey> foreignKeys;
 
     /**
      * One column as Postgres reports it. Array columns report {@code dataType} "ARRAY" and
@@ -62,6 +68,11 @@ class SchemaConformanceTest {
     private record Column(String name, String dataType, String udtName,
                           Integer charMaxLength, Integer numericPrecision, Integer numericScale,
                           boolean nullable) {
+    }
+
+    /** One foreign key as Postgres reports it, with its columns in constraint order. */
+    private record ForeignKey(String name, String table, List<String> columns,
+                              String targetTable, List<String> targetColumns, String onDelete) {
     }
 
     @BeforeAll
@@ -79,16 +90,17 @@ class SchemaConformanceTest {
             jdbcUrl, POSTGRES.getUsername(), POSTGRES.getPassword())) {
             tables = readColumns(connection);
             enumTypes = readEnums(connection);
+            indexedColumns = readIndexedColumns(connection);
+            foreignKeys = readForeignKeys(connection);
         }
     }
 
     @Test
-    @DisplayName("every ported reference model has its table")
-    void everyPortedModelHasItsTable() {
-        for (String modelName : PORTED_MODELS) {
-            PrismaSchema.Model model = reference.model(modelName);
+    @DisplayName("every reference model has its table")
+    void everyReferenceModelHasItsTable() {
+        for (PrismaSchema.Model model : reference.models().values()) {
             assertThat(tables)
-                .as("table for reference model %s", modelName)
+                .as("table for reference model %s", model.name())
                 .containsKey(model.table());
         }
     }
@@ -97,8 +109,7 @@ class SchemaConformanceTest {
     @DisplayName("every reference field has a conforming column")
     List<DynamicTest> everyReferenceFieldHasAConformingColumn() {
         List<DynamicTest> tests = new ArrayList<>();
-        for (String modelName : PORTED_MODELS) {
-            PrismaSchema.Model model = reference.model(modelName);
+        for (PrismaSchema.Model model : reference.models().values()) {
             for (PrismaSchema.Field field : model.fields()) {
                 tests.add(DynamicTest.dynamicTest(
                     "%s.%s -> %s.%s".formatted(model.name(), field.name(), model.table(), field.column()),
@@ -124,6 +135,66 @@ class SchemaConformanceTest {
                     .containsExactlyElementsOf(entry.getValue());
             }))
             .toList();
+    }
+
+    @TestFactory
+    @DisplayName("every reference @@index exists")
+    List<DynamicTest> everyReferenceIndexExists() {
+        List<DynamicTest> tests = new ArrayList<>();
+        for (PrismaSchema.Model model : reference.models().values()) {
+            for (PrismaSchema.Index index : model.indexes()) {
+                List<String> columns = index.fields().stream()
+                    .map(field -> reference.columnFor(model.name(), field))
+                    .toList();
+                String key = indexKey(model.table(), columns);
+                tests.add(DynamicTest.dynamicTest(key, () -> assertThat(indexedColumns)
+                    .as("an index on %s", key)
+                    .contains(key)));
+            }
+        }
+        return tests;
+    }
+
+    @TestFactory
+    @DisplayName("every reference relation is a foreign key with the declared delete rule")
+    List<DynamicTest> everyReferenceRelationIsAForeignKey() {
+        List<DynamicTest> tests = new ArrayList<>();
+        for (PrismaSchema.Model model : reference.models().values()) {
+            for (PrismaSchema.Relation relation : model.relations()) {
+                tests.add(DynamicTest.dynamicTest(
+                    "%s.%s -> %s (onDelete: %s)".formatted(
+                        model.name(), relation.name(), relation.targetModel(), relation.onDelete()),
+                    () -> assertRelationConforms(model, relation)));
+            }
+        }
+        return tests;
+    }
+
+    /**
+     * The delete rule is asserted, not just the key's existence, because it is behaviour: the
+     * reference makes the case's three children {@code Cascade} deliberately, and a document
+     * type {@code Restrict} so one still in use cannot be deleted. A foreign key with the
+     * wrong rule loses or keeps rows silently.
+     */
+    private static void assertRelationConforms(PrismaSchema.Model model, PrismaSchema.Relation relation) {
+        List<String> columns = relation.fields().stream()
+            .map(field -> reference.columnFor(model.name(), field))
+            .toList();
+        PrismaSchema.Model target = reference.model(relation.targetModel());
+        List<String> targetColumns = relation.references().stream()
+            .map(field -> reference.columnFor(target.name(), field))
+            .toList();
+
+        assertThat(foreignKeys)
+            .as("foreign key %s.%s -> %s.%s",
+                model.table(), columns, target.table(), targetColumns)
+            .anySatisfy(key -> {
+                assertThat(key.table()).isEqualTo(model.table());
+                assertThat(key.columns()).isEqualTo(columns);
+                assertThat(key.targetTable()).isEqualTo(target.table());
+                assertThat(key.targetColumns()).isEqualTo(targetColumns);
+                assertThat(key.onDelete()).isEqualTo(relation.onDelete());
+            });
     }
 
     private static void assertFieldConforms(PrismaSchema.Model model, PrismaSchema.Field field) {
@@ -253,6 +324,74 @@ class SchemaConformanceTest {
             }
         }
         return result;
+    }
+
+    /**
+     * Every index in the schema as "table(col,col)". A set of keys rather than index names,
+     * because the reference declares indexes by column and names them nowhere.
+     */
+    private static Set<String> readIndexedColumns(Connection connection) throws SQLException {
+        String sql = """
+            SELECT c.relname AS table_name,
+                   string_agg(a.attname, ',' ORDER BY k.ord) AS columns
+              FROM pg_index i
+              JOIN pg_class c ON c.oid = i.indrelid
+              JOIN pg_class ic ON ic.oid = i.indexrelid
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+              JOIN unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+              JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
+             WHERE n.nspname = 'public'
+             GROUP BY ic.relname, c.relname
+            """;
+        Set<String> result = new LinkedHashSet<>();
+        try (Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery(sql)) {
+            while (rows.next()) {
+                result.add(rows.getString("table_name") + "(" + rows.getString("columns") + ")");
+            }
+        }
+        return result;
+    }
+
+    private static List<ForeignKey> readForeignKeys(Connection connection) throws SQLException {
+        String sql = """
+            SELECT con.conname AS name,
+                   src.relname AS table_name,
+                   tgt.relname AS target_table,
+                   con.confdeltype AS delete_rule,
+                   (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+                      FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                      JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum)
+                     AS columns,
+                   (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+                      FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+                      JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum)
+                     AS target_columns
+              FROM pg_constraint con
+              JOIN pg_class src ON src.oid = con.conrelid
+              JOIN pg_class tgt ON tgt.oid = con.confrelid
+              JOIN pg_namespace n ON n.oid = src.relnamespace
+             WHERE con.contype = 'f' AND n.nspname = 'public'
+             ORDER BY con.conname
+            """;
+        List<ForeignKey> result = new ArrayList<>();
+        try (Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery(sql)) {
+            while (rows.next()) {
+                result.add(new ForeignKey(
+                    rows.getString("name"),
+                    rows.getString("table_name"),
+                    List.of(rows.getString("columns").split(",")),
+                    rows.getString("target_table"),
+                    List.of(rows.getString("target_columns").split(",")),
+                    DELETE_RULES.get(rows.getString("delete_rule"))));
+            }
+        }
+        return result;
+    }
+
+    private static String indexKey(String table, List<String> columns) {
+        return table + "(" + String.join(",", columns) + ")";
     }
 
     private static Integer nullableInt(ResultSet rows, String column) throws SQLException {

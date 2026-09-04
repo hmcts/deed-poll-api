@@ -7,6 +7,7 @@ import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -36,6 +37,9 @@ public final class PrismaSchema {
     private static final Pattern TABLE_MAP = Pattern.compile("@@map\\(\"([^\"]+)\"\\)");
     private static final Pattern VAR_CHAR = Pattern.compile("@db\\.VarChar\\((\\d+)\\)");
     private static final Pattern DECIMAL = Pattern.compile("@db\\.Decimal\\((\\d+)\\s*,\\s*(\\d+)\\)");
+    private static final Pattern INDEX = Pattern.compile("@@index\\(\\[([^\\]]+)\\]\\)");
+    private static final Pattern RELATION = Pattern.compile(
+        "@relation\\(fields:\\s*\\[([^\\]]+)\\],\\s*references:\\s*\\[([^\\]]+)\\](?:,\\s*onDelete:\\s*(\\w+))?\\)");
 
     private final Map<String, Model> models;
     private final Map<String, List<String>> enums;
@@ -62,10 +66,29 @@ public final class PrismaSchema {
     }
 
     /**
-     * A model. {@code table} is the {@code @@map} name where one is declared, and the model
-     * name otherwise.
+     * An {@code @@index([...])} declaration, holding the reference's field names.
      */
-    public record Model(String name, String table, List<Field> fields) {
+    public record Index(List<String> fields) {
+    }
+
+    /**
+     * A {@code @relation} declaration -- a foreign key. {@code onDelete} is the reference's
+     * explicit value where it gives one, and Prisma's default otherwise: {@code SetNull} for
+     * an optional foreign-key scalar, {@code Restrict} for a required one. The default is
+     * resolved here rather than left null so a reader of a test failure sees the rule the
+     * schema actually asks for.
+     */
+    public record Relation(String name, String targetModel,
+                           List<String> fields, List<String> references, String onDelete) {
+    }
+
+    /**
+     * A model. {@code table} is the {@code @@map} name where one is declared, and the model
+     * name otherwise. {@code indexes} and {@code relations} hold field names, not column
+     * names -- resolve them with {@link PrismaSchema#columnFor}.
+     */
+    public record Model(String name, String table, List<Field> fields,
+                        List<Index> indexes, List<Relation> relations) {
     }
 
     /** Parses the vendored reference schema. */
@@ -110,6 +133,16 @@ public final class PrismaSchema {
         return enums.containsKey(typeName);
     }
 
+    /** The column the named field of the named model is stored in. */
+    public String columnFor(String modelName, String fieldName) {
+        return model(modelName).fields().stream()
+            .filter(field -> field.name().equals(fieldName))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException(
+                "The reference model '" + modelName + "' declares no stored field '" + fieldName + "'"))
+            .column();
+    }
+
     private static void collectBlocks(List<String> lines,
                                       Map<String, List<String>> modelBodies,
                                       Map<String, List<String>> enumBodies) {
@@ -144,6 +177,8 @@ public final class PrismaSchema {
     private static Model parseModel(String name, List<String> body, Set<String> modelNames) {
         String table = name;
         List<Field> fields = new ArrayList<>();
+        List<Index> indexes = new ArrayList<>();
+        List<Relation> relations = new ArrayList<>();
 
         for (String raw : body) {
             String line = stripComment(raw);
@@ -155,6 +190,10 @@ public final class PrismaSchema {
                 if (tableMap.find()) {
                     table = tableMap.group(1);
                 }
+                Matcher index = INDEX.matcher(line);
+                if (index.find()) {
+                    indexes.add(new Index(splitList(index.group(1))));
+                }
                 continue;
             }
 
@@ -164,8 +203,14 @@ public final class PrismaSchema {
             }
             Type type = parseType(tokens[1], line);
             if (modelNames.contains(type.base())) {
-                // A relation field: no column of its own. The foreign key is a separate
-                // scalar field (deedPollId), which is kept.
+                // A relation field: no column of its own. The owning side names the foreign
+                // key it is backed by; the inverse side (a list, or a bare model field) names
+                // nothing and is simply dropped.
+                Matcher relation = RELATION.matcher(line);
+                if (relation.find()) {
+                    relations.add(new Relation(tokens[0], type.base(),
+                        splitList(relation.group(1)), splitList(relation.group(2)), relation.group(3)));
+                }
                 continue;
             }
             Matcher fieldMap = FIELD_MAP.matcher(line);
@@ -173,7 +218,32 @@ public final class PrismaSchema {
             fields.add(new Field(tokens[0], column, type));
         }
 
-        return new Model(name, table, List.copyOf(fields));
+        return new Model(name, table, List.copyOf(fields),
+            List.copyOf(indexes), resolveDeleteRules(relations, fields));
+    }
+
+    /**
+     * Fills in {@code onDelete} for the relations that leave it out, using Prisma's default
+     * for a required relation ({@code Restrict}) or an optional one ({@code SetNull}). Done
+     * after the whole body is read, so it does not depend on the foreign-key scalar being
+     * declared above the relation field.
+     */
+    private static List<Relation> resolveDeleteRules(List<Relation> relations, List<Field> fields) {
+        return relations.stream()
+            .map(relation -> relation.onDelete() != null ? relation : new Relation(
+                relation.name(), relation.targetModel(), relation.fields(), relation.references(),
+                isOptional(relation.fields(), fields) ? "SetNull" : "Restrict"))
+            .toList();
+    }
+
+    private static boolean isOptional(List<String> fieldNames, List<Field> fields) {
+        return fields.stream()
+            .filter(field -> fieldNames.contains(field.name()))
+            .anyMatch(field -> field.type().optional());
+    }
+
+    private static List<String> splitList(String contents) {
+        return Arrays.stream(contents.split(",")).map(String::trim).toList();
     }
 
     private static Type parseType(String token, String line) {

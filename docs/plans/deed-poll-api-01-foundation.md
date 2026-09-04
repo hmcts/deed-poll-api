@@ -158,13 +158,33 @@ parent table only; children follow in task 4, so that neither task is too large 
 
 ### Task 4: Flyway baseline: the child tables
 
-- [ ] `V3__children.sql` for `deedpoll_notes`, `deedpoll_witness`, `deedpoll_supportingdocumenttype`,
+- [x] `V3__children.sql` for `deedpoll_notes`, `deedpoll_witness`, `deedpoll_supportingdocumenttype`,
       `deedpoll_supportingdocument` and `deedpoll_referencecounter`, with the foreign keys and the two
       indexes the reference declares. `DeedPollSupportingDocument.deedPollId` is `onDelete: Cascade` — the
       cascade is intentional and must be reproduced.
 
-- [ ] Verify: `./gradlew test --tests "*SchemaConformance*"` — now green for all 6 models.
-- [ ] Mark completed
+- [x] Verify: `./gradlew test --tests "*SchemaConformance*"` — now green for all 6 models.
+- [x] Mark completed
+
+> **What task 4 did beyond the checkboxes.**
+>
+> - **The reference declares three `@@index([deedPollId])`, not two** — on `DeedPollNote`,
+>   `DeedPollWitness` and `DeedPollSupportingDocument`. All three are created, since the reference is the
+>   specification. The checkbox's "two" appears to be a miscount rather than a decision; nothing was
+>   dropped to match it.
+> - **Four foreign keys, with the reference's delete rules.** The three `deedPollId` keys are
+>   `ON DELETE CASCADE`. `documentTypeId` declares no `onDelete`, so it gets Prisma's default for a
+>   required relation, `ON DELETE RESTRICT` — a document type still in use cannot be deleted. Every key
+>   is also `ON UPDATE CASCADE`, Prisma's default, so a future `prisma migrate diff` against this schema
+>   stays empty.
+> - **`SchemaConformanceTest` now asserts indexes and foreign keys too**, and covers every model the
+>   reference declares rather than a hardcoded list — so task 5 onwards cannot forget to widen it.
+>   `PrismaSchema` gained parsing for `@@index` and `@relation`, including resolving an omitted
+>   `onDelete` to Prisma's default, so the delete rules are asserted **from the reference** rather than
+>   from a hand-written expectation. Both new assertions were verified by mutation: turning the
+>   `documentTypeId` key into `CASCADE` and deleting the witness index each fail the test.
+> - `build.gradle` sets `failFast = true`, so only the first failure is reported per run. Worth knowing
+>   when a mutation check appears not to fire — it may simply not have been reached.
 
 ---
 
