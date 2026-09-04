@@ -239,15 +239,55 @@ parent table only; children follow in task 4, so that neither task is too large 
 
 ### Task 6: Reference-number allocation
 
-- [ ] Port `reference/ts/deed-poll/reference-number.ts` and its allocator. Format is
+- [x] Port `reference/ts/deed-poll/reference-number.ts` and its allocator. Format is
       `{prefix}{year}-{serial}`, prefix `KBDR` for type 5 (Deed of Relinquishment) else `KBDP`.
-- [ ] The serial comes from `deedpoll_referencecounter` incremented **inside a transaction with a row
+- [x] The serial comes from `deedpoll_referencecounter` incremented **inside a transaction with a row
       lock** (`SELECT … FOR UPDATE`). The reference file's comment explains this replaced a racy
       read-max-and-add-one; do not reintroduce that.
 
-- [ ] Verify: `./gradlew test --tests "*ReferenceNumber*"` — must include a concurrency test proving two
+- [x] Verify: `./gradlew test --tests "*ReferenceNumber*"` — must include a concurrency test proving two
       parallel allocations never return the same serial.
-- [ ] Mark completed
+- [x] Mark completed
+
+> **What task 6 did beyond the checkboxes, and one decision worth reading.**
+>
+> - **The row lock is one statement, not a `SELECT … FOR UPDATE` followed by an `UPDATE`.**
+>   `ReferenceCounterRepository.allocateNextSerial` is
+>   `INSERT … VALUES (:year, 1) ON CONFLICT ("year") DO UPDATE SET "lastSerial" = … + 1 RETURNING
+>   "lastSerial"`. That takes the same exclusive row lock the checkbox asks for — a second
+>   transaction reaching it waits for the first to commit and then re-reads the committed row — and
+>   it additionally makes safe the one case a read-then-lock cannot: the **first** allocation of a
+>   year, where there is no row to lock yet and two concurrent callers would race to insert one.
+>   It is also exactly what the reference does, a Prisma `upsert` with an `increment`.
+> - **Both concurrency tests were mutation-checked.** Replacing the statement with the source flow's
+>   racy read-then-add-one fails `parallel allocations never return the same serial` *and* `a second
+>   allocation waits for the first transaction to commit`. The second test is the stronger one: it
+>   asserts the lock rather than distinctness, by holding a transaction open after allocating and
+>   proving the other caller cannot return until it commits.
+> - **Allocation demands the caller's transaction** (`Propagation.MANDATORY`), which is the
+>   reference's "must be called inside a transaction" made enforceable. The serial has to be
+>   allocated under the same transaction as the row that will carry it, so a create that then fails
+>   gives the serial back instead of leaving a gap in an external-facing, permanent sequence. There
+>   is a test that calling outside a transaction is refused rather than silently burning a serial.
+> - **`parse` and `reprefixForUpdate` return `Optional`, not null.** In TypeScript the compiler's
+>   strict null checks force the caller to handle the null return; Java has no such check, so
+>   `Optional` keeps the same property in the type rather than in the caller's memory. It is the only
+>   deliberate deviation, and the ported tests assert `isEmpty()` where the reference asserts null.
+> - **Two reference test blocks could not port.** TypeScript's `undefined` is not distinct from null
+>   in Java, and a `LocalDateTime` cannot hold an invalid date the way `new Date("nonsense")` can,
+>   so the invalid-date rejection has no equivalent. Both are noted at the tests that absorbed them.
+>   Everything else ports one-for-one, and the allocating blocks run against the real database
+>   instead of the reference's mocked Prisma client — a mock cannot hold a row lock. Two extra tests
+>   assert behaviour the reference documents but, having mocked the counter, cannot check: that the
+>   serial is shared across KBDP and KBDR within a year and separate between years.
+> - **`errors.ts` had to be started, and no task in the plan owns it.** `reference-number.ts` throws
+>   `InvalidInputError`, so `domain/InvalidInputError.java` and `domain/FieldError.java` exist now,
+>   with the reference's names kept. Its other four error classes and `zodErrorToFieldErrors` are
+>   **not** ported — each should arrive with the ported module that throws it, so the vocabulary stays
+>   a record of what the service actually refuses. Tasks 7–15 will need them.
+> - `ReferenceNumberServiceTest` is deliberately not `@Transactional` — a rollback-only test
+>   transaction would make the lock unobservable — so it clears `deedpoll_referencecounter` around
+>   each test instead. Worth knowing before adding a test to it that assumes rollback.
 
 ---
 
