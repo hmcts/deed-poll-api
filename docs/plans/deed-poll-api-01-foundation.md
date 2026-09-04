@@ -96,14 +96,20 @@ repo that already exists, so the contents have to be copied in by hand. Its only
 The domain and schema are ported from TypeScript. Those sources are the spec, and a session runs in
 isolation, so they must be inside this repo.
 
-- [ ] Copy `../deed-poll-admin/libs/postgres-prisma/prisma/schema/deed-poll.prisma` to
+- [x] Copy `../deed-poll-admin/libs/postgres-prisma/prisma/schema/deed-poll.prisma` to
       `src/test/resources/reference/deed-poll.prisma`.
-- [ ] Copy the whole of `../deed-poll-admin/libs/deed-poll/src/` to `src/test/resources/reference/ts/`.
-- [ ] Add `src/test/resources/reference/README.md` stating: these are verbatim copies used as the port's
+- [x] Copy the whole of `../deed-poll-admin/libs/deed-poll/src/` to `src/test/resources/reference/ts/`.
+- [x] Add `src/test/resources/reference/README.md` stating: these are verbatim copies used as the port's
       specification and its conformance oracle; never edit them; refresh only by re-copying.
 
-- [ ] Verify: `test -f src/test/resources/reference/deed-poll.prisma && test -d src/test/resources/reference/ts && ./gradlew build`
-- [ ] Mark completed
+- [x] Verify: `test -f src/test/resources/reference/deed-poll.prisma && test -d src/test/resources/reference/ts && ./gradlew build`
+- [x] Mark completed
+
+> **Also vendored, beyond the checkboxes above.** `ts/conformance/artifacts.ts` reads the Dataverse
+> exports from `.business_context/dataverse_tables/`, which is outside `libs/deed-poll/src/`. Task 11
+> says "against the vendored Dataverse exports" but no task vendors them, so task 2 copied them to
+> `src/test/resources/reference/dataverse_tables/` (124K, 20 files) — otherwise task 11 is blocked in an
+> isolated session. Same rules apply: verbatim, never edited.
 
 ---
 
