@@ -302,14 +302,68 @@ reference tests assert both directions.
 
 ### Task 7: Domain: deed-poll core
 
-- [ ] Port `reference/ts/deed-poll/`. The largest by far — roughly 267 test blocks — including the state
+- [x] Port `reference/ts/deed-poll/`. The largest by far — roughly 267 test blocks — including the state
       cascade and the field rules.
-- [ ] Port its tests. The reference exports entity-specific names (`updateDeedPoll`, `getCaseFieldRules`)
+- [x] Port its tests. The reference exports entity-specific names (`updateDeedPoll`, `getCaseFieldRules`)
       rather than `update`/`find`, because those collided across five modules once barrel-exported. Java
       packages remove that constraint, but keep the names: they are what every test and caller says.
 
-- [ ] Verify: `./gradlew test --tests "*DeedPoll*" --tests "*FieldRules*" --tests "*StateCascade*"`
-- [ ] Mark completed
+- [x] Verify: `./gradlew test --tests "*DeedPoll*" --tests "*FieldRules*" --tests "*StateCascade*"`
+- [x] Mark completed
+
+> **What task 7 did beyond the checkboxes, and four decisions worth reading.**
+>
+> - **All 15 remaining modules of `reference/ts/deed-poll/` are ported, tests and all** —
+>   `case-state`, `computed`, `date-parts`, `schemas`, `deed-poll-validation`, `form-presentation`,
+>   `card-layout`, `form-fields`, `detail-view`, `edit-view`, `form-payload`, `form-validation`,
+>   `list-filters`, `list-view`, `case-header`, `service`, plus `enums/dynamics-values`.
+>   `reference-number` was task 6. The port adds **282 test methods** where the reference has 249
+>   blocks for those modules; the surplus is parameterised cases counted individually plus a handful
+>   of extra tests noted in each file. `./gradlew test` is 472 tests, all green.
+> - **`FieldError` is used for all three of the reference's `{field, message}` types**
+>   (`DateRuleError`, `ValidationError`, `FormError`). In TypeScript they are structurally identical,
+>   which is why `service.ts` hands a `DateRuleError[]` straight to an `InvalidInputError` declaring
+>   `FieldError[]`. Java has no structural typing, so three records would force a conversion the
+>   reference does not have — and a conversion is where a field name gets lost.
+> - **A patch is a keyed map (`DeedPollPatch`), not a class of nullable fields.** PATCH semantics need
+>   the three-way absent / null / value distinction the reference gets free from JavaScript, and a
+>   field of nullable Java types cannot express it. Only the reference schema's 68 field names are
+>   writable, which is what keeps `referencenumber`, `displayReference` and the audit columns out of a
+>   caller's reach — the reference's "strips unknown keys" made structural. `DeedPollFields` is the
+>   name-to-accessor registry that makes it work, stated explicitly rather than by reflection so a
+>   field becomes writable only by being listed.
+> - **`DeedPollService` validates before it mutates the entity.** The reference builds
+>   `merged = {...existing, ...data}` and hands it to Prisma; here the merge is a field map every rule
+>   reads, and the managed entity is untouched until every rule has passed. A rejected write that has
+>   already half-happened and depends on a rollback to be correct is a worse shape, and the ported
+>   tests assert the stored row rather than a captured call — including that a refused update left the
+>   row alone.
+> - **`DeedPollServiceTest` runs against the throwaway Postgres, not a mocked Prisma client**, the
+>   same choice task 6 made for the same reason: the reference asserts the arguments its mock was
+>   called with, which is all a TypeScript unit test can do, and reference-number allocation is
+>   correct because of a row lock a mock cannot hold. Two of its assertion shapes are translated,
+>   noted on the class: `arg.x` being undefined becomes "the stored value is unchanged", and
+>   "update was not called" becomes "the stored record is unchanged".
+> - **Three renames, all forced by Java keywords**, and no others: `FormPresentation.TabVisibility`
+>   has `returnTab` for the reference's `return`, `EditView` has `caseRecord` for `case`, and
+>   `FieldDef`'s withers are `asReadOnly()` / `asNotNullable()` because a record cannot have a method
+>   named after a component with a different return type. `CardColumn` is an enum (`LEFT`, `RIGHT`,
+>   `FULL`) where the reference has `1 | 2 | "full"`.
+> - **`FormFieldsTest` is not a port.** The reference gets four guarantees from the TypeScript
+>   compiler that this port cannot: a field's `enumSet` is a checked key of `LABELS`, its `subgrid` is
+>   a checked union, and a record can be read and written by index signature. Those become tests —
+>   every `enumSet` resolves, every form field is readable, every editable one is writable — so a typo
+>   fails a build rather than rendering a select with no options.
+> - **`@OrderBy("createdOn ASC")` added to the three child collections** on `DeedPoll`, reproducing
+>   the `orderBy` the reference declares on each of its includes. `findDeedPoll` initialises them by
+>   touching each rather than by one fetch join: three `List` collections are bags, so a single
+>   fetch would be a `MultipleBagFetchException`, and Prisma's `include` issues a query per relation
+>   anyway.
+> - **Steve: one hazard worth knowing.** A `perl -i` one-liner used mid-task to reformat single-line
+>   javadocs silently blanked 24 of them, because an inner regex match inside the same statement
+>   resets `$1`/`$2` before they are read. Caught and repaired before the commit, and every blanked
+>   line is back verbatim — but it is the kind of edit that a green build would not have caught, since
+>   a comment cannot fail a test.
 
 ### Task 8: Domain: notes
 

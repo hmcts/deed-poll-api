@@ -9,6 +9,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
+import jakarta.persistence.OrderBy;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
@@ -377,13 +378,19 @@ public class DeedPoll {
     // No JPA cascade: the database cascades the delete (see V3__children.sql), and duplicating
     // that in Hibernate would mean two places to keep in step. Lazy, because the list view reads
     // cases without their children and the case view fetches them deliberately.
+    // Oldest first, reproducing the `orderBy: { createdOn: "asc" }` the reference declares on each of
+    // the three includes. A child list is a chronology -- notes especially -- so the order is part of
+    // what the page means, not a preference of whichever query happened to load it.
     @OneToMany(mappedBy = "deedPoll", fetch = FetchType.LAZY)
+    @OrderBy("createdOn ASC")
     private List<DeedPollNote> notes = new ArrayList<>();
 
     @OneToMany(mappedBy = "deedPoll", fetch = FetchType.LAZY)
+    @OrderBy("createdOn ASC")
     private List<DeedPollWitness> witnesses = new ArrayList<>();
 
     @OneToMany(mappedBy = "deedPoll", fetch = FetchType.LAZY)
+    @OrderBy("createdOn ASC")
     private List<DeedPollSupportingDocument> documents = new ArrayList<>();
 
     @PrePersist
