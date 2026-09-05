@@ -411,10 +411,54 @@ reference tests assert both directions.
 
 ### Task 9: Domain: witnesses
 
-- [ ] Port `reference/ts/witnesses/`, roughly 15 test blocks, and its tests.
+- [x] Port `reference/ts/witnesses/`, roughly 15 test blocks, and its tests.
 
-- [ ] Verify: `./gradlew test --tests "*Witness*"`
-- [ ] Mark completed
+- [x] Verify: `./gradlew test --tests "*Witness*"`
+- [x] Mark completed
+
+> **What task 9 did beyond the checkboxes, and three decisions worth reading.**
+>
+> - **Both modules of `reference/ts/witnesses/` are ported, tests and all** — `schemas` and `service` —
+>   into `uk.gov.hmcts.reform.deedpoll.domain.witnesses`, plus `repository/DeedPollWitnessRepository`.
+>   27 test methods where the reference has 15 blocks; each of the 12 extras is noted at the test that
+>   carries it. `./gradlew test` is 548 tests, all green.
+> - **`WitnessSchemas` deliberately does NOT trim**, which is the one place this port diverges from the
+>   habit task 8 established. The notes payload trims because a blank note passes an emptiness check and
+>   stores a row the grid renders blank; the witness schema declares plain `z.string().max(...)` and its
+>   test asserts `parse(valid)` returns exactly what it was given, so trimming here would make the port
+>   store something different from the specification it is being asserted against. Same reasoning for
+>   there being no emptiness check: `z.string()` accepts `""`, and the reference's "requires every field"
+>   test removes keys rather than blanking them. If witnesses should trim, that belongs in the reference
+>   first — the comment on the class says so, so the next session does not read the absence as an
+>   oversight.
+> - **Four mutation checks, all of which fired.** Replacing `findByIdAndDeedPollId` with `findById` fails
+>   "refuses to remove a witness through another case"; coercing `declarant` with `Boolean.parseBoolean`
+>   fails "requires declarant to be a boolean, not a truthy string"; dropping the parent check from
+>   `findWitnesses` fails "404s listing witnesses for a case that does not exist"; and flipping the
+>   repository's sort to descending fails the ordering test. Note `failFast = true`, so each was run on
+>   its own.
+> - **`declarant` is a primitive `boolean` on the create input and `Optional<Boolean>` on the patch.** All
+>   four columns are `NOT NULL`, so an explicit null is refused rather than stored — the same
+>   absent-versus-null care `DeedPollPatch` and `UpdateNoteInput` take, in the shape four non-nullable
+>   fields need. `UpdateWitnessInput.EMPTY` and `isEmpty()` exist so a caller can tell a no-op patch from
+>   a change; a witness has no author column to move, so unlike a note an empty patch really is a no-op,
+>   and there is a test for it.
+> - **No `WitnessAuthor`, because `deedpoll_witness` has no `createdBy` / `modifiedBy`** — only the two
+>   timestamps, per the reference schema. So no author is threaded through the service, and attribution
+>   for a witness change is the case's own `modifiedBy` plus the declaration on file.
+> - **The reference's double scoping ports as a structural one**, exactly as task 8 did it: every write
+>   goes through the entity the guard loaded by id *and* parent, and `DeedPollWitnessRepository` has no
+>   unscoped finder, so an unscoped write is not expressible. What the ported test asserts instead of the
+>   `where` clause is the outcome scoping buys — the right row moved and the other case's did not.
+> - **Nothing in plan 01 calls the three write methods.** The caseworker surface is eleven operations and
+>   witness writes are deliberately not among them. They are ported because the reference and the source
+>   form have them, so a later consumer finds a scoped implementation rather than inventing an unscoped
+>   one — stated on the class so it does not read as dead code someone should delete.
+> - **There is no witnesses view model to port**: the reference has none, because witnesses are rendered
+>   as part of the case detail page, which is `DetailView`'s job. One extra test asserts a witness created
+>   through the service is visible on `DeedPoll.witnesses`, since the detail page reads the collection
+>   rather than calling `findWitnesses` and a mapping that wrote the foreign key without the relation
+>   being navigable would pass every other test here.
 
 ### Task 10: Domain: documents, metadata only
 
