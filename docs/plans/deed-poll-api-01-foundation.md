@@ -462,15 +462,72 @@ reference tests assert both directions.
 
 ### Task 10: Domain: documents, metadata only
 
-- [ ] Port `reference/ts/documents/`, roughly 60 test blocks, and its tests — **metadata and the upload
+- [x] Port `reference/ts/documents/`, roughly 60 test blocks, and its tests — **metadata and the upload
       policy only.**
-- [ ] **Do not port `file-storage.ts`.** Real storage is CDAM, in plan 03. Define a `DocumentStore`
+- [x] **Do not port `file-storage.ts`.** Real storage is CDAM, in plan 03. Define a `DocumentStore`
       interface with one local-filesystem implementation for development, and nothing else behind it.
-- [ ] Keep the upload policy's own framing in a comment: the accepted-type list is the client's declared
+- [x] Keep the upload policy's own framing in a comment: the accepted-type list is the client's declared
       MIME type, so it is hygiene rather than security, and 25 MB is an unresearched figure.
 
-- [ ] Verify: `./gradlew test --tests "*Document*"`
-- [ ] Mark completed
+- [x] Verify: `./gradlew test --tests "*Document*"`
+- [x] Mark completed
+
+> **What task 10 did beyond the checkboxes, and four decisions worth reading.**
+>
+> - **All five metadata modules of `reference/ts/documents/` are ported, tests and all** — `schemas`,
+>   `upload-policy`, `document-types`, `service` and `documents-view` — into
+>   `uk.gov.hmcts.reform.deedpoll.domain.documents`, plus `repository/DeedPollSupportingDocumentRepository`
+>   and `…TypeRepository`. 98 test methods where the reference has 57 blocks for those modules; each
+>   surplus is noted at the test that carries it. `./gradlew build` is 646 tests, all green.
+> - **`PatchField<T>` is new vocabulary, in `domain/`, and it was unavoidable.** `UpdateDocumentInput` is
+>   the first ported patch whose columns include nullable ones: clearing `storageKey` detaches a blob from
+>   its metadata row, and that must stay distinct from not mentioning it. `Optional` cannot express it —
+>   there is no room for a legitimate null — and a nullable field collapses the two. `DeedPollPatch` keeps
+>   the distinction by being a keyed map, which is right for 68 fields and wrong for six, so this is the
+>   same three states with the types kept. The three NOT NULL fields use it too, so one patch does not read
+>   in two idioms.
+> - **`DocumentStore` has three methods and one implementation, and `file-storage.ts` really is not
+>   ported.** CDAM is a different shape — content in, document id and hash token out, downloads through it
+>   rather than through this service's disk — so porting the reference's local storage as the production
+>   path would have to be undone. `LocalFilesystemDocumentStore` is written rather than translated, keyed by
+>   a generated UUID (two applicants uploading `birth.pdf` must not collide, and a caller-supplied name in
+>   a path is how a traversal gets in) and it keeps the traversal guard the reference has, because a
+>   storage key lives in a database column and columns get seeded and migrated.
+> - **`isAllowedUploadType` needed a null guard the reference does not.** `Set.of(...).contains(null)`
+>   throws rather than answering false, and a client may legitimately send a multipart part with no
+>   `Content-Type` — so the straight port would have been a 500 for a file that should have been a 400.
+>   Found by writing the test, which is why there is one.
+> - **`DocumentServiceTest` uses a Mockito *spy* on `DocumentStore`, not a mock.** Every test but the
+>   cleanup-failure pair runs the real local store against a temporary directory, so the metadata row and
+>   the blob are asserted to agree — a store that truncated a PDF would pass a metadata-only assertion. The
+>   two exceptions induce an I/O failure, which is exactly the case a real store cannot be asked for. Its
+>   log assertion reads a Logback `ListAppender`, since "logged it with both ids so the orphan can be
+>   found" is the actual requirement and a swallowed exception with no log would pass otherwise.
+> - **`ConflictError` arrived, as `InvalidInputError` and `NotFoundError` did before it** — thrown only by
+>   `removeDocumentType`, whose restrict-on-delete key already refuses but as a driver error the
+>   reference's route layer answered 500 for. `ForbiddenError` and `UnauthorizedError` are still unported;
+>   task 12 will need them. The two existing error javadocs that enumerated what was missing were corrected
+>   rather than left to go stale.
+> - **`findDocuments` and `findDocument` initialise the type relation before the entities leave the
+>   transaction**, reproducing the reference's `include: {documentType: true}`. Without it `DocumentsView`
+>   fails on a lazy proxy with the session closed — a runtime failure where the reference has a query
+>   option. One query per document rather than a fetch join, as Prisma's `include` does it, and the same
+>   handful of types recur across a case anyway.
+> - **Eleven mutation checks, all of which fired.** Dropping the parent check from `findDocuments`;
+>   `findById` in place of `findByIdAndDeedPollId`; rethrowing the blob-cleanup failure as the reference's
+>   own bug did; dropping `initialiseType`; deleting a type without counting its references; counting every
+>   document rather than the type's; listing types descending; treating every patch field as nullable;
+>   matching a MIME type by prefix; dropping the store's traversal guard; and ordering a case's documents
+>   newest-first. Note `failFast = true`, so each was run on its own.
+> - **Nothing in plan 01 calls `updateDocument`, `removeDocument` or the four document-type writes.** The
+>   caseworker surface is eleven operations, and of this module only `GET /caseworker/document-types`, the
+>   upload and the download are among them. They are ported because the reference and the source form have
+>   them, so a later consumer finds a scoped implementation that already refuses the delete rather than
+>   inventing one that 500s — stated on each class so it does not read as dead code.
+> - **`/data` is gitignored** and `deedpoll.documents.local-store-root` (`DOCUMENT_STORE_ROOT`) defaults to
+>   `data/documents`, so a fresh checkout uploads without being configured. **Steve: this must not reach a
+>   deployed environment** — local disk does not survive AKS, replicas do not share a volume, and the
+>   chart has no volume for it. It is a development convenience until plan 03 lands CDAM.
 
 ### Task 11: Domain: the conformance harness
 

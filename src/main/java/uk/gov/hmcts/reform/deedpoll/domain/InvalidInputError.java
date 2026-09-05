@@ -20,11 +20,11 @@ import java.util.List;
  * {@code deed-poll-validation.ts} already uses that name for a per-field result that is collected
  * and returned rather than thrown.
  *
- * <p>The reference declares four more errors alongside this one -- {@code NotFoundError},
- * {@code ForbiddenError}, {@code UnauthorizedError} and {@code ConflictError} -- and a
- * {@code zodErrorToFieldErrors} helper. They are not ported here because nothing in this task
- * throws them; each arrives with the ported module that does, so the vocabulary stays a record of
- * what the service actually refuses rather than a set of classes built for an imagined caller.
+ * <p>The reference declares four more errors alongside this one -- {@link NotFoundError},
+ * {@code ForbiddenError}, {@code UnauthorizedError} and {@link ConflictError} -- and a
+ * {@code zodErrorToFieldErrors} helper. Each arrives with the ported module that throws it, so the
+ * vocabulary stays a record of what the service actually refuses rather than a set of classes built
+ * for an imagined caller. {@code ForbiddenError} and {@code UnauthorizedError} are still unported.
  */
 public class InvalidInputError extends RuntimeException {
 

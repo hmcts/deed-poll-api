@@ -7,10 +7,10 @@ package uk.gov.hmcts.reform.deedpoll.domain;
  * given on {@link InvalidInputError}. The route layer maps it to a 404; nothing about it is HTTP, which
  * is why it lives in the domain rather than being a {@code ResponseStatusException}.
  *
- * <p>The reference declares three more errors alongside these two -- {@code ForbiddenError},
- * {@code UnauthorizedError} and {@code ConflictError} -- plus a {@code zodErrorToFieldErrors} helper.
- * They still are not ported: each arrives with the ported module that throws it, so the vocabulary stays
- * a record of what the service actually refuses.
+ * <p>The reference declares two more errors alongside these three -- {@code ForbiddenError} and
+ * {@code UnauthorizedError} -- plus a {@code zodErrorToFieldErrors} helper. They still are not ported:
+ * each arrives with the ported module that throws it, so the vocabulary stays a record of what the
+ * service actually refuses. {@link ConflictError} arrived with the documents port for exactly that reason.
  */
 public class NotFoundError extends RuntimeException {
 

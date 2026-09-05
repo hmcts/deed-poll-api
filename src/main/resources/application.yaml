@@ -67,6 +67,13 @@ spring:
     # rendering; every fetch the response needs is done in the service layer.
     open-in-view: false
 
+deedpoll:
+  documents:
+    # Where LocalFilesystemDocumentStore keeps uploaded blobs. Development only: local disk does
+    # not survive AKS, because pods are ephemeral and replicas do not share a volume. Real
+    # storage is CDAM, in plan 03, which adds an implementation beside the local one.
+    local-store-root: ${DOCUMENT_STORE_ROOT:data/documents}
+
 azure:
   application-insights:
     instrumentation-key: ${rpe.AppInsightsInstrumentationKey:00000000-0000-0000-0000-000000000000}
