@@ -41,12 +41,23 @@ public final class PrismaSchema {
     private static final Pattern RELATION = Pattern.compile(
         "@relation\\(fields:\\s*\\[([^\\]]+)\\],\\s*references:\\s*\\[([^\\]]+)\\](?:,\\s*onDelete:\\s*(\\w+))?\\)");
 
+    /**
+     * An enum member's documented Dynamics integer: {@code Adult // 1}. The reference schema's own
+     * header says "Comment on each member = the Dynamics integer value", which makes the comment
+     * part of the specification rather than decoration.
+     */
+    private static final Pattern ENUM_VALUE = Pattern.compile("^(\\w+)\\s*//\\s*(\\d+)\\s*$");
+
     private final Map<String, Model> models;
     private final Map<String, List<String>> enums;
+    private final Map<String, Map<String, Integer>> enumDynamicsValues;
 
-    private PrismaSchema(Map<String, Model> models, Map<String, List<String>> enums) {
+    private PrismaSchema(Map<String, Model> models,
+                         Map<String, List<String>> enums,
+                         Map<String, Map<String, Integer>> enumDynamicsValues) {
         this.models = models;
         this.enums = enums;
+        this.enumDynamicsValues = enumDynamicsValues;
     }
 
     /**
@@ -102,10 +113,14 @@ public final class PrismaSchema {
         Map<String, List<String>> enums = new LinkedHashMap<>();
         enumBodies.forEach((name, body) -> enums.put(name, parseEnumValues(body)));
 
+        Map<String, Map<String, Integer>> dynamicsValues = new LinkedHashMap<>();
+        enumBodies.forEach((name, body) -> dynamicsValues.put(name, parseEnumDynamicsValues(body)));
+
         Map<String, Model> models = new LinkedHashMap<>();
         modelBodies.forEach((name, body) -> models.put(name, parseModel(name, body, modelBodies.keySet())));
 
-        return new PrismaSchema(Collections.unmodifiableMap(models), Collections.unmodifiableMap(enums));
+        return new PrismaSchema(Collections.unmodifiableMap(models),
+            Collections.unmodifiableMap(enums), Collections.unmodifiableMap(dynamicsValues));
     }
 
     /** Models by their Prisma name. */
@@ -116,6 +131,16 @@ public final class PrismaSchema {
     /** Enum values, in the order the reference declares them, by enum name. */
     public Map<String, List<String>> enums() {
         return enums;
+    }
+
+    /**
+     * The Dynamics integer each enum member documents, by enum name.
+     *
+     * <p>Only members whose comment is a bare integer appear, so an enum the reference documents no
+     * values for yields an empty map rather than a partial one that reads as complete.
+     */
+    public Map<String, Map<String, Integer>> enumDynamicsValues() {
+        return enumDynamicsValues;
     }
 
     /** The named model, or a failure if the reference has no such model. */
@@ -172,6 +197,21 @@ public final class PrismaSchema {
             .filter(line -> !line.isEmpty())
             .map(line -> line.split("\\s+")[0])
             .toList();
+    }
+
+    /**
+     * The {@code Member // n} comments of one enum body, in declaration order. A member with no
+     * integer comment is simply absent, rather than mapped to a guessed value.
+     */
+    private static Map<String, Integer> parseEnumDynamicsValues(List<String> body) {
+        Map<String, Integer> values = new LinkedHashMap<>();
+        for (String raw : body) {
+            Matcher matcher = ENUM_VALUE.matcher(raw.trim());
+            if (matcher.matches()) {
+                values.put(matcher.group(1), Integer.valueOf(matcher.group(2)));
+            }
+        }
+        return Collections.unmodifiableMap(values);
     }
 
     private static Model parseModel(String name, List<String> body, Set<String> modelNames) {

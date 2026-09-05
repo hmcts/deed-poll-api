@@ -531,15 +531,73 @@ reference tests assert both directions.
 
 ### Task 11: Domain: the conformance harness
 
-- [ ] Port `reference/ts/conformance/`, roughly 32 test blocks, against the vendored Dataverse exports.
+- [x] Port `reference/ts/conformance/`, roughly 32 test blocks, against the vendored Dataverse exports.
       This is the proof the migration did not silently drop a column, so it is the last thing that should
       be allowed to lapse.
-- [ ] **Carry its caveat into a comment on the test class:** the Dataverse exports are alphabetically
+- [x] **Carry its caveat into a comment on the test class:** the Dataverse exports are alphabetically
       truncated at A–R despite declaring 70 columns, so this asserts forward coverage only — every column
       present must map — and must never be read as a complete column set.
 
-- [ ] Verify: `./gradlew test --tests "*Conformance*"`
-- [ ] Mark completed
+- [x] Verify: `./gradlew test --tests "*Conformance*"`
+- [x] Mark completed
+
+> **What task 11 did beyond the checkboxes, and four decisions worth reading.**
+>
+> - **All five modules of `reference/ts/conformance/` are ported, tests and all** — `artifacts`,
+>   `schema`, `state-cascade`, `field-rules`, `enum-values` and `conditional-gates` — into
+>   `uk.gov.hmcts.reform.deedpoll.conformance`, plus `reference/DataverseArtifacts` as the loader.
+>   **248 tests** where the reference has 32 blocks: most of the difference is the reference's own
+>   loops over the column maps counted individually (its one block over 5 tables is 72 tests here),
+>   the rest is the additions below, each noted at the test that carries it. `./gradlew build` is 894
+>   tests, all green; `--tests "*Conformance*"` is 387, which also picks up the task 3/4 schema test.
+> - **The truncation caveat is on `DataverseArtifacts` and on the test class, not only in a comment
+>   by the guard.** Both say the same thing the checkbox asks for: forward coverage only, and the
+>   export must never be read as a complete column set. The reference's own guard is ported verbatim
+>   — assert `deedpoll_Type`, `deedpoll_State` and `deedpoll_Urgency` are absent and
+>   `deedpoll_RefundReference` present — so a fuller export trips the test rather than quietly
+>   widening what "covered" means.
+> - **`DataverseSchemaConformanceTest` is the rename.** `db.SchemaConformanceTest` already held the
+>   plain name for the other half of the same question: that one asserts Flyway against the vendored
+>   `.prisma`, this one asserts the `.prisma` against the Dataverse exports it was derived from.
+>   Together they run from the source system to the live database; separately neither is enough.
+> - **Four additions, all of the same kind: read the specification instead of a transcription of
+>   it.** The reference's tests hand-copy things the vendored exports state in full, and a
+>   transcription only agrees with its source on the day it is written.
+>   (1) Every mapped field name is checked to exist in the reference schema — the reference's maps
+>   claim 69 field names and nothing verified one of them. (2) The Returned/Enroled contradiction
+>   message is read out of `business_rules.md` rather than retyped. (3) The whole 4-branch, 8-field
+>   required matrix is parsed out of `business_rules.md` by `BusinessRule` and asserted from it — the
+>   largest hand-copied thing in the port — with the parser strict enough that a rule gaining a
+>   branch or a field stops the build. (4) The Dynamics integers are checked against the `// n`
+>   comments the reference schema documents them in, which needed `PrismaSchema.enumDynamicsValues()`.
+> - **Three smaller additions.** `declaredColumnTotal` is exported by the reference and never called,
+>   so nothing pinned the parser against the export's own count; it is a test now, and a regex that
+>   silently stopped matching rows would otherwise shrink every coverage assertion to a green
+>   nothing. `hasNoBusinessRules` is asserted **false** for the case table, because an emptiness check
+>   that could only ever answer "empty" passes all four child tables while proving nothing. And the
+>   enum table is checked to cover every enum the reference declares, since a hand-written table can
+>   simply omit one.
+> - **`DynamicsValues.reverse` is called at its concrete type, via a supplier.** Eleven differently
+>   typed value maps share one test table by being re-keyed to member names, but `reverse` takes
+>   `Map<E, Integer>` and a wildcard will not compile — so each case carries a
+>   `Supplier<Map<Integer, ? extends Enum<?>>>` that calls it where the type is still known. The
+>   alternative was asserting uniqueness by hand and never running the method under test.
+> - **One reference block could not port: "invalid dates are treated as unset".** A JavaScript
+>   `Date` can hold an unparseable value that is still not null; a `LocalDateTime` cannot, so "unset"
+>   has one representation instead of two and there is no second case. It is absent rather than
+>   approximated, with a note where it would have been and the null case it collapses to asserted in
+>   its place — the same deviation `CaseStateInput` and task 6 already record.
+> - **Eight mutation checks, all of which fired.** Dropping a column from the forward map; pointing a
+>   mapped field at a name the schema does not declare; a parser that skips a row; the Adult branch no
+>   longer mandating marital status; a reworded contradiction message; a wrong Dynamics integer (which
+>   fails both the transcription and the schema-comment test); two members sharing an integer; and the
+>   minor gate clearing three fields instead of four. Note `failFast = true`, so each was run on its
+>   own.
+> - **Steve: the harness is now three-deep and worth knowing as one thing.** Dataverse export →
+>   `deed-poll.prisma` → Flyway/JPA. Task 11 covers the first arrow, tasks 3–5 the second. Nothing
+>   covers the columns the export never reached, and nothing can until a complete export exists —
+>   which is the one gap in the "did not silently drop a column" claim, and it is in the artifact
+>   rather than in the port.
 
 ---
 
