@@ -367,12 +367,47 @@ reference tests assert both directions.
 
 ### Task 8: Domain: notes
 
-- [ ] Port `reference/ts/notes/`, roughly 44 test blocks, and its tests.
-- [ ] `createNoteSchema` trims **and** delegates to `validateNoteText`. Both are load-bearing: without the
+- [x] Port `reference/ts/notes/`, roughly 44 test blocks, and its tests.
+- [x] `createNoteSchema` trims **and** delegates to `validateNoteText`. Both are load-bearing: without the
       trim, `"   "` is accepted as a note and whitespace is stored.
 
-- [ ] Verify: `./gradlew test --tests "*Note*"`
-- [ ] Mark completed
+- [x] Verify: `./gradlew test --tests "*Note*"`
+- [x] Mark completed
+
+> **What task 8 did beyond the checkboxes, and three decisions worth reading.**
+>
+> - **All four modules of `reference/ts/notes/` are ported, tests and all** — `note-form`, `schemas`,
+>   `notes-view` and `service` — into `uk.gov.hmcts.reform.deedpoll.domain.notes`, plus
+>   `repository/DeedPollNoteRepository`. 49 test methods where the reference has 44 blocks; the five
+>   extras are each noted at the test that carries them. `./gradlew test` is 521 tests, all green.
+> - **The trim and the delegation were both mutation-checked.** Returning the untrimmed value from
+>   `NoteSchemas` fails "stores the trimmed value" and "trims a present note"; sorting the grid
+>   ascending fails "orders newest-modified first"; dropping the parent check from `findNotes` fails
+>   "404s listing notes for a case that does not exist". A green build did not have to be taken on
+>   trust for any of the three.
+> - **`validateNoteText` returns `Optional<String>`**, the same deviation task 6 made and for the same
+>   reason: TypeScript's strict null checks force the caller to handle the null return and Java has
+>   none, so the obligation stays in the type. The ported tests assert `isEmpty()` where the reference
+>   asserts null.
+> - **`UpdateNoteInput` carries `Optional<String>`, not a nullable field.** The note column is
+>   `NOT NULL`, so absent and present are the only two states a note patch has and `null` is refused
+>   rather than stored — the same absent-versus-null care `DeedPollPatch` takes for the case, in the
+>   shape one non-nullable field needs. `createdBy` is not expressible in either input record, so an
+>   amend cannot rewrite who created a note; the reference deletes the key, this port has nothing to
+>   delete.
+> - **The reference's double scoping ports as a structural one.** It guards with a `findFirst` and
+>   *also* repeats `deedPollId` in the `update`/`delete` `where`, because with only the guard
+>   cross-case safety is a convention a later method could omit. Here every write goes through the
+>   entity that guard loaded — fetched by id **and** parent — and `DeedPollNoteRepository` has no
+>   unscoped finder, so an unscoped write is not expressible. An extra test asserts a wrong parent
+>   cannot delete somebody else's note.
+> - **`NoteServiceTest` runs against the throwaway Postgres**, like tasks 6 and 7, and is not
+>   `@Transactional`: the writes must commit for the assertions to read stored rows, so it clears the
+>   three tables around each test. Its ordering test backdates `createdOn` explicitly rather than
+>   trusting two creates to land in different microseconds.
+> - **`NoteAuthor` is kept as its own type** rather than folded into `WriteContext`, as the reference
+>   keeps it: a note write has no admin-only field, so nothing there should be able to ask whether the
+>   caller is an admin. It reads `SERVICE_ACCOUNT_NAME` from `WriteContext` rather than restating it.
 
 ### Task 9: Domain: witnesses
 
