@@ -739,16 +739,80 @@ entity from a controller.**
 
 ### Task 14: Caseworker case writes
 
-- [ ] `POST /caseworker/cases` — allocates a reference number via task 6. A create without `dateReceived`
+- [x] `POST /caseworker/cases` — allocates a reference number via task 6. A create without `dateReceived`
       cannot allocate one and must fail with a 400 rather than a 500; the reference records this as a known
       sharp edge.
-- [ ] `PATCH /caseworker/cases/{id}`
-- [ ] Field-level validation errors must come back attributed to the field, not as one message. The
+- [x] `PATCH /caseworker/cases/{id}`
+- [x] Field-level validation errors must come back attributed to the field, not as one message. The
       reference carries `FieldError[]` for exactly this reason and the UI renders them against individual
       inputs.
 
-- [ ] Verify: `./gradlew test --tests "*CaseworkerCaseController*"`
-- [ ] Mark completed
+- [x] Verify: `./gradlew test --tests "*CaseworkerCaseController*"`
+- [x] Mark completed
+
+> **What task 14 did beyond the checkboxes, and five decisions worth reading.**
+>
+> - **The two writes are one controller, `CaseworkerCaseController`**, with three new DTOs
+>   (`CreateCaseRequest`, `UpdateCaseRequest`, `SavedCaseResponse`) plus `CaseWriteRequest`, the base the
+>   two request types share. `--tests "*CaseworkerCaseController*"` is 24 tests, all green;
+>   `./gradlew build` is **1050 tests**, 0 failures. Task 15's notes and documents writes get their own
+>   controller, so a write stays with the resource it writes.
+> - **The request DTOs are not records of nullable components, and could not be.** A case patch turns on
+>   the three-way absent / null / value distinction — clearing `dateEnroled` un-enrols a case, omitting it
+>   must leave it alone — and a record of nullable components collapses the first two, so every PATCH
+>   would silently clear the sixty-odd fields the caller never mentioned. So `CaseWriteRequest` carries the
+>   body as a keyed map via `@JsonAnySetter` and hands it to `DeedPollSchemas`, which is exactly where the
+>   reference puts the same decision: its handlers pass `req.body` to a Zod schema whose `z.object()`
+>   strips unknown keys and reports the rest per field. **Mutation-checked**: making the any-setter drop
+>   null values fails "clears a field sent as null, and leaves an omitted one alone", which asserts both
+>   directions in one test.
+> - **`SavedCaseResponse` publishes `CaseDetailResponse`'s fields minus the three child collections, and
+>   the absence is deliberate rather than an economy.** A write does not read the children — the
+>   reference's create and update are a plain Prisma `create`/`update` with no `include`, where only
+>   `findDeedPoll` asks for them — so publishing them empty would tell a caller patching a case with three
+>   notes that it has none, and publishing them truthfully would mean three queries the domain
+>   deliberately does not issue. It is also the only shape that works: they are a lazy collection on a
+>   managed entity, and reading one after the transaction closes fails rather than answers.
+> - **One response type for both writes, where the plan asks for a type per operation.** A create and a
+>   patch return the same thing, and the reference returns the identical shape from both, so two identical
+>   seventy-six-component records would be a duplication with no reader and two places to add a column in.
+>   The *request* types are separate, because those really do differ in what an absent field means. Stated
+>   on the class so it does not read as a shortcut.
+> - **`SavedCaseResponseFieldsTest` pins the new record against `DeedPollFields` AND against
+>   `CaseDetailResponse`** — same names in the same order, minus the children, exactly. Each record's own
+>   coverage test would stay green while a column was published on the read and forgotten on the write,
+>   which would leave a client with a field that appears and disappears depending on which call last
+>   returned it. The populating machinery both tests share moved to `CaseResponseFields`;
+>   `CaseDetailResponseFieldsTest` now reads it from there rather than carrying its own copy, so the two
+>   DTOs cannot end up checked with different care. **Mutation-checked**: two transposed `String`
+>   arguments in `SavedCaseResponse.from` fail both flag vectors.
+> - **`DomainErrorHandler` gained a sixth branch, for an unreadable body.** `POST` needed it and no task
+>   owns the error layer — task 13 recorded the same about building it in the first place. Without it a
+>   client gets `ApiError` for every refusal this service reasons about and Boot's default error
+>   attributes for the one it does not, which is two things to parse for one status. **The reference gets
+>   this case wrong**: its body-parser error reaches `errorHandler()` unrecognised and falls to the
+>   catch-all, so unparseable JSON is answered 500 — a client error reported as a server error. Mapping
+>   the one framework signal narrowly fixes that without reintroducing the catch-all, whose own problems
+>   task 13 set out. The handler takes no exception parameter, which is how "the framework's message is
+>   not echoed" is enforced rather than intended. **Mutation-checked**: pointing the annotation at another
+>   exception type fails the test.
+> - **Four more mutation checks, all of which fired.** Passing `WriteContext.DEFAULT` instead of the
+>   caller's context fails "honours a privacy an admin sets on an existing case" — which is the check that
+>   the admin bit reaches the domain at all, not just that the domain honours it. The other two are in the
+>   bullets above. Note `failFast = true`, so each was run on its own.
+> - **What the write tests assert is the stored row, not the response.** A response is built from the same
+>   objects the write path just mutated, so a mapping that never reached the database would still answer
+>   correctly — the failure mode the reference's own tests could not see, having asserted the arguments a
+>   mocked Prisma client was called with. Both refusal tests also assert the row was left alone, which is
+>   what `DeedPollService` validating before it mutates buys and would otherwise be a claim resting on
+>   rollback.
+> - **`SavedCaseResponseFieldsTest` does not match `*CaseworkerCaseController*`**, so it is verified by
+>   `./gradlew build` rather than by the task's own verify command — the same situation tasks 12 and 13
+>   recorded. Renaming it to match would be dishonest about what it tests.
+> - **Steve: `springdoc.packagesToScan` is still `…deedpoll.controllers`**, so these two routes are absent
+>   from the published OpenAPI document along with task 13's four. Still task 16's, still a one-line
+>   change, and now six endpoints rather than four are missing from a spec that says it describes the
+>   service.
 
 ### Task 15: Caseworker notes and documents
 

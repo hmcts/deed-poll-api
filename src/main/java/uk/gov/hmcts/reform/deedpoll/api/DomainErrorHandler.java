@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.api;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -91,6 +92,35 @@ public class DomainErrorHandler {
     @ExceptionHandler(ConflictError.class)
     public ResponseEntity<ApiError> conflict(ConflictError error) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiError.of(error.getMessage()));
+    }
+
+    /**
+     * A request body that is not readable at all -- absent, truncated, or not a JSON object.
+     *
+     * <p>Spring already answers 400 for this, so what is added is the SHAPE: without it a caseworker client
+     * gets {@link ApiError} for every refusal this service reasons about and Boot's default error attributes for
+     * the one refusal it does not, which means two things to parse for the same status.
+     *
+     * <p><strong>The reference gets this wrong, and the difference is deliberate.</strong> Its body parser
+     * raises an error {@code errorHandler()} does not recognise, so it falls to the catch-all and an unparseable
+     * body is answered 500 -- a client error reported as a server error, which sends whoever is paged looking at
+     * this service. Mapping the one framework signal narrowly fixes that without reintroducing the catch-all,
+     * whose own problems are set out below.
+     *
+     * <p><strong>The framework's message is deliberately not echoed.</strong> It quotes the offending payload
+     * and names Java types, and this body is rendered by whatever is on the other end. A caller who sent
+     * unparseable JSON does not need to be told what they sent.
+     *
+     * <p>Note the narrowness: this is a body that could not be turned into an object at all. A body that parses
+     * and then says something unacceptable is a {@link InvalidInputError} from the ported schema, with the
+     * failure attributed to its field, which is the answer a form can render.
+     *
+     * <p>The exception is not taken as a parameter, which is how the paragraph above is enforced rather than
+     * merely intended: there is nothing of it to leak into the answer.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiError> unreadableBody() {
+        return ResponseEntity.badRequest().body(ApiError.of("Request body is missing or is not valid JSON"));
     }
 
     /**
