@@ -603,21 +603,53 @@ reference tests assert both directions.
 
 ### Task 12: Authentication and the two namespaces
 
-- [ ] Accept a forwarded IDAM bearer token on `/caseworker/**` — Spring Security as an OAuth2 resource
+- [x] Accept a forwarded IDAM bearer token on `/caseworker/**` — Spring Security as an OAuth2 resource
       server, issuer from configuration. `../deed-poll-admin/apps/api/src/auth/` is the reference for what
       it validates.
-- [ ] Authenticate by default: every route requires a token unless explicitly permitted, so a route added
+- [x] Authenticate by default: every route requires a token unless explicitly permitted, so a route added
       later is protected by omission rather than by memory. `apps/api/src/auth/authenticate.ts` documents
       this reasoning.
-- [ ] Create an **empty** `/citizen/**` namespace with its own controller package and its own DTO package.
+- [x] Create an **empty** `/citizen/**` namespace with its own controller package and its own DTO package.
       Nothing in it yet. It exists so plan 04 cannot accidentally share a caseworker DTO.
-- [ ] Add `AuthTokenGenerator` from `service-auth-provider-java-client` for outbound S2S, configured but
+- [x] Add `AuthTokenGenerator` from `service-auth-provider-java-client` for outbound S2S, configured but
       unused, with a non-working default secret.
 
-- [ ] Verify: `./gradlew test --tests "*Security*"` — must include a test that an unauthenticated request
+- [x] Verify: `./gradlew test --tests "*Security*"` — must include a test that an unauthenticated request
       to a `/caseworker/**` route is rejected, and an architecture test asserting no class in the citizen
       controller package imports from the caseworker DTO package.
-- [ ] Mark completed
+- [x] Mark completed
+
+> **What task 12 did beyond the checkboxes, and three things worth reading.**
+>
+> - **The implementation landed in the previous session's commits (`9cec400`, `d76c4d6`) with its
+>   checkboxes deliberately unticked**, so this session re-entered at task 12 and verified the work
+>   rather than assuming it. `--tests "*Security*"` is 24 tests across `SecurityConfigurationTest` and
+>   `NamespaceSeparationSecurityTest`, all green; `./gradlew build` is **986 tests**, 0 failures. Every
+>   claim in `9cec400`'s message was checked against the tree, not taken from the message.
+> - **`./gradlew build` was red, and task 12 caused it.** The template's `GetWelcomeTest` is a
+>   `@WebMvcTest` slice, and a slice **does not** get `SecurityConfiguration`: its include list covers
+>   `SecurityFilterChain` beans, and a `@Configuration` that *declares* one is not itself one, so the
+>   slice falls back to Boot's default chain, which authenticates every path — including `/`, which this
+>   service allowlists. It is now a full-context test extending `AbstractPostgresContainerTest`, like
+>   `OpenAPIPublisherTest`, and asserts the thing Azure's Always-On probe actually needs: 200 with no
+>   credential.
+> - **`SecurityConfiguration`'s javadoc said the opposite, and was corrected.** It claimed the IDAM beans
+>   live there because "a `@WebMvcTest` slice imports `SecurityFilterChain` beans" — the failure above
+>   disproves it. The beans stay where they are for the other reason given (one place to read how
+>   authentication is wired), and the paragraph now records the trap instead: a slice test asserts Boot's
+>   defaults in **both** directions, refusing a public path and admitting a protected one under
+>   `@WithMockUser`, so tasks 13–15's controller tests must boot the whole context to be asserting this
+>   service's rules at all.
+> - **The two assertions the checkbox names are present and are the narrower half of what is tested.**
+>   Unauthenticated `/caseworker/**` is refused, and ArchUnit checks the namespace separation as a
+>   bytecode rule rather than an import grep — so a fully-qualified name, a generic parameter or a field
+>   type is caught too. The citizen packages are empty, so all three ArchUnit rules pass vacuously today;
+>   `bothNamespacesExist()` is what stops that from making the class meaningless, asserting the four
+>   `package-info.java` files exist since a documentation-only package compiles to no class file.
+> - **`ServiceAuthConfigurationTest` does not match `*Security*`**, so the S2S checkbox is verified by
+>   `./gradlew build` rather than by the task's own verify command. It asserts the generator bean builds
+>   (which is also the only proof the Feign client the library needs is actually on the classpath), that
+>   the secret default is empty, and that no inbound `ServiceAuthFilter` is registered.
 
 ---
 

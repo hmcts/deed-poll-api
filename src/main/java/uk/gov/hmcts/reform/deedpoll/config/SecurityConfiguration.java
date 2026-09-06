@@ -40,10 +40,16 @@ import uk.gov.hmcts.reform.deedpoll.auth.IdamUserInfoClient;
  * request carries its own bearer token, and a CSRF token would be a thing for API clients to fetch and
  * forward for no gain.
  *
- * <p>The IDAM beans are declared here rather than in their own configuration class deliberately: a
- * {@code @WebMvcTest} slice imports {@link SecurityFilterChain} beans, so a controller test would otherwise
- * build a filter chain with no decoder behind it and fail for a reason that has nothing to do with the
- * controller. One place to look for how authentication is wired is also simply true of this shape.
+ * <p>The IDAM beans are declared here rather than in their own configuration class so that how
+ * authentication is wired has one place to be read.
+ *
+ * <p><strong>A {@code @WebMvcTest} slice does not get this chain.</strong> The slice's include list covers
+ * {@link SecurityFilterChain} beans, and a {@code @Configuration} class that <em>declares</em> one is not
+ * itself one, so this class is filtered out and the slice falls back to Spring Boot's default chain --
+ * which authenticates every path, including the ones allowlisted above. A slice test therefore asserts
+ * Boot's defaults rather than this service's rules, in either direction: it refuses a public path and it
+ * would admit a protected one under {@code @WithMockUser}. Tests that mean to assert authentication boot
+ * the whole context; {@code GetWelcomeTest} records where that bit.
  */
 @Configuration
 @EnableWebSecurity
