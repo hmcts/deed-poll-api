@@ -21,10 +21,14 @@ import java.util.List;
  * and returned rather than thrown.
  *
  * <p>The reference declares four more errors alongside this one -- {@link NotFoundError},
- * {@code ForbiddenError}, {@code UnauthorizedError} and {@link ConflictError} -- and a
- * {@code zodErrorToFieldErrors} helper. Each arrives with the ported module that throws it, so the
- * vocabulary stays a record of what the service actually refuses rather than a set of classes built
- * for an imagined caller. {@code ForbiddenError} and {@code UnauthorizedError} are still unported.
+ * {@link ForbiddenError}, {@link UnauthorizedError} and {@link ConflictError} -- and a
+ * {@code zodErrorToFieldErrors} helper. Each arrived with the ported module that throws it, so the
+ * vocabulary is a record of what the service actually refuses rather than a set of classes built for
+ * an imagined caller. All five are now ported; only the helper has no equivalent, because Bean
+ * Validation replaces Zod.
+ *
+ * <p>{@code DomainErrorHandler} maps this to a 400 and publishes {@link #errors()} alongside the
+ * message, which is the whole reason the list is carried rather than flattened into the text.
  */
 public class InvalidInputError extends RuntimeException {
 

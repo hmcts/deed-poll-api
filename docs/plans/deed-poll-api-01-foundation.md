@@ -665,14 +665,77 @@ entity from a controller.**
 
 ### Task 13: Caseworker reads
 
-- [ ] `GET /caseworker/cases` — the filtered list.
-- [ ] `GET /caseworker/cases/{id}` — one case **with its nested notes, witnesses and documents**. The
+- [x] `GET /caseworker/cases` — the filtered list.
+- [x] `GET /caseworker/cases/{id}` — one case **with its nested notes, witnesses and documents**. The
       reference does this in one query and the UI depends on it; do not split it into four calls.
-- [ ] `GET /caseworker/cases/field-rules`
-- [ ] `GET /caseworker/document-types`
+- [x] `GET /caseworker/cases/field-rules`
+- [x] `GET /caseworker/document-types`
 
-- [ ] Verify: `./gradlew test --tests "*CaseworkerReadController*"`
-- [ ] Mark completed
+- [x] Verify: `./gradlew test --tests "*CaseworkerReadController*"`
+- [x] Mark completed
+
+> **What task 13 did beyond the checkboxes, and five decisions worth reading.**
+>
+> - **The four reads are one controller, `CaseworkerReadController`**, with nine DTOs in
+>   `api.caseworker.dto`. `--tests "*CaseworkerReadController*"` is 25 tests, all green; `./gradlew build`
+>   is **1021 tests**, 0 failures. The writes of tasks 14 and 15 get a controller per resource, so grouping
+>   the reads does not leave a class that is about nothing.
+> - **The error layer had to be built, and no task in the plan owns it.** `GET /caseworker/cases/{id}` cannot
+>   404 without one. `api/DomainErrorHandler` is a `@RestControllerAdvice` porting the mapping in
+>   `../deed-poll-admin/apps/api/src/errors.ts` — 400 / 404 / 401+`WWW-Authenticate` / 403 / 409 for the five
+>   domain errors, plus a 400 for a query parameter Spring cannot convert — and `api/ApiError` is that file's
+>   `{error, errors}` body. Three of the six branches have no route that can reach them yet and are tested
+>   anyway; tasks 14 and 15 reach two of them.
+> - **There is deliberately no catch-all `Exception` handler, which the reference has.** Express leaks a stack
+>   trace from an unhandled rejection, so `errors.ts` intercepts everything; Spring Boot already answers 500
+>   with no message and no trace, and a handler broad enough to catch an unrecognised failure would also catch
+>   `NoResourceFoundException` and turn a correct 404 into a 500. `SecurityConfigurationTest` already asserts
+>   that 404, so the omission is pinned rather than merely reasoned about.
+> - **`ApiError` and `DomainErrorHandler` live in `api`, not in either namespace.** Not a violation of the
+>   namespace rule and not an accident of placement: the ArchUnit slices rule matches `api.(*)..`, so a shared
+>   sub-package *would* fail it, while `api` itself is not a slice. An error envelope carries no case data,
+>   which is what the rule is about.
+> - **The case list publishes six columns and an id, not a whole case.** `ListView.CASE_LIST_COLUMNS` names
+>   exactly those, and returning the full record per row would hand out every applicant's address, telephone
+>   number and referral notes to render a table that shows none of them. Asserted rather than described —
+>   `publishesOnlyTheListColumns` checks the absences. The response is an object rather than a bare array so
+>   it can echo the filter that was actually applied: `ListFilters.filterFor` falls back silently for an
+>   unrecognised key, which is right, but a fallback a caller cannot detect is how a tab renders as active
+>   while listing everything.
+> - **`CaseDetailResponse` is 79 components, and its field set is asserted against `DeedPollFields`.** The
+>   detail page reads the record by field name to build every tab, so the whole case is the operation. The set
+>   is the registry's 74 readable names plus the two derived counts and the three child collections — which
+>   excludes `placeOfBirth` and the parent block, the citizen-journey columns no caseworker form carries, and
+>   a test names those explicitly. A 79-argument canonical constructor is the hazard that buys: thirty-five
+>   are `String`, so two transposed compile silently. `CaseDetailResponseFieldsTest` populates every field
+>   with a value unique to it and compares field by field. **The four flags needed two runs** — four fields
+>   and two values cannot all differ in one — with vectors chosen so each flag has a distinct pair; the
+>   mutation checks below show the second vector earning its place.
+> - **A document's `storageKey` is not published; `hasFile` replaces it.** The key is an internal locator, a
+>   filename today and a CDAM document id after plan 03, and the only question a consumer asks of it is
+>   whether there is anything to download — a metadata row can legitimately exist before its file arrives.
+> - **`?type=` on field-rules is bound as a `List<String>` and resolved in the controller.** Spring converts a
+>   repeated parameter by silently taking the first value, so `?type=Adult&type=Minor` would answer the Adult
+>   rules — the reference's "wrong answer presented as a right one" reached by a different route from the
+>   prototype's unvalidated cast. All three inputs are exposed where the sibling TypeScript API exposes only
+>   `type`, because the detail page passes all three and over HTTP it has to send them.
+> - **Six mutation checks, all of which fired.** Two transposed `String` arguments; two transposed flags that
+>   only the *first* vector catches; two that only the *second* catches; a field dropped from the DTO;
+>   letting a repeated parameter pick the first value; and dropping `findDeedPoll`'s initialisation of the
+>   documents relation, which fails with `LazyInitializationException` at the HTTP boundary rather than
+>   serialising a proxy. Note `failFast = true`, so each was run on its own.
+> - **Three error javadocs were corrected rather than left to go stale.** `NotFoundError`,
+>   `InvalidInputError` and `ConflictError` each still said `ForbiddenError` and `UnauthorizedError` were
+>   unported, and each said "the route layer maps it to" a status that had nowhere to be read. Task 12 landed
+>   the two errors; this task is that route layer, so all three now name `DomainErrorHandler`.
+> - **`CaseDetailResponseFieldsTest` and `DomainErrorHandlerTest` do not match `*CaseworkerReadController*`**,
+>   so they are verified by `./gradlew build` rather than by the task's own verify command — the same
+>   situation task 12 recorded for `ServiceAuthConfigurationTest`. Renaming them to match would have been
+>   dishonest about what they test.
+> - **Steve: `springdoc.packagesToScan` is still `…deedpoll.controllers`**, so these four routes are absent
+>   from the published OpenAPI document. Deliberately left for task 16, which owns the spec, rather than
+>   widened here — but it is a one-line change and worth not forgetting, since a spec that silently omits the
+>   whole caseworker surface is worse than no spec.
 
 ### Task 14: Caseworker case writes
 
