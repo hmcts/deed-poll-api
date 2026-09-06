@@ -86,24 +86,29 @@ public final class StubIdam {
             """.formatted(advertisedIssuer, server.baseUrl(), server.baseUrl()))));
     }
 
-    /** Whatever should come back from {@code /o/userinfo}, verbatim. */
+    /**
+     * Whatever should come back from {@code /o/userinfo}, verbatim.
+     */
     public void stubUserInfoBody(String json) {
         server.stubFor(get(urlPathEqualTo("/o/userinfo")).willReturn(okJson(json)));
     }
 
-    /** Whatever IDAM should answer {@code /o/userinfo} with, when the answer is a refusal or an outage. */
+    /**
+     * Whatever IDAM should answer {@code /o/userinfo} with, when the answer is a refusal or an outage.
+     */
     public void stubUserInfoStatus(int status) {
         server.stubFor(get(urlPathEqualTo("/o/userinfo")).willReturn(aResponse().withStatus(status)));
     }
 
     public void stubUserInfo(String subject, String name, List<String> roles) {
+        String quotedRoles = roles.stream().map(role -> '"' + role + '"').collect(Collectors.joining(","));
         stubUserInfoBody("""
             {
               "sub": "%s",
               "name": "%s",
               "roles": [%s]
             }
-            """.formatted(subject, name, roles.stream().map(role -> '"' + role + '"').collect(Collectors.joining(","))));
+            """.formatted(subject, name, quotedRoles));
     }
 
     /** The stub's own base URL, for stubbing a response that has to name it. */
@@ -124,7 +129,9 @@ public final class StubIdam {
         return new JWKSet(signingKey.toPublicJWK()).toString();
     }
 
-    /** An ordinary, valid access token for {@link #SUBJECT}. */
+    /**
+     * An ordinary, valid access token for {@link #SUBJECT}.
+     */
     public String accessToken() {
         return accessToken(claims -> {
         });

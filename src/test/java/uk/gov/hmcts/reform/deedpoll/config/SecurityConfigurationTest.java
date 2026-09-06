@@ -249,7 +249,9 @@ class SecurityConfigurationTest extends AbstractPostgresContainerTest {
     @TestConfiguration
     static class ProbeConfiguration {
 
-        /** Registered by being a nested component of a configuration class, not by a {@code @Bean} method. */
+        /**
+         * Registered by being a nested component of a configuration class, not by a {@code @Bean} method.
+         */
         @RestController
         static class CaseworkerProbe {
 
