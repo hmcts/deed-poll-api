@@ -157,6 +157,26 @@ dependencies {
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-data-jpa'
   implementation group: 'org.springdoc', name: 'springdoc-openapi-starter-webmvc-ui', version: '2.8.17'
 
+  /*
+    Authentication. The resource-server starter brings spring-security-oauth2-jose (Nimbus), which
+    is what validates a forwarded IDAM access token's signature against the issuer's JWKS.
+  */
+  implementation group: 'org.springframework.boot', name: 'spring-boot-starter-security'
+  implementation group: 'org.springframework.boot', name: 'spring-boot-starter-oauth2-resource-server'
+
+  /*
+    Outbound service-to-service tokens, pinned as pcs-api pins it. Configured but unused in plan 01:
+    nothing here calls another CFT service yet, and the secret has a non-working default so a
+    misconfigured environment cannot mint anything.
+  */
+  implementation group: 'com.github.hmcts', name: 'service-auth-provider-java-client', version: '5.3.5'
+  /*
+    service-auth-provider-java-client declares no transitive dependencies: its
+    ServiceAuthorisationApi is a @FeignClient, and the client bean only exists if Spring Cloud
+    OpenFeign is on the classpath to build it. Version pinned as pcs-api pins it.
+  */
+  implementation group: 'org.springframework.cloud', name: 'spring-cloud-starter-openfeign', version: '4.3.3'
+
   implementation group: 'org.flywaydb', name: 'flyway-core'
   runtimeOnly group: 'org.flywaydb', name: 'flyway-database-postgresql'
   runtimeOnly group: 'org.postgresql', name: 'postgresql'
@@ -177,7 +197,20 @@ dependencies {
   implementation group: 'ch.qos.logback', name: 'logback-core', version: logbackVersion
 
   testImplementation group: 'org.springframework.boot', name: 'spring-boot-starter-test'
+  testImplementation group: 'org.springframework.security', name: 'spring-security-test'
   testImplementation group: 'io.rest-assured', name: 'rest-assured', version: '5.5.7'
+
+  /*
+    A stub IDAM. Nothing in the suite talks to a real issuer: there are no credentials, and a test
+    that needed them would be one nobody could run.
+  */
+  testImplementation group: 'org.wiremock', name: 'wiremock-standalone', version: '3.13.2'
+
+  /*
+    Architecture assertions -- the caseworker and citizen namespaces sharing no DTO is a rule about
+    dependencies between packages, which is a thing to assert rather than to remember.
+  */
+  testImplementation group: 'com.tngtech.archunit', name: 'archunit-junit5', version: '1.4.1'
 
   /*
     Every test that needs a database starts a throwaway Postgres. Nothing in the suite

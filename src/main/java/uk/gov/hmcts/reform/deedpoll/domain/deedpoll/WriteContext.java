@@ -1,5 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+
 /**
  * Viewer context for a write.
  *
@@ -16,13 +18,12 @@ public record WriteContext(boolean isAdmin, String userName) {
     /**
      * Fallback author for a write with no identified user.
      *
-     * <p>The reference exports this from {@code auth/current-user.ts}, which plan 01 task 12 owns; only
-     * the constant is needed here, so only the constant is ported -- and it lives on the type that uses
-     * it rather than in a stub of a module nobody has written yet. It matches the service account the
-     * source system records for automated and integration writes, so an unattributed write is labelled
-     * as one rather than left blank.
+     * <p>The reference exports this from {@code auth/current-user.ts}, which is now ported, so it is
+     * read from {@link CurrentUser} rather than restated here -- one definition, wherever an
+     * unattributed write is labelled. It matches the service account the source system records for
+     * automated and integration writes, so such a write is labelled as one rather than left blank.
      */
-    public static final String SERVICE_ACCOUNT_NAME = "# svc_HMCTS_LCPT_Dev";
+    public static final String SERVICE_ACCOUNT_NAME = CurrentUser.SERVICE_ACCOUNT_NAME;
 
     /** A non-admin caller with no name, attributed to the service account. */
     public static final WriteContext DEFAULT = new WriteContext(false, null);

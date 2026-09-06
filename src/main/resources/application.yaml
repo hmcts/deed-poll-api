@@ -15,6 +15,12 @@ management:
       base-path: /
       exposure:
         include: health, info, prometheus
+  health:
+    # service-auth-provider-java-client contributes a health indicator that calls S2S. Nothing here
+    # calls another CFT service yet, so the only thing it could report is the availability of a
+    # dependency this service does not have -- and it would page somebody for it.
+    serviceAuth:
+      enabled: false
 
 springdoc:
   packagesToScan: uk.gov.hmcts.reform.deedpoll.controllers
@@ -66,6 +72,27 @@ spring:
     # A caseworker request must not hold a database connection open for the whole of view
     # rendering; every fetch the response needs is done in the service layer.
     open-in-view: false
+
+idam:
+  api:
+    # The IDAM issuer a forwarded access token must come from. Empty by default, so an environment
+    # that has not been given one refuses every token rather than trusting an issuer nobody chose.
+    # Endpoints are discovered from it, never configured: this was written without access to a real
+    # CFT IDAM, so any hardcoded path would be a guess.
+    issuer-url: ${IDAM_API_ISSUER_URL:}
+    # Which `aud` values are ours. IDAM signs the whole estate's tokens with one key set, so a
+    # signature alone only proves "some IDAM token"; the audience check is what stops a token minted
+    # for another service being replayed here. Comma-separated because it arrives from a Helm env
+    # map, where a list would have to be JSON-encoded into a string. Empty means every token is
+    # refused -- an unset value must not be the permissive case.
+    audiences: ${IDAM_API_AUDIENCES:}
+  s2s-auth:
+    # Outbound service-to-service tokens. Configured but unused in plan 01: nothing here calls
+    # another CFT service. The secret has no default, so a deployed environment that has not been
+    # given one cannot mint a token that would be refused anyway.
+    url: ${IDAM_S2S_AUTH_URL:http://localhost:4502}
+    totp-secret: ${DEED_POLL_API_S2S_SECRET:}
+    microservice: ${S2S_SERVICE_NAME:deed_poll_api}
 
 deedpoll:
   documents:
