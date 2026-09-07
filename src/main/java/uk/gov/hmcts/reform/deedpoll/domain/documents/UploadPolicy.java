@@ -27,6 +27,18 @@ public final class UploadPolicy {
     public static final String UPLOAD_FILE_FIELD = "file";
 
     /**
+     * A multipart request that could not be parsed at all -- no {@code boundary}, a truncated body, a malformed
+     * part header.
+     *
+     * <p><strong>Deliberately not one of the reference's Multer codes</strong>, because Multer never raises this:
+     * Express refuses the request before the interceptor sees it. It exists so the handler for Spring's generic
+     * {@code MultipartException} names what it is passing rather than passing a bare string, and so lands on
+     * {@link #messageForLimit}'s vague message on purpose rather than by falling off the end of a lookup. That
+     * fallback is the point -- see its comment: a vague message beats an unmapped failure becoming a 500.
+     */
+    public static final String UNREADABLE_UPLOAD = "UNREADABLE_MULTIPART";
+
+    /**
      * 25 MB. Raised from 10 MB on Steve's call, 2026-09-03.
      *
      * <p>These are scanned certificates and multi-page deeds, and a colour scan of a multi-page document at

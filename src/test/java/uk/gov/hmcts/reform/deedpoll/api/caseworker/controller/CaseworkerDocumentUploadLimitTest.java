@@ -16,12 +16,15 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.multipart.MultipartResolver;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
@@ -130,5 +133,33 @@ class CaseworkerDocumentUploadLimitTest extends AbstractPostgresContainerTest {
             .andExpect(jsonPath("$.errors[0].field").value(UploadPolicy.UPLOAD_FILE_FIELD))
             .andExpect(jsonPath("$.errors[0].message")
                 .value(UploadPolicy.uploadLimitRejection("LIMIT_FILE_SIZE").errors().get(0).message()));
+    }
+
+    @Test
+    @DisplayName("a multipart request that will not parse is a 400 too, and not a 500")
+    void anUnparseableMultipartIsABadRequest() throws Exception {
+        // The size limit is only one of the refusals raised at resolution time. A missing boundary parameter, a
+        // body truncated by a dropped connection, or a malformed part header all arrive as a plain
+        // MultipartException -- a NestedRuntimeException that DefaultHandlerExceptionResolver does not know and
+        // that ResponseEntityExceptionHandler, deliberately not extended here, would otherwise have covered. Left
+        // unmapped it is a 500 for an ordinary client mistake, which pages on-call for a caller's flaky upload.
+        given(multipartResolver.isMultipart(any())).willReturn(true);
+        willThrow(new MultipartException("Failed to parse multipart servlet request"))
+            .given(multipartResolver).resolveMultipart(any());
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(IDAM.accessToken());
+
+        mockMvc.perform(post("/caseworker/cases/any-case/documents")
+                .headers(headers)
+                .contentType(MediaType.MULTIPART_FORM_DATA))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error")
+                .value(UploadPolicy.uploadLimitRejection(UploadPolicy.UNREADABLE_UPLOAD).getMessage()))
+            .andExpect(jsonPath("$.errors.length()").value(1))
+            .andExpect(jsonPath("$.errors[0].field").value(UploadPolicy.UPLOAD_FILE_FIELD))
+            // The framework's own message quotes the offending request; this body is rendered by whatever is on
+            // the other end, so none of it is echoed.
+            .andExpect(jsonPath("$.error").value(not(containsString("servlet"))));
     }
 }

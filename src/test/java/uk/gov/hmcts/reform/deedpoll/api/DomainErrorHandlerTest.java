@@ -31,10 +31,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link ConflictError} -- and are mapped and tested anyway. The mapping is one class either way, and an untested
  * branch in an error handler is exactly the branch that turns out to answer 500.
  *
- * <p>The upload-size branch is here for the table's sake and pinned to the dispatcher elsewhere:
+ * <p>The two multipart branches are here for the table's sake and pinned to the dispatcher elsewhere:
  * {@code CaseworkerDocumentUploadLimitTest} proves this advice is consulted for a refusal raised while the
  * request was still being resolved, when no handler method had been chosen for a controller-local handler to sit
- * on.
+ * on. It covers both, because an over-size file and an unparseable body take different paths to the same place
+ * and one being mapped has never implied the other is.
  */
 class DomainErrorHandlerTest {
 
@@ -143,5 +144,35 @@ class DomainErrorHandlerTest {
             .isEqualTo(UploadPolicy.uploadLimitRejection("LIMIT_FILE_SIZE").getMessage());
         assertThat(response.getBody().errors()).hasSize(1);
         assertThat(response.getBody().errors().get(0).field()).isEqualTo(UploadPolicy.UPLOAD_FILE_FIELD);
+    }
+
+    @Test
+    @DisplayName("an unparseable multipart request is a 400, not the 500 nothing else would have caught")
+    void anUnparseableMultipartIsABadRequest() {
+        // MultipartException is a NestedRuntimeException, not an ErrorResponse and not a ServletException, so it
+        // is absent from DefaultHandlerExceptionResolver's chain -- and ResponseEntityExceptionHandler is
+        // deliberately not extended here. Unmapped, a caller aborting an upload mid-body pages on-call.
+        ResponseEntity<ApiError> response = handler.unreadableMultipart();
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().errors()).hasSize(1);
+        assertThat(response.getBody().errors().get(0).field()).isEqualTo(UploadPolicy.UPLOAD_FILE_FIELD);
+        // The policy's vague message, which is what its unenumerated-code fallback exists to give. Read from the
+        // policy rather than transcribed, so correcting the wording there corrects this too.
+        assertThat(response.getBody().error())
+            .isEqualTo(UploadPolicy.uploadLimitRejection(UploadPolicy.UNREADABLE_UPLOAD).getMessage());
+    }
+
+    @Test
+    @DisplayName("the two multipart refusals give different messages, so the size limit is not swallowed")
+    void theSizeLimitIsNotSwallowedByTheGenericMultipartHandler() {
+        // MaxUploadSizeExceededException is a subclass of MultipartException, so registering the parent risks the
+        // specific message being lost. Spring resolves by hierarchy depth, and the two messages differing is what
+        // makes that visible if the resolution ever changes.
+        assertThat(handler.uploadTooLarge().getBody()).isNotNull();
+        assertThat(handler.unreadableMultipart().getBody()).isNotNull();
+        assertThat(handler.uploadTooLarge().getBody().error())
+            .isNotEqualTo(handler.unreadableMultipart().getBody().error());
     }
 }

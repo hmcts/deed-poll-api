@@ -184,8 +184,9 @@ public class OpenAPIWriteBodies {
         form.addProperty("file", new StringSchema().format("binary")
             .description("The file. A PDF, image or Word document, within the configured size limit."));
         form.addProperty("documentTypeId", new StringSchema().format("uuid")
-            .description("The document type this file is filed under. Must be a type the case's marital status "
-                + "and deed poll type allow."));
+            .description("The document type this file is filed under. Must be an existing type, or 404. A type's "
+                + "applicability to the case's marital status and deed poll type is advisory -- it is what a form "
+                + "filters its options by, and the service does not enforce it."));
         form.addProperty("name", new StringSchema()
             .description("An optional display name. Defaults to the uploaded filename, capped to the column."));
 

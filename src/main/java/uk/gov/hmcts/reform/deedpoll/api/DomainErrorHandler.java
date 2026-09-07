@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
@@ -144,6 +145,33 @@ public class DomainErrorHandler {
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ApiError> uploadTooLarge() {
         return invalidInput(UploadPolicy.uploadLimitRejection("LIMIT_FILE_SIZE"));
+    }
+
+    /**
+     * A multipart request that could not be parsed at all -- no {@code boundary} parameter, a body truncated by a
+     * dropped connection, a malformed part header.
+     *
+     * <p><strong>Without this the size limit above is the only multipart refusal that is a 400, and every other
+     * one is a 500.</strong> {@link MaxUploadSizeExceededException} is a subclass of
+     * {@link org.springframework.web.multipart.MultipartException}, and the parent is a
+     * {@code NestedRuntimeException} rather than an {@code ErrorResponse} or a {@code ServletException} -- so it
+     * appears nowhere in {@code DefaultHandlerExceptionResolver}'s chain, and {@code ResponseEntityExceptionHandler}
+     * is deliberately not extended here. Nothing else in the service handles it. That is exactly the trap the
+     * javadoc above says this class exists to avoid: a client error reported as a server error, which sends
+     * whoever is paged looking at this service. A caller aborting an upload mid-body is ordinary and would
+     * otherwise page on-call.
+     *
+     * <p>Registered alongside the subclass rather than instead of it, and the ordering needs no care: Spring
+     * resolves the most specific {@code @ExceptionHandler} by exception-hierarchy depth, so an over-size file
+     * still gets the size message and only the unparseable ones reach here.
+     *
+     * <p>The exception is not taken as a parameter, for the reason {@link #unreadableBody()} gives: the
+     * framework's message quotes the offending request, and this body is rendered by whatever is on the other
+     * end. The policy's own wording is used instead, attributed to the file input a form renders it against.
+     */
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<ApiError> unreadableMultipart() {
+        return invalidInput(UploadPolicy.uploadLimitRejection(UploadPolicy.UNREADABLE_UPLOAD));
     }
 
     /**

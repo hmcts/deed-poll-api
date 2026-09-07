@@ -13,7 +13,7 @@ committed, one commit per task, plus a review-fixes commit on top. `master` hold
 | | |
 |---|---|
 | Tasks complete and committed | **0–16**, all of them |
-| Flyway migrations | 3 — enums, `DeedPoll`, children |
+| Flyway migrations | 4 — enums, `DeedPoll`, children, list indexes |
 | Caseworker endpoints | 12, and no thirteenth |
 | `/citizen/**` | exists, empty, shares no DTO with `/caseworker/**` |
 
