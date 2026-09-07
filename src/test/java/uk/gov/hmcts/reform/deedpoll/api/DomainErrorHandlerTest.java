@@ -12,6 +12,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 
 import java.util.List;
 
@@ -26,9 +27,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * offending parameter name, both over real HTTP. The two together cover more than a set of probe routes would,
  * and cost less.
  *
- * <p>Three of the six have no route that can throw them yet, and are mapped and tested anyway. The mapping is
- * one class either way, tasks 14 and 15 will reach {@link InvalidInputError} and {@link ConflictError}, and an
- * untested branch in an error handler is exactly the branch that turns out to answer 500.
+ * <p>Two of the domain errors still have no route that can throw them -- {@link UnauthorizedError} and
+ * {@link ConflictError} -- and are mapped and tested anyway. The mapping is one class either way, and an untested
+ * branch in an error handler is exactly the branch that turns out to answer 500.
+ *
+ * <p>The upload-size branch is here for the table's sake and pinned to the dispatcher elsewhere:
+ * {@code CaseworkerDocumentUploadLimitTest} proves this advice is consulted for a refusal raised while the
+ * request was still being resolved, when no handler method had been chosen for a controller-local handler to sit
+ * on.
  */
 class DomainErrorHandlerTest {
 
@@ -120,5 +126,22 @@ class DomainErrorHandlerTest {
         // end. Naming the parameter is what makes the error actionable; repeating the value adds nothing.
         assertThat(response.getBody().errors().get(0).message()).doesNotContain("nonsense");
         assertThat(response.getBody().error()).doesNotContain("nonsense");
+    }
+
+    @Test
+    @DisplayName("a file over the limit is the upload policy's own 400, attributed to the file input")
+    void tooLargeAnUploadIsThePolicysBadRequest() {
+        // Translated into the domain's refusal rather than answered from here, so the sentence a caller reads is
+        // the one the sibling web app's form gives and is derived from the same constant. The transport's own
+        // rejection is not a domain error: unwrapped it becomes a 500, telling a caseworker the server has
+        // broken when in fact their file was too big.
+        ResponseEntity<ApiError> response = handler.uploadTooLarge();
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().error())
+            .isEqualTo(UploadPolicy.uploadLimitRejection("LIMIT_FILE_SIZE").getMessage());
+        assertThat(response.getBody().errors()).hasSize(1);
+        assertThat(response.getBody().errors().get(0).field()).isEqualTo(UploadPolicy.UPLOAD_FILE_FIELD);
     }
 }

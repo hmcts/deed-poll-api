@@ -7,12 +7,14 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 
 import java.util.List;
 
@@ -121,6 +123,27 @@ public class DomainErrorHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiError> unreadableBody() {
         return ResponseEntity.badRequest().body(ApiError.of("Request body is missing or is not valid JSON"));
+    }
+
+    /**
+     * A file over the upload limit.
+     *
+     * <p>Translated into the domain's own refusal rather than answered from here, so the message a caller reads is
+     * the policy's -- derived from {@link uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy#MAX_UPLOAD_BYTES}
+     * and identical to the one the sibling web app's form gives -- and attributed to the file input a form renders
+     * it against. The reference records three defects that fell into the trap this avoids: the transport's own
+     * rejection is not a domain error, so unwrapped it reaches the error layer unrecognised and becomes a 500,
+     * telling a caseworker the server has broken when in fact their file was too big.
+     *
+     * <p><strong>It has to live here rather than on the controller, and that is not a stylistic choice.</strong>
+     * The exception is raised while the request is being resolved as multipart, which happens before a handler
+     * method is selected -- so there is no handler for a controller-local {@code @ExceptionHandler} to be found
+     * on, and only a {@code @ControllerAdvice} is consulted. A handler written next to the upload route would
+     * compile, never fire, and answer 500.
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiError> uploadTooLarge() {
+        return invalidInput(UploadPolicy.uploadLimitRejection("LIMIT_FILE_SIZE"));
     }
 
     /**

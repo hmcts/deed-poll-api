@@ -816,18 +816,96 @@ entity from a controller.**
 
 ### Task 15: Caseworker notes and documents
 
-- [ ] `GET` and `POST /caseworker/cases/{id}/notes`, and `GET`/`PATCH
+- [x] `GET` and `POST /caseworker/cases/{id}/notes`, and `GET`/`PATCH
       /caseworker/cases/{id}/notes/{noteId}`.
-- [ ] `POST /caseworker/cases/{id}/documents` — multipart upload, writing through the `DocumentStore`
+- [x] `POST /caseworker/cases/{id}/documents` — multipart upload, writing through the `DocumentStore`
       interface.
-- [ ] `GET /caseworker/cases/{id}/documents/{documentId}/file` — streams from `DocumentStore`. Set
+- [x] `GET /caseworker/cases/{id}/documents/{documentId}/file` — streams from `DocumentStore`. Set
       `Content-Disposition: inline` for `application/pdf`, `image/jpeg` and `image/png`, `attachment`
       otherwise, plus `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`. The inline decision
       and its reasoning are in the API plan; the allowlist is what makes it safe.
-- [ ] A child list under a non-existent parent case must 404, not return an empty list with 200.
+- [x] A child list under a non-existent parent case must 404, not return an empty list with 200.
 
-- [ ] Verify: `./gradlew test --tests "*CaseworkerNote*" --tests "*CaseworkerDocument*"`
-- [ ] Mark completed
+- [x] Verify: `./gradlew test --tests "*CaseworkerNote*" --tests "*CaseworkerDocument*"`
+- [x] Mark completed
+
+> **What task 15 did beyond the checkboxes, and six decisions worth reading.**
+>
+> - **Two controllers, `CaseworkerNoteController` and `CaseworkerDocumentController`**, with three new
+>   request DTOs (`CreateNoteRequest`, `UpdateNoteRequest`, and `api/KeyedRequestBody` as the base they
+>   share with the case writes). `NoteResponse` and `DocumentResponse` already existed from task 13 and
+>   are reused unchanged — the nested notes and documents on the case detail response and these routes
+>   are the same resource, so a second shape would be a second answer to "what is a note". The task's own
+>   verify command is **73 tests**, all green; `./gradlew build` is **1124 tests**, 0 failures.
+> - **Twelve caseworker routes exist, where the plan's prose says eleven, and nothing was dropped or
+>   added to reach either number.** The plan's own task lists enumerate twelve: four reads, two case
+>   writes, four note operations, an upload and a download. So "eleven" is a miscount rather than a
+>   decision — the same kind task 4 records about "two indexes" where the reference declares three. It is
+>   stated in the controller package's `package-info.java` so the discrepancy does not later read as a
+>   twelfth route somebody slipped in. **Steve: the plan's success criterion says "eleven and no twelfth",
+>   so that line wants correcting rather than the code.**
+> - **`KeyedRequestBody` was extracted rather than the `@JsonAnySetter` map written twice.** A note patch
+>   needs the same absent-versus-null distinction a case patch does, for a narrower reason: the note column
+>   is `NOT NULL`, so `{"note": null}` must be a 400 and `{}` an accepted empty patch, and a record of one
+>   nullable component makes those the same body — a client clearing a note would get a success and an
+>   unchanged row. It lives in `api` rather than either namespace's `dto`, for `ApiError`'s reason: it
+>   carries no case data and has no audience-specific shape, so the ArchUnit slices rule still holds.
+>   `CaseWriteRequest` now extends it and keeps only the case-specific half of its javadoc.
+>   **Mutation-checked**: making `parseUpdateNote` treat a null as absent fails "400s an explicit null
+>   instead of treating it as an empty patch".
+> - **The upload is at the collection URL and there is no metadata-only create, which diverges from the
+>   reference on purpose.** The reference has `POST /documents` as a metadata create and `POST
+>   /documents/upload` for the file; the plan asks for the upload at the collection URL, and the metadata
+>   create has no consumer. So a client written against the reference gets an unambiguous **415** for a
+>   JSON body rather than a silent 400, and there is a test for that. `GET /documents` is absent too —
+>   `GET /caseworker/cases/{id}` already carries a case's documents, which is where the detail page reads
+>   them.
+> - **Multipart limits are a `MultipartConfigElement` bean derived from `UploadPolicy.MAX_UPLOAD_BYTES`,
+>   not `application.yaml`.** Spring Boot's default is **1 MB per file**, which every scanned certificate
+>   exceeds, so without this the route would refuse almost everything a caseworker has. A property was the
+>   obvious alternative and is the wrong one: the refusal message is derived from the same constant, so an
+>   environment able to override the property could enforce 5 MB while telling the caller the limit is 25.
+>   Declaring the bean makes `spring.servlet.multipart.max-file-size` inert, which is recorded on the class
+>   because it is a trap otherwise. `maxRequestSize` is the file limit plus 1 MB, because boundaries, part
+>   headers and the form fields count towards the request size and a request ceiling equal to the file
+>   ceiling would refuse a file of exactly the permitted size.
+> - **`DomainErrorHandler` gained a seventh branch, and it could not have gone on the controller.** A
+>   too-large file is refused while the request is being resolved as multipart, before a handler method is
+>   selected — so only a `@ControllerAdvice` is consulted, and an `@ExceptionHandler` written next to the
+>   upload route would compile, never fire, and answer 500. `CaseworkerDocumentUploadLimitTest` pins that
+>   with a mocked resolver rather than a 26 MB body: a real over-size upload is answered and then has its
+>   connection dropped, because the server stops reading a body it has already refused, so the test would be
+>   racing the socket for the response it means to assert. The figure that would have been compared against
+>   is asserted separately, from the bean. **Mutation-checked**: pointing the annotation at another
+>   exception type fails the test.
+> - **`X-Content-Type-Options: nosniff` is deliberate redundancy, and the test does not pin which line
+>   sets it.** Deleting the controller's header changes nothing, because Spring Security's default header
+>   writers already add it to every response — checked, not assumed, and it is the one mutation in this task
+>   that did **not** fire. The header is kept anyway: this is the only route serving bytes a member of the
+>   public uploaded, and a later `contentTypeOptions(disable)` in the filter chain must not quietly take the
+>   protection off it. What the test does pin is that it appears exactly once, since two sources setting one
+>   header is how a proxy ends up choosing between them. Same situation for `Cache-Control: no-store`, where
+>   the controller's value wins because Security skips a header already present.
+> - **No `Content-Length` on the download, deliberately.** The obvious candidate is the row's `sizeBytes`,
+>   which is recorded rather than measured: a row whose blob moved through the metadata path can disagree
+>   with it, and a wrong length truncates the download or hangs it. Chunked instead, with a test that the
+>   header is absent.
+> - **The filename sanitiser and the parameter stripper are both carried over with their reasoning.**
+>   `originalName` is attacker-controlled text on a response header, so only `[A-Za-z0-9._ -]` survives and a
+>   name reduced to nothing becomes `document`. A stored `mimeType` that will not parse as a media type is
+>   treated as no type at all — not hypothetical, because an upload's type is checked against the allowlist
+>   but the metadata path asks only that it is text, and an unparseable value on a header is how an injection
+>   gets in. On the way in, a `Content-Type`'s parameters are stripped before the policy is asked, because the
+>   policy matches exactly so that `application/` can never be read as a prefix.
+> - **Seven mutation checks fired, one did not.** Emptying the inline allowlist; dropping the two-file
+>   count check; letting a repeated form field pick its first value; not stripping content-type parameters;
+>   returning an unsanitised filename; rethrowing an unparseable media type; dropping `findNotes`'s parent
+>   check (which is the plan's own 404-not-empty-list checkbox); and treating a null note as absent. The one
+>   that did not fire is `nosniff`, above. Note `failFast = true`, so each was run on its own.
+> - **Steve: `springdoc.packagesToScan` is still `…deedpoll.controllers`**, so these six routes are absent
+>   from the published OpenAPI document along with tasks 13 and 14's six. Still task 16's, still a one-line
+>   change, and now the whole caseworker surface — twelve routes — is missing from a spec that says it
+>   describes the service.
 
 ---
 
