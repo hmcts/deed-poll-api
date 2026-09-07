@@ -162,6 +162,46 @@ You should get a response similar to this:
   {"status":"UP","diskSpace":{"status":"UP","total":249644974080,"free":137188298752,"threshold":10485760}}
 ```
 
+### The two probes, and why they differ
+
+There are two Kubernetes probes and they deliberately do not check the same things.
+
+```bash
+  curl http://localhost:4550/health/readiness
+  curl http://localhost:4550/health/liveness
+```
+
+**Readiness** — should traffic come to this pod? It checks the database twice over: `db` is Spring
+Boot's own connection check, and `deedPollSchema` asks whether the six deed-poll tables are actually
+there. A connection check alone passes against an unmigrated database, where the probe stays green
+while every request 500s. When a table is missing the response **names it**, so a page that says
+"readiness DOWN" comes with the diagnosis attached rather than needing one:
+
+```
+  {"status":"DOWN","components":{"deedPollSchema":{"status":"DOWN","details":{
+    "error":"the deed-poll schema is incomplete. Has the migration job run?",
+    "missingTables":["deedpoll_notes","deedpoll_witness"]}}}}
+```
+
+**Liveness** — should this process be killed and restarted? It checks nothing but the process
+answering, on purpose. Restarting cannot create a missing table and cannot fix someone else's
+database, so putting the database in liveness turns a blip into a rolling restart of every replica
+and destroys the pods that would have recovered on their own.
+
+Both are public, because Kubernetes has no token to present. `uk.gov.hmcts.reform.deedpoll.health`
+and the `management.endpoint.health.group` block in `application.yaml` are the two places this is
+written down; `HealthProbeTest` asserts it over HTTP, including that readiness answers **503** and
+not 200 when the database is unreachable.
+
+### The OpenAPI document
+
+Published at `/v3/api-docs`, and browsable at `/swagger-ui.html`. `springdoc.packagesToScan` covers
+`…deedpoll.api`, so a controller is documented by being in the package it belongs in rather than by
+somebody remembering to add it. `OpenAPIPublisherTest` writes the document to
+`/tmp/openapi-specs.json`, which is where the HMCTS Jenkins library reads it to publish to
+[`hmcts/cnp-api-docs`](https://github.com/hmcts/cnp-api-docs), and asserts that it actually
+describes the caseworker surface rather than merely being served.
+
 ### Alternative script to run application
 
 To skip all the setting up and building, just execute the following command:

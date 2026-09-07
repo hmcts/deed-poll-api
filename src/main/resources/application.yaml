@@ -2,14 +2,32 @@ server:
   port: 4550
   shutdown: "graceful"
 
-# If you use a database then uncomment the `group:, readiness: and include: "db"` lines in the health probes and uncomment the datasource section
 management:
   endpoint:
     health:
       show-details: "always"
-      # group:
-      #  readiness:
-      #   include: "db"
+      # Enabled explicitly rather than relying on Boot's "am I in Kubernetes" auto-detection, so
+      # /health/liveness and /health/readiness exist in every environment. A probe that only exists
+      # in the cluster is a probe nobody can try before deploying.
+      probes:
+        enabled: true
+      group:
+        # Should traffic come to this pod? `db` is Boot's own connection check and `deedPollSchema`
+        # is DeedPollSchemaHealthIndicator: a connection alone passes against an unmigrated database,
+        # where every request would 500 while the probe stayed green. `readinessState` is Boot's own,
+        # and is what turns the probe DOWN during graceful shutdown so the pod leaves the service
+        # before it stops accepting requests.
+        readiness:
+          include: "readinessState,db,deedPollSchema"
+          # The missing table names are the point -- see DeedPollSchemaHealthIndicator. Stated here
+          # rather than inherited, because a group that quietly stopped showing details would answer
+          # a bare DOWN and lose the diagnosis.
+          show-details: "always"
+        # Should this process be killed? Deliberately nothing but the process itself. A database blip
+        # must not restart every pod: restarting cannot fix someone else's database, and it destroys
+        # the replicas that would have recovered when the database came back.
+        liveness:
+          include: "livenessState"
   endpoints:
     web:
       base-path: /
@@ -23,7 +41,11 @@ management:
       enabled: false
 
 springdoc:
-  packagesToScan: uk.gov.hmcts.reform.deedpoll.controllers
+  # `api` rather than the four controller packages under it, so a namespace added later -- or a
+  # controller put in a sub-package nobody thought to list -- is documented by being where it belongs
+  # instead of by somebody remembering this line. The template's `controllers` package is the
+  # Always-On root endpoint, which is infrastructure rather than API but costs nothing to publish.
+  packagesToScan: uk.gov.hmcts.reform.deedpoll.controllers, uk.gov.hmcts.reform.deedpoll.api
   writer-with-order-by-keys: true
 
 spring:

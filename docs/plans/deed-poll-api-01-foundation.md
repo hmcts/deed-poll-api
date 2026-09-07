@@ -911,19 +911,82 @@ entity from a controller.**
 
 ### Task 16: Health, readiness and the OpenAPI spec
 
-- [ ] Readiness must check the database **and name the missing tables** if any are absent — being paged for
+- [x] Readiness must check the database **and name the missing tables** if any are absent — being paged for
       "readiness DOWN" with no further detail wastes the diagnosis.
       `../deed-poll-admin/libs/deed-poll/src/health.ts` is the reference, including why the table list
       cannot be derived.
-- [ ] Liveness stays empty on purpose: the process answering is the signal. A database blip must not make
+- [x] Liveness stays empty on purpose: the process answering is the signal. A database blip must not make
       Kubernetes restart every pod, because restarting cannot fix someone else's database.
-- [ ] Publish an OpenAPI spec via springdoc, and wire the `SwaggerPublisherTest` pattern the template
+- [x] Publish an OpenAPI spec via springdoc, and wire the `SwaggerPublisherTest` pattern the template
       ships so it can later publish to `hmcts/cnp-api-docs`.
 
-- [ ] Verify: `./gradlew build && ./gradlew test --tests "*Health*"` — including a test that readiness
+- [x] Verify: `./gradlew build && ./gradlew test --tests "*Health*"` — including a test that readiness
       returns 503, not 200, when the database is unreachable. Returning 200 on a failed probe is a real defect
       this codebase has already had once.
-- [ ] Mark completed
+- [x] Mark completed
+
+> **What task 16 did beyond the checkboxes, and five decisions worth reading.**
+>
+> - **`uk.gov.hmcts.reform.deedpoll.health` is two classes, and the split is the point.**
+>   `DeedPollSchema` answers "which of the six tables is absent", which is a fact a test can assert
+>   against a real database; `DeedPollSchemaHealthIndicator` turns that into UP or DOWN, which is a
+>   decision about what readiness means. `health.ts` is one file because TypeScript had no reason to
+>   split it; bundling them here would make the query only reachable through `Health` and every test of
+>   it an assertion about a details map. `--tests "*Health*"` is **17 tests**, all green;
+>   `./gradlew build` is **1141 unit tests plus 3 integration**, 0 failures.
+> - **The missing names go in the probe's response as well as the log, which the reference could not
+>   do.** Its `HealthCheck` collapses to UP/DOWN, so `health.ts` logs the names or loses them; Spring
+>   Boot's `Health` carries detail, so they reach whoever is reading the probe too — which needed
+>   `show-details: "always"` on the readiness **group**, stated explicitly rather than inherited,
+>   because a group that quietly stopped showing details would answer a bare DOWN and lose exactly the
+>   diagnosis the checkbox is about. The unreachable-database branch deliberately does **not** publish
+>   the driver's message — this endpoint takes no credential and a JDBC error names hosts and databases
+>   — so there the log is the only record, and there is a test that it exists.
+> - **The table list is hand-written, and the reference's reason for that does not survive the port —
+>   a better one does.** Prisma has no runtime schema introspection; Hibernate knows every table its
+>   entities map to, so deriving the list was available here. It would make the check circular:
+>   readiness would assert the schema matches whatever the entities say, which is already
+>   `ddl-auto=validate`'s job, and a table nothing is mapped to yet would be invisible to both. So the
+>   list is explicit and `DeedPollSchemaHealthTest` checks it against the vendored `.prisma`'s `@@map`s,
+>   exactly as `health.test.ts` does.
+> - **The port asserts behaviour where the reference could only assert its own SQL string.** Having
+>   mocked `$queryRaw`, `health.test.ts` checks that the query *contains* `current_schema()` — a
+>   transcription check, true on the day it is written. Here each case is a real Postgres schema holding
+>   exactly the tables the case is about, reached over a separate unpooled connection with
+>   `currentSchema` set, so a query hardcoding `'public'` gets the wrong answer and fails. Setting
+>   `search_path` on the application's pooled connection would have left the session state behind for
+>   whichever test borrowed it next, which is why the second datasource exists.
+> - **`HealthProbeTest` takes the database away after boot rather than never having one.**
+>   `InterruptibleDataSource` is a `DelegatingDataSource` installed by a `BeanPostProcessor`, so Flyway
+>   and `ddl-auto=validate` still run against a real Postgres and only then does the pool start refusing
+>   connections — which is what a blip actually looks like. A context pointed at a dead port from the
+>   start would have to disable both to boot, and so would be asserting the probes of a
+>   differently-configured service. It is also the only way to assert the load-bearing half of "liveness
+>   stays empty": that liveness is still 200 **while** readiness is 503.
+> - **Seven mutation checks, all of which fired.** Dropping `db` from the readiness group; adding `db`
+>   to the liveness group; `show-details: never` on the readiness group; `'public'` for
+>   `current_schema()`; a table dropped from `DEED_POLL_TABLES`; the `missingTables` detail dropped from
+>   the indicator; and `http-mapping: {down: 200}` on the readiness group, which is the plan's own
+>   "returning 200 on a failed probe" defect and is caught. Note `failFast = true`, so each was run on
+>   its own.
+> - **`springdoc.packagesToScan` is fixed, and the publisher test now asserts what it publishes.** It
+>   named only the template's `controllers` package for the whole of tasks 13 to 15, so the document
+>   omitted all twelve caseworker routes while remaining valid JSON that a consumer would trust — the
+>   thing tasks 13, 14 and 15 each recorded a note about. It now covers `…deedpoll.api`, one entry rather
+>   than four, so a controller is documented by being in the package it belongs in rather than by
+>   somebody remembering this line. `OpenAPIPublisherTest` checks the eight paths and the twelve
+>   operations by name, because a count agrees with a spec documenting twelve of the wrong things;
+>   reverting the property fails it.
+> - **The spec now declares the bearer token, which is not in the checkboxes and had to be.** The
+>   service authenticates by default, so a document that said nothing about credentials described an open
+>   API and the first client generated from it could not make a single call. Declared globally, with
+>   `@SecurityRequirements` on the Always-On root endpoint as the one exception — Azure's probe has no
+>   token — and both directions asserted.
+> - **Steve: the chart is still the template's `charts/rpe-spring-boot-template`**, so nothing points
+>   Kubernetes at `/health/readiness` and `/health/liveness` yet; the probes exist and are tested, but
+>   until the chart names them the cluster will use whatever the HMCTS library defaults to. That is part
+>   of the deployment work the plan puts outside its own scope, and it is the last thing standing between
+>   this task and the probes actually being consulted.
 
 ---
 
@@ -934,7 +997,10 @@ entity from a controller.**
   schema-conformance test and by Hibernate's `ddl-auto=validate` rather than by inspection.
 - The domain port carries **all** of the reference's test blocks, not a subset. A port with fewer tests is
   not a port.
-- Eleven caseworker endpoints exist and no twelfth.
+- Twelve caseworker endpoints exist and no thirteenth. (Written as "eleven" originally; the plan's own
+  task lists for 13–15 enumerate twelve — four reads, two case writes, four note operations, an upload and
+  a download — so this was a miscount rather than a decision, and task 15 recorded it. Nothing was added or
+  dropped to reach either number.)
 - `/citizen/**` exists, is empty, and shares no DTO with `/caseworker/**`.
 - Nothing in the repo makes a live call to CCD, CDAM, IDAM or payments, and no secret is committed.
 
