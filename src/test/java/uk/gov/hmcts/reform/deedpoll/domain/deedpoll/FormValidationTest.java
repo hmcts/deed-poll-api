@@ -135,6 +135,26 @@ class FormValidationTest {
     }
 
     @Test
+    @DisplayName("rejects a four-digit year below 100, which the digit count alone does not catch")
+    void rejectsAFourDigitYearBelowOneHundred() {
+        // "0026" is the likelier fat-finger of "2026" than "26" is, and it satisfies the four-digit
+        // pattern. The reference refuses it because Date.UTC(26, …) is 1926 and its identity check then
+        // fails; here the bound does it, because composeDateParts does not reproduce that remap and would
+        // otherwise store year 26.
+        List<FieldError> errors =
+            FormValidation.collectDateErrors(parts("signatureRequestedDate", "1", "1", "0026"), DATES);
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0).message()).contains("must be a real date");
+
+        assertThat(FormValidation.collectDateErrors(parts("signatureRequestedDate", "1", "1", "0099"), DATES))
+            .hasSize(1);
+
+        // 0100 is the first year Date.UTC leaves alone, so it is the boundary on the accepting side.
+        assertThat(FormValidation.collectDateErrors(parts("signatureRequestedDate", "1", "1", "0100"), DATES))
+            .isEmpty();
+    }
+
+    @Test
     @DisplayName("reports each bad date field separately")
     void reportsEachBadDateFieldSeparately() {
         List<FieldError> errors = FormValidation.collectDateErrors(

@@ -16,6 +16,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferToMaster;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -322,11 +323,15 @@ public final class DeedPollSchemas {
      * Refuses an amount the {@code numeric(12, 2)} column cannot hold.
      *
      * <p>Precision minus scale is ten integral digits, so the column's range is
-     * {@code (-10^10, 10^10)}. Only the integral part is checked: Postgres rounds a value with more than
-     * two decimal places to the column's scale rather than refusing it, so a long fraction is not an error.
+     * {@code (-10^10, 10^10)}. A long fraction is not itself an error -- Postgres rounds to the column's
+     * scale rather than refusing -- but it is rounded BEFORE the precision is checked, so the rounding
+     * can carry into an eleventh integral digit: {@code 9999999999.999} becomes {@code 10000000000.00}
+     * and overflows. The value is therefore compared as the column will store it, not as it arrived,
+     * because a near-miss on the boundary is otherwise the same numeric field overflow -- and so the
+     * same uninformative 500 -- that this check exists to turn into a 400 naming the field.
      */
     private static BigDecimal inRange(String field, BigDecimal amount) {
-        if (amount.abs().compareTo(DECIMAL_LIMIT) >= 0) {
+        if (amount.setScale(2, RoundingMode.HALF_UP).abs().compareTo(DECIMAL_LIMIT) >= 0) {
             throw new FieldRejected(field + " must be less than " + DECIMAL_LIMIT.toPlainString());
         }
         return amount;

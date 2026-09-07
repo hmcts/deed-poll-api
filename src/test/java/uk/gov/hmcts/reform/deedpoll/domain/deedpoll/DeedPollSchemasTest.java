@@ -155,9 +155,21 @@ class DeedPollSchemasTest {
             rejects(payload("refundAmount", new BigDecimal("10000000000")));
             rejects(payload("refundAmount", new BigDecimal("-10000000000")));
 
+            // Within range unrounded, out of range once stored: Postgres rounds to scale 2 and THEN checks
+            // precision, so this carries into an eleventh integral digit and overflows. Checking the value
+            // as it arrived would let it through to the 500 this whole check exists to prevent.
+            rejects(payload("refundAmount", new BigDecimal("9999999999.999")));
+            rejects(payload("refundAmount", new BigDecimal("-9999999999.999")));
+            rejects(payload("refundAmount", Double.parseDouble("9999999999.999")));
+
             // The boundary on the accepting side, so the limit is pinned from both directions.
             assertThat(DeedPollSchemas.parseCreate(payload("refundAmount", new BigDecimal("9999999999.99")))
                 .get("refundAmount")).isEqualTo(new BigDecimal("9999999999.99"));
+
+            // A long fraction that rounds DOWN is still fine -- the rounding, not the digit count, is what
+            // decides it.
+            assertThat(DeedPollSchemas.parseCreate(payload("refundAmount", new BigDecimal("9999999999.994")))
+                .get("refundAmount")).isEqualTo(new BigDecimal("9999999999.994"));
         }
 
         @Test
