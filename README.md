@@ -44,13 +44,12 @@ this table is the map.
 | POST | `/caseworker/cases/{id}/notes` | Add a note |
 | GET | `/caseworker/cases/{id}/notes/{noteId}` | One note |
 | PATCH | `/caseworker/cases/{id}/notes/{noteId}` | Amend a note |
-| DELETE | `/caseworker/cases/{id}/notes/{noteId}` | Delete a note |
 | POST | `/caseworker/cases/{id}/documents` | Upload a file (multipart) and record its document row |
 | GET | `/caseworker/cases/{id}/documents/{documentId}/file` | Stream a document's stored file back |
 
-There are deliberately **no** case deletes, no witness writes, no document-type writes and no
-`validate` endpoint. The domain implements and tests them; nothing consumes them, and the sibling
-prototype's mistake was building an API for an imagined consumer.
+There are deliberately **no** case deletes, no note delete, no witness writes, no document-type writes
+and no `validate` endpoint. The domain implements and tests them; nothing consumes them, and the
+sibling prototype's mistake was building an API for an imagined consumer.
 
 Every failure answers the same envelope — `{"error": "...", "errors": [{"field": "...", "message": "..."}]}`
 (`api/ApiError.java`), so a form can render a message against the input it belongs to.

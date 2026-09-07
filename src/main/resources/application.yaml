@@ -5,7 +5,14 @@ server:
 management:
   endpoint:
     health:
-      show-details: "always"
+      # `never` at the endpoint level, because the ungrouped /health is on the unauthenticated
+      # allowlist and aggregates *every* registered contributor -- including ones nobody here chose,
+      # such as Boot's auto-configured diskSpace, whose details name the pod's absolute filesystem
+      # path and its free bytes. DatabaseHealthIndicator exists to keep exactly that class of
+      # internal detail off this endpoint, and inheriting `always` would hand it back through
+      # whichever contributor a later dependency registers. Both probe groups re-enable details for
+      # themselves below, where the include list is closed and so what can be published is reviewable.
+      show-details: "never"
       # Enabled explicitly rather than relying on Boot's "am I in Kubernetes" auto-detection, so
       # /health/liveness and /health/readiness exist in every environment. A probe that only exists
       # in the cluster is a probe nobody can try before deploying.
@@ -29,6 +36,11 @@ management:
         # the replicas that would have recovered when the database came back.
         liveness:
           include: "livenessState"
+          # Stated for the same reason as readiness, and safe for the same reason: the include list is
+          # closed, and `livenessState` is a bare UP/DOWN with nothing internal in it. What the details
+          # buy is that the group's *contents* are visible, so a check put in the wrong group is
+          # something a caller -- and livenessHasNothingInItButTheProcess -- can see rather than infer.
+          show-details: "always"
   endpoints:
     web:
       base-path: /

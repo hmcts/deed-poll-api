@@ -193,6 +193,26 @@ class HealthProbeTest extends AbstractPostgresContainerTest {
         mockMvc.perform(get("/health/liveness")).andExpect(status().isOk());
     }
 
+    @Test
+    @DisplayName("the ungrouped /health publishes a status and nothing else")
+    void theUngroupedHealthPublishesAStatusAndNothingElse() throws Exception {
+        // The two groups have closed include lists, so what they can leak is reviewable. Bare /health does not:
+        // it aggregates every contributor Boot or a dependency happens to register, and it is on the same
+        // unauthenticated allowlist. Inheriting `show-details: always` there would publish, for one, the
+        // auto-configured diskSpace contributor's absolute filesystem path and free bytes -- which is the class of
+        // detail DatabaseHealthIndicator was written to keep off this endpoint, arriving through a contributor
+        // nobody chose. `never` at the endpoint level is what stops that, and this is what notices if it comes back.
+        String body = mockMvc.perform(get("/health"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("UP"))
+            .andExpect(jsonPath("$.components").doesNotExist())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+        assertThat(body).doesNotContain("diskSpace").doesNotContain("details");
+    }
+
     /**
      * Wraps whatever {@code DataSource} the application built, so a test can take the database away mid-run.
      *
