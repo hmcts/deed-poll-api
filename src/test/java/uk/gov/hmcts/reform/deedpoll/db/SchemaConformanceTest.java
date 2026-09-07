@@ -37,6 +37,19 @@ import static org.assertj.core.api.Assertions.fail;
  * TypeScript conformance harness states about itself, and it means a green run here proves
  * nothing was dropped -- not that nothing was added.
  *
+ * <p><strong>One addition is already deliberate, and this is where to read about it before
+ * "restoring parity".</strong> V1 to V3 were written to be byte-compatible with the reference, so
+ * that a {@code prisma migrate diff} against this schema stayed empty. V4 breaks that on purpose:
+ * it adds three indexes -- {@code createdOn}, {@code (state, createdOn)} and the
+ * {@code documentTypeId} foreign key -- for access paths the reference has no equivalent of,
+ * because it has no equivalent of these finders. A future diff will therefore propose DROPPING
+ * them, and it is wrong: {@code DeedPollRepository}'s unpaginated ordered finders and
+ * {@code countByDocumentTypeId} are what depend on them, and the fix is to add the matching
+ * {@code @@index} declarations upstream in {@code hmcts/deed-poll-admin}. Nothing here needs the
+ * parity anyway -- an index is not part of the ported data model, this factory only asserts that
+ * every reference index EXISTS, and {@code ddl-auto: validate} does not look at indexes at all --
+ * so both directions are silent and only a reader could get it wrong.
+ *
  * <p>Runs Flyway against a throwaway Postgres, so it tests the migrations as an environment
  * will actually apply them rather than testing a model of them.
  */

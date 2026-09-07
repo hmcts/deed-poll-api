@@ -247,15 +247,18 @@ In order to test if the application is up, you can call its health endpoint:
   curl http://localhost:4550/health
 ```
 
-You should get a response similar to this:
+You get a status and nothing else:
 
 ```
-  {"status":"UP","components":{
-    "db":{"status":"UP","details":{"database":"PostgreSQL","validationQuery":"isValid()"}},
-    "deedPollSchema":{"status":"UP","details":{"tables":6}},
-    "diskSpace":{"status":"UP","details":{"total":249644974080,"free":137188298752,"threshold":10485760}},
-    "livenessState":{"status":"UP"},"ping":{"status":"UP"},"readinessState":{"status":"UP"}}}
+  {"status":"UP"}
 ```
+
+That is deliberate, and it is worth knowing before you go looking for the missing detail. This endpoint
+is on the unauthenticated allowlist and it aggregates *every* registered contributor — including ones
+nobody here chose, such as Boot's auto-configured `diskSpace`, whose details name the pod's absolute
+filesystem path and its free bytes. So `management.endpoint.health.show-details` is `never` at the
+endpoint level, and the two probe groups re-enable details only for themselves, where the include list
+is closed and what can be published is reviewable. Use `/health/readiness` when you want the breakdown.
 
 ### The two probes, and why they differ
 
@@ -266,16 +269,34 @@ There are two Kubernetes probes and they deliberately do not check the same thin
   curl http://localhost:4550/health/liveness
 ```
 
-**Readiness** — should traffic come to this pod? It checks the database twice over: `db` is Spring
-Boot's own connection check, and `deedPollSchema` asks whether the six deed-poll tables are actually
-there. A connection check alone passes against an unmigrated database, where the probe stays green
-while every request 500s. When a table is missing the response **names it**, so a page that says
-"readiness DOWN" comes with the diagnosis attached rather than needing one:
+**Readiness** — should traffic come to this pod? This is the one that shows its working:
 
 ```
-  {"status":"DOWN","components":{"deedPollSchema":{"status":"DOWN","details":{
-    "error":"the deed-poll schema is incomplete. Has the migration job run?",
-    "missingTables":["deedpoll_notes","deedpoll_witness"]}}}}
+  {"status":"UP","components":{
+    "db":{"status":"UP"},
+    "deedPollSchema":{"status":"UP","details":{"tables":6}},
+    "readinessState":{"status":"UP"}}}
+```
+
+It checks the database twice over: `db` is `DatabaseHealthIndicator` and `deedPollSchema` asks whether
+the six deed-poll tables are actually there. A connection check alone passes against an unmigrated
+database, where the probe stays green while every request 500s.
+
+`db` is ours rather than Spring Boot's — `management.health.db.enabled` is `false` — because Boot's
+`DataSourceHealthIndicator` reports a failure as `Health.down(exception)`, and a JDBC message names the
+host, the port, the database and the user it failed to authenticate. This group runs with
+`show-details: always` on an endpoint that takes no credential, so that message is logged and not
+published; a healthy `db` therefore has no details at all. When a table is missing the response
+**names it**, so a page that says "readiness DOWN" comes with the diagnosis attached rather than
+needing one:
+
+```
+  {"status":"DOWN","components":{
+    "db":{"status":"UP"},
+    "deedPollSchema":{"status":"DOWN","details":{
+      "error":"the deed-poll schema is incomplete. Has the migration job run?",
+      "missingTables":["deedpoll_notes","deedpoll_witness"]}},
+    "readinessState":{"status":"UP"}}}
 ```
 
 **Liveness** — should this process be killed and restarted? It checks nothing but the process

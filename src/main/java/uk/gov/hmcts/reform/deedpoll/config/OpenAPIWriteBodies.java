@@ -126,6 +126,15 @@ public class OpenAPIWriteBodies {
             nullable.add(field.getType());
             nullable.add("null");
             field.setTypes(nullable);
+
+            if (!described.allowedValues().isEmpty()) {
+                // An `enum` constrains the value to its listed members independently of the type union, so a
+                // nullable enum whose list omits null publishes a field a validating client cannot clear -- the
+                // exact thing the union was added to say, contradicted one line down. Eight fields are nullable
+                // enums (type, postCounter, maritalStatus, nationality, nationalitySection, referToMasterChoice,
+                // masterDecision, state), and the service accepts a null for every one of them.
+                addEnumValue(field, null);
+            }
         }
         return field;
     }

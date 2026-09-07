@@ -115,17 +115,6 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * The five operations that take a body, asserted to actually describe one.
-     *
-     * <p>The same argument as the path assertions above, one level in. Every write body in this service binds as a
-     * keyed map rather than as declared components -- see {@code KeyedRequestBody} for why it has to -- so
-     * springdoc has no fields to reflect over and published {@code CreateCaseRequest: {}} for each of the four
-     * JSON writes, and no request body at all for the multipart upload. Valid JSON describing nothing, which a
-     * consumer generating a client cannot distinguish from a body that genuinely takes no fields.
-     * {@link uk.gov.hmcts.reform.deedpoll.config.OpenAPIWriteBodies} fills them in from the domain's own tables;
-     * this pins that they stay filled in.
-     */
-    /**
      * A property's declared types, however the document spells them.
      *
      * <p>OpenAPI 3.1 allows {@code "type": "string"} and {@code "type": ["string", "null"]} for the same field
@@ -142,6 +131,22 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             : List.of(type.asText());
     }
 
+    /** Whether an enum list offers a JSON null, which is what permits a patch to clear the field. */
+    private static boolean offersNullMember(JsonNode enumList) {
+        return StreamSupport.stream(enumList.spliterator(), false).anyMatch(JsonNode::isNull);
+    }
+
+    /**
+     * The five operations that take a body, asserted to actually describe one.
+     *
+     * <p>The same argument as the path assertions above, one level in. Every write body in this service binds as a
+     * keyed map rather than as declared components -- see {@code KeyedRequestBody} for why it has to -- so
+     * springdoc has no fields to reflect over and published {@code CreateCaseRequest: {}} for each of the four
+     * JSON writes, and no request body at all for the multipart upload. Valid JSON describing nothing, which a
+     * consumer generating a client cannot distinguish from a body that genuinely takes no fields.
+     * {@link uk.gov.hmcts.reform.deedpoll.config.OpenAPIWriteBodies} fills them in from the domain's own tables;
+     * this pins that they stay filled in.
+     */
     @DisplayName("Describes the body of every operation that takes one")
     @Test
     void documentsTheWriteBodies() throws Exception {
@@ -191,6 +196,23 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(typesOf(spec.at(create + "migratedRecord")))
             .as("a non-nullable field offers no null")
             .doesNotContain("null");
+
+        // A nullable ENUM has to say it twice, and this is the assertion that was missing. `enum` constrains the
+        // value to its members independently of the type union, so a list of members without null describes a
+        // field a validating client cannot clear even though the union next to it says it can -- a document that
+        // contradicts itself, and refuses the clear the service accepts. Asserted on a nullable enum rather than
+        // on masterName, because the non-enum case above cannot fail this way.
+        // Asserted as a JSON null rather than as the text "null", which is a member name a client would send as
+        // a string and would not clear anything.
+        assertThat(spec.at(create + "type/enum").isArray()).isTrue();
+        assertThat(offersNullMember(spec.at(create + "type/enum")))
+            .as("a nullable enum lists null among its members, not only in its type union")
+            .isTrue();
+        assertThat(typesOf(spec.at(create + "type"))).contains("string", "null");
+        // The mirror: an enum whose column refuses a null lists only real members.
+        assertThat(offersNullMember(spec.at(create + "privacy/enum")))
+            .as("a non-nullable enum offers no null member")
+            .isFalse();
 
         // The note body's one field, required on create and optional on patch -- the distinction a client needs.
         assertThat(typesOf(spec.at("/components/schemas/CreateNoteRequest/properties/note"))).contains("string");

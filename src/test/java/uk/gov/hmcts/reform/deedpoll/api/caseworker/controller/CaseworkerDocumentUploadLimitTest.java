@@ -48,11 +48,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *       becomes, which the reference records three defects falling into.</li>
  * </ol>
  *
- * <p><strong>The resolver is mocked rather than fed a 26 MB body, deliberately.</strong> A real over-size upload
- * is answered and then has its connection dropped, because the server stops reading a body it has already
- * refused -- so the test would be racing the socket for the response it means to assert, and would send 26 MB to
- * do it. Mocking the resolver reproduces the one thing that matters here, an exception raised where no handler
- * has been chosen. The figure it would have been compared against is what test (1) checks.
+ * <p><strong>The resolver is mocked rather than fed a 26 MB body, deliberately.</strong> Sending a real one would
+ * cost 26 MB per run to reproduce the one thing that matters here -- an exception raised where no handler has been
+ * chosen -- and MockMvc has no socket for the interesting part of it to happen on anyway. The figure it would have
+ * been compared against is what test (1) checks.
+ *
+ * <p>What the mock cannot reach is whether the answer <em>survives</em>: the server stops reading a body it has
+ * already refused, and if it will not drain the remainder the 400 is aborted before it is flushed. That is
+ * connector state rather than bean state, so it is asserted against a running server in
+ * {@code RefusedUploadSwallowTest}, and the ceiling it has to clear is test (2)'s.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
