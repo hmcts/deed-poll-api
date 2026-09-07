@@ -62,6 +62,41 @@ class FormValidationTest {
     }
 
     @Test
+    @DisplayName("names a missing day, which is the half of the message the month-and-year case never reaches")
+    void namesAMissingDay() {
+        // Every other partial-date case supplies the day, so `missing.add("day")` and the wordings that come
+        // out of joining it were never produced -- a defect in the assembly would have shipped silently.
+        assertThat(FormValidation.collectDateErrors(parts("signatureRequestedDate", "", "8", "2026"), DATES))
+            .containsExactly(new FieldError(
+                "signatureRequestedDate",
+                "Signature requested date must include a day"));
+
+        assertThat(FormValidation.collectDateErrors(parts("signatureRequestedDate", "", "8", ""), DATES))
+            .containsExactly(new FieldError(
+                "signatureRequestedDate",
+                "Signature requested date must include a day and year"));
+
+        assertThat(FormValidation.collectDateErrors(parts("signatureRequestedDate", "", "", "2026"), DATES))
+            .containsExactly(new FieldError(
+                "signatureRequestedDate",
+                "Signature requested date must include a day and month"));
+    }
+
+    @Test
+    @DisplayName("rejects a non-numeric day, and a non-numeric month, each on its own")
+    void rejectsNonNumericDayAndMonth() {
+        // The day and month digit checks are unreachable through the existing cases, which fail on the year
+        // regex first -- so each is given a complete date that is wrong in only that one part.
+        assertThat(FormValidation.collectDateErrors(parts("signatureRequestedDate", "x", "8", "2026"), DATES))
+            .containsExactly(new FieldError(
+                "signatureRequestedDate", "Signature requested date must be a real date"));
+
+        assertThat(FormValidation.collectDateErrors(parts("signatureRequestedDate", "3", "x", "2026"), DATES))
+            .containsExactly(new FieldError(
+                "signatureRequestedDate", "Signature requested date must be a real date"));
+    }
+
+    @Test
     @DisplayName("rejects garbage parts")
     void rejectsGarbageParts() {
         assertThat(FormValidation.collectDateErrors(parts("signatureRequestedDate", "99", "99", "abcd"), DATES))

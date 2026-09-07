@@ -267,6 +267,30 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
             .isEqualTo(created.getReferencenumber());
     }
 
+    @Test
+    @DisplayName("takes a type given as its member name, which is what a form body produces")
+    void takesATypeGivenAsItsMemberName() {
+        // A patch places no type constraint on its values, and FormPayload yields a plain String for an enum
+        // field because a form body has no types. Both halves of reading one used to assume a member: the
+        // re-prefix cast (a ClassCastException, so a 500) and the gates' isInstance narrowing (which read it
+        // as "no type settled", so the minor gate silently left a converted case's minor fields populated).
+        DeedPoll created = created(
+            "type", DeedPollType.Minor,
+            "dateReceived", RECEIVED,
+            "ageOfMinor", 7);
+
+        deedPollService.updateDeedPoll(created.getId(), patch("type", "DeedOfRelinquishment"));
+
+        DeedPoll saved = stored(created.getId());
+        assertThat(saved.getType()).isEqualTo(DeedPollType.DeedOfRelinquishment);
+        assertThat(saved.getDisplayReference())
+            .as("the re-prefix ran, rather than throwing on the cast")
+            .isEqualTo(created.getDisplayReference().replace("KBDP", "KBDR"));
+        assertThat(saved.getAgeOfMinor())
+            .as("the minor gate saw the merged type and cleared the now-meaningless field")
+            .isNull();
+    }
+
     /**
      * Privacy is admin-only on an existing record.
      *

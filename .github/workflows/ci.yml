@@ -1,4 +1,4 @@
-name: Template CI
+name: CI
 
 on:
   pull_request:
@@ -16,7 +16,9 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin' # See 'Supported distributions' for available options
-          java-version: '17'
+          # 21, matching the toolchain build.gradle pins. On 17 Gradle would look for a 21 JDK it has no
+          # resolver configured to download, and the build would fail before compiling anything.
+          java-version: '21'
           cache: 'gradle'
       - name: Build
         run: ./gradlew check

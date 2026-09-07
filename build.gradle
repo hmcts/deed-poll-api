@@ -66,7 +66,6 @@ tasks.withType(JavaExec).configureEach {
 
 tasks.withType(Test).configureEach {
   useJUnitPlatform()
-  failFast = true
 
   testLogging {
     exceptionFormat = 'full'
@@ -85,6 +84,12 @@ tasks.register('integration', Test) {
   group = "Verification"
   testClassesDirs = sourceSets.integrationTest.output.classesDirs
   classpath = sourceSets.integrationTest.runtimeClasspath
+  /*
+    Kept here and NOT on `test`. An integration test that fails has usually taken a container with it,
+    so the remaining ones are reporting the same fault at length. A unit run is the opposite: aborting
+    on the first failure reports one broken test for a change that broke a whole area, which is slower
+    to diagnose than reading the full list.
+  */
   failFast = true
 }
 

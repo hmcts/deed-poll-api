@@ -81,42 +81,82 @@ public class CaseworkerReadController {
      * <p>An unrecognised {@code type} is refused rather than cast: the prototype accepted anything and fell
      * through the matrix to the rules for no type at all, which is a wrong answer presented as a right one. An
      * absent type is a different thing and is legitimate -- it is what a case with no type yet has.
+     *
+     * <p><strong>All three parameters are taken as lists</strong>, for the reason {@link #single} sets out: each
+     * one of them changes the answer, so a caller who sent one twice must be told rather than picked for.
      */
     @GetMapping("/cases/field-rules")
     public FieldRulesResponse fieldRules(
         @RequestParam(name = "type", required = false) List<String> type,
-        @RequestParam(name = "migrated", defaultValue = "false") boolean migrated,
-        @RequestParam(name = "publishToGazette", defaultValue = "true") boolean publishToGazette) {
+        @RequestParam(name = "migrated", required = false) List<String> migrated,
+        @RequestParam(name = "publishToGazette", required = false) List<String> publishToGazette) {
 
-        return FieldRulesResponse.from(deedPolls.getCaseFieldRules(caseType(type), migrated, publishToGazette));
+        return FieldRulesResponse.from(deedPolls.getCaseFieldRules(
+            caseType(type),
+            flag("migrated", migrated, false),
+            flag("publishToGazette", publishToGazette, true)));
     }
 
     /**
-     * The one case type a request named, or null for a request that named none.
+     * The one value a request gave for a parameter, or null for a request that gave none.
      *
-     * <p><strong>Taken as a list of strings and resolved here, rather than bound straight to the enum.</strong>
-     * Spring converts a repeated parameter by silently taking the first value, so
+     * <p><strong>Every parameter here is taken as a list of strings and resolved rather than bound straight to
+     * its type.</strong> Spring converts a repeated parameter by silently taking the first value, so
      * {@code ?type=Adult&type=Minor} would answer the Adult rules -- the same "wrong answer presented as a
      * right one" the reference records about the prototype casting an unvalidated {@code type}, arrived at by a
      * different route. A caller who sent the parameter twice does not know which case they are looking at, and
-     * a service that picks for them makes that unknowable rather than obvious.
+     * a service that picks for them makes that unknowable rather than obvious. The two flags need the identical
+     * treatment for the identical reason: {@code publishToGazette} is what decides whether
+     * {@code dateNoticeSentToLondonGazette} appears at all.
      *
-     * <p>Both refusals are addressed to {@code type}, because the caller's fix is to that parameter.
+     * <p>The refusal is addressed to the parameter it is about, because that is where the caller's fix goes.
      */
-    private static DeedPollType caseType(List<String> values) {
+    private static String single(String name, List<String> values) {
         if (values == null || values.isEmpty()) {
             return null;
         }
         if (values.size() > 1) {
             throw new InvalidInputError(ApiError.INVALID_PARAMETER,
-                List.of(new FieldError("type", "must be given at most once")));
+                List.of(new FieldError(name, "must be given at most once")));
+        }
+        return values.get(0);
+    }
+
+    /** The one case type a request named, or null for a request that named none. */
+    private static DeedPollType caseType(List<String> values) {
+        String value = single("type", values);
+        if (value == null) {
+            return null;
         }
         try {
-            return DeedPollType.valueOf(values.get(0));
+            return DeedPollType.valueOf(value);
         } catch (IllegalArgumentException notAMember) {
             throw new InvalidInputError(ApiError.INVALID_PARAMETER,
                 List.of(new FieldError("type", "is not a valid case type")));
         }
+    }
+
+    /**
+     * One boolean flag, defaulted when absent and refused when it is not a boolean.
+     *
+     * <p>Refused rather than read as false, which is what {@code Boolean.parseBoolean} would do with
+     * {@code ?migrated=maybe}: the two flags select between different rule sets, so answering the
+     * {@code false} set for an unintelligible value is the same wrong-answer-as-right-answer failure as
+     * accepting an unrecognised type.
+     */
+    private static boolean flag(String name, List<String> values, boolean whenAbsent) {
+        String value = single(name, values);
+        if (value == null) {
+            return whenAbsent;
+        }
+        if ("true".equalsIgnoreCase(value)) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(value)) {
+            return false;
+        }
+        throw new InvalidInputError(ApiError.INVALID_PARAMETER,
+            List.of(new FieldError(name, "must be true or false")));
     }
 
     /**

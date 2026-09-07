@@ -1,5 +1,16 @@
 # Deployment Guide
 
+> **⚠️ This file describes the sibling repo `hmcts/deed-poll-admin`, not this one.** It was copied in
+> before any code existed here. The umbrella chart at `helm/deed-poll-admin/` and the per-app
+> `apps/*/helm/` directories it describes do not exist in this repo.
+>
+> **`deed-poll-api` is not onboarded for deployment at all yet.** It has one chart,
+> `charts/rpe-spring-boot-template`, which is still the template's — wrong name, wrong image, wrong
+> ingress host, and no probe path configured. Deployment is Jenkins (`Jenkinsfile_CNP`,
+> `Jenkinsfile_nightly`), and onboarding it is outstanding work outside the build plans.
+>
+> Read [`RESUME.md`](RESUME.md) for the current state of that. This file needs rewriting or deleting.
+
 This guide covers deployment procedures for the application, including both preview and production environments.
 
 ## Overview

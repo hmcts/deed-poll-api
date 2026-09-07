@@ -190,12 +190,22 @@ public final class DeedPollSchemas {
      *
      * <p>A fractional value is refused rather than truncated: the reference refuses {@code 7.5} for
      * {@code ageOfMinor}, and an age silently becoming 7 is a worse answer than a validation error.
+     *
+     * <p><strong>The range is checked as well as the wholeness</strong>, and by the same argument. Jackson
+     * binds an untyped JSON integer too large for an {@code int} to a {@code Long} (or a
+     * {@code BigInteger}), and {@code 1e20} to a {@code Double} -- all of which are whole, so wholeness
+     * alone would accept them and {@code intValue()} would then wrap or saturate. {@code ageOfMinor} of
+     * {@code 4294967296} stored as {@code 0} is the same silent wrong answer as {@code 7.5} stored as
+     * {@code 7}, reached by a different route.
      */
     private static Integer integer(String field, Object value) {
         if (value instanceof Integer number) {
             return number;
         }
-        if (value instanceof Number number && number.doubleValue() == Math.rint(number.doubleValue())) {
+        if (value instanceof Number number
+            && number.doubleValue() == Math.rint(number.doubleValue())
+            && number.doubleValue() >= Integer.MIN_VALUE
+            && number.doubleValue() <= Integer.MAX_VALUE) {
             return number.intValue();
         }
         throw new FieldRejected(field + " must be a whole number");

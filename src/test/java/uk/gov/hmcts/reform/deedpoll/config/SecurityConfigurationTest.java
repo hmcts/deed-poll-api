@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.config;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -52,7 +53,16 @@ class SecurityConfigurationTest extends AbstractPostgresContainerTest {
     private static final StubIdam IDAM = new StubIdam();
 
     static {
+        // Started here rather than in @BeforeAll: @DynamicPropertySource is read while the context is being
+        // built, which is before any @BeforeAll callback could have started the stub.
         IDAM.start();
+    }
+
+    @AfterAll
+    static void stopIdam() {
+        // A static start needs an explicit stop, or the class leaves a Jetty server, its thread pool and a
+        // port behind for the life of the test JVM.
+        IDAM.stop();
     }
 
     @DynamicPropertySource

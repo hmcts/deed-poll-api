@@ -64,6 +64,10 @@ public class IdamJwtDecoder implements JwtDecoder {
         NimbusJwtDecoder decoder = NimbusJwtDecoder
             .withJwkSetUri(metadata.jwksUri())
             .jwsAlgorithm(SignatureAlgorithm.RS256)
+            // Nimbus would otherwise fetch the key set through a bare RestTemplate, which has no read timeout
+            // at all -- and this fetch happens on an unknown `kid`, which is to say during a key rotation and
+            // on the request path. See IdamHttp for what an unbounded wait here costs.
+            .restOperations(IdamHttp.restTemplate())
             .build();
 
         // Every claim check in one chain, so the decoder cannot be used without them: the reference's note

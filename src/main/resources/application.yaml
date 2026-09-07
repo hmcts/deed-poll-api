@@ -117,6 +117,11 @@ idam:
     microservice: ${S2S_SERVICE_NAME:deed_poll_api}
 
 deedpoll:
+  ccd:
+    # The one place a CCD case type is named, and deliberately not the real value: the case type and
+    # jurisdiction have not been onboarded, so anything else here would be a guess that plan 02 would
+    # then have to find and unpick. Nothing reads it yet -- it exists so no task has to invent one.
+    case-type-id: DEED_POLL_PLACEHOLDER
   documents:
     # Where LocalFilesystemDocumentStore keeps uploaded blobs. Development only: local disk does
     # not survive AKS, because pods are ephemeral and replicas do not share a volume. Real

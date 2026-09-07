@@ -10,12 +10,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Ports the {@code InvalidInputError} blocks of {@code reference/ts/errors.test.ts}.
+ * Ports the {@code domain errors} blocks of {@code reference/ts/errors.test.ts}.
  *
- * <p>The reference's remaining blocks cover four error classes and a {@code zodErrorToFieldErrors}
- * helper that are not ported yet -- see {@link InvalidInputError} for why -- and will be ported with
- * the modules that need them. The "discriminating name" block ports as a claim about the class rather
- * than about a {@code name} property: in Java the type is what a mapper switches on.
+ * <p>All five error classes are now ported, so the two class-level blocks cover all of them here rather than
+ * only {@code InvalidInputError}. The one thing the reference file still has no counterpart for is
+ * {@code zodErrorToFieldErrors}: there is no Zod here, and the schemas build {@link FieldError}s directly.
+ *
+ * <p>The "discriminating name" block ports as a claim about the class rather than about a {@code name}
+ * property: in Java the type is what a mapper switches on.
  */
 class InvalidInputErrorTest {
 
@@ -23,14 +25,32 @@ class InvalidInputErrorTest {
     @DisplayName("should remain a RuntimeException so an unrecognised error still reaches a generic handler")
     void shouldRemainARuntimeException() {
         assertThat(new InvalidInputError("bad")).isInstanceOf(RuntimeException.class);
+        assertThat(new NotFoundError("gone")).isInstanceOf(RuntimeException.class);
+        assertThat(new ForbiddenError("nope")).isInstanceOf(RuntimeException.class);
+        assertThat(new UnauthorizedError("who")).isInstanceOf(RuntimeException.class);
+        assertThat(new ConflictError("in use")).isInstanceOf(RuntimeException.class);
     }
 
     @Test
     @DisplayName("should be catchable by its own type, which is what a mapper switches on")
     void shouldBeCatchableByItsOwnType() {
+        // The reference asserts a discriminating `name` string; the Java equivalent of that claim is that no
+        // two of these are the same type, since DomainErrorHandler dispatches on the type alone.
         assertThatThrownBy(() -> {
             throw new InvalidInputError("bad");
         }).isExactlyInstanceOf(InvalidInputError.class);
+        assertThatThrownBy(() -> {
+            throw new NotFoundError("gone");
+        }).isExactlyInstanceOf(NotFoundError.class);
+        assertThatThrownBy(() -> {
+            throw new ForbiddenError("nope");
+        }).isExactlyInstanceOf(ForbiddenError.class);
+        assertThatThrownBy(() -> {
+            throw new UnauthorizedError("who");
+        }).isExactlyInstanceOf(UnauthorizedError.class);
+        assertThatThrownBy(() -> {
+            throw new ConflictError("in use");
+        }).isExactlyInstanceOf(ConflictError.class);
     }
 
     @Test

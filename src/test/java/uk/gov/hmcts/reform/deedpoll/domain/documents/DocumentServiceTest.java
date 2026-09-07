@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.documents;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,6 +14,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
@@ -110,6 +112,10 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
     @MockitoSpyBean
     private DocumentStore store;
 
+    /** For the two tests that need a transaction they can roll back around a service call. */
+    @Autowired
+    private TransactionTemplate transactions;
+
     private ListAppender<ILoggingEvent> logs;
 
     @DynamicPropertySource
@@ -127,11 +133,21 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
 
     @BeforeEach
     @AfterEach
-    void clearTables() {
+    void clearTables() throws IOException {
         documents.deleteAll();
         types.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
+        // The blobs go with their rows. Otherwise the store accumulates for the whole class run, and an
+        // assertion about what is on disk reads whatever an earlier test left there.
+        for (String blob : storedBlobs()) {
+            Files.deleteIfExists(STORE_ROOT.resolve(blob));
+        }
+    }
+
+    @AfterAll
+    static void removeTheStoreRoot() throws IOException {
+        Files.deleteIfExists(STORE_ROOT);
     }
 
     @BeforeEach
@@ -388,6 +404,47 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
             .isInstanceOf(NotFoundError.class);
 
         verify(store, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("uploads: removes the blob when the surrounding transaction rolls back")
+    void uploadsRemovesTheBlobWhenTheTransactionRollsBack() {
+        // Not a reference block. Checking the case and the type up front closes the ordinary orphan, but not a
+        // failure BETWEEN the blob write and the commit: the row rolls back and the bytes stay, with the only
+        // record of the key inside the transaction that vanished -- so unlike removeDocument's orphan there is
+        // nothing left to find it by. Rolling back an outer transaction is exactly that window.
+        String caseId = storedCase();
+        String typeId = storedType();
+
+        assertThatThrownBy(() -> transactions.executeWithoutResult(status -> {
+            documentService.uploadDocument(caseId, typeId, FILE);
+            throw new IllegalStateException("something after the blob was written");
+        })).isInstanceOf(IllegalStateException.class);
+
+        assertThat(documents.findAll()).isEmpty();
+        assertThat(storedBlobs()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("uploads: keeps the blob when the transaction commits, which is the ordinary case")
+    void uploadsKeepsTheBlobWhenTheTransactionCommits() {
+        // The other polarity, because a cleanup hook that fired on commit would delete every upload -- and
+        // every other assertion here reads the row rather than the file, so nothing else would notice.
+        String caseId = storedCase();
+        String typeId = storedType();
+
+        transactions.executeWithoutResult(status -> documentService.uploadDocument(caseId, typeId, FILE));
+
+        assertThat(storedBlobs()).hasSize(1);
+    }
+
+    /** The keys currently on disk, as filenames under the store root. */
+    private static List<String> storedBlobs() {
+        try (var blobs = Files.list(STORE_ROOT)) {
+            return blobs.map(path -> path.getFileName().toString()).toList();
+        } catch (IOException failed) {
+            throw new UncheckedIOException("Could not list the document store", failed);
+        }
     }
 
     @Test

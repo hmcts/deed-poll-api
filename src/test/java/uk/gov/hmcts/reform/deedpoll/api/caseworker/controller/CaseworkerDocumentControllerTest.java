@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,8 +48,10 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -100,7 +103,30 @@ class CaseworkerDocumentControllerTest extends AbstractPostgresContainerTest {
     private static final StubIdam IDAM = new StubIdam();
 
     static {
+        // Started here rather than in @BeforeAll: @DynamicPropertySource is read while the context is being
+        // built, which is before any @BeforeAll callback could have started the stub. The store root is
+        // created the same way and for the same reason.
         IDAM.start();
+    }
+
+    @AfterAll
+    static void releaseTheStubAndTheStore() throws IOException {
+        // A static start needs an explicit stop, or the class leaves a Jetty server, its thread pool and a
+        // port behind for the life of the test JVM -- and the store root would stay in the build agent's
+        // temp directory with a blob per upload test in it.
+        IDAM.stop();
+        deleteRecursively(STORE_ROOT);
+    }
+
+    private static void deleteRecursively(Path root) throws IOException {
+        if (!Files.exists(root)) {
+            return;
+        }
+        try (Stream<Path> entries = Files.walk(root)) {
+            for (Path path : entries.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        }
     }
 
     @DynamicPropertySource
@@ -147,11 +173,22 @@ class CaseworkerDocumentControllerTest extends AbstractPostgresContainerTest {
 
     @BeforeEach
     @AfterEach
-    void clearTables() {
+    void clearTables() throws IOException {
         documents.deleteAll();
         types.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
+        // The blobs go too, not just their rows: leaving them makes the store order-dependent, so an
+        // assertion about what is stored would pass or fail on what an earlier test left behind.
+        clearStore();
+    }
+
+    private static void clearStore() throws IOException {
+        try (Stream<Path> blobs = Files.list(STORE_ROOT)) {
+            for (Path blob : blobs.toList()) {
+                Files.deleteIfExists(blob);
+            }
+        }
     }
 
     @BeforeEach
@@ -594,6 +631,31 @@ class CaseworkerDocumentControllerTest extends AbstractPostgresContainerTest {
             authorised(get(fileUrl(caseId, documentId)))
                 .andExpect(status().isOk())
                 .andExpect(header().stringValues("X-Content-Type-Options", "nosniff"));
+        }
+
+        @Test
+        @DisplayName("renders a served document under a policy that lets it load and run nothing")
+        void setsAnInertContentSecurityPolicy() throws Exception {
+            // What makes inline serving defensible rather than nearly defensible: PDF is on the inline list
+            // and browser PDF viewers execute embedded JavaScript, so an attacker-supplied "certificate" would
+            // otherwise run in this origin's context when a caseworker previewed it.
+            String caseId = newCase();
+            String documentId = uploaded(caseId, "birth.pdf", "application/pdf");
+
+            authorised(get(fileUrl(caseId, documentId)))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Security-Policy", "default-src 'none'; sandbox"));
+        }
+
+        @Test
+        @DisplayName("sends the same policy on a download, not only on an inline render")
+        void setsTheContentSecurityPolicyOnAnAttachmentToo() throws Exception {
+            String caseId = newCase();
+            String documentId = uploaded(caseId, "scan.tiff", "image/tiff");
+
+            authorised(get(fileUrl(caseId, documentId)))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Security-Policy", "default-src 'none'; sandbox"));
         }
 
         @Test

@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -74,7 +75,16 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
     private static final StubIdam IDAM = new StubIdam();
 
     static {
+        // Started here rather than in @BeforeAll: @DynamicPropertySource is read while the context is being
+        // built, which is before any @BeforeAll callback could have started the stub.
         IDAM.start();
+    }
+
+    @AfterAll
+    static void stopIdam() {
+        // A static start needs an explicit stop, or the class leaves a Jetty server, its thread pool and a
+        // port behind for the life of the test JVM.
+        IDAM.stop();
     }
 
     @DynamicPropertySource
@@ -454,13 +464,38 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
         @Test
         @DisplayName("refuses a flag that is not a boolean, naming the flag")
         void refusesANonBooleanFlag() throws Exception {
-            // The other half of the refusal: Spring cannot convert this one, so it arrives as a
-            // MethodArgumentTypeMismatchException. Both paths answer with the same summary and the same
-            // attribution, which is what the shared constant is for.
+            // Read as false is what Boolean.parseBoolean would have done, and the false rule set is a
+            // different answer -- so the flag is resolved explicitly and an unintelligible value is refused
+            // with the same summary and attribution an unrecognised type gets.
             authorised(get("/caseworker/cases/field-rules").param("migrated", "maybe"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Invalid request parameter"))
                 .andExpect(jsonPath("$.errors[0].field").value("migrated"));
+        }
+
+        @Test
+        @DisplayName("refuses a repeated flag rather than quietly picking the first")
+        void refusesARepeatedFlag() throws Exception {
+            // The same trap as the repeated type, on the parameter that decides whether the notice date is
+            // visible at all: Spring's array-to-boolean conversion takes element 0 and discards the rest, so
+            // ?publishToGazette=true&publishToGazette=false would answer the "publish" rules.
+            authorised(get("/caseworker/cases/field-rules")
+                .param("publishToGazette", "true", "false"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Invalid request parameter"))
+                .andExpect(jsonPath("$.errors.length()").value(1))
+                .andExpect(jsonPath("$.errors[0].field").value("publishToGazette"))
+                .andExpect(jsonPath("$.errors[0].message").value("must be given at most once"));
+        }
+
+        @Test
+        @DisplayName("accepts a flag in either case, since a URL is not case-normalised for the caller")
+        void acceptsAFlagInEitherCase() throws Exception {
+            authorised(get("/caseworker/cases/field-rules")
+                .param("type", "Adult")
+                .param("publishToGazette", "FALSE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rules.dateNoticeSentToLondonGazette.visible").value(false));
         }
     }
 

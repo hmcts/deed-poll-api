@@ -106,8 +106,15 @@ public record ValidationInput(Map<String, Object> values) {
         return read("publishToLondonGazette", Boolean.class);
     }
 
+    /**
+     * One field as the type a gate reads it at, coercing the text form a form body produces.
+     *
+     * <p>{@link DeedPollFields#asType} carries the reasoning: a merged record may hold a field as a domain
+     * type or as the member name a caller sent, and narrowing on {@code isInstance} alone would read the
+     * second as "not settled" -- so a form save that changed the type would leave every gate depending on
+     * it imposing nothing, silently.
+     */
     private <T> T read(String field, Class<T> type) {
-        Object value = values.get(field);
-        return type.isInstance(value) ? type.cast(value) : null;
+        return DeedPollFields.asType(type, values.get(field));
     }
 }

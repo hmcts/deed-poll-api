@@ -36,7 +36,7 @@ public class IdamDiscovery {
     private volatile IdamMetadata cached;
 
     public IdamDiscovery(IdamProperties properties, Environment environment) {
-        this(properties, environment, RestClient.create());
+        this(properties, environment, IdamHttp.restClient());
     }
 
     public IdamDiscovery(IdamProperties properties, Environment environment, RestClient restClient) {

@@ -169,6 +169,38 @@ class DocumentTypeServiceTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("writes both applicability arrays when the patch names them")
+    void writesBothApplicabilityArrays() {
+        // The other half of the absent-versus-present distinction, and the only path that exercises the
+        // List-to-Integer[] conversion at all. These arrays are what let the upload form offer only the types
+        // a given case can use, so transposed setters or dropped elements would offer the wrong ones.
+        String id = documentTypes.createDocumentType(dto()).getId();
+
+        documentTypes.updateDocumentType(id, new UpdateDocumentTypeInput(
+            Optional.empty(), Optional.of(List.of(2, 4)), Optional.of(List.of(1, 2, 5))));
+
+        DeedPollSupportingDocumentType saved = stored(id);
+        assertThat(saved.getName()).isEqualTo("Birth certificate");
+        assertThat(saved.getApplicableMaritalStatuses()).containsExactly(2, 4);
+        assertThat(saved.getApplicableTypes()).containsExactly(1, 2, 5);
+    }
+
+    @Test
+    @DisplayName("empties an applicability array, which is a value and not an absence")
+    void emptiesAnApplicabilityArray() {
+        // `[]` means "applies to every marital status", which is a different claim from "leave it alone" --
+        // so an explicitly empty list has to reach the column rather than being read as an absent field.
+        String id = documentTypes.createDocumentType(dto()).getId();
+
+        documentTypes.updateDocumentType(id, new UpdateDocumentTypeInput(
+            Optional.empty(), Optional.of(List.of()), Optional.empty()));
+
+        DeedPollSupportingDocumentType saved = stored(id);
+        assertThat(saved.getApplicableMaritalStatuses()).isEmpty();
+        assertThat(saved.getApplicableTypes()).containsExactly(3);
+    }
+
+    @Test
     @DisplayName("an empty patch changes nothing")
     void anEmptyPatchChangesNothing() {
         // Not a reference block: there the schema test proves an empty patch parses and the service test stops

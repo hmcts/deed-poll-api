@@ -92,6 +92,18 @@ public class CaseworkerDocumentController {
 
     private static final String X_CONTENT_TYPE_OPTIONS = "X-Content-Type-Options";
 
+    /**
+     * The policy a served document is rendered under: it may load nothing and it runs as its own origin.
+     *
+     * <p>{@code default-src 'none'} denies every subresource and every script; {@code sandbox} with no
+     * allowances puts the document in an opaque origin, so even script that a viewer runs anyway has no
+     * same-origin anything to reach. This is what the {@link #INLINE_MIME_TYPES} argument needs to be
+     * complete -- PDF is on that list and browser PDF viewers execute embedded JavaScript.
+     */
+    private static final String INERT_CONTENT_POLICY = "default-src 'none'; sandbox";
+
+    private static final String CONTENT_SECURITY_POLICY = "Content-Security-Policy";
+
     private final DocumentService documents;
 
     public CaseworkerDocumentController(DocumentService documents) {
@@ -141,13 +153,18 @@ public class CaseworkerDocumentController {
      * on a document that belongs elsewhere and on a metadata row with no file attached yet, which is a legitimate
      * state rather than an error.
      *
-     * <p>Four response headers, and each is load-bearing:
+     * <p>Five response headers, and each is load-bearing:
      *
      * <ul>
      *   <li>{@code Content-Type} from the stored value, or {@code application/octet-stream} when the row has
      *       none. Set from what this service recorded, never echoed from the request.</li>
      *   <li>{@code Content-Disposition}, {@code inline} for {@link #INLINE_MIME_TYPES} and {@code attachment}
      *       otherwise, with a sanitised filename.</li>
+     *   <li>{@code Content-Security-Policy: default-src 'none'; sandbox}, which is what makes the inline
+     *       allowlist's argument actually true rather than nearly true. PDF is on that list and a PDF is an
+     *       active-content format -- browser viewers run embedded JavaScript, and a PDF served inline runs it
+     *       in this origin's context. The policy leaves a benign PDF or image rendering exactly as before and
+     *       gives a malicious one nothing to reach.</li>
      *   <li>{@code X-Content-Type-Options: nosniff}, without which a browser may sniff past the declared type
      *       and render something as the thing it guessed. <strong>Spring Security's default header writers
      *       already add this to every response, so this line is deliberate redundancy rather than the only
@@ -182,6 +199,7 @@ public class CaseworkerDocumentController {
             .contentType(contentType)
             .header(HttpHeaders.CONTENT_DISPOSITION, disposition(contentType, document).toString())
             .header(X_CONTENT_TYPE_OPTIONS, "nosniff")
+            .header(CONTENT_SECURITY_POLICY, INERT_CONTENT_POLICY)
             .cacheControl(CacheControl.noStore())
             // The message converter closes the stream once it is written, which is what DocumentDownload's
             // "the caller closes it" means here.

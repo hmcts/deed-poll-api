@@ -23,8 +23,96 @@ contains:
  * MIT license and contribution information
  * Helm chart using chart-java.
 
-The application exposes health endpoint (http://localhost:4550/health) and metrics endpoint
-(http://localhost:4550/metrics).
+The application exposes a health endpoint (http://localhost:4550/health) and a Prometheus metrics
+endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoints exposed —
+`management.endpoints.web.exposure.include` lists `health, info, prometheus` and nothing else.
+
+## The API surface
+
+Twelve caseworker operations, and deliberately no thirteenth. `/swagger-ui.html` is the authority;
+this table is the map.
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/caseworker/cases` | The case list, filtered by a saved-query `filter` key |
+| GET | `/caseworker/cases/field-rules` | Show / hide / mandate rules for a `type`, `migrated` and `publishToGazette` |
+| GET | `/caseworker/cases/{id}` | One case **with** its notes, witnesses and documents — one call, not four |
+| GET | `/caseworker/document-types` | Every supporting-document type, with its applicability arrays |
+| POST | `/caseworker/cases` | Create a case, allocating its reference number |
+| PATCH | `/caseworker/cases/{id}` | Apply a patch — PATCH, not PUT, because the forms save one tab at a time |
+| GET | `/caseworker/cases/{id}/notes` | A case's notes |
+| POST | `/caseworker/cases/{id}/notes` | Add a note |
+| GET | `/caseworker/cases/{id}/notes/{noteId}` | One note |
+| PATCH | `/caseworker/cases/{id}/notes/{noteId}` | Amend a note |
+| DELETE | `/caseworker/cases/{id}/notes/{noteId}` | Delete a note |
+| POST | `/caseworker/cases/{id}/documents` | Upload a file (multipart) and record its document row |
+| GET | `/caseworker/cases/{id}/documents/{documentId}/file` | Stream a document's stored file back |
+
+There are deliberately **no** case deletes, no witness writes, no document-type writes and no
+`validate` endpoint. The domain implements and tests them; nothing consumes them, and the sibling
+prototype's mistake was building an API for an imagined consumer.
+
+Every failure answers the same envelope — `{"error": "...", "errors": [{"field": "...", "message": "..."}]}`
+(`api/ApiError.java`), so a form can render a message against the input it belongs to.
+
+`/citizen/**` exists, is **empty**, and has its own controller and DTO packages. It is reserved for
+`deed-poll-web`; an ArchUnit rule (`NamespaceSeparationSecurityTest`) is what stops a later plan
+sharing a caseworker DTO into it.
+
+## Authentication
+
+Every route requires a forwarded IDAM bearer token except a short infrastructure allowlist — `/`,
+`/health/**`, `/info`, `/prometheus`, `/v3/api-docs/**`, `/swagger-ui/**`, `/favicon.ico`. See
+`SecurityConfiguration.PUBLIC_PATHS`. Authentication is by omission: a route added later is protected
+unless somebody adds it to that list, rather than protected when somebody remembers to.
+
+One consequence worth knowing: an unknown path answers **401, not 404**, because authorisation runs
+before routing. Which paths exist is not something an unauthenticated caller needs to learn.
+
+Two variables must be set before any `/caseworker/**` call can succeed, and **both default to empty
+so that an unconfigured environment refuses every token** rather than trusting an issuer nobody chose:
+
+| Variable | Meaning |
+|---|---|
+| `IDAM_API_ISSUER_URL` | The IDAM issuer. Endpoints are discovered from it, never configured |
+| `IDAM_API_AUDIENCES` | Comma-separated `aud` values that are ours. Empty refuses everything |
+
+Roles come from `/o/userinfo`, not from the token — an IDAM access token carries no roles at all — and
+the lookup is deliberately uncached, so a role removed in IDAM is gone from the next request. The one
+role modelled is `caseworker-deedpoll-admin`, and it gates exactly one thing: whether `privacy` is
+editable.
+
+> **Not yet role-gated.** Every authenticated principal reaches the whole caseworker surface, because
+> the only role name confirmed with IDAM is the admin one and gating everything on it would lock out
+> ordinary caseworkers. Naming a non-admin caseworker role is part of the IDAM onboarding that has not
+> happened; until it does, `anyRequest().authenticated()` is the whole of the authorisation rule.
+
+Outbound S2S (`IDAM_S2S_AUTH_URL`, `DEED_POLL_API_S2S_SECRET`, `S2S_SERVICE_NAME`) is wired but
+unused — nothing here calls another CFT service yet, and the secret has a non-working default.
+
+## Documents and uploads
+
+Uploaded files go through the `DocumentStore` interface. The only implementation in this plan is
+`LocalFilesystemDocumentStore`: blobs keyed by a generated UUID under `DOCUMENT_STORE_ROOT`
+(default `data/documents`, gitignored) so a fresh checkout uploads without being configured first.
+
+> **Development only, and it must not reach a deployed environment.** Pod disk is ephemeral, replicas
+> do not share a volume, and the chart declares none — a deployed environment running this loses every
+> uploaded file on the next restart and serves 404s from whichever replica did not receive the upload.
+> Real storage is CDAM, in plan 03, which adds an implementation beside this one.
+
+The limits are **25 MB per file** and 26 MB per request, and they come from
+`UploadPolicy.MAX_UPLOAD_BYTES` rather than from a property — the same constant derives the refusal
+message ("The file must be smaller than 25MB"), and a property an environment could override would
+let the limit being enforced and the limit being quoted to the caller drift apart. A consequence for
+operators: declaring `MultipartConfigElement` as a bean makes **`spring.servlet.multipart.max-file-size`
+inert**, so setting it changes nothing. Change the constant.
+
+The accepted-type list is also `UploadPolicy`'s, and it is the client's *declared* MIME type, so treat
+it as hygiene rather than as a security control. A narrower list decides which types are served
+`inline` rather than as an attachment (`CaseworkerDocumentController.INLINE_MIME_TYPES`); every
+download is served under `Content-Security-Policy: default-src 'none'; sandbox`, because a PDF is an
+active-content format and a browser PDF viewer runs embedded scripts.
 
 ## Plugins
 
@@ -96,6 +184,10 @@ The project contains the following plugins:
 The project uses [Gradle](https://gradle.org) as a build tool. It already contains
 `./gradlew` wrapper script, so there's no need to install gradle.
 
+**Requires JDK 21.** `build.gradle` pins the toolchain and the runtime image is
+`base/java:21-distroless`; an older JDK fails before compiling anything, because Gradle has no
+resolver configured to download a 21 toolchain for itself.
+
 To build the project execute the following command:
 
 ```bash
@@ -159,7 +251,11 @@ In order to test if the application is up, you can call its health endpoint:
 You should get a response similar to this:
 
 ```
-  {"status":"UP","diskSpace":{"status":"UP","total":249644974080,"free":137188298752,"threshold":10485760}}
+  {"status":"UP","components":{
+    "db":{"status":"UP","details":{"database":"PostgreSQL","validationQuery":"isValid()"}},
+    "deedPollSchema":{"status":"UP","details":{"tables":6}},
+    "diskSpace":{"status":"UP","details":{"total":249644974080,"free":137188298752,"threshold":10485760}},
+    "livenessState":{"status":"UP"},"ping":{"status":"UP"},"readinessState":{"status":"UP"}}}
 ```
 
 ### The two probes, and why they differ
@@ -193,6 +289,11 @@ and the `management.endpoint.health.group` block in `application.yaml` are the t
 written down; `HealthProbeTest` asserts it over HTTP, including that readiness answers **503** and
 not 200 when the database is unreachable.
 
+**Kubernetes does not consult them yet.** `charts/rpe-spring-boot-template` is still the template's —
+the chart name, the image and the ingress host are `spring-boot-template`'s, and no probe path is
+configured — so these endpoints are tested but not yet wired. Renaming the chart and naming the two
+paths is part of the outstanding deployment onboarding, which is deliberately outside the build plans.
+
 ### The OpenAPI document
 
 Published at `/v3/api-docs`, and browsable at `/swagger-ui.html`. `springdoc.packagesToScan` covers
@@ -216,7 +317,12 @@ For more information:
 ./bin/run-in-docker.sh -h
 ```
 
-Script includes bare minimum environment variables necessary to start api instance. Whenever any variable is changed or any other script regarding docker image/container build, the suggested way to ensure all is cleaned up properly is by this command:
+The script sets **no** environment variables of its own — it runs `./gradlew clean` / `assemble` when
+asked and then `docker compose up`, so `-c` and `-i` are the only options that do anything and the
+"Available parameters" block is empty. Configuration comes from `docker-compose.yml` and `.env`; see
+[Authentication](#authentication) for the two variables a caseworker call needs.
+
+Whenever any variable is changed, or any other script regarding docker image/container build, the suggested way to ensure all is cleaned up properly is by this command:
 
 ```bash
 docker compose rm

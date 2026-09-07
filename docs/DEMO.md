@@ -1,3 +1,7 @@
+> **⚠️ This file is a demo outline for the sibling repo `hmcts/deed-poll-admin`, not this one.** The
+> monorepo structure, hooks and `CLAUDE.md` conventions it lists are that repo's. Nothing here
+> describes `deed-poll-api`. It needs deleting.
+
 ## HMCTS Monorepo Agentic Capabilities
 
 ### Code base

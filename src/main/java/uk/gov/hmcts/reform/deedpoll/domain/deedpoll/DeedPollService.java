@@ -167,8 +167,13 @@ public class DeedPollService {
         // left untouched.
         String reprefixed = null;
         if (data.has("type")) {
+            // Read through the same coercion every other reader of a patch uses, rather than cast. A patch
+            // places no type constraint on its values -- DeedPollFields' writer for `type` coerces a member
+            // name, and FormPayload produces exactly that for an enum field -- so a cast here would be a
+            // ClassCastException on a legitimate patch, surfacing as a 500.
             reprefixed = ReferenceNumbers
-                .reprefixForUpdate(record.getDisplayReference(), (DeedPollType) data.get("type"))
+                .reprefixForUpdate(record.getDisplayReference(),
+                                   DeedPollFields.asType(DeedPollType.class, data.get("type")))
                 .orElse(null);
         }
 

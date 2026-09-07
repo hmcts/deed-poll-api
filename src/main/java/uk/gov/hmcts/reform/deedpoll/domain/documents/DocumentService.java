@@ -4,6 +4,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
@@ -202,6 +204,14 @@ public class DocumentService {
      * declared MIME type and size. Both the case and the type are checked before anything is stored, so a bad
      * request does not leave an orphaned blob behind.
      *
+     * <p><strong>A rollback after the blob is written removes it.</strong> Checking the case and the type up
+     * front closes the ordinary orphan; what it cannot close is a failure between the write and the commit --
+     * a flush error, a constraint violation, a lost connection -- which rolls the row back and leaves bytes on
+     * disk that nothing references. Unlike {@link #removeDocument}'s orphan, this one is unrecoverable by
+     * hand, because the only record of the key was in the transaction that vanished. So the cleanup is
+     * registered against the transaction and is best-effort in the same way and for the same reason: a failed
+     * unlink is logged with the key, never allowed to replace the error that caused the rollback.
+     *
      * <p>The stored name is the caller's, capped at the column's 100 characters, falling back to the file's own
      * name when the caller gives none or gives an empty one -- the reference's {@code ||} rather than
      * {@code ??}, because an empty name in the grid is no more use than no name at all.
@@ -222,6 +232,7 @@ public class DocumentService {
         DeedPollSupportingDocumentType type = requireType(documentTypeId);
 
         String storageKey = store.save(file.content());
+        removeBlobIfTheWriteDoesNotCommit(storageKey);
 
         DeedPollSupportingDocument document = new DeedPollSupportingDocument();
         document.setDeedPoll(parent);
@@ -251,6 +262,32 @@ public class DocumentService {
             throw new NotFoundError("This document has no attached file");
         }
         return new DocumentDownload(document, store.open(document.getStorageKey()));
+    }
+
+    /**
+     * Deletes a just-written blob if the transaction that was going to reference it rolls back.
+     *
+     * <p>No-ops when there is no transaction to hang the cleanup on -- a direct call outside one owns its own
+     * ordering, and there is nothing to be told about.
+     */
+    private void removeBlobIfTheWriteDoesNotCommit(String storageKey) {
+        if (storageKey == null || !TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status == STATUS_COMMITTED) {
+                    return;
+                }
+                try {
+                    store.delete(storageKey);
+                } catch (RuntimeException failed) {
+                    LOG.error("Upload rolled back but its stored file could not be removed (key {})",
+                              storageKey, failed);
+                }
+            }
+        });
     }
 
     private DeedPoll requireCase(String deedPollId) {

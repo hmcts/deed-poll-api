@@ -27,6 +27,11 @@ services:
       - DB_PORT=5432
       - DB_NAME=deedpoll
       - DB_USER_NAME=deedpoll
+      # Passed through from the host with no default, so an unset one stays unset and the service
+      # keeps refusing every token rather than trusting an issuer nobody chose. Without these two,
+      # /health and /v3/api-docs answer and every /caseworker/** route is a 401.
+      - IDAM_API_ISSUER_URL
+      - IDAM_API_AUDIENCES
     depends_on:
       deed-poll-db:
         condition: service_healthy

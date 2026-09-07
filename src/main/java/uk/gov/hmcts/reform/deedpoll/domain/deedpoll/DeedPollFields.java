@@ -32,9 +32,10 @@ import java.util.function.Function;
  * means a field only becomes writable by being listed here.
  *
  * <p><strong>{@link #WRITERS} is the reference's {@code createDeedPollSchema} field list.</strong> Only
- * those 68 fields are writable through a patch, so this registry is what makes {@code referencenumber}
- * and {@code displayReference} unsettable by a caller -- exactly what the reference's "strips unknown
- * keys" test asserts about the schema. The audit columns are unwritable for the same reason, and the
+ * the 67 fields it names are writable through a patch, so this registry is what makes
+ * {@code referencenumber} and {@code displayReference} unsettable by a caller -- exactly what the
+ * reference's "strips unknown keys" test asserts about the schema. The audit columns are unwritable
+ * for the same reason, and the
  * public-journey fields ({@code placeOfBirth} and the parent block) are absent because the reference's
  * schema does not accept them either: they belong to the citizen journey, not to this API.
  *
@@ -106,6 +107,46 @@ public final class DeedPollFields {
         values.put("witnesses", record.getWitnesses());
         values.put("documents", record.getDocuments());
         return values;
+    }
+
+    /**
+     * A patch value read as one of the domain types a rule needs, or null when it cannot be one.
+     *
+     * <p><strong>Why a reader of a patch has to coerce at all.</strong> {@link DeedPollPatch} places no type
+     * constraint on its values, and legitimately so: a value may arrive as a domain type (the JSON schema
+     * resolves an enum to its member) or as the text a caller sent ({@link FormPayload} yields a member name
+     * for an enum field, because a form body has no types). {@link #WRITERS} coerces at the point of write,
+     * which is why both producers work -- but the gates read the merged record BEFORE that write, so they
+     * need the same coercion or a text-valued field reads as "not settled" and every rule depending on it
+     * silently imposes nothing. That is the quiet half of the failure; the loud half is a cast.
+     *
+     * <p>Null for a value that is neither, rather than an exception. "Not a type this rule recognises" and
+     * "no type" are the same thing to a gate, and a value that is genuinely wrong is refused by the schema
+     * on the way in and by the writer on the way out -- both with better to say than a rule could.
+     */
+    public static <T> T asType(Class<T> type, Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (type.isInstance(value)) {
+            return type.cast(value);
+        }
+        if (!(value instanceof String text) || text.isEmpty()) {
+            return null;
+        }
+        if (type == Boolean.class) {
+            return "true".equals(text) || "false".equals(text) ? type.cast(Boolean.valueOf(text)) : null;
+        }
+        T[] members = type.getEnumConstants();
+        if (members == null) {
+            return null;
+        }
+        for (T member : members) {
+            if (((Enum<?>) member).name().equals(text)) {
+                return member;
+            }
+        }
+        return null;
     }
 
     private static Map<String, Function<DeedPoll, Object>> readers() {

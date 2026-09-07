@@ -41,7 +41,7 @@ public class IdamUserInfoClient {
     private final RestClient restClient;
 
     public IdamUserInfoClient(IdamDiscovery discovery) {
-        this(discovery, RestClient.create());
+        this(discovery, IdamHttp.restClient());
     }
 
     public IdamUserInfoClient(IdamDiscovery discovery, RestClient restClient) {

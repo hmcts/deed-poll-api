@@ -7,6 +7,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MaritalStatus;
 
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -84,6 +85,50 @@ class DeedPollSchemasTest {
         void rejectsAMalformedDate() {
             rejects(payload("dateReceived", "01/03/2026"));
             rejects(payload("dateReceived", "not-a-date"));
+        }
+
+        @Test
+        @DisplayName("rejects a well-shaped date that is not a real one, as a 400 rather than a 500")
+        void rejectsACalendarImpossibleDate() {
+            // Passes the shape check and then fails to parse, which is the one branch inside the ISO-date
+            // arm: without the catch there the exception escapes as a 500 instead of a 400 naming the field.
+            rejects(payload("dateReceived", "2026-02-30"));
+            rejects(payload("dateReceived", "2026-13-01"));
+        }
+
+        @Test
+        @DisplayName("accepts booleans and rejects the strings a form-shaped payload would send")
+        void acceptsBooleansAndRejectsTheirTextForm() {
+            assertThat(DeedPollSchemas.parseCreate(payload("inPerson", true)).get("inPerson")).isEqualTo(true);
+            assertThat(DeedPollSchemas.parseCreate(payload("migratedRecord", false)).get("migratedRecord"))
+                .isEqualTo(false);
+            // The refusal KeyedRequestBody's javadoc promises: the JSON API is not the form, so "yes" and 1
+            // are refused with the field named rather than coerced into a flag nobody chose.
+            rejects(payload("migratedRecord", "yes"));
+            rejects(payload("retainPermanently", 1));
+        }
+
+        @Test
+        @DisplayName("accepts a whole number for an age, and a decimal amount for the refund")
+        void acceptsNumbers() {
+            assertThat(DeedPollSchemas.parseCreate(payload("ageOfMinor", 7)).get("ageOfMinor")).isEqualTo(7);
+            assertThat(DeedPollSchemas.parseCreate(payload("refundAmount", new BigDecimal("12.50")))
+                .get("refundAmount")).isEqualTo(new BigDecimal("12.50"));
+            // A JSON number binds to Double, which the decimal rule converts rather than refusing.
+            assertThat(DeedPollSchemas.parseCreate(payload("refundAmount", 12.5d)).get("refundAmount"))
+                .isEqualTo(new BigDecimal("12.5"));
+            rejects(payload("refundAmount", "12.50"));
+        }
+
+        @Test
+        @DisplayName("rejects a whole number too large for the column rather than silently wrapping it")
+        void rejectsAnOutOfRangeWholeNumber() {
+            // Jackson binds an untyped integer beyond int range to a Long, and 1e20 to a Double. Both are
+            // whole, so a wholeness check alone would accept them and intValue() would then store 0 and
+            // 2147483647 respectively -- the same silent wrong answer as 7.5 becoming 7.
+            rejects(payload("ageOfMinor", 4294967296L));
+            rejects(payload("ageOfMinor", -4294967296L));
+            rejects(payload("ageOfMinor", 1e20d));
         }
 
         @Test
