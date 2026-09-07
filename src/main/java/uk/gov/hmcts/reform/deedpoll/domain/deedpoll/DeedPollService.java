@@ -135,18 +135,27 @@ public class DeedPollService {
      * One case with its children and derived columns.
      *
      * <p>The three child collections are fetched here rather than left lazy, because every consumer of a
-     * single case shows them and a caller outside this transaction cannot fetch them itself. That is four
-     * queries, which is also what the reference's Prisma {@code include} issues -- one per relation --
-     * and it is the shape that avoids a multiple-bag fetch.
+     * single case shows them and a caller outside this transaction cannot fetch them itself.
+     *
+     * <p>That is three queries: the case with its documents and their types in one, then notes and
+     * witnesses separately. Fetching more than one collection in a single query is a multiple-bag fetch,
+     * which Hibernate answers with a cartesian product -- hence the split rather than one graph covering
+     * all three. The reference's Prisma {@code include} issues one query per relation, so this is a
+     * query fewer rather than more.
+     *
+     * <p><strong>Each document's type comes back with the documents, not per document.</strong> The
+     * association is a lazy {@code @ManyToOne}, so touching {@code getDocumentType()} in a loop -- which
+     * is what this method used to do -- was one select per document. See
+     * {@code DeedPollRepository.findWithDocumentsById}.
      *
      * @throws NotFoundError if there is no such case
      */
     @Transactional(readOnly = true)
     public DeedPollWithComputed findDeedPoll(String id) {
-        DeedPoll record = requireDeedPoll(id);
+        DeedPoll record = deedPolls.findWithDocumentsById(id)
+            .orElseThrow(() -> new NotFoundError("DeedPoll " + id + " not found"));
         record.getNotes().size();
         record.getWitnesses().size();
-        record.getDocuments().forEach(document -> document.getDocumentType().getName());
         return Computed.withComputed(record);
     }
 

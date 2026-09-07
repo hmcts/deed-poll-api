@@ -11,8 +11,14 @@
 --     witnesses and documents with it, which is intentional. "documentTypeId" declares no
 --     onDelete, so it gets Prisma's default for a required relation, RESTRICT: a document
 --     type that is still in use cannot be deleted. ON UPDATE CASCADE throughout is also
---     Prisma's default and is reproduced so a future `prisma migrate diff` against this
---     schema stays empty.
+--     Prisma's default, and is reproduced so that the delete and update rules match the
+--     reference exactly.
+--
+--     An earlier version of this comment said the point was for a future
+--     `prisma migrate diff` against this schema to stay empty. That stopped being true at
+--     V4, which adds four indexes for this service's own access paths that the reference
+--     schema does not have. A diff would now report them, correctly. Matching the
+--     reference on constraints is still the intent; matching it on indexes is not.
 --   * deedpoll_notes has no "deedpoll_NoteID". The source's autonumber display code is
 --     deliberately not ported -- Dataverse forces a GUID primary key so a short readable
 --     handle had to be a second column, and Postgres does not. The reference records the

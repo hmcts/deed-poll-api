@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.repository;
 
 import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -60,6 +61,22 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select d from DeedPoll d where d.id = :id")
     Optional<DeedPoll> findByIdForUpdate(@Param("id") String id);
+
+    /**
+     * One case with its documents and each document's type, in a single query.
+     *
+     * <p>Exists because the case view renders every document's type name. Reaching it through the lazy
+     * {@code @ManyToOne} was one select per document on top of the collection load -- invisible with the
+     * two or three documents a test fixture has, and linear in the real thing.
+     *
+     * <p><strong>Only the documents collection is fetched.</strong> Adding {@code notes} or
+     * {@code witnesses} here would make it a multiple-bag fetch, which Hibernate answers with a
+     * cartesian product across the two collections. Those two are still initialised separately by
+     * {@code DeedPollService.findDeedPoll}, which is why this finder is documents-specific rather than a
+     * general "with children" one.
+     */
+    @EntityGraph(attributePaths = {"documents", "documents.documentType"})
+    Optional<DeedPoll> findWithDocumentsById(String id);
 
     /** Cases in one of the given states, newest first. */
     List<DeedPoll> findByStateInOrderByCreatedOnDesc(Collection<DeedPollState> states);

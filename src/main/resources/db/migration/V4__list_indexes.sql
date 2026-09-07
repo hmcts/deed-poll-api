@@ -8,11 +8,19 @@
 -- sort of every row in it -- including the filtered variants, because the existing "state" index
 -- cannot supply the ordering and Postgres sorts after filtering.
 --
--- Composite rather than "createdOn" alone: the leading "state" serves the two state filters, and the
--- trailing "createdOn" lets those read out in order rather than sorting. The "all" filter, which has
--- no state predicate, is served by the second index. DESC is stated to match the query, though
--- Postgres can also read an ASC index backwards -- saying it makes the intent legible next to the
--- finder that depends on it.
+-- Composite rather than "createdOn" alone: the leading "state" serves findByStateIn..., whose
+-- "state IN (…)" is a set of equality seeks, and the trailing "createdOn" lets those read out in
+-- order rather than sorting.
+--
+-- It does NOT serve findOpenOrderByCreatedOnDesc, and an earlier version of this comment claiming it
+-- served "the two state filters" was wrong about that one. That finder's predicate is
+-- "state IS NULL OR state NOT IN (…)" -- negation and a null test, neither of which a btree's leading
+-- column can seek on -- so it reads out via the "createdOn"-only index below and filters as it goes.
+-- Which is fine, and is why that index is not redundant: it is what the open filter and the "all"
+-- filter both use.
+--
+-- DESC is stated to match the query, though Postgres can also read an ASC index backwards -- saying it
+-- makes the intent legible next to the finder that depends on it.
 CREATE INDEX "deedpoll_deedpoll_createdOn_idx"
     ON "deedpoll_deedpoll" ("createdOn" DESC);
 
