@@ -8,6 +8,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
@@ -154,6 +155,10 @@ public class DocumentService {
         dto.storageKey().ifPresent(document::setStorageKey);
         dto.originalName().ifPresent(document::setOriginalName);
         dto.mimeType().ifPresent(document::setMimeType);
+        // Stamped here rather than left to @PreUpdate, which Hibernate only fires when its dirty check
+        // finds a changed property -- so an empty patch, or one resending the values already stored, would
+        // leave modifiedOn where it was. The reference's `prisma.update` writes @updatedAt on every call.
+        document.setModifiedOn(AuditClock.now());
         return documents.save(document);
     }
 
@@ -167,6 +172,15 @@ public class DocumentService {
      * status code that contradicts what happened is neither. The failure is logged with both ids so the orphan
      * can be found.
      *
+     * <p><strong>The unlink waits for the commit</strong>, which is the mirror of what
+     * {@link #removeBlobIfTheWriteDoesNotCommit} does for an upload. The reference has no enclosing
+     * transaction, so its row delete is already committed by the time it unlinks and its comment leans on
+     * exactly that -- "the row is already gone at this point". Here the delete is one statement in a
+     * transaction that has not committed yet, so unlinking first would let a failed commit (a lost
+     * connection, or a wider {@code @Transactional} caller that rolls back later) restore the metadata row
+     * while its bytes were permanently gone: a row that renders as downloadable and 404s for ever. Of the
+     * two failure modes only the orphaned blob is recoverable, so that is the one this keeps.
+     *
      * @throws NotFoundError if there is no such document, or it belongs to another case
      */
     @Transactional
@@ -174,15 +188,7 @@ public class DocumentService {
         DeedPollSupportingDocument document = findDocument(deedPollId, id);
         String storageKey = document.getStorageKey();
         documents.delete(document);
-        documents.flush();
-
-        try {
-            // Called unconditionally, as the reference does: the store no-ops on a null key, so a
-            // metadata-only row needs no special case here.
-            store.delete(storageKey);
-        } catch (RuntimeException failed) {
-            LOG.error("Deleted document {} but could not remove its stored file (key {})", id, storageKey, failed);
-        }
+        removeBlobOnceTheDeleteCommits(id, storageKey);
     }
 
     /** Uploads a file with the form's own options, which is the shape a multipart request arrives in. */
@@ -262,6 +268,40 @@ public class DocumentService {
             throw new NotFoundError("This document has no attached file");
         }
         return new DocumentDownload(document, store.open(document.getStorageKey()));
+    }
+
+    /**
+     * Deletes a blob once the row that referenced it is really gone.
+     *
+     * <p>Runs the unlink inline when there is no transaction to hang it on -- a direct call outside one has
+     * already had its delete committed by the repository, so waiting would mean never running.
+     *
+     * <p>A failed unlink is logged and swallowed either way. It used to propagate while claiming to be
+     * best-effort, and the reference records the correction: the row was already gone, so a failed unlink
+     * turned a completed delete into a 500, the caller retried and got a 404, and had no way to tell the
+     * delete had in fact worked. Both ids are logged so the orphan can be found.
+     */
+    private void removeBlobOnceTheDeleteCommits(String id, String storageKey) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            unlink(id, storageKey);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                unlink(id, storageKey);
+            }
+        });
+    }
+
+    private void unlink(String id, String storageKey) {
+        try {
+            // Called unconditionally, as the reference does: the store no-ops on a null key, so a
+            // metadata-only row needs no special case here.
+            store.delete(storageKey);
+        } catch (RuntimeException failed) {
+            LOG.error("Deleted document {} but could not remove its stored file (key {})", id, storageKey, failed);
+        }
     }
 
     /**

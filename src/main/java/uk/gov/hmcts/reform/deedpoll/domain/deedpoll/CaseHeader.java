@@ -86,7 +86,11 @@ public record CaseHeader(String entityLabel, List<CaseHeaderRow> rows) {
         ZonedDateTime local = utc.atOffset(ZoneOffset.UTC).atZoneSameInstant(LONDON);
         int hour = local.getHour() % 12 == 0 ? 12 : local.getHour() % 12;
         String meridiem = local.getHour() < 12 ? "am" : "pm";
-        return "%s at %d:%02d%s".formatted(HEADER_DATE.format(local), hour, local.getMinute(), meridiem);
+        // Locale.UK on the format too, not just on HEADER_DATE: `%d` substitutes the default FORMAT
+        // locale's zero digit, so a non-Latin default would print the hour and minute in digits the rest
+        // of the header is not in.
+        return String.format(Locale.UK, "%s at %d:%02d%s",
+                             HEADER_DATE.format(local), hour, local.getMinute(), meridiem);
     }
 
     /**

@@ -239,6 +239,30 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
         assertThat(saved.getModifiedBy()).isEqualTo("Jordan Blake");
     }
 
+    @Test
+    @DisplayName("an empty update by the note's own last author still moves modifiedOn")
+    void anEmptyUpdateByTheSameAuthorStillMovesModifiedOn() throws InterruptedException {
+        // Not a reference block: `prisma.update` writes @updatedAt on every call, so there is nothing to
+        // test. Here there was: leaving the stamp to @PreUpdate meant Hibernate's dirty check decided
+        // whether it happened, and a patch that names no text, by the author already on the row, changes no
+        // property -- so no UPDATE was issued at all and modifiedOn stayed put. NotesView derives the
+        // grid's `unmodified` flag from createdOn.equals(modifiedOn), so the note went on reporting that it
+        // had never been edited. Every other test here switches author between the create and the patch,
+        // which always makes the entity dirty and hid this.
+        String caseId = storedCase();
+        String noteId = noteService.createNote(caseId, create("original"), new NoteAuthor("Steve Newman")).getId();
+        LocalDateTime createdOn = stored(noteId).getCreatedOn();
+        // timestamp(3): two writes inside the same millisecond would store the same value, so the assertion
+        // below would be a coin toss rather than a test.
+        Thread.sleep(2);
+
+        noteService.updateNote(caseId, noteId, new UpdateNoteInput(Optional.empty()), new NoteAuthor("Steve Newman"));
+
+        DeedPollNote saved = stored(noteId);
+        assertThat(saved.getCreatedOn()).isEqualTo(createdOn);
+        assertThat(saved.getModifiedOn()).isAfter(createdOn);
+    }
+
     /** Backdates a stored note, so an ordering assertion does not depend on the clock's resolution. */
     private void setCreatedOn(String noteId, LocalDateTime createdOn) {
         DeedPollNote note = stored(noteId);

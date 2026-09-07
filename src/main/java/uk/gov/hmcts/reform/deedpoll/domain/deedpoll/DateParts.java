@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Pattern;
@@ -64,11 +65,18 @@ public record DateParts(String day, String month, String year) {
             LocalDate composed = LocalDate.of(Integer.parseInt(year), 1, 1)
                 .plusMonths(Integer.parseInt(month) - 1L)
                 .plusDays(Integer.parseInt(day) - 1L);
-            return Optional.of("%04d-%02d-%02dT00:00:00.000Z".formatted(
+            // Locale.ROOT, not the default: `%d` substitutes the zero digit of the default FORMAT locale,
+            // so under a non-Latin numbering system this would emit an "ISO" string of non-ASCII digits
+            // that Dates.toDateTime then fails to parse -- silently discarding the date. See
+            // ReferenceNumbers.SERIAL_LOCALE, which is the same trap on a persisted value.
+            return Optional.of(String.format(Locale.ROOT, "%04d-%02d-%02dT00:00:00.000Z",
                 composed.getYear(), composed.getMonthValue(), composed.getDayOfMonth()));
-        } catch (ArithmeticException | java.time.DateTimeException outOfRange) {
+        } catch (NumberFormatException | ArithmeticException | java.time.DateTimeException outOfRange) {
             // A year beyond the supported range. `new Date(Date.UTC(...))` gives an Invalid Date for
-            // the same inputs, which the reference reports as null.
+            // the same inputs, which the reference reports as null. NumberFormatException is in the list
+            // because INTEGER admits any run of digits, including one wider than an int: `Number()` reads
+            // "99999999999" as a finite number and Date.UTC turns it into an Invalid Date, so the
+            // reference's answer is still null and not a 500 out of a pure formatting helper.
             return Optional.empty();
         }
     }

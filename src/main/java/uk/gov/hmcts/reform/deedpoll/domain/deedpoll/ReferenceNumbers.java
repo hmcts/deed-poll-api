@@ -6,6 +6,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -52,6 +53,21 @@ public final class ReferenceNumbers {
      */
     private static final String SERIAL_FORMAT = "%05d";
 
+    /**
+     * The locale the serial is formatted in.
+     *
+     * <p>{@code Locale.ROOT} rather than the default, and it is load-bearing. {@code "%05d".formatted(n)}
+     * is {@code String.format(this, n)}, which for {@code %d} substitutes the zero digit of
+     * {@code Locale.getDefault(FORMAT)} -- so under a default locale whose numbering system is not Latin
+     * ({@code ar-EG}, {@code fa-IR}, {@code ne-NP}, set by {@code user.language}/{@code LANG} in an image)
+     * serial 7 formats as {@code ٠٠٠٠٧}. That would be persisted as {@code displayReference}, which is
+     * external-facing and permanent; worse, {@link #REFERENCE} uses {@code \d}, which is ASCII-only, so
+     * {@link #parse} could no longer read back what {@link #compose} had just written and a DP&#8596;DR flip
+     * would silently stop re-prefixing. The reference is locale-independent by construction:
+     * {@code String(serial).padStart(5, "0")}.
+     */
+    private static final Locale SERIAL_LOCALE = Locale.ROOT;
+
     private ReferenceNumbers() {
     }
 
@@ -74,7 +90,7 @@ public final class ReferenceNumbers {
 
     /** 5-digit zero-padded serial. */
     public static String formatSerial(int serial) {
-        return SERIAL_FORMAT.formatted(serial);
+        return String.format(SERIAL_LOCALE, SERIAL_FORMAT, serial);
     }
 
     /**

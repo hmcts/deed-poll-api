@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.witnesses;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
@@ -113,6 +114,10 @@ public class WitnessService {
         dto.witnessAddress().ifPresent(witness::setWitnessAddress);
         dto.witnessOccupation().ifPresent(witness::setWitnessOccupation);
         dto.declarant().ifPresent(witness::setDeclarant);
+        // Stamped here rather than left to @PreUpdate, which Hibernate only fires when its dirty check
+        // finds a changed property -- so an empty patch, or one resending the values already stored, would
+        // leave modifiedOn where it was. The reference's `prisma.update` writes @updatedAt on every call.
+        witness.setModifiedOn(AuditClock.now());
         return witnesses.save(witness);
     }
 

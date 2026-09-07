@@ -237,13 +237,19 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("an empty patch changes nothing")
-    void anEmptyPatchChangesNothing() {
+    @DisplayName("an empty patch leaves the four fields alone but still moves modifiedOn")
+    void anEmptyPatchChangesNothingButTheTimestamp() throws InterruptedException {
         // Not a reference block: there the schema test proves an empty patch parses and the service test
-        // stops there. A witness has no author column to move, so unlike a note an empty patch is a
-        // genuine no-op and that is worth pinning rather than assuming.
+        // stops there. A witness has no author column to move, so an empty patch touches no field of its
+        // own -- but the reference's `prisma.update` writes @updatedAt on every call, so modifiedOn moves
+        // regardless. Leaving that to @PreUpdate would not: Hibernate only fires it when its dirty check
+        // finds a changed property, so the whole UPDATE would silently be skipped.
         String caseId = storedCase();
         String witnessId = witnessService.createWitness(caseId, create()).getId();
+        final LocalDateTime createdOn = stored(witnessId).getCreatedOn();
+        // The column is timestamp(3), so two writes inside the same millisecond would store the same value
+        // and the assertion below would be a coin toss rather than a test.
+        Thread.sleep(2);
 
         witnessService.updateWitness(caseId, witnessId, UpdateWitnessInput.EMPTY);
 
@@ -252,6 +258,8 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
         assertThat(saved.getWitnessAddress()).isEqualTo("1 High St");
         assertThat(saved.getWitnessOccupation()).isEqualTo("Teacher");
         assertThat(saved.isDeclarant()).isFalse();
+        assertThat(saved.getCreatedOn()).isEqualTo(createdOn);
+        assertThat(saved.getModifiedOn()).isAfter(createdOn);
     }
 
     @Test

@@ -139,11 +139,16 @@ public record EditView(
                                          TabDef tab,
                                          EditContext ctx,
                                          Map<String, Object> submitted) {
-        DeedPollType type = record.get("type") instanceof DeedPollType stored ? stored : null;
+        // Coerced rather than narrowed with instanceof. Prisma enums are runtime strings, so the reference
+        // resolves the rules from a record carrying "Adult"; Java's instanceof would read that as null, and
+        // null means "impose nothing" to getFieldRules -- an Adult case rendering the four minor fields
+        // with nothing marked required, and no error anywhere. DeedPollFields.asType is the one coercion
+        // every reader of a loosely-typed record goes through, for exactly this.
+        DeedPollType type = DeedPollFields.asType(DeedPollType.class, record.get("type"));
         Map<String, FieldRule> rules = DeedPollValidation.getFieldRules(
             type,
-            Boolean.TRUE.equals(record.get("migratedRecord")),
-            !Boolean.FALSE.equals(record.get("publishToLondonGazette")));
+            Boolean.TRUE.equals(DeedPollFields.asType(Boolean.class, record.get("migratedRecord"))),
+            !Boolean.FALSE.equals(DeedPollFields.asType(Boolean.class, record.get("publishToLondonGazette"))));
         boolean canEditPrivacy = FormPresentation.privacyEditable(type, new PresentationContext(ctx.isAdmin(), false));
 
         List<EditSection> sections = tab.sections().stream()

@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.notes;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollNoteRepository;
@@ -112,6 +113,13 @@ public class NoteService {
         DeedPollNote note = findNote(deedPollId, id);
         dto.note().ifPresent(note::setNote);
         note.setModifiedBy(author.author());
+        // Stamped here rather than left to @PreUpdate. Hibernate only fires @PreUpdate when its dirty check
+        // finds a changed property, so an empty patch by the note's own last author would change nothing,
+        // issue no UPDATE and leave modifiedOn where it was -- and NotesView derives the grid's
+        // "unmodified" flag from createdOn.equals(modifiedOn), so an edited note would keep reporting that
+        // it had never been touched. The reference's `prisma.update` writes @updatedAt unconditionally, and
+        // UpdateNoteRequest promises the same ("an empty patch re-stamps modifiedBy").
+        note.setModifiedOn(AuditClock.now());
         return notes.save(note);
     }
 

@@ -62,7 +62,7 @@ public class DeedPollNote {
 
     @PrePersist
     void onCreate() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = AuditClock.now();
         if (createdOn == null) {
             createdOn = now;
         }
@@ -71,6 +71,6 @@ public class DeedPollNote {
 
     @PreUpdate
     void onUpdate() {
-        modifiedOn = LocalDateTime.now();
+        modifiedOn = AuditClock.now();
     }
 }

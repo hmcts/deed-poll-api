@@ -325,6 +325,27 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("removes: keeps the blob when the surrounding transaction rolls back")
+    void removesKeepsTheBlobWhenTheTransactionRollsBack() {
+        // Not a reference block: there the row delete is its own committed statement, so the unlink cannot
+        // run against a delete that did not stick. Here it can -- a wider transaction rolling back after
+        // removeDocument restores the metadata row, and an unlink that had already happened would leave it
+        // pointing at nothing, downloadable in the view and a permanent 404 in fact. The mirror of
+        // uploadsRemovesTheBlobWhenTheTransactionRollsBack, and the unrecoverable half of the same window.
+        String caseId = storedCase();
+        DeedPollSupportingDocument uploaded = documentService.uploadDocument(caseId, storedType(), FILE);
+
+        assertThatThrownBy(() -> transactions.executeWithoutResult(status -> {
+            documentService.removeDocument(caseId, uploaded.getId());
+            throw new IllegalStateException("something after the row was deleted");
+        })).isInstanceOf(IllegalStateException.class);
+
+        assertThat(documents.findById(uploaded.getId())).isPresent();
+        verify(store, never()).delete(any());
+        assertThat(STORE_ROOT.resolve(uploaded.getStorageKey())).exists();
+    }
+
+    @Test
     @DisplayName("uploads: stores the blob and records metadata")
     void uploadsStoresTheBlobAndRecordsMetadata() {
         String caseId = storedCase();

@@ -5,6 +5,7 @@ import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
@@ -82,9 +83,14 @@ public class DeedPollService {
         applyPrivacyAuthorisation(data, type, ctx, true);
         // Privacy auto-default on create (ported from deedpoll_javascript OnChangeType): depends on type
         // plus admin status. isNew is always true here.
+        // Read through DeedPollFields.asType, not narrowed with instanceof, for the reason the `type` read
+        // in update() gives: a patch places no type constraint on its values and FormPayload yields a
+        // member NAME for an enum field. Narrowing would read "Private" as "no privacy supplied", and
+        // because null means "fall back" to defaultPrivacy the failure would be silent -- an admin's
+        // explicit Private stored as Normal, with nothing raised.
         data.set("privacy", FormPresentation.defaultPrivacy(
             type,
-            data.get("privacy") instanceof Privacy privacy ? privacy : null,
+            DeedPollFields.asType(Privacy.class, data.get("privacy")),
             new PresentationContext(ctx.isAdmin(), true)));
 
         // The same cross-field date rules as update(). Checked before a serial is allocated, so a
@@ -213,6 +219,12 @@ public class DeedPollService {
         record.setState(CaseState.deriveState(CaseStateInput.from(merged)));
         // Stamp the author of THIS write.
         record.setModifiedBy(ctx.author());
+        // And its time, stamped here rather than left to @PreUpdate. Hibernate only fires @PreUpdate when
+        // its dirty check finds a changed property, so an empty patch by the case's own last author, with a
+        // derived state that does not move, would issue no UPDATE at all and leave the header's "Modified"
+        // row on the previous edit. UpdateCaseRequest states an empty body is not a no-op, and the
+        // reference's `prisma.update` writes @updatedAt on every call.
+        record.setModifiedOn(AuditClock.now());
 
         return Computed.withComputed(deedPolls.save(record));
     }

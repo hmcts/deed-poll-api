@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -67,6 +68,36 @@ class DatePartsTest {
             // Documented rather than endorsed: 31 February becomes 3 March. collectDateErrors is what
             // rejects it before this is reached on the form path, which is why this is not a bug here.
             assertThat(DateParts.composeDateParts("31", "2", "2026")).contains("2026-03-03T00:00:00.000Z");
+        }
+
+        @Test
+        @DisplayName("returns empty for a year too wide for an int rather than throwing")
+        void returnsEmptyForAYearTooWideForAnInt() {
+            // The INTEGER guard admits any run of digits, so a year wider than an int reaches parseInt. The
+            // reference reads `Number("99999999999")` as a finite number, hands it to Date.UTC and gets an
+            // Invalid Date, which composeDateParts reports as null -- so empty here, not a
+            // NumberFormatException escaping a pure formatting helper as a 500 on a form save.
+            assertThat(DateParts.composeDateParts("1", "3", "99999999999")).isEmpty();
+            assertThat(DateParts.composeDateParts("99999999999", "3", "2026")).isEmpty();
+            assertThat(DateParts.composeDateParts("1", "99999999999", "2026")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("uses ASCII digits whatever the default locale's numbering system is")
+        void usesAsciiDigitsWhateverTheDefaultLocaleIs() {
+            // Not a reference block: a TS template literal has no locale. Java's `%d` substitutes the zero
+            // digit of Locale.getDefault(FORMAT), and the output of this method is fed straight to
+            // Dates.toDateTime -- which answers null for non-ASCII digits, silently discarding the date the
+            // caseworker typed.
+            Locale original = Locale.getDefault(Locale.Category.FORMAT);
+            try {
+                Locale.setDefault(Locale.Category.FORMAT, Locale.forLanguageTag("ar-EG-u-nu-arab"));
+
+                assertThat(DateParts.composeDateParts("1", "3", "2026"))
+                    .contains("2026-03-01T00:00:00.000Z");
+            } finally {
+                Locale.setDefault(Locale.Category.FORMAT, original);
+            }
         }
     }
 

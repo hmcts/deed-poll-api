@@ -11,6 +11,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 
 import java.time.LocalDateTime;
+import java.util.Locale;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -70,6 +71,27 @@ class ReferenceNumbersTest {
         void composesPrefixYearSerial() {
             assertThat(ReferenceNumbers.compose("KBDP", 2026, 1)).isEqualTo("KBDP2026-00001");
             assertThat(ReferenceNumbers.compose("KBDR", 2025, 123)).isEqualTo("KBDR2025-00123");
+        }
+
+        @Test
+        @DisplayName("uses ASCII digits whatever the default locale's numbering system is")
+        void usesAsciiDigitsWhateverTheDefaultLocaleIs() {
+            // Not a reference block: `String(serial).padStart(5, "0")` cannot do anything else. Java's
+            // `%d` can -- it substitutes the zero digit of Locale.getDefault(FORMAT) -- and the value here
+            // is persisted, external-facing and permanent, so getting it wrong is not recoverable. Worse,
+            // parse() uses `\d`, which is ASCII-only, so the class would stop being able to read back what
+            // it had just written and a DP-to-DR flip would silently stop re-prefixing.
+            Locale original = Locale.getDefault(Locale.Category.FORMAT);
+            try {
+                Locale.setDefault(Locale.Category.FORMAT, Locale.forLanguageTag("ar-EG-u-nu-arab"));
+
+                String composed = ReferenceNumbers.compose("KBDP", 2026, 7);
+
+                assertThat(composed).isEqualTo("KBDP2026-00007");
+                assertThat(ReferenceNumbers.parse(composed)).isPresent();
+            } finally {
+                Locale.setDefault(Locale.Category.FORMAT, original);
+            }
         }
     }
 
