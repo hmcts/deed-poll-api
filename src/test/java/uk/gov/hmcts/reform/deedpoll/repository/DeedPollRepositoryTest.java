@@ -83,13 +83,18 @@ class DeedPollRepositoryTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("the open filter returns newest first")
     void ordersOpenCasesNewestFirst() {
-        // createdOn is set by the entity's audit callback, so the order is asserted rather than the timestamps:
-        // three rows persisted in sequence must come back in the reverse of it.
+        // createdOn is stamped explicitly rather than left to the entity's audit callback, which only defaults it
+        // when null. The column is timestamp(3), so two inserts completing inside the same millisecond would tie
+        // and "order by createdOn desc" would then be free to return either -- an intermittent failure with no
+        // diagnostic value. Three fixed timestamps make the ordering the only thing under test.
         DeedPoll first = persisted(DeedPollState.Received, LocalDateTime.of(2026, 1, 6, 10, 0));
+        first.setCreatedOn(LocalDateTime.of(2026, 1, 6, 11, 0));
         entityManager.flush();
         DeedPoll second = persisted(DeedPollState.Received, LocalDateTime.of(2026, 1, 7, 10, 0));
+        second.setCreatedOn(LocalDateTime.of(2026, 1, 7, 11, 0));
         entityManager.flush();
         DeedPoll third = persisted(null, LocalDateTime.of(2026, 1, 8, 10, 0));
+        third.setCreatedOn(LocalDateTime.of(2026, 1, 8, 11, 0));
         entityManager.flush();
 
         List<String> open = deedPolls.findOpenOrderByCreatedOnDesc(FINISHED).stream()

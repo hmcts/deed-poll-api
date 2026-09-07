@@ -78,6 +78,12 @@ public class IdamDiscovery {
      * healthy the wait is one round trip and every waiter gets the cached value; when IDAM is not, requests
      * fail quickly and in parallel rather than slowly and in series, which is the difference between a
      * degraded pod and a dead one.
+     *
+     * <p><strong>The cache is re-read after a timed-out wait rather than before it only.</strong> Giving up on
+     * the lock is not the same as there being nothing to give: a discovery that published its result in the
+     * window between the wait expiring and the refusal being raised has left the answer in {@link #cached}, and
+     * failing anyway would answer 500 -- {@code IllegalStateException} is not a {@code JwtException}, so it
+     * escapes the bearer-token filter unmapped -- for a request that can now be served without touching IDAM.
      */
     public IdamMetadata metadata() {
         IdamMetadata existing = cached;
@@ -86,6 +92,10 @@ public class IdamDiscovery {
         }
 
         if (!awaitTurnToDiscover()) {
+            IdamMetadata discovered = cached;
+            if (discovered != null) {
+                return discovered;
+            }
             throw new IllegalStateException(
                 "IDAM discovery is already in progress and did not complete within "
                     + WAIT_FOR_DISCOVERY.toMillis() + "ms");
