@@ -273,7 +273,7 @@ public class DeedPollService {
     private List<DeedPoll> casesMatching(ListFilters.StateWhere where) {
         return switch (where) {
             case ListFilters.In in -> deedPolls.findByStateInOrderByCreatedOnDesc(in.states());
-            case ListFilters.NotIn notIn -> deedPolls.findByStateNotInOrderByCreatedOnDesc(notIn.states());
+            case ListFilters.NotIn notIn -> deedPolls.findOpenOrderByCreatedOnDesc(notIn.states());
         };
     }
 

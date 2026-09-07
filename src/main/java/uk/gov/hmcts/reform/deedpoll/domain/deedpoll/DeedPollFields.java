@@ -363,12 +363,35 @@ public final class DeedPollFields {
         return Boolean.valueOf(String.valueOf(value));
     }
 
+    /**
+     * A whole number, refusing what it cannot represent rather than coercing it.
+     *
+     * <p>{@code Number.intValue()} is deliberately not used. It truncates -- {@code 7.5} becomes {@code 7} --
+     * and it narrows by wrapping -- {@code 4294967296} becomes {@code 0}. Those are the two failures
+     * {@link DeedPollSchemas#integer} exists to prevent, and this is the last thing before the value is
+     * persisted, so a silent coercion here produces exactly the wrong permanent answer that check was written
+     * to stop: an {@code ageOfMinor} of 7 on a case whose caller said 7.5.
+     *
+     * <p>Refusing rather than truncating matters even though the JSON path is already guarded, because
+     * {@link DeedPollSchemas} is not the only producer of a patch. {@link FormPayload#readNumber} falls back to
+     * a {@code BigDecimal} for a numeric field, so a form submitting {@code 7.5} reaches here as a
+     * {@code BigDecimal} with nothing in between to reject it.
+     */
     private static Integer integer(Object value) {
         if (value == null) {
             return null;
         }
+        if (value instanceof Integer number) {
+            return number;
+        }
+        if (value instanceof BigDecimal number) {
+            // Exact: raises ArithmeticException for a fraction or an out-of-range value rather than silently
+            // dropping either.
+            return number.intValueExact();
+        }
         if (value instanceof Number number) {
-            return number.intValue();
+            BigDecimal exact = new BigDecimal(number.toString());
+            return exact.intValueExact();
         }
         return Integer.valueOf(String.valueOf(value).trim());
     }

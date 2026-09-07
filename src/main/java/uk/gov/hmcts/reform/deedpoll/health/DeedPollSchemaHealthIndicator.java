@@ -14,7 +14,8 @@ import java.util.List;
  *
  * <p>Contributed as {@code deedPollSchema} -- Spring Boot takes the contributor's name from the bean name with
  * the {@code HealthIndicator} suffix removed -- and included in the readiness group by
- * {@code application.yaml}, alongside Boot's own {@code db}. The two together are the reference's two checks:
+ * {@code application.yaml}, alongside {@link DatabaseHealthIndicator}'s {@code db}. The two together are the
+ * reference's two checks:
  * {@code db} opens a connection, this one asks whether the migrations have run. Neither is enough alone; a
  * connection check passes against an unmigrated database, and this check cannot distinguish "no tables" from
  * "no database" without the connection check beside it to say which.

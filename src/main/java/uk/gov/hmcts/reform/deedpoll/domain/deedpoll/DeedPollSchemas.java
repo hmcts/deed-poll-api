@@ -1,5 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
@@ -19,6 +21,7 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -60,6 +63,8 @@ import java.util.regex.Pattern;
  */
 public final class DeedPollSchemas {
 
+    private static final Logger LOG = LoggerFactory.getLogger(DeedPollSchemas.class);
+
     /**
      * An ISO 8601 calendar date, matching {@code z.iso.date()}.
      */
@@ -69,6 +74,11 @@ public final class DeedPollSchemas {
      * The reference's 1000-character cap on the six name fields, from {@code nvarchar(1000)}.
      */
     private static final int NAME_MAX_LENGTH = 1000;
+
+    /**
+     * One past the widest amount a {@code numeric(12, 2)} column holds -- ten integral digits.
+     */
+    private static final BigDecimal DECIMAL_LIMIT = new BigDecimal("10000000000");
 
     /** Every accepted field, in the reference schema's declaration order, with its rule. */
     private static final Map<String, Rule> SCHEMA = schema();
@@ -119,6 +129,66 @@ public final class DeedPollSchemas {
         return parse(raw);
     }
 
+    /** The JSON type a write body's field accepts. */
+    public enum JsonType {
+        STRING,
+        BOOLEAN,
+        INTEGER,
+        NUMBER,
+        /** An ISO 8601 date or date-time, carried as a string. */
+        DATE,
+        /** A Dynamics multiselect, carried as an array of option-set values. */
+        INTEGER_ARRAY
+    }
+
+    /**
+     * One field of a case write body, as something outside the domain needs to describe it.
+     *
+     * @param type          what the field accepts
+     * @param nullable      whether an explicit null is accepted, which clears the column
+     * @param maxLength     the cap on a text field, or 0 for none
+     * @param allowedValues the accepted names for an enum field, empty for any other kind
+     */
+    public record FieldSchema(JsonType type, boolean nullable, int maxLength, List<String> allowedValues) {
+    }
+
+    /**
+     * Every field a case write body may carry, in the reference schema's declaration order.
+     *
+     * <p>Exposed for one caller: the published OpenAPI document, which describes the create and patch bodies
+     * from this table rather than from a list kept alongside it. The bodies bind as a keyed map (see
+     * {@code KeyedRequestBody}, and the three-state argument for why they must), so springdoc has no fields to
+     * reflect over and would otherwise publish {@code {}} -- a request-body type with no properties, which tells
+     * a consumer generating a client nothing at all. Deriving the description from the same table that does the
+     * validating is what stops the document and the service disagreeing later.
+     *
+     * @return field name to what that field accepts, unmodifiable
+     */
+    public static Map<String, FieldSchema> writeBodyFields() {
+        Map<String, FieldSchema> described = new LinkedHashMap<>();
+        SCHEMA.forEach((field, rule) -> described.put(field, describe(rule)));
+        return Collections.unmodifiableMap(described);
+    }
+
+    private static FieldSchema describe(Rule rule) {
+        List<String> allowed = rule.enumType() == null
+            ? List.of()
+            : Arrays.stream(rule.enumType().getEnumConstants()).map(Enum::name).toList();
+        return new FieldSchema(jsonType(rule.kind()), rule.nullable(), rule.maxLength(), allowed);
+    }
+
+    private static JsonType jsonType(Kind kind) {
+        return switch (kind) {
+            // An enum is a string that happens to be constrained, and its members travel in allowedValues.
+            case TEXT, ENUM -> JsonType.STRING;
+            case BOOLEAN -> JsonType.BOOLEAN;
+            case INT -> JsonType.INTEGER;
+            case DECIMAL -> JsonType.NUMBER;
+            case ISO_DATE_STRING -> JsonType.DATE;
+            case OPTION_SET -> JsonType.INTEGER_ARRAY;
+        };
+    }
+
     private static DeedPollPatch parse(Map<String, Object> raw) {
         Map<String, Object> accepted = new LinkedHashMap<>();
         List<FieldError> errors = new ArrayList<>();
@@ -142,6 +212,13 @@ public final class DeedPollSchemas {
                 accepted.put(field, coerce(field, value, rule));
             } catch (FieldRejected rejected) {
                 errors.add(new FieldError(field, rejected.getMessage()));
+            } catch (RuntimeException failed) {
+                // Fail closed. Every coercion above refuses a value it does not accept by raising
+                // FieldRejected, so arriving here means a coercion itself is wrong rather than the value --
+                // but letting it escape would answer 500, lose the other fields' errors with it, and tell the
+                // caller nothing about which field was at fault. Logged so the coercion bug stays visible.
+                LOG.warn("Coercing field {} failed unexpectedly; reported as a field error", field, failed);
+                errors.add(new FieldError(field, field + " is not valid"));
             }
         });
 
@@ -211,14 +288,48 @@ public final class DeedPollSchemas {
         throw new FieldRejected(field + " must be a whole number");
     }
 
+    /**
+     * A decimal amount, matching {@code z.number()} over a {@code numeric(12, 2)} column.
+     *
+     * <p><strong>Guarded the same two ways {@link #integer} is, and by the same argument.</strong> Jackson
+     * binds an untyped JSON float to a {@code Double}, so {@code 1e400} arrives as
+     * {@code Double.POSITIVE_INFINITY} and {@code new BigDecimal("Infinity")} raises a
+     * {@code NumberFormatException} -- which is not a {@link FieldRejected}, so it would escape the error
+     * collection in {@link #parse} entirely and answer 500 without naming the field. A finite but oversized
+     * {@code 1e300} gets further and overflows the column instead, which is the same 500 one layer later.
+     * Both are refused here, where the field's name is still known and the caller can be told which one it
+     * was.
+     */
     private static BigDecimal decimal(String field, Object value) {
         if (value instanceof BigDecimal amount) {
-            return amount;
+            return inRange(field, amount);
+        }
+        // Non-finite before the general Number arm: Infinity and NaN are Numbers, and BigDecimal has no
+        // representation for either.
+        if (value instanceof Double number && !Double.isFinite(number)) {
+            throw new FieldRejected(field + " must be a number");
+        }
+        if (value instanceof Float number && !Float.isFinite(number)) {
+            throw new FieldRejected(field + " must be a number");
         }
         if (value instanceof Number number) {
-            return new BigDecimal(number.toString());
+            return inRange(field, new BigDecimal(number.toString()));
         }
         throw new FieldRejected(field + " must be a number");
+    }
+
+    /**
+     * Refuses an amount the {@code numeric(12, 2)} column cannot hold.
+     *
+     * <p>Precision minus scale is ten integral digits, so the column's range is
+     * {@code (-10^10, 10^10)}. Only the integral part is checked: Postgres rounds a value with more than
+     * two decimal places to the column's scale rather than refusing it, so a long fraction is not an error.
+     */
+    private static BigDecimal inRange(String field, BigDecimal amount) {
+        if (amount.abs().compareTo(DECIMAL_LIMIT) >= 0) {
+            throw new FieldRejected(field + " must be less than " + DECIMAL_LIMIT.toPlainString());
+        }
+        return amount;
     }
 
     /**

@@ -9,7 +9,12 @@ import org.springframework.core.env.Environment;
 import org.springframework.mock.env.MockEnvironment;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamDiscovery.IdamMetadata;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
@@ -28,6 +33,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class IdamDiscoveryTest {
 
     private static final StubIdam IDAM = new StubIdam();
+
+    /**
+     * Comfortably longer than {@code IdamDiscovery}'s two-second wait, so a waiter that gave up on its own
+     * schedule is distinguishable from one that queued for the holder.
+     */
+    private static final Duration SLOW_DISCOVERY = Duration.ofSeconds(6);
 
     @BeforeAll
     static void startIdam() {
@@ -164,5 +175,43 @@ class IdamDiscoveryTest {
         assertThatThrownBy(() -> discovery(IDAM.issuerUrl(), "test").metadata())
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining(IDAM.issuerUrl() + "/.well-known/openid-configuration");
+    }
+
+    @Test
+    @DisplayName("a request does not queue behind another thread's slow discovery")
+    void doesNotQueueBehindAnInFlightDiscovery() throws Exception {
+        // The cold-start failure mode this guards. A failed discovery is deliberately not cached, so under a
+        // plain `synchronized` block every waiting request would take its turn and start its own attempt,
+        // each paying the full read timeout -- the pod holds every worker for a multiple of it, stops
+        // answering its own probes, and is restarted for somebody else's fault.
+        IDAM.server().stubFor(get(urlPathEqualTo("/o/.well-known/openid-configuration"))
+                                  .willReturn(okJson("{}").withFixedDelay((int) SLOW_DISCOVERY.toMillis())));
+        IdamDiscovery discovery = discovery(IDAM.issuerUrl(), "test");
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            final Future<?> holder = pool.submit(() -> discovery.metadata());
+            // Long enough that the first thread is inside the call, short enough to be well clear of the delay.
+            Thread.sleep(250);
+
+            long startedAt = System.nanoTime();
+            Future<?> waiter = pool.submit(() -> discovery.metadata());
+            assertThatThrownBy(() -> waiter.get(SLOW_DISCOVERY.toSeconds(), TimeUnit.SECONDS))
+                .cause()
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already in progress");
+            Duration waited = Duration.ofNanos(System.nanoTime() - startedAt);
+
+            // The point of the assertion: it gave up on its own schedule rather than inheriting the first
+            // thread's, which is the difference between a degraded pod and a dead one.
+            assertThat(waited).isLessThan(SLOW_DISCOVERY);
+
+            // The holder still fails on its own terms -- the stub answers a document with no endpoints in it.
+            assertThatThrownBy(() -> holder.get(SLOW_DISCOVERY.toSeconds() * 2, TimeUnit.SECONDS))
+                .cause()
+                .isInstanceOf(IllegalStateException.class);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }

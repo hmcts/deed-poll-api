@@ -12,8 +12,9 @@ management:
       probes:
         enabled: true
       group:
-        # Should traffic come to this pod? `db` is Boot's own connection check and `deedPollSchema`
-        # is DeedPollSchemaHealthIndicator: a connection alone passes against an unmigrated database,
+        # Should traffic come to this pod? `db` is DatabaseHealthIndicator's connection check and
+        # `deedPollSchema` is DeedPollSchemaHealthIndicator: a connection alone passes against an unmigrated
+        # database,
         # where every request would 500 while the probe stayed green. `readinessState` is Boot's own,
         # and is what turns the probe DOWN during graceful shutdown so the pod leaves the service
         # before it stops accepting requests.
@@ -34,6 +35,13 @@ management:
       exposure:
         include: health, info, prometheus
   health:
+    # Boot's own `db` contributor is replaced by DatabaseHealthIndicator, which asks the same
+    # question and answers it without publishing the driver's message. See that class: the readiness
+    # group runs with show-details always and is on the unauthenticated allowlist, and a JDBC error
+    # names the host, database and user. Disabled here rather than excluded from the group, because
+    # the group still wants a `db` answer -- just not that one.
+    db:
+      enabled: false
     # service-auth-provider-java-client contributes a health indicator that calls S2S. Nothing here
     # calls another CFT service yet, so the only thing it could report is the availability of a
     # dependency this service does not have -- and it would page somebody for it.

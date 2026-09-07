@@ -7,7 +7,10 @@ import org.springframework.web.client.RestClientException;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Where IDAM's keys and userinfo endpoint are, discovered from the issuer.
@@ -29,9 +32,23 @@ public class IdamDiscovery {
         new ParameterizedTypeReference<>() {
         };
 
+    /**
+     * How long a request waits for another thread's in-flight discovery before failing its own.
+     *
+     * <p>Comfortably longer than a healthy round trip and well short of {@link IdamHttp#READ_TIMEOUT}, which is
+     * what a waiter would otherwise inherit a multiple of.
+     */
+    private static final Duration WAIT_FOR_DISCOVERY = Duration.ofSeconds(2);
+
     private final IdamProperties properties;
     private final Environment environment;
     private final RestClient restClient;
+
+    /**
+     * Held for the duration of a discovery attempt. A {@link ReentrantLock} rather than a {@code synchronized}
+     * block for the one thing {@code synchronized} cannot do: give up waiting.
+     */
+    private final ReentrantLock discovering = new ReentrantLock();
 
     private volatile IdamMetadata cached;
 
@@ -45,18 +62,50 @@ public class IdamDiscovery {
         this.restClient = restClient;
     }
 
-    /** The issuer's metadata, discovered once and then remembered. */
+    /**
+     * The issuer's metadata, discovered once and then remembered.
+     *
+     * <p><strong>Only one thread discovers, and the rest do not queue behind it indefinitely.</strong> A lock
+     * is needed so a cold start does not send one discovery request per in-flight request, but a plain
+     * {@code synchronized} block would make a failing IDAM far worse than a fast one. Because a failure is
+     * deliberately not cached, each waiter that acquired the monitor would start its own attempt and pay the
+     * full {@link IdamHttp#READ_TIMEOUT} in turn -- so with the connector's worth of workers all blocked, the
+     * pod holds every thread for a multiple of that timeout, stops answering its own probes, and gets
+     * restarted for a fault that is somebody else's. That is the self-sustaining outage the timeouts exist to
+     * prevent, reintroduced by the lock.
+     *
+     * <p>So a waiter gives up after {@link #WAIT_FOR_DISCOVERY} and fails its own request instead. When IDAM is
+     * healthy the wait is one round trip and every waiter gets the cached value; when IDAM is not, requests
+     * fail quickly and in parallel rather than slowly and in series, which is the difference between a
+     * degraded pod and a dead one.
+     */
     public IdamMetadata metadata() {
         IdamMetadata existing = cached;
         if (existing != null) {
             return existing;
         }
 
-        synchronized (this) {
+        if (!awaitTurnToDiscover()) {
+            throw new IllegalStateException(
+                "IDAM discovery is already in progress and did not complete within "
+                    + WAIT_FOR_DISCOVERY.toMillis() + "ms");
+        }
+        try {
             if (cached == null) {
                 cached = discover();
             }
             return cached;
+        } finally {
+            discovering.unlock();
+        }
+    }
+
+    private boolean awaitTurnToDiscover() {
+        try {
+            return discovering.tryLock(WAIT_FOR_DISCOVERY.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted waiting for IDAM discovery", e);
         }
     }
 

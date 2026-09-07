@@ -46,15 +46,31 @@ public class IdamJwtDecoder implements JwtDecoder {
         return delegate().decode(token);
     }
 
+    /**
+     * The decoder, built once from the discovered metadata.
+     *
+     * <p>Discovery happens <strong>before</strong> this monitor is taken, not inside it. Holding a lock across
+     * the network call would recreate at this level the convoy {@link IdamDiscovery#metadata()} guards against:
+     * every waiting request would be serialised behind one attempt, each paying a full timeout in turn.
+     * {@code metadata()} already limits itself to one concurrent attempt and fails fast, so there is nothing
+     * left for this monitor to protect except {@link #build}, which is local construction --
+     * {@code withJwkSetUri} does not fetch, the key set is fetched lazily on the first {@code decode}.
+     *
+     * <p>Two threads racing here may therefore each build a decoder, and one is discarded. That is cheaper than
+     * what it buys: an unused decoder has fetched nothing, whereas serialising the build would put IDAM's
+     * latency in front of every request.
+     */
     private JwtDecoder delegate() {
         JwtDecoder existing = delegate;
         if (existing != null) {
             return existing;
         }
 
+        IdamMetadata metadata = discovery.metadata();
+
         synchronized (this) {
             if (delegate == null) {
-                delegate = build(discovery.metadata());
+                delegate = build(metadata);
             }
             return delegate;
         }

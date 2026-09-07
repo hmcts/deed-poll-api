@@ -11,12 +11,14 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
 
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.stream.StreamSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -110,5 +112,100 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         // The exception, and the only one: Azure's Always-On probe has no token.
         assertThat(spec.at("/paths/~1/get/security").isArray()).isTrue();
         assertThat(spec.at("/paths/~1/get/security").isEmpty()).isTrue();
+    }
+
+    /**
+     * The five operations that take a body, asserted to actually describe one.
+     *
+     * <p>The same argument as the path assertions above, one level in. Every write body in this service binds as a
+     * keyed map rather than as declared components -- see {@code KeyedRequestBody} for why it has to -- so
+     * springdoc has no fields to reflect over and published {@code CreateCaseRequest: {}} for each of the four
+     * JSON writes, and no request body at all for the multipart upload. Valid JSON describing nothing, which a
+     * consumer generating a client cannot distinguish from a body that genuinely takes no fields.
+     * {@link uk.gov.hmcts.reform.deedpoll.config.OpenAPIWriteBodies} fills them in from the domain's own tables;
+     * this pins that they stay filled in.
+     */
+    /**
+     * A property's declared types, however the document spells them.
+     *
+     * <p>OpenAPI 3.1 allows {@code "type": "string"} and {@code "type": ["string", "null"]} for the same field
+     * depending on whether it accepts a null, so a caller asserting a type has to accept both forms or it is
+     * really asserting nullability by accident.
+     */
+    private static List<String> typesOf(JsonNode property) {
+        JsonNode type = property.get("type");
+        if (type == null) {
+            return List.of();
+        }
+        return type.isArray()
+            ? StreamSupport.stream(type.spliterator(), false).map(JsonNode::asText).toList()
+            : List.of(type.asText());
+    }
+
+    @DisplayName("Describes the body of every operation that takes one")
+    @Test
+    void documentsTheWriteBodies() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                          .andExpect(status().isOk())
+                                          .andReturn()
+                                          .getResponse()
+                                          .getContentAsByteArray());
+
+        // The four JSON bodies, each named by the operation that takes it.
+        for (String body : List.of("CreateCaseRequest", "UpdateCaseRequest", "CreateNoteRequest",
+                                   "UpdateNoteRequest")) {
+            JsonNode properties = spec.at("/components/schemas/" + body + "/properties");
+            assertThat(properties.isObject())
+                .as("%s declares its properties rather than publishing an empty schema", body)
+                .isTrue();
+            assertThat(properties.size()).as("%s has at least one property", body).isPositive();
+        }
+
+        // A case body describes every writable field, so the count tracks the schema rather than a number here.
+        int writableFields = DeedPollSchemas.writeBodyFields().size();
+        assertThat(spec.at("/components/schemas/CreateCaseRequest/properties").size())
+            .isEqualTo(writableFields);
+        assertThat(spec.at("/components/schemas/UpdateCaseRequest/properties").size())
+            .isEqualTo(writableFields);
+
+        // Spot-checks that the types travelled, one of each kind rather than all sixty-seven: a text field with
+        // its cap, an enum with its members, a date, a boolean, a decimal and a multiselect.
+        String create = "/components/schemas/CreateCaseRequest/properties/";
+        assertThat(typesOf(spec.at(create + "newForename"))).contains("string");
+        assertThat(spec.at(create + "newForename/maxLength").asInt()).isEqualTo(1000);
+        assertThat(spec.at(create + "type/enum").isArray()).isTrue();
+        assertThat(spec.at(create + "dateReceived/format").asText()).isEqualTo("date-time");
+        assertThat(typesOf(spec.at(create + "migratedRecord"))).contains("boolean");
+        assertThat(typesOf(spec.at(create + "refundAmount"))).contains("number");
+        assertThat(typesOf(spec.at(create + "iShall"))).contains("array");
+
+        // Which fields a patch can clear, which is the distinction the keyed body exists to carry. This document
+        // is OpenAPI 3.1, where nullability is a type union and the 3.0 `nullable: true` flag is dropped on
+        // serialisation -- so asserting the union is also what stops that flag being used by mistake and
+        // published as nothing at all.
+        assertThat(typesOf(spec.at(create + "masterName")))
+            .as("a nullable field offers null in its type union")
+            .contains("string", "null");
+        // And the other side of it: a column that refuses a null does not offer one, or a client would be told it
+        // could clear a field the service would then 400 on.
+        assertThat(typesOf(spec.at(create + "migratedRecord")))
+            .as("a non-nullable field offers no null")
+            .doesNotContain("null");
+
+        // The note body's one field, required on create and optional on patch -- the distinction a client needs.
+        assertThat(typesOf(spec.at("/components/schemas/CreateNoteRequest/properties/note"))).contains("string");
+        assertThat(spec.at("/components/schemas/CreateNoteRequest/required/0").asText()).isEqualTo("note");
+        assertThat(spec.at("/components/schemas/UpdateNoteRequest/required").isMissingNode()).isTrue();
+
+        // The upload, which had no body at all: the media type is as load-bearing as the fields, because a client
+        // that posts JSON to it fails whatever field names it uses.
+        JsonNode uploadForm = spec.at(
+            "/paths/~1caseworker~1cases~1{id}~1documents/post/requestBody/content/multipart~1form-data/schema");
+        assertThat(uploadForm.isObject()).as("the upload declares a multipart/form-data body").isTrue();
+        assertThat(uploadForm.at("/properties/file/format").asText()).isEqualTo("binary");
+        assertThat(uploadForm.at("/properties/documentTypeId").isObject()).isTrue();
+        assertThat(uploadForm.at("/properties/name").isObject()).isTrue();
+        assertThat(uploadForm.at("/properties/direction/enum").isArray()).isTrue();
+        assertThat(uploadForm.at("/required/0").asText()).isEqualTo("documentTypeId");
     }
 }

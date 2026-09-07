@@ -4,6 +4,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.entity.ReferenceCounter;
 
 /**
@@ -36,9 +38,20 @@ public interface ReferenceCounterRepository extends JpaRepository<ReferenceCount
      * <p>Identifiers are quoted because {@code "lastSerial"} is mixed case; unquoted, Postgres folds
      * it to {@code lastserial} and the statement does not find the column.
      *
+     * <p><strong>Deliberately not {@code @Modifying}</strong>, despite being an INSERT. That annotation makes
+     * Spring Data run the query through {@code executeUpdate()} and return the number of rows affected, which
+     * is 1 for every allocation -- so the {@code RETURNING} value would be discarded and every case would be
+     * handed serial 1. Left as a selecting query, the returned row is the serial.
+     *
+     * <p>{@code MANDATORY} because the lock is only worth taking if it is held until the caller commits. On its
+     * own transaction the serial would be committed the moment it was allocated, so a create that then failed
+     * would leave a permanent gap in an externally visible sequence; demanding the caller's transaction says so
+     * rather than leaving it to be noticed.
+     *
      * @param year the year the serial belongs to; the counter is shared across KBDP and KBDR
      * @return the serial allocated, 1 for the first allocation of the year
      */
+    @Transactional(propagation = Propagation.MANDATORY)
     @Query(nativeQuery = true, value = """
         INSERT INTO "deedpoll_referencecounter" ("year", "lastSerial")
         VALUES (:year, 1)

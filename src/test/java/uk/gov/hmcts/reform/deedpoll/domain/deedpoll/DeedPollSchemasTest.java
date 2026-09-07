@@ -132,6 +132,35 @@ class DeedPollSchemasTest {
         }
 
         @Test
+        @DisplayName("rejects a non-finite amount as a field error rather than letting it escape as a 500")
+        void rejectsANonFiniteAmount() {
+            // Jackson binds an untyped JSON float to a Double, so `{"refundAmount": 1e400}` -- and anything
+            // above 1e308 -- arrives as Double.POSITIVE_INFINITY. BigDecimal has no representation for it, so
+            // the conversion used to raise a NumberFormatException, which is not a field rejection and so was
+            // not collected: the caller got a 500 with nothing naming the field.
+            assertThat(Double.isFinite(Double.parseDouble("1e400"))).isFalse();
+            rejects(payload("refundAmount", Double.parseDouble("1e400")));
+            rejects(payload("refundAmount", Double.POSITIVE_INFINITY));
+            rejects(payload("refundAmount", Double.NEGATIVE_INFINITY));
+            rejects(payload("refundAmount", Double.NaN));
+        }
+
+        @Test
+        @DisplayName("rejects an amount too large for numeric(12,2), where the database would have been the guard")
+        void rejectsAnOutOfRangeAmount() {
+            // Finite, so the finiteness check passes it, and then numeric(12,2) cannot hold it -- a Postgres
+            // numeric field overflow, which is a 500 one layer later rather than a 400 naming refundAmount.
+            // Ten integral digits is the column's limit.
+            rejects(payload("refundAmount", 1e300d));
+            rejects(payload("refundAmount", new BigDecimal("10000000000")));
+            rejects(payload("refundAmount", new BigDecimal("-10000000000")));
+
+            // The boundary on the accepting side, so the limit is pinned from both directions.
+            assertThat(DeedPollSchemas.parseCreate(payload("refundAmount", new BigDecimal("9999999999.99")))
+                .get("refundAmount")).isEqualTo(new BigDecimal("9999999999.99"));
+        }
+
+        @Test
         @DisplayName("accepts null on a nullable field, so a PATCH can clear it")
         void acceptsNullOnANullableField() {
             DeedPollPatch patch = DeedPollSchemas.parseCreate(payload("dateReceived", null, "masterName", null));

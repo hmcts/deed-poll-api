@@ -1,6 +1,8 @@
 package uk.gov.hmcts.reform.deedpoll.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 
@@ -25,6 +27,20 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String> {
     /** Cases in one of the given states, newest first. */
     List<DeedPoll> findByStateInOrderByCreatedOnDesc(Collection<DeedPollState> states);
 
-    /** Cases in none of the given states, newest first -- the "open" filter. */
-    List<DeedPoll> findByStateNotInOrderByCreatedOnDesc(Collection<DeedPollState> states);
+    /**
+     * Cases in none of the given states, newest first -- the "open" filter.
+     *
+     * <p><strong>A case with no state counts as open</strong>, which is why this is a written query and not
+     * the derived {@code findByStateNotIn...}. The derived form generates a bare {@code state NOT IN (…)},
+     * and SQL evaluates that to NULL rather than true for a NULL state, so the row is dropped. The column is
+     * nullable and nothing defaults it, so a case created without a state -- which the create schema
+     * permits, since state is normally derived by {@link uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseState}
+     * from the dates -- would be invisible in every filter but "all".
+     *
+     * <p>Including it is the direction the reference argues for: "open" is defined by exclusion so that
+     * anything not yet finished shows up by default, because a case appearing in a caseworker's open list is
+     * noticeable whereas one silently missing from it is not.
+     */
+    @Query("select d from DeedPoll d where d.state is null or d.state not in :states order by d.createdOn desc")
+    List<DeedPoll> findOpenOrderByCreatedOnDesc(@Param("states") Collection<DeedPollState> states);
 }

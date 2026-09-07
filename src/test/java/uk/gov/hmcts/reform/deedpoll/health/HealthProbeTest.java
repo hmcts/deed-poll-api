@@ -22,6 +22,7 @@ import java.sql.SQLException;
 import java.util.List;
 import javax.sql.DataSource;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -100,6 +101,33 @@ class HealthProbeTest extends AbstractPostgresContainerTest {
             .andExpect(status().isServiceUnavailable())
             .andExpect(jsonPath("$.status").value("DOWN"))
             .andExpect(jsonPath("$.components.db.status").value("DOWN"));
+    }
+
+    @Test
+    @DisplayName("a database failure does not publish the driver's message to an unauthenticated caller")
+    void readinessDoesNotLeakTheDriversMessage() throws Exception {
+        // This group runs with show-details always, because naming the missing tables is the point of the probe,
+        // and `/health/**` takes no credential. Boot's own `db` contributor reports a failure as
+        // Health.down(exception), which writes the driver's text -- naming the host, the database and the user --
+        // straight into a body anyone can fetch. DatabaseHealthIndicator replaces it for that reason, and this
+        // pins the replacement: the same fixed sentence DeedPollSchemaHealthIndicator already gives, and nothing
+        // of the exception.
+        database().unreachable();
+
+        String body = mockMvc.perform(get("/health/readiness"))
+            .andExpect(status().isServiceUnavailable())
+            .andExpect(jsonPath("$.components.db.status").value("DOWN"))
+            .andExpect(jsonPath("$.components.db.details.error").value("the database did not answer"))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+        // Asserted over the whole body rather than one field, because the leak's shape is "somewhere in the
+        // details", and a future contributor added to this group would reintroduce it somewhere else.
+        assertThat(body)
+            .doesNotContain("Connection to the database refused")
+            .doesNotContain("SQLException")
+            .doesNotContain("CannotGetJdbcConnection");
     }
 
     @Test

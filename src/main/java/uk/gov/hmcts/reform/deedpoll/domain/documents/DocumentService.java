@@ -317,7 +317,14 @@ public class DocumentService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCompletion(int status) {
-                if (status == STATUS_COMMITTED) {
+                // Only a KNOWN rollback deletes the file. STATUS_UNKNOWN means the commit's outcome was never
+                // established -- the database acknowledged nothing either way, typically a connection lost
+                // mid-commit -- and the row may well be there. Deleting on that would leave a committed
+                // document permanently listed and permanently un-downloadable, which nothing can repair,
+                // whereas keeping the file leaves at worst an orphaned blob whose key is logged by the
+                // delete path and which costs only disk. The asymmetry is the point: of the two ways to be
+                // wrong here, only one is recoverable.
+                if (status != STATUS_ROLLED_BACK) {
                     return;
                 }
                 try {
