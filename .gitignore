@@ -26,3 +26,10 @@ applicationinsights-agent-*.jar
 
 ### Local document blobs — LocalFilesystemDocumentStore, development only. ###
 /data
+
+### Personal hand-off notes — not part of the service. ###
+# Untracked-but-not-ignored is the state a stray `git add -A` commits by accident, which is why these
+# are named rather than left to habit. `*.local.md` would also work; the explicit name is clearer about
+# what it is and who it belongs to.
+steve-where-to-next.md
+*.local.md
