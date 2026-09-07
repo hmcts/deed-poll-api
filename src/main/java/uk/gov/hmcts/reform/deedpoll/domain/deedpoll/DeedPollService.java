@@ -159,12 +159,19 @@ public class DeedPollService {
     /**
      * Applies a patch to a case.
      *
+     * <p>The case is read under a row lock held to this transaction's commit, because everything below is a
+     * read-modify-write: the merge, the gates, the date rules and the derived state all read the record as it
+     * was loaded, and the write is the whole row. Two concurrent patches reading the same pre-patch row would
+     * otherwise have the second overwrite the first even where they touched different fields.
+     * {@link DeedPollRepository#findByIdForUpdate} has the full reasoning and why the alternative was not
+     * taken.
+     *
      * @throws NotFoundError if there is no such case
      * @throws InvalidInputError if the merged dates contradict each other
      */
     @Transactional
     public DeedPollWithComputed updateDeedPoll(String id, DeedPollPatch dto, WriteContext ctx) {
-        DeedPoll record = requireDeedPoll(id);
+        DeedPoll record = requireDeedPollForUpdate(id);
         DeedPollPatch data = dto.copy().coerceDates();
 
         // If Type is part of this update, recompute the prefix from the new type, preserving the existing
@@ -279,6 +286,14 @@ public class DeedPollService {
 
     private DeedPoll requireDeedPoll(String id) {
         return deedPolls.findById(id)
+            .orElseThrow(() -> new NotFoundError("DeedPoll " + id + " not found"));
+    }
+
+    /**
+     * As {@link #requireDeedPoll}, but locking the row for the caller's transaction.
+     */
+    private DeedPoll requireDeedPollForUpdate(String id) {
+        return deedPolls.findByIdForUpdate(id)
             .orElseThrow(() -> new NotFoundError("DeedPoll " + id + " not found"));
     }
 
