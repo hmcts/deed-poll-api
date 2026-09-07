@@ -34,7 +34,19 @@ fi
 #
 # --allow-all-tools is required for non-interactive mode and is what lets copilot run the
 # git diff the prompt asks for. --silent restricts stdout to the agent response alone.
+#
+# --model is load-bearing and must not be dropped. Without it the CLI picks its own default,
+# which on 2026-09-07 was `claude-sonnet-5` — so the "external" review was Claude reviewing
+# Claude's own work, since the task and internal review phases run through Claude Code. That
+# run found nothing in 9,391 lines, including two issues an earlier Claude review had already
+# flagged, which is what correlated blind spots look like. The whole point of ralphex's
+# external phase is a second opinion from a different model; codex defaults to GPT for exactly
+# this reason. Verified by reading ~/.copilot/session-state/<id>/events.jsonl, not by asking
+# the model what it was.
+#
+# `copilot help config` lists the valid identifiers.
 exec copilot \
+  --model gpt-5.6-sol \
   --prompt "$(cat "$prompt_file")
 
 Output rules, which override any conflicting instruction above:
