@@ -1,5 +1,18 @@
 # Architecture Overview
 
+> **⚠️ This file describes the sibling repo `hmcts/deed-poll-admin`, not this one.** It was copied in
+> before any code existed here and has not been adapted. It describes an Express.js / TypeScript
+> monorepo with Prisma, Nunjucks, Turbo and Vite, deployed by GitHub Actions.
+>
+> **`deed-poll-api` is none of those.** It is a Spring Boot 3 / Gradle service on Java 21, with JPA
+> entities over a Flyway-owned Postgres schema, deployed by Jenkins (`Jenkinsfile_CNP`) with a single
+> chart under `charts/`. Its GitHub workflows are only `ci.yml`, `codeql.yml` and
+> `publish-openapi.yaml`.
+>
+> For this service's actual shape, read [`../README.md`](../README.md) and
+> [`plans/deed-poll-api-01-foundation.md`](plans/deed-poll-api-01-foundation.md). Do not prime an
+> agent from this file. It needs rewriting or deleting — that is Steve's call, not a session's.
+
 Note that this is an example architecture document for the deed-poll-admin. It should be adapted to fit the specific architecture of your project.
 
 ## Executive Summary

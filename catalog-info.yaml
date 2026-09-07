@@ -1,0 +1,43 @@
+# For further information on how to update this file to use other features of HMCTS Backstage, please see the HMCTS Backstage examples README: https://github.com/hmcts/backstage-hmcts-examples
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: "deed-poll-api"
+  description: "Deed poll case management API"
+  annotations:
+    # This should match folder-name/job-name in Jenkins. Uncomment and fill in once the
+    # Jenkins folder for this service exists — the product folder is not yet confirmed.
+    # jenkins.io/job-full-name: cft:HMCTS_<product>/deed-poll-api
+    github.com/project-slug: 'hmcts/deed-poll-api'
+  tags:
+    - java
+  # Uncomment and fill in once a support channel for this service exists.
+  # links:
+  #   - url: https://hmcts-reform.slack.com/app_redirect?channel=<channel>
+  #     title: <channel> on Slack
+  #     icon: chat
+spec:
+  type: service
+  # system: <product> — uncomment once the Backstage system for this product is confirmed.
+  lifecycle: experimental
+  owner: dcd_deed-poll
+
+# Uncomment the below once the project has an API file to link to
+#---
+#
+#apiVersion: backstage.io/v1alpha1
+#kind: API
+#metadata:
+#  name: "deed-poll-api-api"
+#  description: Update this description to describe the purpose of this API entity
+#  annotations:
+#    github.com/project-slug: 'hmcts/deed-poll-api'
+#spec:
+#  type: openapi
+#  lifecycle: experimental
+#  owner: dcd_deed-poll
+#  system: <product>
+#  apiProvidedBy: "deed-poll-api"
+#  definition:
+#    # Update the below to the raw URL of your OpenAPI spec
+#    $text: https://raw.githubusercontent.com/hmcts/deed-poll-api/main/build/openapi/openapi.json

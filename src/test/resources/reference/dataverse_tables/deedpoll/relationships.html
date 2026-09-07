@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Deed Poll Power App Relationships</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; margin: 2rem; color: #1f2937; }
+      h1 { margin-bottom: 0.5rem; }
+      p { margin-top: 0; color: #4b5563; }
+      table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+      th, td { border: 1px solid #d1d5db; padding: 0.5rem 0.65rem; text-align: left; vertical-align: top; }
+      th { background: #f3f4f6; font-weight: 600; position: sticky; top: 0; }
+      tbody tr:nth-child(even) { background: #f9fafb; }
+      .meta { margin: 1rem 0; font-size: 0.9rem; }
+      code { background: #f3f4f6; padding: 0.1rem 0.25rem; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Deed Poll Power App Relationships</h1>
+    <p>Human-readable extract of relationship metadata from the original exported grid HTML.</p>
+    <div class="meta"><strong>Total relationships:</strong> 21</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Display name</th><th>Relationship name</th><th>Related table</th><th>Relationship type</th><th>Managed</th><th>Customized</th><th>Customizable</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Base Record ID</td><td>deedpoll_deedpoll_DuplicateBaseRecord</td><td>Duplicate Record</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Created By</td><td>lk_deedpoll_deedpoll_createdby</td><td>User</td><td>Many-to-one</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Created By (Delegate)</td><td>lk_deedpoll_deedpoll_createdonbehalfby</td><td>User</td><td>Many-to-one</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Currency</td><td>TransactionCurrency_deedpoll_DeedPoll</td><td>Currency</td><td>Many-to-one</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Deed Poll</td><td>deedpoll_supportingdocument_DeedPoll_deedpoll_deed</td><td>Deed Poll Supporting Document</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Deed Poll</td><td>deedpoll_witness_DeedPoll_deedpoll_deedpoll</td><td>Deed Poll Witness</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Deed Poll</td><td>deedpoll_notes_DeedPoll_deedpoll_deedpoll</td><td>Deed Poll Note</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Duplicate Record ID</td><td>deedpoll_deedpoll_DuplicateMatchingRecord</td><td>Duplicate Record</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Entity instance</td><td>deedpoll_deedpoll_PrincipalObjectAttributeAccesses</td><td>Field Sharing</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Modified By</td><td>lk_deedpoll_deedpoll_modifiedby</td><td>User</td><td>Many-to-one</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Modified By (Delegate)</td><td>lk_deedpoll_deedpoll_modifiedonbehalfby</td><td>User</td><td>Many-to-one</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Name</td><td>deedpoll_deedpoll_BulkDeleteFailures</td><td>Bulk Delete Failure</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Object Id</td><td>deedpoll_deedpoll_UserEntityInstanceDatas</td><td>User Entity Instance Data</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Owner</td><td>owner_deedpoll_deedpoll</td><td>Owner</td><td>Many-to-one</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Owning Business Unit</td><td>business_unit_deedpoll_deedpoll</td><td>Business Unit</td><td>Many-to-one</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Owning Team</td><td>team_deedpoll_deedpoll</td><td>Team</td><td>Many-to-one</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Owning User</td><td>user_deedpoll_deedpoll</td><td>User</td><td>Many-to-one</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Record</td><td>deedpoll_deedpoll_SyncErrors</td><td>Sync Error</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Regarding</td><td>deedpoll_deedpoll_AsyncOperations</td><td>System Job</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Regarding</td><td>deedpoll_deedpoll_ProcessSession</td><td>Process Session</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Regarding Object Id</td><td>deedpoll_deedpoll_MailboxTrackingFolders</td><td>Mailbox Auto Tracking Folder</td><td>One-to-many</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+      </tbody>
+    </table>
+  </body>
+</html>

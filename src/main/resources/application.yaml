@@ -1,0 +1,153 @@
+server:
+  port: 4550
+  shutdown: "graceful"
+
+management:
+  endpoint:
+    health:
+      # `never` at the endpoint level, because the ungrouped /health is on the unauthenticated
+      # allowlist and aggregates *every* registered contributor -- including ones nobody here chose,
+      # such as Boot's auto-configured diskSpace, whose details name the pod's absolute filesystem
+      # path and its free bytes. DatabaseHealthIndicator exists to keep exactly that class of
+      # internal detail off this endpoint, and inheriting `always` would hand it back through
+      # whichever contributor a later dependency registers. Both probe groups re-enable details for
+      # themselves below, where the include list is closed and so what can be published is reviewable.
+      show-details: "never"
+      # Enabled explicitly rather than relying on Boot's "am I in Kubernetes" auto-detection, so
+      # /health/liveness and /health/readiness exist in every environment. A probe that only exists
+      # in the cluster is a probe nobody can try before deploying.
+      probes:
+        enabled: true
+      group:
+        # Should traffic come to this pod? `db` is DatabaseHealthIndicator's connection check and
+        # `deedPollSchema` is DeedPollSchemaHealthIndicator: a connection alone passes against an unmigrated
+        # database,
+        # where every request would 500 while the probe stayed green. `readinessState` is Boot's own,
+        # and is what turns the probe DOWN during graceful shutdown so the pod leaves the service
+        # before it stops accepting requests.
+        readiness:
+          include: "readinessState,db,deedPollSchema"
+          # The missing table names are the point -- see DeedPollSchemaHealthIndicator. Stated here
+          # rather than inherited, because a group that quietly stopped showing details would answer
+          # a bare DOWN and lose the diagnosis.
+          show-details: "always"
+        # Should this process be killed? Deliberately nothing but the process itself. A database blip
+        # must not restart every pod: restarting cannot fix someone else's database, and it destroys
+        # the replicas that would have recovered when the database came back.
+        liveness:
+          include: "livenessState"
+          # Stated for the same reason as readiness, and safe for the same reason: the include list is
+          # closed, and `livenessState` is a bare UP/DOWN with nothing internal in it. What the details
+          # buy is that the group's *contents* are visible, so a check put in the wrong group is
+          # something a caller -- and livenessHasNothingInItButTheProcess -- can see rather than infer.
+          show-details: "always"
+  endpoints:
+    web:
+      base-path: /
+      exposure:
+        include: health, info, prometheus
+  health:
+    # Boot's own `db` contributor is replaced by DatabaseHealthIndicator, which asks the same
+    # question and answers it without publishing the driver's message. See that class: the readiness
+    # group runs with show-details always and is on the unauthenticated allowlist, and a JDBC error
+    # names the host, database and user. Disabled here rather than excluded from the group, because
+    # the group still wants a `db` answer -- just not that one.
+    db:
+      enabled: false
+    # service-auth-provider-java-client contributes a health indicator that calls S2S. Nothing here
+    # calls another CFT service yet, so the only thing it could report is the availability of a
+    # dependency this service does not have -- and it would page somebody for it.
+    serviceAuth:
+      enabled: false
+
+springdoc:
+  # `api` rather than the four controller packages under it, so a namespace added later -- or a
+  # controller put in a sub-package nobody thought to list -- is documented by being where it belongs
+  # instead of by somebody remembering this line. The template's `controllers` package is the
+  # Always-On root endpoint, which is infrastructure rather than API but costs nothing to publish.
+  packagesToScan: uk.gov.hmcts.reform.deedpoll.controllers, uk.gov.hmcts.reform.deedpoll.api
+  writer-with-order-by-keys: true
+
+spring:
+  config:
+    import: "optional:configtree:/mnt/secrets/rpe/"
+  application:
+    name: deed-poll-api
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    # Defaults point at the docker-compose database in docker-compose.yml, published on
+    # 5433 to avoid the sibling deed-poll-admin stack's 5432. The password default is
+    # empty on purpose: no credential is committed, and a deployed environment that
+    # forgets to supply DB_PASSWORD fails to connect rather than connecting as something
+    # unintended.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:deedpoll}${DB_OPTIONS:}
+    username: ${DB_USER_NAME:deedpoll}
+    password: ${DB_PASSWORD:}
+    properties:
+      charSet: UTF-8
+    hikari:
+      minimumIdle: ${DB_POOL_MIN_IDLE:2}
+      maximumPoolSize: ${DB_POOL_MAX_SIZE:10}
+      idleTimeout: 10000
+      poolName: DeedPollHikariCP
+      maxLifetime: 7200000
+      connectionTimeout: 30000
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  jpa:
+    hibernate:
+      # Flyway owns the schema. Hibernate only checks that the entities agree with it, and the
+      # application refuses to start if they do not -- the same assertion EntityMappingTest makes,
+      # made again in every environment.
+      ddl-auto: validate
+      naming:
+        # Verbatim names, not Spring Boot's camelCase-to-snake_case default. The ported columns are
+        # mixed case ("newForename") because the reference schema's are, and the default strategy
+        # would rewrite them to new_forename and stop finding them.
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+    properties:
+      hibernate:
+        # Quote every identifier, so the mixed-case column names survive: unquoted, Postgres folds
+        # them to lower case. Table names are all lower case, so quoting them changes nothing.
+        globally_quoted_identifiers: true
+    # A caseworker request must not hold a database connection open for the whole of view
+    # rendering; every fetch the response needs is done in the service layer.
+    open-in-view: false
+
+idam:
+  api:
+    # The IDAM issuer a forwarded access token must come from. Empty by default, so an environment
+    # that has not been given one refuses every token rather than trusting an issuer nobody chose.
+    # Endpoints are discovered from it, never configured: this was written without access to a real
+    # CFT IDAM, so any hardcoded path would be a guess.
+    issuer-url: ${IDAM_API_ISSUER_URL:}
+    # Which `aud` values are ours. IDAM signs the whole estate's tokens with one key set, so a
+    # signature alone only proves "some IDAM token"; the audience check is what stops a token minted
+    # for another service being replayed here. Comma-separated because it arrives from a Helm env
+    # map, where a list would have to be JSON-encoded into a string. Empty means every token is
+    # refused -- an unset value must not be the permissive case.
+    audiences: ${IDAM_API_AUDIENCES:}
+  s2s-auth:
+    # Outbound service-to-service tokens. Configured but unused in plan 01: nothing here calls
+    # another CFT service. The secret has no default, so a deployed environment that has not been
+    # given one cannot mint a token that would be refused anyway.
+    url: ${IDAM_S2S_AUTH_URL:http://localhost:4502}
+    totp-secret: ${DEED_POLL_API_S2S_SECRET:}
+    microservice: ${S2S_SERVICE_NAME:deed_poll_api}
+
+deedpoll:
+  ccd:
+    # The one place a CCD case type is named, and deliberately not the real value: the case type and
+    # jurisdiction have not been onboarded, so anything else here would be a guess that plan 02 would
+    # then have to find and unpick. Nothing reads it yet -- it exists so no task has to invent one.
+    case-type-id: DEED_POLL_PLACEHOLDER
+  documents:
+    # Where LocalFilesystemDocumentStore keeps uploaded blobs. Development only: local disk does
+    # not survive AKS, because pods are ephemeral and replicas do not share a volume. Real
+    # storage is CDAM, in plan 03, which adds an implementation beside the local one.
+    local-store-root: ${DOCUMENT_STORE_ROOT:data/documents}
+
+azure:
+  application-insights:
+    instrumentation-key: ${rpe.AppInsightsInstrumentationKey:00000000-0000-0000-0000-000000000000}
