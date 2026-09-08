@@ -49,7 +49,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
     /**
      * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them. Listed rather than
-     * counted, because a count agrees with a spec that documents twelve of the wrong things.
+     * counted, because a count agrees with a spec that documents the right number of the wrong things.
      */
     private static final List<String> CASEWORKER_PATHS = List.of(
         "/caseworker/cases",
@@ -87,7 +87,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(paths.fieldNames()).toIterable().containsAll(CASEWORKER_PATHS);
     }
 
-    @DisplayName("Documents the twelve caseworker operations and the token they need")
+    @DisplayName("Documents the thirteen caseworker operations and the token they need")
     @Test
     void documentsTheCaseworkerOperations() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -97,12 +97,14 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Twelve operations across eight paths: `/caseworker/cases` and the notes collection each carry a GET
-        // and a POST, the case and the note each carry a GET and a PATCH.
+        // Thirteen operations across the same eight paths: `/caseworker/cases` and the notes collection each
+        // carry a GET and a POST, the case carries a GET and a PATCH, and the note carries a GET, a PATCH and
+        // -- since 2026-09-08 -- a DELETE. The path list above does not change for it, which is the point of
+        // asserting both: a count alone could not tell a new verb on a known path from a new path.
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(12);
+        assertThat(operations).isEqualTo(13);
 
         // Every one of them needs a forwarded IDAM token, which the document has to say or the client generated
         // from it cannot make a call. Declared once, globally, because the service authenticates by default.

@@ -14,7 +14,7 @@ committed, one commit per task, plus a review-fixes commit on top. `master` hold
 |---|---|
 | Tasks complete and committed | **0–16**, all of them |
 | Flyway migrations | 4 — enums, `DeedPoll`, children, list indexes |
-| Caseworker endpoints | 12, and no thirteenth |
+| Caseworker endpoints | 13 |
 | `/citizen/**` | exists, empty, shares no DTO with `/caseworker/**` |
 
 `./gradlew build` is green. Two things about running it here, both recorded in the README as well:

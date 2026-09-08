@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,23 +19,33 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import java.util.List;
 
 /**
- * Case notes: the four operations the caseworker surface has on them.
+ * Case notes: the five operations the caseworker surface has on them.
  *
- * <p>Nested under the case, so every id in the URL is part of the scope rather than decoration. Both handlers
- * that address one note pass <em>both</em> ids to the domain, which is the whole of the scoping rule: a note id
- * belonging to another case answers 404 instead of being read or amended through the wrong parent. The reference
- * records that passing only the note id compiles and quietly makes every note in the database reachable from any
- * case's URL, and {@code DeedPollNoteRepository} has no unscoped finder for exactly that reason.
+ * <p>Nested under the case, so every id in the URL is part of the scope rather than decoration. Every handler
+ * that addresses one note passes <em>both</em> ids to the domain, which is the whole of the scoping rule: a note
+ * id belonging to another case answers 404 instead of being read, amended or deleted through the wrong parent.
+ * The reference records that passing only the note id compiles and quietly makes every note in the database
+ * reachable from any case's URL, and {@code DeedPollNoteRepository} has no unscoped finder for exactly that
+ * reason.
  *
- * <p><strong>There is deliberately no note delete.</strong> The reference has one, admin-only, and it has no
- * consumer in {@code deed-poll-admin}'s data-access layer. {@code NoteService.removeNote} exists and is tested,
- * so exposing it later is a route rather than a design.
+ * <p><strong>The delete was added 2026-09-08, and this class previously said there deliberately was not one.</strong>
+ * That was true when written: the reference's delete is admin-only and nothing consumed it. What changed is that
+ * {@code deed-poll-admin} is losing its own data-access layer to this service, and its note form has always had a
+ * delete button -- so the operation now has a consumer, and without this route the cutover would have to drop a
+ * working feature. {@code NoteService.removeNote} already existed and was already tested, so this is the route
+ * that class predicted rather than a new design.
  *
  * <p>The author of a write is the authenticated caller and never the body. {@code CurrentUser.noteAuthor()}
  * supplies it, and it carries the name only: a note has no admin-only field, so nothing on this path should be
  * able to ask whether the caller is an admin. That is the reference's decision, asserted by a test of its own.
  *
- * <p>None of these routes is annotated as requiring authentication, and all four do:
+ * <p><strong>The delete is not role-gated, and that is the same decision the rest of this surface took rather
+ * than a new one.</strong> The reference restricts it to admins, but the only role name IDAM has confirmed for
+ * this service is {@code caseworker-deedpoll-admin} and naming a non-admin caseworker role would be inventing
+ * one -- the same reason {@code /caseworker/**} is authenticated but not role-gated throughout. When IDAM
+ * onboarding confirms the role names, this route is one of the places to revisit; see {@code docs/RESUME.md}.
+ *
+ * <p>None of these routes is annotated as requiring authentication, and all five do:
  * {@code SecurityConfiguration} authenticates {@code anyRequest()} that is not on a short infrastructure
  * allowlist, so a route is protected by having been written rather than by having been remembered.
  */
@@ -104,5 +115,25 @@ public class CaseworkerNoteController {
 
         return NoteResponse.from(
             notes.updateNote(id, noteId, request.toInput(), CurrentUsers.required().noteAuthor()));
+    }
+
+    /**
+     * Deletes a note.
+     *
+     * <p>204 with no body: there is nothing meaningful to return, and the deleted note is not it. Both ids are
+     * passed to the domain, so a note addressed through the wrong case 404s rather than being deleted -- which
+     * matters more here than on the reads, because an unscoped delete is destructive and silent.
+     *
+     * <p>No author is recorded. {@code removeNote} takes no {@code WriteContext} and the row is gone, so there is
+     * nowhere to record one; a delete audit would be a schema change and a decision, not a parameter. The
+     * reference does not record one either.
+     *
+     * <p>Deleting twice 404s on the second call rather than answering 204 again, because the domain reports
+     * absence by throwing. Not idempotent in the strict HTTP sense, and consistent with the reads.
+     */
+    @DeleteMapping("/{noteId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable("id") String id, @PathVariable("noteId") String noteId) {
+        notes.removeNote(id, noteId);
     }
 }
