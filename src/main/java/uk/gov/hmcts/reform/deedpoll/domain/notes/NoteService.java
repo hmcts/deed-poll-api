@@ -126,9 +126,10 @@ public class NoteService {
     /**
      * Deletes a note.
      *
-     * <p>No endpoint exposes this -- the caseworker surface has no note delete -- but the reference has it
-     * and the source grid does, so the domain keeps it rather than the next caller inventing an unscoped
-     * one.
+     * <p>Exposed since 2026-09-08 by {@code DELETE /caseworker/cases/&#123;id&#125;/notes/&#123;noteId&#125;}. This
+     * comment previously said no endpoint exposed it and that the domain kept it so the next caller would not
+     * invent an unscoped one -- which is exactly what happened, and the route reuses this rather than adding a
+     * second path to the same delete.
      *
      * @throws NotFoundError if there is no such note, or it belongs to another case
      */

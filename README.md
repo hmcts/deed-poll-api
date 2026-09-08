@@ -29,8 +29,7 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 
 ## The API surface
 
-Twelve caseworker operations, and deliberately no thirteenth. `/swagger-ui.html` is the authority;
-this table is the map.
+Thirteen caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
 
 | Method | Path | What it does |
 |---|---|---|
@@ -44,12 +43,20 @@ this table is the map.
 | POST | `/caseworker/cases/{id}/notes` | Add a note |
 | GET | `/caseworker/cases/{id}/notes/{noteId}` | One note |
 | PATCH | `/caseworker/cases/{id}/notes/{noteId}` | Amend a note |
+| DELETE | `/caseworker/cases/{id}/notes/{noteId}` | Delete a note — 204, and 404 through the wrong case |
 | POST | `/caseworker/cases/{id}/documents` | Upload a file (multipart) and record its document row |
 | GET | `/caseworker/cases/{id}/documents/{documentId}/file` | Stream a document's stored file back |
 
-There are deliberately **no** case deletes, no note delete, no witness writes, no document-type writes
-and no `validate` endpoint. The domain implements and tests them; nothing consumes them, and the
-sibling prototype's mistake was building an API for an imagined consumer.
+There are deliberately **no** case deletes, no witness writes, no document-type writes and no `validate`
+endpoint. The domain implements and tests them; nothing consumes them, and the sibling prototype's mistake
+was building an API for an imagined consumer.
+
+The note delete was the thirteenth, added 2026-09-08 on exactly that principle rather than against it:
+`deed-poll-admin` is losing its data-access layer to this service and its note form has always had a delete
+button, so the operation acquired a real consumer. `NoteService.removeNote` already existed and was already
+tested — this was the route it was keeping itself for. It is **not** role-gated, which is the same decision
+the rest of `/caseworker/**` took, and for the same reason: only `caseworker-deedpoll-admin` is confirmed,
+and naming a second role would be inventing one.
 
 Every failure answers the same envelope — `{"error": "...", "errors": [{"field": "...", "message": "..."}]}`
 (`api/ApiError.java`), so a form can render a message against the input it belongs to.

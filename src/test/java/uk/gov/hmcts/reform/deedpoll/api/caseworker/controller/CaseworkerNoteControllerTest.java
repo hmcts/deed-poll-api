@@ -35,9 +35,11 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -157,6 +159,20 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isUnauthorized());
 
             assertThat(stored(noteId).getNote()).isEqualTo("Called the applicant");
+        }
+
+        @Test
+        @DisplayName("refuses to delete a note, and the note survives")
+        void refusesADelete() throws Exception {
+            String caseId = newCase();
+            String noteId = addNote(caseId, "Called the applicant");
+
+            mockMvc.perform(delete("/caseworker/cases/" + caseId + "/notes/" + noteId))
+                .andExpect(status().isUnauthorized());
+
+            // The same argument as the create above, and stronger: a 401 that still deleted the row would be
+            // unrecoverable rather than merely wrong.
+            assertThat(notes.findById(noteId)).isPresent();
         }
     }
 
@@ -501,6 +517,79 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
         @DisplayName("404s for a note that does not exist")
         void notFoundForAMissingNote() throws Exception {
             authorised(patch("/caseworker/cases/" + newCase() + "/notes/" + UNKNOWN_ID), "{\"note\":\"Called\"}")
+                .andExpect(status().isNotFound());
+        }
+    }
+
+    @Nested
+    @DisplayName("DELETE /caseworker/cases/{id}/notes/{noteId}")
+    class DeleteNote {
+
+        @Test
+        @DisplayName("deletes the note and answers 204 with no body")
+        void deletesTheNote() throws Exception {
+            String caseId = newCase();
+            String noteId = addNote(caseId, "Called the applicant");
+
+            authorised(delete("/caseworker/cases/" + caseId + "/notes/" + noteId))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+            assertThat(notes.findById(noteId)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("leaves the case and its other notes alone")
+        void deletesOnlyThatNote() throws Exception {
+            String caseId = newCase();
+            String keptId = addNote(caseId, "Kept");
+            String deletedId = addNote(caseId, "Deleted");
+
+            authorised(delete("/caseworker/cases/" + caseId + "/notes/" + deletedId))
+                .andExpect(status().isNoContent());
+
+            assertThat(notes.findById(deletedId)).isEmpty();
+            assertThat(stored(keptId).getNote()).isEqualTo("Kept");
+            // The parent survives a child delete. Worth asserting rather than assuming: the association is
+            // where a stray cascade would show up, and it would show up as data loss.
+            assertThat(deedPolls.findById(caseId)).isPresent();
+        }
+
+        @Test
+        @DisplayName("404s deleting a note through another case, and does not delete it")
+        void refusesADeleteThroughAnotherCase() throws Exception {
+            String caseId = newCase();
+            String otherCaseId = newCase();
+            String noteId = addNote(caseId, "Ours");
+
+            authorised(delete("/caseworker/cases/" + otherCaseId + "/notes/" + noteId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Note " + noteId + " not found"));
+
+            // The scoping assertion that matters most on this verb: an unscoped delete would answer 204 and
+            // destroy another case's note, and nothing downstream would report it.
+            assertThat(notes.findById(noteId)).isPresent();
+        }
+
+        @Test
+        @DisplayName("404s for a note that does not exist")
+        void notFoundForAMissingNote() throws Exception {
+            authorised(delete("/caseworker/cases/" + newCase() + "/notes/" + UNKNOWN_ID))
+                .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("404s deleting the same note twice, rather than answering 204 again")
+        void notIdempotent() throws Exception {
+            String caseId = newCase();
+            String noteId = addNote(caseId, "Called the applicant");
+
+            authorised(delete("/caseworker/cases/" + caseId + "/notes/" + noteId))
+                .andExpect(status().isNoContent());
+
+            // Deliberate, and consistent with the reads: the domain reports absence by throwing, so the second
+            // call cannot tell "already deleted" from "never existed" and should not pretend to.
+            authorised(delete("/caseworker/cases/" + caseId + "/notes/" + noteId))
                 .andExpect(status().isNotFound());
         }
     }
