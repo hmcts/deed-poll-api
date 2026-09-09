@@ -87,12 +87,26 @@ from the chart's own metadata, so this is not cosmetic.
 Uncomment and replace the template's `keyVaults` block. **The mapping is not the same shape as the Node
 repos':** `application.yaml` reads the database as five separate variables, not one URL.
 
-- [ ] `keyVaults: deed-poll:` — the vault is `deed-poll-{env}`, shared with the other two services
-- [ ] Map `postgres-host` → `DB_HOST`, `postgres-port` → `DB_PORT`, `postgres-user` → `DB_USER_NAME`, `postgres-password` → `DB_PASSWORD`, matching `application.yaml` lines 83–85. **Not `postgres-url`** — that secret exists for the Node services, which want a composed URL. Both forms are provisioned by the shared root precisely because the two runtimes want different shapes
-- [ ] Set `DB_NAME` as a plain environment value, not a secret, to `deed-poll` — the shared database. Note `application.yaml` defaults it to `deedpoll` for local development, which is a different name; the deployed value must be explicit or Hibernate validates against a database that does not exist
-- [ ] Map `app-insights-connection-string`. **`application.yaml:152-154` currently reads `${rpe.AppInsightsInstrumentationKey:...}`** — an instrumentation key under an `rpe`-prefixed property, which is the template's. Change it to read the connection string, which is what the shared root writes and what Application Insights has wanted since instrumentation keys were deprecated
-- [ ] Do **not** add `idam-client-secret` or any S2S secret. Neither exists in the vault: IDAM has not replied, and S2S is deliberately out of the first apply. A chart that names a missing secret fails to deploy, which is the right way round but not yet
-- [ ] Mark completed
+- [x] `keyVaults: deed-poll:` — the vault is `deed-poll-{env}`, shared with the other two services
+- [x] Map `postgres-host` → `DB_HOST`, `postgres-port` → `DB_PORT`, `postgres-user` → `DB_USER_NAME`, `postgres-password` → `DB_PASSWORD`, matching `application.yaml` lines 83–85. **Not `postgres-url`** — that secret exists for the Node services, which want a composed URL. Both forms are provisioned by the shared root precisely because the two runtimes want different shapes
+- [x] Set `DB_NAME` as a plain environment value, not a secret, to `deed-poll` — the shared database. Note `application.yaml` defaults it to `deedpoll` for local development, which is a different name; the deployed value must be explicit or Hibernate validates against a database that does not exist
+- [x] Map `app-insights-connection-string`. **`application.yaml:152-154` currently reads `${rpe.AppInsightsInstrumentationKey:...}`** — an instrumentation key under an `rpe`-prefixed property, which is the template's. Change it to read the connection string, which is what the shared root writes and what Application Insights has wanted since instrumentation keys were deprecated
+- [x] Do **not** add `idam-client-secret` or any S2S secret. Neither exists in the vault: IDAM has not replied, and S2S is deliberately out of the first apply. A chart that names a missing secret fails to deploy, which is the right way round but not yet
+- [x] Mark completed
+
+Two things this task had to settle that the plan did not name:
+
+- **The vault mount path, in two more places.** `keyVaults` is keyed on `deed-poll`, and the java chart
+  mounts at `/mnt/secrets/{that key}`. So `application.yaml`'s configtree import and
+  `lib/applicationinsights.json`'s `${file:...}` both had to move off `/mnt/secrets/rpe/`. They were
+  the last two `rpe` hits task 3 deferred here. `app-insights-connection-string` therefore carries **no
+  alias**: it has to stay a file for the agent to read, and the configtree turns the same file into the
+  property `application.yaml` binds.
+- **`DB_OPTIONS: "?sslmode=require&gssEncMode=disable"`**, a sixth plain environment value.
+  `application.yaml` already appends `${DB_OPTIONS:}` to the JDBC URL, and Azure Postgres flexible
+  refuses a cleartext connection that the driver will not negotiate by default — so without it every
+  connection fails at startup. `postgres-url`'s own value in `deed-poll-infra` ends `?sslmode=require`
+  for the same reason; `pcs-api` sets the same pair.
 
 ### Task 5: Delete `infrastructure/` and `.github/workflows/`
 

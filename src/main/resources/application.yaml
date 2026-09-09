@@ -70,7 +70,10 @@ springdoc:
 
 spring:
   config:
-    import: "optional:configtree:/mnt/secrets/rpe/"
+    # Where the CNP java chart mounts the `deed-poll-{env}` vault -- `charts/deed-poll-api/values.yaml`
+    # keys its `keyVaults` block on `deed-poll`, and the mount path follows that key. `optional:` so a
+    # local run, where nothing is mounted, starts rather than failing on a missing directory.
+    import: "optional:configtree:/mnt/secrets/deed-poll/"
   application:
     name: deed-poll-api
   datasource:
@@ -150,4 +153,10 @@ deedpoll:
 
 azure:
   application-insights:
-    instrumentation-key: ${rpe.AppInsightsInstrumentationKey:00000000-0000-0000-0000-000000000000}
+    # The connection string, not an instrumentation key: keys are deprecated, and
+    # `app-insights-connection-string` is the secret the shared root in `hmcts/deed-poll-infra` writes.
+    # It arrives as a file under the vault mount above, which the configtree import turns into a
+    # property of the same name. What actually sends telemetry is the agent, reading the same secret
+    # directly through `lib/applicationinsights.json`; this property is what in-process telemetry would
+    # bind to. Empty by default, so a local run reports nowhere rather than into a real workspace.
+    connection-string: ${app-insights-connection-string:}
