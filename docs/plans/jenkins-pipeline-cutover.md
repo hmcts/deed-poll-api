@@ -110,11 +110,23 @@ Two things this task had to settle that the plan did not name:
 
 ### Task 5: Delete `infrastructure/` and `.github/workflows/`
 
-- [ ] Delete `infrastructure/` in full — `main.tf` is a bare provider block, the three tfvars are empty, and nothing in it has ever been applied. The shared resources live in `hmcts/deed-poll-infra`
-- [ ] Delete `.github/workflows/` in full: `ci.yml`, `codeql.yml`, `publish-openapi.yaml`. The CNP pipeline covers build, test and scanning, and it has a spec-publishing equivalent
-- [ ] Keep everything else under `.github/` that is not a workflow
-- [ ] Update `CLAUDE.md`'s "Build and test" section if it references any deleted workflow
-- [ ] Mark completed
+- [x] Delete `infrastructure/` in full — `main.tf` is a bare provider block, the three tfvars are empty, and nothing in it has ever been applied. The shared resources live in `hmcts/deed-poll-infra`
+- [x] Delete `.github/workflows/` in full: `ci.yml`, `codeql.yml`, `publish-openapi.yaml`. The CNP pipeline covers build, test and scanning, and it has a spec-publishing equivalent
+- [x] Keep everything else under `.github/` that is not a workflow — `CODEOWNERS`, `CONTRIBUTING.md`, `ISSUE_TEMPLATE.md`, `PULL_REQUEST_TEMPLATE.md`, `renovate.json`, `stale.yml` all stay
+- [x] Update `CLAUDE.md`'s "Build and test" section if it references any deleted workflow — it does not; it only documents `./gradlew` invocations, so no change was needed
+- [x] Mark completed
+
+Three things this task had to settle that the plan did not name:
+
+- **`OpenAPIPublisherTest` stays.** `publish-openapi.yaml` only *invoked* it; the test itself writes
+  `/tmp/openapi-specs.json`, which is what the HMCTS Jenkins library reads to publish to `cnp-api-docs`.
+  Deleting the workflow removes the GitHub-side trigger, not the publishing mechanism.
+- **`.github/CODEOWNERS` had a `.github/workflows/*.yaml` line** in its Renovate-ignore list. Removed:
+  it now names a path that does not exist.
+- **`docs/PIPELINES.md` and `docs/ARCHITECTURE.md` asserted this repo had three workflows** in the
+  corrective banners at the top of each. Both banners now say it has none. The inherited bodies of those
+  files still describe `deed-poll-admin`'s GitHub Actions hierarchy — that is what the banners are for,
+  and rewriting them is not this plan's job.
 
 ### Task 6: Say so in the docs
 

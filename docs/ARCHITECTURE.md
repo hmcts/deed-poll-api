@@ -6,8 +6,8 @@
 >
 > **`deed-poll-api` is none of those.** It is a Spring Boot 3 / Gradle service on Java 21, with JPA
 > entities over a Flyway-owned Postgres schema, deployed by Jenkins (`Jenkinsfile_CNP`) with a single
-> chart under `charts/`. Its GitHub workflows are only `ci.yml`, `codeql.yml` and
-> `publish-openapi.yaml`.
+> chart under `charts/`. It has **no GitHub Actions workflows** — `.github/workflows/` was deleted, and
+> it owns **no Terraform**: the shared resources live in `hmcts/deed-poll-infra`.
 >
 > For this service's actual shape, read [`../README.md`](../README.md) and
 > [`plans/deed-poll-api-01-foundation.md`](plans/deed-poll-api-01-foundation.md). Do not prime an
