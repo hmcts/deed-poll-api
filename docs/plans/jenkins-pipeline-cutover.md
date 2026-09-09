@@ -130,9 +130,15 @@ Three things this task had to settle that the plan did not name:
 
 ### Task 6: Say so in the docs
 
-- [ ] Update `docs/RESUME.md`: this repo deploys via Jenkins, owns no Terraform, and reads the vault created by `hmcts/deed-poll-infra` — which must apply before this service can deploy
-- [ ] Note the one external dependency this plan leaves: a `cnp-jenkins-config` entry for `hmcts/deed-poll-api`. It cannot be raised before `Jenkinsfile_CNP` exists and is correct, which is task 1 — that ordering is why it has not been raised yet
-- [ ] Mark completed
+- [x] Update `docs/RESUME.md`: this repo deploys via Jenkins, owns no Terraform, and reads the vault created by `hmcts/deed-poll-infra` — which must apply before this service can deploy
+- [x] Note the one external dependency this plan leaves: a `cnp-jenkins-config` entry for `hmcts/deed-poll-api`. It cannot be raised before `Jenkinsfile_CNP` exists and is correct, which is task 1 — that ordering is why it has not been raised yet
+- [x] Mark completed
+
+The `Jenkinsfile_nightly` decision was already recorded in `RESUME.md` by task 2, so this task folded it
+into a single **How this repo deploys** section rather than leaving two accounts of the cutover in one
+file. The `cnp-jenkins-config` entry became open item 1 rather than a note: it is the one thing blocking
+a first build, as distinct from `deed-poll-infra` applying, which blocks a first *deploy*. Both are now
+stated as separate prerequisites, because conflating them is how one gets waited on for the other.
 
 ## Success criteria
 

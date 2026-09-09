@@ -38,8 +38,27 @@ Both are deliberately unwritten, because both wait on external onboarding:
 Retiring `apps/api` in the sibling repo and cutting `apps/web` over to HTTP is later work in a
 different repo, and must not happen until this service is deployed and serving.
 
-## Decisions taken during the Jenkins cutover
+## How this repo deploys
 
+Plan [`plans/jenkins-pipeline-cutover.md`](plans/jenkins-pipeline-cutover.md) is complete. In short:
+
+- **Jenkins CNP is the only pipeline.** `Jenkinsfile_CNP` declares `java` / `deed-poll` / `api`, with
+  an empty `withPipeline` body. `.github/workflows/` is gone entirely — build, test and scanning are
+  the pipeline's now, and CodeQL has no Jenkins equivalent, which was accepted rather than replaced.
+  `OpenAPIPublisherTest` stays: the deleted `publish-openapi.yaml` only *invoked* it, and the test
+  still writes the `/tmp/openapi-specs.json` that the Jenkins library publishes to `cnp-api-docs`.
+- **This repo owns no Terraform.** `infrastructure/` is deleted and must not come back. The resource
+  group, Key Vault, App Insights, Redis and Postgres all live in `hmcts/deed-poll-infra`.
+- **It reads a vault it does not create.** `charts/deed-poll-api` reads `deed-poll-{env}`, created by
+  the shared root in `hmcts/deed-poll-infra` and shared with `deed-poll-admin` and `deed-poll-web`:
+  `app-insights-connection-string` plus four `postgres-*` secrets mapped to `DB_HOST`, `DB_PORT`,
+  `DB_USER_NAME` and `DB_PASSWORD`. **`deed-poll-infra` must have applied before this service can
+  deploy, and nothing enforces that ordering mechanically** — so a missing secret is a missing apply
+  there, not a chart bug. Secret names are fixed by the shared root; renaming happens there or not at
+  all.
+- **One shared database, `deed-poll`.** Set as a plain environment value, not a secret, because
+  `application.yaml` defaults it to `deedpoll` for docker-compose and inheriting that default would
+  have Hibernate validate against a database that does not exist.
 - **`Jenkinsfile_nightly` is deleted, deliberately.** It was the template's, declaring
   `rpe` / `spring-boot-template` — another team's product code — and it had never run. A nightly
   pipeline brings its own security and cross-browser stages, so configuring one that has never run
@@ -47,17 +66,28 @@ different repo, and must not happen until this service is deployed and serving.
   it is the kind of thing that runs once by accident and reports failures against `rpe`. If a nightly
   build is wanted later, add it deliberately with this service's own identity.
 
+The cutover configures the repo. It deploys nothing, and it deliberately raised no Azure-secret or
+federated-credential request: Jenkins authenticates as its own managed identity.
+
 ## Open items that are Steve's, not a session's
 
-1. **Deployment is not onboarded.** The chart is `charts/deed-poll-api` now, carrying this service's
-   name, image, ingress host and `annotations.team: deed-poll`, but no probe path points at
-   `/health/readiness` or `/health/liveness`. Jenkins folder configuration is unconfirmed.
-2. **`DOCUMENT_STORE_ROOT` must not reach a deployed environment.** Local disk does not survive AKS
+1. **The `cnp-jenkins-config` entry — the one external dependency the cutover leaves.**
+   `hmcts/deed-poll-api` has to be added to the repository list in `hmcts/cnp-jenkins-config` before
+   Jenkins will build it at all; until then `Jenkinsfile_CNP` is a correct file no job runs. It has
+   not been raised yet, and the ordering is the reason: the entry cannot sensibly be requested before
+   `Jenkinsfile_CNP` exists and declares the right product and component, which is what the cutover
+   just did. Raise it now. `deed-poll-infra` applying is a *separate* prerequisite, for the vault —
+   see above.
+2. **Deployment is not otherwise onboarded either.** The chart is `charts/deed-poll-api` now, carrying
+   this service's name, image, ingress host and `annotations.team: deed-poll`, but no probe path
+   points at `/health/readiness` or `/health/liveness`. Jenkins folder configuration is unconfirmed,
+   and the `cnp-flux-config` namespace and HelmRelease are outstanding.
+3. **`DOCUMENT_STORE_ROOT` must not reach a deployed environment.** Local disk does not survive AKS
    and replicas do not share a volume. Real storage is plan 03.
-3. **IDAM roles.** The only role name confirmed is `caseworker-deedpoll-admin`, and it gates one
+4. **IDAM roles.** The only role name confirmed is `caseworker-deedpoll-admin`, and it gates one
    field. So `/caseworker/**` is authenticated but not role-gated: naming a non-admin caseworker role
    needs IDAM onboarding, and inventing one would be the same mistake as inventing a case type.
-4. **IDAM audiences and issuer.** Both default to empty, which refuses every token. An environment
+5. **IDAM audiences and issuer.** Both default to empty, which refuses every token. An environment
    with neither answers `/health` and `/v3/api-docs` and 401s everything else.
 
 ## Do not let a session drift into
