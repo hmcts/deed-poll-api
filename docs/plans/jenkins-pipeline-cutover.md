@@ -67,9 +67,9 @@ author's product code, not ours.
 It declares `rpe` / `spring-boot-template` and has never run. A nightly pipeline carries its own security
 and cross-browser stages, so configuring one that has never run means two untested things landing together.
 
-- [ ] **Delete it.** A nightly pipeline can be added deliberately when someone wants one, and a file naming another team's product is worse than no file: it is the kind of thing that runs once by accident and reports failures against `rpe`
-- [ ] Record the deletion in `docs/RESUME.md` so it reads as a decision rather than an oversight
-- [ ] Mark completed
+- [x] **Delete it.** A nightly pipeline can be added deliberately when someone wants one, and a file naming another team's product is worse than no file: it is the kind of thing that runs once by accident and reports failures against `rpe`
+- [x] Record the deletion in `docs/RESUME.md` so it reads as a decision rather than an oversight
+- [x] Mark completed
 
 ### Task 3: Rename and configure the Helm chart
 

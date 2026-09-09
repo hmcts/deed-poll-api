@@ -4,8 +4,8 @@
 > `workflow.*` / `stage.*` / `job.*` GitHub Actions hierarchy it documents does not exist here.
 >
 > **`deed-poll-api` has three workflows** — `ci.yml` (build on PR and on master), `codeql.yml` and
-> `publish-openapi.yaml` — and its real pipeline is Jenkins via `Jenkinsfile_CNP` and
-> `Jenkinsfile_nightly`, which is not onboarded yet.
+> `publish-openapi.yaml` — and its real pipeline is Jenkins via `Jenkinsfile_CNP`, which is not
+> onboarded yet. There is deliberately no `Jenkinsfile_nightly`; see [`RESUME.md`](RESUME.md).
 >
 > This file needs rewriting or deleting.
 

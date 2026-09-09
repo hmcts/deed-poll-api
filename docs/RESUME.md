@@ -38,6 +38,15 @@ Both are deliberately unwritten, because both wait on external onboarding:
 Retiring `apps/api` in the sibling repo and cutting `apps/web` over to HTTP is later work in a
 different repo, and must not happen until this service is deployed and serving.
 
+## Decisions taken during the Jenkins cutover
+
+- **`Jenkinsfile_nightly` is deleted, deliberately.** It was the template's, declaring
+  `rpe` / `spring-boot-template` — another team's product code — and it had never run. A nightly
+  pipeline brings its own security and cross-browser stages, so configuring one that has never run
+  would land two untested things at once. A file naming someone else's product is worse than no file:
+  it is the kind of thing that runs once by accident and reports failures against `rpe`. If a nightly
+  build is wanted later, add it deliberately with this service's own identity.
+
 ## Open items that are Steve's, not a session's
 
 1. **Deployment is not onboarded.** `charts/rpe-spring-boot-template` is still the template's — chart
