@@ -1,0 +1,14 @@
+java:
+  applicationPort: 4550
+  image: 'hmctspublic.azurecr.io/deed-poll/api:latest'
+  # The host `deed-poll-admin` already expects to reach this service on — its web chart's
+  # `DEED_POLL_API_URL` spells out the same name. Cluster-internal, not a public ingress.
+  ingressHost: deed-poll-api-{{ .Values.global.environment }}.service.core-compute-{{ .Values.global.environment }}.internal
+  aadIdentityName: deed-poll
+#  Uncomment once the vault containing the app insights key has been set up
+#  keyVaults:
+#    rpe:
+#      secrets:
+#        - name: AppInsightsInstrumentationKey
+#          alias: azure.application-insights.instrumentation-key
+  environment:

@@ -76,11 +76,11 @@ and cross-browser stages, so configuring one that has never run means two untest
 `charts/rpe-spring-boot-template/` must become `charts/deed-poll-api/`. The CNP chart resolves the vault
 from the chart's own metadata, so this is not cosmetic.
 
-- [ ] `git mv charts/rpe-spring-boot-template charts/deed-poll-api`
-- [ ] In `Chart.yaml`: `name: deed-poll-api`, a description naming this service, `home` pointing at `https://github.com/hmcts/deed-poll-api`, and drop the `HMCTS rpe team` maintainer. Add `annotations: team: deed-poll` — `deed-poll-admin`'s and `deed-poll-web`'s charts both carry it, and the CNP tooling reads `annotations.team` as the product
-- [ ] Leave the `java` chart dependency and its version alone
-- [ ] Grep the whole repo for `rpe-spring-boot-template` and `rpe` afterwards. A path left behind in a values file or a CI reference fails at deploy time, not at build time
-- [ ] Mark completed
+- [x] `git mv charts/rpe-spring-boot-template charts/deed-poll-api`
+- [x] In `Chart.yaml`: `name: deed-poll-api`, a description naming this service, `home` pointing at `https://github.com/hmcts/deed-poll-api`, and drop the `HMCTS rpe team` maintainer. Add `annotations: team: deed-poll` — `deed-poll-admin`'s and `deed-poll-web`'s charts both carry it, and the CNP tooling reads `annotations.team` as the product
+- [x] Leave the `java` chart dependency and its version alone
+- [x] Grep the whole repo for `rpe-spring-boot-template` and `rpe` afterwards. A path left behind in a values file or a CI reference fails at deploy time, not at build time — `values.yaml`'s `image`, `ingressHost` and `aadIdentityName` were all `rpe`/`spring-boot-template` and are now this service's; `README.md`, `docs/RESUME.md` and `docs/DEPLOYMENT.md` all named the old chart path and now name the new one. The remaining `rpe` hits are the commented-out `keyVaults` block, `lib/applicationinsights.json` and `application.yaml`'s `/mnt/secrets/rpe/` configtree — all of which are the vault mount, i.e. task 4
+- [x] Mark completed
 
 ### Task 4: Wire the vault secrets this service actually reads
 

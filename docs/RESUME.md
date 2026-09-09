@@ -49,8 +49,8 @@ different repo, and must not happen until this service is deployed and serving.
 
 ## Open items that are Steve's, not a session's
 
-1. **Deployment is not onboarded.** `charts/rpe-spring-boot-template` is still the template's — chart
-   name, image and ingress host are all `spring-boot-template`'s, and no probe path points at
+1. **Deployment is not onboarded.** The chart is `charts/deed-poll-api` now, carrying this service's
+   name, image, ingress host and `annotations.team: deed-poll`, but no probe path points at
    `/health/readiness` or `/health/liveness`. Jenkins folder configuration is unconfirmed.
 2. **`DOCUMENT_STORE_ROOT` must not reach a deployed environment.** Local disk does not survive AKS
    and replicas do not share a volume. Real storage is plan 03.
