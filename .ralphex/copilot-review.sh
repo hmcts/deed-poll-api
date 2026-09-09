@@ -22,8 +22,32 @@ if [[ ! -r "$prompt_file" ]]; then
   exit 1
 fi
 
-if ! command -v copilot >/dev/null 2>&1; then
-  echo "copilot-review.sh: the copilot CLI is not on PATH (expected @github/copilot)" >&2
+# Resolve the real CLI rather than trusting `copilot` on PATH.
+#
+# VS Code's Copilot Chat extension installs its own `copilot` shim at
+# ~/.vscode-server/.../github.copilot-chat/copilotCli/copilot and puts that directory EARLIER on PATH than
+# nvm's bin. The shim is not the CLI: run non-interactively it answers "Cannot find GitHub Copilot CLI" and
+# prompts "Install GitHub Copilot CLI? ['y/N']", then exits 0 — so a `command -v copilot` guard passes, the
+# review produces no findings, and the phase looks like a reviewer that found nothing rather than one that
+# never ran. Exit 0 on a non-review is the worst available failure mode, which is why this resolves the
+# binary explicitly and verifies it identifies itself.
+copilot_bin=""
+for candidate in \
+  "${COPILOT_CLI:-}" \
+  "$HOME/.nvm/versions/node/v24.18.0/bin/copilot" \
+  "$(command -v copilot 2>/dev/null || true)"; do
+  [[ -n "$candidate" && -x "$candidate" ]] || continue
+  # `--version` on the real CLI prints "GitHub Copilot CLI <n>"; the shim prints its install prompt.
+  if "$candidate" --version 2>&1 | grep -q "GitHub Copilot CLI"; then
+    copilot_bin="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$copilot_bin" ]]; then
+  echo "copilot-review.sh: no working @github/copilot CLI found." >&2
+  echo "  Install with: npm i -g @github/copilot" >&2
+  echo "  Note VS Code's copilot-chat shim shadows it on PATH; set COPILOT_CLI to override." >&2
   exit 1
 fi
 
@@ -45,7 +69,7 @@ fi
 # the model what it was.
 #
 # `copilot help config` lists the valid identifiers.
-exec copilot \
+exec "$copilot_bin" \
   --model gpt-5.6-sol \
   --prompt "$(cat "$prompt_file")
 
