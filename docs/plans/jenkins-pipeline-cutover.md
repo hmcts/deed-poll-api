@@ -57,10 +57,10 @@ author's product code, not ours.
 
 ### Task 1: Give `Jenkinsfile_CNP` this service's identity
 
-- [ ] Change `product` from `"rpe"` to `"deed-poll"` and `component` from `"demo"` to `"api"`. Leave `type = "java"`
-- [ ] Delete the template's comment pointing at the "new microservice" onboarding page — it is advice for someone starting from the template, and it is the reason this file was never edited
-- [ ] Leave the `withPipeline` body empty. Extra stages are a separate decision and an empty body is the working default
-- [ ] Mark completed
+- [x] Change `product` from `"rpe"` to `"deed-poll"` and `component` from `"demo"` to `"api"`. Leave `type = "java"`
+- [x] Delete the template's comment pointing at the "new microservice" onboarding page — it is advice for someone starting from the template, and it is the reason this file was never edited
+- [x] Leave the `withPipeline` body empty. Extra stages are a separate decision and an empty body is the working default
+- [x] Mark completed
 
 ### Task 2: Decide `Jenkinsfile_nightly`, and act on the decision
 
