@@ -111,16 +111,26 @@ Two things this task had to settle that the plan did not name:
 ### Task 5: Delete `infrastructure/` and `.github/workflows/`
 
 - [x] Delete `infrastructure/` in full — `main.tf` is a bare provider block, the three tfvars are empty, and nothing in it has ever been applied. The shared resources live in `hmcts/deed-poll-infra`
-- [x] Delete `.github/workflows/` in full: `ci.yml`, `codeql.yml`, `publish-openapi.yaml`. The CNP pipeline covers build, test and scanning, and it has a spec-publishing equivalent
+- [x] Delete `.github/workflows/` in full: `ci.yml`, `codeql.yml`, `publish-openapi.yaml`. The CNP pipeline covers build, test and scanning. It does **not** cover spec publishing — see below, that one is a real loss rather than a replacement
 - [x] Keep everything else under `.github/` that is not a workflow — `CODEOWNERS`, `CONTRIBUTING.md`, `ISSUE_TEMPLATE.md`, `PULL_REQUEST_TEMPLATE.md`, `renovate.json`, `stale.yml` all stay
 - [x] Update `CLAUDE.md`'s "Build and test" section if it references any deleted workflow — it does not; it only documents `./gradlew` invocations, so no change was needed
 - [x] Mark completed
 
 Three things this task had to settle that the plan did not name:
 
-- **`OpenAPIPublisherTest` stays.** `publish-openapi.yaml` only *invoked* it; the test itself writes
-  `/tmp/openapi-specs.json`, which is what the HMCTS Jenkins library reads to publish to `cnp-api-docs`.
-  Deleting the workflow removes the GitHub-side trigger, not the publishing mechanism.
+- **`OpenAPIPublisherTest` stays, but nothing consumes what it writes any more — this is an open gap.**
+  The test writes `/tmp/openapi-specs.json`. The only thing that has ever read that file is the reusable
+  workflow `hmcts/workflow-publish-openapi-spec`, which copies it to `docs/specs/<api>.json` in
+  `hmcts/cnp-api-docs` — and that workflow is exactly what the deleted `publish-openapi.yaml` invoked.
+  `hmcts/cnp-jenkins-library` contains **no** reference to `cnp-api-docs`, `swagger` or
+  `openapi-specs.json`: there is no Jenkins-side equivalent, so deleting the workflow removed the
+  publishing mechanism and not merely its trigger. The two are complementary rather than alternatives,
+  which is why 19 CNP-pipeline Java services in this workspace (`pcs-api`, `em-stitching-api`,
+  `civil-service`, the `wa-*` and `bulk-scan-*` sets) keep the workflow *alongside* `Jenkinsfile_CNP`.
+  **Consequence:** `deed-poll-api` will not appear in the API catalogue until the workflow is restored.
+  Restoring it needs `SWAGGER_PUBLISHER_API_TOKEN`, an org-level secret this repo must be in the
+  selected-repositories list for — unverifiable without `admin:org`, so it is a step-5 question, not a
+  silent assumption.
 - **`.github/CODEOWNERS` had a `.github/workflows/*.yaml` line** in its Renovate-ignore list. Removed:
   it now names a path that does not exist.
 - **`docs/PIPELINES.md` and `docs/ARCHITECTURE.md` asserted this repo had three workflows** in the

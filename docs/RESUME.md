@@ -45,8 +45,11 @@ Plan [`plans/jenkins-pipeline-cutover.md`](plans/jenkins-pipeline-cutover.md) is
 - **Jenkins CNP is the only pipeline.** `Jenkinsfile_CNP` declares `java` / `deed-poll` / `api`, with
   an empty `withPipeline` body. `.github/workflows/` is gone entirely — build, test and scanning are
   the pipeline's now, and CodeQL has no Jenkins equivalent, which was accepted rather than replaced.
-  `OpenAPIPublisherTest` stays: the deleted `publish-openapi.yaml` only *invoked* it, and the test
-  still writes the `/tmp/openapi-specs.json` that the Jenkins library publishes to `cnp-api-docs`.
+  `OpenAPIPublisherTest` stays and still writes `/tmp/openapi-specs.json`, but **nothing consumes it
+  any more.** The only reader was `hmcts/workflow-publish-openapi-spec`, the reusable workflow the
+  deleted `publish-openapi.yaml` invoked; `hmcts/cnp-jenkins-library` has no equivalent. So the spec
+  no longer reaches `hmcts/cnp-api-docs` — an accepted-for-now gap, not a replacement, and the one
+  `.github/workflows/` deletion worth revisiting during onboarding. See the plan's Task 5 notes.
 - **This repo owns no Terraform.** `infrastructure/` is deleted and must not come back. The resource
   group, Key Vault, App Insights, Redis and Postgres all live in `hmcts/deed-poll-infra`.
 - **It reads a vault it does not create.** `charts/deed-poll-api` reads `deed-poll-{env}`, created by
