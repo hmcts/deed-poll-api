@@ -5,8 +5,8 @@
 > `apps/*/helm/` directories it describes do not exist in this repo.
 >
 > **`deed-poll-api` is not onboarded for deployment at all yet.** It has one chart,
-> `charts/rpe-spring-boot-template`, which is still the template's — wrong name, wrong image, wrong
-> ingress host, and no probe path configured. Deployment is Jenkins (`Jenkinsfile_CNP`,
+> `charts/deed-poll-api`, which now carries this service's own name, image and ingress host, but no
+> probe path configured. Deployment is Jenkins (`Jenkinsfile_CNP` — there is deliberately no
 > `Jenkinsfile_nightly`), and onboarding it is outstanding work outside the build plans.
 >
 > Read [`RESUME.md`](RESUME.md) for the current state of that. This file needs rewriting or deleting.

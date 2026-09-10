@@ -316,10 +316,9 @@ and the `management.endpoint.health.group` block in `application.yaml` are the t
 written down; `HealthProbeTest` asserts it over HTTP, including that readiness answers **503** and
 not 200 when the database is unreachable.
 
-**Kubernetes does not consult them yet.** `charts/rpe-spring-boot-template` is still the template's —
-the chart name, the image and the ingress host are `spring-boot-template`'s, and no probe path is
-configured — so these endpoints are tested but not yet wired. Renaming the chart and naming the two
-paths is part of the outstanding deployment onboarding, which is deliberately outside the build plans.
+**Kubernetes does not consult them yet.** The chart is now `charts/deed-poll-api`, with this service's
+name, image and ingress host, but no probe path is configured — so these endpoints are tested and not
+yet wired. Naming the two paths is part of the outstanding deployment onboarding.
 
 ### The OpenAPI document
 
