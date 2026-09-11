@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.WriteContext;
@@ -44,7 +45,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The four caseworker note endpoints, over HTTP, against a real database and a stub IDAM.
+ * The five caseworker note endpoints, over HTTP, against a real database and a stub IDAM.
  *
  * <p>The whole context rather than a {@code @WebMvcTest} slice, and not {@code @Transactional}, for the reasons
  * {@code CaseworkerReadControllerTest} and {@code CaseworkerCaseControllerTest} record: a slice asserts Spring
@@ -521,9 +522,24 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
         }
     }
 
+    /**
+     * The one privileged operation on this surface.
+     *
+     * <p>The other four are open to both roles -- a Basic User may create, view and edit notes -- so this is the
+     * only group that has to say who the caller is. Every test here is an Administrator unless it restubs, which
+     * puts the requirement in one place: a delete test added later is authorised the way the route expects, and a
+     * refusal has to ask for it in so many words.
+     */
     @Nested
     @DisplayName("DELETE /caseworker/cases/{id}/notes/{noteId}")
     class DeleteNote {
+
+        @BeforeEach
+        void administrator() {
+            // After the outer resetIdam(), which restores the non-admin default -- JUnit runs the enclosing
+            // class's callbacks first, so this overrides it rather than racing it.
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+        }
 
         @Test
         @DisplayName("deletes the note and answers 204 with no body")
@@ -572,10 +588,77 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("404s for a note that does not exist")
+        @DisplayName("404s an Administrator addressing a note that does not exist")
         void notFoundForAMissingNote() throws Exception {
+            // Also the proof that the role check did not absorb the not-found: the caller here holds the role,
+            // so a 403 would mean the gate was refusing everyone and a 204 would mean it had swallowed the
+            // absence. Compare the 403 the same request gets without the role, below.
             authorised(delete("/caseworker/cases/" + newCase() + "/notes/" + UNKNOWN_ID))
                 .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("403s a caseworker without the Administrator role, and the note survives")
+        void refusesACaseworkerWithoutTheRole() throws Exception {
+            String caseId = newCase();
+            String noteId = addNote(caseId, "Called the applicant");
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+
+            authorised(delete("/caseworker/cases/" + caseId + "/notes/" + noteId))
+                .andExpect(status().isForbidden())
+                // 403 and not 404: a caseworker is entitled to know the note is there and that they may not
+                // remove it. Disguising the refusal as an absence would send them to look for a note they can
+                // see on the page.
+                .andExpect(jsonPath("$.error")
+                    .value("Requires one of the following roles: " + Role.DEEDPOLL_ADMIN.claimValue()));
+
+            // The half that matters: the 403 alone would also pass against a handler that refused after
+            // deleting, and that is the failure nothing downstream could report or undo.
+            assertThat(notes.findById(noteId)).isPresent();
+        }
+
+        @Test
+        @DisplayName("403s a caller whose token names no roles at all, rather than falling open")
+        void refusesACallerWithNoRoles() throws Exception {
+            // The fail-closed case, and the one a bug in authentication would produce: userinfo that names no
+            // roles still authenticates -- IdamAuthentication is authenticated whatever it carries -- so the
+            // request reaches the handler and the gate is the only thing standing between it and the row.
+            String caseId = newCase();
+            String noteId = addNote(caseId, "Called the applicant");
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of());
+
+            authorised(delete("/caseworker/cases/" + caseId + "/notes/" + noteId))
+                .andExpect(status().isForbidden());
+
+            assertThat(notes.findById(noteId)).isPresent();
+        }
+
+        @Test
+        @DisplayName("403s a refused caller addressing a note that does not exist, so the check runs first")
+        void refusesBeforeResolving() throws Exception {
+            // Paired with notFoundForAMissingNote: the same URL is a 404 for an Administrator and a 403 for
+            // everybody else. Refusing second would make the status code an existence oracle over notes the
+            // caller may not touch.
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+
+            authorised(delete("/caseworker/cases/" + newCase() + "/notes/" + UNKNOWN_ID))
+                .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("still admits a caseworker's PATCH, so only the delete is gated")
+        void doesNotGateTheAmend() throws Exception {
+            // The business splits edit from delete, and the tidy-minded mistake would be to gate both --
+            // removing a capability caseworkers are meant to have. Asserted here, next to the refusals, rather
+            // than trusted to the PATCH group where nothing says the caller is not an admin.
+            String caseId = newCase();
+            String noteId = addNote(caseId, "Called the applicant");
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+
+            authorised(patch("/caseworker/cases/" + caseId + "/notes/" + noteId), "{\"note\":\"Called twice\"}")
+                .andExpect(status().isOk());
+
+            assertThat(stored(noteId).getNote()).isEqualTo("Called twice");
         }
 
         @Test

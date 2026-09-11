@@ -7,7 +7,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
@@ -47,6 +50,21 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
 
     /** createDeedPoll cannot allocate a reference number without a Date Received to derive the year. */
     private static final String RECEIVED = "2026-07-01T00:00:00.000Z";
+
+    /** An Administrator: the only caller a delete admits. */
+    private static final CurrentUser ADMIN =
+        CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "An Admin");
+
+    /**
+     * A Basic User: authenticated and named, holding no role this service recognises.
+     *
+     * <p>{@link Role} has one member, so today this differs from {@link CurrentUser#ANONYMOUS} only in its
+     * name -- an ordinary caseworker's IDAM roles all belong to other services and are dropped by
+     * {@code IdamClaims}. Both are asserted anyway: they are different claims (a real Basic User is refused;
+     * an unidentified caller is refused) and they stop being the same object the moment the enum grows a
+     * second role.
+     */
+    private static final CurrentUser CASEWORKER = CurrentUser.currentUser(List.of(), "A Caseworker");
 
     @Autowired
     private NoteService noteService;
@@ -204,7 +222,7 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
         String caseId = storedCase();
         String noteId = noteService.createNote(caseId, create("original")).getId();
 
-        noteService.removeNote(caseId, noteId);
+        noteService.removeNote(caseId, noteId, ADMIN);
 
         assertThat(notes.findById(noteId)).isEmpty();
     }
@@ -219,9 +237,61 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
         String other = storedCase();
         String noteId = noteService.createNote(owner, create("original")).getId();
 
-        assertThatThrownBy(() -> noteService.removeNote(other, noteId)).isInstanceOf(NotFoundError.class);
+        assertThatThrownBy(() -> noteService.removeNote(other, noteId, ADMIN)).isInstanceOf(NotFoundError.class);
 
         assertThat(notes.findById(noteId)).isPresent();
+    }
+
+    @Test
+    @DisplayName("refuses a delete by a caller without the Administrator role, and leaves the note stored")
+    void refusesADeleteByACallerWithoutTheAdministratorRole() {
+        // Not a reference block: there the rule was a middleware in front of the route, so the service had
+        // nothing to test. The business splits editing from deleting -- a Basic User may create, view and edit
+        // notes -- and notes are the audit record of a case, so deletion specifically is privileged.
+        String caseId = storedCase();
+        String noteId = noteService.createNote(caseId, create("original")).getId();
+
+        assertThatThrownBy(() -> noteService.removeNote(caseId, noteId, CASEWORKER))
+            .isInstanceOf(ForbiddenError.class);
+
+        // The assertion that carries the test. The refusal alone would also pass against an implementation
+        // that threw *after* deleting, which is the failure that could not be undone.
+        assertThat(notes.findById(noteId)).isPresent();
+    }
+
+    @Test
+    @DisplayName("refuses a delete by a caller with no roles at all, rather than falling open")
+    void refusesADeleteByACallerWithNoRolesAtAll() {
+        // The fail-closed case. requireAnyRole is open when *nothing* is required, which is why removeNote
+        // names the role explicitly; this asserts the other axis -- a caller who holds nothing, which is the
+        // state a bug in authentication or a token whose roles all belong to other services produces.
+        String caseId = storedCase();
+        String noteId = noteService.createNote(caseId, create("original")).getId();
+
+        assertThatThrownBy(() -> noteService.removeNote(caseId, noteId, CurrentUser.ANONYMOUS))
+            .isInstanceOf(ForbiddenError.class);
+
+        assertThat(notes.findById(noteId)).isPresent();
+    }
+
+    @Test
+    @DisplayName("404s an Administrator deleting a note that does not exist, so the check did not swallow it")
+    void administratorDeletingAMissingNoteStillGets404() {
+        // The role check runs first, so it has to be shown not to have absorbed the not-found: an admin
+        // addressing a note that was never stored still gets the absence, not a success.
+        assertThatThrownBy(() -> noteService.removeNote(storedCase(), "nope", ADMIN))
+            .isInstanceOf(NotFoundError.class);
+    }
+
+    @Test
+    @DisplayName("refuses first and resolves second, so a missing note is a refusal rather than a 404")
+    void refusesBeforeResolving() {
+        // Order is the point. Looking the note up first and refusing second would let a caller without the
+        // role tell an existing note from a non-existent one by which error came back -- an existence oracle
+        // over rows they may not touch. Paired with the test above: the same missing note is a 404 for an
+        // Administrator and a refusal for everybody else.
+        assertThatThrownBy(() -> noteService.removeNote(storedCase(), "nope", CASEWORKER))
+            .isInstanceOf(ForbiddenError.class);
     }
 
     @Test
