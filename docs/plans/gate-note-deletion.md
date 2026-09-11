@@ -107,7 +107,8 @@ added 2026-09-08 in `#4` — and is now wrong three ways.
 
 - [ ] `./gradlew clean build` green
 - [ ] `./gradlew test` green. **Confirm the totals from the result files, not Gradle's summary** — a run reporting "N actionable tasks: N up-to-date" did not execute anything, and briefly suggested this suite was 17 tests rather than 1,234. Count with:
-      `grep -ho 'tests="[0-9]*"' build/test-results/test/*.xml | grep -o '[0-9]*' | paste -sd+ - | bc`
+      `grep -ho 'tests="[0-9]*"' build/test-results/test/*.xml | grep -o '[0-9]*' | awk '{s+=$1} END{print s}'`
+      (`bc` is not installed in this devcontainer — do not reach for it)
       and check failures are zero with:
       `grep -l 'failures="[1-9]' build/test-results/test/*.xml` (no output expected)
 - [ ] `git status --short -- src/main/resources` clean: the OpenAPI spec must not move. This changes who may call an existing route, not its shape
