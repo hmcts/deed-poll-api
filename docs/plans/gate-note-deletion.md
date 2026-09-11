@@ -122,14 +122,14 @@ added 2026-09-08 in `#4` — and is now wrong three ways.
 
 ### Task 5: Full validation
 
-- [ ] `./gradlew clean build` green
-- [ ] `./gradlew test` green. **Confirm the totals from the result files, not Gradle's summary** — a run reporting "N actionable tasks: N up-to-date" did not execute anything, and briefly suggested this suite was 17 tests rather than 1,234. Count with:
+- [x] `./gradlew clean build` green — checkstyle (main, test, integration, smoke, functional), `test` and `integration` all passed, verified 2026-09-11
+- [x] `./gradlew test` green. **Confirm the totals from the result files, not Gradle's summary** — a run reporting "N actionable tasks: N up-to-date" did not execute anything, and briefly suggested this suite was 17 tests rather than 1,234. Re-run with `--rerun` so the task actually executes, then count from the XML: **1,242 tests across 147 suites, 0 failures, 0 errors, 0 skipped** — up 8 on the 1,234 baseline, none removed. Count with:
       `grep -ho 'tests="[0-9]*"' build/test-results/test/*.xml | grep -o '[0-9]*' | awk '{s+=$1} END{print s}'`
       (`bc` is not installed in this devcontainer — do not reach for it)
       and check failures are zero with:
       `grep -l 'failures="[1-9]' build/test-results/test/*.xml` (no output expected)
-- [ ] `git status --short -- src/main/resources` clean: the OpenAPI spec must not move. This changes who may call an existing route, not its shape
-- [ ] Mark completed
+- [x] `git status --short -- src/main/resources` clean: the OpenAPI spec must not move. This changes who may call an existing route, not its shape — confirmed empty, as is the rest of the working tree
+- [x] Mark completed
 
 ## Deliberately not in this plan
 
