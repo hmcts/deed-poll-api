@@ -82,14 +82,31 @@ It is a correctness gap with a known right answer.
 
 ### Task 3: Tests — the four that matter
 
-- [ ] **An Administrator deletes successfully** — 204, and the note is gone
-- [ ] **A caller without the role is refused** — `ForbiddenError` to 403, **and the note still exists afterwards**. Asserting the refusal alone would pass against an implementation that threw *after* deleting; the surviving note is the assertion that matters
-- [ ] **A caller with no roles at all is refused** — the fail-closed case. `currentUser([])` is the state a bug in authentication would produce, and it must not delete anything
-- [ ] **An Administrator deleting a non-existent note still gets 404** — proving the new check did not swallow or reorder the existing not-found behaviour
-- [ ] Add a controller-level test, not only a service one. Per this repo's convention a controller test must boot the whole context, because a `@WebMvcTest` slice does not get `SecurityConfiguration`
-- [ ] Fix the `removeNote` call sites broken by Task 1
-- [ ] Validate: `./gradlew test` green, count strictly greater than 1,234
-- [ ] Mark completed
+- [x] **An Administrator deletes successfully** — 204, and the note is gone
+- [x] **A caller without the role is refused** — `ForbiddenError` to 403, **and the note still exists afterwards**. Asserting the refusal alone would pass against an implementation that threw *after* deleting; the surviving note is the assertion that matters
+- [x] **A caller with no roles at all is refused** — the fail-closed case. `currentUser([])` is the state a bug in authentication would produce, and it must not delete anything
+- [x] **An Administrator deleting a non-existent note still gets 404** — proving the new check did not swallow or reorder the existing not-found behaviour
+- [x] Add a controller-level test, not only a service one. Per this repo's convention a controller test must boot the whole context, because a `@WebMvcTest` slice does not get `SecurityConfiguration`
+- [x] Fix the `removeNote` call sites broken by Task 1
+- [x] Validate: `./gradlew test` green, count strictly greater than 1,234 — **1,242 tests across 147 suites, 0 failures, 0 errors, 0 skipped**, counted from `build/test-results/test/*.xml`
+- [x] Mark completed
+
+Two beyond the four, because each closes a hole the four leave open. **Refuse-first is asserted as a pair**,
+at both levels: the same missing note is a 404 for an Administrator and a 403 for everybody else, which is the
+only way to show the order rather than assume it — refusing second would make the status code an existence
+oracle over notes the caller may not touch. And **a caseworker's `PATCH` is asserted to still succeed**, next
+to the refusals rather than left to the `PATCH` group where nothing says the caller is not an admin; that is
+the decision this plan warns is easiest to get wrong in the tidy-minded direction.
+
+The "no roles at all" and "without the role" callers are the same role list today, since `Role` has one member
+and an ordinary caseworker's IDAM roles are all dropped by `IdamClaims`. Both are asserted anyway: they are
+different claims, and they stop being the same object the moment the enum grows a second role. Recorded in the
+fixture's comment rather than left for a reader to notice.
+
+The controller's delete group now stubs an Administrator in a `@BeforeEach`, so the pre-existing delete tests
+still exercise the route and a delete test added later is authorised the way the route expects. Also corrected
+that class's "four caseworker note endpoints" to five, which the delete had made wrong — the same drift Task 4
+addresses in `package-info.java`.
 
 ### Task 4: Reconcile the stale package documentation
 
