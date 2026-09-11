@@ -113,12 +113,12 @@ addresses in `package-info.java`.
 `api/caseworker/controller/package-info.java` predates the note delete — comment dated 2026-09-07, the delete
 added 2026-09-08 in `#4` — and is now wrong three ways.
 
-- [ ] It says the surface has "no deletes". It has one
-- [ ] It lists `CaseworkerNoteController` as "list, add, read and amend a case's notes", omitting delete
-- [ ] It asserts "that is twelve routes" where there are thirteen; `#4`'s own title calls it "the thirteenth caseworker operation"
-- [ ] **State the route count as a property of the package rather than a total** — the current wording goes stale every time a route is added, which is how it got wrong in the first place
-- [ ] Check `docs/RESUME.md` and this repo's `CLAUDE.md` agree with whatever route count they quote
-- [ ] Mark completed
+- [x] It says the surface has "no deletes". It has one — the note delete is now named, with a note that `NoteService.removeNote` restricts it to `Role.DEEDPOLL_ADMIN`
+- [x] It lists `CaseworkerNoteController` as "list, add, read and amend a case's notes", omitting delete — now "list, add, read, amend and delete"
+- [x] It asserts "that is twelve routes" where there are thirteen; `#4`'s own title calls it "the thirteenth caseworker operation"
+- [x] **State the route count as a property of the package rather than a total** — replaced with "every route in this package is one of those bullets", and the reader is told to read the count off the mappings. The plan-01 miscount is still recorded, as the reason a count was ever written down, but without restating a total that goes stale
+- [x] Check `docs/RESUME.md` and this repo's `CLAUDE.md` agree with whatever route count they quote — both already say 13, which matches the thirteen `@…Mapping` declarations in the four controllers (4 read, 2 case, 5 note, 2 document). Neither needed changing
+- [x] Mark completed
 
 ### Task 5: Full validation
 
