@@ -3,6 +3,8 @@ package uk.gov.hmcts.reform.deedpoll.domain.notes;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
@@ -25,6 +27,11 @@ import java.util.List;
  * omit. Here the write goes through the entity that guard loaded, and that entity was fetched by id
  * <em>and</em> parent, so an unscoped write is not expressible at all: there is no path that writes a note
  * fetched by id alone. {@link DeedPollNoteRepository} has no such finder either.
+ *
+ * <p>One rule here is not in the reference's service: deletion requires the Administrator role. The reference
+ * expressed that as middleware in front of its route, and there is no route layer to hang it on in the domain,
+ * so {@link #removeNote} takes the caller and refuses. Editing stays open to both roles, which is the split the
+ * business asked for rather than an oversight.
  *
  * <p>The service returns entities, not view models, exactly as the reference does. Formatting is
  * {@link NotesView}'s job, and the caseworker API will map to its own DTOs.
@@ -124,17 +131,33 @@ public class NoteService {
     }
 
     /**
-     * Deletes a note.
+     * Deletes a note. <strong>Administrators only.</strong>
      *
      * <p>Exposed since 2026-09-08 by {@code DELETE /caseworker/cases/&#123;id&#125;/notes/&#123;noteId&#125;}. This
      * comment previously said no endpoint exposed it and that the domain kept it so the next caller would not
      * invent an unscoped one -- which is exactly what happened, and the route reuses this rather than adding a
      * second path to the same delete.
      *
+     * <p><strong>The role check is here rather than on the route.</strong> The business splits editing from
+     * deleting -- a Basic User may create, view and edit notes, and only deletion is restricted -- and notes
+     * are the audit record of what happened on a case. Enforcing it in the domain means the rule holds for
+     * every caller, including a citizen surface or a batch job that does not exist yet, rather than only for
+     * the one HTTP route that does. There is deliberately <em>no</em> ungated overload: a caller who could
+     * reach a two-argument {@code removeNote} would skip the check entirely, so unlike
+     * {@link #createNote(String, CreateNoteInput)} and {@link #updateNote(String, String, UpdateNoteInput)} --
+     * whose short forms only mean "no author recorded" -- there is exactly one way to delete a note.
+     *
+     * <p><strong>Refuse first, then resolve.</strong> The check runs before the lookup so that a caller
+     * without the role gets the same 403 whether or not the note exists; looking it up first would let them
+     * tell an existing note from a missing one by the status code. Authorship is not consulted: "only the
+     * author may delete" is a third rule the business did not choose.
+     *
+     * @throws uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError if the caller is not an Administrator
      * @throws NotFoundError if there is no such note, or it belongs to another case
      */
     @Transactional
-    public void removeNote(String deedPollId, String id) {
+    public void removeNote(String deedPollId, String id, CurrentUser caller) {
+        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
         notes.delete(findNote(deedPollId, id));
     }
 

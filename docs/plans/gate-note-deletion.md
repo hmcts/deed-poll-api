@@ -67,11 +67,11 @@ It is a correctness gap with a known right answer.
 
 ### Task 1: Refuse the deletion in the domain
 
-- [ ] Change `NoteService.removeNote(String deedPollId, String id)` to take the caller, and have it call `requireAnyRole(Role.DEEDPOLL_ADMIN)` **before** it looks the note up
-- [ ] **Delete the old two-argument signature** rather than keeping it alongside. `createNote` and `updateNote` each have a short and a long form, and for *authorship* that is harmless; for *authorisation* an ungated overload is a bypass. There must be exactly one way to delete a note
-- [ ] Order matters: refuse first, then resolve. Looking the note up first and refusing second would let a non-admin distinguish an existing note from a non-existent one by the status code
-- [ ] Expect the existing `removeNote` tests to fail to compile on the changed signature. That is this task's boundary; they are fixed in Task 3
-- [ ] Mark completed
+- [x] Change `NoteService.removeNote(String deedPollId, String id)` to take the caller, and have it call `requireAnyRole(Role.DEEDPOLL_ADMIN)` **before** it looks the note up
+- [x] **Delete the old two-argument signature** rather than keeping it alongside. `createNote` and `updateNote` each have a short and a long form, and for *authorship* that is harmless; for *authorisation* an ungated overload is a bypass. There must be exactly one way to delete a note
+- [x] Order matters: refuse first, then resolve. Looking the note up first and refusing second would let a non-admin distinguish an existing note from a non-existent one by the status code
+- [x] Expect the existing `removeNote` tests to fail to compile on the changed signature. That is this task's boundary; they are fixed in Task 3 — `./gradlew compileJava` currently reports exactly one error, the controller call site, which is Task 2
+- [x] Mark completed
 
 ### Task 2: Update the controller
 
