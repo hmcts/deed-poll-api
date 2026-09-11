@@ -36,14 +36,16 @@ import java.util.List;
  * that class predicted rather than a new design.
  *
  * <p>The author of a write is the authenticated caller and never the body. {@code CurrentUser.noteAuthor()}
- * supplies it, and it carries the name only: a note has no admin-only field, so nothing on this path should be
- * able to ask whether the caller is an admin. That is the reference's decision, asserted by a test of its own.
+ * supplies it, and it carries the name only: a note has no admin-only field, so nothing on the create or amend
+ * path should be able to ask whether the caller is an admin. That is the reference's decision, asserted by a test
+ * of its own.
  *
- * <p><strong>The delete is not role-gated, and that is the same decision the rest of this surface took rather
- * than a new one.</strong> The reference restricts it to admins, but the only role name IDAM has confirmed for
- * this service is {@code caseworker-deedpoll-admin} and naming a non-admin caseworker role would be inventing
- * one -- the same reason {@code /caseworker/**} is authenticated but not role-gated throughout. When IDAM
- * onboarding confirms the role names, this route is one of the places to revisit; see {@code docs/RESUME.md}.
+ * <p><strong>The delete is restricted to Administrators; the other four operations are not.</strong> That is the
+ * split the business asked for -- a Basic User may create, view and edit notes but not delete one -- and notes are
+ * the audit record of what happened on a case, so it is deletion specifically that is privileged. The rule is
+ * enforced in {@code NoteService.removeNote} rather than here, which is why {@code delete} passes the whole caller
+ * where the writes pass only an author. Gating the {@code PATCH} as well would remove a capability caseworkers are
+ * meant to have.
  *
  * <p>None of these routes is annotated as requiring authentication, and all five do:
  * {@code SecurityConfiguration} authenticates {@code anyRequest()} that is not on a short infrastructure
@@ -124,16 +126,19 @@ public class CaseworkerNoteController {
      * passed to the domain, so a note addressed through the wrong case 404s rather than being deleted -- which
      * matters more here than on the reads, because an unscoped delete is destructive and silent.
      *
-     * <p>No author is recorded. {@code removeNote} takes no {@code WriteContext} and the row is gone, so there is
-     * nowhere to record one; a delete audit would be a schema change and a decision, not a parameter. The
-     * reference does not record one either.
+     * <p><strong>The caller is passed for authorisation, not authorship.</strong> {@code removeNote} decides who
+     * may delete and refuses anyone else with a 403; this handler states no rule of its own, so there is exactly
+     * one place the rule lives and any future caller is held to it. No author is recorded either way -- the row is
+     * gone, so there is nowhere to record one, and a delete audit would be a schema change and a decision rather
+     * than a parameter. The reference does not record one.
      *
      * <p>Deleting twice 404s on the second call rather than answering 204 again, because the domain reports
-     * absence by throwing. Not idempotent in the strict HTTP sense, and consistent with the reads.
+     * absence by throwing. Not idempotent in the strict HTTP sense, and consistent with the reads. A refusal is a
+     * 403 and not a 404: a caseworker is entitled to know the note is there and that they may not remove it.
      */
     @DeleteMapping("/{noteId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable("id") String id, @PathVariable("noteId") String noteId) {
-        notes.removeNote(id, noteId);
+        notes.removeNote(id, noteId, CurrentUsers.required());
     }
 }

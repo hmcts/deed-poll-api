@@ -75,10 +75,10 @@ It is a correctness gap with a known right answer.
 
 ### Task 2: Update the controller
 
-- [ ] `CaseworkerNoteController.delete` passes `CurrentUsers.required()` through, exactly as `createNote` and `updateNote` pass `CurrentUsers.required().noteAuthor()`
-- [ ] Update the method's docblock: it explains the double-delete 404 and says nothing about who may delete
-- [ ] **Leave the route, verb and success status alone** — still `DELETE`, still 204
-- [ ] Mark completed
+- [x] `CaseworkerNoteController.delete` passes `CurrentUsers.required()` through, exactly as `createNote` and `updateNote` pass `CurrentUsers.required().noteAuthor()`
+- [x] Update the method's docblock: it explains the double-delete 404 and says nothing about who may delete
+- [x] **Leave the route, verb and success status alone** — still `DELETE`, still 204
+- [x] Mark completed
 
 ### Task 3: Tests — the four that matter
 
