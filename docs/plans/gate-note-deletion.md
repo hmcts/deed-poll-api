@@ -65,76 +65,53 @@ It is a correctness gap with a known right answer.
 
 ## Tasks
 
-### 1. Refuse the deletion in the domain
+### Task 1: Refuse the deletion in the domain
 
-- Change `NoteService.removeNote(String deedPollId, String id)` to take the caller, and have it call
-  `requireAnyRole(Role.DEEDPOLL_ADMIN)` **before** it looks the note up.
-- **Delete the old two-argument signature** rather than keeping it alongside — see decision 3.
-- Order matters: refuse first, then resolve. Looking up the note first and refusing second would let a
-  non-admin distinguish an existing note from a non-existent one by the status code, which is a small
-  information leak and easy to avoid by ordering the two lines correctly.
+- [ ] Change `NoteService.removeNote(String deedPollId, String id)` to take the caller, and have it call `requireAnyRole(Role.DEEDPOLL_ADMIN)` **before** it looks the note up
+- [ ] **Delete the old two-argument signature** rather than keeping it alongside. `createNote` and `updateNote` each have a short and a long form, and for *authorship* that is harmless; for *authorisation* an ungated overload is a bypass. There must be exactly one way to delete a note
+- [ ] Order matters: refuse first, then resolve. Looking the note up first and refusing second would let a non-admin distinguish an existing note from a non-existent one by the status code
+- [ ] Expect the existing `removeNote` tests to fail to compile on the changed signature. That is this task's boundary; they are fixed in Task 3
+- [ ] Mark completed
 
-**Validation:** `./gradlew test` — expect the existing `removeNote` tests to fail to compile on the changed
-signature. That is the task boundary; fix them in task 3.
+### Task 2: Update the controller
 
-### 2. Update the controller
+- [ ] `CaseworkerNoteController.delete` passes `CurrentUsers.required()` through, exactly as `createNote` and `updateNote` pass `CurrentUsers.required().noteAuthor()`
+- [ ] Update the method's docblock: it explains the double-delete 404 and says nothing about who may delete
+- [ ] **Leave the route, verb and success status alone** — still `DELETE`, still 204
+- [ ] Mark completed
 
-- `CaseworkerNoteController.delete` passes `CurrentUsers.required()` through, exactly as `createNote` and
-  `updateNote` pass `CurrentUsers.required().noteAuthor()`.
-- Update the method's docblock: it currently explains the double-delete 404 and says nothing about who may
-  delete.
-- **Leave the route, verb and success status alone** — still `DELETE`, still 204.
+### Task 3: Tests — the four that matter
 
-**Validation:** `./gradlew test`.
+- [ ] **An Administrator deletes successfully** — 204, and the note is gone
+- [ ] **A caller without the role is refused** — `ForbiddenError` to 403, **and the note still exists afterwards**. Asserting the refusal alone would pass against an implementation that threw *after* deleting; the surviving note is the assertion that matters
+- [ ] **A caller with no roles at all is refused** — the fail-closed case. `currentUser([])` is the state a bug in authentication would produce, and it must not delete anything
+- [ ] **An Administrator deleting a non-existent note still gets 404** — proving the new check did not swallow or reorder the existing not-found behaviour
+- [ ] Add a controller-level test, not only a service one. Per this repo's convention a controller test must boot the whole context, because a `@WebMvcTest` slice does not get `SecurityConfiguration`
+- [ ] Fix the `removeNote` call sites broken by Task 1
+- [ ] Validate: `./gradlew test` green, count strictly greater than 1,234
+- [ ] Mark completed
 
-### 3. Tests — the four that matter
-
-1. **An Administrator deletes successfully** — 204, and the note is gone.
-2. **A caller without the role is refused** — `ForbiddenError` → **403, and the note still exists
-   afterwards.** Asserting the refusal alone would pass against an implementation that threw *after*
-   deleting; the surviving note is the assertion that matters.
-3. **A caller with no roles at all is refused** — the fail-closed case. `currentUser([])` is the state a bug
-   in authentication would produce, and it must not delete anything.
-4. **An Administrator deleting a non-existent note still gets 404** — proving the new check did not swallow
-   or reorder the existing not-found behaviour.
-
-Add a controller-level test too, not just a service one: per this repo's convention a controller test must
-boot the whole context, because a `@WebMvcTest` slice does not get `SecurityConfiguration`.
-
-**Validation:** `./gradlew test` — green, count strictly greater than 1,234.
-
-### 4. Reconcile the stale package documentation
+### Task 4: Reconcile the stale package documentation
 
 `api/caseworker/controller/package-info.java` predates the note delete — comment dated 2026-09-07, the delete
-added 2026-09-08 in `#4` — and is now wrong three ways:
+added 2026-09-08 in `#4` — and is now wrong three ways.
 
-- it says the surface has "no deletes"
-- it lists `CaseworkerNoteController` as "list, add, read and amend a case's notes", omitting delete
-- it asserts "that is twelve routes" where there are thirteen; `#4`'s own title calls it "the thirteenth
-  caseworker operation"
+- [ ] It says the surface has "no deletes". It has one
+- [ ] It lists `CaseworkerNoteController` as "list, add, read and amend a case's notes", omitting delete
+- [ ] It asserts "that is twelve routes" where there are thirteen; `#4`'s own title calls it "the thirteenth caseworker operation"
+- [ ] **State the route count as a property of the package rather than a total** — the current wording goes stale every time a route is added, which is how it got wrong in the first place
+- [ ] Check `docs/RESUME.md` and this repo's `CLAUDE.md` agree with whatever route count they quote
+- [ ] Mark completed
 
-Correct all three, and **state the route count as a property of the package rather than a total** — the
-current wording goes stale every time a route is added, which is how it got wrong in the first place.
+### Task 5: Full validation
 
-**Validation:** `./gradlew build` — green, and check `docs/RESUME.md` and this repo's `CLAUDE.md` agree with
-whatever route count they quote.
-
-### 5. Full validation
-
-```bash
-./gradlew clean build
-./gradlew test
-python3 -c "
-import glob, xml.etree.ElementTree as ET
-t=f=e=s=0
-for p in glob.glob('build/test-results/test/*.xml'):
-    r=ET.parse(p).getroot()
-    t+=int(r.get('tests',0)); f+=int(r.get('failures',0)); e+=int(r.get('errors',0)); s+=int(r.get('skipped',0))
-print(t,f,e,s)"
-git status --short -- src/main/resources   # OpenAPI unchanged: no path, verb or schema moved
-```
-
-The spec should not move. This changes who may call an existing route, not its shape.
+- [ ] `./gradlew clean build` green
+- [ ] `./gradlew test` green. **Confirm the totals from the result files, not Gradle's summary** — a run reporting "N actionable tasks: N up-to-date" did not execute anything, and briefly suggested this suite was 17 tests rather than 1,234. Count with:
+      `grep -ho 'tests="[0-9]*"' build/test-results/test/*.xml | grep -o '[0-9]*' | paste -sd+ - | bc`
+      and check failures are zero with:
+      `grep -l 'failures="[1-9]' build/test-results/test/*.xml` (no output expected)
+- [ ] `git status --short -- src/main/resources` clean: the OpenAPI spec must not move. This changes who may call an existing route, not its shape
+- [ ] Mark completed
 
 ## Deliberately not in this plan
 
