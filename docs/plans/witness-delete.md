@@ -31,9 +31,17 @@ choice because the route would be new.
 
 ### Sequencing
 
-**Land [`witness-create-and-edit.md`](witness-create-and-edit.md) first.** It creates
-`CaseworkerWitnessController`; this plan adds one method to it. Running the two in parallel means both editing
-the same new file.
+**This gate is released.** [`completed/witness-create-and-edit.md`](completed/witness-create-and-edit.md) ran on
+2026-09-12 (branch `witness-create-and-edit`, `95649b2`) and created `CaseworkerWitnessController` with its four
+routes. This plan adds one method to that class, which is why the two could not run in parallel.
+
+**Two things it left in place for this plan**, both deliberate and both confirmed in the merged code:
+
+- `WitnessService.removeWitness` is **still the ungated two-argument form** — plan 1's decision 4 kept the domain
+  untouched, so the defect described below is exactly as stated.
+- `WitnessService`'s docblock now says *"`removeWitness` is still uncalled, and is the one witness operation the
+  business restricts"*, and `WitnessResponse`'s says *"A witness delete is still absent"*. **Both become untrue
+  when this plan lands — update them.**
 
 ### Severity, stated honestly
 
@@ -83,8 +91,13 @@ otherwise expose it.
 - **Controller tests boot the whole context** — a `@WebMvcTest` slice does not get `SecurityConfiguration`, so
   it cannot tell you anything about a role gate. This constraint is load-bearing for this plan specifically.
 - **`CurrentUsers.required()`** is how the controller gets the caller, as in `CaseworkerNoteController:142`.
-- **The operation count changes again.** If [`witness-create-and-edit.md`](witness-create-and-edit.md) left a
-  count of 17, this makes it 18. Grep and update.
+- **The operation count changes again: 17 → 18.** Plan 1 left it at seventeen. **Grep for it rather than trusting
+  a list** — plan 1's own enumeration was incomplete and only the grep instruction saved it. Known sites, still
+  not guaranteed complete: `CLAUDE.md`, `README.md`, `docs/RESUME.md`,
+  `api/caseworker/controller/package-info.java`, and **`OpenAPIPublisherTest`, which asserts the number
+  outright** (`isEqualTo(17)`) so a missed update fails the integration stage rather than going quiet.
+  `OpenAPIWriteBodies` will also need the delete described if it takes a body — it does not, so check rather
+  than assume.
 
 ## Validation Commands
 
@@ -96,9 +109,10 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 ```
 
 `build` is compile plus checkstyle across all five source sets, plus `test`, plus `integration`
-(`build.gradle:113`). **Baseline verified green 2026-09-12: `test` 1,242 / 147 suites, `integration` 5 / 3, 0
-failures and 0 errors.** Take a fresh count from master before starting, since
-[`witness-create-and-edit.md`](witness-create-and-edit.md) lands first and will have raised it.
+(`build.gradle:113`). **Baseline verified green from a cold `clean build` on 2026-09-12, after
+[`completed/witness-create-and-edit.md`](completed/witness-create-and-edit.md) landed: `test` 1,275 across 153
+suites, `integration` 5 across 3, 0 failures and 0 errors in both.** That is the number to beat — it already
+includes the 33 tests plan 1 added. Re-take it from your branch point anyway if anything else has merged since.
 
 Deliberately **not** here: test counts, baseline comparisons and the `git grep -n 'removeWitness'` assertion.
 Those only hold once the plan is finished — the grep in particular is guaranteed to fail until task 1 is done —
@@ -112,10 +126,14 @@ Change `WitnessService.removeWitness` to take `CurrentUser` and refuse first, pe
 signature — no overload. Update the docblock to say why the check is here rather than on the route, matching
 `NoteService.removeNote`'s.
 
+- [ ] `removeWitness` takes `CurrentUser`, refuses before resolving, and no two-argument overload remains
+
 ### Task 2: The route
 
 Add `@DeleteMapping("/{witnessId}")` to `CaseworkerWitnessController`, passing `CurrentUsers.required()`.
 Return the same status the note delete returns.
+
+- [ ] `@DeleteMapping("/{witnessId}")` on `CaseworkerWitnessController`, passing `CurrentUsers.required()`
 
 ### Task 3: Tests — the four that matter
 
@@ -130,9 +148,13 @@ Return the same status the note delete returns.
 Plus: assert there is **no** ungated `removeWitness` overload. A compile-time fact, so a test that references
 the two-argument form would fail to compile — say so in a comment rather than writing a test that cannot exist.
 
+- [ ] All four tests present, including the 403-for-a-nonexistent-witness ordering guard
+
 ### Task 4: Reconcile the documented operation count
 
 Per the constraint. Grep, then update.
+
+- [ ] Every stated operation count updated — grepped, not assumed
 
 ### Task 5: Full validation
 
