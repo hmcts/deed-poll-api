@@ -13,9 +13,11 @@ import java.util.List;
  * attribution for a witness change is the case's own {@code modifiedBy} plus the declaration on file, and
  * this DTO cannot pretend otherwise.
  *
- * <p><strong>Read-only for the whole of plan 01.</strong> Witnesses arrive nested inside a case and the
- * detail page renders them; nothing creates, amends or removes one, because no consumer does. Hence a
- * response type and no request type beside it.
+ * <p><strong>Read-only for the whole of plan 01, and no longer.</strong> Witnesses arrived nested inside a
+ * case and the detail page rendered them, with nothing to create or amend one -- which was the only place
+ * on this surface where data was readable and not writable. {@link CreateWitnessRequest} and
+ * {@link UpdateWitnessRequest} now sit beside this record, and it is the response to all four routes.
+ * A witness delete is still absent, so nothing removes one.
  *
  * @param id the witness id
  * @param witnessName the witness's name as recorded

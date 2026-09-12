@@ -17,6 +17,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
+import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 
 import java.util.Arrays;
@@ -25,7 +26,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Describes the five write bodies that springdoc cannot describe by reflection.
+ * Describes the seven write bodies that springdoc cannot describe by reflection.
  *
  * <p><strong>Why any of this is needed.</strong> Every write payload in this service binds as a keyed map rather
  * than as declared components, because a patch turns on the difference between an omitted field and an explicit
@@ -37,14 +38,15 @@ import java.util.Set;
  *
  * <p>That matters because of what the document is for. It is published to {@code hmcts/cnp-api-docs} for
  * consumers to generate clients from, and a consumer cannot tell an empty schema from a body that takes no
- * fields. They would get four request types with no properties and an upload they cannot call, with nothing in
+ * fields. They would get six request types with no properties and an upload they cannot call, with nothing in
  * the document hinting that anything is missing -- which is the failure {@code OpenAPIPublisherTest} was written
  * to prevent for the paths, reaching the bodies instead. A published document that is silently empty is worse
  * than no document, because a consumer trusts it.
  *
  * <p><strong>Generated from the domain's own tables, not restated here.</strong> The case body's fields come from
  * {@link DeedPollSchemas#writeBodyFields()}, which is the table that validates them; the note limit comes from
- * {@link NoteForm#MAX_NOTE_LENGTH}; the upload's direction values come from {@link DocumentDirection}. A field
+ * {@link NoteForm#MAX_NOTE_LENGTH}; the witness caps come from {@link WitnessSchemas}; the upload's direction
+ * values come from {@link DocumentDirection}. A field
  * added to the schema therefore appears in the document without anyone editing this file, which is the only way
  * a description of sixty-seven fields stays true.
  */
@@ -55,8 +57,13 @@ public class OpenAPIWriteBodies {
     private static final String UPDATE_CASE = "UpdateCaseRequest";
     private static final String CREATE_NOTE = "CreateNoteRequest";
     private static final String UPDATE_NOTE = "UpdateNoteRequest";
+    private static final String CREATE_WITNESS = "CreateWitnessRequest";
+    private static final String UPDATE_WITNESS = "UpdateWitnessRequest";
 
     private static final String NOTE_FIELD = "note";
+
+    /** The declarant flag, named once because both witness bodies declare it. */
+    private static final String DECLARANT_FIELD = "declarant";
 
     /** The upload route, as it appears in the document's paths. */
     private static final String UPLOAD_PATH = "/caseworker/cases/{id}/documents";
@@ -66,6 +73,7 @@ public class OpenAPIWriteBodies {
         return openApi -> {
             describeCaseBodies(openApi);
             describeNoteBodies(openApi);
+            describeWitnessBodies(openApi);
             describeUploadBody(openApi);
         };
     }
@@ -173,6 +181,59 @@ public class OpenAPIWriteBodies {
 
     private Schema<?> noteText() {
         return new StringSchema().minLength(1).maxLength(NoteForm.MAX_NOTE_LENGTH);
+    }
+
+    /**
+     * The two witness bodies: four fields, all required on create and each optional on patch.
+     *
+     * <p>The caps are {@link WitnessSchemas}'s own constants rather than numbers written here, for the reason the
+     * class comment gives -- the document has to describe what the service enforces, not what somebody remembered
+     * it enforced. No {@code minLength}, unlike the note: a witness field is not trimmed and an empty string is
+     * accepted, which is the reference's behaviour and is argued in {@code WitnessSchemas}.
+     */
+    private void describeWitnessBodies(OpenAPI openApi) {
+        Schema<?> create = schema(openApi, CREATE_WITNESS);
+        if (create != null) {
+            create.setType("object");
+            create.setProperties(null);
+            witnessFields(create);
+            // All four, because all four columns are NOT NULL and a witness is entered from a completed
+            // declaration rather than logged incrementally the way a case is.
+            create.addRequiredItem("witnessName");
+            create.addRequiredItem("witnessAddress");
+            create.addRequiredItem("witnessOccupation");
+            create.addRequiredItem(DECLARANT_FIELD);
+            create.setAdditionalProperties(true);
+            create.setDescription("A witness or declarant. All four fields are required: every column is NOT "
+                + "NULL. declarant must be a JSON boolean -- the string \"true\" is refused rather than coerced. "
+                + "Values are stored as submitted and not trimmed. The case comes from the path and no author is "
+                + "recorded, so neither can be set here. Unknown keys are ignored.");
+        }
+
+        Schema<?> update = schema(openApi, UPDATE_WITNESS);
+        if (update != null) {
+            update.setType("object");
+            update.setProperties(null);
+            witnessFields(update);
+            update.setAdditionalProperties(true);
+            // Nothing required and nothing nullable: an omitted field is left as stored, and an explicit null is
+            // a 400 rather than a clear, because no column can hold one.
+            update.setDescription("A patch. An omitted field is left as stored; a field that is present gets the "
+                + "create rule. An empty patch is accepted and re-stamps modifiedOn. An explicit null is a 400, "
+                + "not a clear: every column is NOT NULL. Unknown keys are ignored.");
+        }
+    }
+
+    private void witnessFields(Schema<?> body) {
+        body.addProperty("witnessName",
+            new StringSchema().maxLength(WitnessSchemas.MAX_WITNESS_NAME_LENGTH));
+        body.addProperty("witnessAddress",
+            new StringSchema().maxLength(WitnessSchemas.MAX_WITNESS_ADDRESS_LENGTH)
+                .description("The whole address as one free-text field, exactly as the source form holds it."));
+        body.addProperty("witnessOccupation",
+            new StringSchema().maxLength(WitnessSchemas.MAX_WITNESS_OCCUPATION_LENGTH));
+        body.addProperty(DECLARANT_FIELD, new BooleanSchema()
+            .description("Whether this witness is the declarant. One row type covers both."));
     }
 
     /**
