@@ -37,10 +37,11 @@ import java.util.List;
  * witnesses view model at all: witnesses are rendered as part of the case detail page, whose tab is
  * {@code DetailView}'s job, and the caseworker API maps to its own DTOs.
  *
- * <p><strong>Nothing in plan 01 calls the three write methods.</strong> The caseworker surface is eleven
- * operations and witness writes are deliberately not among them -- {@code deed-poll-admin} has no consumer
- * for them. They are ported because the reference has them and the source form does, so that when a
- * consumer does arrive it finds a scoped implementation rather than inventing an unscoped one.
+ * <p><strong>Nothing in plan 01 called the three write methods, and they were ported anyway</strong> --
+ * because the reference has them and the source form does, so that when a consumer arrived it would find a
+ * scoped implementation rather than invent an unscoped one. It arrived: {@code CaseworkerWitnessController}
+ * calls {@link #createWitness} and {@link #updateWitness}, and this class needed no change for it.
+ * {@link #removeWitness} is still uncalled, and is the one witness operation the business restricts.
  */
 @Service
 public class WitnessService {

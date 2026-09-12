@@ -108,10 +108,15 @@ Add `CreateWitnessRequest` and `UpdateWitnessRequest` under `api/caseworker/dto/
 returning the existing domain input record. Mirror `CreateNoteRequest` / `UpdateNoteRequest` for shape and for
 how `Optional` fields are expressed on the wire.
 
+- [x] Both extend `KeyedRequestBody` and delegate to `WitnessSchemas.parseCreateWitness` / `parseUpdateWitness`,
+      so the absent / null / value distinction survives to the schema and unknown keys are stripped
+
 ### Task 2: The controller
 
 Add `CaseworkerWitnessController` under `api/caseworker/controller/`, `@RequestMapping("/caseworker/cases/{id}/witnesses")`,
 delegating each of the four routes to `WitnessService`. No role checks. No caller parameter.
+
+- [x] Four routes, `POST` answering 201; no role check and no `CurrentUser` anywhere in the class
 
 ### Task 3: Controller tests
 
@@ -126,22 +131,46 @@ Booting the full context, per the constraint. Cover, at minimum:
 - `GET` list and `GET /{witnessId}`, including a witness id belonging to **another** case answering 404
 - **A non-admin caller succeeds on both writes** — this is the regression guard for decision 1
 
+- [x] `CaseworkerWitnessControllerTest`, `@SpringBootTest` on the whole context: **33 tests, all green** — 3
+      unauthenticated, 5 list, 11 create, 3 read, 8 patch, 3 in a `NotGated` group that names the caller's
+      roles in so many words (both writes admitted for a `caseworker-civil`-only token, and for an Administrator
+      too, so nothing was inverted)
+
 ### Task 4: Reconcile the documented operation count
 
 Per the constraint. Grep, then update whatever states it.
 
+- [x] `git grep` found and updated: `CLAUDE.md` (13 → 17), `README.md` ("Thirteen" → "Seventeen", four new
+      table rows, and the "no witness writes" claim), `docs/RESUME.md` (13 → 17),
+      `api/caseworker/controller/package-info.java` (four controllers → five, and the same "no witness writes"
+      claim), `OpenAPIPublisherTest` (two new paths, 13 → 17 operations, six write bodies not four)
+- [x] Also updated, because they stated something this change made false: `WitnessResponse` ("read-only for the
+      whole of plan 01"), `WitnessService`'s class comment ("nothing calls the three write methods" — a
+      comment-only edit; constraint 4's "do not touch the domain" is intact, no behaviour changed), and
+      `scope-gap-questions.md`, whose gap 1 this closes
+- [x] **Not** updated, deliberately: the vendored `openapi.json` in `deed-poll-admin`, per the constraint —
+      refreshing it is that repo's plan. `scope-gap-questions.md` now says so where it quotes that file's count
+- [x] Beyond the count, `OpenAPIWriteBodies` now describes the two witness bodies. Without it springdoc
+      publishes `CreateWitnessRequest: {}` for a keyed body, which is the silently-empty document that file
+      exists to prevent — the caps come from `WitnessSchemas`'s own constants, not numbers restated there
+
 ### Task 5: Full validation
 
-- [ ] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`
-- [ ] **`./gradlew test --rerun`**, never bare `./gradlew test`. A bare run reports `:test UP-TO-DATE` and
-      **executes nothing** while still printing `BUILD SUCCESSFUL` — observed again on 2026-09-12
-- [ ] **Count from the result XML, not Gradle's summary:**
+- [x] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`
+- [x] **`./gradlew test --rerun`**, never bare `./gradlew test`. A bare run reports `:test UP-TO-DATE` and
+      **executes nothing** while still printing `BUILD SUCCESSFUL` — observed again on 2026-09-12. Satisfied by
+      the `clean build` above, which cannot report anything UP-TO-DATE; the XML below is from that run, and the
+      new class was also run under an explicit `--rerun` on its own beforehand
+- [x] **Count from the result XML, not Gradle's summary:**
       `grep -ho 'tests="[0-9]*"' build/test-results/test/*.xml | grep -o '[0-9]*' | awk '{s+=$1} END{print s}'`
       (`bc` is not installed here — do not reach for it)
-- [ ] Failures must be empty: `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output
-- [ ] **Baseline: 1,242 tests across 147 suites, 0 failures, 0 errors, 0 skipped** — verified green 2026-09-12.
+- [x] Failures must be empty: `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output
+- [x] **Baseline: 1,242 tests across 147 suites, 0 failures, 0 errors, 0 skipped** — verified green 2026-09-12.
       Expect this plan to raise it, and nothing to be removed
-- [ ] Mark completed
+- [x] **Result: 1,275 tests across 153 suites, 0 failures, 0 errors, 0 skipped**, plus `integration` at 5 across
+      3 — unchanged. Exactly +33 and +6 on the baseline, which is the new controller test and its six nested
+      groups; nothing was removed. Green on the first run, no re-run needed
+- [x] Mark completed
 
 > **The suite is container-backed and takes about eight minutes. A single red run is not proof of a break** — one
 > `--rerun` failed on 2026-09-12 and the immediate re-run was fully green at 1,242. Re-run once before concluding

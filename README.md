@@ -29,7 +29,7 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 
 ## The API surface
 
-Thirteen caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
+Seventeen caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
 
 | Method | Path | What it does |
 |---|---|---|
@@ -44,12 +44,25 @@ Thirteen caseworker operations. `/swagger-ui.html` is the authority; this table 
 | GET | `/caseworker/cases/{id}/notes/{noteId}` | One note |
 | PATCH | `/caseworker/cases/{id}/notes/{noteId}` | Amend a note |
 | DELETE | `/caseworker/cases/{id}/notes/{noteId}` | Delete a note — 204, and 404 through the wrong case |
+| GET | `/caseworker/cases/{id}/witnesses` | A case's witnesses and declarants, oldest first |
+| POST | `/caseworker/cases/{id}/witnesses` | Add a witness — all four fields required |
+| GET | `/caseworker/cases/{id}/witnesses/{witnessId}` | One witness |
+| PATCH | `/caseworker/cases/{id}/witnesses/{witnessId}` | Amend a witness — an omitted field is left alone |
 | POST | `/caseworker/cases/{id}/documents` | Upload a file (multipart) and record its document row |
 | GET | `/caseworker/cases/{id}/documents/{documentId}/file` | Stream a document's stored file back |
 
-There are deliberately **no** case deletes, no witness writes, no document-type writes and no `validate`
+There are deliberately **no** case deletes, no witness delete, no document-type writes and no `validate`
 endpoint. The domain implements and tests them; nothing consumes them, and the sibling prototype's mistake
 was building an API for an imagined consumer.
+
+The witness create, read and edit were the fourteenth to seventeenth, and arrived the same way the note
+delete did: `deed-poll-admin` renders a case's witnesses and had no way to record one, which was the only
+place on this surface where data was readable and not writable. The business document gives Basic User
+"Create, view and edit witness records", so the capability existed and the route did not.
+`WitnessService` already had all five operations and their tests — the four routes are the consumer it was
+keeping itself for. Neither write is role-gated: the capability matrix marks "Add and edit witnesses" for
+both roles. The **delete** is deliberately still absent, because it is the one witness operation the
+business restricts.
 
 The note delete was the thirteenth, added 2026-09-08 on exactly that principle rather than against it:
 `deed-poll-admin` is losing its data-access layer to this service and its note form has always had a delete

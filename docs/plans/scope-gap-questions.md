@@ -78,9 +78,11 @@ supporting it does not hold, and that question is now open rather than answered.
 The previous §D said *"The service has no witness write operations at all — witnesses are read as part of the
 case and maintained through the case itself."* The first clause is right; the second is false.
 
-`CreateCaseRequest` and `UpdateCaseRequest` each carry **67 properties, none witness-related**. There is no
-route by which a witness can be written. This makes item 1 below considerably more serious than the previous
-version implied, which asked only about *deleting* a witness.
+`CreateCaseRequest` and `UpdateCaseRequest` each carry **67 properties, none witness-related**, and as of
+2026-09-12 there was no route by which a witness could be written. That made item 1 below considerably more
+serious than the previous version implied, which asked only about *deleting* a witness — and is why item 1 was
+closed first. The correction still stands as stated: a witness is written through its own nested routes, never
+through the case body, which carries nothing witness-related to this day.
 
 ---
 
@@ -98,9 +100,15 @@ That prints 14 lines: `GET /` plus the 13 caseworker operations. Note what is ab
 no `PATCH` or `DELETE` on documents, no write on `/caseworker/document-types`, and nothing for
 deactivate / reactivate.
 
+> **That spec is `deed-poll-admin`'s vendored copy, and it is a snapshot rather than a live reading.** The
+> service has served four `/witnesses` operations since 2026-09-12 (gap 1 below), which that file does not
+> yet know about; refreshing it is that repo's plan. To ask this service what it actually serves, read
+> `/v3/api-docs` from a running instance — `OpenAPIPublisherTest` asserts the paths and the operation count
+> against it, and says seventeen.
+
 | # | Capability | Power App evidence | Service today | Verdict | Consequence |
 | --- | --- | --- | --- | --- | --- |
-| 1 | **Create / edit witnesses** | Matrix: "Add and edit witnesses **✓ ✓**". Prose: Basic User "Create, view and edit witness records". `deeppoll_witness` has 23 columns | **No witness write operation exists.** No `/witnesses` path; only a `WitnessResponse` schema; the two 67-property write schemas contain nothing witness-related | **GAP** | A witness can be *displayed* but **never recorded**. The only case in the service where data can be shown and never entered. Both roles lose a capability both had |
+| 1 | **Create / edit witnesses** | Matrix: "Add and edit witnesses **✓ ✓**". Prose: Basic User "Create, view and edit witness records". `deeppoll_witness` has 23 columns | **Closed 2026-09-12** by [`witness-create-and-edit.md`](witness-create-and-edit.md): `CaseworkerWitnessController` adds `GET`, `POST`, `GET /{witnessId}` and `PATCH /{witnessId}` under `/caseworker/cases/{id}/witnesses`, neither write role-gated. The domain layer needed no change — `WitnessService` already had all five operations | **CLOSED** | The service now records witnesses. The **vendored** `openapi.json` in `deed-poll-admin` still predates this, so the verification command above still prints 14 lines until that repo refreshes it — which is that repo's plan, not this one's |
 | 2 | **Delete witnesses** | Matrix: ✗ / ✓ | Absent | **GAP** | — |
 | 3 | **Edit documents** | Prose: "Upload, view and **edit** supporting documents", both roles | `POST …/documents` and `GET …/{documentId}/file` only. No `PATCH` | **GAP** | A document recorded against the wrong type or description cannot be corrected |
 | 4 | **Delete documents** | Matrix: ✗ / ✓ | Absent | **GAP** | — |
@@ -120,6 +128,7 @@ Recorded so these are not re-investigated.
 | --- | --- |
 | Create / view / edit deed poll records | `POST`, `GET`, `PATCH /caseworker/cases` |
 | Create / view / edit notes | Full CRUD, five operations |
+| **Create / view / edit witnesses**, both roles | `api/caseworker/controller/CaseworkerWitnessController.java` — four operations, no role gate on either write. Gap 1 above, closed 2026-09-12 |
 | **Delete notes, Administrator-only** | `domain/notes/NoteService.java:159` — takes the caller and throws `ForbiddenError`. Matches the document exactly |
 | Upload / view documents | `POST …/documents`, `GET …/{documentId}/file` |
 | View Supporting Document Types | `GET /caseworker/document-types` |

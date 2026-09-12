@@ -12,6 +12,7 @@ import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
+import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -48,8 +49,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     private static final Path PUBLISHED_SPEC = Paths.get("/tmp/openapi-specs.json");
 
     /**
-     * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them. Listed rather than
-     * counted, because a count agrees with a spec that documents the right number of the wrong things.
+     * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them plus the witness routes
+     * added afterwards. Listed rather than counted, because a count agrees with a spec that documents the right
+     * number of the wrong things.
      */
     private static final List<String> CASEWORKER_PATHS = List.of(
         "/caseworker/cases",
@@ -58,6 +60,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/document-types",
         "/caseworker/cases/{id}/notes",
         "/caseworker/cases/{id}/notes/{noteId}",
+        "/caseworker/cases/{id}/witnesses",
+        "/caseworker/cases/{id}/witnesses/{witnessId}",
         "/caseworker/cases/{id}/documents",
         "/caseworker/cases/{id}/documents/{documentId}/file"
     );
@@ -87,7 +91,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(paths.fieldNames()).toIterable().containsAll(CASEWORKER_PATHS);
     }
 
-    @DisplayName("Documents the thirteen caseworker operations and the token they need")
+    @DisplayName("Documents the seventeen caseworker operations and the token they need")
     @Test
     void documentsTheCaseworkerOperations() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -97,14 +101,15 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Thirteen operations across the same eight paths: `/caseworker/cases` and the notes collection each
-        // carry a GET and a POST, the case carries a GET and a PATCH, and the note carries a GET, a PATCH and
-        // -- since 2026-09-08 -- a DELETE. The path list above does not change for it, which is the point of
-        // asserting both: a count alone could not tell a new verb on a known path from a new path.
+        // Seventeen operations across ten paths: `/caseworker/cases` and the notes and witnesses collections each
+        // carry a GET and a POST, the case carries a GET and a PATCH, the note carries a GET, a PATCH and -- since
+        // 2026-09-08 -- a DELETE, and the witness a GET and a PATCH but no DELETE yet. Both the paths and the
+        // count are asserted because neither alone is enough: a count could not tell a new verb on a known path
+        // from a new path, and the path list could not tell a route that was removed from one that never existed.
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(13);
+        assertThat(operations).isEqualTo(17);
 
         // Every one of them needs a forwarded IDAM token, which the document has to say or the client generated
         // from it cannot make a call. Declared once, globally, because the service authenticates by default.
@@ -139,12 +144,12 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * The five operations that take a body, asserted to actually describe one.
+     * The seven operations that take a body, asserted to actually describe one.
      *
      * <p>The same argument as the path assertions above, one level in. Every write body in this service binds as a
      * keyed map rather than as declared components -- see {@code KeyedRequestBody} for why it has to -- so
-     * springdoc has no fields to reflect over and published {@code CreateCaseRequest: {}} for each of the four
-     * JSON writes, and no request body at all for the multipart upload. Valid JSON describing nothing, which a
+     * springdoc has no fields to reflect over and published {@code CreateCaseRequest: {}} for each of the JSON
+     * writes, and no request body at all for the multipart upload. Valid JSON describing nothing, which a
      * consumer generating a client cannot distinguish from a body that genuinely takes no fields.
      * {@link uk.gov.hmcts.reform.deedpoll.config.OpenAPIWriteBodies} fills them in from the domain's own tables;
      * this pins that they stay filled in.
@@ -158,9 +163,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getResponse()
                                           .getContentAsByteArray());
 
-        // The four JSON bodies, each named by the operation that takes it.
+        // The six JSON bodies, each named by the operation that takes it.
         for (String body : List.of("CreateCaseRequest", "UpdateCaseRequest", "CreateNoteRequest",
-                                   "UpdateNoteRequest")) {
+                                   "UpdateNoteRequest", "CreateWitnessRequest", "UpdateWitnessRequest")) {
             JsonNode properties = spec.at("/components/schemas/" + body + "/properties");
             assertThat(properties.isObject())
                 .as("%s declares its properties rather than publishing an empty schema", body)
@@ -220,6 +225,26 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(typesOf(spec.at("/components/schemas/CreateNoteRequest/properties/note"))).contains("string");
         assertThat(spec.at("/components/schemas/CreateNoteRequest/required/0").asText()).isEqualTo("note");
         assertThat(spec.at("/components/schemas/UpdateNoteRequest/required").isMissingNode()).isTrue();
+
+        // The witness body's four fields, with the caps the schema enforces rather than numbers a client would
+        // discover by being refused. All four required on create -- every column is NOT NULL -- and none on the
+        // patch, which is the whole difference between the two bodies.
+        String witness = "/components/schemas/CreateWitnessRequest/properties/";
+        assertThat(spec.at(witness + "witnessName/maxLength").asInt())
+            .isEqualTo(WitnessSchemas.MAX_WITNESS_NAME_LENGTH);
+        assertThat(spec.at(witness + "witnessAddress/maxLength").asInt())
+            .isEqualTo(WitnessSchemas.MAX_WITNESS_ADDRESS_LENGTH);
+        assertThat(spec.at(witness + "witnessOccupation/maxLength").asInt())
+            .isEqualTo(WitnessSchemas.MAX_WITNESS_OCCUPATION_LENGTH);
+        // A boolean and not a string: the schema refuses "true" rather than coercing it, and a document that
+        // called this a string would have clients sending the one value that coerces wrongly.
+        assertThat(typesOf(spec.at(witness + "declarant"))).contains("boolean");
+        assertThat(spec.at("/components/schemas/CreateWitnessRequest/required").size()).isEqualTo(4);
+        assertThat(spec.at("/components/schemas/UpdateWitnessRequest/required").isMissingNode()).isTrue();
+        // And no null offered anywhere on the patch, because an explicit null is a 400 rather than a clear.
+        assertThat(typesOf(spec.at("/components/schemas/UpdateWitnessRequest/properties/witnessName")))
+            .as("a witness field cannot be cleared, so the document does not offer a null")
+            .doesNotContain("null");
 
         // The upload, which had no body at all: the media type is as load-bearing as the fields, because a client
         // that posts JSON to it fails whatever field names it uses.
