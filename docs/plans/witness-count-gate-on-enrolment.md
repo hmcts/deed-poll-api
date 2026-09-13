@@ -142,7 +142,17 @@ Booting the whole context where the check is exercised over HTTP, and unit-level
    Master, Referred to Master, Awaiting Further Docs and Received. This is the test that stops the gate being
    applied too widely.
 
-- [ ] All eight present, including the migrated-record case and the "other transitions unaffected" guard
+- [x] All eight present, including the migrated-record case and the "other transitions unaffected" guard
+
+All eight are HTTP-level, in `CaseworkerCaseControllerTest$EnrolmentWitnessGate` — the caseworker PATCH is
+the surface the rule is met on, and a refusal is only useful if it reaches the client as a field-addressed
+400. They are deliberately **not** in `DeedPollServiceTest`, which ports
+`reference/ts/deed-poll/service.test.ts` block for block: an addition filed among the ported blocks would
+blur which rules came from the specification and which are ours, which is the same line decision 3 protects.
+
+The eighth walks all six other states, not the four named above — `Returned` and `Awaiting Signature`
+included, so the guard covers every branch of the cascade the gate must not touch. `test` is 1,294 across 155
+suites (1,286 across 154 at the branch point), `integration` 5 across 3, 0 failures and 0 errors in both.
 
 ### Task 3: Full validation
 

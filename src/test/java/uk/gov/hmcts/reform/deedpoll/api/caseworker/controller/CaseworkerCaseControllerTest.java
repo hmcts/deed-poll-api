@@ -40,11 +40,14 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -558,6 +561,188 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
         }
     }
 
+    /**
+     * The two-witness gate on the enrolment transition.
+     *
+     * <p><strong>NOT a port -- the source has no such rule</strong>; it is the rule the business gave us on
+     * 2026-09-13, implemented in {@code DeedPollService.requireWitnessesForEnrolment}. These tests are here
+     * rather than beside the ported blocks in {@code DeedPollServiceTest} for the same reason: that class
+     * ports {@code reference/ts/deed-poll/service.test.ts} block for block, and an addition filed among the
+     * ported blocks would blur which rules came from the specification and which are ours.
+     *
+     * <p>Over HTTP and through the whole context, because the caseworker PATCH is the surface the rule is
+     * actually met on, and because a refusal is only useful if it reaches the client as a field-addressed 400
+     * that {@code deed-poll-admin} can render -- which is a claim about the response, not about the service
+     * call.
+     *
+     * <p>Every refusal here is update-shaped. A create is not gated: witnesses are children of a row that
+     * has to exist first, so a create can never carry two.
+     */
+    @Nested
+    @DisplayName("the two-witness gate on enrolment (an addition, not a port)")
+    class EnrolmentWitnessGate {
+
+        private static final String ENROLMENT_DATE = "2026-07-20T00:00:00.000Z";
+
+        @Test
+        @DisplayName("a case with two witnesses can be sent for enrolment")
+        void twoWitnessesCanBeSentForEnrolment() throws Exception {
+            DeedPoll record = newCase(Map.of("newForename", "Ada"));
+            addWitnesses(record, 2);
+
+            authorised(patch("/caseworker/cases/" + record.getId()),
+                json(Map.of("signatureReceivedDate", quoted(ENROLMENT_DATE))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("AwaitingEnrolment"));
+
+            assertThat(deedPolls.findById(record.getId()).orElseThrow().getSignatureReceivedDate())
+                .as("the accepted write reached the row")
+                .isNotNull();
+        }
+
+        @Test
+        @DisplayName("a case with two witnesses can be enrolled")
+        void twoWitnessesCanBeEnrolled() throws Exception {
+            DeedPoll record = newCase(Map.of("newForename", "Ada"));
+            addWitnesses(record, 2);
+
+            authorised(patch("/caseworker/cases/" + record.getId()),
+                json(Map.of("dateEnroled", quoted(ENROLMENT_DATE))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("Enroled"));
+
+            assertThat(deedPolls.findById(record.getId()).orElseThrow().getDateEnroled()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("a case with one witness is refused a signature received date, against that field")
+        void oneWitnessIsRefusedASignatureReceivedDate() throws Exception {
+            DeedPoll record = newCase(Map.of("newForename", "Ada"));
+            addWitnesses(record, 1);
+
+            authorised(patch("/caseworker/cases/" + record.getId()),
+                json(Map.of("signatureReceivedDate", quoted(ENROLMENT_DATE))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.length()").value(1))
+                // Addressed to the date the caseworker just filled in, never to a witnesses field: there is
+                // no witness control on the case form, and deed-poll-admin builds its error summary by
+                // mapping the field name to a control on the tab being edited.
+                .andExpect(jsonPath("$.errors[0].field").value("signatureReceivedDate"))
+                .andExpect(jsonPath("$.errors[0].message")
+                    .value(startsWith(DeedPollService.ENROLMENT_WITNESSES_MESSAGE)))
+                // The message names the shortfall, so a caseworker knows what to do rather than only that
+                // something is wrong.
+                .andExpect(jsonPath("$.errors[0].message").value(containsString("one more witness")));
+
+            DeedPoll stored = deedPolls.findById(record.getId()).orElseThrow();
+            assertThat(stored.getSignatureReceivedDate()).as("the refused write did not reach the row").isNull();
+            assertThat(stored.getState()).isEqualTo(DeedPollState.Received);
+        }
+
+        @Test
+        @DisplayName("a case with one witness is refused an enrolment date, against that field")
+        void oneWitnessIsRefusedAnEnrolmentDate() throws Exception {
+            DeedPoll record = newCase(Map.of("newForename", "Ada"));
+            addWitnesses(record, 1);
+
+            authorised(patch("/caseworker/cases/" + record.getId()),
+                json(Map.of("dateEnroled", quoted(ENROLMENT_DATE))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.length()").value(1))
+                .andExpect(jsonPath("$.errors[0].field").value("dateEnroled"))
+                .andExpect(jsonPath("$.errors[0].message")
+                    .value(startsWith(DeedPollService.ENROLMENT_WITNESSES_MESSAGE)));
+
+            DeedPoll stored = deedPolls.findById(record.getId()).orElseThrow();
+            assertThat(stored.getDateEnroled()).isNull();
+            assertThat(stored.getState()).isEqualTo(DeedPollState.Received);
+        }
+
+        @Test
+        @DisplayName("a case with no witnesses is refused too, so the boundary is not off by one at zero")
+        void noWitnessesIsRefusedToo() throws Exception {
+            DeedPoll record = newCase(Map.of("newForename", "Ada"));
+
+            authorised(patch("/caseworker/cases/" + record.getId()),
+                json(Map.of("dateEnroled", quoted(ENROLMENT_DATE))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("dateEnroled"))
+                // The shortfall is two here, not one: the message has to be right at both counts it can
+                // report, or it tells a caseworker with an empty witness list to add a single witness.
+                .andExpect(jsonPath("$.errors[0].message").value(containsString("two witnesses")));
+
+            assertThat(deedPolls.findById(record.getId()).orElseThrow().getDateEnroled()).isNull();
+        }
+
+        @Test
+        @DisplayName("three witnesses are accepted -- the rule is a shortfall, not a cap")
+        void threeWitnessesAreAccepted() throws Exception {
+            // Pins the "fewer than two" reading of "there must be two witnesses". If the business later says
+            // exactly two, this is the test that changes, and it will be obvious why -- a maximum is a
+            // different rule, enforced at witness creation in WitnessService.
+            DeedPoll record = newCase(Map.of("newForename", "Ada"));
+            addWitnesses(record, 3);
+
+            authorised(patch("/caseworker/cases/" + record.getId()),
+                json(Map.of("dateEnroled", quoted(ENROLMENT_DATE))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("Enroled"));
+        }
+
+        @Test
+        @DisplayName("a migrated record with one witness is refused as well")
+        void migratedRecordIsSubjectToTheRule() throws Exception {
+            // A deliberate departure from the pattern around it, confirmed by the business on 2026-09-13:
+            // "For existing cases the two witness rule will still apply." The Power App relaxes every
+            // per-type mandatory field when Migrated Record = Yes (FieldRulesConformanceTest$MigratedRecords)
+            // and this rule does not follow it. Without this test the departure is invisible, and a later
+            // tidy-up into consistency with the others would pass.
+            DeedPoll record = newCase(Map.of("newForename", "Ada", "migratedRecord", true));
+            assertThat(record.isMigratedRecord()).as("premise: a migrated record").isTrue();
+            addWitnesses(record, 1);
+
+            authorised(patch("/caseworker/cases/" + record.getId()),
+                json(Map.of("dateEnroled", quoted(ENROLMENT_DATE))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("dateEnroled"))
+                .andExpect(jsonPath("$.errors[0].message")
+                    .value(startsWith(DeedPollService.ENROLMENT_WITNESSES_MESSAGE)));
+
+            assertThat(deedPolls.findById(record.getId()).orElseThrow().getDateEnroled()).isNull();
+        }
+
+        @Test
+        @DisplayName("the other six transitions are unaffected, so a case with no witnesses still moves")
+        void theOtherTransitionsAreUnaffected() throws Exception {
+            // The gate is on the two enrolment dates and nowhere else. A case collects its witnesses while it
+            // is in these states, so gating any of them would make the case unworkable rather than unready.
+            reachesStateWithoutWitnesses(Map.of("dateReturned", quoted("2026-07-15T00:00:00.000Z")), "Returned");
+            reachesStateWithoutWitnesses(
+                Map.of("signatureRequestedDate", quoted("2026-07-10T00:00:00.000Z")), "AwaitingSignature");
+            reachesStateWithoutWitnesses(
+                Map.of("dateReadyForMaster", quoted("2026-07-08T00:00:00.000Z")), "ReadyForMaster");
+            reachesStateWithoutWitnesses(
+                Map.of(
+                    "dateReadyForMaster", quoted("2026-07-08T00:00:00.000Z"),
+                    "dateReferred", quoted("2026-07-09T00:00:00.000Z")),
+                "ReferredToMaster");
+            reachesStateWithoutWitnesses(
+                Map.of("awaitingFurtherDocsInfo", quoted("2026-07-06T00:00:00.000Z")), "AwaitingFurtherDocs");
+            reachesStateWithoutWitnesses(Map.of("newForename", quoted("Bea")), "Received");
+        }
+
+        /** Patches a witness-less case and asserts the state it lands in, rather than a refusal. */
+        private void reachesStateWithoutWitnesses(Map<String, String> body, String expectedState)
+            throws Exception {
+            DeedPoll record = newCase(Map.of());
+            assertThat(witnesses.count()).as("premise: no witnesses anywhere").isZero();
+
+            authorised(patch("/caseworker/cases/" + record.getId()), json(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value(expectedState));
+        }
+    }
+
     /** A stored case with a Date Received, plus whatever else the test needs on it. */
     private DeedPoll newCase(Map<String, Object> values) {
         Map<String, Object> patch = new LinkedHashMap<>();
@@ -573,7 +758,20 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
      * here, not the subject of the test.
      */
     private void addTwoWitnesses(DeedPoll record) {
-        witnesses.saveAll(List.of(witness(record, "Sam Doe"), witness(record, "Ada Wren")));
+        addWitnesses(record, DeedPollService.WITNESSES_REQUIRED_FOR_ENROLMENT);
+    }
+
+    /**
+     * Records {@code count} witnesses against a case, straight through the repository.
+     *
+     * <p>Not through {@code WitnessService}: the witness write operations are deliberately ungated by count,
+     * so how a witness got onto the record is never what these tests are about -- only how many are there
+     * when the case write is attempted.
+     */
+    private void addWitnesses(DeedPoll record, int count) {
+        witnesses.saveAll(IntStream.rangeClosed(1, count)
+            .mapToObj(number -> witness(record, "Witness " + number))
+            .toList());
     }
 
     private static DeedPollWitness witness(DeedPoll record, String name) {
