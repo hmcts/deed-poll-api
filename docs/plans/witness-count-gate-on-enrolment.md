@@ -108,8 +108,22 @@ carries fewer than two witnesses. Produce a `FieldError` addressed to whichever 
 Mark it clearly as an addition rather than a port, per decision 3, and record the migrated-record departure per
 decision 2.
 
-- [ ] Fires on both dates, addressed to the date being set, marked as a non-port addition with the
+- [x] Fires on both dates, addressed to the date being set, marked as a non-port addition with the
       migrated-record reasoning recorded at the check
+
+Implemented as `DeedPollService.requireWitnessesForEnrolment`, called from `updateDeedPoll` after
+`requireConsistentDates`. Two boundaries settled while building it, both recorded at the check:
+
+- **The MERGED record is what is checked**, as with every other rule on that path — so a patch touching only
+  a surname on a case that already carries an enrolment date is refused too, and the escape is the same shape
+  as the escape from a contradictory date pair (clear the date, or add the witnesses).
+- **`createDeedPoll` is NOT gated.** A witness is a child of a row that must exist first, so a create can
+  never carry two; gating it would forbid the state outright rather than gate a transition into it. Every
+  refusal test in task 2 is therefore update-shaped.
+
+Four existing tests were fixtures of an enrolled case with no witnesses, and now record two: two blocks of
+`DeedPollServiceTest`, `DeedPollConcurrentUpdateTest.derivesStateFromTheCommittedRowRatherThanAStaleRead` and
+`CaseworkerCaseControllerTest$UpdateCase.clearsAnExplicitNullAndLeavesAnOmittedFieldAlone`.
 
 ### Task 2: Tests
 

@@ -28,11 +28,13 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.WriteContext;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
 import uk.gov.hmcts.reform.deedpoll.entity.ReferenceCounter;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollNoteRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollWitnessRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 
 import java.util.LinkedHashMap;
@@ -105,6 +107,9 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
     private DeedPollNoteRepository notes;
 
     @Autowired
+    private DeedPollWitnessRepository witnesses;
+
+    @Autowired
     private ReferenceCounterRepository referenceCounters;
 
     @Autowired
@@ -114,6 +119,7 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
     @AfterEach
     void clearTables() {
         notes.deleteAll();
+        witnesses.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
     }
@@ -393,6 +399,8 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
             DeedPoll record = newCase(Map.of(
                 "newForename", "Ada",
                 "dateEnroled", "2026-07-11T00:00:00.000Z"));
+            // An enrolled case has to carry two witnesses for any later patch of it to be accepted at all.
+            addTwoWitnesses(record);
             assertThat(record.getState())
                 .as("premise: the enrolment date drove the state")
                 .isEqualTo(DeedPollState.Enroled);
@@ -557,6 +565,24 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
         patch.putAll(values);
         String id = deedPollService.createDeedPoll(DeedPollPatch.of(patch)).deedPoll().getId();
         return deedPolls.findById(id).orElseThrow();
+    }
+
+    /**
+     * Records the two witnesses an enrolment needs, so that a case carrying an enrolment date can still be
+     * patched -- see {@code DeedPollService.requireWitnessesForEnrolment}. A precondition of the fixture
+     * here, not the subject of the test.
+     */
+    private void addTwoWitnesses(DeedPoll record) {
+        witnesses.saveAll(List.of(witness(record, "Sam Doe"), witness(record, "Ada Wren")));
+    }
+
+    private static DeedPollWitness witness(DeedPoll record, String name) {
+        DeedPollWitness witness = new DeedPollWitness();
+        witness.setDeedPoll(record);
+        witness.setWitnessName(name);
+        witness.setWitnessAddress("1 High St");
+        witness.setWitnessOccupation("Teacher");
+        return witness;
     }
 
     private void addNote(DeedPoll record, String text) {
