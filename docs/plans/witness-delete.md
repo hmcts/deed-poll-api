@@ -183,18 +183,34 @@ Per the constraint. Grep, then update.
 
 ### Task 5: Full validation
 
-- [ ] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`
-- [ ] **`./gradlew test --rerun`**, never bare `./gradlew test` — a bare run reports `:test UP-TO-DATE`,
-      **executes nothing**, and still prints `BUILD SUCCESSFUL`
-- [ ] Count from the XML, not Gradle's summary:
-      `grep -ho 'tests="[0-9]*"' build/test-results/test/*.xml | grep -o '[0-9]*' | awk '{s+=$1} END{print s}'`
-      (`bc` is not installed here)
-- [ ] `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output
-- [ ] **Baseline: 1,242 as at 2026-09-12**, plus whatever
-      [`witness-create-and-edit.md`](witness-create-and-edit.md) added. Take the count from master immediately
-      before starting rather than from this line
-- [ ] `git grep -n 'removeWitness'` shows **no** two-argument call site anywhere
-- [ ] Mark completed
+- [x] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`.
+      Cold run on 2026-09-13, 8m24s, **25 of 25 tasks executed** — nothing `UP-TO-DATE`, which is what tasks 3
+      and 4 could not claim. `checkstyleMain`, `checkstyleTest`, `checkstyleIntegrationTest`,
+      `checkstyleFunctionalTest` and `checkstyleSmokeTest` all ran. `integration` **5 across 3**, matching
+      baseline
+- [x] **`./gradlew test --rerun`** — `:test` reported `1 executed`, not `UP-TO-DATE`. 23m53s (the machine was
+      contended; the cold run's `test` was inside 8m24s). This doubles as the second run the note below asks
+      for: **two consecutive fully green runs, no flake to re-run through**
+- [x] Counted from the XML, not Gradle's summary: **1,286 tests across 154 suites, 0 skipped** — identical in
+      both runs
+- [x] `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output, in both runs.
+      Same grep over `integration` → no output
+- [x] Baseline reconciles exactly: **1,242** (2026-09-12) **+ 33** from
+      [`completed/witness-create-and-edit.md`](completed/witness-create-and-edit.md) **= 1,275**, the figure
+      that plan's cold build recorded, **+ 11** from task 3 **= 1,286**. No test was lost or silently skipped
+- [x] `git grep -n 'removeWitness'` shows **no** two-argument call site anywhere. Every Java call site passes
+      three arguments (`CaseworkerWitnessController:145`, and the seven in `WitnessServiceTest`). The remaining
+      two-argument hits are **not** call sites and must stay: `reference/ts/witnesses/service.ts:46` and its
+      test are the **vendored TypeScript specification**, which the repo rules forbid editing, and the rest is
+      prose in this file, `README.md` and `scope-gap-questions.md` describing the old form historically
+- [x] Mark completed. **All five tasks are done; this plan is finished.** It has *not* been moved to
+      `completed/` yet: both plans in there moved after their PR merged (`gate-note-deletion.md` with #7,
+      `witness-create-and-edit.md` with #8) and branch `witness-delete` is still open, so the move belongs with
+      the merge. Two link edits go with it when it happens — this file's `completed/…` prefixes and its
+      `scope-gap-questions.md` link become `../`, and `scope-gap-questions.md:112` gains the `completed/`
+      prefix. Moving it also *fixes* four already-broken sibling links in
+      [`completed/witness-create-and-edit.md`](completed/witness-create-and-edit.md), which point at
+      `witness-delete.md` as though it were beside them.
 
 > The suite is container-backed and takes about eight minutes. **One red run is not proof of a break** — a
 > `--rerun` failed on 2026-09-12 and the immediate re-run was fully green. Re-run once, and read the XML.
