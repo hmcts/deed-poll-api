@@ -14,7 +14,7 @@ committed, one commit per task, plus a review-fixes commit on top. `master` hold
 |---|---|
 | Tasks complete and committed | **0–16**, all of them |
 | Flyway migrations | 4 — enums, `DeedPoll`, children, list indexes |
-| Caseworker endpoints | 17 — 13 from plan 01, plus the four witness routes added afterwards |
+| Caseworker endpoints | 18 — 13 from plan 01, plus the four witness routes and the witness delete added afterwards |
 | `/citizen/**` | exists, empty, shares no DTO with `/caseworker/**` |
 
 `./gradlew build` is green. Two things about running it here, both recorded in the README as well:
@@ -88,8 +88,9 @@ federated-credential request: Jenkins authenticates as its own managed identity.
 3. **`DOCUMENT_STORE_ROOT` must not reach a deployed environment.** Local disk does not survive AKS
    and replicas do not share a volume. Real storage is plan 03.
 4. **IDAM roles.** The only role name confirmed is `caseworker-deedpoll-admin`, and it gates one
-   field. So `/caseworker/**` is authenticated but not role-gated: naming a non-admin caseworker role
-   needs IDAM onboarding, and inventing one would be the same mistake as inventing a case type.
+   field plus the two deletes the business restricts — a note's and a witness's, both enforced in the
+   domain. No route is gated as a route: naming a non-admin caseworker role needs IDAM onboarding,
+   and inventing one would be the same mistake as inventing a case type.
 5. **IDAM audiences and issuer.** Both default to empty, which refuses every token. An environment
    with neither answers `/health` and `/v3/api-docs` and 401s everything else.
 

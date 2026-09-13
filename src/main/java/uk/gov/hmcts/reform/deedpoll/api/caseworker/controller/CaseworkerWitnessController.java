@@ -25,9 +25,9 @@ import java.util.List;
  * {@code deed-poll-admin} renders a case's witnesses from the nested list on {@code GET /caseworker/cases/{id}}
  * and has no way to record one, and the business document gives Basic User "Create, view and edit witness
  * records" -- so the capability exists and the route did not. Everything below this class was already built and
- * tested with plan 01: {@code WitnessService} has all five operations and this adds four routes over them, which
- * is the consumer the service was keeping itself for. The delete is the fifth route and the last of the five
- * operations to acquire one.
+ * tested with plan 01: {@code WitnessService} has all five operations and this class is a route over each of
+ * them, which is the consumer the service was keeping itself for. Four of the five landed first; the delete is
+ * the fifth route and the last of the five operations to acquire one.
  *
  * <p>Shaped exactly like {@code CaseworkerNoteController}, nested under the case so every id in the URL is part
  * of the scope rather than decoration. Both ids are passed to the domain on every handler that addresses one

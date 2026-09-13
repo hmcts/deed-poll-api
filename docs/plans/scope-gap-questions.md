@@ -101,15 +101,15 @@ no `PATCH` or `DELETE` on documents, no write on `/caseworker/document-types`, a
 deactivate / reactivate.
 
 > **That spec is `deed-poll-admin`'s vendored copy, and it is a snapshot rather than a live reading.** The
-> service has served four `/witnesses` operations since 2026-09-12 (gap 1 below), which that file does not
-> yet know about; refreshing it is that repo's plan. To ask this service what it actually serves, read
-> `/v3/api-docs` from a running instance — `OpenAPIPublisherTest` asserts the paths and the operation count
-> against it, and says seventeen.
+> service has served four `/witnesses` operations since 2026-09-12 (gap 1 below) and a fifth, the delete,
+> since 2026-09-13 (gap 2), which that file does not yet know about; refreshing it is that repo's plan. To
+> ask this service what it actually serves, read `/v3/api-docs` from a running instance —
+> `OpenAPIPublisherTest` asserts the paths and the operation count against it, and says eighteen.
 
 | # | Capability | Power App evidence | Service today | Verdict | Consequence |
 | --- | --- | --- | --- | --- | --- |
 | 1 | **Create / edit witnesses** | Matrix: "Add and edit witnesses **✓ ✓**". Prose: Basic User "Create, view and edit witness records". `deeppoll_witness` has 23 columns | **Closed 2026-09-12** by [`witness-create-and-edit.md`](witness-create-and-edit.md): `CaseworkerWitnessController` adds `GET`, `POST`, `GET /{witnessId}` and `PATCH /{witnessId}` under `/caseworker/cases/{id}/witnesses`, neither write role-gated. The domain layer needed no change — `WitnessService` already had all five operations | **CLOSED** | The service now records witnesses. The **vendored** `openapi.json` in `deed-poll-admin` still predates this, so the verification command above still prints 14 lines until that repo refreshes it — which is that repo's plan, not this one's |
-| 2 | **Delete witnesses** | Matrix: ✗ / ✓ | Absent | **GAP** | — |
+| 2 | **Delete witnesses** | Matrix: ✗ / ✓ | **Closed 2026-09-13** by [`witness-delete.md`](witness-delete.md): `DELETE /caseworker/cases/{id}/witnesses/{witnessId}`, 204, with the role check in `WitnessService.removeWitness` rather than on the route — which also closed the ungated two-argument form that had been reachable-by-nothing since plan 01 | **CLOSED** | An Administrator can remove a witness, and only an Administrator. The same vendored-`openapi.json` caveat as gap 1 applies |
 | 3 | **Edit documents** | Prose: "Upload, view and **edit** supporting documents", both roles | `POST …/documents` and `GET …/{documentId}/file` only. No `PATCH` | **GAP** | A document recorded against the wrong type or description cannot be corrected |
 | 4 | **Delete documents** | Matrix: ✗ / ✓ | Absent | **GAP** | — |
 | 5 | **Manage Supporting Document Types** — create, update, delete | Matrix: ✗ / ✓ | `GET /caseworker/document-types` only | **GAP** | Reference-data changes require a release |
@@ -130,6 +130,7 @@ Recorded so these are not re-investigated.
 | Create / view / edit notes | Full CRUD, five operations |
 | **Create / view / edit witnesses**, both roles | `api/caseworker/controller/CaseworkerWitnessController.java` — four operations, no role gate on either write. Gap 1 above, closed 2026-09-12 |
 | **Delete notes, Administrator-only** | `domain/notes/NoteService.java:159` — takes the caller and throws `ForbiddenError`. Matches the document exactly |
+| **Delete witnesses, Administrator-only** | `domain/witnesses/WitnessService.java:156` — the same shape, refusing before it resolves. Gap 2 above, closed 2026-09-13 |
 | Upload / view documents | `POST …/documents`, `GET …/{documentId}/file` |
 | View Supporting Document Types | `GET /caseworker/document-types` |
 | **All seven business rules** | Six pinned by named conformance groups. Rule 1, *Default Minor Deed Poll to Single*, is implemented at `reference/ts/deed-poll/deed-poll-validation.ts:251` and `domain/deedpoll/DeedPollValidation.java:230` — it is a create default, so it is simply not a named gate group |
@@ -197,8 +198,9 @@ scattered `isAdmin` boolean.
 
 Not estimates, and not a plan — the plans are separate documents.
 
-1. **Witnesses (items 1–2).** The only capability where data can be displayed and never entered, and the
-   only one where a caseworker cannot complete a record at all.
+1. ~~**Witnesses (items 1–2).** The only capability where data can be displayed and never entered, and the
+   only one where a caseworker cannot complete a record at all.~~ **Both closed**, 2026-09-12 and
+   2026-09-13. Documents (items 3–4) are the same shape and are now the head of this list.
 2. **Ask the two questions that block design** — item 9's definition, and the complete column export in §6.
    Both are other people's answers, so raise them early.
 3. **Documents (items 3–4).** Edit before delete; delete needs the retention and stored-file questions

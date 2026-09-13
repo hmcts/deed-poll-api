@@ -165,7 +165,21 @@ the two-argument form would fail to compile — say so in a comment rather than 
 
 Per the constraint. Grep, then update.
 
-- [ ] Every stated operation count updated — grepped, not assumed
+- [x] Every stated operation count updated — grepped, not assumed. `git grep -iE '\b(17|seventeen|18|eighteen)\b'`
+      found five sites the constraint's list did not fully cover: `CLAUDE.md` (17 → 18), `README.md`
+      ("Seventeen" → "Eighteen", a `DELETE …/witnesses/{witnessId}` table row, and the "no witness delete"
+      claim on the "deliberately absent" line), `docs/RESUME.md` (17 → 18, and open item 4's "gates one
+      field"), `package-info.java` (the running-total sentence, the `CaseworkerWitnessController` bullet, and
+      the "a witness delete is still absent" claim), **and `docs/plans/scope-gap-questions.md`, which the
+      constraint did not list at all** — it quoted `OpenAPIPublisherTest` as "says seventeen" and carried
+      "Delete witnesses" as an open **GAP**; both now closed, with the row added to its already-closed table
+      and its suggested order struck through. `OpenAPIPublisherTest` was already 18 from task 2.
+      Two claims falsified by *earlier* work were corrected in the same passes rather than left beside the
+      new text: `README.md`'s "the note delete is **not** role-gated" and its "Not yet role-gated" callout,
+      both of which predate `gate-note-deletion.md` and read as this change's error. The count in
+      `CaseworkerWitnessController`'s docblock ("adds four routes") was reworded too. `WitnessResponse`'s
+      "the response to the four routes that answer with a witness" is **correct as it stands** — the delete
+      answers 204 with no body, so four is the right number there and was left alone.
 
 ### Task 5: Full validation
 
