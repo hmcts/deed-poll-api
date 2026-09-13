@@ -91,7 +91,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(paths.fieldNames()).toIterable().containsAll(CASEWORKER_PATHS);
     }
 
-    @DisplayName("Documents the seventeen caseworker operations and the token they need")
+    @DisplayName("Documents the eighteen caseworker operations and the token they need")
     @Test
     void documentsTheCaseworkerOperations() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -101,15 +101,16 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Seventeen operations across ten paths: `/caseworker/cases` and the notes and witnesses collections each
-        // carry a GET and a POST, the case carries a GET and a PATCH, the note carries a GET, a PATCH and -- since
-        // 2026-09-08 -- a DELETE, and the witness a GET and a PATCH but no DELETE yet. Both the paths and the
-        // count are asserted because neither alone is enough: a count could not tell a new verb on a known path
-        // from a new path, and the path list could not tell a route that was removed from one that never existed.
+        // Eighteen operations across ten paths: `/caseworker/cases` and the notes and witnesses collections each
+        // carry a GET and a POST, the case carries a GET and a PATCH, and the note and the witness each carry a
+        // GET, a PATCH and a DELETE -- the note's since 2026-09-08, the witness's since the Administrator gate
+        // landed. Both the paths and the count are asserted because neither alone is enough: a count could not
+        // tell a new verb on a known path from a new path, and the path list could not tell a route that was
+        // removed from one that never existed.
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(17);
+        assertThat(operations).isEqualTo(18);
 
         // Every one of them needs a forwarded IDAM token, which the document has to say or the client generated
         // from it cannot make a call. Declared once, globally, because the service authenticates by default.

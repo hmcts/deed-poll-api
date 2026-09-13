@@ -16,8 +16,9 @@ import java.util.List;
  * <p><strong>Read-only for the whole of plan 01, and no longer.</strong> Witnesses arrived nested inside a
  * case and the detail page rendered them, with nothing to create or amend one -- which was the only place
  * on this surface where data was readable and not writable. {@link CreateWitnessRequest} and
- * {@link UpdateWitnessRequest} now sit beside this record, and it is the response to all four routes.
- * A witness delete is still absent, so nothing removes one.
+ * {@link UpdateWitnessRequest} now sit beside this record, and it is the response to the four routes that
+ * answer with a witness. The delete answers 204 with no body, so it has no response DTO -- there is nothing
+ * meaningful to return once the row is gone.
  *
  * @param id the witness id
  * @param witnessName the witness's name as recorded

@@ -16,7 +16,7 @@ See `docs/RESUME.md` for the current state and `docs/plans/` for the build plans
 ## Layout
 
 ```
-api/caseworker/{controller,dto}   the caseworker HTTP surface — 17 operations
+api/caseworker/{controller,dto}   the caseworker HTTP surface — 18 operations
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/auth                       CurrentUser, IdamClaims, Role — transport-independent

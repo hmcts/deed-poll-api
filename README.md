@@ -29,7 +29,7 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 
 ## The API surface
 
-Seventeen caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
+Eighteen caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
 
 | Method | Path | What it does |
 |---|---|---|
@@ -48,28 +48,42 @@ Seventeen caseworker operations. `/swagger-ui.html` is the authority; this table
 | POST | `/caseworker/cases/{id}/witnesses` | Add a witness — all four fields required |
 | GET | `/caseworker/cases/{id}/witnesses/{witnessId}` | One witness |
 | PATCH | `/caseworker/cases/{id}/witnesses/{witnessId}` | Amend a witness — an omitted field is left alone |
+| DELETE | `/caseworker/cases/{id}/witnesses/{witnessId}` | Delete a witness — **Administrators only**, 204, and 404 through the wrong case |
 | POST | `/caseworker/cases/{id}/documents` | Upload a file (multipart) and record its document row |
 | GET | `/caseworker/cases/{id}/documents/{documentId}/file` | Stream a document's stored file back |
 
-There are deliberately **no** case deletes, no witness delete, no document-type writes and no `validate`
-endpoint. The domain implements and tests them; nothing consumes them, and the sibling prototype's mistake
-was building an API for an imagined consumer.
+There are deliberately **no** case deletes, no document-type writes and no `validate` endpoint. The domain
+implements and tests them; nothing consumes them, and the sibling prototype's mistake was building an API
+for an imagined consumer.
+
+The witness delete was the eighteenth, and is **the one witness route restricted by role**: the capability
+matrix puts "Delete witnesses" at ✗ for Basic User and ✓ for Administrator, the same split as deleting a
+note. The check lives in `WitnessService.removeWitness` rather than on the route, so it holds for every
+future caller, and it **refuses before it resolves** — a caller without the role gets 403 whether or not
+the witness exists, so the status code cannot be used to tell an existing witness from a missing one. The
+delete is a hard one, on the notes precedent, and there is **no minimum number of witnesses** a case must
+retain: no artefact states one, so an Administrator may delete the last witness on a case. That is the one
+decision here the business might want changed.
+
+Before the route existed, `removeWitness` was an ungated two-argument method safe only because nothing
+called it — the shape the note delete had before it was gated. Adding the route without the gate would have
+reintroduced that, so the gate landed with it.
 
 The witness create, read and edit were the fourteenth to seventeenth, and arrived the same way the note
 delete did: `deed-poll-admin` renders a case's witnesses and had no way to record one, which was the only
 place on this surface where data was readable and not writable. The business document gives Basic User
 "Create, view and edit witness records", so the capability existed and the route did not.
-`WitnessService` already had all five operations and their tests — the four routes are the consumer it was
+`WitnessService` already had all five operations and their tests — the routes are the consumer it was
 keeping itself for. Neither write is role-gated: the capability matrix marks "Add and edit witnesses" for
-both roles. The **delete** is deliberately still absent, because it is the one witness operation the
-business restricts.
+both roles.
 
 The note delete was the thirteenth, added 2026-09-08 on exactly that principle rather than against it:
 `deed-poll-admin` is losing its data-access layer to this service and its note form has always had a delete
 button, so the operation acquired a real consumer. `NoteService.removeNote` already existed and was already
-tested — this was the route it was keeping itself for. It is **not** role-gated, which is the same decision
-the rest of `/caseworker/**` took, and for the same reason: only `caseworker-deedpoll-admin` is confirmed,
-and naming a second role would be inventing one.
+tested — this was the route it was keeping itself for. It is **Administrators only**, enforced the same way
+the witness delete is: in `NoteService.removeNote` rather than on the route. Only
+`caseworker-deedpoll-admin` is confirmed with IDAM, which is why the restriction is expressed as "requires
+the admin role" and never as "requires a Basic User role" — naming that second role would be inventing one.
 
 Every failure answers the same envelope — `{"error": "...", "errors": [{"field": "...", "message": "..."}]}`
 (`api/ApiError.java`), so a form can render a message against the input it belongs to.
@@ -98,13 +112,14 @@ so that an unconfigured environment refuses every token** rather than trusting a
 
 Roles come from `/o/userinfo`, not from the token — an IDAM access token carries no roles at all — and
 the lookup is deliberately uncached, so a role removed in IDAM is gone from the next request. The one
-role modelled is `caseworker-deedpoll-admin`, and it gates exactly one thing: whether `privacy` is
-editable.
+role modelled is `caseworker-deedpoll-admin`, and it gates three things: whether `privacy` is editable,
+deleting a note, and deleting a witness.
 
-> **Not yet role-gated.** Every authenticated principal reaches the whole caseworker surface, because
-> the only role name confirmed with IDAM is the admin one and gating everything on it would lock out
-> ordinary caseworkers. Naming a non-admin caseworker role is part of the IDAM onboarding that has not
-> happened; until it does, `anyRequest().authenticated()` is the whole of the authorisation rule.
+> **No route is gated as a route.** Every authenticated principal reaches the whole caseworker surface,
+> because the only role name confirmed with IDAM is the admin one and gating everything on it would lock
+> out ordinary caseworkers. Naming a non-admin caseworker role is part of the IDAM onboarding that has not
+> happened; until it does, `anyRequest().authenticated()` is the whole of the *transport's* authorisation
+> rule, and the three checks above live in the domain, where they hold for callers a route does not have.
 
 Outbound S2S (`IDAM_S2S_AUTH_URL`, `DEED_POLL_API_S2S_SECRET`, `S2S_SERVICE_NAME`) is wired but
 unused — nothing here calls another CFT service yet, and the secret has a non-working default.

@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -12,19 +13,21 @@ import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CreateWitnessRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.UpdateWitnessRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.WitnessResponse;
+import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
 
 import java.util.List;
 
 /**
- * A case's witnesses and declarants: list, add, read and amend.
+ * A case's witnesses and declarants: list, add, read, amend and -- for an Administrator -- delete.
  *
  * <p><strong>Added because the readable-but-not-writable gap was the only one on this surface.</strong>
  * {@code deed-poll-admin} renders a case's witnesses from the nested list on {@code GET /caseworker/cases/{id}}
  * and has no way to record one, and the business document gives Basic User "Create, view and edit witness
  * records" -- so the capability exists and the route did not. Everything below this class was already built and
- * tested with plan 01: {@code WitnessService} has all five operations and this adds four routes over them, which
- * is the consumer the service was keeping itself for.
+ * tested with plan 01: {@code WitnessService} has all five operations and this class is a route over each of
+ * them, which is the consumer the service was keeping itself for. Four of the five landed first; the delete is
+ * the fifth route and the last of the five operations to acquire one.
  *
  * <p>Shaped exactly like {@code CaseworkerNoteController}, nested under the case so every id in the URL is part
  * of the scope rather than decoration. Both ids are passed to the domain on every handler that addresses one
@@ -32,22 +35,22 @@ import java.util.List;
  * being read or amended through the wrong parent, and {@code DeedPollWitnessRepository} has no unscoped finder
  * for exactly that reason.
  *
- * <p><strong>No role check, on either write.</strong> The capability matrix marks "Add and edit witnesses" for
- * both roles, so gating in the tidy-minded direction would remove something caseworkers are meant to have -- the
- * trap the note-deletion gate called out for note editing, where only deletion is privileged. There is nothing
- * to gate on here in any case: no operation on this class consults the caller.
+ * <p><strong>No role check on create or amend, and one on delete.</strong> The capability matrix marks "Add and
+ * edit witnesses" for both roles, so gating those in the tidy-minded direction would remove something caseworkers
+ * are meant to have -- the trap the note-deletion gate called out for note editing, where only deletion is
+ * privileged. "Delete witnesses" is the one row of that matrix marked for Administrators alone, and it is
+ * enforced in {@code WitnessService.removeWitness} rather than here, so the rule holds for every caller rather
+ * than for this route.
  *
- * <p><strong>And no caller parameter at all</strong>, which is the visible difference from the note controller.
- * A note takes a {@code CurrentUser} because {@code deedpoll_note} stores an author; {@code deedpoll_witness}
- * stores only {@code createdOn} and {@code modifiedOn}, and Dataverse's {@code CreatedBy} is one of the platform
- * system columns deliberately not ported. {@code WitnessService} stamps the two timestamps through
- * {@code AuditClock}. Threading a caller through anyway would invite the false impression that a role check
- * happens somewhere below.
+ * <p><strong>Only the delete takes a caller</strong>, which is the visible difference from the note controller,
+ * where every write does. A note passes a {@code CurrentUser} for authorship as well as authorisation, because
+ * {@code deedpoll_note} stores an author; {@code deedpoll_witness} stores only {@code createdOn} and
+ * {@code modifiedOn}, and Dataverse's {@code CreatedBy} is one of the platform system columns deliberately not
+ * ported. {@code WitnessService} stamps the two timestamps through {@code AuditClock}. So the caller here is
+ * passed for authorisation and nothing else, and threading it through the reads and the two open writes as well
+ * would invite the false impression that a role check happens somewhere below them.
  *
- * <p><strong>There is deliberately no delete here yet.</strong> It carries a role gate of its own and is its own
- * change; {@code WitnessService.removeWitness} exists and is tested, so it is a route away when it lands.
- *
- * <p>None of these routes is annotated as requiring authentication, and all four do:
+ * <p>None of these routes is annotated as requiring authentication, and all five do:
  * {@code SecurityConfiguration} authenticates {@code anyRequest()} that is not on a short infrastructure
  * allowlist, so a route is protected by having been written rather than by having been remembered.
  */
@@ -116,5 +119,29 @@ public class CaseworkerWitnessController {
                                   @RequestBody UpdateWitnessRequest request) {
 
         return WitnessResponse.from(witnesses.updateWitness(id, witnessId, request.toInput()));
+    }
+
+    /**
+     * Deletes a witness. <strong>Administrators only.</strong>
+     *
+     * <p>204 with no body, as the note delete answers: there is nothing meaningful to return, and the deleted
+     * witness is not it. Both ids go to the domain, so a witness addressed through the wrong case 404s rather
+     * than being deleted -- which matters more here than on the reads, because an unscoped delete is destructive
+     * and silent.
+     *
+     * <p><strong>The caller is passed for authorisation only.</strong> {@code removeWitness} decides who may
+     * delete and refuses anyone else with a 403; this handler states no rule of its own, so the rule lives in
+     * exactly one place and a future caller that is not this route is held to it too. No author is recorded --
+     * the row is gone, and {@code deedpoll_witness} has nowhere to record one in any case.
+     *
+     * <p>A refusal is a 403 and not a 404, and it is the same 403 for a witness that does not exist: the domain
+     * refuses before it resolves, so a caller without the role cannot use the status code to tell one from the
+     * other. Deleting twice 404s on the second call for an Administrator, because absence is reported by
+     * throwing -- not idempotent in the strict HTTP sense, and consistent with the reads.
+     */
+    @DeleteMapping("/{witnessId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable("id") String id, @PathVariable("witnessId") String witnessId) {
+        witnesses.removeWitness(id, witnessId, CurrentUsers.required());
     }
 }

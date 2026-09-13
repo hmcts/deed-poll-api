@@ -6,7 +6,7 @@ Adds `DELETE /caseworker/cases/{id}/witnesses/{witnessId}`, restricted to Admini
 defect while doing it**.
 
 The business document
-([`../Deed Poll Power App Permissions Summary.docx`](../Deed%20Poll%20Power%20App%20Permissions%20Summary.docx))
+([`../Deed Poll Power App Permissions Summary.docx`](../../Deed%20Poll%20Power%20App%20Permissions%20Summary.docx))
 puts "Delete witnesses" at **✗ for Basic User, ✓ for Administrator** — the same split as deleting notes.
 
 ### The defect this closes
@@ -22,7 +22,7 @@ public void removeWitness(String deedPollId, String id) {
 ```
 
 That is character-for-character the shape `NoteService.removeNote` had before
-[`completed/gate-note-deletion.md`](completed/gate-note-deletion.md) fixed it — an ungated delete reachable by
+[`completed/gate-note-deletion.md`](gate-note-deletion.md) fixed it — an ungated delete reachable by
 any authenticated caller. **It is currently harmless only because no controller calls it.** Adding a route
 without also adding the gate would reintroduce the exact bug `#7` closed, and it would look like a deliberate
 choice because the route would be new.
@@ -31,7 +31,7 @@ choice because the route would be new.
 
 ### Sequencing
 
-**This gate is released.** [`completed/witness-create-and-edit.md`](completed/witness-create-and-edit.md) ran on
+**This gate is released.** [`completed/witness-create-and-edit.md`](witness-create-and-edit.md) ran on
 2026-09-12 (branch `witness-create-and-edit`, `95649b2`) and created `CaseworkerWitnessController` with its four
 routes. This plan adds one method to that class, which is why the two could not run in parallel.
 
@@ -110,7 +110,7 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 
 `build` is compile plus checkstyle across all five source sets, plus `test`, plus `integration`
 (`build.gradle:113`). **Baseline verified green from a cold `clean build` on 2026-09-12, after
-[`completed/witness-create-and-edit.md`](completed/witness-create-and-edit.md) landed: `test` 1,275 across 153
+[`completed/witness-create-and-edit.md`](witness-create-and-edit.md) landed: `test` 1,275 across 153
 suites, `integration` 5 across 3, 0 failures and 0 errors in both.** That is the number to beat — it already
 includes the 33 tests plan 1 added. Re-take it from your branch point anyway if anything else has merged since.
 
@@ -126,14 +126,18 @@ Change `WitnessService.removeWitness` to take `CurrentUser` and refuse first, pe
 signature — no overload. Update the docblock to say why the check is here rather than on the route, matching
 `NoteService.removeNote`'s.
 
-- [ ] `removeWitness` takes `CurrentUser`, refuses before resolving, and no two-argument overload remains
+- [x] `removeWitness` takes `CurrentUser`, refuses before resolving, and no two-argument overload remains
 
 ### Task 2: The route
 
 Add `@DeleteMapping("/{witnessId}")` to `CaseworkerWitnessController`, passing `CurrentUsers.required()`.
 Return the same status the note delete returns.
 
-- [ ] `@DeleteMapping("/{witnessId}")` on `CaseworkerWitnessController`, passing `CurrentUsers.required()`
+- [x] `@DeleteMapping("/{witnessId}")` on `CaseworkerWitnessController`, passing `CurrentUsers.required()` —
+      204 no body, as the note delete answers. `OpenAPIPublisherTest`'s count went 17 → 18 in the same change
+      because leaving it would have failed the integration stage; the prose counts are still task 4's.
+      `OpenAPIWriteBodies` needed nothing — the delete carries no body. `WitnessResponse`'s "a witness delete is
+      still absent" and the controller's "no delete here yet" / "no caller parameter at all" docblocks updated.
 
 ### Task 3: Tests — the four that matter
 
@@ -148,28 +152,65 @@ Return the same status the note delete returns.
 Plus: assert there is **no** ungated `removeWitness` overload. A compile-time fact, so a test that references
 the two-argument form would fail to compile — say so in a comment rather than writing a test that cannot exist.
 
-- [ ] All four tests present, including the 403-for-a-nonexistent-witness ordering guard
+- [x] All four tests present, including the 403-for-a-nonexistent-witness ordering guard — as a
+      `DeleteWitness` group in `CaseworkerWitnessControllerTest` whose `@BeforeEach` restubs the token as an
+      Administrator, mirroring the note test's delete group, plus an unauthenticated-delete test so that group
+      still covers every route. The gate is also tested where it lives: `WitnessServiceTest` gained the four
+      refusals `NoteServiceTest` has (no role, no roles at all, 404 for an Administrator, refuse-before-resolve)
+      and one asserting the last witness on a case can go, since the open question's answer is "no minimum".
+      The no-ungated-overload assertion is recorded as a comment on the `DeleteWitness` docblock, not a test:
+      the two-argument form would not compile. **1,286 tests, up from the 1,275 baseline; 0 failures, 0 errors.**
 
 ### Task 4: Reconcile the documented operation count
 
 Per the constraint. Grep, then update.
 
-- [ ] Every stated operation count updated — grepped, not assumed
+- [x] Every stated operation count updated — grepped, not assumed. `git grep -iE '\b(17|seventeen|18|eighteen)\b'`
+      found five sites the constraint's list did not fully cover: `CLAUDE.md` (17 → 18), `README.md`
+      ("Seventeen" → "Eighteen", a `DELETE …/witnesses/{witnessId}` table row, and the "no witness delete"
+      claim on the "deliberately absent" line), `docs/RESUME.md` (17 → 18, and open item 4's "gates one
+      field"), `package-info.java` (the running-total sentence, the `CaseworkerWitnessController` bullet, and
+      the "a witness delete is still absent" claim), **and `docs/plans/scope-gap-questions.md`, which the
+      constraint did not list at all** — it quoted `OpenAPIPublisherTest` as "says seventeen" and carried
+      "Delete witnesses" as an open **GAP**; both now closed, with the row added to its already-closed table
+      and its suggested order struck through. `OpenAPIPublisherTest` was already 18 from task 2.
+      Two claims falsified by *earlier* work were corrected in the same passes rather than left beside the
+      new text: `README.md`'s "the note delete is **not** role-gated" and its "Not yet role-gated" callout,
+      both of which predate `gate-note-deletion.md` and read as this change's error. The count in
+      `CaseworkerWitnessController`'s docblock ("adds four routes") was reworded too. `WitnessResponse`'s
+      "the response to the four routes that answer with a witness" is **correct as it stands** — the delete
+      answers 204 with no body, so four is the right number there and was left alone.
 
 ### Task 5: Full validation
 
-- [ ] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`
-- [ ] **`./gradlew test --rerun`**, never bare `./gradlew test` — a bare run reports `:test UP-TO-DATE`,
-      **executes nothing**, and still prints `BUILD SUCCESSFUL`
-- [ ] Count from the XML, not Gradle's summary:
-      `grep -ho 'tests="[0-9]*"' build/test-results/test/*.xml | grep -o '[0-9]*' | awk '{s+=$1} END{print s}'`
-      (`bc` is not installed here)
-- [ ] `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output
-- [ ] **Baseline: 1,242 as at 2026-09-12**, plus whatever
-      [`witness-create-and-edit.md`](witness-create-and-edit.md) added. Take the count from master immediately
-      before starting rather than from this line
-- [ ] `git grep -n 'removeWitness'` shows **no** two-argument call site anywhere
-- [ ] Mark completed
+- [x] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`.
+      Cold run on 2026-09-13, 8m24s, **25 of 25 tasks executed** — nothing `UP-TO-DATE`, which is what tasks 3
+      and 4 could not claim. `checkstyleMain`, `checkstyleTest`, `checkstyleIntegrationTest`,
+      `checkstyleFunctionalTest` and `checkstyleSmokeTest` all ran. `integration` **5 across 3**, matching
+      baseline
+- [x] **`./gradlew test --rerun`** — `:test` reported `1 executed`, not `UP-TO-DATE`. 23m53s (the machine was
+      contended; the cold run's `test` was inside 8m24s). This doubles as the second run the note below asks
+      for: **two consecutive fully green runs, no flake to re-run through**
+- [x] Counted from the XML, not Gradle's summary: **1,286 tests across 154 suites, 0 skipped** — identical in
+      both runs
+- [x] `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output, in both runs.
+      Same grep over `integration` → no output
+- [x] Baseline reconciles exactly: **1,242** (2026-09-12) **+ 33** from
+      [`completed/witness-create-and-edit.md`](witness-create-and-edit.md) **= 1,275**, the figure
+      that plan's cold build recorded, **+ 11** from task 3 **= 1,286**. No test was lost or silently skipped
+- [x] `git grep -n 'removeWitness'` shows **no** two-argument call site anywhere. Every Java call site passes
+      three arguments (`CaseworkerWitnessController:145`, and the seven in `WitnessServiceTest`). The remaining
+      two-argument hits are **not** call sites and must stay: `reference/ts/witnesses/service.ts:46` and its
+      test are the **vendored TypeScript specification**, which the repo rules forbid editing, and the rest is
+      prose in this file, `README.md` and `scope-gap-questions.md` describing the old form historically
+- [x] Mark completed. **All five tasks are done; this plan is finished.** It has *not* been moved to
+      `completed/` yet: both plans in there moved after their PR merged (`gate-note-deletion.md` with #7,
+      `witness-create-and-edit.md` with #8) and branch `witness-delete` is still open, so the move belongs with
+      the merge. Two link edits go with it when it happens — this file's `completed/…` prefixes and its
+      `scope-gap-questions.md` link become `../`, and `scope-gap-questions.md:112` gains the `completed/`
+      prefix. Moving it also *fixes* four already-broken sibling links in
+      [`completed/witness-create-and-edit.md`](witness-create-and-edit.md), which point at
+      `witness-delete.md` as though it were beside them.
 
 > The suite is container-backed and takes about eight minutes. **One red run is not proof of a break** — a
 > `--rerun` failed on 2026-09-12 and the immediate re-run was fully green. Re-run once, and read the XML.
@@ -182,4 +223,4 @@ Per the constraint. Grep, then update.
 - **The UI.** `deed-poll-admin/docs/plans/06-witness-delete.md`, which depends on this merging.
 - **Gating create or edit.** Both roles have them.
 - **Deleting a document, or managing Supporting Document Types.** Same shape of gap, different plans — see
-  [`scope-gap-questions.md`](scope-gap-questions.md).
+  [`scope-gap-questions.md`](../scope-gap-questions.md).
