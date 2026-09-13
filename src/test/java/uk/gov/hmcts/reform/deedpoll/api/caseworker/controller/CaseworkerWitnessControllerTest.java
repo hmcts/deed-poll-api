@@ -35,14 +35,16 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The four caseworker witness endpoints, over HTTP, against a real database and a stub IDAM.
+ * The five caseworker witness endpoints, over HTTP, against a real database and a stub IDAM.
  *
  * <p>The whole context rather than a {@code @WebMvcTest} slice, and not {@code @Transactional}, for the reasons
  * {@code CaseworkerNoteControllerTest} records: a slice does not get {@code SecurityConfiguration}, so it asserts
@@ -54,10 +56,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * the second case exists to be the wrong parent, and the scoping tests assert both halves: the witness is not
  * reachable through it, and the row that was addressed did not move.
  *
- * <p><strong>Every caller here is a Basic User unless it says otherwise</strong>, which is the opposite emphasis
- * from the note test's delete group. Create and edit are open to both roles -- the business document gives Basic
- * User "Create, view and edit witness records" -- so the default caseworker token is the interesting one, and a
- * gate added later would fail these tests rather than passing them silently.
+ * <p><strong>Every caller here is a Basic User unless it says otherwise</strong>, and the delete group is where it
+ * says otherwise. Create and edit are open to both roles -- the business document gives Basic User "Create, view
+ * and edit witness records" -- so on those the default caseworker token is the interesting one, and a gate added
+ * later would fail these tests rather than passing them silently. "Delete witnesses" is the one row marked for
+ * Administrators alone, so {@link DeleteWitness} restubs the token for every test in it.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -161,6 +164,20 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isUnauthorized());
 
             assertThat(stored(witnessId).getWitnessName()).isEqualTo("Wilma Witness");
+        }
+
+        @Test
+        @DisplayName("refuses to delete a witness, which is still there")
+        void refusesADelete() throws Exception {
+            String caseId = newCase();
+            String witnessId = addWitness(caseId, "Wilma Witness");
+
+            // 401 rather than the 403 a caseworker without the role gets: an unidentified caller is not told
+            // which role would have been enough, and the row is untouched either way.
+            mockMvc.perform(delete("/caseworker/cases/" + caseId + "/witnesses/" + witnessId))
+                .andExpect(status().isUnauthorized());
+
+            assertThat(witnesses.findById(witnessId)).isPresent();
         }
     }
 
@@ -609,6 +626,119 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
             authorised(patch("/caseworker/cases/" + newCase() + "/witnesses/" + UNKNOWN_ID),
                 "{\"witnessName\":\"Wilma Witness\"}")
                 .andExpect(status().isNotFound());
+        }
+    }
+
+    /**
+     * The one privileged operation on this surface.
+     *
+     * <p>The other four are open to both roles, so this is the only group that has to say who the caller is --
+     * the opposite emphasis from everywhere else in this class. Every test here is an Administrator unless it
+     * restubs, as {@code CaseworkerNoteControllerTest}'s delete group does, which puts the requirement in one
+     * place: a delete test added later is authorised the way the route expects, and a refusal has to ask for it
+     * in so many words.
+     *
+     * <p><strong>There is no test asserting the absence of an ungated two-argument {@code removeWitness}.</strong>
+     * That is a compile-time fact rather than a runtime one: a test calling the two-argument form would fail to
+     * compile, so it cannot be written as a failing assertion. The overload's absence is enforced by there being
+     * nothing to call, and {@code WitnessService.removeWitness}'s docblock records why.
+     */
+    @Nested
+    @DisplayName("DELETE /caseworker/cases/{id}/witnesses/{witnessId}")
+    class DeleteWitness {
+
+        @BeforeEach
+        void administrator() {
+            // After the outer resetIdam(), which restores the non-admin default -- JUnit runs the enclosing
+            // class's callbacks first, so this overrides it rather than racing it.
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+        }
+
+        @Test
+        @DisplayName("an Administrator deletes the witness, and the case's list no longer carries it")
+        void deletesTheWitness() throws Exception {
+            String caseId = newCase();
+            String keptId = addWitness(caseId, "Kept");
+            String deletedId = addWitness(caseId, "Deleted");
+
+            authorised(delete("/caseworker/cases/" + caseId + "/witnesses/" + deletedId))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+            // Through the list route as well as the repository, because the list is what the case detail page
+            // reads: a delete that removed the row but left it reachable through the parent's collection would
+            // be a hard delete the UI could not see.
+            authorised(get("/caseworker/cases/" + caseId + "/witnesses"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(keptId));
+
+            assertThat(witnesses.findById(deletedId)).isEmpty();
+            assertThat(stored(keptId).getWitnessName()).isEqualTo("Kept");
+            // The parent survives a child delete. Worth asserting rather than assuming: the association is
+            // where a stray cascade would show up, and it would show up as data loss.
+            assertThat(deedPolls.findById(caseId)).isPresent();
+        }
+
+        @Test
+        @DisplayName("403s a caseworker without the Administrator role, and the witness survives")
+        void refusesACaseworkerWithoutTheRole() throws Exception {
+            String caseId = newCase();
+            String witnessId = addWitness(caseId, "Wilma Witness");
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+
+            authorised(delete("/caseworker/cases/" + caseId + "/witnesses/" + witnessId))
+                .andExpect(status().isForbidden())
+                // 403 and not 404: a caseworker is entitled to know the witness is there and that they may not
+                // remove it. Disguising the refusal as an absence would send them to look for a witness they
+                // can see on the page.
+                .andExpect(jsonPath("$.error")
+                    .value("Requires one of the following roles: " + Role.DEEDPOLL_ADMIN.claimValue()));
+
+            // The half that matters: the 403 alone would also pass against a handler that refused after
+            // deleting, and that is the failure nothing downstream could report or undo.
+            assertThat(witnesses.findById(witnessId)).isPresent();
+        }
+
+        @Test
+        @DisplayName("403s a refused caller addressing a witness that does not exist, so the check runs first")
+        void refusesBeforeResolving() throws Exception {
+            // The ordering guard, and the test that actually pins it -- without it a later refactor can swap
+            // the two lines in removeWitness and nothing complains. Paired with the 404 below: the same URL is
+            // a 404 for an Administrator and a 403 for everybody else, so the status code is not an existence
+            // oracle over witnesses the caller may not touch.
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+
+            authorised(delete("/caseworker/cases/" + newCase() + "/witnesses/" + UNKNOWN_ID))
+                .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("404s an Administrator addressing a witness that does not exist")
+        void notFoundForAMissingWitness() throws Exception {
+            // Also the proof that the role check did not absorb the not-found: the caller holds the role, so a
+            // 403 here would mean the gate was refusing everyone and a 204 would mean it had swallowed the
+            // absence. Compare the 403 the same request gets without the role, above.
+            authorised(delete("/caseworker/cases/" + newCase() + "/witnesses/" + UNKNOWN_ID))
+                .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("404s an Administrator deleting a witness through another case, and does not delete it")
+        void refusesADeleteThroughAnotherCase() throws Exception {
+            // Scoping still applies to someone who is allowed to delete: the gate and the scope are separate
+            // rules, and holding the role does not widen which rows the route reaches.
+            String caseId = newCase();
+            String otherCaseId = newCase();
+            String witnessId = addWitness(caseId, "Ours");
+
+            authorised(delete("/caseworker/cases/" + otherCaseId + "/witnesses/" + witnessId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Witness " + witnessId + " not found"));
+
+            // The scoping assertion that matters most on this verb: an unscoped delete would answer 204 and
+            // destroy another case's witness, and nothing downstream would report it.
+            assertThat(witnesses.findById(witnessId)).isPresent();
         }
     }
 

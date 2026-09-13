@@ -152,7 +152,14 @@ Return the same status the note delete returns.
 Plus: assert there is **no** ungated `removeWitness` overload. A compile-time fact, so a test that references
 the two-argument form would fail to compile — say so in a comment rather than writing a test that cannot exist.
 
-- [ ] All four tests present, including the 403-for-a-nonexistent-witness ordering guard
+- [x] All four tests present, including the 403-for-a-nonexistent-witness ordering guard — as a
+      `DeleteWitness` group in `CaseworkerWitnessControllerTest` whose `@BeforeEach` restubs the token as an
+      Administrator, mirroring the note test's delete group, plus an unauthenticated-delete test so that group
+      still covers every route. The gate is also tested where it lives: `WitnessServiceTest` gained the four
+      refusals `NoteServiceTest` has (no role, no roles at all, 404 for an Administrator, refuse-before-resolve)
+      and one asserting the last witness on a case can go, since the open question's answer is "no minimum".
+      The no-ungated-overload assertion is recorded as a comment on the `DeleteWitness` docblock, not a test:
+      the two-argument form would not compile. **1,286 tests, up from the 1,275 baseline; 0 failures, 0 errors.**
 
 ### Task 4: Reconcile the documented operation count
 

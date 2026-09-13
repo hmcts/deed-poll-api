@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
@@ -54,6 +55,16 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
     /** An Administrator: the only caller a delete admits. */
     private static final CurrentUser ADMIN =
         CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "An Admin");
+
+    /**
+     * A Basic User: authenticated and named, holding no role this service recognises.
+     *
+     * <p>{@link Role} has one member, so today this differs from {@link CurrentUser#ANONYMOUS} only in its
+     * name -- an ordinary caseworker's IDAM roles all belong to other services and are dropped by
+     * {@code IdamClaims}. Both are asserted anyway, for the reason {@code NoteServiceTest} records: they are
+     * different claims, and they stop being the same object the moment the enum grows a second role.
+     */
+    private static final CurrentUser CASEWORKER = CurrentUser.currentUser(List.of(), "A Caseworker");
 
     /** The reference's `witness` fixture. */
     private static final Map<String, Object> WITNESS = Map.of(
@@ -282,6 +293,75 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
             .isInstanceOf(NotFoundError.class);
 
         assertThat(witnesses.findById(witnessId)).isPresent();
+    }
+
+    @Test
+    @DisplayName("refuses a delete by a caller without the Administrator role, and leaves the witness stored")
+    void refusesADeleteByACallerWithoutTheAdministratorRole() {
+        // Not a reference block: the reference has no authorisation at all in this service. The business
+        // splits editing from deleting -- both roles may add and amend a witness, and "Delete witnesses" is
+        // marked for Administrators alone -- and the rule lives here rather than on the route so that a caller
+        // which is not that route is held to it too.
+        String caseId = storedCase();
+        String witnessId = witnessService.createWitness(caseId, create()).getId();
+
+        assertThatThrownBy(() -> witnessService.removeWitness(caseId, witnessId, CASEWORKER))
+            .isInstanceOf(ForbiddenError.class);
+
+        // The assertion that carries the test. The refusal alone would also pass against an implementation
+        // that threw *after* deleting, which is the failure that could not be undone.
+        assertThat(witnesses.findById(witnessId)).isPresent();
+    }
+
+    @Test
+    @DisplayName("refuses a delete by a caller with no roles at all, rather than falling open")
+    void refusesADeleteByACallerWithNoRolesAtAll() {
+        // The fail-closed case. requireAnyRole is open when *nothing* is required, which is why removeWitness
+        // names the role explicitly; this asserts the other axis -- a caller holding nothing, the state a bug
+        // in authentication or a token whose roles all belong to other services produces.
+        String caseId = storedCase();
+        String witnessId = witnessService.createWitness(caseId, create()).getId();
+
+        assertThatThrownBy(() -> witnessService.removeWitness(caseId, witnessId, CurrentUser.ANONYMOUS))
+            .isInstanceOf(ForbiddenError.class);
+
+        assertThat(witnesses.findById(witnessId)).isPresent();
+    }
+
+    @Test
+    @DisplayName("404s an Administrator deleting a witness that does not exist, so the check did not swallow it")
+    void administratorDeletingAMissingWitnessStillGets404() {
+        // The role check runs first, so it has to be shown not to have absorbed the not-found: an admin
+        // addressing a witness that was never stored still gets the absence, not a success.
+        assertThatThrownBy(() -> witnessService.removeWitness(storedCase(), "nope", ADMIN))
+            .isInstanceOf(NotFoundError.class);
+    }
+
+    @Test
+    @DisplayName("refuses first and resolves second, so a missing witness is a refusal rather than a 404")
+    void refusesBeforeResolving() {
+        // Order is the point, and this is the test that pins it: without it a later refactor can swap the two
+        // lines and nothing complains. Resolving first would let a caller without the role tell an existing
+        // witness from a non-existent one by which error came back -- an existence oracle over rows they may
+        // not touch. Paired with the test above: the same missing witness is a 404 for an Administrator and a
+        // refusal for everybody else.
+        assertThatThrownBy(() -> witnessService.removeWitness(storedCase(), "nope", CASEWORKER))
+            .isInstanceOf(ForbiddenError.class);
+    }
+
+    @Test
+    @DisplayName("deletes the last witness on a case, since no minimum is enforced")
+    void deletesTheLastWitnessOnACase() {
+        // No artefact states a minimum number of witnesses -- checked DeedPollValidation, the reference's
+        // deed-poll-validation.ts and the Dataverse business rules, none of which mention witnesses -- so the
+        // absence of a rule is asserted rather than left to be discovered. If the business says there is a
+        // minimum, this is the test that has to change, which is what makes the decision visible.
+        String caseId = storedCase();
+        String only = witnessService.createWitness(caseId, create()).getId();
+
+        witnessService.removeWitness(caseId, only, ADMIN);
+
+        assertThat(witnessService.findWitnesses(caseId)).isEmpty();
     }
 
     @Test
