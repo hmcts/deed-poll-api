@@ -133,7 +133,11 @@ signature — no overload. Update the docblock to say why the check is here rath
 Add `@DeleteMapping("/{witnessId}")` to `CaseworkerWitnessController`, passing `CurrentUsers.required()`.
 Return the same status the note delete returns.
 
-- [ ] `@DeleteMapping("/{witnessId}")` on `CaseworkerWitnessController`, passing `CurrentUsers.required()`
+- [x] `@DeleteMapping("/{witnessId}")` on `CaseworkerWitnessController`, passing `CurrentUsers.required()` —
+      204 no body, as the note delete answers. `OpenAPIPublisherTest`'s count went 17 → 18 in the same change
+      because leaving it would have failed the integration stage; the prose counts are still task 4's.
+      `OpenAPIWriteBodies` needed nothing — the delete carries no body. `WitnessResponse`'s "a witness delete is
+      still absent" and the controller's "no delete here yet" / "no caller parameter at all" docblocks updated.
 
 ### Task 3: Tests — the four that matter
 
