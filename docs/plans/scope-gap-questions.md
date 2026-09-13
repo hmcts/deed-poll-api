@@ -96,27 +96,62 @@ python3 -c "import json;d=json.load(open('../deed-poll-admin/libs/deed-poll-api-
 [print(m.upper(),p) for p,o in d['paths'].items() for m in o if m in('get','post','patch','delete')]"
 ```
 
-That prints 14 lines: `GET /` plus the 13 caseworker operations. Note what is absent — no `/witnesses` path,
-no `PATCH` or `DELETE` on documents, no write on `/caseworker/document-types`, and nothing for
-deactivate / reactivate.
+**As at 2026-09-13 that prints 19 lines: `GET /` plus 18 caseworker operations**, five of them the witness
+routes closed by gaps 1 and 2. Note what is still absent — no `PATCH` or `DELETE` on documents, no write on
+`/caseworker/document-types`, and nothing for deactivate / reactivate.
 
-> **That spec is `deed-poll-admin`'s vendored copy, and it is a snapshot rather than a live reading.** The
-> service has served four `/witnesses` operations since 2026-09-12 (gap 1 below) and a fifth, the delete,
-> since 2026-09-13 (gap 2), which that file does not yet know about; refreshing it is that repo's plan. To
-> ask this service what it actually serves, read `/v3/api-docs` from a running instance —
-> `OpenAPIPublisherTest` asserts the paths and the operation count against it, and says eighteen.
+> **That spec is `deed-poll-admin`'s vendored copy, so it is a snapshot rather than a live reading.** It was
+> refreshed from this service on 2026-09-13 (`deed-poll-admin#96`) and is currently in step — but it only ever
+> tracks the last refresh, so treat a disagreement between it and this table as the snapshot being stale rather
+> than as a finding. **To ask this service what it actually serves, read `/v3/api-docs` from a running
+> instance**; `OpenAPIPublisherTest` asserts the paths and the caseworker count against it, and says eighteen.
 
 | # | Capability | Power App evidence | Service today | Verdict | Consequence |
 | --- | --- | --- | --- | --- | --- |
-| 1 | **Create / edit witnesses** | Matrix: "Add and edit witnesses **✓ ✓**". Prose: Basic User "Create, view and edit witness records". `deeppoll_witness` has 23 columns | **Closed 2026-09-12** by [`witness-create-and-edit.md`](witness-create-and-edit.md): `CaseworkerWitnessController` adds `GET`, `POST`, `GET /{witnessId}` and `PATCH /{witnessId}` under `/caseworker/cases/{id}/witnesses`, neither write role-gated. The domain layer needed no change — `WitnessService` already had all five operations | **CLOSED** | The service now records witnesses. The **vendored** `openapi.json` in `deed-poll-admin` still predates this, so the verification command above still prints 14 lines until that repo refreshes it — which is that repo's plan, not this one's |
-| 2 | **Delete witnesses** | Matrix: ✗ / ✓ | **Closed 2026-09-13** by [`witness-delete.md`](witness-delete.md): `DELETE /caseworker/cases/{id}/witnesses/{witnessId}`, 204, with the role check in `WitnessService.removeWitness` rather than on the route — which also closed the ungated two-argument form that had been reachable-by-nothing since plan 01 | **CLOSED** | An Administrator can remove a witness, and only an Administrator. The same vendored-`openapi.json` caveat as gap 1 applies |
-| 3 | **Edit documents** | Prose: "Upload, view and **edit** supporting documents", both roles | `POST …/documents` and `GET …/{documentId}/file` only. No `PATCH` | **GAP** | A document recorded against the wrong type or description cannot be corrected |
+| 1 | **Create / edit witnesses** | Matrix: "Add and edit witnesses **✓ ✓**". Prose: Basic User "Create, view and edit witness records". `deeppoll_witness` has 23 columns | **Closed 2026-09-12** by [`witness-create-and-edit.md`](completed/witness-create-and-edit.md): `CaseworkerWitnessController` adds `GET`, `POST`, `GET /{witnessId}` and `PATCH /{witnessId}` under `/caseworker/cases/{id}/witnesses`, neither write role-gated. The domain layer needed no change — `WitnessService` already had all five operations | **CLOSED** | The service now records witnesses. The **vendored** `openapi.json` in `deed-poll-admin` still predates this, so the verification command above still prints 14 lines until that repo refreshes it — which is that repo's plan, not this one's |
+| 2 | **Delete witnesses** | Matrix: ✗ / ✓ | **Closed 2026-09-13** by [`witness-delete.md`](completed/witness-delete.md): `DELETE /caseworker/cases/{id}/witnesses/{witnessId}`, 204, with the role check in `WitnessService.removeWitness` rather than on the route — which also closed the ungated two-argument form that had been reachable-by-nothing since plan 01 | **CLOSED** | An Administrator can remove a witness, and only an Administrator. The same vendored-`openapi.json` caveat as gap 1 applies |
+| 3 | **"Edit" documents — GAP, but the word is ambiguous and must be resolved before it is scoped** | Prose: "Upload, view and **edit** supporting documents", both roles | `POST …/documents` and `GET …/{documentId}/file` only. No `PATCH` | **GAP + AMBIGUOUS** | See below — the two readings are different sizes of work, and one of them is entangled with the CDAM cutover |
 | 4 | **Delete documents** | Matrix: ✗ / ✓ | Absent | **GAP** | — |
 | 5 | **Manage Supporting Document Types** — create, update, delete | Matrix: ✗ / ✓ | `GET /caseworker/document-types` only | **GAP** | Reference-data changes require a release |
 | 6 | **Deactivate records** | Matrix: ✗ / ✓ | Absent | **GAP**, and its nature is now clear | `DataverseSchemaConformanceTest.java:52-75` lists `statecode` and `statuscode` among **21 "Dynamics system columns present on every table"**, deliberately not ported. So this is very likely **stock Dataverse record deactivation** rather than a designed deed poll feature — the old Q A.2 — and the evidence favours it |
 | 7 | **Reactivate closed records** | Matrix: "Reactivate records **✓ ✓**" | Absent | **GAP** | Same mechanism as 6; the two should be designed together |
 | 8 | **`deedpoll_MigratedRecordID`** | Export row `Migrated Record ID \| Whole number`. Its sibling flag `deedpoll_MigratedRecord` **is** ported — `reference/deed-poll.prisma:112` | **Deliberately** not ported: `DataverseSchemaConformanceTest.java:290`, reason recorded as *"migration-provenance id; not needed in the rebuilt store"* | **DECISION TO REVISIT** | It is the natural join key from a migrated record back to its legacy identifier. That decision was taken before parity was the requirement, and it bears on the migration question below |
 | 9 | **"Administrative record management"** / "Manage records requiring administrative intervention" | Matrix row, ✗ / ✓ | Cannot be assessed | **AMBIGUOUS — not guessed** | The document never defines the term. It could be a feature, or a restatement of the deletion and deactivation rights already listed. **Ask before scoping** |
+
+### Item 3 in detail — what "edit a supporting document" can and cannot mean
+
+Raised 2026-09-13. **An earlier version of this row said a document recorded "against the wrong type or
+description" could not be corrected. There is no description field — that was wrong**, and correcting it is what
+surfaced the ambiguity.
+
+`deeppoll_supporting_document` carries exactly six business columns; everything else on it is Dynamics platform
+plumbing:
+
+| Column | Type | Could "edit" mean this? |
+| --- | --- | --- |
+| `deedpoll_Direction` | Choice | **Yes** — metadata |
+| `deedpoll_DocumentType` | Lookup | **Yes** — metadata |
+| `deedpoll_Document` | **File** | **Possibly** — a Dataverse File column's contents can be replaced |
+| `deedpoll_Name` | Autonumber | No — system-generated |
+| `deedpoll_DeedPoll` | Lookup | No — the parent case |
+| `deedpoll_SupportingDocumentId` | Unique identifier | No — primary key |
+
+So there are exactly two readings, and **the permissions document does not say which**:
+
+1. **Metadata only** — correct a document's Direction or Document Type. That is a `PATCH` on the row, independent
+   of where the blob lives, and available to build now.
+2. **Replacing the file as well.** That touches the storage seam, and **`storage/LocalFilesystemDocumentStore`
+   is explicitly the seam CDAM replaces** — CDAM is plan 03 and is blocked on the same onboarding as everything
+   else. Planning file replacement before that cutover means designing against a seam that is about to move.
+
+**These are different sizes of work with different dependencies, so the question has to be answered before item 3
+is scoped — not during.** The service already separates the two concerns, which is mild evidence for reading 1:
+the upload takes `direction`, `documentTypeId`, `file` and `name` as distinct parts, and
+`reference/deed-poll.prisma:349` comments the blob as *"File reference — blob stored on disk/object storage;
+metadata here."*
+
+**Q 3.1 — does "edit a supporting document" mean its Direction and Document Type, or replacing the file itself?**
+Worth asking alongside Q 9.1 and the minimum-witness question: same conversation, same people.
 
 ---
 
@@ -161,6 +196,10 @@ logic it is correct as it stands. **Not resolved here.**
 ## 6. Not determinable from available evidence
 
 Named as unknowns rather than filled in.
+
+- **What "edit a supporting document" means** — its Direction and Document Type, or replacing the file. See item 3
+  in detail above. The distinction decides whether the work is a `PATCH` available now or something entangled with
+  the CDAM cutover.
 
 - **`deedpoll` columns S–Z: the count is unknown and they cannot be enumerated.** Some post-R columns are
   recoverable by name from other artefacts — Type, State, Urgency, Section, Retain Permanently, and (from

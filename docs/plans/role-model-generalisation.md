@@ -16,7 +16,7 @@ and the suite is what proves it.
 >    fails it should be unambiguously a deployment problem, not "did that 33-site refactor break something".
 >
 > **The one business rule we are currently getting wrong has been split out** into
-> [`gate-note-deletion.md`](gate-note-deletion.md), which depends on none of the above and can go
+> [`gate-note-deletion.md`](completed/gate-note-deletion.md), which depends on none of the above and can go
 > independently. That is the thing to do first.
 
 The business has now supplied the permission matrix as
@@ -36,7 +36,7 @@ wrong**: deleting a note. Everything else is either already correct or has no op
 | Add and edit documents — both roles | Already open to both. **No change** |
 | Add and edit witnesses — both roles | Already open to both, via the case patch. **No change** |
 | Progress through the business process — both roles | Already open to both. **No change** |
-| **Delete notes — Administrator only** | **Open to everybody.** Fixed by [`gate-note-deletion.md`](gate-note-deletion.md), not here |
+| **Delete notes — Administrator only** | **Open to everybody.** Fixed by [`gate-note-deletion.md`](completed/gate-note-deletion.md), not here |
 | Privacy read-only for Basic User | Resolved below — no change needed |
 | Delete documents — Administrator only | **No document delete operation exists** |
 | Delete witnesses — Administrator only | **No witness write operations exist** |
@@ -86,7 +86,7 @@ What survives, and why I still recommend capabilities:
   to align with admin; a named capability each costs nothing and stops the alignment being assumed.
 
 **If a reviewer prefers a boolean, this plan is unnecessary** — the note-delete gate already stands alone in
-[`gate-note-deletion.md`](gate-note-deletion.md), and nothing else needs a capability.** That is a legitimate outcome and cheaper than what follows. Decide before starting, not
+[`gate-note-deletion.md`](completed/gate-note-deletion.md), and nothing else needs a capability.** That is a legitimate outcome and cheaper than what follows. Decide before starting, not
 midway.
 
 The second, smaller open decision: **`CurrentUser.requireAnyRole(Role...)` is replaced with a fail-closed
@@ -138,7 +138,7 @@ Each task ends green. Run its validation before starting the next.
 
 - `domain/auth/Capability.java` — enum, single member `OVERRIDE_PRIVACY`. **One member, because one rule
   exists.** `DELETE_NOTE` arrives with the operation it gates — see
-  [`gate-note-deletion.md`](gate-note-deletion.md), which if it has already landed will have a
+  [`gate-note-deletion.md`](completed/gate-note-deletion.md), which if it has already landed will have a
   `requireAnyRole` check for this refactor to convert. Do not add members for the four capabilities that
   have no operation.
 - `domain/auth/RoleCapabilities.java` — `Map<Role, Set<Capability>>`, single entry
