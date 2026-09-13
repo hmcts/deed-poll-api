@@ -8,15 +8,15 @@ no authorship check** — any authenticated caller can delete any author's note,
 of what happened on a case.
 
 The business is explicit
-([`Deed Poll Power App Permissions Summary.docx`](../Deed%20Poll%20Power%20App%20Permissions%20Summary.docx)):
+([`Deed Poll Power App Permissions Summary.docx`](../../Deed%20Poll%20Power%20App%20Permissions%20Summary.docx)):
 Basic User "cannot delete notes"; Administrator can "delete notes". Of the eleven capability rows in that
 document, **this is the only one that is both implementable today and currently wrong.**
 
 ### Why this is its own plan
 
-It was originally phase 2 of [`role-model-generalisation.md`](role-model-generalisation.md) and has been
+It was originally phase 2 of [`role-model-generalisation.md`](../role-model-generalisation.md) and has been
 split out because **it depends on nothing**. It does not need the capability refactor, it does not need any
-answer in [`scope-gap-questions.md`](scope-gap-questions.md), and it can land while both of those are still
+answer in [`scope-gap-questions.md`](../scope-gap-questions.md), and it can land while both of those are still
 open. The refactor, by contrast, is waiting on a scope decision that determines whether capability
 indirection earns its keep.
 
@@ -133,13 +133,13 @@ added 2026-09-08 in `#4` — and is now wrong three ways.
 
 ## Deliberately not in this plan
 
-- **The capability model.** See [`role-model-generalisation.md`](role-model-generalisation.md). This change is
+- **The capability model.** See [`role-model-generalisation.md`](../role-model-generalisation.md). This change is
   written so that plan can later swap one line.
 - **Gating anything else.** Create, update, upload, download and the reads are all open to both roles per the
   business document, and are already correct.
 - **The four capabilities with no operation** — delete a document, delete a witness, manage Supporting
   Document Types, deactivate a record. All Administrator-only in the business document, none of them built.
-  See [`scope-gap-questions.md`](scope-gap-questions.md).
+  See [`scope-gap-questions.md`](../scope-gap-questions.md).
 - **`deed-poll-admin`'s side.** The staff app offers note deletion as a second submit button on the note edit
   form. Once this lands, a non-admin pressing it will get a 403 rather than a disabled control. **That is a
   worse experience than hiding the button, and it is the same class of problem the privacy field already

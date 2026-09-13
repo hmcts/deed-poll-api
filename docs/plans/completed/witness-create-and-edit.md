@@ -6,11 +6,11 @@
 
 `deed-poll-admin` can display a case's witnesses and has no way to record one. That is the single place in the
 service where data is readable and not writable, and both roles are meant to have it — the business document
-([`../Deed Poll Power App Permissions Summary.docx`](../Deed%20Poll%20Power%20App%20Permissions%20Summary.docx))
+([`../Deed Poll Power App Permissions Summary.docx`](../../Deed%20Poll%20Power%20App%20Permissions%20Summary.docx))
 gives Basic User "Create, view and edit witness records" and the capability matrix marks "Add and edit
 witnesses" **✓ for both roles**.
 
-The gap register in [`scope-gap-questions.md`](scope-gap-questions.md) lists this first. What that register does
+The gap register in [`scope-gap-questions.md`](../scope-gap-questions.md) lists this first. What that register does
 **not** say, and what materially shrinks this plan, is that everything below the controller is already built and
 tested:
 
@@ -37,7 +37,7 @@ It carries a role gate and a live defect that this plan must not silently inheri
 ## Decisions taken — implement these, do not revisit
 
 1. **Do not gate create or edit.** Both roles have them. Gating in the tidy-minded direction would remove a
-   capability caseworkers are meant to have — the same trap [`completed/gate-note-deletion.md`](completed/gate-note-deletion.md)
+   capability caseworkers are meant to have — the same trap [`completed/gate-note-deletion.md`](gate-note-deletion.md)
    called out for note editing.
 2. **Mirror `CaseworkerNoteController` exactly.** Same package, same shape: `@RequestMapping`
    (`/caseworker/cases/{id}/witnesses`), `@PathVariable`, request DTOs with a `toInput()`, `WitnessResponse`

@@ -6,7 +6,7 @@ Adds `DELETE /caseworker/cases/{id}/witnesses/{witnessId}`, restricted to Admini
 defect while doing it**.
 
 The business document
-([`../Deed Poll Power App Permissions Summary.docx`](../Deed%20Poll%20Power%20App%20Permissions%20Summary.docx))
+([`../Deed Poll Power App Permissions Summary.docx`](../../Deed%20Poll%20Power%20App%20Permissions%20Summary.docx))
 puts "Delete witnesses" at **✗ for Basic User, ✓ for Administrator** — the same split as deleting notes.
 
 ### The defect this closes
@@ -22,7 +22,7 @@ public void removeWitness(String deedPollId, String id) {
 ```
 
 That is character-for-character the shape `NoteService.removeNote` had before
-[`completed/gate-note-deletion.md`](completed/gate-note-deletion.md) fixed it — an ungated delete reachable by
+[`completed/gate-note-deletion.md`](gate-note-deletion.md) fixed it — an ungated delete reachable by
 any authenticated caller. **It is currently harmless only because no controller calls it.** Adding a route
 without also adding the gate would reintroduce the exact bug `#7` closed, and it would look like a deliberate
 choice because the route would be new.
@@ -31,7 +31,7 @@ choice because the route would be new.
 
 ### Sequencing
 
-**This gate is released.** [`completed/witness-create-and-edit.md`](completed/witness-create-and-edit.md) ran on
+**This gate is released.** [`completed/witness-create-and-edit.md`](witness-create-and-edit.md) ran on
 2026-09-12 (branch `witness-create-and-edit`, `95649b2`) and created `CaseworkerWitnessController` with its four
 routes. This plan adds one method to that class, which is why the two could not run in parallel.
 
@@ -110,7 +110,7 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 
 `build` is compile plus checkstyle across all five source sets, plus `test`, plus `integration`
 (`build.gradle:113`). **Baseline verified green from a cold `clean build` on 2026-09-12, after
-[`completed/witness-create-and-edit.md`](completed/witness-create-and-edit.md) landed: `test` 1,275 across 153
+[`completed/witness-create-and-edit.md`](witness-create-and-edit.md) landed: `test` 1,275 across 153
 suites, `integration` 5 across 3, 0 failures and 0 errors in both.** That is the number to beat — it already
 includes the 33 tests plan 1 added. Re-take it from your branch point anyway if anything else has merged since.
 
@@ -196,7 +196,7 @@ Per the constraint. Grep, then update.
 - [x] `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output, in both runs.
       Same grep over `integration` → no output
 - [x] Baseline reconciles exactly: **1,242** (2026-09-12) **+ 33** from
-      [`completed/witness-create-and-edit.md`](completed/witness-create-and-edit.md) **= 1,275**, the figure
+      [`completed/witness-create-and-edit.md`](witness-create-and-edit.md) **= 1,275**, the figure
       that plan's cold build recorded, **+ 11** from task 3 **= 1,286**. No test was lost or silently skipped
 - [x] `git grep -n 'removeWitness'` shows **no** two-argument call site anywhere. Every Java call site passes
       three arguments (`CaseworkerWitnessController:145`, and the seven in `WitnessServiceTest`). The remaining
@@ -209,7 +209,7 @@ Per the constraint. Grep, then update.
       the merge. Two link edits go with it when it happens — this file's `completed/…` prefixes and its
       `scope-gap-questions.md` link become `../`, and `scope-gap-questions.md:112` gains the `completed/`
       prefix. Moving it also *fixes* four already-broken sibling links in
-      [`completed/witness-create-and-edit.md`](completed/witness-create-and-edit.md), which point at
+      [`completed/witness-create-and-edit.md`](witness-create-and-edit.md), which point at
       `witness-delete.md` as though it were beside them.
 
 > The suite is container-backed and takes about eight minutes. **One red run is not proof of a break** — a
@@ -223,4 +223,4 @@ Per the constraint. Grep, then update.
 - **The UI.** `deed-poll-admin/docs/plans/06-witness-delete.md`, which depends on this merging.
 - **Gating create or edit.** Both roles have them.
 - **Deleting a document, or managing Supporting Document Types.** Same shape of gap, different plans — see
-  [`scope-gap-questions.md`](scope-gap-questions.md).
+  [`scope-gap-questions.md`](../scope-gap-questions.md).
