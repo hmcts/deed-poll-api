@@ -156,20 +156,38 @@ suites (1,286 across 154 at the branch point), `integration` 5 across 3, 0 failu
 
 ### Task 3: Full validation
 
-- [ ] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`
-- [ ] **`./gradlew test --rerun`**, never bare `./gradlew test` — a bare run reports `:test UP-TO-DATE`,
+- [x] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`
+- [x] **`./gradlew test --rerun`**, never bare `./gradlew test` — a bare run reports `:test UP-TO-DATE`,
       **executes nothing**, and still prints `BUILD SUCCESSFUL`
-- [ ] Count from the XML, not Gradle's summary:
+- [x] Count from the XML, not Gradle's summary:
       `grep -ho 'tests="[0-9]*"' build/test-results/test/*.xml | grep -o '[0-9]*' | awk '{s+=$1} END{print s}'`
       (`bc` is not installed here)
-- [ ] `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output
-- [ ] `git diff --name-only master -- src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/CaseState.java src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/CaseStateInput.java`
+- [x] `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output
+- [x] `git diff --name-only master -- src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/CaseState.java src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/CaseStateInput.java`
       returns **nothing** — decision 5, the cascade is untouched
-- [ ] `git status --short -- src/test/resources/reference` clean — the specification was not edited
-- [ ] Mark completed
+- [x] `git status --short -- src/test/resources/reference` clean — the specification was not edited
+- [x] Mark completed
 
 > The suite is container-backed and takes about eight minutes. **One red run is not proof of a break** — re-run
 > once and read the XML rather than the console.
+
+Validated 2026-09-13 on `witness-count-gate`. `clean build` green from cold in 9m 59s, **25 of 25 actionable
+tasks executed** — so no source set was skipped as up-to-date. `test --rerun` then executed `:test` again on its
+own (4m 4s, `1 executed, 4 up-to-date`), and both runs agree on the counts read from the result XML:
+
+| Source set | Tests | Suites | Failures | Errors |
+| --- | --- | --- | --- | --- |
+| `test` | 1,294 | 155 | 0 | 0 |
+| `integration` | 5 | 3 | 0 | 0 |
+
+Against the branch-point baseline of 1,286 across 154, that is **+8 tests in +1 suite** — exactly the
+`CaseworkerCaseControllerTest$EnrolmentWitnessGate` block, whose own XML reports `tests="8"`. Nothing else moved:
+no test was lost or silently renamed while the four enrolled-case fixtures in task 1 were given two witnesses.
+
+Both guard checks are clean. The cascade diff against `master` is empty, so `CaseState` and `CaseStateInput` are
+untouched and `StateCascadeConformanceTest` is still pinning them against the rules file rather than against us.
+`src/test/resources/reference` is clean, so the vendored specification was read as ground truth and never edited
+to accommodate a rule it does not contain — which is what keeps the addition legible as an addition.
 
 ## Deliberately not in this plan
 
