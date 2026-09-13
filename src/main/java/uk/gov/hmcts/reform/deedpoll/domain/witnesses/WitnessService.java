@@ -3,6 +3,8 @@ package uk.gov.hmcts.reform.deedpoll.domain.witnesses;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
@@ -33,6 +35,11 @@ import java.util.List;
  * {@code WitnessAuthor} to match {@code NoteAuthor}. Attribution for a witness change is the case's own
  * {@code modifiedBy} plus the declaration on file.
  *
+ * <p>One rule here is not in the reference's service: deletion requires the Administrator role. The reference
+ * expressed that as middleware in front of its route, and there is no route layer to hang it on in the domain,
+ * so {@link #removeWitness} takes the caller and refuses. Creating and editing stay open to both roles, which
+ * is the split the business asked for rather than an oversight -- the same split {@code NoteService} carries.
+ *
  * <p>The service returns entities, not view models, exactly as the reference does. The reference has no
  * witnesses view model at all: witnesses are rendered as part of the case detail page, whose tab is
  * {@code DetailView}'s job, and the caseworker API maps to its own DTOs.
@@ -40,8 +47,8 @@ import java.util.List;
  * <p><strong>Nothing in plan 01 called the three write methods, and they were ported anyway</strong> --
  * because the reference has them and the source form does, so that when a consumer arrived it would find a
  * scoped implementation rather than invent an unscoped one. It arrived: {@code CaseworkerWitnessController}
- * calls {@link #createWitness} and {@link #updateWitness}, and this class needed no change for it.
- * {@link #removeWitness} is still uncalled, and is the one witness operation the business restricts.
+ * calls {@link #createWitness} and {@link #updateWitness}, and this class needed no change for either.
+ * {@link #removeWitness} needed one, because it is the one witness operation the business restricts.
  */
 @Service
 public class WitnessService {
@@ -123,12 +130,31 @@ public class WitnessService {
     }
 
     /**
-     * Deletes a witness.
+     * Deletes a witness. <strong>Administrators only.</strong>
      *
+     * <p><strong>The role check is here rather than on the route.</strong> The business splits editing from
+     * deleting -- both roles may add and amend a witness, and only removal is restricted -- so enforcing it in
+     * the domain means the rule holds for every caller, including a citizen surface or a batch job that does
+     * not exist yet, rather than only for the one HTTP route that does. There is deliberately <em>no</em>
+     * ungated two-argument overload: a caller who could reach one would skip the check entirely, so there is
+     * exactly one way to delete a witness. This method carried that shape before the check existed, and was
+     * safe only because nothing called it -- {@code NoteService.removeNote} records the same reasoning.
+     *
+     * <p><strong>Refuse first, then resolve.</strong> The check runs before the lookup so that a caller
+     * without the role gets the same 403 whether or not the witness exists; looking it up first would let them
+     * tell an existing witness from a missing one by the status code. Authorship is not consulted -- and could
+     * not be here in any case, since {@code deedpoll_witness} has no {@code createdBy}.
+     *
+     * <p>The delete is a hard one: the row goes. No {@code statecode} filtering, no migration, and the case's
+     * witness list is simply shorter afterwards. There is no minimum number of witnesses a case must retain --
+     * no artefact states one -- so an Administrator may delete the last witness on a case.
+     *
+     * @throws uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError if the caller is not an Administrator
      * @throws NotFoundError if there is no such witness, or it belongs to another case
      */
     @Transactional
-    public void removeWitness(String deedPollId, String id) {
+    public void removeWitness(String deedPollId, String id, CurrentUser caller) {
+        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
         witnesses.delete(findWitness(deedPollId, id));
     }
 

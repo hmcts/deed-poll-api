@@ -8,6 +8,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
@@ -48,6 +50,10 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
 
     /** createDeedPoll cannot allocate a reference number without a Date Received to derive the year. */
     private static final String RECEIVED = "2026-07-01T00:00:00.000Z";
+
+    /** An Administrator: the only caller a delete admits. */
+    private static final CurrentUser ADMIN =
+        CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "An Admin");
 
     /** The reference's `witness` fixture. */
     private static final Map<String, Object> WITNESS = Map.of(
@@ -181,7 +187,7 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
         String caseId = storedCase();
         String witnessId = witnessService.createWitness(caseId, create()).getId();
 
-        witnessService.removeWitness(caseId, witnessId);
+        witnessService.removeWitness(caseId, witnessId, ADMIN);
 
         assertThat(witnesses.findById(witnessId)).isEmpty();
     }
@@ -272,7 +278,8 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
         String other = storedCase();
         String witnessId = witnessService.createWitness(owner, create()).getId();
 
-        assertThatThrownBy(() -> witnessService.removeWitness(other, witnessId)).isInstanceOf(NotFoundError.class);
+        assertThatThrownBy(() -> witnessService.removeWitness(other, witnessId, ADMIN))
+            .isInstanceOf(NotFoundError.class);
 
         assertThat(witnesses.findById(witnessId)).isPresent();
     }

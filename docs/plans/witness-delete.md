@@ -126,7 +126,7 @@ Change `WitnessService.removeWitness` to take `CurrentUser` and refuse first, pe
 signature — no overload. Update the docblock to say why the check is here rather than on the route, matching
 `NoteService.removeNote`'s.
 
-- [ ] `removeWitness` takes `CurrentUser`, refuses before resolving, and no two-argument overload remains
+- [x] `removeWitness` takes `CurrentUser`, refuses before resolving, and no two-argument overload remains
 
 ### Task 2: The route
 
