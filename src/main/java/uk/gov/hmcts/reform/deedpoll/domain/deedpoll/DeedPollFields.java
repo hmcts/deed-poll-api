@@ -59,6 +59,22 @@ public final class DeedPollFields {
         return WRITERS.keySet();
     }
 
+    /**
+     * Every stored field name -- the columns, and nothing derived.
+     *
+     * <p>Published for {@link CaseQuery}, which needs "is this a stored column" and must not ask
+     * {@link #isWritable} instead: {@code referencenumber} and {@code state} are two of the most useful
+     * things to query and neither is writable, so a queryability check built on the write registry would
+     * refuse exactly the fields a caseworker reaches for first.
+     *
+     * <p>It is {@link #READERS} and not {@link FormFields#FIELD_BY_NAME} because the form has two fields
+     * that are not columns -- the computed day counts, which {@link #displayValues} adds on top of
+     * {@link #readAll}. A query names a column or it names nothing.
+     */
+    public static Set<String> readableFields() {
+        return READERS.keySet();
+    }
+
     /** Whether a name is one a patch may set -- what "strips unknown keys" means here. */
     public static boolean isWritable(String field) {
         return WRITERS.containsKey(field);

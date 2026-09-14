@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -7,6 +8,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -18,16 +20,20 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseSummaryResponse;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollFields;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.FieldRule;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollNoteRepository;
@@ -38,11 +44,13 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollWitnessRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -116,6 +124,16 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private ReferenceCounterRepository referenceCounters;
+
+    /**
+     * The application's own mapper, not a fresh one.
+     *
+     * <p>Used where an assertion compares a response body against what the domain would serialise: taking
+     * the configured bean means the comparison is made in the service's wire format, including whatever
+     * modules and date handling that format has, rather than in a default one that happens to agree today.
+     */
+    @Autowired
+    private ObjectMapper mapper;
 
     @BeforeEach
     @AfterEach
@@ -249,6 +267,506 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.cases").isArray())
                 .andExpect(jsonPath("$.cases.length()").value(0));
+        }
+    }
+
+    /**
+     * The paging envelope: {@code page}, {@code size}, {@code total} and {@code totalPages}.
+     *
+     * <p>The four members are asserted through HTTP rather than only on {@code CaseResults}, because the
+     * thing a consumer renders "page 3 of 7" from is the JSON. {@code DeedPollServiceTest} pins which rows a
+     * page holds; what is at stake here is that the numbers describing them reach the wire, and reach it
+     * saying what was <em>applied</em> rather than what was asked for -- the clamped size especially.
+     */
+    @Nested
+    @DisplayName("GET /caseworker/cases paging")
+    class CaseListPaging {
+
+        @Test
+        @DisplayName("a bare list is page one of the default size, and says how many there are")
+        void bareListIsPageOneOfTheDefaultSize() throws Exception {
+            threeCases();
+
+            authorised(get("/caseworker/cases"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(3))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.size").value(25))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(1));
+        }
+
+        @Test
+        @DisplayName("a middle page is the rows between, and neither end of the set")
+        void theMiddlePageIsTheRowsBetween() throws Exception {
+            threeCases();
+
+            // Three pages of one, asked for the second: the failure a first-and-last-page test would miss is
+            // an offset computed as page * size rather than (page - 1) * size, which is right for page 1 and
+            // for the final page of a set that divides evenly, and wrong in between.
+            authorised(get("/caseworker/cases").param("size", "1").param("page", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.cases[0].newForename").value("Middle"))
+                .andExpect(jsonPath("$.page").value(2))
+                .andExpect(jsonPath("$.size").value(1))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(3));
+        }
+
+        @Test
+        @DisplayName("the last page is partial, and the total still counts the whole result set")
+        void theLastPageIsPartial() throws Exception {
+            threeCases();
+
+            // Two pages of two out of three rows: the second holds one row, and total is 3 rather than the
+            // 1 a caller could infer from the page it is holding. Getting this wrong is how a list reports
+            // "1 case" on its final page.
+            authorised(get("/caseworker/cases").param("size", "2").param("page", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.cases[0].newForename").value("Oldest"))
+                .andExpect(jsonPath("$.page").value(2))
+                .andExpect(jsonPath("$.size").value(2))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(2));
+        }
+
+        @Test
+        @DisplayName("an empty result set is zero pages, not one empty one")
+        void anEmptyResultSetIsZeroPages() throws Exception {
+            authorised(get("/caseworker/cases"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(0))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.size").value(25))
+                .andExpect(jsonPath("$.total").value(0))
+                // "Page 1 of 1" would claim a page that has no rows on it. See CaseResults.of.
+                .andExpect(jsonPath("$.totalPages").value(0));
+        }
+
+        @Test
+        @DisplayName("a page past the end is an empty page and not an error")
+        void pagePastTheEndIsAnEmptyPage() throws Exception {
+            threeCases();
+
+            // A caseworker who bookmarked page 9 of a list that has since shrunk has asked a question with
+            // an answer, and total is what tells them where to go instead.
+            authorised(get("/caseworker/cases").param("page", "9"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(0))
+                .andExpect(jsonPath("$.page").value(9))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(1));
+        }
+
+        @Test
+        @DisplayName("an over-cap size is clamped, and the response says the size that was applied")
+        void anOverCapSizeIsClampedAndSaidSo() throws Exception {
+            threeCases();
+
+            // The echo is what makes the clamp survivable: a caller that asked for 1,000 and was given 100
+            // must be able to see it, or it reads a full page as the whole result set and stops paging.
+            authorised(get("/caseworker/cases").param("size", "1000"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.size").value(100))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(1));
+        }
+
+        @Test
+        @DisplayName("the filter that was applied is echoed alongside the page it produced")
+        void theFilterIsEchoedAlongsideThePage() throws Exception {
+            newCase(Map.of("newForename", "Open"));
+            newCase(Map.of("newForename", "Done", "dateEnroled", RECEIVED));
+
+            // total counts the criterion the page came from -- the filter's rows, not the table's. A total
+            // taken from an unfiltered count is how "page 1 of 2" appears above a single-page list.
+            authorised(get("/caseworker/cases").param("filter", "enroled"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.filter").value("enroled"))
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.totalPages").value(1));
+        }
+
+        /**
+         * The query, sort and paging parameters reach the domain from the request.
+         *
+         * <p>Three assertions and not the operator matrix, which is task 5's: what is checked here is the
+         * wiring -- that {@code where}, {@code sort}, {@code page} and {@code size} are read at all, and
+         * that a refusal from any of them becomes a 400 rather than an unfiltered list.
+         */
+        @Test
+        @DisplayName("applies a where condition and a sort, and refuses one it cannot read")
+        void appliesAWhereConditionAndASort() throws Exception {
+            newCase(Map.of("newForename", "Adult one", "type", DeedPollType.Adult));
+            newCase(Map.of("newForename", "Minor one", "type", DeedPollType.Minor));
+
+            authorised(get("/caseworker/cases").param("where", "type:is:Adult"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.cases[0].newForename").value("Adult one"))
+                .andExpect(jsonPath("$.total").value(1));
+
+            authorised(get("/caseworker/cases").param("sort", "newForename:asc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases[0].newForename").value("Adult one"))
+                .andExpect(jsonPath("$.cases[1].newForename").value("Minor one"));
+
+            authorised(get("/caseworker/cases").param("where", "nosuchfield:is:Adult"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("where.0"));
+
+            authorised(get("/caseworker/cases").param("page", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("page"));
+        }
+
+        /**
+         * A parameter that changes the answer, sent twice, is refused rather than picked between.
+         *
+         * <p>Spring binds a repeated parameter by taking the first value, so {@code ?page=1&page=9} would
+         * answer page 1 to a caller who does not know which page they are looking at. {@code where} is the
+         * one parameter that legitimately repeats.
+         */
+        @Test
+        @DisplayName("refuses a sort, page or size given twice")
+        void refusesAParameterGivenTwice() throws Exception {
+            authorised(get("/caseworker/cases").param("page", "1", "9"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("page"));
+
+            authorised(get("/caseworker/cases").param("sort", "createdOn:asc", "createdOn:desc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("sort"));
+
+            authorised(get("/caseworker/cases").param("size", "5", "10"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("size"));
+        }
+
+        /** Three cases in a known order, newest first: "Newest", "Middle", "Oldest". */
+        private void threeCases() {
+            backdated(newCase(Map.of("newForename", "Oldest")),
+                LocalDateTime.parse("2026-06-01T09:00:00"));
+            backdated(newCase(Map.of("newForename", "Middle")),
+                LocalDateTime.parse("2026-07-01T09:00:00"));
+            backdated(newCase(Map.of("newForename", "Newest")),
+                LocalDateTime.parse("2026-08-01T09:00:00"));
+        }
+    }
+
+    /**
+     * The field-level query surface, over HTTP: the {@code where} parameter end to end.
+     *
+     * <p>{@code CaseQueryTest} pins the parsing and {@code CaseSpecificationsTest} pins the SQL, both against
+     * the domain directly. What is at stake here is the whole path -- a repeated URL parameter, through
+     * validation, into a query, back as JSON -- and the things only that path can get wrong: a condition that
+     * validates and then translates to nothing, a refusal that reaches a caller as a 500 or as an unfiltered
+     * 200, and a delimiter that survives one layer and not the next.
+     *
+     * <p>Two fixtures cover all six kinds between them, so a condition on any kind has one case that matches
+     * it and one that does not. Both are backdated to distinct times: the assertions read the rows back by
+     * {@code newForename}, and two cases created in the same millisecond would tie on {@code createdOn}.
+     */
+    @Nested
+    @DisplayName("GET /caseworker/cases where")
+    class CaseListQuery {
+
+        @BeforeEach
+        void twoCasesCoveringEveryKind() {
+            backdated(queryCase("Alexandra",
+                "newSurname", "MacDonald",
+                "referralNotes", "Ref: 12/34",
+                "type", DeedPollType.Adult,
+                "inPerson", true,
+                "iShall", List.of(1, 4)),
+                LocalDateTime.parse("2026-06-01T09:00:00"));
+            backdated(queryCase("Barnaby",
+                "newSurname", "Donaldson",
+                "type", DeedPollType.Minor,
+                "ageOfMinor", 8,
+                "inPerson", false,
+                "iShall", List.of(5),
+                "dateReceived", LocalDateTime.parse("2026-08-05T09:00:00")),
+                LocalDateTime.parse("2026-07-01T09:00:00"));
+        }
+
+        /**
+         * The regression that matters most: a request with none of the new parameters answers what it did
+         * before they existed.
+         *
+         * <p>Asserted against the untouched unpaged finder rather than against a transcription of its output,
+         * because "the same as today" is a claim about that method and nothing else. Its rows, mapped by the
+         * same DTO, must be the {@code cases} array of a bare request node for node -- which is what makes the
+         * switch to serving every list through the specification (task 3) safe rather than merely tested.
+         */
+        @Test
+        @DisplayName("a bare list is the same rows in the same order as the unpaged finder answers")
+        void bareListMatchesTheUnpagedFinder() throws Exception {
+            String expected = mapper.writeValueAsString(CaseSummaryResponse.from(
+                deedPollService.findDeedPolls(ListFilters.filterFor("all"))));
+
+            String body = authorised(get("/caseworker/cases"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+            assertThat(mapper.readTree(body).get("cases")).isEqualTo(mapper.readTree(expected));
+        }
+
+        /**
+         * Decision 5's table, executed over HTTP with rows that discriminate.
+         *
+         * <p>{@code CaseSpecificationsTest} runs the same sweep for translation coverage and asserts nothing
+         * about which rows come back. This one asserts exactly that, because the failure it is looking for is
+         * different: a condition that reaches the database intact and answers the wrong question -- a
+         * {@code lt} bound read as {@code le}, an {@code isEmpty} that misses a null column, a multiselect
+         * {@code contains} matching every row.
+         */
+        @ParameterizedTest(name = "{0}")
+        @CsvSource({
+            "'newForename:is:Alexandra', Alexandra",
+            "'newForename:contains:LEXAND', Alexandra",
+            "'newForename:startsWith:barn', Barnaby",
+            "'newForename:isNotEmpty', 'Alexandra,Barnaby'",
+            "'newSurname:contains:CDON', Alexandra",
+            "'referralNotes:isEmpty', Barnaby",
+            "'referralNotes:isNotEmpty', Alexandra",
+            "'referralNotes:contains:12/34', Alexandra",
+            "'dateReceived:is:2026-07-01T00:00', Alexandra",
+            "'dateReceived:before:2026-08-01T00:00', Alexandra",
+            "'dateReceived:after:2026-08-01T00:00', Barnaby",
+            "'dateReceived:between:2026-07-01T00:00,2026-08-05T09:00', 'Alexandra,Barnaby'",
+            "'dateReceived:isNotEmpty', 'Alexandra,Barnaby'",
+            "'ageOfMinor:is:8', Barnaby",
+            "'ageOfMinor:gt:7', Barnaby",
+            "'ageOfMinor:lt:9', Barnaby",
+            "'ageOfMinor:between:7,9', Barnaby",
+            "'ageOfMinor:isEmpty', Alexandra",
+            "'ageOfMinor:isNotEmpty', Barnaby",
+            "'type:is:Minor', Barnaby",
+            "'type:isOneOf:Adult,Minor', 'Alexandra,Barnaby'",
+            "'masterDecision:isEmpty', 'Alexandra,Barnaby'",
+            "'masterDecision:isNotEmpty', ''",
+            "'inPerson:is:true', Alexandra",
+            "'inPerson:is:false', Barnaby",
+            "'iShall:contains:4', Alexandra",
+            "'iShall:contains:5', Barnaby",
+            "'iShall:isNotEmpty', 'Alexandra,Barnaby'",
+            "'iShall:isEmpty', ''"
+        })
+        @DisplayName("every operator of every kind answers the rows it should")
+        void answersEveryOperatorOfEveryKind(String where, String expected) throws Exception {
+            assertThat(forenamesMatching(where))
+                .containsExactlyInAnyOrderElementsOf(names(expected));
+        }
+
+        @Test
+        @DisplayName("contains and startsWith ignore the capitalisation the value was typed in")
+        void containsAndStartsWithIgnoreCase() throws Exception {
+            // Both directions of both operators, because the predicate lowers both sides and a test that only
+            // sent a lower-case value would pass on a query that lowered the column alone.
+            assertThat(forenamesMatching("newSurname:contains:cdon")).containsExactly("Alexandra");
+            assertThat(forenamesMatching("newSurname:contains:CDON")).containsExactly("Alexandra");
+            assertThat(forenamesMatching("newSurname:startsWith:macd")).containsExactly("Alexandra");
+            assertThat(forenamesMatching("newSurname:startsWith:MACD")).containsExactly("Alexandra");
+        }
+
+        @Test
+        @DisplayName("a value containing a colon or a comma survives the round trip")
+        void keepsAValueContainingAColonOrAComma() throws Exception {
+            // The wire format's two delimiters, each inside a value: the entry is split on the first two
+            // colons only, and no text operator takes a list, so neither is ambiguous. A third colon read as
+            // a separator would look for a field called "Ref" and 400 on a condition that is well formed.
+            queryCase("Comma", "referralNotes", "Smith, A");
+
+            assertThat(forenamesMatching("referralNotes:is:Ref: 12/34")).containsExactly("Alexandra");
+            assertThat(forenamesMatching("referralNotes:contains:Smith, A")).containsExactly("Comma");
+        }
+
+        @Test
+        @DisplayName("refuses an unknown field, a wrong operator and an invalid enum member, naming each")
+        void refusesAConditionItCannotRead() throws Exception {
+            badCondition("stat:is:Received", "names no case field");
+            badCondition("newForename:before:2026-01-01T00:00", "does not apply");
+            badCondition("type:is:Nonsense", "has no value");
+        }
+
+        /**
+         * Every mistake in one answer, not the first one.
+         *
+         * <p>A query builder sends several conditions at once, so failing on the first would make correcting a
+         * request a round trip per mistake -- and the position in {@code where} is the only thing that says
+         * which condition each refusal is about.
+         */
+        @Test
+        @DisplayName("reports every bad condition in one response, addressed to its position")
+        void reportsEveryBadConditionRatherThanTheFirst() throws Exception {
+            authorised(get("/caseworker/cases")
+                .param("where", "stat:is:Received")
+                .param("where", "type:is:Nonsense")
+                .param("where", "newForename:before:2026-01-01T00:00"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Case query is not valid"))
+                .andExpect(jsonPath("$.errors.length()").value(3))
+                .andExpect(jsonPath("$.errors[0].field").value("where.0"))
+                .andExpect(jsonPath("$.errors[1].field").value("where.1"))
+                .andExpect(jsonPath("$.errors[2].field").value("where.2"));
+        }
+
+        @Test
+        @DisplayName("refuses a between whose bounds are reversed, and one that has only a bound")
+        void refusesABetweenThatIsReversedOrIncomplete() throws Exception {
+            // Reversed is refused rather than swapped: a caller who filled two controls the wrong way round
+            // needs telling, and a query that can only ever match nothing answered as an empty list looks
+            // exactly like a query that matched nothing.
+            badCondition("ageOfMinor:between:9,7", "reversed");
+            badCondition("ageOfMinor:between:7", "two comma-separated");
+        }
+
+        @Test
+        @DisplayName("applies a filter tab and a condition together")
+        void appliesTheFilterAndTheConditionTogether() throws Exception {
+            // Decision 3: the five tabs are ported system views, so filter=open&where=type:is:Adult means
+            // both. Alexandra is the open Adult; Barnaby is an open Minor; this one satisfies the condition
+            // and not the tab. Its state is set explicitly, because the derivation runs on a write through
+            // the service and a fixture that only set dateEnroled would still be Received -- and would then
+            // be admitted by the open tab, which is the assertion passing for the wrong reason.
+            queryCase("Enroled adult",
+                "type", DeedPollType.Adult,
+                "dateEnroled", LocalDateTime.parse("2026-08-01T09:00:00"),
+                "state", DeedPollState.Enroled);
+
+            authorised(get("/caseworker/cases").param("filter", "open").param("where", "type:is:Adult"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.filter").value("open"))
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.cases[0].newForename").value("Alexandra"))
+                .andExpect(jsonPath("$.total").value(1));
+        }
+
+        /**
+         * The security-relevant assertion of the whole surface.
+         *
+         * <p>A field name reaches a query, so a name crafted to look like SQL has to be refused by validation
+         * rather than escaped afterwards -- and the list still answering afterwards is what says the statement
+         * was never issued. A <em>value</em> is the other half: it is bound by the Criteria API, so one that
+         * reads as SQL is a string that matches nothing rather than a predicate that matches everything.
+         */
+        @Test
+        @DisplayName("refuses a field name crafted to look like SQL, and binds a value that reads as SQL")
+        void refusesAFieldNameThatLooksLikeSql() throws Exception {
+            badCondition("newForename\"; drop table \"DeedPoll\"; --:is:Ada", "names no case field");
+
+            authorised(get("/caseworker/cases"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(2));
+
+            authorised(get("/caseworker/cases").param("where", "newForename:is:' OR 1=1 --"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0));
+        }
+
+        /**
+         * The {@code newForename} of every case one condition admits, in the order the response gave them.
+         */
+        private List<String> forenamesMatching(String where) throws Exception {
+            String body = authorised(get("/caseworker/cases").param("where", where))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+            List<String> forenames = new ArrayList<>();
+            mapper.readTree(body).get("cases").forEach(row -> forenames.add(row.get("newForename").asText()));
+            return forenames;
+        }
+
+        /** One condition refused, with the refusal addressed to it and saying what is wrong. */
+        private void badCondition(String where, String saying) throws Exception {
+            authorised(get("/caseworker/cases").param("where", where))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Case query is not valid"))
+                .andExpect(jsonPath("$.errors.length()").value(1))
+                .andExpect(jsonPath("$.errors[0].field").value("where.0"))
+                .andExpect(jsonPath("$.errors[0].message").value(containsString(saying)));
+        }
+
+        /** A comma-separated expectation as a list, where nothing at all means no rows. */
+        private List<String> names(String expected) {
+            if (expected == null || expected.isBlank()) {
+                return List.of();
+            }
+            return List.of(expected.split(","));
+        }
+    }
+
+    /**
+     * The order the list came back in: {@code sort}, over HTTP.
+     *
+     * <p>Both directions, because a translation that ignored the direction would still pass a test that only
+     * asked for the default one -- and the default is descending, which is the direction a request that sends
+     * nothing already gets.
+     */
+    @Nested
+    @DisplayName("GET /caseworker/cases sort")
+    class CaseListOrder {
+
+        @Test
+        @DisplayName("sorts ascending and descending by a named field")
+        void sortsAscendingAndDescending() throws Exception {
+            // Backdated in the opposite order to the alphabet, so an assertion about the requested order
+            // cannot be satisfied by the default one.
+            backdated(queryCase("Ada"), LocalDateTime.parse("2026-08-01T09:00:00"));
+            backdated(queryCase("Beatrice"), LocalDateTime.parse("2026-07-01T09:00:00"));
+            backdated(queryCase("Cyril"), LocalDateTime.parse("2026-06-01T09:00:00"));
+
+            authorised(get("/caseworker/cases").param("sort", "newForename:asc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases[0].newForename").value("Ada"))
+                .andExpect(jsonPath("$.cases[1].newForename").value("Beatrice"))
+                .andExpect(jsonPath("$.cases[2].newForename").value("Cyril"));
+
+            authorised(get("/caseworker/cases").param("sort", "newForename:desc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases[0].newForename").value("Cyril"))
+                .andExpect(jsonPath("$.cases[1].newForename").value("Beatrice"))
+                .andExpect(jsonPath("$.cases[2].newForename").value("Ada"));
+        }
+
+        @Test
+        @DisplayName("refuses a sort field that is not one, or that has no column")
+        void refusesASortFieldItCannotOrderBy() throws Exception {
+            badSort("nosuchfield:asc", "names no sortable case field");
+            // Queryable and not sortable, in the other direction from a multiselect: the day counts are
+            // derived at read time, so there is no column to order by.
+            badSort("daysReceivedToEnroled:asc", "derived, not stored");
+        }
+
+        @Test
+        @DisplayName("refuses a multiselect sort field, which is queryable but has no order")
+        void refusesAMultiselectSortField() throws Exception {
+            // Ordering option-value sets means deciding whether {1,3} precedes {2}, and every answer to that
+            // is arbitrary -- so it is refused rather than silently ignored. A list returned in an order the
+            // caller did not ask for, with nothing said, is what this whole surface exists to avoid.
+            badSort("iShall:asc", "several values at once");
+        }
+
+        @Test
+        @DisplayName("refuses a direction that is not asc or desc")
+        void refusesAnUnreadableDirection() throws Exception {
+            badSort("newForename:sideways", "takes a direction of asc, desc");
+        }
+
+        /**
+         * One order refused, attributed to {@code sort} and saying what is wrong with it.
+         */
+        private void badSort(String sort, String saying) throws Exception {
+            authorised(get("/caseworker/cases").param("sort", sort))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Case list sort is not valid"))
+                .andExpect(jsonPath("$.errors.length()").value(1))
+                .andExpect(jsonPath("$.errors[0].field").value("sort"))
+                .andExpect(jsonPath("$.errors[0].message").value(containsString(saying)));
         }
     }
 
@@ -538,6 +1056,22 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
         patch.putAll(values);
         String id = deedPollService.createDeedPoll(DeedPollPatch.of(patch)).deedPoll().getId();
         return deedPolls.findById(id).orElseThrow();
+    }
+
+    /**
+     * A stored case with fields written straight onto the record, by the names the query uses.
+     *
+     * <p>Written through {@link DeedPollFields} after the create rather than as a patch through it, so a
+     * fixture can set a field regardless of what the per-type rules would make of it on a form -- an
+     * {@code ageOfMinor} on an Adult case, for one. What is under test is the query, not what a caseworker
+     * would have been allowed to type, and a condition on {@code ageOfMinor} needs a row that has one.
+     */
+    private DeedPoll queryCase(String forename, Object... fields) {
+        DeedPoll record = newCase(Map.of("newForename", forename));
+        for (int i = 0; i < fields.length; i += 2) {
+            DeedPollFields.write(record, String.valueOf(fields[i]), fields[i + 1]);
+        }
+        return deedPolls.save(record);
     }
 
     /**

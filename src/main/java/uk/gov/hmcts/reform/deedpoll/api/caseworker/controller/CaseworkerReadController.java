@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,6 +13,10 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DocumentTypeResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.FieldRulesResponse;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseQuery;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseResults;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentTypeService;
@@ -49,21 +54,54 @@ public class CaseworkerReadController {
     }
 
     /**
-     * The case list, filtered by one of the saved-query keys.
+     * One page of the case list: a saved-query filter, field-level conditions, an order and a page.
      *
      * <p>An unrecognised or absent {@code filter} resolves to the first filter -- "all" -- rather than being
      * refused, because the key arrives from a URL a caseworker may have bookmarked and the list is the
      * service's front page. The response says which filter was applied, so the fallback is visible; see
      * {@link CaseListResponse}.
      *
-     * <p>Not paginated. The reference is not either, and the case volume this service replaces is a few
-     * thousand rows against which a page parameter with no consumer would be a guess about how it should be
-     * consumed. It is the one thing here worth revisiting before go-live rather than after.
+     * <p><strong>Every other parameter is refused rather than resolved when it is not understood</strong>,
+     * which is the opposite of {@code filter} and deliberately so. A filter key is one of five tabs and the
+     * fallback shows a caseworker something; a condition, an order or a page number that cannot be read has
+     * no defensible fallback -- answering an unfiltered list to {@code where=stat:is:Received} would present
+     * every case as the ones matching a query nobody can see was dropped.
+     *
+     * <p><strong>Each parameter is read from a list and resolved</strong>, for the reason {@link #single}
+     * sets out: Spring binds a repeated parameter by silently taking the first value, and each of these
+     * changes the answer. {@code where} is the exception and is genuinely repeated -- that is the wire
+     * format, one condition per occurrence.
+     *
+     * <p><strong>Those lists come from the request's own parameter map and not from
+     * {@code @RequestParam List<String>}</strong>, which cannot carry them. Spring hands a collection-typed
+     * parameter the single {@code String} when a request sent one value, and converting a {@code String} to a
+     * {@code List<String>} splits it on commas -- so {@code ?where=type:isOneOf:Adult,Minor} arrived as two
+     * conditions, the second of them the bare word {@code Minor}, and every list-valued operator and every
+     * value with a comma in it was a 400. It only bit a request that sent {@code where} exactly once, because
+     * two occurrences arrive as an array and are not split, which is why it survived the wiring tests.
+     * {@code MultiValueMap} is populated from {@code getParameterMap} and does no conversion, so a comma
+     * inside a value stays inside the value and {@code CaseQuery} does the only splitting there is.
+     *
+     * <p>{@code filter} keeps binding as a single string, untouched: a repeated {@code filter} arrives as a
+     * value that is not a key and falls back to "all", which is exactly what the paragraph above describes
+     * and is pinned behaviour.
+     *
+     * <p>Paginated, where the list this ports was not. A default page size means a bare request no longer
+     * answers every row in the table, which is the point: an unbounded list endpoint is a denial of service
+     * against its own database, and {@code CasePaging} records why the cap is not the client's to raise.
      */
     @GetMapping("/cases")
-    public CaseListResponse cases(@RequestParam(name = "filter", required = false) String filter) {
+    public CaseListResponse cases(
+        @RequestParam(name = "filter", required = false) String filter,
+        @RequestParam MultiValueMap<String, String> parameters) {
+
         ListFilters.ListFilter resolved = ListFilters.filterFor(filter);
-        return CaseListResponse.of(resolved, deedPolls.findDeedPolls(resolved));
+        CaseResults results = deedPolls.findDeedPolls(
+            resolved,
+            CaseQuery.parse(parameters.get("where")),
+            CaseSort.parse(single("sort", parameters.get("sort"))),
+            CasePaging.parse(single("page", parameters.get("page")), single("size", parameters.get("size"))));
+        return CaseListResponse.of(resolved, results);
     }
 
     /**

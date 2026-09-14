@@ -11,14 +11,19 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.StreamSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -257,5 +262,74 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(uploadForm.at("/properties/name").isObject()).isTrue();
         assertThat(uploadForm.at("/properties/direction/enum").isArray()).isTrue();
         assertThat(uploadForm.at("/required/0").asText()).isEqualTo("documentTypeId");
+    }
+
+    /**
+     * The case list's four query parameters, asserted to be described rather than reflected.
+     *
+     * <p>The same argument as the write bodies, on the way in instead of the way out. The list binds its
+     * parameters from a {@code MultiValueMap} because a repeated {@code where} cannot arrive any other way, and
+     * springdoc reflects that into one required parameter literally named {@code parameters} -- a document that
+     * says a bare list request is a 400 and never mentions {@code where}, {@code sort}, {@code page} or
+     * {@code size}. {@link uk.gov.hmcts.reform.deedpoll.config.OpenAPIQueryParameters} replaces it; this pins
+     * that it stays replaced, because {@code deed-poll-admin} generates its client from this document and the
+     * reflected form is one a client cannot call the operation with at all.
+     */
+    @DisplayName("Describes the case list's query parameters rather than the map they bind from")
+    @Test
+    void documentsTheCaseListQueryParameters() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                          .andExpect(status().isOk())
+                                          .andReturn()
+                                          .getResponse()
+                                          .getContentAsByteArray());
+
+        JsonNode parameters = spec.at("/paths/~1caseworker~1cases/get/parameters");
+        assertThat(parameters.isArray()).isTrue();
+
+        Map<String, JsonNode> byName = new LinkedHashMap<>();
+        parameters.forEach(parameter -> byName.put(parameter.at("/name").asText(), parameter));
+
+        // The binding mechanism is not part of the surface, and neither is the component it was typed with.
+        assertThat(byName).as("the reflected map parameter is gone").doesNotContainKey("parameters");
+        assertThat(spec.at("/components/schemas/MultiValueMapStringString").isMissingNode())
+            .as("and so is the schema springdoc generated for it")
+            .isTrue();
+
+        assertThat(byName.keySet()).containsExactlyInAnyOrder("filter", "where", "sort", "page", "size");
+
+        // Not one of them is required: a bare list is the service's front page, and the reflected document said
+        // otherwise. This is the assertion that would have caught the published form.
+        byName.forEach((name, parameter) ->
+                           assertThat(parameter.at("/required").asBoolean())
+                               .as("%s is optional", name)
+                               .isFalse());
+
+        // `where` repeats rather than taking one comma-separated value, and `explode` on an array is what says
+        // so. A client that joined conditions with commas would send one unparseable entry, and a comma is
+        // already meaningful inside a `between` or `isOneOf` value.
+        assertThat(byName.get("where").at("/schema/type").asText()).isEqualTo("array");
+        assertThat(byName.get("where").at("/explode").asBoolean()).isTrue();
+
+        // The paging defaults are the domain's constants, so the document tracks CasePaging rather than a number
+        // written here -- and no `maximum`, because an over-cap size is clamped and answered, not refused.
+        assertThat(byName.get("page").at("/schema/default").asInt()).isEqualTo(CasePaging.FIRST_PAGE);
+        assertThat(byName.get("size").at("/schema/default").asInt()).isEqualTo(CasePaging.DEFAULT_SIZE);
+        assertThat(byName.get("size").at("/schema/maximum").isMissingNode())
+            .as("a clamped cap is described in prose, not as a constraint a client would enforce")
+            .isTrue();
+        assertThat(byName.get("size").at("/description").asText())
+            .contains(String.valueOf(CasePaging.MAX_SIZE));
+
+        // The operator table reaches the document from the enum that validates it, so the two cannot drift.
+        String where = byName.get("where").at("/description").asText();
+        for (QueryOperator operator : QueryOperator.values()) {
+            assertThat(where).as("the document lists the %s operator", operator.wire()).contains(operator.wire());
+        }
+
+        // And the sortable fields likewise, from CaseSort rather than restated.
+        String sort = byName.get("sort").at("/description").asText();
+        CaseSort.sortableFields()
+            .forEach(field -> assertThat(sort).as("the document lists %s as sortable", field).contains(field));
     }
 }

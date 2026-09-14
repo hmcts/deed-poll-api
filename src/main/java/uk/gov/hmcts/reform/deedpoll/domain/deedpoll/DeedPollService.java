@@ -1,5 +1,8 @@
 package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
@@ -52,6 +55,27 @@ public class DeedPollService {
      */
     public static final String ENROLMENT_WITNESSES_MESSAGE =
         "A Deed Poll cannot be sent for enrolment until two witnesses have been recorded.";
+
+    /**
+     * The column every order falls back on when its own column ties.
+     *
+     * <p><strong>A page of a result set with no total order is not a page.</strong> Postgres may return two
+     * rows with the same {@code createdOn} in either order between two queries, so without a unique
+     * tiebreak a row can appear on both page 1 and page 2 while another appears on neither -- and a
+     * caseworker paging through a list would never know. {@code id} is unique and NOT NULL, so adding it
+     * settles every tie, and it refines today's order rather than changing it: two rows the requested
+     * column already separates are unaffected.
+     */
+    private static final String TIEBREAK = "id";
+
+    /**
+     * The list order, which the named finders carry in their own names.
+     *
+     * <p>Stated here for the specification path, because a {@code Specification} says which rows and not
+     * in what order. Newest first is how a caseworker finds the case they have just logged, and it is the
+     * reference's {@code orderBy}.
+     */
+    private static final Sort NEWEST_FIRST = order(CaseSort.NEWEST_FIRST);
 
     private final DeedPollRepository deedPolls;
     private final ReferenceNumberService referenceNumbers;
@@ -145,6 +169,60 @@ public class DeedPollService {
             .map(this::casesMatching)
             .orElseGet(deedPolls::findAllByOrderByCreatedOnDesc);
         return Computed.withComputedAll(found);
+    }
+
+    /**
+     * The cases a saved-query filter and a field-level query both admit, newest first.
+     *
+     * <p>The two compose with AND: {@code ?filter=open&where=type:is:Adult} means both, because the tabs
+     * are ported system views and a bookmarked {@code ?filter=open} has to keep meaning what it meant.
+     *
+     * <p><strong>An empty query is today's path, not an empty specification.</strong> A list with no
+     * conditions is by far the common request, and it is the one whose behaviour is pinned -- so it goes
+     * through the same named finders it always has, with the same SQL. The specification is reached only
+     * by a request that could not have been served before.
+     *
+     * @param query the conditions, already validated; {@link CaseQuery#NONE} for a request with no
+     *     {@code where}
+     */
+    @Transactional(readOnly = true)
+    public List<DeedPollWithComputed> findDeedPolls(ListFilters.ListFilter filter, CaseQuery query) {
+        if (query.isEmpty()) {
+            return findDeedPolls(filter);
+        }
+        return Computed.withComputedAll(
+            deedPolls.findAll(CaseSpecifications.matching(filter, query), NEWEST_FIRST));
+    }
+
+    /**
+     * One page of the cases a filter and a query both admit, in the order that was asked for.
+     *
+     * <p><strong>Every request comes through here, including one with no conditions.</strong> The unpaged
+     * methods above stay exactly as they are and keep their consumers, but a paged answer needs a total, and
+     * a total is a count of the same criterion the page was drawn from -- so the specification is the only
+     * path that can produce a page and its count together. {@code CaseSpecificationsTest} pins the
+     * specification's statement of each filter tab against the named finders' own, which is what makes
+     * serving a bare list this way the same answer it has always been.
+     *
+     * <p>A page past the end is an empty page and not an error: a caller who bookmarked page 4 of a list
+     * that has since shrunk to two pages has asked a question with an answer, and the answer is "nothing,
+     * out of this many". {@link CaseResults#total()} is what tells them where to go instead.
+     *
+     * @param filter the tab, whose criterion composes with the query -- decision 3
+     * @param query the conditions, already validated; {@link CaseQuery#NONE} for a request with no
+     *     {@code where}
+     * @param sort the order, {@link CaseSort#NEWEST_FIRST} for a request that asked for none
+     * @param paging which page and how many rows, {@link CasePaging#FIRST} for a request that asked for none
+     */
+    @Transactional(readOnly = true)
+    public CaseResults findDeedPolls(ListFilters.ListFilter filter,
+                                     CaseQuery query,
+                                     CaseSort sort,
+                                     CasePaging paging) {
+        Page<DeedPoll> found = deedPolls.findAll(
+            CaseSpecifications.matching(filter, query),
+            PageRequest.of(paging.index(), paging.size(), order(sort)));
+        return CaseResults.of(Computed.withComputedAll(found.getContent()), paging, found.getTotalElements());
     }
 
     /**
@@ -304,6 +382,21 @@ public class DeedPollService {
             throw new InvalidInputError("Case is not valid for submission", errors);
         }
         return record;
+    }
+
+    /**
+     * A requested order as the repository's, with the tiebreak that makes paging it safe.
+     *
+     * <p>The one place a {@link CaseSort} becomes a Spring Data {@code Sort}, so nothing above this class
+     * holds a persistence type -- the same split {@code CaseSpecifications} keeps for the conditions.
+     * The field name is a name {@link CaseSort} resolved against the field registries, never a caller's
+     * string.
+     */
+    private static Sort order(CaseSort sort) {
+        Sort.Direction direction = sort.direction().isDescending() ? Sort.Direction.DESC : Sort.Direction.ASC;
+        // Always appended: no sortable field is the tiebreak itself -- CaseSort does not admit `id` -- so
+        // there is no case where this repeats a column.
+        return Sort.by(direction, sort.field()).and(Sort.by(Sort.Direction.ASC, TIEBREAK));
     }
 
     /** The cases one state criterion admits, newest first. */

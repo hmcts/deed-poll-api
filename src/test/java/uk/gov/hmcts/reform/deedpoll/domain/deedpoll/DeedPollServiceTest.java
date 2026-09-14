@@ -636,6 +636,223 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("findDeedPolls applies a filter and a field-level query together")
+    void findDeedPollsAppliesAFilterAndAQueryTogether() {
+        created("dateReceived", RECEIVED, "type", DeedPollType.Adult);
+        created("dateReceived", RECEIVED, "type", DeedPollType.Minor);
+        created("dateReceived", RECEIVED, "type", DeedPollType.Adult,
+            "dateEnroled", "2026-08-01T00:00:00.000Z");
+
+        // Decision 3: the two compose. The Adult case that is enrolled is excluded by the tab, and the open
+        // Minor case by the condition, so exactly one of the three survives both.
+        assertThat(deedPollService.findDeedPolls(
+                ListFilters.filterFor("open"), CaseQuery.parse(List.of("type:is:Adult"))))
+            .singleElement()
+            .satisfies(withComputed -> {
+                assertThat(withComputed.deedPoll().getType()).isEqualTo(DeedPollType.Adult);
+                assertThat(withComputed.computed()).isNotNull();
+            });
+    }
+
+    @Test
+    @DisplayName("findDeedPolls with no conditions is the unqueried list, newest first")
+    void findDeedPollsWithNoConditionsIsTheUnqueriedList() {
+        // An empty query is today's path rather than an empty specification -- the common request, and the
+        // one whose behaviour is pinned. Asserted as the same answer, which is the claim that matters.
+        created("dateReceived", "2026-07-01T00:00:00.000Z");
+        created("dateReceived", "2026-07-02T00:00:00.000Z");
+
+        ListFilters.ListFilter all = ListFilters.filterFor("all");
+
+        assertThat(deedPollService.findDeedPolls(all, CaseQuery.NONE))
+            .extracting(withComputed -> withComputed.deedPoll().getId())
+            .containsExactlyElementsOf(deedPollService.findDeedPolls(all).stream()
+                .map(withComputed -> withComputed.deedPoll().getId())
+                .toList());
+    }
+
+    @Nested
+    @DisplayName("sorting and paging")
+    class SortingAndPaging {
+
+        /** The "all" tab, so an assertion is about the order and the slice and nothing else. */
+        private final ListFilters.ListFilter all = ListFilters.filterFor("all");
+
+        /**
+         * A case with an explicit creation time.
+         *
+         * <p>Set explicitly rather than trusting two creates to land in different milliseconds, which is
+         * what every ordering assertion below would otherwise be resting on.
+         */
+        private DeedPoll backdated(String forename, String createdOn) {
+            DeedPoll record = created("dateReceived", RECEIVED, "newForename", forename);
+            record.setCreatedOn(LocalDateTime.parse(createdOn));
+            return deedPolls.save(record);
+        }
+
+        private List<String> forenamesOf(CaseResults results) {
+            return results.cases().stream().map(found -> found.deedPoll().getNewForename()).toList();
+        }
+
+        private CaseResults page(CaseSort sort, CasePaging paging) {
+            return deedPollService.findDeedPolls(all, CaseQuery.NONE, sort, paging);
+        }
+
+        @Test
+        @DisplayName("the defaults are today's list: the same cases, in the same order")
+        void theDefaultsAreTodaysList() {
+            // The regression that matters most. A caller that sends no sort and no paging must see exactly
+            // the list it saw before either parameter existed, even though the paged path reaches it through
+            // a specification and the unpaged one through a named finder.
+            backdated("Older", "2026-06-01T09:00:00");
+            backdated("Newest", "2026-08-01T09:00:00");
+            backdated("Middle", "2026-07-01T09:00:00");
+
+            CaseResults results = page(CaseSort.NEWEST_FIRST, CasePaging.FIRST);
+
+            assertThat(forenamesOf(results)).containsExactly("Newest", "Middle", "Older");
+            assertThat(results.cases().stream().map(found -> found.deedPoll().getId()))
+                .containsExactlyElementsOf(deedPollService.findDeedPolls(all).stream()
+                    .map(found -> found.deedPoll().getId())
+                    .toList());
+            assertThat(results.page()).isEqualTo(1);
+            assertThat(results.size()).isEqualTo(CasePaging.DEFAULT_SIZE);
+            assertThat(results.total()).isEqualTo(3);
+            assertThat(results.totalPages()).isEqualTo(1);
+            assertThat(results.cases()).allSatisfy(found -> assertThat(found.computed()).isNotNull());
+        }
+
+        @Test
+        @DisplayName("sorts ascending and descending by a field a caller named")
+        void sortsAscendingAndDescending() {
+            backdated("Bea", "2026-06-01T09:00:00");
+            backdated("Cal", "2026-07-01T09:00:00");
+            backdated("Ada", "2026-08-01T09:00:00");
+
+            assertThat(forenamesOf(page(CaseSort.parse("newForename:asc"), CasePaging.FIRST)))
+                .containsExactly("Ada", "Bea", "Cal");
+            assertThat(forenamesOf(page(CaseSort.parse("newForename:desc"), CasePaging.FIRST)))
+                .containsExactly("Cal", "Bea", "Ada");
+            // The default order, reversed -- which is why createdOn has to be nameable at all.
+            assertThat(forenamesOf(page(CaseSort.parse("createdOn:asc"), CasePaging.FIRST)))
+                .containsExactly("Bea", "Cal", "Ada");
+        }
+
+        @Test
+        @DisplayName("pages the first, a middle and a last partial page")
+        void pagesTheFirstAMiddleAndALastPartialPage() {
+            backdated("One", "2026-08-05T09:00:00");
+            backdated("Two", "2026-08-04T09:00:00");
+            backdated("Three", "2026-08-03T09:00:00");
+            backdated("Four", "2026-08-02T09:00:00");
+            backdated("Five", "2026-08-01T09:00:00");
+
+            CaseResults first = page(CaseSort.NEWEST_FIRST, new CasePaging(1, 2));
+            CaseResults middle = page(CaseSort.NEWEST_FIRST, new CasePaging(2, 2));
+            CaseResults last = page(CaseSort.NEWEST_FIRST, new CasePaging(3, 2));
+
+            assertThat(forenamesOf(first)).containsExactly("One", "Two");
+            assertThat(forenamesOf(middle)).containsExactly("Three", "Four");
+            // The partial page is a page, which is what rounding the count up means.
+            assertThat(forenamesOf(last)).containsExactly("Five");
+            assertThat(List.of(first, middle, last)).allSatisfy(results -> {
+                assertThat(results.total()).isEqualTo(5);
+                assertThat(results.totalPages()).isEqualTo(3);
+                assertThat(results.size()).isEqualTo(2);
+            });
+            assertThat(last.page()).isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("answers a page past the end with nothing, not with an error")
+        void answersAPagePastTheEndWithNothing() {
+            // A caller who bookmarked page 4 of a list that has since shrunk has asked a question with an
+            // answer, and the total is what tells them where to go instead.
+            backdated("One", "2026-08-02T09:00:00");
+            backdated("Two", "2026-08-01T09:00:00");
+
+            CaseResults beyond = page(CaseSort.NEWEST_FIRST, new CasePaging(4, 2));
+
+            assertThat(beyond.cases()).isEmpty();
+            assertThat(beyond.isEmpty()).isTrue();
+            assertThat(beyond.page()).isEqualTo(4);
+            assertThat(beyond.total()).isEqualTo(2);
+            assertThat(beyond.totalPages()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("an empty result set has no pages")
+        void anEmptyResultSetHasNoPages() {
+            CaseResults empty = page(CaseSort.NEWEST_FIRST, CasePaging.FIRST);
+
+            assertThat(empty.cases()).isEmpty();
+            assertThat(empty.total()).isZero();
+            // Zero rather than one: "page 1 of 0" says the truth about a list with nothing in it, where
+            // "page 1 of 1" claims a page that has no rows on it.
+            assertThat(empty.totalPages()).isZero();
+        }
+
+        @Test
+        @DisplayName("pages a filter and a query together, counting only what both admit")
+        void pagesAFilterAndAQueryTogether() {
+            backdated("Adult one", "2026-08-03T09:00:00");
+            backdated("Adult two", "2026-08-02T09:00:00");
+            backdated("Elsewhere", "2026-08-04T09:00:00");
+            // A third matching case, excluded by the tab rather than by the condition -- so the total below
+            // is a count of what both admit and not of either alone.
+            DeedPoll enroled = backdated("Adult three", "2026-08-01T09:00:00");
+            recordTwoWitnesses(enroled.getId());
+            deedPollService.updateDeedPoll(enroled.getId(), patch("dateEnroled", "2026-08-05T00:00:00.000Z"));
+
+            CaseResults results = deedPollService.findDeedPolls(
+                ListFilters.filterFor("open"),
+                CaseQuery.parse(List.of("newForename:startsWith:adult")),
+                CaseSort.parse("newForename:asc"),
+                new CasePaging(1, 1));
+
+            assertThat(forenamesOf(results)).containsExactly("Adult one");
+            // The total is a count of the same criterion the page was drawn from, not of the whole table.
+            assertThat(results.total()).isEqualTo(2);
+            assertThat(results.totalPages()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("pages a tie deterministically, so no row is on two pages or on none")
+        void pagesATieDeterministically() {
+            // Without a unique tiebreak Postgres may return two rows with the same createdOn in either
+            // order between two queries, and a caseworker paging a list would never know that one row
+            // appeared twice and another not at all. The id tiebreak is what makes this assertion possible.
+            String shared = "2026-08-01T09:00:00";
+            List<String> ids = List.of(
+                backdated("A", shared).getId(),
+                backdated("B", shared).getId(),
+                backdated("C", shared).getId());
+
+            List<String> paged = List.of(1, 2, 3).stream()
+                .flatMap(number -> page(CaseSort.NEWEST_FIRST, new CasePaging(number, 1)).cases().stream())
+                .map(found -> found.deedPoll().getId())
+                .toList();
+
+            assertThat(paged).containsExactlyElementsOf(ids.stream().sorted().toList());
+        }
+
+        @Test
+        @DisplayName("every field published as sortable really sorts")
+        void everyFieldPublishedAsSortableReallySorts() {
+            // A sortable name becomes an ORDER BY on the entity's own attribute, and a name that is not one
+            // fails when the query is built -- which would reach a caller as a 500 for an option the sort
+            // control offered them. Swept rather than sampled, for the same reason CaseSpecificationsTest
+            // walks every operator: this is the assertion that the published set and the entity agree.
+            backdated("Only", "2026-08-01T09:00:00");
+
+            assertThat(CaseSort.sortableFields()).isNotEmpty().allSatisfy(field ->
+                assertThat(page(CaseSort.parse(field + ":desc"), CasePaging.FIRST).total())
+                    .as(field)
+                    .isEqualTo(1));
+        }
+    }
+
+    @Test
     @DisplayName("validateCaseForSubmit refuses a case whose per-type required fields are unmet")
     void validateCaseForSubmitRefusesAnIncompleteCase() {
         String caseId = created("type", DeedPollType.Adult, "dateReceived", RECEIVED).getId();
