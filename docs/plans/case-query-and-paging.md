@@ -121,7 +121,23 @@ Validate against `FormFields`: unknown field, operator not permitted for that fi
 the operator, or an enum value not in the named set — each a `FieldError` naming the offending condition, collected
 into one `InvalidInputError` rather than failing on the first.
 
-- [ ] Parses, validates against `FormFields`, and reports every bad condition at once rather than the first
+- [x] Parses, validates against `FormFields`, and reports every bad condition at once rather than the first
+
+`CaseQuery` + `QueryOperator` in `domain/deedpoll`; errors addressed to `where.0`, `where.1`, … because the
+parameter repeats and a position is the only thing that identifies which condition was wrong. Two departures
+from decision 6, both recorded here so task 2 does not have to rediscover them:
+
+- **68 of the 70 fields are queryable, not all 70.** `daysReceivedToEnroled` and `daysReceivedToReturned` are
+  computed at read time and have no column, so there is nothing to query them against — they are refused with
+  *"is derived, not stored"*. Queryability is `FormFields.FIELD_BY_NAME` ∩ `DeedPollFields.readableFields()`
+  (a new accessor), which is deliberately **not** `isWritable`: all five read-only fields, including
+  `referencenumber` and `state`, are queryable exactly as the decision requires.
+- **Conditions are capped at `MAX_CONDITIONS` (20)**, for the reason `size` is capped: each one is another
+  predicate against a table with no index for it.
+
+A condition's values arrive already coerced to the field's kind (`LocalDateTime`, `BigDecimal`, `Boolean`,
+`Integer` for a multiselect option, the validated member *name* for an enum), so task 2 binds them rather than
+parsing them. `between` bounds are refused when reversed rather than swapped.
 
 ### Task 2: Specifications
 
