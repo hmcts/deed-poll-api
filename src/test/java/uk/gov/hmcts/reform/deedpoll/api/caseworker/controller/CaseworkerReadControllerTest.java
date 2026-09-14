@@ -252,6 +252,174 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
         }
     }
 
+    /**
+     * The paging envelope: {@code page}, {@code size}, {@code total} and {@code totalPages}.
+     *
+     * <p>The four members are asserted through HTTP rather than only on {@code CaseResults}, because the
+     * thing a consumer renders "page 3 of 7" from is the JSON. {@code DeedPollServiceTest} pins which rows a
+     * page holds; what is at stake here is that the numbers describing them reach the wire, and reach it
+     * saying what was <em>applied</em> rather than what was asked for -- the clamped size especially.
+     */
+    @Nested
+    @DisplayName("GET /caseworker/cases paging")
+    class CaseListPaging {
+
+        @Test
+        @DisplayName("a bare list is page one of the default size, and says how many there are")
+        void bareListIsPageOneOfTheDefaultSize() throws Exception {
+            threeCases();
+
+            authorised(get("/caseworker/cases"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(3))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.size").value(25))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(1));
+        }
+
+        @Test
+        @DisplayName("the last page is partial, and the total still counts the whole result set")
+        void theLastPageIsPartial() throws Exception {
+            threeCases();
+
+            // Two pages of two out of three rows: the second holds one row, and total is 3 rather than the
+            // 1 a caller could infer from the page it is holding. Getting this wrong is how a list reports
+            // "1 case" on its final page.
+            authorised(get("/caseworker/cases").param("size", "2").param("page", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.cases[0].newForename").value("Oldest"))
+                .andExpect(jsonPath("$.page").value(2))
+                .andExpect(jsonPath("$.size").value(2))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(2));
+        }
+
+        @Test
+        @DisplayName("an empty result set is zero pages, not one empty one")
+        void anEmptyResultSetIsZeroPages() throws Exception {
+            authorised(get("/caseworker/cases"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(0))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.size").value(25))
+                .andExpect(jsonPath("$.total").value(0))
+                // "Page 1 of 1" would claim a page that has no rows on it. See CaseResults.of.
+                .andExpect(jsonPath("$.totalPages").value(0));
+        }
+
+        @Test
+        @DisplayName("a page past the end is an empty page and not an error")
+        void pagePastTheEndIsAnEmptyPage() throws Exception {
+            threeCases();
+
+            // A caseworker who bookmarked page 9 of a list that has since shrunk has asked a question with
+            // an answer, and total is what tells them where to go instead.
+            authorised(get("/caseworker/cases").param("page", "9"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(0))
+                .andExpect(jsonPath("$.page").value(9))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(1));
+        }
+
+        @Test
+        @DisplayName("an over-cap size is clamped, and the response says the size that was applied")
+        void anOverCapSizeIsClampedAndSaidSo() throws Exception {
+            threeCases();
+
+            // The echo is what makes the clamp survivable: a caller that asked for 1,000 and was given 100
+            // must be able to see it, or it reads a full page as the whole result set and stops paging.
+            authorised(get("/caseworker/cases").param("size", "1000"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.size").value(100))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(1));
+        }
+
+        @Test
+        @DisplayName("the filter that was applied is echoed alongside the page it produced")
+        void theFilterIsEchoedAlongsideThePage() throws Exception {
+            newCase(Map.of("newForename", "Open"));
+            newCase(Map.of("newForename", "Done", "dateEnroled", RECEIVED));
+
+            // total counts the criterion the page came from -- the filter's rows, not the table's. A total
+            // taken from an unfiltered count is how "page 1 of 2" appears above a single-page list.
+            authorised(get("/caseworker/cases").param("filter", "enroled"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.filter").value("enroled"))
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.totalPages").value(1));
+        }
+
+        /**
+         * The query, sort and paging parameters reach the domain from the request.
+         *
+         * <p>Three assertions and not the operator matrix, which is task 5's: what is checked here is the
+         * wiring -- that {@code where}, {@code sort}, {@code page} and {@code size} are read at all, and
+         * that a refusal from any of them becomes a 400 rather than an unfiltered list.
+         */
+        @Test
+        @DisplayName("applies a where condition and a sort, and refuses one it cannot read")
+        void appliesAWhereConditionAndASort() throws Exception {
+            newCase(Map.of("newForename", "Adult one", "type", DeedPollType.Adult));
+            newCase(Map.of("newForename", "Minor one", "type", DeedPollType.Minor));
+
+            authorised(get("/caseworker/cases").param("where", "type:is:Adult"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.cases[0].newForename").value("Adult one"))
+                .andExpect(jsonPath("$.total").value(1));
+
+            authorised(get("/caseworker/cases").param("sort", "newForename:asc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases[0].newForename").value("Adult one"))
+                .andExpect(jsonPath("$.cases[1].newForename").value("Minor one"));
+
+            authorised(get("/caseworker/cases").param("where", "nosuchfield:is:Adult"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("where.0"));
+
+            authorised(get("/caseworker/cases").param("page", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("page"));
+        }
+
+        /**
+         * A parameter that changes the answer, sent twice, is refused rather than picked between.
+         *
+         * <p>Spring binds a repeated parameter by taking the first value, so {@code ?page=1&page=9} would
+         * answer page 1 to a caller who does not know which page they are looking at. {@code where} is the
+         * one parameter that legitimately repeats.
+         */
+        @Test
+        @DisplayName("refuses a sort, page or size given twice")
+        void refusesAParameterGivenTwice() throws Exception {
+            authorised(get("/caseworker/cases").param("page", "1", "9"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("page"));
+
+            authorised(get("/caseworker/cases").param("sort", "createdOn:asc", "createdOn:desc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("sort"));
+
+            authorised(get("/caseworker/cases").param("size", "5", "10"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("size"));
+        }
+
+        /** Three cases in a known order, newest first: "Newest", "Middle", "Oldest". */
+        private void threeCases() {
+            backdated(newCase(Map.of("newForename", "Oldest")),
+                LocalDateTime.parse("2026-06-01T09:00:00"));
+            backdated(newCase(Map.of("newForename", "Middle")),
+                LocalDateTime.parse("2026-07-01T09:00:00"));
+            backdated(newCase(Map.of("newForename", "Newest")),
+                LocalDateTime.parse("2026-08-01T09:00:00"));
+        }
+    }
+
     @Nested
     @DisplayName("GET /caseworker/cases/{id}")
     class CaseDetail {

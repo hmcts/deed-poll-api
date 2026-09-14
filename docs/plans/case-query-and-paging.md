@@ -211,7 +211,29 @@ is what stops a published sort option becoming a 500 on an entity attribute that
 
 `CaseListResponse` gains `page`, `size`, `total`, `totalPages`. Wire it through the controller.
 
-- [ ] New fields populated correctly, including the last partial page and the empty-result case
+- [x] New fields populated correctly, including the last partial page and the empty-result case
+
+`CaseListResponse` gains `page`, `size`, `total`, `totalPages` as flat members, populated from `CaseResults`
+through a single `of(filter, results)` factory — the old `of(filter, List)` is gone, so there is no way to
+build a response without the paging numbers. Three things task 5 should not have to rediscover:
+
+- **`filter` still binds as a single `String`; `sort`, `page` and `size` are read from lists through
+  `single`.** Each of those three changes the answer, and Spring resolves a repeated parameter by silently
+  taking the first value — the wrong-answer-as-right-answer failure the `field-rules` parameters already
+  guard against. `where` is the one parameter that legitimately repeats. `filter` is left alone deliberately:
+  a repeated `filter` arrives as a non-key and falls back to "all", which is pinned behaviour.
+- **`filter` resolves; everything else refuses.** A tab's fallback shows a caseworker something, whereas an
+  unreadable condition, order or page number has no defensible fallback — answering an unfiltered list to
+  `where=stat:is:Received` presents every case as the matches of a query nobody can see was dropped.
+- **A bare `GET /caseworker/cases` is now page 1 of 25, not every row.** Same cases in the same order, plus
+  the envelope, but the default size is a real change to an unbounded endpoint and is the point of decision
+  10. The existing `CaseworkerReadControllerTest` assertions are untouched and green.
+
+The `size` echo is what makes the clamp survivable: a caller that asked for 1,000 and got 100 must be able to
+see it, or it reads a full page as the whole result set and stops paging. `CaseListPaging` (8 tests) pins the
+bare default, the partial last page, the empty result set at `totalPages` 0, a page past the end, the clamp,
+`total` counting the filter's rows rather than the table's, the `where`/`sort` wiring with its 400s, and the
+refusal of a repeated `sort`, `page` or `size`.
 
 ### Task 5: Tests
 
