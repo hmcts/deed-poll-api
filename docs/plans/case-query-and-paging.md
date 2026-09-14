@@ -176,7 +176,36 @@ specification; that test is what makes the switch safe.
 `sort=<field>:<asc|desc>` and 1-based `page` with `size` capped at 100. Default `createdOn:desc`. Reject a
 `MULTISELECT` sort field and an unknown sort field with a 400.
 
-- [ ] Defaults reproduce today's behaviour exactly; the size cap cannot be exceeded by any client input
+- [x] Defaults reproduce today's behaviour exactly; the size cap cannot be exceeded by any client input
+
+`CaseSort`, `CasePaging` and `CaseResults` in `domain/deedpoll`, with
+`DeedPollService.findDeedPolls(filter, query, sort, paging)` as the entry point — the controller is task 4.
+Five things task 4 should not have to rediscover:
+
+- **Sortable is not queryable, in both directions.** A `MULTISELECT` field is queryable and refused as a
+  sort ("holds several values at once"), because ordering option-value sets means deciding whether
+  `{1,3}` precedes `{2}`. The four audit columns are sortable and *not* queryable — `FormFields` does not
+  describe them — and `createdOn` has to be among them, or "oldest first" is the one order that cannot be
+  asked for. The set is `CaseSort.sortableFields()`, computed from the registries; `id` and
+  `displayReference` are deliberately excluded (no list header offers them, and `displayReference` sorts
+  as text rather than as the reference numbers it renders).
+- **Every order carries an `id` tiebreak.** Without a unique second key Postgres may return two rows with
+  equal `createdOn` in either order between two queries, so a row can appear on page 1 *and* page 2 while
+  another appears on neither. It refines today's order rather than changing it, and
+  `pagesATieDeterministically` pins it.
+- **Clamped for too large, refused for unintelligible.** `size=1000` is clamped to 100 (a caller asking
+  for as much as they can have); `size=lots` and `page=0` are 400s. `page` and `size` are read together
+  and report both errors at once. The record's own constructor refuses an over-cap size, so no caller in
+  this codebase can get past the cap either.
+- **The bare list now goes through the specification**, because a total is a count of the criterion the
+  page came from. The two unpaged `findDeedPolls` methods are untouched and keep their consumers;
+  `theDefaultsAreTodaysList` asserts the paged default is the same ids in the same order as the unpaged
+  finder.
+- **`totalPages` is 0 for an empty result set**, not 1 — "page 1 of 1" would claim a page with no rows on
+  it. A page past the end is an empty page and not an error.
+
+`everyFieldPublishedAsSortableReallySorts` sweeps every published sortable name against the real database, which
+is what stops a published sort option becoming a 500 on an entity attribute that does not exist.
 
 ### Task 4: The response
 
