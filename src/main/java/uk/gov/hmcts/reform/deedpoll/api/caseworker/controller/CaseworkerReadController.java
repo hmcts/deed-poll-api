@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -71,6 +72,16 @@ public class CaseworkerReadController {
      * changes the answer. {@code where} is the exception and is genuinely repeated -- that is the wire
      * format, one condition per occurrence.
      *
+     * <p><strong>Those lists come from the request's own parameter map and not from
+     * {@code @RequestParam List<String>}</strong>, which cannot carry them. Spring hands a collection-typed
+     * parameter the single {@code String} when a request sent one value, and converting a {@code String} to a
+     * {@code List<String>} splits it on commas -- so {@code ?where=type:isOneOf:Adult,Minor} arrived as two
+     * conditions, the second of them the bare word {@code Minor}, and every list-valued operator and every
+     * value with a comma in it was a 400. It only bit a request that sent {@code where} exactly once, because
+     * two occurrences arrive as an array and are not split, which is why it survived the wiring tests.
+     * {@code MultiValueMap} is populated from {@code getParameterMap} and does no conversion, so a comma
+     * inside a value stays inside the value and {@code CaseQuery} does the only splitting there is.
+     *
      * <p>{@code filter} keeps binding as a single string, untouched: a repeated {@code filter} arrives as a
      * value that is not a key and falls back to "all", which is exactly what the paragraph above describes
      * and is pinned behaviour.
@@ -82,17 +93,14 @@ public class CaseworkerReadController {
     @GetMapping("/cases")
     public CaseListResponse cases(
         @RequestParam(name = "filter", required = false) String filter,
-        @RequestParam(name = "where", required = false) List<String> where,
-        @RequestParam(name = "sort", required = false) List<String> sort,
-        @RequestParam(name = "page", required = false) List<String> page,
-        @RequestParam(name = "size", required = false) List<String> size) {
+        @RequestParam MultiValueMap<String, String> parameters) {
 
         ListFilters.ListFilter resolved = ListFilters.filterFor(filter);
         CaseResults results = deedPolls.findDeedPolls(
             resolved,
-            CaseQuery.parse(where),
-            CaseSort.parse(single("sort", sort)),
-            CasePaging.parse(single("page", page), single("size", size)));
+            CaseQuery.parse(parameters.get("where")),
+            CaseSort.parse(single("sort", parameters.get("sort"))),
+            CasePaging.parse(single("page", parameters.get("page")), single("size", parameters.get("size"))));
         return CaseListResponse.of(resolved, results);
     }
 

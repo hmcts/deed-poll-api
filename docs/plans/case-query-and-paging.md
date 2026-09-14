@@ -252,7 +252,32 @@ Booting the whole context for the HTTP surface.
 - **A value containing a colon and a value containing a comma** both survive the round trip
 - **A field name crafted to look like SQL is rejected by validation**, not passed to a query
 
-- [ ] All present, including the multi-error case and the value-with-delimiter cases
+- [x] All present, including the multi-error case and the value-with-delimiter cases
+
+Two new nested classes in `CaseworkerReadControllerTest` — `CaseListQuery` (13 tests, 29 of them parameterised
+cases in one) and `CaseListOrder` (4) — plus a middle-page test in `CaseListPaging`. They boot the whole
+context, as every controller test here must. Three things task 6 should not have to rediscover:
+
+- **The comma case found a real defect in task 4's wiring, now fixed.** `@RequestParam List<String> where`
+  cannot carry the wire format: Spring hands a collection-typed parameter the single `String` when a request
+  sent one value, and converting a `String` to a `List<String>` splits it on commas — so
+  `?where=type:isOneOf:Adult,Minor` arrived as two conditions, the second the bare word `Minor`, and **every
+  list-valued operator and every value containing a comma was a 400**. It only bit a request that sent `where`
+  exactly once, because two occurrences arrive as an array and are not split, which is why the task 4 wiring
+  tests passed. `where`, `sort`, `page` and `size` now come from a `MultiValueMap` populated from
+  `getParameterMap`, which does no conversion; `CaseQuery` does the only splitting there is. `filter` is
+  untouched.
+- **A fixture's state is set explicitly, not derived.** The derivation runs on a write through the service, so
+  a case written directly with `dateEnroled` is still `Received` — and would then be admitted by the open tab,
+  which is `filter=open&where=…` passing for the wrong reason.
+- **The bare-list regression is asserted against the unpaged finder, not a transcription of it.**
+  `bareListMatchesTheUnpagedFinder` compares the `cases` node of a bare request with the untouched
+  `findDeedPolls(filter)` mapped by the same DTO, through the application's own `ObjectMapper`. "The same as
+  today" is a claim about that method, so that method is what it is compared against.
+
+Fixtures are written through `DeedPollFields` after the create (`queryCase`), so a row can carry an
+`ageOfMinor` on an Adult case: what is under test is the query, not what a form would have allowed. Every
+fixture is backdated to a distinct time, because two cases created in the same millisecond tie on `createdOn`.
 
 ### Task 6: Full validation
 
