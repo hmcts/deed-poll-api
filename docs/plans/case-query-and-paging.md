@@ -281,21 +281,29 @@ fixture is backdated to a distinct time, because two cases created in the same m
 
 ### Task 6: Full validation
 
-- [ ] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`
-- [ ] **`./gradlew test --rerun`**, never bare `./gradlew test` — a bare run reports `:test UP-TO-DATE`,
+- [x] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`
+- [x] **`./gradlew test --rerun`**, never bare `./gradlew test` — a bare run reports `:test UP-TO-DATE`,
       **executes nothing**, and still prints `BUILD SUCCESSFUL`
-- [ ] Count from the XML, not Gradle's summary:
+- [x] Count from the XML, not Gradle's summary:
       `grep -ho 'tests="[0-9]*"' build/test-results/test/*.xml | grep -o '[0-9]*' | awk '{s+=$1} END{print s}'`
       (`bc` is not installed here)
-- [ ] `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output
-- [ ] `git diff --name-only master -- src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/ListFilters.java src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/CaseState.java` returns **nothing**
-- [ ] `git status --short -- src/test/resources/reference` clean
-- [ ] `git grep -nE '"select |\+ *filter|\+ *field' -- src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll` shows
+- [x] `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output
+- [x] `git diff --name-only master -- src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/ListFilters.java src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/CaseState.java` returns **nothing**
+- [x] `git status --short -- src/test/resources/reference` clean
+- [x] `git grep -nE '"select |\+ *filter|\+ *field' -- src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll` shows
       no query built by concatenation
-- [ ] Mark completed
+- [x] Mark completed
 
 > The suite is container-backed and takes about eight minutes. **One red run is not proof of a break** — re-run
 > once and read the XML rather than the console.
+
+**1,488 tests across 185 suites, plus 5 integration, green first time** — no failures or errors in any XML, from
+1,294 across 155 suites at the `62c76f4` baseline. `clean build` passed checkstyle on all five source sets.
+`ListFilters` and `CaseState` are byte-identical to master and the vendored reference tree is clean. The
+concatenation grep matches four lines and **none of them is a query** — they are the text of exception messages
+(`operator.wire() + " does not apply to "`, `"Not a sortable case field: " + field`), which is what the pattern
+`\+ *field` cannot distinguish from a query fragment. Every predicate is a Criteria API expression, so the plan's
+"never concatenate a request value into a query" holds by construction rather than by the grep.
 
 ## Deliberately not in this plan
 
