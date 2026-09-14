@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
@@ -52,6 +53,15 @@ public class DeedPollService {
      */
     public static final String ENROLMENT_WITNESSES_MESSAGE =
         "A Deed Poll cannot be sent for enrolment until two witnesses have been recorded.";
+
+    /**
+     * The list order, which the named finders carry in their own names.
+     *
+     * <p>Stated here for the specification path, because a {@code Specification} says which rows and not
+     * in what order. Newest first is how a caseworker finds the case they have just logged, and it is the
+     * reference's {@code orderBy}.
+     */
+    private static final Sort NEWEST_FIRST = Sort.by(Sort.Direction.DESC, "createdOn");
 
     private final DeedPollRepository deedPolls;
     private final ReferenceNumberService referenceNumbers;
@@ -145,6 +155,29 @@ public class DeedPollService {
             .map(this::casesMatching)
             .orElseGet(deedPolls::findAllByOrderByCreatedOnDesc);
         return Computed.withComputedAll(found);
+    }
+
+    /**
+     * The cases a saved-query filter and a field-level query both admit, newest first.
+     *
+     * <p>The two compose with AND: {@code ?filter=open&where=type:is:Adult} means both, because the tabs
+     * are ported system views and a bookmarked {@code ?filter=open} has to keep meaning what it meant.
+     *
+     * <p><strong>An empty query is today's path, not an empty specification.</strong> A list with no
+     * conditions is by far the common request, and it is the one whose behaviour is pinned -- so it goes
+     * through the same named finders it always has, with the same SQL. The specification is reached only
+     * by a request that could not have been served before.
+     *
+     * @param query the conditions, already validated; {@link CaseQuery#NONE} for a request with no
+     *     {@code where}
+     */
+    @Transactional(readOnly = true)
+    public List<DeedPollWithComputed> findDeedPolls(ListFilters.ListFilter filter, CaseQuery query) {
+        if (query.isEmpty()) {
+            return findDeedPolls(filter);
+        }
+        return Computed.withComputedAll(
+            deedPolls.findAll(CaseSpecifications.matching(filter, query), NEWEST_FIRST));
     }
 
     /**

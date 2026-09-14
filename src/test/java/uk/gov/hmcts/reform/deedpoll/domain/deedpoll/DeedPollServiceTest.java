@@ -636,6 +636,42 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("findDeedPolls applies a filter and a field-level query together")
+    void findDeedPollsAppliesAFilterAndAQueryTogether() {
+        created("dateReceived", RECEIVED, "type", DeedPollType.Adult);
+        created("dateReceived", RECEIVED, "type", DeedPollType.Minor);
+        created("dateReceived", RECEIVED, "type", DeedPollType.Adult,
+            "dateEnroled", "2026-08-01T00:00:00.000Z");
+
+        // Decision 3: the two compose. The Adult case that is enrolled is excluded by the tab, and the open
+        // Minor case by the condition, so exactly one of the three survives both.
+        assertThat(deedPollService.findDeedPolls(
+                ListFilters.filterFor("open"), CaseQuery.parse(List.of("type:is:Adult"))))
+            .singleElement()
+            .satisfies(withComputed -> {
+                assertThat(withComputed.deedPoll().getType()).isEqualTo(DeedPollType.Adult);
+                assertThat(withComputed.computed()).isNotNull();
+            });
+    }
+
+    @Test
+    @DisplayName("findDeedPolls with no conditions is the unqueried list, newest first")
+    void findDeedPollsWithNoConditionsIsTheUnqueriedList() {
+        // An empty query is today's path rather than an empty specification -- the common request, and the
+        // one whose behaviour is pinned. Asserted as the same answer, which is the claim that matters.
+        created("dateReceived", "2026-07-01T00:00:00.000Z");
+        created("dateReceived", "2026-07-02T00:00:00.000Z");
+
+        ListFilters.ListFilter all = ListFilters.filterFor("all");
+
+        assertThat(deedPollService.findDeedPolls(all, CaseQuery.NONE))
+            .extracting(withComputed -> withComputed.deedPoll().getId())
+            .containsExactlyElementsOf(deedPollService.findDeedPolls(all).stream()
+                .map(withComputed -> withComputed.deedPoll().getId())
+                .toList());
+    }
+
+    @Test
     @DisplayName("validateCaseForSubmit refuses a case whose per-type required fields are unmet")
     void validateCaseForSubmitRefusesAnIncompleteCase() {
         String caseId = created("type", DeedPollType.Adult, "dateReceived", RECEIVED).getId();

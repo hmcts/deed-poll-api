@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.repository;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -22,8 +23,14 @@ import java.util.Optional;
  *
  * <p>The two state finders are the shapes {@code ListFilters.StateWhere} has, and no others: adding a
  * finder here for a filter that does not exist is how a repository grows methods with no consumer.
+ *
+ * <p><strong>{@link JpaSpecificationExecutor} is for the field-level case query, and nothing else.</strong>
+ * A query names case fields a caller chose, so its shape is not known in advance and no named finder can
+ * express it -- but a {@code Specification} is built through the Criteria API, which binds its values, so
+ * a query assembled from a request can never be a query concatenated from one.
+ * {@code CaseSpecifications} is the only translation into it, and it is where the reasoning lives.
  */
-public interface DeedPollRepository extends JpaRepository<DeedPoll, String> {
+public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, JpaSpecificationExecutor<DeedPoll> {
 
     /** Every case, newest first. */
     List<DeedPoll> findAllByOrderByCreatedOnDesc();

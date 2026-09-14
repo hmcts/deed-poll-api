@@ -147,7 +147,29 @@ API, never concatenated. `contains`/`startsWith` lower both sides.
 
 Compose with the existing state predicate so `filter` and `where` work together, without touching `ListFilters`.
 
-- [ ] Every operator in decision 5 translated; `filter` composes; the two existing named repository methods untouched
+- [x] Every operator in decision 5 translated; `filter` composes; the two existing named repository methods untouched
+
+`CaseSpecifications` in `domain/deedpoll`, with `DeedPollService.findDeedPolls(filter, query)` as the entry
+point. Four things task 3 should not have to rediscover:
+
+- **The column is widened, not the value narrowed.** A `NUMBER` condition compares `cast(col as numeric)`
+  against the `BigDecimal` task 1 coerced. Narrowing to reach `ageOfMinor` (an `integer`) would have to
+  decide what `gt:7.5` means against a column that cannot hold 7.5, and truncating to 7 answers a
+  different question with no caller left to tell. It forgoes an index, which none of these columns has.
+- **`ENUM` binds the column's own constant**, resolved from the validated member name through
+  `Path.getJavaType()`. That is why the translation never names one of the ten enum types.
+- **`MULTISELECT` uses Hibernate's `arrayContains`/`arrayLength`**, not raw `array_position` SQL.
+  `isEmpty` accepts three shapes of nothing — a NULL column, an empty array, and the NULL that Postgres's
+  `array_length` returns for an empty array — because the entity defaults the column to `[]` and the
+  schema permits NULL.
+- **LIKE wildcards in a caseworker's own value are escaped.** Without it, `contains:100%` would match
+  "1000 Others". Same class of surprise as an unvalidated field name, though not a security one.
+
+**An empty query still takes today's path**, so a bare list is the same SQL it always was and the two named
+finders keep their consumer. `CaseSpecifications.inState` restates their state criterion — including "a case
+with no state counts as open" — and `CaseSpecificationsTest` pins the two statements of it together, per tab,
+so the duplication cannot drift. Task 3 needs a total and therefore has to route every request through the
+specification; that test is what makes the switch safe.
 
 ### Task 3: Sort and page
 
