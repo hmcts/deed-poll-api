@@ -11,15 +11,18 @@ import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MaritalStatus;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollWitnessRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,6 +62,9 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
     private DeedPollRepository deedPolls;
 
     @Autowired
+    private DeedPollWitnessRepository witnesses;
+
+    @Autowired
     private ReferenceCounterRepository referenceCounters;
 
     private static DeedPollPatch patch(Object... keysAndValues) {
@@ -72,6 +78,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
     @BeforeEach
     @AfterEach
     void clearTables() {
+        witnesses.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
     }
@@ -83,6 +90,28 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
 
     private DeedPoll created(Object... keysAndValues) {
         return deedPollService.createDeedPoll(patch(keysAndValues)).deedPoll();
+    }
+
+    /**
+     * Records the two witnesses an enrolment needs -- see
+     * {@code DeedPollService.requireWitnessesForEnrolment}, which refuses a write that would leave a case
+     * enrolled, or sent for enrolment, with fewer than two.
+     *
+     * <p>Written straight through the repository rather than {@code WitnessService}: in these blocks a
+     * witness is a precondition of the case write under test, not the subject of it.
+     */
+    private void recordTwoWitnesses(String caseId) {
+        DeedPoll parent = stored(caseId);
+        witnesses.saveAll(List.of(witness(parent, "Sam Doe"), witness(parent, "Ada Wren")));
+    }
+
+    private static DeedPollWitness witness(DeedPoll parent, String name) {
+        DeedPollWitness witness = new DeedPollWitness();
+        witness.setDeedPoll(parent);
+        witness.setWitnessName(name);
+        witness.setWitnessAddress("1 High St");
+        witness.setWitnessOccupation("Teacher");
+        return witness;
     }
 
     @Test
@@ -232,6 +261,9 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
     @DisplayName("recalculates state on update from merged dates (enrolment gives Enroled)")
     void recalculatesStateOnUpdateFromMergedDates() {
         DeedPoll created = created("dateReceived", "2026-01-01T00:00:00.000Z");
+        // The enrolment gate, not part of this block's claim: without two witnesses the patch below is
+        // refused before a state is derived at all.
+        recordTwoWitnesses(created.getId());
 
         deedPollService.updateDeedPoll(created.getId(), patch("dateEnroled", "2026-03-01T00:00:00.000Z"));
 
@@ -527,6 +559,9 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
             String caseId = created(
                 "dateReceived", RECEIVED,
                 "signatureRequestedDate", "2026-08-03T00:00:00.000Z").getId();
+            // The enrolment gate, not part of this block's claim: a signature received date sends the case
+            // for enrolment, which needs two witnesses on the record.
+            recordTwoWitnesses(caseId);
 
             deedPollService.updateDeedPoll(caseId, patch("signatureReceivedDate", "2026-08-15T00:00:00.000Z"));
 

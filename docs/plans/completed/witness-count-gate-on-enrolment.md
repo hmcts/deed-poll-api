@@ -108,8 +108,22 @@ carries fewer than two witnesses. Produce a `FieldError` addressed to whichever 
 Mark it clearly as an addition rather than a port, per decision 3, and record the migrated-record departure per
 decision 2.
 
-- [ ] Fires on both dates, addressed to the date being set, marked as a non-port addition with the
+- [x] Fires on both dates, addressed to the date being set, marked as a non-port addition with the
       migrated-record reasoning recorded at the check
+
+Implemented as `DeedPollService.requireWitnessesForEnrolment`, called from `updateDeedPoll` after
+`requireConsistentDates`. Two boundaries settled while building it, both recorded at the check:
+
+- **The MERGED record is what is checked**, as with every other rule on that path — so a patch touching only
+  a surname on a case that already carries an enrolment date is refused too, and the escape is the same shape
+  as the escape from a contradictory date pair (clear the date, or add the witnesses).
+- **`createDeedPoll` is NOT gated.** A witness is a child of a row that must exist first, so a create can
+  never carry two; gating it would forbid the state outright rather than gate a transition into it. Every
+  refusal test in task 2 is therefore update-shaped.
+
+Four existing tests were fixtures of an enrolled case with no witnesses, and now record two: two blocks of
+`DeedPollServiceTest`, `DeedPollConcurrentUpdateTest.derivesStateFromTheCommittedRowRatherThanAStaleRead` and
+`CaseworkerCaseControllerTest$UpdateCase.clearsAnExplicitNullAndLeavesAnOmittedFieldAlone`.
 
 ### Task 2: Tests
 
@@ -128,24 +142,52 @@ Booting the whole context where the check is exercised over HTTP, and unit-level
    Master, Referred to Master, Awaiting Further Docs and Received. This is the test that stops the gate being
    applied too widely.
 
-- [ ] All eight present, including the migrated-record case and the "other transitions unaffected" guard
+- [x] All eight present, including the migrated-record case and the "other transitions unaffected" guard
+
+All eight are HTTP-level, in `CaseworkerCaseControllerTest$EnrolmentWitnessGate` — the caseworker PATCH is
+the surface the rule is met on, and a refusal is only useful if it reaches the client as a field-addressed
+400. They are deliberately **not** in `DeedPollServiceTest`, which ports
+`reference/ts/deed-poll/service.test.ts` block for block: an addition filed among the ported blocks would
+blur which rules came from the specification and which are ours, which is the same line decision 3 protects.
+
+The eighth walks all six other states, not the four named above — `Returned` and `Awaiting Signature`
+included, so the guard covers every branch of the cascade the gate must not touch. `test` is 1,294 across 155
+suites (1,286 across 154 at the branch point), `integration` 5 across 3, 0 failures and 0 errors in both.
 
 ### Task 3: Full validation
 
-- [ ] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`
-- [ ] **`./gradlew test --rerun`**, never bare `./gradlew test` — a bare run reports `:test UP-TO-DATE`,
+- [x] `./gradlew clean build` green — checkstyle across all five source sets, `test` and `integration`
+- [x] **`./gradlew test --rerun`**, never bare `./gradlew test` — a bare run reports `:test UP-TO-DATE`,
       **executes nothing**, and still prints `BUILD SUCCESSFUL`
-- [ ] Count from the XML, not Gradle's summary:
+- [x] Count from the XML, not Gradle's summary:
       `grep -ho 'tests="[0-9]*"' build/test-results/test/*.xml | grep -o '[0-9]*' | awk '{s+=$1} END{print s}'`
       (`bc` is not installed here)
-- [ ] `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output
-- [ ] `git diff --name-only master -- src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/CaseState.java src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/CaseStateInput.java`
+- [x] `grep -l 'failures="[1-9]\|errors="[1-9]' build/test-results/test/*.xml` → no output
+- [x] `git diff --name-only master -- src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/CaseState.java src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/CaseStateInput.java`
       returns **nothing** — decision 5, the cascade is untouched
-- [ ] `git status --short -- src/test/resources/reference` clean — the specification was not edited
-- [ ] Mark completed
+- [x] `git status --short -- src/test/resources/reference` clean — the specification was not edited
+- [x] Mark completed
 
 > The suite is container-backed and takes about eight minutes. **One red run is not proof of a break** — re-run
 > once and read the XML rather than the console.
+
+Validated 2026-09-13 on `witness-count-gate`. `clean build` green from cold in 9m 59s, **25 of 25 actionable
+tasks executed** — so no source set was skipped as up-to-date. `test --rerun` then executed `:test` again on its
+own (4m 4s, `1 executed, 4 up-to-date`), and both runs agree on the counts read from the result XML:
+
+| Source set | Tests | Suites | Failures | Errors |
+| --- | --- | --- | --- | --- |
+| `test` | 1,294 | 155 | 0 | 0 |
+| `integration` | 5 | 3 | 0 | 0 |
+
+Against the branch-point baseline of 1,286 across 154, that is **+8 tests in +1 suite** — exactly the
+`CaseworkerCaseControllerTest$EnrolmentWitnessGate` block, whose own XML reports `tests="8"`. Nothing else moved:
+no test was lost or silently renamed while the four enrolled-case fixtures in task 1 were given two witnesses.
+
+Both guard checks are clean. The cascade diff against `master` is empty, so `CaseState` and `CaseStateInput` are
+untouched and `StateCascadeConformanceTest` is still pinning them against the rules file rather than against us.
+`src/test/resources/reference` is clean, so the vendored specification was read as ground truth and never edited
+to accommodate a rule it does not contain — which is what keeps the addition legible as an addition.
 
 ## Deliberately not in this plan
 

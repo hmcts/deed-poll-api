@@ -21,7 +21,8 @@ import java.util.Map;
  * <p>Ported from {@code reference/ts/deed-poll/service.ts}. The write path applies, in this order:
  * create-time defaults, the Gazette gate, the minor gate, privacy authorisation, the cross-field date
  * rules, reference-number allocation and state derivation. The order is the reference's and it matters --
- * see the comment on each step.
+ * see the comment on each step. One rule is not the reference's: the two-witness gate on the enrolment
+ * transition, marked as an addition at {@link #requireWitnessesForEnrolment}.
  *
  * <p><strong>Where this port differs, and why.</strong> The reference merges a patch into a plain object
  * ({@code merged = {...existing, ...data}}) and hands the result to Prisma. Here the merge is built as a
@@ -36,6 +37,21 @@ import java.util.Map;
  */
 @Service
 public class DeedPollService {
+
+    /**
+     * How many witnesses a case needs before it can be sent for enrolment.
+     *
+     * <p>Not a port -- see {@link #requireWitnessesForEnrolment}. Named rather than inlined because the
+     * number is the rule, and the tests assert against the same constant.
+     */
+    public static final int WITNESSES_REQUIRED_FOR_ENROLMENT = 2;
+
+    /**
+     * The opening sentence of the enrolment refusal. Not a port -- see
+     * {@link #requireWitnessesForEnrolment}.
+     */
+    public static final String ENROLMENT_WITNESSES_MESSAGE =
+        "A Deed Poll cannot be sent for enrolment until two witnesses have been recorded.";
 
     private final DeedPollRepository deedPolls;
     private final ReferenceNumberService referenceNumbers;
@@ -176,7 +192,8 @@ public class DeedPollService {
      * taken.
      *
      * @throws NotFoundError if there is no such case
-     * @throws InvalidInputError if the merged dates contradict each other
+     * @throws InvalidInputError if the merged dates contradict each other, or if the write would leave the
+     *     case in an enrolment state with fewer than two witnesses
      */
     @Transactional
     public DeedPollWithComputed updateDeedPoll(String id, DeedPollPatch dto, WriteContext ctx) {
@@ -219,6 +236,10 @@ public class DeedPollService {
         // derived state would be a guess: the source shows an error and refuses, so silently keeping one
         // date would invent a decision the caseworker did not make.
         requireConsistentDates(merged);
+
+        // The two-witness rule, checked here rather than in CaseState because it is not one of the source's
+        // date rules -- see requireWitnessesForEnrolment.
+        requireWitnessesForEnrolment(record, data, merged);
 
         // Privacy is admin-only on an existing record. Enforced on the write path because the template's
         // disabled attribute is a courtesy to the browser and not a control: until 2026-08-10 a non-admin
@@ -325,6 +346,103 @@ public class DeedPollService {
         if (!dateErrors.isEmpty()) {
             throw new InvalidInputError("Case dates are inconsistent", dateErrors);
         }
+    }
+
+    /**
+     * Refuses a write that would leave a case in an enrolment state with fewer than two witnesses.
+     *
+     * <p><strong>NOT a port -- the source has no such rule.</strong> {@code business_rules.md} mentions
+     * witnesses zero times and no Power App artefact we hold enforces a count; this is a rule the business
+     * gave us on 2026-09-13, marked the way {@link CaseState#SIGNATURE_ORDER_MESSAGE} is so that a reader
+     * comparing this service against the reference can still tell which rules are ported and which are ours.
+     *
+     * <p><strong>Why here and not in {@link CaseState}.</strong> {@code collectDateRuleErrors} is pure and
+     * takes only the eight state dates, and {@code StateCascadeConformanceTest} pins it against the rules
+     * file. Widening {@link CaseStateInput} to carry a witness count would put a non-ported concern inside
+     * the ported cascade, which is exactly the line the paragraph above is protecting.
+     *
+     * <p><strong>Why both dates.</strong> Two dates carry the enrolment meaning in the cascade:
+     * {@code signatureReceivedDate} gives Awaiting Enrolment ("sent for enrolment") and {@code dateEnroled}
+     * gives Enroled. Gating only the second would let a case be queued for an enrolment it can never
+     * complete.
+     *
+     * <p><strong>Fewer than two, not exactly two.</strong> The business said "there must be two witnesses"
+     * and "if an application doesn't have 2 witnesses it can't be sent for enrolment" -- a shortfall rather
+     * than a cap, so three passes. A maximum would have to be enforced at witness creation, which is a
+     * different rule in {@code WitnessService} and was not asked for.
+     *
+     * <p><strong>A migrated record is subject to this rule too</strong>, confirmed by the business on
+     * 2026-09-13: "For existing cases the two witness rule will still apply." That is a deliberate
+     * departure from the pattern around it -- the Power App relaxes every per-type mandatory field when
+     * {@code Migrated Record = Yes} (see {@code FieldRulesConformanceTest$MigratedRecords}) -- so
+     * {@code migratedRecord} is deliberately not consulted below, and this rule must not be "tidied up"
+     * into consistency with the others.
+     *
+     * <p><strong>Checked against the MERGED record</strong>, as every other rule on this path is: a patch
+     * touching only a surname on a case that already carries an enrolment date is still a write that leaves
+     * the record enrolled. The escape from a case that is short is the same shape as the escape from a
+     * contradictory pair of dates -- clear the date, or (here) add the missing witnesses, which is an
+     * ungated witness write.
+     *
+     * <p><strong>Not called from create.</strong> A case's witnesses are children of a row that has to
+     * exist before they can, so a create can never carry two of them and gating it would forbid the state
+     * outright rather than gate a transition into it. The rule is about sending an application for
+     * enrolment, which a logged case does later.
+     *
+     * <p>The count is taken from the record's LAZY witnesses collection, so this must stay inside the
+     * write transaction. It is: the caller is {@code @Transactional}.
+     */
+    private static void requireWitnessesForEnrolment(DeedPoll record, DeedPollPatch data, ValidationInput merged) {
+        CaseStateInput dates = CaseStateInput.from(merged);
+        if (dates.dateEnroled() == null && dates.signatureReceivedDate() == null) {
+            return; // this write does not leave the case in an enrolment state
+        }
+
+        int recorded = record.getWitnesses().size();
+        if (recorded >= WITNESSES_REQUIRED_FOR_ENROLMENT) {
+            return;
+        }
+
+        throw new InvalidInputError(
+            "Case cannot be sent for enrolment",
+            List.of(new FieldError(enrolmentDateToAddress(data, dates), witnessShortfallMessage(recorded))));
+    }
+
+    /**
+     * Which of the two enrolment dates the refusal is addressed to.
+     *
+     * <p>Addressed to a date and never to a witnesses field: there is no witness control on the case form,
+     * so an error naming one would have nowhere to render, and {@code deed-poll-admin} builds its error
+     * summary by mapping the field name to a control on the tab being edited -- an unmappable name breaks
+     * the summary link rather than only its styling.
+     *
+     * <p>The date THIS write sets is preferred, so the error lands on the box the caseworker just filled in.
+     * A write that sets neither -- an edit to some other field of an already-enrolled case -- falls back to
+     * the cascade's own precedence, so the error names the date that decides the state the record is in.
+     */
+    private static String enrolmentDateToAddress(DeedPollPatch data, CaseStateInput dates) {
+        if (data.has("dateEnroled") && dates.dateEnroled() != null) {
+            return "dateEnroled";
+        }
+        if (data.has("signatureReceivedDate") && dates.signatureReceivedDate() != null) {
+            return "signatureReceivedDate";
+        }
+        return dates.dateEnroled() != null ? "dateEnroled" : "signatureReceivedDate";
+    }
+
+    /**
+     * The refusal message, naming the shortfall.
+     *
+     * <p>A caseworker needs to know what to do next, so it says how many are recorded and how many are
+     * missing -- compare {@link CaseState#CONTRADICTION_MESSAGE}, which tells the reader what to remove and
+     * why rather than only that something is wrong.
+     */
+    private static String witnessShortfallMessage(int recorded) {
+        // Only reached when the record is short, so recorded is 0 or 1.
+        String shortfall = recorded == 1
+            ? "This case has one; please add one more witness."
+            : "This case has none; please add two witnesses.";
+        return ENROLMENT_WITNESSES_MESSAGE + " " + shortfall;
     }
 
     /**

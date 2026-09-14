@@ -10,12 +10,15 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollWitnessRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -66,6 +69,9 @@ class DeedPollConcurrentUpdateTest extends AbstractPostgresContainerTest {
     private DeedPollRepository deedPolls;
 
     @Autowired
+    private DeedPollWitnessRepository witnesses;
+
+    @Autowired
     private ReferenceCounterRepository referenceCounters;
 
     @Autowired
@@ -74,6 +80,7 @@ class DeedPollConcurrentUpdateTest extends AbstractPostgresContainerTest {
     @BeforeEach
     @AfterEach
     void clearTables() {
+        witnesses.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
     }
@@ -91,6 +98,28 @@ class DeedPollConcurrentUpdateTest extends AbstractPostgresContainerTest {
             .createDeedPoll(patch("type", DeedPollType.Adult, "dateReceived", RECEIVED))
             .deedPoll()
             .getId();
+    }
+
+    /**
+     * A case carrying the two witnesses an enrolment needs, so that the patch which sets
+     * {@code dateEnroled} -- and the concurrent patch that leaves it in place -- get as far as the row.
+     * The gate itself is {@code DeedPollService.requireWitnessesForEnrolment}; here it is a precondition,
+     * not the claim.
+     */
+    private String witnessedCase() {
+        String caseId = createdCase();
+        DeedPoll parent = deedPolls.findById(caseId).orElseThrow();
+        witnesses.saveAll(List.of(witness(parent, "Sam Doe"), witness(parent, "Ada Wren")));
+        return caseId;
+    }
+
+    private static DeedPollWitness witness(DeedPoll parent, String name) {
+        DeedPollWitness witness = new DeedPollWitness();
+        witness.setDeedPoll(parent);
+        witness.setWitnessName(name);
+        witness.setWitnessAddress("1 High St");
+        witness.setWitnessOccupation("Teacher");
+        return witness;
     }
 
     @Test
@@ -111,7 +140,7 @@ class DeedPollConcurrentUpdateTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("a patch derives state from the writes that committed before it, not from a stale read")
     void derivesStateFromTheCommittedRowRatherThanAStaleRead() throws Exception {
-        String caseId = createdCase();
+        String caseId = witnessedCase();
 
         // The second patch mentions no date at all, so its derived state depends entirely on the dates it
         // reads: against a stale read it sees no enrolment date and derives Received, storing a case that is
