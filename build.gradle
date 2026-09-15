@@ -110,7 +110,16 @@ jacocoTestReport {
 }
 
 tasks.sonarqube.dependsOn(jacocoTestReport)
-tasks.check.dependsOn(integration)
+
+// Testcontainers needs a Docker daemon, and the CNP Jenkins VM agent has none: `POSTGRES.start()`
+// throws in a static initialiser and every context-booting test fails with it (PR-15/1, 2026-09-15).
+// Unset means enabled, so a local `./gradlew check` still runs them and a developer sees a real
+// failure. `Jenkinsfile_CNP` sets it false. See docs/plans for the cost this accepts.
+def integrationTestsEnabled = System.getenv('INTEGRATION_TESTS_ENABLED') != 'false'
+
+if (integrationTestsEnabled) {
+  tasks.check.dependsOn(integration)
+}
 
 sonarqube {
   properties {
