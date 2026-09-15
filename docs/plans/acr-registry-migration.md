@@ -90,16 +90,17 @@ registry".**
 
 ### Task 2: Point the chart's dependency and image at `hmctsprod`
 
-- [ ] In `charts/deed-poll-api/Chart.yaml` line 14, change the `java` dependency's `repository` from
+- [x] In `charts/deed-poll-api/Chart.yaml` line 14, change the `java` dependency's `repository` from
       `oci://hmctspublic.azurecr.io/helm` to `oci://hmctsprod.azurecr.io/helm`. **`version: 5.3.0` does not
       change** — `pcs-api` pins the same version on the new registry
-- [ ] In `charts/deed-poll-api/values.yaml` line 3, change
+- [x] In `charts/deed-poll-api/values.yaml` line 3, change
       `hmctspublic.azurecr.io/deed-poll/api:latest` to `hmctsprod.azurecr.io/deed-poll/api:latest`.
       Keep the `deed-poll/api:latest` path and tag exactly as they are
-- [ ] Leave the comment above the `annotations` block alone — it documents which vault the secrets come
+- [x] Leave the comment above the `annotations` block alone — it documents which vault the secrets come
       from and is still true
-- [ ] Run the validation command
-- [ ] Mark completed
+- [x] Run the validation command — `./gradlew build` BUILD SUCCESSFUL, 24 actionable tasks, all
+      up-to-date bar one; the chart is not a Gradle input, so no behaviour changed
+- [x] Mark completed
 
 ### Task 3: Prove the whole repo is clean, the way the pipeline checks it
 
