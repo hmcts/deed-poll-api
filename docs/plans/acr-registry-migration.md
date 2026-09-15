@@ -66,6 +66,8 @@ registry".**
   overrides with `${IMAGE_NAME}` at deploy time. Change its registry; leave the rest of the string alone.
 - The nagger scans `*.tpl.yaml`, Dockerfiles and Helm charts. This repo has no `.tpl.yaml`, so the three
   known files are the whole surface — but Task 3 re-checks rather than trusting that.
+  **Task 3 found a fourth: `docker-compose.yml:11`.** It is the local-dev image name, so it did not cause
+  the build failure, but the nagger's `*.yml` scan reaches it. This is the reason Task 3 existed.
 
 ## Validation Commands
 
@@ -107,7 +109,7 @@ registry".**
 The nagger scans more than the three files that happened to fail. This task exists so the next master build
 is not a guess.
 
-- [ ] Run the same search the pipeline runs, across the whole repo:
+- [x] Run the same search the pipeline runs, across the whole repo:
 
       ```bash
       grep -rnE 'hmctsprivate|hmctspublic|hmctssandbox|sdshmctspublic|sdshmctspublicsbox' \
@@ -117,15 +119,44 @@ is not a guess.
 
       It must print **nothing**. If it finds anything outside the three files above, fix it the same way —
       registry swap only — and record what and where in this plan
-- [ ] Confirm the intended state is actually present, rather than only that the old string is absent:
+
+      **It found a fourth file.** `docker-compose.yml:11` read
+      `image: hmctspublic.azurecr.io/deed-poll/api` — the name given to the locally built image, so it had
+      no bearing on the failing build, but the nagger scans `*.yml` and would have gone on flagging it.
+      Swapped to `hmctsprod.azurecr.io/deed-poll/api`: registry only, no path and no tag (it has none).
+      The sibling `../deed-poll-admin/docker-compose.yml` already refers to `hmctsprod`, so this matches
+      it. The search now prints nothing, and so does the wider
+      `git grep -nE '…' --` over **every** tracked file, not just Dockerfiles and YAML
+- [x] Confirm the intended state is actually present, rather than only that the old string is absent:
       `grep -rn 'hmctsprod.azurecr.io' Dockerfile charts/` should show **three** matches — the base image,
       the chart repository and the values image
-- [ ] Run `./gradlew build` once more from clean (`./gradlew clean build`) and record the result — task
+
+      Exactly three, as intended:
+      `Dockerfile:3` (`FROM hmctsprod.azurecr.io/base/java:21-distroless`),
+      `charts/deed-poll-api/Chart.yaml:14` (`repository: 'oci://hmctsprod.azurecr.io/helm'`),
+      `charts/deed-poll-api/values.yaml:3` (`image: 'hmctsprod.azurecr.io/deed-poll/api:latest'`).
+      `docker-compose.yml` is a fourth reference but deliberately outside this check's scope, which the
+      plan defined as the Dockerfile and the chart
+- [x] Run `./gradlew build` once more from clean (`./gradlew clean build`) and record the result — task
       count and test count — so the next plan has a baseline
-- [ ] **Do not attempt to verify the pipeline itself.** `build.hmcts.net` is behind Azure AD App Proxy and
+
+      **Baseline, 2026-09-15, from clean:** BUILD SUCCESSFUL in 5m 59s, **25 actionable tasks, 25
+      executed**. **1488 unit tests** across 185 classes and **6 integration tests** across 3 classes —
+      0 failures, 0 errors, 0 skipped in both source sets. Run with `TESTCONTAINERS_RYUK_DISABLED=true`
+      per this repo's CLAUDE.md. The only noise is a pair of harmless warnings unrelated to this change:
+      Gradle's file-watcher `Couldn't poll for events, error = 4` (this Docker's inotify) and the JVM's
+      `Sharing is only supported for boot loader classes` CDS notice
+- [x] **Do not attempt to verify the pipeline itself.** `build.hmcts.net` is behind Azure AD App Proxy and
       is unreachable from the devcontainer; the master build is Steve's to trigger and read. Note in this
       plan that the change is unverified against a real build, and that this is expected
-- [ ] Mark completed
+
+      Not attempted, as instructed. **This change is unverified against a real pipeline run, and that is
+      expected rather than a gap.** What has been verified is that the nagger's own search pattern finds
+      nothing in this repo, and that `hmctsprod` demonstrably hosts both artefacts at the pinned versions
+      because `pcs-api` runs them. Triggering and reading the master build is Steve's step. The Jenkins MCP
+      server also failed to connect in this session (`-32000`, connection closed), so there was no
+      alternative route to the build log
+- [x] Mark completed
 
 ## Deliberately not in this plan
 
