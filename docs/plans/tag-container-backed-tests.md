@@ -17,6 +17,12 @@ reaches the same static initialiser — and `failFast` is deliberately **off** f
 
 **This plan tags the container-backed tests and excludes them in CI, so 1,166 keep running.**
 
+> **Corrected by measurement (Task 3).** The 322/1,166 split above is the *estimate* this plan was written
+> from, and it is wrong. Measured: **609** tests need Docker and **879** do not. The 22 classes are exactly the
+> intended ones — they simply hold more tests than was thought, because `@Nested` inner classes are reported
+> as separate result files and were counted as separate classes. The title's "1,166" should read **879**. The
+> rest of the premise stands, and the fix is unchanged. Full figures in Task 3.
+
 ### Why this option, and what was rejected
 
 | Option | Why not |
@@ -159,22 +165,72 @@ exclusion and the gate, not to refine either.
 
 ### Task 3: Confirm the numbers and record the residue
 
-- [ ] State the measured counts in this plan: total with the variable unset, total with it `false`, and the
+- [x] State the measured counts in this plan: total with the variable unset, total with it `false`, and the
       difference. **The 322 figure came from the previous run's analysis — verify it rather than repeat it**
-- [ ] Confirm what now runs nowhere in CI: the **6** `integrationTest` tests plus the **322** tagged ones.
+
+      Re-measured independently of Task 2, both runs on this machine with Docker up, counted by summing
+      `tests="…"` across `build/test-results/*/TEST-*.xml`:
+
+      | Run | Unit tests | Result files | Failures / errors / skipped |
+      |---|---|---|---|
+      | `./gradlew build` (variable unset) | **1,488** | 185 | 0 / 0 / 0 |
+      | `INTEGRATION_TESTS_ENABLED=false ./gradlew test --rerun-tasks` | **879** | 125 | 0 / 0 / 0 |
+      | **Difference — excluded by the tag** | **609** | 60 | — |
+
+      **The 322 figure is wrong; the real number is 609.** It was not verified before being carried into this
+      plan, and the discrepancy is an accounting error, not over-exclusion: the 60 additional result files
+      normalise to **exactly 22 top-level classes**, and that set `diff`s clean against the 21 direct
+      subclasses of `AbstractPostgresContainerTest` plus `SchemaConformanceTest`. The 38 extra files are
+      `@Nested` inner classes, which Gradle reports separately; the raw filename diff appears to show 34
+      classes only because Gradle mangles long result filenames with an inserted hash
+      (`uk.-2VO146322BMH6.hmcts.…`), splitting one class across several apparent names. So the tag reaches
+      precisely the intended classes — they just hold 609 tests, not 322. `build.gradle`'s comment carries the
+      measured figures.
+- [x] Confirm what now runs nowhere in CI: the **6** `integrationTest` tests plus the **322** tagged ones.
       Say so plainly, with the class count, so the cost is legible without reading two plans
-- [ ] Confirm `:integration` is still gated and still runs locally — this plan must not have quietly undone
+
+      Stated plainly, with the corrected figure: **615 tests across 25 classes now run nowhere in CI.** That is
+      the **6** `integrationTest` tests across **3** classes, gated out of `check` by the previous plan, plus
+      the **609** `src/test` tests across **22** classes excluded by `requires-docker` here. **879 of the 1,488
+      unit tests still run**, which is the point of the change — before it, the static initialiser in
+      `AbstractPostgresContainerTest` took all 1,488 down with it. All 1,494 still run locally on any machine
+      with a Docker daemon; nothing is deleted, skipped or `@Disabled`.
+- [x] Confirm `:integration` is still gated and still runs locally — this plan must not have quietly undone
       the previous one
-- [ ] Note that `functional` and `smoke` remain unwired from `check`, so neither is affected
-- [ ] **Do not attempt to verify the pipeline.** `build.hmcts.net` is behind Azure AD App Proxy and
+
+      Intact. `build.gradle:139-141` still reads `if (integrationTestsEnabled) { tasks.check.dependsOn(integration) }`,
+      unchanged in substance — this plan only moved the `def` above its first use and left a pointer at the old
+      site. It still runs locally: the validation `./gradlew build` produced 3 `integration` result files with
+      **6** tests, zero failures. Scoping the exclusion to a `test { }` block rather than
+      `tasks.withType(Test)` is what keeps the two mechanisms independent.
+- [x] Note that `functional` and `smoke` remain unwired from `check`, so neither is affected
+
+      Both are still bare `tasks.register(…, Test)` declarations (`build.gradle:99` and `:120`) with no
+      `dependsOn` from `check` and no reference in `Jenkinsfile_CNP`. Neither carries the tag exclusion either,
+      since that is on `test` alone. Unaffected in both directions.
+- [x] **Do not attempt to verify the pipeline.** `build.hmcts.net` is behind Azure AD App Proxy and
       unreachable from the devcontainer. Record that both this and the previous plan are unverified against a
       real build, and that triggering it is Steve's
-- [ ] If the local Docker-less simulation cannot be staged — `~/.testcontainers.properties` caches
+
+      Not attempted. **Both this plan and `gate-integration-tests-in-ci.md` are unverified against a real CNP
+      build.** What is proven is local and by test count: the flag changes which tests run, in both directions.
+      What is *not* proven is that the CNP agent then goes green — that depends on nothing outside the 22
+      classes needing Docker, which only a real build can settle. Triggering it is Steve's.
+- [x] If the local Docker-less simulation cannot be staged — `~/.testcontainers.properties` caches
       `docker.client.strategy=UnixSocketClientProviderStrategy` and reaches the socket regardless of
       `DOCKER_HOST` or the override variables, as the previous run found — **say so** rather than implying the
       exclusion was proven against a Docker-less environment. Excluding by tag is verifiable from the test
       count alone, which is why Task 2 asks for the number
-- [ ] Mark completed
+
+      **Saying so: it could not be staged, and the exclusion was never run against a Docker-less environment.**
+      `~/.testcontainers.properties` still pins
+      `docker.client.strategy=org.testcontainers.dockerclient.UnixSocketClientProviderStrategy`, which finds
+      the socket regardless of `DOCKER_HOST`, so a Docker-less CNP agent cannot be faithfully imitated here.
+      The claim this plan actually supports is narrower and sufficient: **the tag excludes 609 tests from
+      `:test` when `INTEGRATION_TESTS_ENABLED=false` and excludes nothing when it is unset** — verifiable from
+      the counts above without any Docker-less environment. Whether the surviving 879 pass without a daemon is
+      the untested step, and it is what the first real build will answer.
+- [x] Mark completed
 
 ## Deliberately not in this plan
 
