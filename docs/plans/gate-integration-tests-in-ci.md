@@ -141,7 +141,7 @@ the proper fix is asking PlatOps whether a Docker-capable agent is available (`t
 
 ### Task 2: Set the variable in the pipeline, on both paths
 
-- [ ] In `Jenkinsfile_CNP`, replace the empty closure body so the variable is set for **both** PR and master
+- [x] In `Jenkinsfile_CNP`, replace the empty closure body so the variable is set for **both** PR and master
       builds. Note `pcs-api` sets it inside `onPR()` only; ours must cover master too — decision 2:
 
       ```groovy
@@ -153,12 +153,23 @@ the proper fix is asking PlatOps whether a Docker-capable agent is available (`t
         env.INTEGRATION_TESTS_ENABLED = "false"
       }
       ```
-- [ ] The value is the **string** `"false"` — see the constraint on Groovy truthiness
-- [ ] Keep `@Library("Infrastructure@2.4.4")` and its comment exactly as they are
-- [ ] Confirm the file is still valid Groovy as far as can be checked here — it cannot be executed without
+- [x] The value is the **string** `"false"` — see the constraint on Groovy truthiness. Verified: the file
+      contains `env.INTEGRATION_TESTS_ENABLED = "false"` and zero occurrences of the unquoted boolean form
+- [x] Keep `@Library("Infrastructure@2.4.4")` and its comment exactly as they are — unchanged, along with
+      `type`/`product`/`component`; the diff is the closure body only
+- [x] Confirm the file is still valid Groovy as far as can be checked here — it cannot be executed without
       Jenkins, so read it against `../apps/pcs/pcs-api/Jenkinsfile_CNP` for shape rather than running it
-- [ ] Run the validation command
-- [ ] Mark completed
+
+      Neither `groovy` nor `groovyc` is installed in the devcontainer, so no parser was available. Checked
+      what could be: braces balance (1 open, 1 close, ignoring comment lines) and the shape matches
+      `pcs-api`, which uses exactly `env.INTEGRATION_TESTS_ENABLED = "false"` — the only difference being
+      that theirs sits inside `onPR()` and ours sits directly in the `withPipeline` body, which is decision 2.
+- [x] Run the validation command — `./gradlew build` **BUILD SUCCESSFUL** in 4s, 24 actionable tasks, 23
+      `UP-TO-DATE`. Everything was up to date because **Gradle does not read `Jenkinsfile_CNP`**, so this
+      change cannot affect the task graph; Task 1's `clean build` is what actually proved the 1,488 + 6
+      baseline. `:integration` still appears under `check` here, which reconfirms the gate defaults to
+      *enabled* with the variable unset locally.
+- [x] Mark completed
 
 ### Task 3: Record what this accepts, and check nothing else needs the same treatment
 
