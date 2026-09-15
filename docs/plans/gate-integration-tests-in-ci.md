@@ -72,6 +72,10 @@ That is accepted for now because:
 - The unit suite is unaffected: **1,488 tests still run in `check`** on every build. The 6 integration tests
   are the boot-the-context-and-hit-Postgres tests, not where most of the risk sits.
 
+  > **This second bullet turned out to be wrong, and Task 3 is where it was caught.** 322 of those 1,488 unit
+  > tests are also container-backed, so `:test` fails on the agent for the same reason `:integration` did.
+  > Read *"Finding from Task 3"* at the end of this plan before assuming the build is unblocked.
+
 **It is not the right long-term answer.** Recorded as an open question in `cft-workspace/TRACKER.local.md`;
 the proper fix is asking PlatOps whether a Docker-capable agent is available (`team-config.yml` has an
 `agent:` key that `xui` and `civil` set), at which point this gate is deleted rather than refined.
@@ -173,17 +177,97 @@ the proper fix is asking PlatOps whether a Docker-capable agent is available (`t
 
 ### Task 3: Record what this accepts, and check nothing else needs the same treatment
 
-- [ ] Confirm no *other* Gradle task wired into `check` needs Docker. Check `functional` and `smoke`: both are
+- [x] Confirm no *other* Gradle task wired into `check` needs Docker. Check `functional` and `smoke`: both are
       registered but neither is a `check` dependency, so neither should be affected. State what you found
-- [ ] Confirm the unit suite genuinely does not need Docker, so the claim "1,488 tests still run" is true and
+
+      **`functional` and `smoke` are confirmed clear.** `./gradlew check --dry-run` lists
+      `:functionalTestClasses`, `:checkstyleFunctionalTest`, `:smokeTestClasses`, `:checkstyleSmokeTest` — the
+      *compile* and *checkstyle* tasks — but neither `:functional` nor `:smoke` itself. Both are plain
+      `tasks.register(…, Test)` blocks with no `check` wiring (`build.gradle:75` and `:96`), and each source set
+      holds a single sample (`SampleFunctionalTest`, `SampleSmokeTest`). Nothing to change.
+
+      **But `check`'s *other* Docker-dependent task is `:test`, and this plan assumed it was not.** See the
+      finding below — it is the reason the change as scoped does not yet make `check` pass.
+- [x] Confirm the unit suite genuinely does not need Docker, so the claim "1,488 tests still run" is true and
       not just assumed: `./gradlew test` alone, and record the count
-- [ ] Note in this plan, explicitly, that **the 6 integration tests now run in no CI job**, that they passed
+
+      **The count is confirmed; the Docker-independence is disproved.** `./gradlew clean test` alone:
+      **BUILD SUCCESSFUL** in 5m24s, **1,488 tests across 185 classes**, 0 failures, 0 errors, 0 skipped
+      (aggregated from `build/test-results/test/*.xml`). So the *number* in the Overview is right.
+
+      It passed **because this machine has Docker**. It will not pass on the agent:
+
+      - `AbstractPostgresContainerTest` lives in `src/test`, and **21 `src/test` classes extend it** —
+        `CaseworkerCaseControllerTest`, `CaseworkerReadControllerTest`, `CaseworkerNoteControllerTest`,
+        `CaseworkerWitnessControllerTest`, `CaseworkerDocumentControllerTest`,
+        `CaseworkerDocumentUploadLimitTest`, `DeedPollServiceTest`, `DeedPollConcurrentUpdateTest`,
+        `CaseSpecificationsTest`, `ReferenceNumberServiceTest`, `NoteServiceTest`, `WitnessServiceTest`,
+        `DocumentServiceTest`, `DocumentTypeServiceTest`, `EntityMappingTest`, `DeedPollRepositoryTest`,
+        `ReferenceCounterRepositoryTest`, `HealthProbeTest`, `DeedPollSchemaHealthTest`,
+        `SecurityConfigurationTest`, `ServiceAuthConfigurationTest`.
+      - `SchemaConformanceTest` is `@Testcontainers` with its own `@Container PostgreSQLContainer`, started in
+        `@BeforeAll` rather than `<clinit>` — 139 tests, the largest single class in the suite.
+      - **322 of the 1,488 unit tests sit in those 22 classes.** The remaining 1,166 need no Docker.
+
+      The CI log already quoted in this plan is the proof rather than an inference: it names
+      `AbstractPostgresContainerTest.<clinit>` at line 27 throwing *Could not find a valid Docker environment*
+      on the agent. That is a `src/test` class. `:integration` merely happened to be the task that reached it
+      first — Gradle ordered `:integration` before `:test` among `check`'s dependencies, the build stopped
+      there, and `:test` never ran. Removing `:integration` from `check` lets `:test` run and hit the same
+      static initialiser.
+
+      No Docker-less run could be staged locally to demonstrate it directly: `~/.testcontainers.properties`
+      caches `docker.client.strategy=UnixSocketClientProviderStrategy`, which reaches
+      `/var/run/docker.sock` regardless of `DOCKER_HOST`, `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE` or
+      `TESTCONTAINERS_DOCKER_CLIENT_STRATEGY`; three attempts (including `--no-daemon --rerun-tasks`) all
+      still found Docker and passed. Recorded as a limit of the local check, not as evidence either way.
+- [x] Note in this plan, explicitly, that **the 6 integration tests now run in no CI job**, that they passed
       locally at the time of writing, and that the proper fix is a Docker-capable agent from PlatOps rather
       than this gate
-- [ ] **Do not attempt to verify the pipeline.** `build.hmcts.net` is behind Azure AD App Proxy and
+
+      **The 6 integration tests now run in no CI job.** `Jenkinsfile_CNP` sets
+      `INTEGRATION_TESTS_ENABLED = "false"` on both the PR and master paths, `build.gradle` therefore omits
+      `tasks.check.dependsOn(integration)` in CI, and there is no other job — decision 4 rules out
+      `.github/workflows/`, and no nightly or AAT job runs `integration`. They still **compile and pass
+      checkstyle** in CI (`:integrationTestClasses`, `:checkstyleIntegrationTest` remain), so the source set
+      cannot rot into non-compiling code unnoticed, but nothing **executes** them.
+
+      They passed locally at the time of writing: 6 tests across 3 classes, 0 failures, in the `clean build`
+      recorded under Task 1, and `:integration` was still selected by `check` in a dry run with the variable
+      unset. **The proper fix is a Docker-capable Jenkins agent from PlatOps** (`team-config.yml`'s `agent:`
+      key, as `xui` and `civil` set), at which point this gate is deleted rather than refined. Tracked as an
+      open question in `cft-workspace/TRACKER.local.md`.
+- [x] **Do not attempt to verify the pipeline.** `build.hmcts.net` is behind Azure AD App Proxy and
       unreachable from the devcontainer. Triggering and reading the build is Steve's. Note that the change is
       unverified against a real build and that this is expected
-- [ ] Mark completed
+
+      Not attempted. **Both commits are unverified against a real build, and that is expected**: nothing here
+      can reach `build.hmcts.net`, and `Jenkinsfile_CNP` cannot even be parsed locally (no `groovy`/`groovyc`
+      in the devcontainer). Triggering and reading the build is Steve's.
+- [x] Mark completed
+
+### Finding from Task 3: this does not yet make `check` pass — `:test` needs Docker too
+
+**Do not treat this plan as having unblocked the build.** Tasks 1 and 2 are implemented as specified and are
+correct as far as they go, but the Overview's claim *"The unit suite is unaffected: 1,488 tests still run in
+`check`"* is **false on the CNP agent**. `check` depends on `:test` as well as `:integration`, and 322 of the
+1,488 unit tests are container-backed (22 classes; the evidence is under Task 3's second checkbox). On an agent
+with no Docker daemon, `:test` fails in the same `AbstractPostgresContainerTest` static initialiser and `check`
+still fails — just further down, and noisily, because `failFast` is deliberately **off** for `test`, so all 322
+report.
+
+That was outside what this plan authorised to change: its constraints are *"No application code, no test
+changes. Two files."*, and every option for `:test` breaks one of them. So it is recorded here for a decision
+rather than implemented:
+
+| Option | Cost |
+|---|---|
+| **A Docker-capable agent** (`team-config.yml`'s `agent:`) | The real fix. Deletes the Task 1 gate instead of extending it. External dependency on PlatOps. |
+| **Tag the 22 container-backed classes** (e.g. JUnit `@Tag("docker")`) and exclude the tag when the variable is `false` | Keeps 1,166 unit tests running in CI, the finest-grained gate available. **Requires test changes** — 22 files — so it needs a new plan. |
+| **Gate `:test` the way `:integration` was gated** | One line, but disables **all 1,488** tests in CI. Strictly worse than tagging, and gives up the whole safety net the Overview leans on. |
+
+The next plan should start from the middle option and from re-checking the Overview's premise, not from the
+assumption that CI is now green.
 
 ## Deliberately not in this plan
 
