@@ -79,13 +79,14 @@ registry".**
 
 ### Task 1: Point the Dockerfile's base image at `hmctsprod`
 
-- [ ] In `Dockerfile` line 3, change `hmctspublic.azurecr.io/base/java:21-distroless` to
+- [x] In `Dockerfile` line 3, change `hmctspublic.azurecr.io/base/java:21-distroless` to
       `hmctsprod.azurecr.io/base/java:21-distroless`. **The tag `21-distroless` does not change.**
-- [ ] Confirm no other line in `Dockerfile` names any retired registry:
+- [x] Confirm no other line in `Dockerfile` names any retired registry:
       `grep -nE 'hmctsprivate|hmctspublic|hmctssandbox|sdshmctspublic|sdshmctspublicsbox' Dockerfile`
       must print nothing
-- [ ] Run the validation command
-- [ ] Mark completed
+- [x] Run the validation command — `./gradlew build` BUILD SUCCESSFUL, unchanged (the Dockerfile is not a
+      build input, so every task was up-to-date)
+- [x] Mark completed
 
 ### Task 2: Point the chart's dependency and image at `hmctsprod`
 
