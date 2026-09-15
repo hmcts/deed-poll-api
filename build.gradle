@@ -64,11 +64,35 @@ tasks.withType(JavaExec).configureEach {
   javaLauncher.set(javaToolchains.launcherFor(java.toolchain))
 }
 
+// Testcontainers needs a Docker daemon, and the CNP Jenkins VM agent has none: `POSTGRES.start()`
+// throws in a static initialiser and every context-booting test fails with it (PR-15/1, 2026-09-15).
+// Unset means enabled, so a local `./gradlew check` still runs them and a developer sees a real
+// failure. `Jenkinsfile_CNP` sets it false. See docs/plans for the cost this accepts.
+//
+// Declared here, above the `test` block and `tasks.check.dependsOn(integration)` that both read it,
+// because Groovy evaluates this file top to bottom: a `Test` task configured above the definition
+// would not see it.
+def integrationTestsEnabled = System.getenv('INTEGRATION_TESTS_ENABLED') != 'false'
+
 tasks.withType(Test).configureEach {
   useJUnitPlatform()
 
   testLogging {
     exceptionFormat = 'full'
+  }
+}
+
+test {
+  useJUnitPlatform {
+    // The CNP VM agent has no Docker daemon. 22 src/test classes need Testcontainers -- 21 inherit
+    // the tag from AbstractPostgresContainerTest, SchemaConformanceTest carries it directly -- and
+    // they account for 609 of the 1,488 tests (measured, 2026-09-15; the 322 in the earlier plan was
+    // an estimate). Excluding them keeps the other 879 running in CI instead of losing the whole
+    // suite to a static initialiser. Unset means exclude nothing, so a local run is unchanged.
+    // STOPGAP: delete this when a Docker-capable agent exists.
+    if (!integrationTestsEnabled) {
+      excludeTags 'requires-docker'
+    }
   }
 }
 
@@ -111,12 +135,7 @@ jacocoTestReport {
 
 tasks.sonarqube.dependsOn(jacocoTestReport)
 
-// Testcontainers needs a Docker daemon, and the CNP Jenkins VM agent has none: `POSTGRES.start()`
-// throws in a static initialiser and every context-booting test fails with it (PR-15/1, 2026-09-15).
-// Unset means enabled, so a local `./gradlew check` still runs them and a developer sees a real
-// failure. `Jenkinsfile_CNP` sets it false. See docs/plans for the cost this accepts.
-def integrationTestsEnabled = System.getenv('INTEGRATION_TESTS_ENABLED') != 'false'
-
+// `integrationTestsEnabled` is defined above the `test` block, which reads it too.
 if (integrationTestsEnabled) {
   tasks.check.dependsOn(integration)
 }

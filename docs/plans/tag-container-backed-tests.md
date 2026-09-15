@@ -103,7 +103,7 @@ exclusion and the gate, not to refine either.
 
 ### Task 2: Exclude the tag in CI only
 
-- [ ] In `build.gradle`, inside the existing `tasks.withType(Test).configureEach { useJUnitPlatform() … }`
+- [x] In `build.gradle`, inside the existing `tasks.withType(Test).configureEach { useJUnitPlatform() … }`
       block — or a dedicated `test { }` block if that is cleaner, following `pcs-api`'s shape — exclude the tag
       when `integrationTestsEnabled` is false. Reuse the flag the previous plan added; **do not add a second
       variable**:
@@ -120,13 +120,24 @@ exclusion and the gate, not to refine either.
         }
       }
       ```
-- [ ] **Check the declaration order.** `integrationTestsEnabled` is currently defined near the bottom of
+
+      Done as a dedicated `test { useJUnitPlatform { … } }` block, following `pcs-api`'s shape, so the
+      exclusion applies to the unit task only and not to `integration`, `functional` or `smoke`. The comment
+      carries the **measured** counts (below), not the plan's estimate.
+- [x] **Check the declaration order.** `integrationTestsEnabled` is currently defined near the bottom of
       `build.gradle`, next to `tasks.check.dependsOn(integration)`, but Groovy evaluates top to bottom — a
       `Test` task configured *above* the definition will not see it. Move the `def` above the first use and
       leave a comment saying why, rather than duplicating it
-- [ ] Prove the default path is unchanged: `./gradlew test --dry-run` and the full validation command both
+
+      Moved above the `Test`-task configuration, with the reason stated in the comment; the original site now
+      carries a one-line pointer instead of a second `def`.
+- [x] Prove the default path is unchanged: `./gradlew test --dry-run` and the full validation command both
       still run the whole suite with the variable unset
-- [ ] Prove the exclusion works, which is the point of the task:
+
+      `./gradlew test --dry-run` → **BUILD SUCCESSFUL**. `./gradlew build` → **BUILD SUCCESSFUL**, and
+      `build/test-results/test/` reports **1,488 tests across 185 result files**, zero failures, zero errors,
+      zero skipped — identical to the baseline, so the exclusion has not leaked into the default path.
+- [x] Prove the exclusion works, which is the point of the task:
 
       ```bash
       INTEGRATION_TESTS_ENABLED=false ./gradlew test --rerun-tasks
@@ -135,7 +146,16 @@ exclusion and the gate, not to refine either.
       It must pass **and report ~1,166 tests rather than 1,488**. Record the exact number. If it still reports
       1,488, the tag is not being excluded; if it fails, something outside the 22 classes needs Docker too —
       report that rather than widening the exclusion to make it pass
-- [ ] Mark completed
+
+      **BUILD SUCCESSFUL**, and **879 tests across 125 result files**, zero failures, zero errors, zero
+      skipped. So **609 tests are excluded, not the 322 the plan predicted** — the estimate carried over from
+      the previous plan's analysis is wrong, and Task 3 should record 609. It is not over-exclusion: diffing
+      the result files between the two runs gives 60 files, which reduce to **exactly 22 top-level classes**,
+      and that set is byte-identical to the 21 direct subclasses of `AbstractPostgresContainerTest` plus
+      `SchemaConformanceTest`. The extra 38 files are `@Nested` inner classes, which Gradle reports
+      separately — the 185-vs-22 accounting confusion is what produced the 322 estimate. The tag reaches
+      exactly the intended classes; those classes simply hold more tests than was thought.
+- [x] Mark completed
 
 ### Task 3: Confirm the numbers and record the residue
 
