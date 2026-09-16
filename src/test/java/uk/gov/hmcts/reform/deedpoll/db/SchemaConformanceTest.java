@@ -4,6 +4,7 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -53,6 +54,9 @@ import static org.assertj.core.api.Assertions.fail;
  * <p>Runs Flyway against a throwaway Postgres, so it tests the migrations as an environment
  * will actually apply them rather than testing a model of them.
  */
+// Tagged directly rather than by inheritance: this class starts its own container below instead of
+// extending AbstractPostgresContainerTest, so it would not otherwise pick the tag up.
+@Tag("requires-docker")
 @Testcontainers
 class SchemaConformanceTest {
 

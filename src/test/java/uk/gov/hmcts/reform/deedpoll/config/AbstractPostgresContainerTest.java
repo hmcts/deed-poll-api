@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.config;
 
+import org.junit.jupiter.api.Tag;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -16,7 +17,12 @@ import uk.gov.hmcts.reform.deedpoll.db.ContainerDatabase;
  * <p>It lives in the {@code test} source set rather than {@code integrationTest} because both need
  * it -- {@code integrationTest} has {@code test}'s output on its classpath, not the reverse -- and
  * a second copy would be a second thing to keep in step with {@link ContainerDatabase}.
+ *
+ * <p>The {@code requires-docker} tag exists so CI can exclude these where no Docker daemon is
+ * available, and JUnit 5 inherits it -- so all 21 subclasses carry it already and a new one needs no
+ * annotation.
  */
+@Tag("requires-docker")
 public abstract class AbstractPostgresContainerTest {
 
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
