@@ -4,7 +4,10 @@ java:
   # The host `deed-poll-admin` already expects to reach this service on — its web chart's
   # `DEED_POLL_API_URL` spells out the same name. Cluster-internal, not a public ingress.
   ingressHost: deed-poll-api-{{ .Values.global.environment }}.service.core-compute-{{ .Values.global.environment }}.internal
-  aadIdentityName: deed-poll
+  # Use the namespace service account federated to `deed-poll-{env}-mi`. The matching identity,
+  # federated credential and service-account annotation are owned by cnp-flux-config.
+  useWorkloadIdentity: true
+  saEnabled: true
   # The `deed-poll-{env}` vault, created by the shared root in `hmcts/deed-poll-infra` and shared with
   # `deed-poll-admin` and `deed-poll-web`. It must have applied before this chart can deploy: nothing
   # enforces that ordering mechanically, so a missing secret here is a missing apply there, not a chart
