@@ -214,7 +214,7 @@ dependencies {
   runtimeOnly group: 'org.flywaydb', name: 'flyway-database-postgresql'
   runtimeOnly group: 'org.postgresql', name: 'postgresql'
 
-  implementation group: 'com.github.hmcts.java-logging', name: 'logging', version: '6.1.9'
+  implementation group: 'com.github.hmcts.java-logging', name: 'logging', version: '8.0.0'
 
   /*
     Accessors only, on the entities. The case entity has over a hundred mapped columns and
