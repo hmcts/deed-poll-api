@@ -8,6 +8,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -207,6 +209,27 @@ class CaseSortTest {
         void cannotBeModifiedByACaller() {
             assertThatThrownBy(() -> CaseSort.sortableFields().add("nonsense"))
                 .isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        @DisplayName("ends with the audit columns in a fixed order, because the order is published")
+        void endsWithTheAuditColumnsInAFixedOrder() {
+            // This set feeds the `sort` parameter's description in the OpenAPI document, and deed-poll-admin
+            // vendors that document. The audit four were a Set.of, whose iteration order is randomised per JVM
+            // by a startup salt, so every regeneration of the spec produced a spurious diff in these names with
+            // nothing having changed -- which is how a real change hides. Iteration order is part of this
+            // method's contract, not an implementation detail.
+            assertThat(CaseSort.sortableFields())
+                .endsWith("createdOn", "modifiedOn", "createdBy", "modifiedBy");
+        }
+
+        @Test
+        @DisplayName("iterates identically every time it is read")
+        void iteratesIdenticallyEveryTime() {
+            // Within one JVM a Set.of is stably ordered, so this alone would not have caught the bug above --
+            // it guards the weaker property that nothing recomputes the set per call.
+            assertThat(List.copyOf(CaseSort.sortableFields()))
+                .isEqualTo(List.copyOf(CaseSort.sortableFields()));
         }
     }
 
