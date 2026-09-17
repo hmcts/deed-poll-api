@@ -346,10 +346,30 @@ Name match, case-insensitive substring, on `newForename`, `newSurname`, `oldFore
 every condition ineffective — write a test that would fail if the grouping were flattened, not only one that
 passes when it is correct.
 
-- [ ] `q` ORs across the six name fields and the two reference fields, ANDs with `filter` and `where`; a test that
+- [x] `q` ORs across the six name fields and the two reference fields, ANDs with `filter` and `where`; a test that
       fails if the bracketing is flattened; reference match tolerant of case and hyphens; `referenceMatch` set on
       an exact reference hit and null otherwise; `newSurname` on `CaseSummary`; `GET` with no `q` byte-identical
       to today; matching isolated in one function; `Specification` only, nothing concatenated
+
+**As built, three things are worth recording because a reader would otherwise have to infer them.**
+
+`referenceMatch` comes from a **second query** (`CaseSpecifications.matchingReference`, asked for two rows and
+reported only when exactly one comes back), not from the page. The page cannot answer it: a reference belonging
+to a case that sorts below the page boundary would make the fact invisible while it is still true of the result
+set. That query **carries the filter and the conditions**, so the answer can never be a case this list would
+not have shown — a redirect into a case the tab excludes would be a disclosure by another route. Two rows is no
+answer, because `referencenumber` is only the serial and repeats across years, so a term of `10100` can match
+several cases and there is then no single case to go to.
+
+`CaseSearch.MAX_TERM_LENGTH` (100) **truncates** an over-long term rather than refusing it — the choice
+`CasePaging` makes about an over-cap size, and for the same reason. `SavedQuerySchemas` now bounds a stored
+`searchTerm` by the same constant, where it previously had no cap: a saved query that stored a term the list
+would truncate would be a stored view that differs from the view it produces.
+
+The **name matcher is `CaseSpecifications.nameMatch`** and every one of the six columns comes through it, so
+decision 12's substring-to-trigram swap is that one function. `CaseSpecificationsTest` reads the column list
+from `CaseSearch.NAME_FIELDS` rather than transcribing it, so a column added to the matcher arrives as a new
+case of the sweep and has to work.
 
 ### Task 6: Security and the spec
 

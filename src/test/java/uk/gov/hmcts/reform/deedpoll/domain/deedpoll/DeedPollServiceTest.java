@@ -852,6 +852,105 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
         }
     }
 
+    @Nested
+    @DisplayName("searching")
+    class Searching {
+
+        /** The "all" tab, so the term is the only thing narrowing the result unless a test says otherwise. */
+        private final ListFilters.ListFilter all = ListFilters.filterFor("all");
+
+        private CaseResults searched(ListFilters.ListFilter filter, String term, String... where) {
+            return deedPollService.findDeedPolls(
+                filter,
+                CaseQuery.parse(List.of(where)),
+                CaseSearch.parse(term),
+                CaseSort.NEWEST_FIRST,
+                CasePaging.FIRST);
+        }
+
+        @Test
+        @DisplayName("a term ANDs with the filter and the conditions, and the total counts only what all admit")
+        void termAndsWithTheFilterAndTheConditions() {
+            created("dateReceived", RECEIVED, "newSurname", "Threepwood", "type", DeedPollType.Adult);
+            created("dateReceived", RECEIVED, "newSurname", "Threepwood", "type", DeedPollType.Minor);
+            created("dateReceived", RECEIVED, "newSurname", "Elsewhere", "type", DeedPollType.Adult);
+
+            CaseResults results = searched(all, "threepwood", "type:is:Adult");
+
+            assertThat(results.cases()).hasSize(1);
+            // The total is the other half of the bracketing: a flattened OR would count three while showing
+            // one, and "1 of 3" above a single row is how that failure surfaces.
+            assertThat(results.total()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("referenceMatch names the case whose reference the term matched")
+        void referenceMatchNamesTheCase() {
+            DeedPoll record = created("dateReceived", RECEIVED, "newForename", "Ada");
+
+            assertThat(searched(all, record.getDisplayReference()).referenceMatch())
+                .isEqualTo(record.getId());
+            assertThat(searched(all, String.valueOf(record.getReferencenumber())).referenceMatch())
+                .isEqualTo(record.getId());
+        }
+
+        @Test
+        @DisplayName("referenceMatch is null when a term matches a name rather than a reference")
+        void referenceMatchIsNullForANameHit() {
+            created("dateReceived", RECEIVED, "newSurname", "Threepwood");
+
+            CaseResults results = searched(all, "threepwood");
+
+            assertThat(results.cases()).hasSize(1);
+            // Exactly the case a consumer would otherwise have inferred a reference hit from, which is why
+            // total == 1 is not the signal.
+            assertThat(results.referenceMatch()).isNull();
+        }
+
+        @Test
+        @DisplayName("referenceMatch is null when a serial matches more than one case")
+        void referenceMatchIsNullWhenASerialMatchesSeveralCases() {
+            // referencenumber holds only the serial component, so it repeats across years and types: two
+            // cases can share it, and there is then no single case for a UI to go to. This is the reason the
+            // lookup asks for two rows rather than one.
+            DeedPoll first = created("dateReceived", RECEIVED, "newForename", "One");
+            DeedPoll second = created("dateReceived", RECEIVED, "newForename", "Two");
+            second.setReferencenumber(first.getReferencenumber());
+            deedPolls.save(second);
+
+            CaseResults results = searched(all, String.valueOf(first.getReferencenumber()));
+
+            assertThat(results.total()).isEqualTo(2);
+            assertThat(results.referenceMatch()).isNull();
+        }
+
+        @Test
+        @DisplayName("referenceMatch is null for a reference the filter excludes")
+        void referenceMatchIsNullForAReferenceTheFilterExcludes() {
+            // Carrying the filter into the lookup is what stops a redirect into a case the tab does not show.
+            DeedPoll open = created("dateReceived", RECEIVED, "newForename", "Open");
+
+            CaseResults results = searched(ListFilters.filterFor("returned"), open.getDisplayReference());
+
+            assertThat(results.cases()).isEmpty();
+            assertThat(results.referenceMatch()).isNull();
+        }
+
+        @Test
+        @DisplayName("a request that searched for nothing has no referenceMatch and the same rows as today")
+        void requestThatSearchedForNothingIsUnchanged() {
+            created("dateReceived", RECEIVED, "newForename", "One");
+            created("dateReceived", RECEIVED, "newForename", "Two");
+
+            CaseResults unsearched = deedPollService.findDeedPolls(
+                all, CaseQuery.NONE, CaseSort.NEWEST_FIRST, CasePaging.FIRST);
+
+            assertThat(unsearched.referenceMatch()).isNull();
+            assertThat(unsearched.total()).isEqualTo(2);
+            assertThat(searched(all, "   ").total()).isEqualTo(2);
+        }
+    }
+
     @Test
     @DisplayName("validateCaseForSubmit refuses a case whose per-type required fields are unmet")
     void validateCaseForSubmitRefusesAnIncompleteCase() {

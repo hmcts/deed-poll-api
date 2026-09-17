@@ -12,12 +12,18 @@ import java.util.List;
 /**
  * One row of the case list.
  *
- * <p><strong>Six columns and an id, not a whole case.</strong> The list table renders exactly the columns
+ * <p><strong>Seven columns and an id, not a whole case.</strong> The list table renders the columns
  * {@code ListView.CASE_LIST_COLUMNS} names -- Reference, Privacy, Received, Type, State, New forename -- so
  * this carries those and the id the row links with. Returning the full case for every row instead would put
  * every applicant's address, telephone number and referral notes into a response that displays none of them,
  * once per case in the service; a narrow row is the honest contract and the data-minimising one, and it is not
  * a performance micro-optimisation to say so.
+ *
+ * <p><strong>{@code newSurname} is the one column beyond that list, and it is a correctness requirement
+ * rather than a nicety.</strong> The search term matches on surname among other names, so without it a
+ * caseworker searching "Smith" gets a table of forenames that cannot show them why any row is in it.
+ * {@code CASE_LIST_COLUMNS} is deliberately left alone: it is the ported Dynamics view and the conformance
+ * tests read it as the specification, so the divergence belongs here, where the reason for it is.
  *
  * <p>The consequence is that a new column on the list page needs a field here. That is the intended direction:
  * a field reaches a caller by being asked for.
@@ -35,7 +41,8 @@ import java.util.List;
  * @param dateReceived when the application was received
  * @param type the case type
  * @param state the derived state
- * @param newForename the applicant's new forename, the one name column the list shows
+ * @param newForename the applicant's new forename
+ * @param newSurname the applicant's new surname, which the search matches on and the list therefore shows
  */
 public record CaseSummaryResponse(
     String id,
@@ -44,7 +51,8 @@ public record CaseSummaryResponse(
     LocalDateTime dateReceived,
     DeedPollType type,
     DeedPollState state,
-    String newForename) {
+    String newForename,
+    String newSurname) {
 
     /** One case as a list row. */
     public static CaseSummaryResponse from(DeedPoll record) {
@@ -55,7 +63,8 @@ public record CaseSummaryResponse(
             record.getDateReceived(),
             record.getType(),
             record.getState(),
-            record.getNewForename());
+            record.getNewForename(),
+            record.getNewSurname());
     }
 
     /** The list, preserving the order the domain returned it in -- which is newest first. */

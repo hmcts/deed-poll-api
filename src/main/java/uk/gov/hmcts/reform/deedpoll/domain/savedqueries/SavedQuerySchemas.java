@@ -4,6 +4,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.PatchField;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseQuery;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 
@@ -37,6 +38,9 @@ import java.util.Optional;
  *       the real parser is what keeps {@code CaseSort.sortableFields()} the single authority on which
  *       fields can be ordered by.</li>
  *   <li><strong>Filter</strong> -- {@link ListFilters#filterFor}, against {@code LIST_FILTERS}.</li>
+ *   <li><strong>The search term's length</strong> -- {@link CaseSearch#MAX_TERM_LENGTH}, the cap the live
+ *       search itself applies. Bounded by the same constant so a saved query cannot store a term the list
+ *       would truncate when it ran it, which would make the stored view and the view it produces differ.</li>
  * </ul>
  *
  * <p><strong>The refusals those validators raise are carried through with their field names unchanged.</strong>
@@ -108,7 +112,7 @@ public final class SavedQuerySchemas {
         Optional<String> filter = filterKey(raw, errors);
         List<String> conditions = conditions(raw, errors).orElse(List.of());
         Optional<CaseSort> sort = sort(raw, errors);
-        Optional<String> searchTerm = boundedText(raw, SEARCH_TERM, 0, errors);
+        Optional<String> searchTerm = boundedText(raw, SEARCH_TERM, CaseSearch.MAX_TERM_LENGTH, errors);
 
         refuseIfAny(errors);
         return new CreateSavedQueryInput(
@@ -142,7 +146,7 @@ public final class SavedQuerySchemas {
         PatchField<String> filter = patchedFilter(raw, errors);
         PatchField<List<String>> conditions = patchedConditions(raw, errors);
         PatchField<CaseSort> sort = patchedSort(raw, errors);
-        PatchField<String> searchTerm = patchedText(raw, SEARCH_TERM, 0, errors);
+        PatchField<String> searchTerm = patchedText(raw, SEARCH_TERM, CaseSearch.MAX_TERM_LENGTH, errors);
 
         refuseIfAny(errors);
         return new UpdateSavedQueryInput(name, description, shared, filter, conditions, sort, searchTerm);

@@ -20,6 +20,13 @@ import java.util.List;
  * 100 has to be able to tell -- otherwise it reads a full page as the whole result set and stops paging.
  * The clamp is observable here without being fatal there.
  *
+ * <p><strong>{@code referenceMatch} is stated rather than left to be inferred.</strong> A caseworker who
+ * types a reference into the search box wants <em>the case</em>, not a list with one row in it -- and a
+ * consumer must not have to read that intent off {@code total == 1}, which is also true of a surname only one
+ * case happens to carry. api says which case the term matched as a reference; the UI decides whether to
+ * redirect to it. Null whenever the term matched no reference, which includes every request that sent no
+ * {@code q}.
+ *
  * <p>The four paging members are flat rather than nested under a {@code page} object. There are four of them
  * and no prospect of a fifth, and a consumer reads {@code total} to render "3 of 7" -- an envelope inside an
  * envelope would be ceremony, of the kind {@code documentTypes} avoids by answering a bare array.
@@ -30,6 +37,7 @@ import java.util.List;
  * @param size the page size that was applied, which is not necessarily the one that was requested
  * @param total how many cases match the filter and query across every page
  * @param totalPages how many pages of {@code size} that is, and zero when nothing matches
+ * @param referenceMatch the id of the case whose reference the search term matched exactly, or null
  */
 public record CaseListResponse(
     String filter,
@@ -37,7 +45,8 @@ public record CaseListResponse(
     int page,
     int size,
     long total,
-    int totalPages) {
+    int totalPages,
+    String referenceMatch) {
 
     /** The list as it was resolved: the filter the domain settled on, and the page it produced. */
     public static CaseListResponse of(ListFilters.ListFilter filter, CaseResults results) {
@@ -47,6 +56,7 @@ public record CaseListResponse(
             results.page(),
             results.size(),
             results.total(),
-            results.totalPages());
+            results.totalPages(),
+            results.referenceMatch());
     }
 }

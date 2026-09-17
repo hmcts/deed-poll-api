@@ -21,11 +21,29 @@ import java.util.List;
  *     {@link CasePaging#MAX_SIZE}
  * @param total how many cases match the filter and query in total, across every page
  * @param totalPages how many pages of {@code size} that is, and zero when nothing matches
+ * @param referenceMatch the id of the one case whose reference the search term matched exactly, or null --
+ *     which is what a caseworker who typed a reference is really asking for, rather than a list of one.
+ *     Null for a search that matched no reference, for one that matched several (a serial repeats across
+ *     years, so two cases can share it and there is then no single case to go to), and for a request that
+ *     searched for nothing at all
  */
-public record CaseResults(List<DeedPollWithComputed> cases, int page, int size, long total, int totalPages) {
+public record CaseResults(
+    List<DeedPollWithComputed> cases,
+    int page,
+    int size,
+    long total,
+    int totalPages,
+    String referenceMatch) {
 
     public CaseResults {
         cases = List.copyOf(cases);
+    }
+
+    /**
+     * One page of a request that searched for nothing, so there is no reference to have matched.
+     */
+    public static CaseResults of(List<DeedPollWithComputed> cases, CasePaging paging, long total) {
+        return of(cases, paging, total, null);
     }
 
     /**
@@ -36,8 +54,12 @@ public record CaseResults(List<DeedPollWithComputed> cases, int page, int size, 
      * of 0" says the truth about a list with nothing in it, where "page 1 of 1" claims a page that has no
      * rows on it.
      */
-    public static CaseResults of(List<DeedPollWithComputed> cases, CasePaging paging, long total) {
-        return new CaseResults(cases, paging.page(), paging.size(), total, pages(total, paging.size()));
+    public static CaseResults of(List<DeedPollWithComputed> cases,
+                                 CasePaging paging,
+                                 long total,
+                                 String referenceMatch) {
+        return new CaseResults(
+            cases, paging.page(), paging.size(), total, pages(total, paging.size()), referenceMatch);
     }
 
     /** Whether this page has anything on it, which a page past the end does not. */
