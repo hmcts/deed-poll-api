@@ -121,15 +121,28 @@ owned here:
    and let `FormFieldsTest` be the check). Follow whatever the existing string-keyed label sets do; do not
    invent a Dynamics integer for a state that never had one.
 
-6. **No new HTTP operation. The caseworker operation count stays 30.** This plan adds a *field* to an
-   *existing* response (`CaseSummaryResponse`, the list row) and a *queryable field*, both served by the
-   already-published `GET /caseworker/cases`. No path is added, so `CASEWORKER_PATHS` and the `30` count do
-   **not** change. What *does* move is `OpenAPIPublisherTest`'s schema surface: `CaseSummaryResponse` gains a
-   property and the queryable-field set gains a member, so any assertion in that test (or `DeedPollSchemas`
-   /the published `openapi.json`) over the summary schema's properties or the field list must be updated in
-   the same task, or `build` goes red. **Grep before assuming which:** `git grep -n currentReferralState` will
-   be empty at the start; grep `CaseSummaryResponse` and the schema/field-count assertions to find every
-   place the new property is counted.
+6. **No new HTTP operation. The caseworker operation count stays 30.** This plan adds a *field* to two
+   *existing* responses (`CaseSummaryResponse` the list row, and `SavedCaseResponse`) and a *queryable
+   field*, all served by already-published operations. No path is added, so `CASEWORKER_PATHS` and the `30`
+   count do **not** change. What *does* move is `OpenAPIPublisherTest`'s schema surface: both DTOs gain a
+   property and the queryable-field set gains a member, so any assertion in that test (or `DeedPollSchemas` /
+   the published `openapi.json`) over those schemas' properties or the field list must be updated in the same
+   task, or `build` goes red. **Grep before assuming which:** `git grep -n currentReferralState` will be empty
+   at the start; grep `CaseSummaryResponse`, `SavedCaseResponse` and the schema/field-count assertions to find
+   every place the new property is counted.
+
+7. **`currentReferralState` MUST be exposed on `SavedCaseResponse`, not only `CaseSummaryResponse` — this is
+   the cross-repo fact that keeps admin-2 a clean consumer.** admin-2 develops and unit-tests against
+   deed-poll-admin's in-memory mock (`libs/deed-poll-api-client/src/mock/server.ts`), which is also what
+   `yarn dev` runs. That mock derives its set of *queryable* fields from the wire `SavedCaseResponse` schema's
+   keys, **not** `CaseSummaryResponse`'s (it is the fuller row), and it filters by reading the property off
+   each stored case by name. So a `where=currentReferralState:is:Decided` filter — the exact call admin-2
+   makes — **400s in the admin mock ("names no case field") unless `currentReferralState` is a property of
+   `SavedCaseResponse`**. On the real api this does not bite (queryability comes from
+   `DeedPollFields.readableFields()`, independent of any DTO), but the mock is the contract admin builds
+   against, and the honest fix is here, not a mock special-case in admin. `state` is on both DTOs for exactly
+   this reason; `currentReferralState` follows it. **Do not** try to make it queryable while omitting it from
+   `SavedCaseResponse` — that leaves admin unable to test its own count without hacking the mock.
 
 ## What this plan adds, and why every piece is additive
 
@@ -138,6 +151,10 @@ owned here:
 - **One field on `CaseSummaryResponse`** — `currentReferralState` (`ReferralState`, nullable). The list row
   already carries `state`; this sits beside it. Both `from(...)` factories
   (`CaseSummaryResponse.java:58,71`) map it.
+- **The same field on `SavedCaseResponse`** — `currentReferralState` (`ReferralState`, nullable), mapped
+  `record.getCurrentReferralState()` in its `from(DeedPollWithComputed)` factory beside `record.getState()`
+  (`SavedCaseResponse.java:58,169`). **This is not optional and not gold-plating** — it mirrors exactly how
+  `state` is carried on both DTOs, and the reason is a downstream contract fact, decision 7.
 - **One `FormFields` field**, read-only, queryable, plus its `DeedPollFields` reader and its
   `DynamicsValues` labels set.
 - **One recompute helper** on the referral service, called at every transition, plus the set-based mirror of
@@ -221,12 +238,15 @@ otherwise) and a nullable mapping; it validates against `V{n}` under `ddl-auto: 
 round-trip test.
 
 Add `currentReferralState` (`ReferralState`, nullable) to `CaseSummaryResponse` and map it in **both**
-factories (`from(DeedPoll)` and `from(List<DeedPollWithComputed>)`). Update `CaseSummaryResponse`'s test and
-any summary-schema assertion in `OpenAPIPublisherTest`/`DeedPollSchemas` for the new property.
+factories (`from(DeedPoll)` and `from(List<DeedPollWithComputed>)`). Add the **same field to
+`SavedCaseResponse`** (decision 7), mapped `record.getCurrentReferralState()` beside `record.getState()` in
+its `from(DeedPollWithComputed)` factory (`SavedCaseResponse.java:169`). Update both DTOs' tests and any
+schema assertion in `OpenAPIPublisherTest`/`DeedPollSchemas` for the new property on each.
 
 - [ ] `V{n}` added (number verified against the branch), additive, column nullable, `NAMED_ENUM`-mapped, and
-      validates under `ddl-auto: validate`; entity round-trip test covers it; `CaseSummaryResponse` exposes it
-      via both factories; summary-schema assertions updated; op count unchanged at 30; `./gradlew build` green
+      validates under `ddl-auto: validate`; entity round-trip test covers it; **both** `CaseSummaryResponse`
+      (both factories) and `SavedCaseResponse` expose it; schema assertions updated for both; op count
+      unchanged at 30; `./gradlew build` green
 
 ### Task 2: Recompute-from-truth, wired into every transition
 
