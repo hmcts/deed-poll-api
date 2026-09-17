@@ -17,6 +17,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
@@ -26,7 +27,8 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * A referral of a case to the judiciary: {@code deedpoll_referral}, from {@code V6__referrals.sql}.
+ * A referral of a case to the judiciary: {@code deedpoll_referral}, from {@code V6__referrals.sql},
+ * with the claim and direction columns {@code V8__referral_claim_and_direction.sql} adds.
  *
  * <p><strong>Not a port.</strong> Like {@link SavedQuery}, this has no model in
  * {@code reference/deed-poll.prisma}. The source store held one referral inline on the case,
@@ -102,6 +104,54 @@ public class Referral {
     /** Seeded from the case's flat columns rather than raised by a caseworker, so it has no reasons. */
     @Column(name = "migrated", nullable = false)
     private boolean migrated;
+
+    /**
+     * The judge holding this referral, as a display name resolved from their token at claim time.
+     * Null on an {@code Open} referral and on every backfilled one -- the power app recorded no claim.
+     */
+    @Column(name = "claimedBy")
+    private String claimedBy;
+
+    @Column(name = "claimedAt")
+    private LocalDateTime claimedAt;
+
+    /**
+     * When the holding judge last interacted with this referral: claiming it, reading it through the
+     * judicial surface, or saving a direction. The input to the inactivity sweep, and a separate column
+     * from {@link #claimedAt} on purpose -- the expiry is measured from the last interaction, so a judge
+     * still working on a referral keeps it. Nulled when a claim is released, which is what stops the
+     * sweep reclaiming the same row twice.
+     */
+    @Column(name = "lastTouchedAt")
+    private LocalDateTime lastTouchedAt;
+
+    /**
+     * The direction, reusing the ported {@link MasterDecision} vocabulary rather than a
+     * referral-specific copy of it. A real Postgres enum type, so it needs
+     * {@link SqlTypes#NAMED_ENUM} like {@code state} and {@code urgency}.
+     */
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Column(name = "decision")
+    private MasterDecision decision;
+
+    @Column(name = "directionsText")
+    private String directionsText;
+
+    /**
+     * The judge's decision on London Gazette publication. A {@link Boolean} rather than a primitive
+     * because absent and false are different answers: a referral with no direction has not been asked.
+     * Never derived from the caseworker's referral reasons.
+     */
+    @Column(name = "publishToGazette")
+    private Boolean publishToGazette;
+
+    @Column(name = "decisionDate")
+    private LocalDateTime decisionDate;
+
+    /** The deciding judge's display name, resolved from their token when the direction was recorded. */
+    @Column(name = "decidedBy")
+    private String decidedBy;
 
     @Column(name = "createdOn", nullable = false)
     private LocalDateTime createdOn;

@@ -15,7 +15,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The case notes a referral writes as it is raised and withdrawn.
+ * The case notes a referral writes as it is raised, withdrawn, and taken back from an inactive judge.
  *
  * <p>Container-free, so CI runs it -- and the length test below is the reason this class exists rather than
  * the text being composed inline in the service.
@@ -117,5 +117,39 @@ class ReferralNotesTest {
             ReferralNotes.withdrawn(referral(everyReason, LocalDateTime.parse("2026-09-01T09:30:00")));
 
         assertThat(NoteForm.validateNoteText(text)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a lapsed claim names the judge who was holding it and says it is back in the pool")
+    void lapsedClaimNamesTheJudge() {
+        // The judge is named because the release erases claimedBy: after the sweep, the note is the only
+        // record on the case that this judge ever had it.
+        assertThat(ReferralNotes.claimLapsed("District Judge Bell"))
+            .isEqualTo("Referral claim by District Judge Bell lapsed after inactivity."
+                + " The referral has been returned to the judicial pool and can be picked up again.");
+    }
+
+    @Test
+    @DisplayName("a lapsed claim with no name on it still reads as a lapse")
+    void lapsedClaimWithNoNameStillReadsAsALapse() {
+        // Not reachable through claim(), which always stamps a name -- but a row backfilled or repaired by
+        // hand could hold a claim with none, and the sweep must still be able to say what happened.
+        for (String noName : Arrays.asList(null, "", "   ")) {
+            assertThat(ReferralNotes.claimLapsed(noName))
+                .as("a claim held under %s", noName == null ? "null" : "blank")
+                .startsWith("Referral claim by an unnamed judge lapsed after inactivity.");
+        }
+    }
+
+    @Test
+    @DisplayName("a lapse note is acceptable to the notes column however long the name on the claim is")
+    void lapseNoteIsAcceptableHoweverLongTheNameIs() {
+        // claimedBy is unbounded text and comes from a token, so the note it composes has to be bounded here
+        // -- a note the validator refused would roll back the release rather than just the note, leaving the
+        // claim stuck on a judge who has gone home.
+        String text = ReferralNotes.claimLapsed("J".repeat(5000));
+
+        assertThat(NoteForm.validateNoteText(text)).isEmpty();
+        assertThat(text.length()).isLessThanOrEqualTo(NoteForm.MAX_NOTE_LENGTH);
     }
 }

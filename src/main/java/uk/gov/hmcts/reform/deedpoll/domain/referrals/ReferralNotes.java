@@ -7,7 +7,8 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import java.time.format.DateTimeFormatter;
 
 /**
- * The text of the case notes a referral writes as it is raised and withdrawn.
+ * The text of the case notes a referral writes as it is raised, withdrawn, and taken back from a judge who
+ * stopped working on it.
  *
  * <p><strong>Why a referral writes a note at all.</strong> There is no timeline concept in this domain --
  * only the human-authored Notes grid -- and the referral has to be visible where caseworkers already look,
@@ -31,6 +32,15 @@ public final class ReferralNotes {
 
     /** Dates read by a caseworker in a grid, so the day rather than the instant. */
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMMM yyyy");
+
+    /**
+     * How much of a judge's display name a lapse note will quote.
+     *
+     * <p>The audit columns' own bound, {@code varchar(200)}, rather than a number chosen here: a name too
+     * long for {@code createdBy} is already too long to be a name, and matching it means the note quotes
+     * exactly as much of it as the rest of the schema keeps.
+     */
+    private static final int MAX_JUDGE_NAME_LENGTH = 200;
 
     private ReferralNotes() {
     }
@@ -67,6 +77,30 @@ public final class ReferralNotes {
      * <p>A referral with no reasons is a backfilled one -- the source store had no such field -- so it says
      * so rather than trailing off after an empty list.
      */
+    /**
+     * The note for a claim the inactivity sweep took back, naming the judge who was holding it.
+     *
+     * <p><strong>The only event on the timeline that no column records.</strong> Claiming a referral is
+     * visible in {@code claimedBy} and deciding one in the direction columns, so neither needs a note to be
+     * discoverable; a lapse <em>erases</em> the claim it is about, so without this the case would show a
+     * referral that had quietly gone back into the pool with nothing to say it ever left. It is authored by
+     * the service account rather than by a caseworker, because no person did it.
+     *
+     * <p>The judge's name is bounded here rather than trusted. It arrives from a token, the column holding
+     * it is unbounded {@code text}, and the notes column is not -- so a pathological display name would make
+     * the sweep compose a note the notes validator refuses, and the refusal would roll back the release
+     * rather than the note. Truncating is the safe failure: the note still says a claim lapsed.
+     *
+     * @param judge the display name the claim was held under, blank or null on a row that somehow has none
+     */
+    public static String claimLapsed(String judge) {
+        String held = judge == null || judge.isBlank()
+            ? "an unnamed judge"
+            : judge.substring(0, Math.min(judge.length(), MAX_JUDGE_NAME_LENGTH));
+        return "Referral claim by " + held + " lapsed after inactivity. The referral has been returned to "
+            + "the judicial pool and can be picked up again.";
+    }
+
     public static String withdrawn(Referral referral) {
         String reasons = referral.getReasons().isEmpty()
             ? "no reasons recorded"

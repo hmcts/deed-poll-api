@@ -64,8 +64,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
     /**
      * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
-     * added afterwards, the saved-query routes after those and the referral routes after those. Listed rather
-     * than counted, because a count agrees with a spec that documents the right number of the wrong things.
+     * added afterwards, the saved-query routes after those, the referral routes after those and the closure the
+     * referral state machine added last. Listed rather than counted, because a count agrees with a spec that
+     * documents the right number of the wrong things.
      */
     private static final List<String> CASEWORKER_PATHS = List.of(
         "/caseworker/cases",
@@ -83,7 +84,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/saved-queries/{id}/selection",
         "/caseworker/cases/{id}/referrals",
         "/caseworker/cases/{id}/referrals/{referralId}",
-        "/caseworker/cases/{id}/referrals/{referralId}/withdrawal"
+        "/caseworker/cases/{id}/referrals/{referralId}/withdrawal",
+        "/caseworker/cases/{id}/referrals/{referralId}/closure"
     );
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -111,7 +113,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(paths.fieldNames()).toIterable().containsAll(CASEWORKER_PATHS);
     }
 
-    @DisplayName("Documents the twenty-nine caseworker operations and the token they need")
+    @DisplayName("Documents the thirty caseworker operations and the token they need")
     @Test
     void documentsTheCaseworkerOperations() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -121,20 +123,23 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Twenty-nine operations across sixteen paths: `/caseworker/cases`, the notes and witnesses collections,
+        // Thirty operations across seventeen paths: `/caseworker/cases`, the notes and witnesses collections,
         // the saved-query collection and the referrals collection each carry a GET and a POST, the case carries a
         // GET and a PATCH, the note, the witness and the saved query each carry a GET, a PATCH and a DELETE, a
-        // saved query's selection carries a PUT and a DELETE, one referral carries a GET, and its withdrawal
-        // carries a POST -- the note's delete since 2026-09-08, the witness's since the Administrator gate
-        // landed, the saved query's since the library did and the selection's with it, and the four referral
-        // routes with the referrals feature.
+        // saved query's selection carries a PUT and a DELETE, one referral carries a GET, and its withdrawal and
+        // its closure each carry a POST -- the note's delete since 2026-09-08, the witness's since the
+        // Administrator gate landed, the saved query's since the library did and the selection's with it, the
+        // four referral routes with the referrals feature and the closure with the referral state machine.
+        // The judge's own operations -- claiming a referral and recording a direction -- are deliberately not
+        // here: they are transitions on ReferralService with no route yet, and when they get one it is on a
+        // judicial surface rather than this one, so this count stays the caseworker count.
         // Both the paths and the count are asserted because neither alone is enough: a count could not tell a new
         // verb on a known path from a new path, and the path list could not tell a route that was removed from one
         // that never existed.
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(29);
+        assertThat(operations).isEqualTo(30);
 
         // Every one of them needs a forwarded IDAM token, which the document has to say or the client generated
         // from it cannot make a call. Declared once, globally, because the service authenticates by default.

@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.referrals;
 
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.util.ArrayList;
@@ -14,15 +15,16 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
- * Shape validation for a referral create payload.
+ * Shape validation for the two referral payloads: a caseworker's create, and a judge's direction.
  *
  * <p><strong>Not a port.</strong> Referrals are new behaviour, so like {@code SavedQuerySchemas} -- and
  * unlike {@code DeedPollSchemas}, {@code NoteSchemas} and {@code WitnessSchemas} -- there is no
  * {@code reference/ts} schema behind this one and none to look for.
  *
  * <p>There is no update parse, and that is the shape of the feature rather than a gap. A referral is not
- * edited in place: amending one is withdrawing it and raising another, so the only write that carries a body
- * is the create. Withdrawal is a sub-resource with no payload at all.
+ * edited in place: amending one is withdrawing it and raising another, and a direction is recorded once and
+ * confirmed before it arrives, so the only writes that carry a body are the create and the direction.
+ * Withdrawal and closure are sub-resources with no payload at all.
  *
  * <p><strong>Every refusal is reported at once</strong>, as {@code SavedQuerySchemas} reports them: a
  * payload with no reasons <em>and</em> an urgent referral that does not say why comes back naming both,
@@ -61,17 +63,34 @@ public final class ReferralSchemas {
     public static final int MAX_NOTES_LENGTH = 1000;
 
     /**
-     * {@link #URGENCY_REASON}'s cap, narrower than the notes' because it answers one question.
+     * {@link #URGENCY_REASON}'s cap, narrower because it answers one question.
      */
     public static final int MAX_URGENCY_REASON_LENGTH = 500;
 
-    /** The summary every refusal from this class carries; the per-field detail is in the errors. */
+    /**
+     * {@link #DIRECTIONS_TEXT}'s cap, the widest of the three.
+     *
+     * <p>The column is unbounded {@code text}, so this is not the database's limit either -- but unlike
+     * {@link #MAX_NOTES_LENGTH} it is not another validator's limit in disguise, because recording a direction
+     * writes no case note that would have to quote it. It is a bound for the sake of having one: an unbounded
+     * text field on a public route is a way of storing a megabyte through a form, and the direction on a deed
+     * poll referral is a paragraph or two of what the judge requires.
+     */
+    public static final int MAX_DIRECTIONS_LENGTH = 4000;
+
+    /** The summary every create refusal from this class carries; the per-field detail is in the errors. */
     private static final String INVALID_REFERRAL = "Referral is not valid";
+
+    /** The summary every direction refusal carries, distinct because they are two different payloads. */
+    private static final String INVALID_DIRECTION = "Direction is not valid";
 
     private static final String REASONS = "reasons";
     private static final String NOTES = "notes";
     private static final String URGENCY = "urgency";
     private static final String URGENCY_REASON = "urgencyReason";
+    private static final String DECISION = "decision";
+    private static final String DIRECTIONS_TEXT = "directionsText";
+    private static final String PUBLISH_TO_GAZETTE = "publishToGazette";
 
     private ReferralSchemas() {
     }
@@ -107,8 +126,94 @@ public final class ReferralSchemas {
                 + " is " + Urgency.Urgent));
         }
 
-        refuseIfAny(errors);
+        refuseIfAny(INVALID_REFERRAL, errors);
         return new CreateReferralInput(reasons, notes, urgency, urgencyReason);
+    }
+
+    /**
+     * Validates a judge's direction.
+     *
+     * <p>{@link #DECISION} and {@link #PUBLISH_TO_GAZETTE} are both required of their own accord, and neither
+     * has a default. A direction with no decision is not a direction, and Gazette publication is a decision
+     * the judge makes rather than a preference with an obvious answer -- <strong>defaulting it either way
+     * would silently make the choice on their behalf</strong>, in one direction publishing a change that was
+     * to stay private and in the other withholding one the public notice depends on. Neither is derived from
+     * the caseworker's referral reasons.
+     *
+     * <p>{@link #DIRECTIONS_TEXT} is optional and bounded: an approval that needs no comment is a real answer,
+     * so a judge is not made to type one.
+     *
+     * <p>There is no field here for the referral, its state, the deciding judge or the date. Each is either the
+     * path, the transition, the token or the clock -- see {@link DirectionInput}.
+     *
+     * @throws InvalidInputError with one entry per offending field, every failure at once
+     */
+    public static DirectionInput parseDirection(Map<String, Object> raw) {
+        List<FieldError> errors = new ArrayList<>();
+
+        Optional<MasterDecision> decision = decision(raw, errors);
+        Optional<String> directionsText = boundedText(raw, DIRECTIONS_TEXT, MAX_DIRECTIONS_LENGTH, errors);
+        Optional<Boolean> publishToGazette = gazette(raw, errors);
+
+        refuseIfAny(INVALID_DIRECTION, errors);
+        // Both are present once nothing was refused, so the gets cannot throw -- and reading them here rather
+        // than defaulting them is what makes that true: an absent required field is an error above, not a
+        // value invented below.
+        return new DirectionInput(decision.orElseThrow(), directionsText, publishToGazette.orElseThrow());
+    }
+
+    // --- the direction ---
+
+    /**
+     * The decision by name, required.
+     *
+     * <p>Matched exactly and against the ported {@link MasterDecision} names, for the reason a referral reason
+     * is: the names are the wire form and the stored form at once, because the column is the Postgres enum
+     * those names spell, so accepting {@code "approved"} here would send Postgres a label it does not have.
+     */
+    private static Optional<MasterDecision> decision(Map<String, Object> raw, List<FieldError> errors) {
+        Object value = raw.get(DECISION);
+        if (value == null) {
+            // Absent and explicitly null take the same message: neither is a direction anybody could action.
+            errors.add(new FieldError(DECISION, DECISION + " is required to record a direction. One of "
+                + members(MasterDecision.values())));
+            return Optional.empty();
+        }
+        if (!(value instanceof String name)) {
+            errors.add(new FieldError(DECISION, DECISION + " must be text"));
+            return Optional.empty();
+        }
+        String trimmed = name.trim();
+        return Arrays.stream(MasterDecision.values())
+            .filter(candidate -> candidate.name().equals(trimmed))
+            .findFirst()
+            .or(() -> {
+                errors.add(new FieldError(DECISION, DECISION + " names no decision: " + quoted(trimmed)
+                    + ". One of " + members(MasterDecision.values())));
+                return Optional.empty();
+            });
+    }
+
+    /**
+     * The Gazette-publication flag, required and never coerced.
+     *
+     * <p>Refused rather than read truthily, as a saved query's {@code shared} is and for a sharper version of
+     * the same reason: publication puts the applicant's former and new names in a public notice, so a
+     * {@code "false"} string quietly read as true is a disclosure that cannot be taken back.
+     */
+    private static Optional<Boolean> gazette(Map<String, Object> raw, List<FieldError> errors) {
+        Object value = raw.get(PUBLISH_TO_GAZETTE);
+        if (value instanceof Boolean set) {
+            return Optional.of(set);
+        }
+        if (value == null) {
+            errors.add(new FieldError(PUBLISH_TO_GAZETTE, PUBLISH_TO_GAZETTE
+                + " is required: whether to publish in the London Gazette is the judge's decision and has no"
+                + " default"));
+            return Optional.empty();
+        }
+        errors.add(new FieldError(PUBLISH_TO_GAZETTE, PUBLISH_TO_GAZETTE + " must be true or false"));
+        return Optional.empty();
     }
 
     // --- reasons ---
@@ -258,9 +363,9 @@ public final class ReferralSchemas {
         return Optional.of(List.copyOf(strings));
     }
 
-    private static void refuseIfAny(List<FieldError> errors) {
+    private static void refuseIfAny(String summary, List<FieldError> errors) {
         if (!errors.isEmpty()) {
-            throw new InvalidInputError(INVALID_REFERRAL, errors);
+            throw new InvalidInputError(summary, errors);
         }
     }
 

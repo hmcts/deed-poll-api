@@ -32,6 +32,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>The scoping is asserted by getting the wrong answer's absence, not by reading the method names:
  * two cases each hold a referral, and each finder is asked about both.
+ *
+ * <p>The stale-claim sweep's two statements are here for a stronger reason: what makes them correct is SQL
+ * that no fake can stand in for. {@code ReferralServiceTest} proves the arithmetic -- which rows the service
+ * asks about and with which cutoff -- against a repository that applies the same predicate in Java, and only
+ * a real Postgres can say that the conditional {@code UPDATE} refuses a row somebody touched in the meantime
+ * and answers zero the second time it is run. That second answer is the whole multi-replica argument.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Transactional
@@ -42,6 +48,16 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
      */
     private static final Set<ReferralState> NON_TERMINAL =
         EnumSet.copyOf(Arrays.stream(ReferralState.values()).filter(state -> !state.isTerminal()).toList());
+
+    /** A fixed "now" for the sweep tests, so nothing turns on how long a container took to start. */
+    private static final LocalDateTime NOW = LocalDateTime.of(2026, 6, 1, 12, 0);
+
+    /**
+     * Two hours before {@link #NOW}: the cutoff a default-configured sweep would ask about.
+     */
+    private static final LocalDateTime CUTOFF = NOW.minusHours(2);
+
+    private static final String SERVICE_ACCOUNT = "# svc_HMCTS_LCPT_Dev";
 
     @Autowired
     private ReferralRepository referrals;
@@ -64,6 +80,17 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         // referrals created in the same millisecond have no order to assert.
         referral.setCreatedOn(createdOn);
         entityManager.persist(referral);
+        return referral;
+    }
+
+    /**
+     * A referral held by a judge who last interacted with it at {@code lastTouchedAt}.
+     */
+    private Referral claimedReferral(DeedPoll parent, String judge, LocalDateTime lastTouchedAt) {
+        Referral referral = persistedReferral(parent, ReferralState.Claimed, lastTouchedAt);
+        referral.setClaimedBy(judge);
+        referral.setClaimedAt(lastTouchedAt);
+        referral.setLastTouchedAt(lastTouchedAt);
         return referral;
     }
 
@@ -128,6 +155,85 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(referrals.existsByDeedPollIdAndStateIn(withOnlyTerminalReferrals.getId(), NON_TERMINAL))
             .isFalse();
         assertThat(referrals.existsByDeedPollIdAndStateIn(withNoReferrals.getId(), NON_TERMINAL)).isFalse();
+    }
+
+    @Test
+    @DisplayName("finds the claims nobody has touched since the cutoff, with the case and the judge on each")
+    void findsTheClaimsNobodyHasTouchedSinceTheCutoff() {
+        DeedPoll deedPoll = persistedCase();
+        final Referral lapsed = claimedReferral(deedPoll, "District Judge Bell", CUTOFF.minusMinutes(1));
+        final Referral fresh = claimedReferral(persistedCase(), "District Judge Okafor", CUTOFF.plusMinutes(1));
+        // Withdrawn out from under the judge who held it, which is the withdraw-voids-a-claim case: the row
+        // still carries a stale lastTouchedAt, and the sweep must not treat it as a claim to hand back.
+        Referral withdrawn = claimedReferral(persistedCase(), "District Judge Bell", CUTOFF.minusHours(9));
+        withdrawn.setState(ReferralState.Withdrawn);
+        entityManager.flush();
+        entityManager.clear();
+
+        List<StaleClaim> stale = referrals.findStaleClaims(ReferralState.Claimed, CUTOFF);
+
+        assertThat(stale).extracting(StaleClaim::id)
+            .containsExactly(lapsed.getId())
+            .doesNotContain(fresh.getId(), withdrawn.getId());
+        // The two facts the note needs, taken before the release erases one of them. The case id comes off
+        // the foreign key without loading the case, which is what lets the sweep read it after the update.
+        assertThat(stale.getFirst().deedPollId()).isEqualTo(deedPoll.getId());
+        assertThat(stale.getFirst().claimedBy()).isEqualTo("District Judge Bell");
+    }
+
+    @Test
+    @DisplayName("releases a lapsed claim back to the pool in one statement, clearing all three claim columns")
+    void releasesALapsedClaimInOneStatement() {
+        DeedPoll deedPoll = persistedCase();
+        Referral lapsed = claimedReferral(deedPoll, "District Judge Bell", CUTOFF.minusHours(1));
+        entityManager.flush();
+
+        int released = referrals.releaseStaleClaim(lapsed.getId(), CUTOFF, NOW, SERVICE_ACCOUNT);
+
+        assertThat(released).isEqualTo(1);
+        Referral reloaded = entityManager.find(Referral.class, lapsed.getId());
+        assertThat(reloaded.getState()).isEqualTo(ReferralState.Open);
+        assertThat(reloaded.getClaimedBy()).isNull();
+        assertThat(reloaded.getClaimedAt()).isNull();
+        // The column the predicate reads, nulled by the statement that read it -- which is what makes the
+        // release happen once rather than on every sweep from here on.
+        assertThat(reloaded.getLastTouchedAt()).isNull();
+        assertThat(reloaded.getModifiedBy()).isEqualTo(SERVICE_ACCOUNT);
+        assertThat(reloaded.getModifiedOn()).isEqualTo(NOW);
+    }
+
+    @Test
+    @DisplayName("releases nothing a second time, so two replicas sweeping at once write one note between them")
+    void releasesNothingASecondTime() {
+        Referral lapsed = claimedReferral(persistedCase(), "District Judge Bell", CUTOFF.minusHours(1));
+        entityManager.flush();
+
+        assertThat(referrals.releaseStaleClaim(lapsed.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isEqualTo(1);
+        // The whole multi-replica argument, as a fact about the statement rather than about the service: the
+        // second caller is told it changed nothing, so it writes no second lapse note.
+        assertThat(referrals.releaseStaleClaim(lapsed.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isZero();
+    }
+
+    @Test
+    @DisplayName("releases nothing when the judge touched it after the cutoff, or when nobody holds it")
+    void releasesNothingItShouldNot() {
+        DeedPoll deedPoll = persistedCase();
+        Referral fresh = claimedReferral(deedPoll, "District Judge Bell", CUTOFF.plusSeconds(1));
+        Referral decided = claimedReferral(persistedCase(), "District Judge Okafor", CUTOFF.minusHours(9));
+        decided.setState(ReferralState.Decided);
+        entityManager.flush();
+
+        // One second inside the window is a judge still working, and a decided referral is not a claim at
+        // all -- both are rows the statement's own predicate has to refuse, because the candidate query and
+        // the release are separated by however long the sweep's loop takes.
+        assertThat(referrals.releaseStaleClaim(fresh.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isZero();
+        assertThat(referrals.releaseStaleClaim(decided.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isZero();
+
+        entityManager.clear();
+        assertThat(entityManager.find(Referral.class, fresh.getId()).getClaimedBy())
+            .isEqualTo("District Judge Bell");
+        assertThat(entityManager.find(Referral.class, decided.getId()).getState())
+            .isEqualTo(ReferralState.Decided);
     }
 
     @Test

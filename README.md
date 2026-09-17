@@ -29,7 +29,7 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 
 ## The API surface
 
-Twenty-nine caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
+Thirty caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
 
 | Method | Path | What it does |
 |---|---|---|
@@ -62,6 +62,7 @@ Twenty-nine caseworker operations. `/swagger-ui.html` is the authority; this tab
 | POST | `/caseworker/cases/{id}/referrals` | Raise one — at least one reason, and **409** if the case already has one that is not closed or withdrawn |
 | GET | `/caseworker/cases/{id}/referrals/{referralId}` | One referral |
 | POST | `/caseworker/cases/{id}/referrals/{referralId}/withdrawal` | Withdraw one — a transition to `Withdrawn`, and **409** if it is already terminal |
+| POST | `/caseworker/cases/{id}/referrals/{referralId}/closure` | Close one whose direction has been actioned — a transition to `Closed`, and **409** unless it is `Decided` |
 
 There are deliberately **no** case deletes, no document-type writes and no `validate` endpoint. The domain
 implements and tests them; nothing consumes them, and the sibling prototype's mistake was building an API
@@ -89,11 +90,11 @@ Sharing is a **library, not a push**: publishing a query makes it findable, and 
 found queries appear in their own navigation. Sharing with a *named* colleague is deliberately absent — this
 service has no user directory, and a query is already a URL, so pushing one at somebody is a link in Slack.
 
-The four referral routes were the twenty-sixth to twenty-ninth, and they replace a process that ran on email
+The five referral routes were the twenty-sixth to thirtieth, and they replace a process that ran on email
 and a Teams channel: caseworkers batched ten referrals to a Master twice a day and polled a shared mailbox for
 the returned direction. A referral is a **row of its own**, not a field on the case — the ported `dateReferred`
 / `masterName` / `masterDecision` block on `deedpoll_deedpoll` held one referral per case, latest-wins, and it
-stays as the historical snapshot while a case may now carry many referrals over its lifetime. Three rules are
+stays as the historical snapshot while a case may now carry many referrals over its lifetime. Four rules are
 worth knowing before calling them:
 
 - **At most one live referral per case.** A second while one is still `Open`, `Claimed` or `Decided` is a
@@ -102,15 +103,27 @@ worth knowing before calling them:
 - **Withdrawal is a transition, not a delete or an edit.** The row survives as `Withdrawn`, distinct from
   `Closed` — closed means a direction was actioned — and there is no in-place editing of an open referral, so
   amending one is withdrawing it and raising another.
-- **No role gate anywhere below these routes.** Any authenticated staff caller may raise, read and withdraw:
-  in the process this replaces, anybody who works a case can email a Master. The judicial role is the one that
-  is different, and it does not exist yet.
+- **Closing is only possible once a direction has come back.** `Decided → Closed`, and anything else is a
+  **409** — closing an `Open` or `Claimed` referral would take it out of the pool with no direction on it, and
+  closing a `Withdrawn` one would relabel an abandoned referral as an actioned one. Closing clears nothing and
+  writes nothing back to the case's flat `masterDecision` / `masterDirections` columns: those stay the
+  pre-migration snapshot, and the live direction is on the referral.
+- **No role gate anywhere below these routes.** Any authenticated staff caller may raise, read, withdraw and
+  close: in the process this replaces, anybody who works a case can email a Master and action the reply. The
+  judicial role is the one that is different — `Role.JUDICIAL`, which IDAM does not issue yet — and it gates
+  the two transitions that are not on this surface.
 
 Raising and withdrawing each write a **case note** attributed to the acting caseworker, because there is no
 timeline concept in this domain beyond the notes grid and the referral has to appear where caseworkers already
-look. Claiming a referral, recording a direction and closing a returned one are the judge's half of the loop
-and are not here yet; `ReferralState` carries all five members from the first migration so those arrive as
-transitions rather than as a schema change.
+look. Claiming and deciding write none — both are legible from the referral's own row — and the inactivity
+sweep writes one as the service account, because a lapsed claim erases the fact it is about.
+
+**Claiming a referral and recording a direction are the judge's half of the loop, and they have no HTTP route
+here.** Both are transitions on `ReferralService` — role-gated to `Role.JUDICIAL`, exercised by unit tests
+holding a `CurrentUser` — and the judicial pool, the read-through to a case's papers and the endpoints that call
+them are a later plan on a `/judicial/**` surface, not additions to the caseworker one. A claim lapses after
+`deedpoll.referrals.claim-expiry` (two hours by default) of the holding judge's inactivity, taken back as a side
+effect of loading the judicial pool rather than by a scheduler.
 
 The witness delete was the eighteenth, and is **the one witness route restricted by role**: the capability
 matrix puts "Delete witnesses" at ✗ for Basic User and ✓ for Administrator, the same split as deleting a

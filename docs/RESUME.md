@@ -14,7 +14,7 @@ committed, one commit per task, plus a review-fixes commit on top. `master` hold
 |---|---|
 | Tasks complete and committed | **0–16**, all of them |
 | Flyway migrations | 7 — enums, `DeedPoll`, children, list indexes, saved queries, referrals, the referral backfill |
-| Caseworker endpoints | 29 — 13 from plan 01, plus the four witness routes, the witness delete, the seven saved-query routes and the four referral routes added afterwards |
+| Caseworker endpoints | 30 — 13 from plan 01, plus the four witness routes, the witness delete, the seven saved-query routes, the four referral routes and the referral closure added afterwards |
 | `/citizen/**` | exists, empty, shares no DTO with `/caseworker/**` |
 
 `./gradlew build` is green. Two things about running it here, both recorded in the README as well:

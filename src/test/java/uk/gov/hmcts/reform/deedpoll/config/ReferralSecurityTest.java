@@ -13,27 +13,35 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.controller.CaseworkerReferralController;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
+import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.IdamClaims;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.CreateReferralInput;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.BiConsumer;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,9 +60,10 @@ import static org.mockito.Mockito.when;
 /**
  * What the referral resource refuses, and what it deliberately does not, with no database and no HTTP.
  *
- * <p><strong>The three properties this class exists for are the plan's:</strong> namespace separation (the
- * citizen surface stays empty of referrals), a caller with no roles is still a caseworker and may refer, and a
- * referral of one case is never reachable through another case's path. Each is asserted <em>through
+ * <p><strong>The four properties this class exists for are the plan's:</strong> namespace separation (the
+ * citizen surface stays empty of referrals), a caller with no roles is still a caseworker and may refer, the
+ * judicial transitions fail closed for every token IDAM issues today, and a referral of one case is never
+ * reachable through another case's path -- closing it included. Each is asserted <em>through
  * {@link ReferralService} or over the declarations that constrain it</em> rather than over HTTP, which is the
  * gap between this class and {@code CaseworkerReferralControllerTest}: that class proves which status code each
  * refusal becomes, against a real token and a real database, and is excluded on the Jenkins agent --
@@ -62,10 +71,22 @@ import static org.mockito.Mockito.when;
  * CI runs them, following {@code SavedQuerySecurityTest}.
  *
  * <p><strong>The absence of a role gate is asserted, not assumed.</strong> Decision 18: there is no "may refer"
- * permission, because in the process this replaces anybody who works a case can email a Master. A test suite
- * that only ever checked refusals would let somebody add a gate here and see nothing go red, so every one of
- * the four operations is exercised by a caller holding no roles at all, and by an administrator alongside --
- * two callers, because a single one cannot tell "no rule" from "a rule this caller happens to satisfy".
+ * permission and no "may close" one, because in the process this replaces anybody who works a case can email a
+ * Master and action the reply. A test suite that only ever checked refusals would let somebody add a gate here
+ * and see nothing go red, so every one of the five caseworker operations is exercised by a caller holding no
+ * roles at all, and by an administrator alongside -- two callers, because a single one cannot tell "no rule"
+ * from "a rule this caller happens to satisfy".
+ *
+ * <p><strong>The judicial gate is the one refusal this resource does have, and it is asserted three ways.</strong>
+ * {@code claim}, {@code touch} and {@code decide} demand {@link Role#JUDICIAL}; every other caller is refused,
+ * an administrator included, before the case or the referral is looked up at all. It is asserted over all three
+ * transitions from one list rather than one test each, so a fourth judicial transition is gated by being added
+ * to that list rather than by somebody remembering to copy a test; and it is asserted from the token end too --
+ * a claims document naming a near-miss role string reduces to no roles, which is what makes "fails closed for
+ * every token IDAM currently issues" a statement about the reduction rather than a hope about IDAM. The
+ * transitions have no route on any controller yet, which is checked here as well: a gate on a surface nobody can
+ * reach is safe, and a route added ahead of the judicial-surface plan must not inherit the caseworker surface's
+ * "any authenticated caller" reading by accident.
  *
  * <p><strong>The scoping claims are made twice on purpose.</strong> {@code ReferralServiceTest} states them as
  * behaviour; here they are stated over the declarations that make the behaviour unavoidable -- the repository
@@ -83,11 +104,41 @@ class ReferralSecurityTest {
 
     private static final UUID REFERRAL_ID = UUID.fromString("55555555-5555-5555-5555-555555555555");
 
+    /**
+     * The two statements of the inactivity sweep, which are the only ones on {@code ReferralRepository} that
+     * name no parent case -- because a sweep is about every case at once and there is no case to name.
+     */
+    private static final Set<String> SWEEP = Set.of("findStaleClaims", "releaseStaleClaim");
+
     /** A caller with no role this service asks about: the ordinary caseworker, and the fail-closed case. */
     private static final CurrentUser NO_ROLES = CurrentUser.currentUser(List.of(), "Otto Other", "other-1");
 
     private static final CurrentUser ADMIN =
         CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "An Admin", "admin-2");
+
+    /**
+     * A judge: the role IDAM does not issue yet, supplied directly, which is what makes the gate provable today.
+     */
+    private static final CurrentUser JUDGE =
+        CurrentUser.currentUser(List.of(Role.JUDICIAL), "District Judge Bell", "judge-3");
+
+    /**
+     * Role strings a token could plausibly carry that are <em>not</em> this service's judicial role.
+     *
+     * <p>Every one of them is either a real claim IDAM issues across the estate today, a different case of the
+     * working value, or the kind of near miss a mis-provisioned role would produce. None may pass the gate:
+     * {@link Role#fromClaimValue} matches exactly, and the point of stating it here is that the judicial
+     * transitions are gated by a claim value IDAM does not issue at all yet, so the only thing standing between
+     * a live token and a claimed referral is that this match is exact.
+     */
+    private static final List<String> NEAR_MISSES = List.of(
+        "caseworker-deedpoll-admin",
+        "caseworker-deedpoll",
+        "caseworker-deedpoll-judiciary",
+        "caseworker-deedpoll-judicial-admin",
+        "CASEWORKER-DEEDPOLL-JUDICIAL",
+        "judicial",
+        "caseworker");
 
     private DeedPollRepository deedPolls;
     private ReferralRepository referrals;
@@ -99,9 +150,11 @@ class ReferralSecurityTest {
         deedPolls = mock(DeedPollRepository.class);
         referrals = mock(ReferralRepository.class);
         notes = mock(NoteService.class);
-        service = new ReferralService(deedPolls, referrals, notes);
+        service = new ReferralService(deedPolls, referrals, notes,
+                                      new ReferralProperties(Duration.ofHours(2)));
 
         when(referrals.save(any())).thenAnswer(call -> call.getArgument(0));
+        when(referrals.findStaleClaims(any(), any())).thenReturn(List.of());
     }
 
     /** Both cases exist, so no refusal below is the parent check answering instead of the rule under test. */
@@ -132,6 +185,64 @@ class ReferralSecurityTest {
 
     private static CreateReferralInput minimal() {
         return ReferralSchemas.parseCreateReferral(Map.of("reasons", List.of("Minor")));
+    }
+
+    /** The shortest direction the schema accepts: these tests are about who may record one, not what it says. */
+    private static DirectionInput approval() {
+        return ReferralSchemas.parseDirection(Map.of(
+            "decision", "Approved",
+            "directionsText", "Approved",
+            "publishToGazette", false));
+    }
+
+    /**
+     * A referral of {@link #CASE_ID} with a direction on it, as the closing caseworker finds one.
+     *
+     * <p>The direction is populated rather than left null so that a close reached through the wrong parent can be
+     * shown to have changed nothing at all -- not merely to have left the state alone.
+     */
+    private Referral storedDecision() {
+        Referral referral = stored(ReferralState.Decided);
+        referral.setDecision(MasterDecision.Approved);
+        referral.setDirectionsText("Granted, publication as usual");
+        referral.setPublishToGazette(true);
+        referral.setDecisionDate(LocalDateTime.parse("2026-09-02T11:00:00"));
+        referral.setDecidedBy(JUDGE.name());
+        return referral;
+    }
+
+    /**
+     * The transitions that demand {@link Role#JUDICIAL}, in one list.
+     *
+     * <p>Written once and used by every refusal below, so the gate is asserted over the whole judicial surface
+     * rather than over whichever transition somebody remembered. A fourth one is covered by being added here.
+     */
+    private List<Transition> judicialTransitions() {
+        return List.of(
+            new Transition("claim", (caseId, caller) -> service.claim(caseId, REFERRAL_ID.toString(), caller)),
+            new Transition("touch", (caseId, caller) -> service.touch(caseId, REFERRAL_ID.toString(), caller)),
+            new Transition("decide",
+                           (caseId, caller) -> service.decide(caseId, REFERRAL_ID.toString(), approval(), caller)));
+    }
+
+    /**
+     * One judicial transition, named so a failure says which of them let a caller through.
+     *
+     * <p>The case id is a parameter rather than baked in, because the two questions asked of these transitions
+     * are "who may" and "through which parent", and the second one needs the same call addressed at a case that
+     * is not the referral's.
+     */
+    private record Transition(String name, BiConsumer<String, CurrentUser> apply) {
+
+        /** Addressed at the referral's own case: every question about who may act. */
+        void by(CurrentUser caller) {
+            apply.accept(CASE_ID, caller);
+        }
+
+        /** Addressed at a real case that is not the referral's parent: the scoping question. */
+        void throughAnotherCase(CurrentUser caller) {
+            apply.accept(OTHER_CASE_ID, caller);
+        }
     }
 
     @Nested
@@ -233,6 +344,44 @@ class ReferralSecurityTest {
         }
 
         @Test
+        @DisplayName("may close a returned direction, because closing is not role-gated either")
+        void mayCloseAReturnedDirection() {
+            bothCasesExist();
+            Referral referral = storedDecision();
+
+            // The fifth operation, and the one most likely to acquire a gate by analogy: it is the transition
+            // that says the office actioned the direction, so a reviewer could reasonably expect a permission on
+            // it. Decision 4 is that there is none -- whoever works the case actions the Master's reply -- and
+            // that has to be asserted, because a gate added here would refuse every caseworker in existence.
+            assertThatCode(() -> service.close(CASE_ID, REFERRAL_ID.toString(), NO_ROLES))
+                .doesNotThrowAnyException();
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Closed);
+            assertThat(referral.getModifiedBy()).isEqualTo("Otto Other");
+        }
+
+        @Test
+        @DisplayName("and so may a judge's own token, because the caseworker/judge split is by surface, not by gate")
+        void soMayAJudgesToken() {
+            bothCasesExist();
+            Referral referral = storedDecision();
+
+            // Stated because it is the honest reading of decision 4 and the surprising half of it. "A judge does
+            // not close a referral" is true of the process and of the surfaces -- there is no closure route under
+            // /judicial/** and there will not be one -- but it is NOT enforced by a role check, so a token that
+            // happens to hold JUDICIAL and reaches the caseworker route is admitted like any other authenticated
+            // caller. Writing that down is what stops the next reader assuming a refusal that is not there, and
+            // what makes adding one a deliberate change to this test rather than a silent tightening.
+            assertThatCode(() -> service.close(CASE_ID, REFERRAL_ID.toString(), JUDGE))
+                .doesNotThrowAnyException();
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Closed);
+            assertThat(referral.getDecidedBy())
+                .as("closing leaves the direction and its author exactly as the judge recorded them")
+                .isEqualTo(JUDGE.name());
+        }
+
+        @Test
         @DisplayName("is attributed by name, so the caller is used for authorship and not for permission")
         void isAttributedByName() {
             bothCasesExist();
@@ -282,6 +431,178 @@ class ReferralSecurityTest {
             verify(referrals, never()).save(any());
             verifyNoInteractions(notes);
         }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Open", "Claimed", "Withdrawn", "Closed"})
+        @DisplayName("is refused a close with no direction to action, exactly as an administrator is")
+        void isRefusedACloseWithNoDirectionAsAnAdministratorIs(ReferralState state) {
+            Referral referral = stored(state);
+
+            // The other half of the pair: both callers permitted where there is no rule, both refused where the
+            // rule is about the referral rather than about them. A conflict that an administrator could step past
+            // would make closing a privilege, and closing an Open referral takes it out of the pool with no
+            // direction on it -- which is the outcome the guard exists to prevent, for everybody.
+            for (CurrentUser caller : List.of(NO_ROLES, ADMIN)) {
+                assertThatThrownBy(() -> service.close(CASE_ID, REFERRAL_ID.toString(), caller))
+                    .isInstanceOf(ConflictError.class);
+            }
+
+            assertThat(referral.getState()).isEqualTo(state);
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+    }
+
+    @Nested
+    @DisplayName("the judicial transitions")
+    class JudicialGate {
+
+        @Test
+        @DisplayName("refuse a caseworker on every one of them, naming the role, and write nothing")
+        void refuseACaseworker() {
+            bothCasesExist();
+            Referral referral = stored(ReferralState.Open);
+
+            // The one refusal this resource has. Everything else here is open to any authenticated staff caller,
+            // so a gate that had been dropped would look exactly like the rest of the service and be the only
+            // place it mattered: a caseworker who could claim a referral out of the pool could also answer it.
+            for (Transition transition : judicialTransitions()) {
+                assertThatThrownBy(() -> transition.by(NO_ROLES))
+                    .as("%s refuses a caller with no roles", transition.name())
+                    .isInstanceOf(ForbiddenError.class)
+                    .hasMessageContaining(Role.JUDICIAL.claimValue());
+            }
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Open);
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("refuse an administrator too, because admin is a different role and not a wider one")
+        void refuseAnAdministrator() {
+            bothCasesExist();
+            Referral referral = stored(ReferralState.Open);
+
+            // Asserted rather than assumed, for the reason the permitted operations are asserted with two
+            // callers: this service's only other privilege is the admin role, and a gate written as "any
+            // privileged caller" would pass every test that only ever tried an unprivileged one.
+            for (Transition transition : judicialTransitions()) {
+                assertThatThrownBy(() -> transition.by(ADMIN))
+                    .as("%s refuses an administrator", transition.name())
+                    .isInstanceOf(ForbiddenError.class);
+            }
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Open);
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("refuse before the case or the referral is read, so a 403 says nothing about what exists")
+        void refuseBeforeAnythingIsRead() {
+            // Nothing is stored, and the refusal is the same one: the gate answers before the lookups, so a
+            // caller who may not act learns neither whether the case exists nor whether the referral does. The
+            // sweep is not run on their behalf either -- it writes notes, and a refused caller must not be able
+            // to move another judge's claim by being refused often enough.
+            for (Transition transition : judicialTransitions()) {
+                assertThatThrownBy(() -> transition.by(NO_ROLES))
+                    .as("%s refuses before the lookup", transition.name())
+                    .isInstanceOf(ForbiddenError.class);
+            }
+
+            verifyNoInteractions(deedPolls, notes);
+            verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
+            verify(referrals, never()).findStaleClaims(any(), any());
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("admit a judge, so the refusals above are a rule and not a service that refuses everyone")
+        void admitAJudge() {
+            bothCasesExist();
+            Referral referral = stored(ReferralState.Open);
+
+            assertThatCode(() -> service.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE))
+                .doesNotThrowAnyException();
+            assertThat(referral.getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(referral.getClaimedBy()).isEqualTo(JUDGE.name());
+
+            // And the rest of the surface follows, on the referral this judge now holds: the gate is about the
+            // role, so a claimed referral is touchable and directable by its holder and by nobody else.
+            for (Transition transition : judicialTransitions().subList(1, judicialTransitions().size())) {
+                assertThatCode(() -> transition.by(JUDGE))
+                    .as("%s admits the judge holding it", transition.name())
+                    .doesNotThrowAnyException();
+            }
+        }
+
+        @Test
+        @DisplayName("are unreachable by a token asserting a role string that is not exactly the judicial claim")
+        void areUnreachableByANearMissClaim() {
+            bothCasesExist();
+            stored(ReferralState.Open);
+
+            // From the token end, because that is where the risk actually is. IDAM does not issue the judicial
+            // claim at all yet, so what stands between a live token and a claimed referral is that the reduction
+            // in IdamClaims matches the claim value exactly and drops everything else. A prefix match, a
+            // case-insensitive one or a "contains" would let one of these through -- and the roles below are the
+            // ones a real or a mis-provisioned token would plausibly carry.
+            for (String claim : NEAR_MISSES) {
+                CurrentUser caller = IdamClaims.userFromClaims(
+                    Map.of("roles", List.of(claim), "name", "Near Miss", "sub", "near-miss-1"));
+
+                assertThat(caller.roles())
+                    .as("%s is not the judicial role", claim)
+                    .doesNotContain(Role.JUDICIAL);
+                for (Transition transition : judicialTransitions()) {
+                    assertThatThrownBy(() -> transition.by(caller))
+                        .as("%s refuses a token asserting %s", transition.name(), claim)
+                        .isInstanceOf(ForbiddenError.class);
+                }
+            }
+
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("are admitted by the claim value IDAM will issue, spelt exactly once in the Role enum")
+        void areAdmittedByTheExactClaim() {
+            bothCasesExist();
+            stored(ReferralState.Open);
+
+            // The counterpart, and what keeps the near-miss list from passing vacuously against a gate nothing
+            // can satisfy. It goes through IdamClaims rather than constructing the caller, so the string on
+            // Role.JUDICIAL is the one asserted end to end: when the idam plan confirms a different subrole, this
+            // test moves with the enum member and nothing else has to.
+            CurrentUser judgeFromToken = IdamClaims.userFromClaims(Map.of(
+                "roles", List.of(Role.JUDICIAL.claimValue()),
+                "name", "District Judge Bell",
+                "sub", "judge-3"));
+
+            assertThat(judgeFromToken.roles()).containsExactly(Role.JUDICIAL);
+            assertThat(judgeFromToken.isAdmin())
+                .as("the judicial role is not an administrator, so it unlocks nothing on the case surface")
+                .isFalse();
+            assertThatCode(() -> service.claim(CASE_ID, REFERRAL_ID.toString(), judgeFromToken))
+                .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("have no route on any controller yet, so the gate is not the only thing keeping them closed")
+        void haveNoRouteYet() {
+            // The judicial surface is a later plan, and until it exists the transitions are reachable only from
+            // a test. Stated so that a route added here -- on the caseworker controller, under /caseworker/** --
+            // fails rather than quietly inheriting this surface's "any authenticated caller may" reading, which
+            // is written all over its javadoc and is true of everything else on it.
+            List<String> paths = Arrays.stream(CaseworkerReferralController.class.getDeclaredMethods())
+                .map(Method::getName)
+                .toList();
+
+            assertThat(paths)
+                .as("the judicial transitions are exposed by the judicial surface, not by this one")
+                .doesNotContain("claim", "touch", "decide", "direction");
+        }
     }
 
     @Nested
@@ -322,6 +643,50 @@ class ReferralSecurityTest {
         }
 
         @Test
+        @DisplayName("is 404 to close, and its direction survives exactly as the judge recorded it")
+        void isNotFoundToClose() {
+            bothCasesExist();
+            Referral referral = storedDecision();
+
+            assertThatThrownBy(() -> service.close(OTHER_CASE_ID, REFERRAL_ID.toString(), NO_ROLES))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            // 404 and not 409, which is the whole point of the scope being in the lookup: a caller pointing
+            // another case at this id is told the referral does not exist there, not told what state it is in.
+            // And nothing is written -- a close through the wrong parent would mark somebody else's direction
+            // actioned, which is the one thing about a referral that cannot be undone by raising another.
+            assertThat(referral.getState()).isEqualTo(ReferralState.Decided);
+            assertThat(referral.getDecision()).isEqualTo(MasterDecision.Approved);
+            assertThat(referral.getDecidedBy()).isEqualTo(JUDGE.name());
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("is 404 to claim, touch or direct, so the judicial half is scoped as the caseworker half is")
+        void isNotFoundToTheJudicialTransitions() {
+            bothCasesExist();
+            Referral referral = storedDecision();
+            referral.setState(ReferralState.Claimed);
+            referral.setClaimedBy(JUDGE.name());
+            referral.setLastTouchedAt(LocalDateTime.parse("2026-09-02T10:00:00"));
+
+            // Held by this very judge, and still unreachable through another case: the transitions are scoped by
+            // the same two-id lookup rather than by the claim they check, so holding a referral does not let its
+            // judge address it through whatever case id they happen to have. A 404 rather than the conflict the
+            // holder check would give, because the scope answers first.
+            for (Transition transition : judicialTransitions()) {
+                assertThatThrownBy(() -> transition.throughAnotherCase(JUDGE))
+                    .as("%s is 404 through the wrong parent", transition.name())
+                    .isInstanceOf(NotFoundError.class);
+            }
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Claimed);
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
         @DisplayName("is not in the other case's list, because the parent id is in the read")
         void isNotInTheOtherCasesList() {
             bothCasesExist();
@@ -344,7 +709,23 @@ class ReferralSecurityTest {
             // The behavioural half of this rule is in ReferralServiceTest; this is the half that stops it being
             // re-introduced. `findById` is inherited from JpaRepository and cannot be removed, so what is
             // asserted is that this interface declares nothing that reaches a referral without naming its case.
+            List<String> declared = Arrays.stream(ReferralRepository.class.getDeclaredMethods())
+                .map(Method::getName)
+                .toList();
+            // The exception is real, so it is named rather than pattern-matched: a third unscoped method has
+            // to be admitted here deliberately, and a rename that made this list vacuous fails too.
+            assertThat(declared).containsAll(SWEEP);
+
             for (Method finder : ReferralRepository.class.getDeclaredMethods()) {
+                if (SWEEP.contains(finder.getName())) {
+                    // What keeps the sweep inside the rule instead of beside it: neither statement hands back
+                    // a referral. The candidate query returns a three-field projection and the release returns
+                    // a row count, so an unscoped query cannot become an unscoped read of case data.
+                    assertThat(finder.getGenericReturnType().getTypeName())
+                        .as("%s hands back no referral", finder.getName())
+                        .doesNotContain(Referral.class.getName());
+                    continue;
+                }
                 assertThat(finder.getName())
                     .as("%s carries the parent case id", finder.getName())
                     .contains("DeedPollId");
