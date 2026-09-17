@@ -352,11 +352,34 @@ is no referral role gate, so this asserts the *absence* of one is deliberate), a
 never reachable through another case's path (the scoping rule). Put the scoping assertions in a
 container-free unit test on the service where possible, so CI runs them.
 
-- [ ] Security tests for namespace separation, no-roles-still-a-caseworker, and cross-case isolation;
+- [x] Security tests for namespace separation, no-roles-still-a-caseworker, and cross-case isolation;
       `./gradlew build` green from cold with `TESTCONTAINERS_RYUK_DISABLED=true`; checkstyle clean on all
       five source sets; test and integration totals recorded next to the baseline; the count with
       `INTEGRATION_TESTS_ENABLED=false` also recorded, so it is visible how much of this plan's coverage CI
       actually runs
+
+**Counts, measured from `build/test-results` on a cold `clean build`: 1,813 unit / 7 integration**, from a
+branch baseline of 1,696 / 7 before Task 1 — 117 tests for the plan, none of them integration, because
+referrals add no new source set. `ReferralSecurityTest` is the fifteen of those added here (from 1,798 / 7).
+
+**With `INTEGRATION_TESTS_ENABLED=false`, the figure CI actually runs: 1,072 of the 1,813.** The 741 excluded
+sit in 26 container-backed classes — 25 inherit the tag from `AbstractPostgresContainerTest` and
+`SchemaConformanceTest` carries it directly — and three of those classes are this plan's
+(`ReferralRepositoryTest`, `ReferralBackfillTest`, `CaseworkerReferralControllerTest`). So of this plan's 117,
+CI runs everything except those three, which is why every referral *rule* was written as a mocked unit test:
+`ReferralSchemasTest`, `ReferralServiceTest`, `ReferralNotesTest`, `ReferralStateTest` and
+`ReferralSecurityTest` all run on the agent. `build.gradle:87-91` held the pre-referrals measurement and now
+holds this one, since its own comment says to re-measure rather than trust it.
+
+**Two additions this task's text does not ask for, both of which state a rule over declarations rather than
+behaviour**, because `ReferralServiceTest` already states the behaviour and a re-implementation is where a
+scope goes missing: `ReferralRepository` is asserted to declare no finder whose name omits `DeedPollId` (the
+inherited `findById` cannot be removed, so what is provable is that nothing here reaches a referral without
+naming its case), and every controller handler is asserted to take the case id — and both ids, where it
+addresses one referral. The no-role-gate assertions run the same four operations as an ordinary caseworker and
+as an administrator and require the same answer each time, including the *refusals*: a single caller cannot
+tell "no rule" from "a rule this caller happens to satisfy", and the saved-query resource's administrator
+override is exactly the thing that must not have leaked in here.
 
 ## Deliberately not in this plan
 
