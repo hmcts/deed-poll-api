@@ -248,12 +248,20 @@ in the domain, not a DB type (decision 4).
 
 Add `deedpoll_referral` to `DeedPollSchema.DEED_POLL_TABLES` (`DeedPollSchema.java:50`).
 
-- [ ] `V6__referrals.sql` and `V7__backfill_referrals.sql` added, no committed migration edited, no
+- [x] `V6__referrals.sql` and `V7__backfill_referrals.sql` added, no committed migration edited, no
       `deedpoll_deedpoll` column altered; `Referral` validates against V6 under `ddl-auto: validate`; audit
       columns match `V2`'s types and null/default choices exactly; `state`/`urgency` mapped `NAMED_ENUM`,
       `reasons` mapped `JSON`; cascade on delete; repository has case-scoped finders and **no** find-by-id-
       alone; `deedpoll_referral` in `DeedPollSchema`'s list and readiness green; a round-trip entity test;
       `./gradlew build` green
+
+**One deviation from the text above, taken deliberately: `"deedPollId"` is `text`, not `uuid`.** It is a
+foreign key onto `deedpoll_deedpoll("id")`, which `V2` declares as `text` holding an application-generated
+UUID (matching the reference so ids survive the data migration), and Postgres will not build a foreign key
+between `uuid` and `text`. The cascade is the stronger requirement, so this follows `V3`'s children, all of
+which key the case by `text`. The referral's own `"id"` **is** `uuid`, as specified — that row has no
+counterpart in the source store. Baseline before this task, measured from `build/test-results`:
+**1,696 unit / 7 integration**; after it, **1,709 / 7**.
 
 ### Task 2: The domain model and write-time validation
 

@@ -31,8 +31,9 @@ public class DeedPollSchema {
 
     /**
      * Every table the deed-poll domain reads or writes: the six named by the {@code @@map}s in
-     * {@code src/test/resources/reference/deed-poll.prisma}, plus the two saved-query tables, which have
-     * no reference model because saved queries are new behaviour rather than a port.
+     * {@code src/test/resources/reference/deed-poll.prisma}, plus the two saved-query tables and
+     * {@code deedpoll_referral}, which have no reference model because saved queries and referrals are new
+     * behaviour rather than a port.
      *
      * <p>Listed explicitly rather than derived, and the reference's reason for that survives the port even
      * though its own reason does not: Prisma has no runtime schema introspection, whereas Hibernate does know
@@ -55,7 +56,8 @@ public class DeedPollSchema {
         "deedpoll_supportingdocumenttype",
         "deedpoll_referencecounter",
         "deedpoll_savedquery",
-        "deedpoll_savedqueryselection"
+        "deedpoll_savedqueryselection",
+        "deedpoll_referral"
     );
 
     /**
