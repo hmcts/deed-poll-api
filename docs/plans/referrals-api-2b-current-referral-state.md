@@ -196,6 +196,10 @@ controller test boots the whole context; do not edit `reference/`). Additional t
 - **Measure the baseline on this branch before Task 1** by summing `tests="…"` across
   `build/test-results/{test,integration}/*.xml`; record it next to the final count in the last task. Do not
   quote api-2's numbers.
+
+  **Baseline measured on `referrals-api-2b` at Task 0 (2026-09-17), `./gradlew build` green: `test` = 1920
+  tests / 245 classes, `integration` = 7 tests / 3 classes, total 1927, 0 failures, 0 errors.** Compare the
+  final count in Task 4 against these numbers.
 - **A worker or container startup timeout is an environment failure, not a code failure** — re-run before
   investigating; consider a `git archive` copy under `/tmp`.
 
@@ -224,8 +228,30 @@ matches the assumptions, and STOP if it does not:
   most one non-terminal referral per case**. If this guard is gone, decision 1 is unsafe and the whole plan
   must be reconsidered — STOP and report.
 
-- [ ] All three confirmed against code, not the plan text; if any fails, STOP and report which and how the
+- [x] All three confirmed against code, not the plan text; if any fails, STOP and report which and how the
       reality differs — do not build on a wrong assumption
+
+**Gate result (2026-09-17, verified on `referrals-api-2b`) — all three hold, this plan may proceed:**
+
+1. **All six transition sites exist** on `ReferralService.java`, each `@Transactional`, so the recompute of
+   decision 2 has a tail to hook in the transition's own transaction: `createReferral` (:151),
+   `withdrawReferral` (:225), `claim` (:268), `decide` (:359), `close` (:405), `reclaimStaleClaims` (:439).
+   There is a **seventh** mutating method the plan does not name — `touch` (:309), api-2's claim-keepalive.
+   It moves `lastTouchedAt`, **not `state`**, so it needs no recompute (Task 2's list is still exactly right);
+   noted so Task 2 does not "helpfully" add a call there. `reclaimStaleClaims` is also invoked from inside
+   `claim` (:272), so the set-based mirror must be correct when nested in another transition's transaction.
+2. **`"ReferralState"` is the DB enum with the five expected members**, in lifecycle order, created at
+   `V6__referrals.sql:48` (`Open`, `Claimed`, `Decided`, `Closed`, `Withdrawn`), and
+   `ReferralState.isTerminal()` (`entity/enums/ReferralState.java:54`) returns true for **exactly**
+   `Closed || Withdrawn`. So decision 1's "non-NULL is exactly one of Open/Claimed/Decided" is the enum's own
+   terminal split, not a second hand-written set — reuse `isTerminal()` in the recompute rule.
+3. **api-1 decision 11 holds in code**, which is what makes a single column correct rather than a lie:
+   `createReferral` throws `ConflictError` when `referrals.existsByDeedPollIdAndStateIn(deedPollId,
+   LIVE_STATES)` (`ReferralService.java:153`), `LIVE_STATES` being derived from `!isTerminal()` (:116) rather
+   than listed, and `DomainErrorHandler:96` maps `ConflictError` → **409**. At most one non-terminal referral
+   per case is therefore enforced, so the column never has two live states to represent.
+
+**Also established for Task 1:** the highest committed migration on this branch is **`V8__referral_claim_and_direction.sql`**, so this plan's migration is **`V9__current_referral_state.sql`** (the open question about numbering is answered — it is `V9`, not assumed).
 
 ### Task 1: The column, the entity mapping, and the summary field
 
