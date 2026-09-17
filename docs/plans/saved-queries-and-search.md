@@ -434,10 +434,59 @@ no-entity-on-the-controller assertions either side of it are not.
 
 ### Task 7: Full validation
 
-- [ ] `./gradlew build` green from cold with `TESTCONTAINERS_RYUK_DISABLED=true`; checkstyle clean on all five
+- [x] `./gradlew build` green from cold with `TESTCONTAINERS_RYUK_DISABLED=true`; checkstyle clean on all five
       source sets; test and integration totals recorded next to the baseline; the count with
       `INTEGRATION_TESTS_ENABLED=false` also recorded, so it is visible how much of this plan's coverage CI
       actually runs
+
+      `./gradlew clean build` → **BUILD SUCCESSFUL in 2m 58s**, from cold, all 25 tasks executed. All five
+      checkstyle tasks ran and are clean — `checkstyleMain`, `checkstyleTest`, `checkstyleIntegrationTest`,
+      `checkstyleSmokeTest`, `checkstyleFunctionalTest`. Counted by summing `tests="…"` across
+      `build/test-results/{test,integration}/TEST-*.xml`, as the note above the tasks requires, not from a Gradle
+      summary line:
+
+      | Run | Tests | Result files | Failures / errors / skipped |
+      |---|---|---|---|
+      | Baseline `:test`, at the point this plan started | 1,488 | 185 | 0 / 0 / 0 |
+      | **`:test` now** | **1,688** | 216 | 0 / 0 / 0 |
+      | Baseline `:integration` | 6 | 3 | 0 / 0 / 0 |
+      | **`:integration` now** | **6** | 3 | 0 / 0 / 0 |
+      | **`INTEGRATION_TESTS_ENABLED=false ./gradlew test --rerun-tasks`** | **987** | 144 | 0 / 0 / 0 |
+
+      So this plan added **200 unit tests** and no integration tests — everything new is container-free except
+      `CaseworkerSavedQueryControllerTest`, which is the one new class that boots a context.
+
+      **What CI actually runs of it.** 987 of the 1,688 unit tests, up from 879 of 1,488 — so **108 of this
+      plan's 200 new tests run on the Jenkins agent** and 92 do not. The excluded set is **701 tests across 23
+      classes**, up from 609 across 22: the residue grew by exactly one class, `CaseworkerSavedQueryControllerTest`,
+      because tasks 2, 4 and 6 deliberately put the permission and selection logic in plain unit tests
+      (`SavedQueryPermissionsTest`, `SavedQuerySelectionTest`, `SavedQuerySchemasTest`, `SavedQuerySecurityTest`),
+      which is the constraint above being honoured rather than a coincidence. Adding `:integration`'s 6, **707
+      tests across 26 classes now run nowhere in CI**; all 1,694 run locally with a Docker daemon, and nothing is
+      deleted, `@Disabled` or skipped — the skipped column is zero in every run.
+
+      **The excluded set is exactly the tagged set, verified rather than assumed.** Diffing the result-file names
+      between the two runs gives 72 files, which normalise to **23 top-level classes**, and that set `diff`s clean
+      against the 22 direct subclasses of `AbstractPostgresContainerTest` plus `SchemaConformanceTest`. The
+      normalisation is necessary, not cosmetic: Gradle both reports `@Nested` classes as separate files and mangles
+      long result filenames with an inserted hash (`uk.-2VO146322BMH6.hmcts.…`), so the raw diff appears to name 44
+      classes. That is the same accounting trap `tag-container-backed-tests.md` documented, and it is why the
+      excluded *class* count must be normalised before it is quoted.
+
+      **The default path is unchanged by the exclusion**, checked the way that plan checked it: `./gradlew test
+      --rerun-tasks` with the variable unset, run after the `false` run, reports 1,688 across 216 again. So the
+      `false` run did not leave the tag excluded.
+
+      `build.gradle`'s comment above `excludeTags` carried the 2026-09-15 figures (22 classes, 609 of 1,488,
+      879 running) and has been updated to the measured ones, with the old figures kept as history and an
+      instruction to re-measure rather than trust them — it is the only place in the code that states this cost,
+      so a stale number there is the one that misleads. **The Constraints section's "609 tests in 22 classes" is
+      the pre-plan figure and is deliberately left as written**; it was true when the plan was written, and this
+      task is where the current number lives.
+
+      Two files in the working tree are **not** this plan's and are left uncommitted: an unrelated fix to
+      `SampleFunctionalTest` (dropping `@SpringBootTest` so a functional test does not boot a local copy on the
+      agent) and an untracked `rules-of-engagement.md`.
 
 ## Deliberately not in this plan
 
