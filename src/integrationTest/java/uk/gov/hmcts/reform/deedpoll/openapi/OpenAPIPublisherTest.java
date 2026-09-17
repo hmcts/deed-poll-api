@@ -20,6 +20,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 
 import java.io.OutputStream;
@@ -27,6 +29,7 @@ import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,8 +64,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
     /**
      * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
-     * added afterwards and the saved-query routes after those. Listed rather than counted, because a count agrees
-     * with a spec that documents the right number of the wrong things.
+     * added afterwards, the saved-query routes after those and the referral routes after those. Listed rather
+     * than counted, because a count agrees with a spec that documents the right number of the wrong things.
      */
     private static final List<String> CASEWORKER_PATHS = List.of(
         "/caseworker/cases",
@@ -77,7 +80,10 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/cases/{id}/documents/{documentId}/file",
         "/caseworker/saved-queries",
         "/caseworker/saved-queries/{id}",
-        "/caseworker/saved-queries/{id}/selection"
+        "/caseworker/saved-queries/{id}/selection",
+        "/caseworker/cases/{id}/referrals",
+        "/caseworker/cases/{id}/referrals/{referralId}",
+        "/caseworker/cases/{id}/referrals/{referralId}/withdrawal"
     );
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -105,7 +111,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(paths.fieldNames()).toIterable().containsAll(CASEWORKER_PATHS);
     }
 
-    @DisplayName("Documents the twenty-five caseworker operations and the token they need")
+    @DisplayName("Documents the twenty-nine caseworker operations and the token they need")
     @Test
     void documentsTheCaseworkerOperations() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -115,18 +121,20 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Twenty-five operations across thirteen paths: `/caseworker/cases`, the notes and witnesses collections
-        // and the saved-query collection each carry a GET and a POST, the case carries a GET and a PATCH, the
-        // note, the witness and the saved query each carry a GET, a PATCH and a DELETE, and a saved query's
-        // selection carries a PUT and a DELETE -- the note's since 2026-09-08, the witness's since the
-        // Administrator gate landed, the saved query's since the library did and the selection's with it.
+        // Twenty-nine operations across sixteen paths: `/caseworker/cases`, the notes and witnesses collections,
+        // the saved-query collection and the referrals collection each carry a GET and a POST, the case carries a
+        // GET and a PATCH, the note, the witness and the saved query each carry a GET, a PATCH and a DELETE, a
+        // saved query's selection carries a PUT and a DELETE, one referral carries a GET, and its withdrawal
+        // carries a POST -- the note's delete since 2026-09-08, the witness's since the Administrator gate
+        // landed, the saved query's since the library did and the selection's with it, and the four referral
+        // routes with the referrals feature.
         // Both the paths and the count are asserted because neither alone is enough: a count could not tell a new
         // verb on a known path from a new path, and the path list could not tell a route that was removed from one
         // that never existed.
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(25);
+        assertThat(operations).isEqualTo(29);
 
         // Every one of them needs a forwarded IDAM token, which the document has to say or the client generated
         // from it cannot make a call. Declared once, globally, because the service authenticates by default.
@@ -262,6 +270,31 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(typesOf(spec.at("/components/schemas/UpdateWitnessRequest/properties/witnessName")))
             .as("a witness field cannot be cleared, so the document does not offer a null")
             .doesNotContain("null");
+
+        // The referral body, whose two caps are the ones that keep a referral from being stored and then refused
+        // by the case note it writes -- so they are asserted to be ReferralSchemas' own numbers rather than
+        // whatever the document happens to say. reasons is the only outright requirement; notes and urgencyReason
+        // are required conditionally, which OpenAPI cannot express and the description carries in prose.
+        String referral = "/components/schemas/CreateReferralRequest/properties/";
+        assertThat(spec.at(referral + "notes/maxLength").asInt()).isEqualTo(ReferralSchemas.MAX_NOTES_LENGTH);
+        assertThat(spec.at(referral + "urgencyReason/maxLength").asInt())
+            .isEqualTo(ReferralSchemas.MAX_URGENCY_REASON_LENGTH);
+        assertThat(typesOf(spec.at(referral + "reasons"))).contains("array");
+        assertThat(spec.at(referral + "reasons/minItems").asInt()).isEqualTo(1);
+        // The vocabulary reaches the document from the enum that validates it, so the two cannot drift.
+        List<String> publishedReasons = StreamSupport
+            .stream(spec.at(referral + "reasons/items/enum").spliterator(), false)
+            .map(JsonNode::asText)
+            .toList();
+        assertThat(publishedReasons)
+            .containsExactlyElementsOf(Arrays.stream(ReferralReason.values()).map(Enum::name).toList());
+        assertThat(spec.at("/components/schemas/CreateReferralRequest/required").size()).isEqualTo(1);
+        assertThat(spec.at("/components/schemas/CreateReferralRequest/required/0").asText()).isEqualTo("reasons");
+        // And no update body, because a referral is not edited in place: amending one is withdrawing it and
+        // raising another. Asserted rather than left implicit, since the tidy-minded addition would be a PATCH.
+        assertThat(spec.at("/components/schemas/UpdateReferralRequest").isMissingNode())
+            .as("there is no referral patch body, because there is no referral patch")
+            .isTrue();
 
         // The upload, which had no body at all: the media type is as load-bearing as the fields, because a client
         // that posts JSON to it fails whatever field names it uses.

@@ -116,7 +116,8 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
          */
         private static final List<String> NOT_IN_THE_REFERENCE = List.of(
             "deedpoll_savedquery",
-            "deedpoll_savedqueryselection"
+            "deedpoll_savedqueryselection",
+            "deedpoll_referral"
         );
 
         @Test
@@ -140,7 +141,7 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
             // The half of the assertion above that the reference cannot supply. Nothing checks an unported
             // name against anything, so a typo in one -- in the list, or in V5 -- would leave readiness
             // reporting a table missing on every environment forever. Asked of the migrated schema, so it
-            // fails here if V5 stopped creating them too.
+            // fails here if V5 or V6 stopped creating them too.
             assertThat(schema.missingDeedPollTables()).doesNotContainAnyElementsOf(NOT_IN_THE_REFERENCE);
         }
     }

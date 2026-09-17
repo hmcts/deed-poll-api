@@ -29,7 +29,7 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 
 ## The API surface
 
-Twenty-five caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
+Twenty-nine caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
 
 | Method | Path | What it does |
 |---|---|---|
@@ -58,6 +58,10 @@ Twenty-five caseworker operations. `/swagger-ui.html` is the authority; this tab
 | DELETE | `/caseworker/saved-queries/{id}` | Delete one — same rule, 204, and its subscribers' selections cascade |
 | PUT | `/caseworker/saved-queries/{id}/selection` | Add it to the caller's own list — 204, idempotent, no edit rights needed |
 | DELETE | `/caseworker/saved-queries/{id}/selection` | Remove it from the caller's own list — 204 whether or not it was in it |
+| GET | `/caseworker/cases/{id}/referrals` | A case's referrals to the judiciary, newest first — the history and the live one |
+| POST | `/caseworker/cases/{id}/referrals` | Raise one — at least one reason, and **409** if the case already has one that is not closed or withdrawn |
+| GET | `/caseworker/cases/{id}/referrals/{referralId}` | One referral |
+| POST | `/caseworker/cases/{id}/referrals/{referralId}/withdrawal` | Withdraw one — a transition to `Withdrawn`, and **409** if it is already terminal |
 
 There are deliberately **no** case deletes, no document-type writes and no `validate` endpoint. The domain
 implements and tests them; nothing consumes them, and the sibling prototype's mistake was building an API
@@ -84,6 +88,29 @@ entity, which is why its permission rules are written out rather than implied:
 Sharing is a **library, not a push**: publishing a query makes it findable, and each caseworker chooses which
 found queries appear in their own navigation. Sharing with a *named* colleague is deliberately absent — this
 service has no user directory, and a query is already a URL, so pushing one at somebody is a link in Slack.
+
+The four referral routes were the twenty-sixth to twenty-ninth, and they replace a process that ran on email
+and a Teams channel: caseworkers batched ten referrals to a Master twice a day and polled a shared mailbox for
+the returned direction. A referral is a **row of its own**, not a field on the case — the ported `dateReferred`
+/ `masterName` / `masterDecision` block on `deedpoll_deedpoll` held one referral per case, latest-wins, and it
+stays as the historical snapshot while a case may now carry many referrals over its lifetime. Three rules are
+worth knowing before calling them:
+
+- **At most one live referral per case.** A second while one is still `Open`, `Claimed` or `Decided` is a
+  **409**, not a 400: nothing about the payload is wrong, and the same request succeeds once the live one is
+  closed or withdrawn.
+- **Withdrawal is a transition, not a delete or an edit.** The row survives as `Withdrawn`, distinct from
+  `Closed` — closed means a direction was actioned — and there is no in-place editing of an open referral, so
+  amending one is withdrawing it and raising another.
+- **No role gate anywhere below these routes.** Any authenticated staff caller may raise, read and withdraw:
+  in the process this replaces, anybody who works a case can email a Master. The judicial role is the one that
+  is different, and it does not exist yet.
+
+Raising and withdrawing each write a **case note** attributed to the acting caseworker, because there is no
+timeline concept in this domain beyond the notes grid and the referral has to appear where caseworkers already
+look. Claiming a referral, recording a direction and closing a returned one are the judge's half of the loop
+and are not here yet; `ReferralState` carries all five members from the first migration so those arrive as
+transitions rather than as a schema change.
 
 The witness delete was the eighteenth, and is **the one witness route restricted by role**: the capability
 matrix puts "Delete witnesses" at ✗ for Basic User and ✓ for Administrator, the same split as deleting a

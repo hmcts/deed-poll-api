@@ -14,7 +14,7 @@
  * The witness writes joined on the same test: the admin renders a case's witnesses and had no way to record
  * one, so the consumer arrived and the routes followed.
  *
- * <p>Six controllers, one per written resource, plus one for the reads -- which share theirs because they are
+ * <p>Seven controllers, one per written resource, plus one for the reads -- which share theirs because they are
  * one thing to a consumer, everything a caseworker screen needs before it can render:
  *
  * <ul>
@@ -26,13 +26,18 @@
  *   <li>{@code CaseworkerSavedQueryController} -- list, save, read, amend and delete a saved query, and select
  *       or unselect one. The only resource here not nested under a case, because a saved query is a way of
  *       finding cases rather than a thing belonging to one.</li>
+ *   <li>{@code CaseworkerReferralController} -- list, raise, read and withdraw a referral to the judiciary.
+ *       No amend: a referral is not edited in place, so withdrawal is a sub-resource rather than a patch or a
+ *       delete. The one resource here with no role gate anywhere below it, deliberately -- there is no "may
+ *       refer" permission.</li>
  * </ul>
  *
  * <p><strong>Every route in this package is one of those bullets; there is no route here that no controller
  * above describes.</strong> That is the property worth stating -- a running total is not, because it goes stale
  * the moment a route is added, which is exactly how the count recorded here came to say "twelve" after the note
- * delete made it thirteen -- and the four witness routes made it seventeen, the witness delete eighteen, and the
- * seven saved-query routes twenty-five. Read the count off the mappings when you need it.
+ * delete made it thirteen -- and the four witness routes made it seventeen, the witness delete eighteen, the
+ * seven saved-query routes twenty-five and the four referral routes twenty-nine. Read the count off the mappings
+ * when you need it.
  *
  * <p>The reason a count was ever written down: plan 01's prose says eleven, while its own task list enumerates
  * more than that -- so the shortfall was a miscount rather than a decision, the same kind its task 4 records
