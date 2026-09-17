@@ -309,12 +309,12 @@ There are two Kubernetes probes and they deliberately do not check the same thin
 ```
   {"status":"UP","components":{
     "db":{"status":"UP"},
-    "deedPollSchema":{"status":"UP","details":{"tables":6}},
+    "deedPollSchema":{"status":"UP","details":{"tables":8}},
     "readinessState":{"status":"UP"}}}
 ```
 
 It checks the database twice over: `db` is `DatabaseHealthIndicator` and `deedPollSchema` asks whether
-the six deed-poll tables are actually there. A connection check alone passes against an unmigrated
+the eight deed-poll tables are actually there. A connection check alone passes against an unmigrated
 database, where the probe stays green while every request 500s.
 
 `db` is ours rather than Spring Boot's — `management.health.db.enabled` is `false` — because Boot's

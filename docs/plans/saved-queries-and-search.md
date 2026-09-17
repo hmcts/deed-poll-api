@@ -246,7 +246,7 @@ Entities under `entity/`, repositories under `repository/`, both following the e
 holds the six expected table names literally; add both new tables there or readiness will pass while describing a
 schema it is no longer checking.
 
-- [ ] `V5__saved_queries.sql` added and no committed migration edited; both entities validate against it under
+- [x] `V5__saved_queries.sql` added and no committed migration edited; both entities validate against it under
       `ddl-auto: validate`; audit columns match `V2`'s types and null/default choices exactly; `conditions` mapped
       with `@JdbcTypeCode(SqlTypes.JSON)`; selection cascades on delete; both new tables added to
       `DeedPollSchema`'s expected list and readiness green
