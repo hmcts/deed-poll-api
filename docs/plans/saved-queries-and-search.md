@@ -267,7 +267,7 @@ The validators to call, by name, because "the existing one" has been ambiguous o
 
 Name required and bounded; description optional and bounded — those two are the only genuinely new validation here.
 
-- [ ] Conditions validated by `CaseQuery.parse` itself and sort by `CaseSort.parse`, neither reimplemented nor
+- [x] Conditions validated by `CaseQuery.parse` itself and sort by `CaseSort.parse`, neither reimplemented nor
       wrapped in a second parser; name/description bounds enforced; an unknown filter key, an unsortable sort field
       and an invalid condition each 400 with the field named; the condition cap applies **because `CaseQuery`
       applies it**, not via a new check; unit tests needing no container for all of it
