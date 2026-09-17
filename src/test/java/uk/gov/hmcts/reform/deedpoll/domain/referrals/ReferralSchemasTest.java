@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.util.Arrays;
@@ -17,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Validating a submitted referral.
+ * Validating a submitted referral, and a submitted direction on one.
  *
  * <p>No reference test to port -- referrals are new behaviour rather than something the source store had.
  *
@@ -335,6 +336,179 @@ class ReferralSchemasTest {
 
             assertThat(created).isEqualTo(new CreateReferralInput(
                 List.of(ReferralReason.Minor), Optional.empty(), Urgency.Normal, Optional.empty()));
+        }
+    }
+
+    @Nested
+    @DisplayName("a judge's direction")
+    class Direction {
+
+        private static DirectionInput direction(Map<String, Object> raw) {
+            return ReferralSchemas.parseDirection(raw);
+        }
+
+        @Test
+        @DisplayName("accepts a whole direction, as the enum member rather than the wire string")
+        void acceptsAWholeDirection() {
+            DirectionInput recorded = direction(payload(
+                "decision", "Approved",
+                "directionsText", "  Approved. No publication necessary.  ",
+                "publishToGazette", false));
+
+            assertThat(recorded.decision()).isEqualTo(MasterDecision.Approved);
+            // Trimmed, and the trimmed value is what gets stored -- the rule every payload here applies.
+            assertThat(recorded.directionsText()).contains("Approved. No publication necessary.");
+            assertThat(recorded.publishToGazette()).isFalse();
+        }
+
+        @Test
+        @DisplayName("accepts a rejection with directions and publication")
+        void acceptsARejection() {
+            DirectionInput recorded = direction(payload(
+                "decision", "Rejected",
+                "directionsText", "Refused: the minor's second parent has not consented.",
+                "publishToGazette", true));
+
+            assertThat(recorded.decision()).isEqualTo(MasterDecision.Rejected);
+            assertThat(recorded.publishToGazette()).isTrue();
+        }
+
+        @Test
+        @DisplayName("requires a decision, naming the two acceptable values")
+        void requiresADecision() {
+            List<FieldError> errors = errorsFrom(() -> direction(payload("publishToGazette", false)));
+
+            assertThat(errors).extracting(FieldError::field).contains("decision");
+            assertThat(errors.getFirst().message()).contains("required", "Approved", "Rejected");
+        }
+
+        @Test
+        @DisplayName("refuses a decision it does not know rather than guessing between two opposites")
+        void refusesAnUnknownDecision() {
+            List<FieldError> errors = errorsFrom(() -> direction(payload(
+                "decision", "Adjourned", "publishToGazette", false)));
+
+            assertThat(errors).hasSize(1);
+            assertThat(errors.getFirst().field()).isEqualTo("decision");
+            assertThat(errors.getFirst().message())
+                .contains("names no decision", "'Adjourned'", "Approved", "Rejected");
+        }
+
+        @Test
+        @DisplayName("matches the decision exactly, because the name is also the stored enum label")
+        void matchesTheDecisionExactly() {
+            // Accepting "approved" would send Postgres a label the "MasterDecision" type does not have, which
+            // fails at the insert rather than here -- the same reason a referral reason is matched exactly.
+            assertThat(errorsFrom(() -> direction(payload("decision", "approved", "publishToGazette", true))))
+                .extracting(FieldError::field)
+                .containsExactly("decision");
+        }
+
+        @Test
+        @DisplayName("requires publishToGazette, because it has no safe default in either direction")
+        void requiresPublishToGazette() {
+            // Defaulting it would make the judge's choice for them: false withholds a notice the public record
+            // may depend on, and true publishes a change that was to stay private.
+            List<FieldError> errors = errorsFrom(() -> direction(payload("decision", "Approved")));
+
+            assertThat(errors).hasSize(1);
+            assertThat(errors.getFirst().field()).isEqualTo("publishToGazette");
+            assertThat(errors.getFirst().message()).contains("required", "no default");
+        }
+
+        @Test
+        @DisplayName("refuses an explicit null publishToGazette as well as an absent one")
+        void refusesANullPublishToGazette() {
+            Map<String, Object> raw = payload("decision", "Approved");
+            raw.put("publishToGazette", null);
+
+            assertThat(errorsFrom(() -> direction(raw)))
+                .extracting(FieldError::field)
+                .containsExactly("publishToGazette");
+        }
+
+        @Test
+        @DisplayName("refuses a truthy string rather than coercing it, because publication cannot be undone")
+        void refusesATruthyString() {
+            List<FieldError> errors = errorsFrom(() -> direction(payload(
+                "decision", "Approved", "publishToGazette", "false")));
+
+            assertThat(errors).hasSize(1);
+            assertThat(errors.getFirst()).isEqualTo(
+                new FieldError("publishToGazette", "publishToGazette must be true or false"));
+        }
+
+        @Test
+        @DisplayName("does not require directions text, because an approval may need no comment")
+        void doesNotRequireDirectionsText() {
+            assertThat(direction(payload("decision", "Approved", "publishToGazette", true)).directionsText())
+                .isEmpty();
+        }
+
+        @Test
+        @DisplayName("reads whitespace-only directions as none, rather than storing an empty explanation")
+        void readsBlankDirectionsAsNone() {
+            assertThat(direction(payload(
+                "decision", "Approved", "directionsText", "   ", "publishToGazette", true)).directionsText())
+                .isEmpty();
+        }
+
+        @Test
+        @DisplayName("caps the directions text")
+        void capsTheDirectionsText() {
+            assertThat(errorsFrom(() -> direction(payload(
+                "decision", "Approved",
+                "directionsText", repeated(ReferralSchemas.MAX_DIRECTIONS_LENGTH + 1),
+                "publishToGazette", true))))
+                .contains(new FieldError("directionsText",
+                    "directionsText must be " + ReferralSchemas.MAX_DIRECTIONS_LENGTH + " characters or fewer"));
+        }
+
+        @Test
+        @DisplayName("accepts the longest directions text the cap allows")
+        void acceptsTheLongestDirectionsText() {
+            // The other half of the cap: an off-by-one here would refuse a direction of exactly the length the
+            // form told the judge they had.
+            assertThat(direction(payload(
+                "decision", "Approved",
+                "directionsText", repeated(ReferralSchemas.MAX_DIRECTIONS_LENGTH),
+                "publishToGazette", true)).directionsText())
+                .isPresent();
+        }
+
+        @Test
+        @DisplayName("reports every failure at once rather than one per round trip")
+        void reportsEveryFailureAtOnce() {
+            assertThat(errorsFrom(() -> direction(payload("directionsText", 7))))
+                .extracting(FieldError::field)
+                .containsExactlyInAnyOrder("decision", "directionsText", "publishToGazette");
+        }
+
+        @Test
+        @DisplayName("carries its own summary message, distinct from the create's")
+        void carriesItsOwnSummaryMessage() {
+            // Two payloads with two banners: "Referral is not valid" on a direction would send a judge looking
+            // at the caseworker's referral for the mistake they made in their own form.
+            assertThatThrownBy(() -> direction(payload()))
+                .isInstanceOf(InvalidInputError.class)
+                .hasMessage("Direction is not valid");
+        }
+
+        @Test
+        @DisplayName("strips what the judge may not set: the state, the author and the date")
+        void stripsWhatTheJudgeMayNotSet() {
+            // Structural rather than a check: DirectionInput has nowhere to put any of these, so a direction
+            // cannot close its own referral, sign itself as another judge, or backdate itself.
+            DirectionInput recorded = direction(payload(
+                "decision", "Approved",
+                "publishToGazette", true,
+                "state", "Closed",
+                "decidedBy", "Some Other Judge",
+                "decisionDate", "2020-01-01T00:00:00",
+                "claimedBy", "Some Other Judge"));
+
+            assertThat(recorded).isEqualTo(
+                new DirectionInput(MasterDecision.Approved, Optional.empty(), true));
         }
     }
 }

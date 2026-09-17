@@ -27,9 +27,9 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * Referrals of a case to the judiciary: raising one, reading them, pulling one back, and the judicial
- * transitions -- claiming one out of the shared pool, and the inactivity sweep that gives a forgotten claim
- * back to it.
+ * Referrals of a case to the judiciary: raising one, reading them, pulling one back, closing a returned one,
+ * and the judicial transitions -- claiming one out of the shared pool, recording a direction on one, and the
+ * inactivity sweep that gives a forgotten claim back to it.
  *
  * <p><strong>Not a port.</strong> There is nothing for this in {@code src/test/resources/reference} -- the
  * source store held a referral inline on the case, one per case, latest-wins, and those columns are still on
@@ -41,12 +41,13 @@ import java.util.stream.Collectors;
  * is not expressible rather than merely refused. The parent's existence is checked on the reads too, so a
  * mistyped case id is a 404 rather than an empty list that says the case has no referrals.
  *
- * <p><strong>The state machine lives here, and the judicial HTTP surface does not.</strong> Create enters
- * {@link ReferralState#Open}, withdraw enters {@link ReferralState#Withdrawn}, and {@link #claim} enters
- * {@link ReferralState#Claimed}; {@code Decided} and {@code Closed} follow with the direction. {@link #claim}
- * has no route in this service -- the judicial pool, the read-through and the endpoints that call it are the
- * judicial-surface plan's -- so it is exercised by tests holding a {@code CurrentUser} rather than a token.
- * Keeping the transition beside the columns it mutates is deliberate: one place owns how a referral changes
+ * <p><strong>The whole state machine lives here, and the judicial HTTP surface does not.</strong> Create enters
+ * {@link ReferralState#Open}, {@link #claim} enters {@link ReferralState#Claimed}, {@link #decide} enters
+ * {@link ReferralState#Decided}, {@link #close} enters {@link ReferralState#Closed}, and withdraw enters
+ * {@link ReferralState#Withdrawn} from any of the three live ones. {@link #claim} and {@link #decide} have no
+ * route in this service -- the judicial pool, the read-through and the endpoints that call them are the
+ * judicial-surface plan's -- so they are exercised by tests holding a {@code CurrentUser} rather than a token.
+ * Keeping each transition beside the columns it mutates is deliberate: one place owns how a referral changes
  * state, and a transition needs a role claim rather than a real judicial identity to be provable.
  *
  * <p>The two long-standing guards ask {@link ReferralState#isTerminal()} rather than naming states, so a
@@ -63,16 +64,21 @@ import java.util.stream.Collectors;
  *       here takes a patch.</li>
  * </ul>
  *
- * <p><strong>Nothing here writes the case's flat referral columns.</strong> No {@code dateReferred}, no
- * {@code masterName}, no {@code referralNotes}: those stay the ported historical snapshot, read once in the
- * other direction by {@code V7__backfill_referrals.sql}. Whether closing a referral later syncs back into
- * them is the directions plan's question.
+ * <p><strong>Nothing here writes the case's flat referral columns, closing included.</strong> No
+ * {@code dateReferred}, no {@code masterName}, no {@code masterDecision}, no {@code referralNotes}: those stay
+ * the ported historical snapshot, read once in the other direction by {@code V7__backfill_referrals.sql}. The
+ * live direction is on the referral, and syncing it back was considered and refused -- the case columns would
+ * then say two different things over time, the backfilled snapshot and whichever referral was latest, which is
+ * the single-referral-per-case model this feature replaced.
  *
  * <p><strong>No role gate on the caseworker operations, deliberately.</strong> Any authenticated staff caller
- * may raise, read and withdraw a referral -- there is no "may refer" permission, because in the process this
- * replaces anybody who works a case can email a Master. The judicial transitions are the ones that are
- * different: {@link #claim} and {@link #touch} demand {@link Role#JUDICIAL}, which IDAM does not issue yet, so
- * they fail closed for every token in existence today while being fully testable.
+ * may raise, read, withdraw and close a referral -- there is no "may refer" permission and no "may close" one,
+ * because in the process this replaces anybody who works a case can email a Master and action the reply. The
+ * judicial transitions are the ones that are different: {@link #claim}, {@link #touch} and {@link #decide}
+ * demand {@link Role#JUDICIAL}, which IDAM does not issue yet, so they fail closed for every token in
+ * existence today while being fully testable. The split is not decoration -- a judge does not close a referral
+ * and a caseworker does not decide one, because closing is the acknowledgement that the direction has been
+ * actioned by the office that has to action it.
  *
  * <p><strong>{@link #reclaimStaleClaims()} is a mutating read, on purpose. Do not "fix" it.</strong> A claim
  * lapses after {@link ReferralProperties#claimExpiry()} of the holding judge's inactivity, and there is no
@@ -206,9 +212,11 @@ public class ReferralService {
      * means it never was, and a report that could not tell them apart would count abandoned referrals as
      * work done. The row survives, so the case's history still shows that it was raised.
      *
-     * <p>Guarded on {@link ReferralState#isTerminal()} rather than on {@code == Open}, so the claimed and
-     * decided states the directions plan adds need no change here: a referral a judge is holding is still
-     * withdrawable, and one already finished is not.
+     * <p>Guarded on {@link ReferralState#isTerminal()} rather than on {@code == Open}, which is what makes it
+     * right about {@code Claimed} and {@code Decided} without naming them: a referral a judge is holding is
+     * still withdrawable, one whose direction has come back but not been actioned still is, and one already
+     * finished is not. Withdrawing a claimed referral is also how a claim is voided -- the judge holding it is
+     * no longer holding a {@code Claimed} referral, so {@link #decide} refuses their late submission.
      *
      * @throws NotFoundError if there is no such referral, or it belongs to another case
      * @throws ConflictError if the referral is already closed or withdrawn
@@ -309,6 +317,103 @@ public class ReferralService {
         // previous writer while modifiedOn moved would attribute their touch to a caseworker.
         referral.setModifiedBy(caller.name());
         referral.setModifiedOn(now);
+        return referrals.save(referral);
+    }
+
+    /**
+     * The holding judge recording their direction: what they decided, what they directed, and whether the
+     * change is to be published in the London Gazette.
+     *
+     * <p><strong>Permitted only on a referral this caller currently holds</strong> -- state {@code Claimed} and
+     * {@code claimedBy} is them -- and that single check is what two other rules rely on rather than
+     * implementing themselves:
+     *
+     * <ul>
+     *   <li>A referral a caseworker withdrew is {@code Withdrawn}, so a judge who had it open and submits a
+     *       direction afterwards gets a conflict rather than writing a direction onto a referral that was
+     *       pulled back.</li>
+     *   <li>A referral the sweep took back is {@code Open} with no {@code claimedBy}, so the same is true of a
+     *       judge whose claim lapsed while they were reading. The referral may by then be another judge's, and
+     *       the two of them must not both be able to direct it.</li>
+     * </ul>
+     *
+     * <p><strong>One transition, not a draft and a submit.</strong> The check-your-answers page and the
+     * "Signed" attestation are the admin's, so what arrives here is one confirmed direction and it is recorded
+     * atomically. {@code decisionDate} and {@code decidedBy} come from the clock and the token, never from the
+     * payload -- see {@link DirectionInput}.
+     *
+     * <p>{@code lastTouchedAt} is refreshed even though the referral is leaving {@code Claimed} and the sweep
+     * will never look at it again. It costs nothing and it keeps the column meaning "when a judge last did
+     * something with this", which is what a caseworker asking how long the judiciary had it reads.
+     *
+     * <p><strong>No case note</strong>, for the reason {@link #claim} writes none: the direction is on the
+     * referral's own row, in five columns the referrals tab publishes, so a note would be a second copy of a
+     * recorded fact that could then disagree with it. The sweep writes one because a lapse erases the fact it
+     * is about.
+     *
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws NotFoundError  if there is no such referral, or it belongs to another case
+     * @throws ConflictError  if the referral is not currently claimed by this caller
+     */
+    @Transactional
+    public Referral decide(String deedPollId, String id, DirectionInput direction, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+        Referral referral = requireHeldBy(findReferral(deedPollId, id), id, caller);
+
+        LocalDateTime now = AuditClock.now();
+        referral.setState(ReferralState.Decided);
+        referral.setDecision(direction.decision());
+        referral.setDirectionsText(direction.directionsText().orElse(null));
+        referral.setPublishToGazette(direction.publishToGazette());
+        referral.setDecisionDate(now);
+        // The judge's own name from the token, so the record says who directed it rather than who last saved
+        // the row -- which the closing caseworker becomes a moment later.
+        referral.setDecidedBy(caller.name());
+        referral.setLastTouchedAt(now);
+        referral.setModifiedBy(caller.name());
+        referral.setModifiedOn(now);
+        return referrals.save(referral);
+    }
+
+    /**
+     * The caseworker acknowledging that a returned direction has been actioned.
+     *
+     * <p>{@code Decided -> Closed}, and this is the transition that drops the referral off the "returned --
+     * action needed" queue, because that queue is "state = Decided". So closing is not bookkeeping: it is the
+     * caseworker saying they have done what the direction required, which is why <strong>a judge does not
+     * close and a caseworker does not decide</strong>.
+     *
+     * <p><strong>Any authenticated caseworker, with no role gate</strong>, exactly as raising and withdrawing
+     * are. There is no "may close" permission for the same reason there is no "may refer" one: in the process
+     * this replaces, whoever works the case actions the Master's reply.
+     *
+     * <p>Only a {@code Decided} referral can be closed, and every other state is a conflict rather than a
+     * silent success. This one guard is written against a single state rather than against
+     * {@link ReferralState#isTerminal()} -- unlike withdraw's -- and that is the point of it: closing an
+     * {@code Open} or {@code Claimed} referral would take it out of the pool with no direction on it, and
+     * closing a {@code Withdrawn} one would relabel a referral that was abandoned as one that was actioned.
+     *
+     * <p>Close clears nothing and reverses nothing. The direction stays exactly as the judge recorded it, and
+     * <strong>nothing is written back to the case's flat {@code masterDecision} and {@code masterDirections}
+     * columns</strong>: those are the pre-migration snapshot, and syncing them would make the case say two
+     * different things over time and re-introduce the one-referral-per-case model this feature replaced.
+     *
+     * @throws NotFoundError if there is no such referral, or it belongs to another case
+     * @throws ConflictError if the referral is not {@code Decided}
+     */
+    @Transactional
+    public Referral close(String deedPollId, String id, CurrentUser caller) {
+        Referral referral = findReferral(deedPollId, id);
+        if (referral.getState() != ReferralState.Decided) {
+            throw new ConflictError("Referral " + id + " is " + referral.getState()
+                + " and can only be closed once it is " + ReferralState.Decided);
+        }
+
+        referral.setState(ReferralState.Closed);
+        referral.setModifiedBy(caller.name());
+        // Stamped rather than left to @PreUpdate, for the reason withdraw's is: Hibernate fires @PreUpdate
+        // only when its dirty check finds a changed property.
+        referral.setModifiedOn(AuditClock.now());
         return referrals.save(referral);
     }
 

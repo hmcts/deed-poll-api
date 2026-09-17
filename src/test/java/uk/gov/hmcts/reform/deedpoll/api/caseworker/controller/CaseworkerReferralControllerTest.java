@@ -20,10 +20,15 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollNoteRepository;
@@ -35,6 +40,7 @@ import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,7 +50,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The four caseworker referral endpoints, over HTTP, against a real database and a stub IDAM.
+ * The five caseworker referral endpoints, over HTTP, against a real database and a stub IDAM.
  *
  * <p>The whole context rather than a {@code @WebMvcTest} slice, and not {@code @Transactional}, for the reasons
  * {@code CaseworkerNoteControllerTest} records: a slice does not get {@code SecurityConfiguration}, so it would
@@ -75,6 +81,16 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
 
     /** The smallest acceptable create body: one reason, and nothing that makes another field required. */
     private static final String ONE_REASON = "{\"reasons\":[\"Minor\"]}";
+
+    /**
+     * The judge the fixtures claim and direct as.
+     *
+     * <p>Not a token holder. {@code Role.JUDICIAL} is not issued by IDAM yet and the two transitions that need
+     * it have no route here at all, so the fixture calls them on the service with a {@code CurrentUser} carrying
+     * the role -- which is what lets this class reach a {@code Decided} referral the way a real one is reached,
+     * rather than by writing the state into the row.
+     */
+    private static final String JUDGE_NAME = "District Judge Bell";
 
     /** Only to read the id back out of a create response, which is how a fixture addresses what it raised. */
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -109,6 +125,12 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private ReferralRepository referrals;
+
+    /**
+     * Only to reach a Decided referral through the judicial transitions, which have no route here.
+     */
+    @Autowired
+    private ReferralService referralService;
 
     @Autowired
     private DeedPollNoteRepository notes;
@@ -165,6 +187,21 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isUnauthorized());
 
             assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Open);
+        }
+
+        @Test
+        @DisplayName("refuses to close a referral, and it stays Decided")
+        void refusesAClosure() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            moveTo(referralId, ReferralState.Decided);
+
+            // The route is protected by having been written rather than by having been annotated -- there is no
+            // declaration on the handler saying so -- which is exactly why every new route gets one of these.
+            mockMvc.perform(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
+                .andExpect(status().isUnauthorized());
+
+            assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Decided);
         }
     }
 
@@ -591,6 +628,158 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         }
     }
 
+    @Nested
+    @DisplayName("POST /caseworker/cases/{id}/referrals/{referralId}/closure")
+    class CloseReferral {
+
+        @Test
+        @DisplayName("moves the referral to Closed, answers 200 with the direction still on it")
+        void closesTheReferral() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            decide(caseId, referralId, MasterDecision.Approved, "Approved. Publish in the Gazette.", true);
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-civil"));
+
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
+                // 200 with the row rather than 204, as withdrawal answers: it survives the transition, and the
+                // direction it carries is what the caseworker just actioned.
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(referralId))
+                .andExpect(jsonPath("$.state").value(ReferralState.Closed.name()))
+                .andExpect(jsonPath("$.decision").value(MasterDecision.Approved.name()))
+                .andExpect(jsonPath("$.directionsText").value("Approved. Publish in the Gazette."))
+                .andExpect(jsonPath("$.publishToGazette").value(true))
+                .andExpect(jsonPath("$.decisionDate").exists())
+                // The judge directed it and the caseworker closed it, and the response distinguishes them:
+                // decidedBy is not modifiedBy.
+                .andExpect(jsonPath("$.decidedBy").value(JUDGE_NAME))
+                .andExpect(jsonPath("$.modifiedBy").value("Another Caseworker"))
+                .andExpect(jsonPath("$.createdBy").value("A Caseworker"));
+
+            Referral closed = stored(referralId);
+            assertThat(closed.getState()).isEqualTo(ReferralState.Closed);
+            // Round-tripped through the real "MasterDecision" Postgres enum, which is what the NAMED_ENUM
+            // mapping on the column is for.
+            assertThat(closed.getDecision()).isEqualTo(MasterDecision.Approved);
+            assertThat(closed.getDecidedBy()).isEqualTo(JUDGE_NAME);
+            assertThat(closed.getModifiedBy()).isEqualTo("Another Caseworker");
+        }
+
+        @Test
+        @DisplayName("publishes the claim and the direction, but not the sweep's own bookkeeping")
+        void publishesTheClaimAndTheDirection() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            decide(caseId, referralId, MasterDecision.Rejected, null, false);
+
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
+                .andExpect(status().isOk())
+                // Who held it and from when: what answers "has the judiciary picked this up, and how long have
+                // they had it".
+                .andExpect(jsonPath("$.claimedBy").value(JUDGE_NAME))
+                .andExpect(jsonPath("$.claimedAt").exists())
+                // An approval or refusal needing no comment is a real answer, so the column stays null rather
+                // than becoming an empty string.
+                .andExpect(jsonPath("$.directionsText").doesNotExist())
+                .andExpect(jsonPath("$.publishToGazette").value(false))
+                // lastTouchedAt is the inactivity sweep's bookkeeping, not a fact about the referral: it moves
+                // every time a judge opens the page, so publishing it would invite it to be read as "when the
+                // judge last worked on this".
+                .andExpect(jsonPath("$.lastTouchedAt").doesNotExist())
+                // And still a DTO rather than the entity behind it.
+                .andExpect(jsonPath("$.deedPoll").doesNotExist())
+                .andExpect(jsonPath("$.deedPollId").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("409s closing the same referral twice, rather than answering 200 again")
+        void refusesASecondClosure() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            decide(caseId, referralId, MasterDecision.Approved, "Approved", false);
+
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
+                .andExpect(status().isOk());
+
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("Referral " + referralId + " is " + ReferralState.Closed
+                    + " and can only be closed once it is " + ReferralState.Decided));
+        }
+
+        @Test
+        @DisplayName("409s closing anything that is not Decided, and leaves the row where it was")
+        void refusesAnythingThatIsNotDecided() throws Exception {
+            // Every non-Decided state through the route, because a route wired to a wider guard would pass every
+            // other test in this class: closing an Open or Claimed referral would take it out of the pool with
+            // no direction on it, and closing a Withdrawn one would relabel an abandoned referral as actioned.
+            for (ReferralState state : Arrays.stream(ReferralState.values())
+                .filter(candidate -> candidate != ReferralState.Decided)
+                .toList()) {
+
+                String caseId = newCase();
+                String referralId = raise(caseId, ONE_REASON);
+                moveTo(referralId, state);
+
+                authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
+                    .andExpect(status().isConflict());
+
+                assertThat(stored(referralId).getState()).isEqualTo(state);
+            }
+        }
+
+        @Test
+        @DisplayName("closes for a caller holding no roles, because there is no may-close permission")
+        void closesForACallerHoldingNoRoles() throws Exception {
+            // The default stub token carries no role this service asks about, so this is the ordinary caseworker
+            // path -- asserted rather than assumed, because the absence of a gate here is a decision.
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            moveTo(referralId, ReferralState.Decided);
+
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
+                .andExpect(status().isOk());
+        }
+
+        @Test
+        @DisplayName("404s closing a referral through another case, and it stays Decided")
+        void refusesAClosureThroughAnotherCase() throws Exception {
+            String caseId = newCase();
+            String otherCaseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            moveTo(referralId, ReferralState.Decided);
+
+            authorised(post("/caseworker/cases/" + otherCaseId + "/referrals/" + referralId + "/closure"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + referralId + " not found"));
+
+            // Both halves: refused, and the row that was addressed did not move.
+            assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Decided);
+        }
+
+        @Test
+        @DisplayName("404s for a referral that does not exist")
+        void notFoundForAMissingReferral() throws Exception {
+            authorised(post("/caseworker/cases/" + newCase() + "/referrals/" + UNKNOWN_ID + "/closure"))
+                .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("writes no case note, unlike raising and withdrawing")
+        void writesNoCaseNote() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            moveTo(referralId, ReferralState.Decided);
+
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
+                .andExpect(status().isOk());
+
+            // Only the note the create wrote: Closed is on the row, and the "returned -- action needed" queue
+            // keys off the state rather than off the timeline.
+            assertThat(notes.count()).isOne();
+        }
+    }
+
     /** A stored case with a Date Received, which is all reference-number allocation needs. */
     private String newCase() {
         return deedPollService.createDeedPoll(DeedPollPatch.of(Map.of("dateReceived", RECEIVED)))
@@ -619,17 +808,47 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             .andExpect(status().isOk());
     }
 
+    /**
+     * A referral claimed and directed by a judge, leaving it {@code Decided} -- which is the only state closure
+     * accepts.
+     *
+     * <p>Through the transitions rather than by writing {@code Decided} into the row, so the fixture is a
+     * referral the service could really have produced: it carries a claim, a decision, a decision date and a
+     * deciding judge, which is what lets the closure response be asserted to publish them. Not through HTTP,
+     * because there is no route to either transition on this surface -- they are the judicial plan's -- so the
+     * fixture supplies the {@code JUDICIAL} role directly, which is the whole reason the role exists before IDAM
+     * issues it.
+     *
+     * @param directionsText what the judge directed, or null for a direction that needed no comment
+     */
+    private void decide(String caseId,
+                        String referralId,
+                        MasterDecision decision,
+                        String directionsText,
+                        boolean publishToGazette) {
+
+        CurrentUser judge = CurrentUser.currentUser(List.of(Role.JUDICIAL), JUDGE_NAME, "judge-1");
+        referralService.claim(caseId, referralId, judge);
+        referralService.decide(
+            caseId,
+            referralId,
+            new DirectionInput(decision, Optional.ofNullable(directionsText), publishToGazette),
+            judge);
+    }
+
     private Referral stored(String referralId) {
         return referrals.findById(UUID.fromString(referralId)).orElseThrow();
     }
 
     /**
-     * Puts a referral into a state no route reaches yet.
+     * Puts a referral into a given state directly, for the tests that are about a guard rather than about how the
+     * state was reached.
      *
-     * <p>Written directly, because {@code Claimed}, {@code Decided} and {@code Closed} arrive with the
-     * directions plans and there is no transition into them to use instead. That is the point: the guards are
-     * written against terminal-ness rather than against the two states this plan reaches, and this is how that
-     * is asserted before the transitions exist.
+     * <p>Written into the row on purpose. {@code Claimed} and {@code Decided} do now have transitions -- see
+     * {@link #decide} -- but reaching every state through them would make a guard test depend on the transition
+     * chain in front of it, and two of the states a guard has to refuse ({@code Closed} through a second closure,
+     * {@code Withdrawn} through a withdrawal) are cheaper to state than to arrange. Where the *content* of the
+     * state matters, and not only its name, the fixture uses the transitions instead.
      */
     private void moveTo(String referralId, ReferralState state) {
         Referral referral = stored(referralId);

@@ -200,7 +200,10 @@ api-1's numbers.
 **Baseline measured on this branch, 2026-09-17, before Task 1: `test` 1,813, `integration` 7.** After Task 1:
 `test` 1,818 (+4 `ReferralPropertiesTest`, +1 `EntityMappingTest`), `integration` 7. After Task 2: `test` 1,854
 (+29 `ReferralServiceTest` — claim, touch and the sweep — +3 `ReferralNotesTest`, +4 `ReferralRepositoryTest`),
-`integration` 7.
+`integration` 7. After Task 3: `test` 1,905 (+27 `ReferralServiceTest` — 16 `Deciding`, 11 `Closing` —
++15 `ReferralSchemasTest.Direction`, +9 `CaseworkerReferralControllerTest` — 8 `CloseReferral` and the
+unauthenticated closure), `integration` 7 (`OpenAPIPublisherTest` now asserts 30 caseworker operations across
+seventeen paths).
 
 **A worker or container startup timeout is an environment failure, not a code failure** — re-run before
 investigating, and consider a `git archive` copy under `/tmp`.
@@ -268,7 +271,7 @@ under the `deedpoll:` block in `application.yaml` and a comment that it is tunab
 409" cases, because those are the withdraw/lapse-voids-a-claim guarantees (decision 12) and they need no
 container.
 
-- [ ] `decide` requires `JUDICIAL`, is permitted only on a referral this judge holds (409 otherwise, incl.
+- [x] `decide` requires `JUDICIAL`, is permitted only on a referral this judge holds (409 otherwise, incl.
       after reclaim/withdraw), records the direction and moves `Claimed`→`Decided`, validates the direction
       as a 400; `close` is caseworker-only-authenticated, permitted only on `Decided` (409 otherwise), moves
       `Decided`→`Closed`, and is live at `POST …/closure` returning a DTO; `CASEWORKER_PATHS` and the count

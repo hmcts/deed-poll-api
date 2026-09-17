@@ -19,6 +19,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
@@ -49,7 +50,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Raising, reading and withdrawing a referral, with no database and no HTTP.
+ * The whole referral state machine -- raising, reading, withdrawing, claiming, directing, closing and the
+ * inactivity sweep -- with no database and no HTTP.
  *
  * <p><strong>Mocked repositories, following {@code SavedQuerySelectionTest} rather than
  * {@code NoteServiceTest}.</strong> The container-backed service tests exist because their services are
@@ -142,6 +144,19 @@ class ReferralServiceTest {
 
     private static CreateReferralInput minimal() {
         return input(Map.of("reasons", List.of("Minor")));
+    }
+
+    /** A direction as the schema would have produced it, so a test cannot build a shape a judge could not send. */
+    private static DirectionInput direction(String decision, String directionsText, boolean publishToGazette) {
+        return ReferralSchemas.parseDirection(Map.of(
+            "decision", decision,
+            "directionsText", directionsText,
+            "publishToGazette", publishToGazette));
+    }
+
+    /** The shortest acceptable direction, for the tests that are about who may record one rather than what. */
+    private static DirectionInput approval() {
+        return direction("Approved", "Approved", false);
     }
 
     /**
@@ -849,6 +864,338 @@ class ReferralServiceTest {
                 .isInstanceOf(NotFoundError.class);
 
             verify(referrals, never()).save(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("recording a direction")
+    class Deciding {
+
+        @Test
+        @DisplayName("records the direction, moves Claimed to Decided and signs it with the judge's name")
+        void recordsTheDirection() {
+            Referral referral = storedClaim(JUDGE, Duration.ofMinutes(20));
+            final LocalDateTime claimedAt = referral.getClaimedAt();
+            final LocalDateTime before = AuditClock.now();
+
+            service.decide(CASE_ID, REFERRAL_ID.toString(), direction("Approved", "No publication", false), JUDGE);
+
+            Referral written = saved();
+            assertThat(written.getState()).isEqualTo(ReferralState.Decided);
+            assertThat(written.getDecision()).isEqualTo(MasterDecision.Approved);
+            assertThat(written.getDirectionsText()).isEqualTo("No publication");
+            assertThat(written.getPublishToGazette()).isFalse();
+            assertThat(written.getDecisionDate()).isBetween(before, AuditClock.now());
+            // From the token and the clock, never from the payload: a direction that could name its own author
+            // would be a signature anybody could forge.
+            assertThat(written.getDecidedBy()).isEqualTo("District Judge Bell");
+            assertThat(written.getModifiedBy()).isEqualTo("District Judge Bell");
+            // The claim's own columns are left as they were: claimedAt is what answers "how long did the
+            // judiciary have this", and rewriting it at the decision would erase the answer.
+            assertThat(written.getClaimedAt()).isEqualTo(claimedAt);
+            assertThat(written.getClaimedBy()).isEqualTo("District Judge Bell");
+            // Refreshed even though the sweep will never look at this row again, so the column keeps meaning
+            // "when a judge last did something with this".
+            assertThat(written.getLastTouchedAt()).isBetween(before, AuditClock.now());
+        }
+
+        @Test
+        @DisplayName("stores a Rejected direction with publication just as readily")
+        void storesARejection() {
+            storedClaim(JUDGE, Duration.ofMinutes(1));
+
+            service.decide(CASE_ID, REFERRAL_ID.toString(),
+                           direction("Rejected", "Refused: no consent from the second parent", true), JUDGE);
+
+            Referral written = saved();
+            assertThat(written.getDecision()).isEqualTo(MasterDecision.Rejected);
+            assertThat(written.getPublishToGazette()).isTrue();
+            // Publication is the judge's decision and is not tied to the outcome, so a rejection that directs
+            // publication is a real answer rather than a contradiction to normalise away.
+            assertThat(written.getState()).isEqualTo(ReferralState.Decided);
+        }
+
+        @Test
+        @DisplayName("leaves the directions text null rather than an empty string when there is none")
+        void leavesTheDirectionsTextNull() {
+            storedClaim(JUDGE, Duration.ofMinutes(1));
+
+            service.decide(CASE_ID, REFERRAL_ID.toString(),
+                           new DirectionInput(MasterDecision.Approved, Optional.empty(), false), JUDGE);
+
+            assertThat(saved().getDirectionsText()).isNull();
+        }
+
+        @Test
+        @DisplayName("refuses a caseworker, who has no judicial role, and writes nothing")
+        void refusesACaseworker() {
+            storedClaim(JUDGE, Duration.ofMinutes(1));
+
+            // A caseworker directing a referral would be the office answering its own question to the
+            // judiciary, which is the one thing this feature exists to stop happening informally.
+            assertThatThrownBy(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), CASEWORKER))
+                .isInstanceOf(ForbiddenError.class)
+                .hasMessageContaining(Role.JUDICIAL.claimValue());
+
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("refuses an administrator too: admin is not judicial")
+        void refusesAnAdministrator() {
+            storedClaim(JUDGE, Duration.ofMinutes(1));
+
+            assertThatThrownBy(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), ADMIN))
+                .isInstanceOf(ForbiddenError.class);
+
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("refuses the gate before it looks the referral up at all")
+        void refusesTheGateBeforeLookingItUp() {
+            assertThatThrownBy(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), CASEWORKER))
+                .isInstanceOf(ForbiddenError.class);
+
+            verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
+        }
+
+        @Test
+        @DisplayName("409s a judge directing a referral another judge holds, and leaves it untouched")
+        void refusesAnotherJudgesReferral() {
+            Referral referral = storedClaim(OTHER_JUDGE, Duration.ofMinutes(10));
+
+            // The state alone is not enough and neither is the role: two judges both hold JUDICIAL and both see
+            // a Claimed referral, so what entitles one of them to write on it is that it is theirs.
+            assertThatThrownBy(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining("District Judge Bell");
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(referral.getDecision()).isNull();
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("409s after a caseworker withdrew the referral, so a late submission cannot land")
+        void refusesAfterAWithdrawal() {
+            // The withdraw-voids-a-claim guarantee, from the judge's side. The judge had the papers open; a
+            // caseworker pulled the referral back; the direction they submit afterwards must not be recorded on
+            // a referral that is no longer in play.
+            Referral referral = storedClaim(JUDGE, Duration.ofMinutes(10));
+            service.withdrawReferral(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+
+            assertThatThrownBy(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining(ReferralState.Withdrawn.name());
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Withdrawn);
+            assertThat(referral.getDecision()).isNull();
+            assertThat(referral.getDecidedBy()).isNull();
+        }
+
+        @Test
+        @DisplayName("409s after the sweep took the claim back, so a lapsed judge cannot direct it")
+        void refusesAfterTheClaimLapsed() {
+            // The other half of the same guarantee. The claim lapsed while the judge read the papers, the
+            // referral went back into the pool, and their direction must not land on it -- another judge may
+            // hold it by now, and both of them directing the same referral is the outcome this prevents.
+            Referral referral = storedClaim(JUDGE, CLAIM_EXPIRY.plusMinutes(5));
+            rowsInTheDatabase(referral);
+            assertThat(service.reclaimStaleClaims()).isEqualTo(1);
+
+            assertThatThrownBy(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining(ReferralState.Open.name());
+
+            assertThat(referral.getDecision()).isNull();
+            verify(referrals, never()).save(any());
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Open", "Decided", "Closed", "Withdrawn"})
+        @DisplayName("409s a referral nobody is holding, whatever became of it")
+        void refusesAReferralNobodyIsHolding(ReferralState state) {
+            Referral referral = stored(state);
+
+            assertThatThrownBy(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining(state.name());
+
+            // Decided included, which is what stops a judge revising a direction they have already given: a
+            // second direction is not an amendment, it is two answers to one question.
+            assertThat(referral.getState()).isEqualTo(state);
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("404s a referral addressed through another case, and directs nothing")
+        void refusesAReferralAddressedThroughAnotherCase() {
+            Referral referral = storedClaim(JUDGE, Duration.ofMinutes(10));
+
+            assertThatThrownBy(() -> service.decide(OTHER_CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
+                .isInstanceOf(NotFoundError.class);
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(referral.getDecision()).isNull();
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("writes no case note, because the direction is on the referral's own row")
+        void writesNoCaseNote() {
+            storedClaim(JUDGE, Duration.ofMinutes(10));
+
+            service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE);
+
+            // Five columns the referrals tab publishes say what was directed, so a note would be a second copy
+            // that could then disagree with them.
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("does not write the case's flat master columns, so the snapshot stays the snapshot")
+        void doesNotWriteTheCasesFlatColumns() {
+            Referral referral = storedClaim(JUDGE, Duration.ofMinutes(10));
+            DeedPoll parent = referral.getDeedPoll();
+            // A case whose flat block holds the pre-migration answer, which is the case the rule is about: a
+            // referral raised on a case that was referred once before, by email, years ago.
+            parent.setMasterDecision(MasterDecision.Approved);
+            parent.setMasterDirections("Approved by Master Someone, 2019");
+            parent.setPublishToLondonGazette(true);
+
+            service.decide(CASE_ID, REFERRAL_ID.toString(), direction("Rejected", "Refused", false), JUDGE);
+
+            // Untouched. Syncing the live direction back would make the case say two different things over time
+            // -- the backfilled snapshot and whichever referral was latest -- and re-introduce the
+            // one-referral-per-case model this feature replaced.
+            assertThat(parent.getMasterDecision()).isEqualTo(MasterDecision.Approved);
+            assertThat(parent.getMasterDirections()).isEqualTo("Approved by Master Someone, 2019");
+            assertThat(parent.isPublishToLondonGazette()).isTrue();
+            verifyNoInteractions(deedPolls);
+        }
+    }
+
+    @Nested
+    @DisplayName("closing a referral")
+    class Closing {
+
+        @Test
+        @DisplayName("moves a Decided referral to Closed, keeping the direction exactly as it was")
+        void movesADecidedReferralToClosed() {
+            Referral referral = stored(ReferralState.Decided);
+            referral.setDecision(MasterDecision.Approved);
+            referral.setDirectionsText("Approved, publish");
+            referral.setPublishToGazette(true);
+            referral.setDecidedBy("District Judge Bell");
+            LocalDateTime decidedOn = LocalDateTime.parse("2026-09-10T11:00:00");
+            referral.setDecisionDate(decidedOn);
+
+            service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+
+            Referral written = saved();
+            assertThat(written.getState()).isEqualTo(ReferralState.Closed);
+            // Closing is an acknowledgement, not an edit: the direction the caseworker actioned has to still be
+            // readable afterwards, because it is the record of what they actioned.
+            assertThat(written.getDecision()).isEqualTo(MasterDecision.Approved);
+            assertThat(written.getDirectionsText()).isEqualTo("Approved, publish");
+            assertThat(written.getPublishToGazette()).isTrue();
+            assertThat(written.getDecisionDate()).isEqualTo(decidedOn);
+            assertThat(written.getDecidedBy()).isEqualTo("District Judge Bell");
+            // And the closing caseworker is who last moved it, while decidedBy still says who directed it.
+            assertThat(written.getModifiedBy()).isEqualTo("Ada Caseworker");
+            assertThat(written.getModifiedOn()).isAfter(decidedOn);
+        }
+
+        @Test
+        @DisplayName("is open to a caller holding no roles, as raising and withdrawing are")
+        void isOpenToACallerHoldingNoRoles() {
+            // Asserted rather than assumed: closing is the caseworker's acknowledgement that the direction has
+            // been actioned, so there is no "may close" permission any more than there is a "may refer" one.
+            stored(ReferralState.Decided);
+
+            assertThatCode(() -> service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
+                .doesNotThrowAnyException();
+
+            assertThat(saved().getState()).isEqualTo(ReferralState.Closed);
+        }
+
+        @Test
+        @DisplayName("lets a judge's own token close one too, because the gate is authentication only")
+        void doesNotRefuseAJudge() {
+            // Not an endorsement of a judge closing their own referral -- the caseworker actions the direction,
+            // and the judicial surface offers no closure -- but the domain gate is authentication, and pinning
+            // that here is what stops a role check being added below the route by accident.
+            stored(ReferralState.Decided);
+
+            assertThatCode(() -> service.close(CASE_ID, REFERRAL_ID.toString(), JUDGE))
+                .doesNotThrowAnyException();
+
+            assertThat(saved().getModifiedBy()).isEqualTo("District Judge Bell");
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Open", "Claimed", "Closed", "Withdrawn"})
+        @DisplayName("409s anything that is not Decided, and leaves it as it was")
+        void refusesAnythingThatIsNotDecided(ReferralState state) {
+            Referral referral = stored(state);
+
+            // The one guard here written against a single state rather than against terminal-ness, and that is
+            // the point of it: closing an Open or Claimed referral would take it out of the pool with no
+            // direction on it, and closing a Withdrawn one would relabel an abandoned referral as an actioned
+            // one.
+            assertThatThrownBy(() -> service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining(state.name());
+
+            assertThat(referral.getState()).isEqualTo(state);
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("404s a referral addressed through another case, and it stays Decided")
+        void refusesAReferralAddressedThroughAnotherCase() {
+            Referral referral = stored(ReferralState.Decided);
+
+            assertThatThrownBy(() -> service.close(OTHER_CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
+                .isInstanceOf(NotFoundError.class);
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Decided);
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("404s an id that is not an identifier at all, without asking the database")
+        void refusesAMalformedId() {
+            assertThatThrownBy(() -> service.close(CASE_ID, "not-a-uuid", CASEWORKER))
+                .isInstanceOf(NotFoundError.class);
+
+            verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
+        }
+
+        @Test
+        @DisplayName("writes no case note")
+        void writesNoCaseNote() {
+            stored(ReferralState.Decided);
+
+            service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+
+            // Closed is on the row, and the "returned -- action needed" queue keys off the state rather than off
+            // the timeline, so there is nothing a note would tell a reader the referral does not.
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("does not run the stale-claim sweep, because closing is not a judicial read")
+        void doesNotSweep() {
+            stored(ReferralState.Decided);
+
+            service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+
+            // The mutating read is contained to the pool load and to claim(). A caseworker closing a referral
+            // has no business releasing another judge's claim on a different case.
+            verify(referrals, never()).findStaleClaims(any(), any());
         }
     }
 

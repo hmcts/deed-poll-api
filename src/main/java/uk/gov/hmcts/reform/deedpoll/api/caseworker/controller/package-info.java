@@ -26,18 +26,21 @@
  *   <li>{@code CaseworkerSavedQueryController} -- list, save, read, amend and delete a saved query, and select
  *       or unselect one. The only resource here not nested under a case, because a saved query is a way of
  *       finding cases rather than a thing belonging to one.</li>
- *   <li>{@code CaseworkerReferralController} -- list, raise, read and withdraw a referral to the judiciary.
- *       No amend: a referral is not edited in place, so withdrawal is a sub-resource rather than a patch or a
- *       delete. The one resource here with no role gate anywhere below it, deliberately -- there is no "may
- *       refer" permission.</li>
+ *   <li>{@code CaseworkerReferralController} -- list, raise, read, withdraw and close a referral to the
+ *       judiciary. No amend: a referral is not edited in place, so withdrawal and closure are sub-resources
+ *       rather than a patch or a delete. The one resource here with no role gate anywhere below it,
+ *       deliberately -- there is no "may refer" permission and no "may close" one. The judge's own operations,
+ *       claiming a referral and recording a direction, are {@code ReferralService} transitions gated on
+ *       {@code Role#JUDICIAL} with no route in this package at all: they belong to a judicial surface rather
+ *       than to the caseworker one.</li>
  * </ul>
  *
  * <p><strong>Every route in this package is one of those bullets; there is no route here that no controller
  * above describes.</strong> That is the property worth stating -- a running total is not, because it goes stale
  * the moment a route is added, which is exactly how the count recorded here came to say "twelve" after the note
  * delete made it thirteen -- and the four witness routes made it seventeen, the witness delete eighteen, the
- * seven saved-query routes twenty-five and the four referral routes twenty-nine. Read the count off the mappings
- * when you need it.
+ * seven saved-query routes twenty-five, the four referral routes twenty-nine and the referral closure thirty.
+ * Read the count off the mappings when you need it.
  *
  * <p>The reason a count was ever written down: plan 01's prose says eleven, while its own task list enumerates
  * more than that -- so the shortfall was a miscount rather than a decision, the same kind its task 4 records
