@@ -115,16 +115,25 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
     @Autowired
     private SavedQuerySelectionRepository selections;
 
+    /**
+     * One {@code @BeforeEach} calling both, rather than two of them.
+     *
+     * <p>JUnit does not order sibling {@code @BeforeEach} methods -- the sequence is deliberately
+     * unspecified -- so two of them are two things that happen in no stated order. These two are
+     * independent today, which is why the split passed, but a later dependency between them would hold by
+     * luck and fail intermittently rather than at once. Stating the order costs a line.
+     */
     @BeforeEach
+    void freshFixture() {
+        clearTables();
+        IDAM.stubDefaults();
+    }
+
+    /** Cleared afterwards as well, because the container outlives this class and the next one starts empty. */
     @AfterEach
     void clearTables() {
         selections.deleteAll();
         savedQueries.deleteAll();
-    }
-
-    @BeforeEach
-    void resetIdam() {
-        IDAM.stubDefaults();
     }
 
     @Nested
