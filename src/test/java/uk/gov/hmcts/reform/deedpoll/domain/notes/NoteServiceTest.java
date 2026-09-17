@@ -53,7 +53,7 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
 
     /** An Administrator: the only caller a delete admits. */
     private static final CurrentUser ADMIN =
-        CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "An Admin");
+        CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "An Admin", "admin-1");
 
     /**
      * A Basic User: authenticated and named, holding no role this service recognises.
@@ -64,7 +64,7 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
      * an unidentified caller is refused) and they stop being the same object the moment the enum grows a
      * second role.
      */
-    private static final CurrentUser CASEWORKER = CurrentUser.currentUser(List.of(), "A Caseworker");
+    private static final CurrentUser CASEWORKER = CurrentUser.currentUser(List.of(), "A Caseworker", "caseworker-1");
 
     @Autowired
     private NoteService noteService;

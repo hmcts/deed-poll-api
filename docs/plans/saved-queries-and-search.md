@@ -302,7 +302,7 @@ discoverable. Concretely:
 **Implement this, do not revisit.** Both statuses are deliberate and a reviewer who has not read this paragraph
 will read the 404 as a bug.
 
-- [ ] Five operations; visibility is shared-or-mine; edit/delete allow owner and allow admin **only when shared**;
+- [x] Five operations; visibility is shared-or-mine; edit/delete allow owner and allow admin **only when shared**;
       an admin naming another user's unshared query gets 404 and cannot distinguish it from an id that never
       existed; a visible-but-not-editable query gets 403; a caller with no roles fails closed; DTOs not entities
 

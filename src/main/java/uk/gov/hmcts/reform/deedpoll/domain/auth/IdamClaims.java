@@ -38,9 +38,17 @@ public final class IdamClaims {
      * CFT estate, so a caseworker's token can name roles from other services entirely. Keeping them would
      * put strings this service has no rules for into the object its authorization decisions are made from,
      * and {@code isAdmin} would then depend on a list nobody here maintains.
+     *
+     * <p><strong>{@code sub} is read twice, for two different jobs.</strong> It is the caller's stable id,
+     * which is what a saved query records as its owner; and it is the last fallback for the display name,
+     * because {@code createdBy} reading as an opaque identifier is still traceable. Those are not the same
+     * use and must not be collapsed: the name is substituted when it is missing, and the id never is.
      */
     public static CurrentUser userFromClaims(Map<String, ?> claims) {
-        return CurrentUser.currentUser(rolesFrom(claims.get("roles")), displayNameFrom(claims));
+        return CurrentUser.currentUser(
+            rolesFrom(claims.get("roles")),
+            displayNameFrom(claims),
+            string(claims.get("sub")).orElse(null));
     }
 
     /**

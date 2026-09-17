@@ -54,9 +54,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     private static final Path PUBLISHED_SPEC = Paths.get("/tmp/openapi-specs.json");
 
     /**
-     * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them plus the witness routes
-     * added afterwards. Listed rather than counted, because a count agrees with a spec that documents the right
-     * number of the wrong things.
+     * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
+     * added afterwards and the saved-query routes after those. Listed rather than counted, because a count agrees
+     * with a spec that documents the right number of the wrong things.
      */
     private static final List<String> CASEWORKER_PATHS = List.of(
         "/caseworker/cases",
@@ -68,7 +68,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/cases/{id}/witnesses",
         "/caseworker/cases/{id}/witnesses/{witnessId}",
         "/caseworker/cases/{id}/documents",
-        "/caseworker/cases/{id}/documents/{documentId}/file"
+        "/caseworker/cases/{id}/documents/{documentId}/file",
+        "/caseworker/saved-queries",
+        "/caseworker/saved-queries/{id}"
     );
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -96,7 +98,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(paths.fieldNames()).toIterable().containsAll(CASEWORKER_PATHS);
     }
 
-    @DisplayName("Documents the eighteen caseworker operations and the token they need")
+    @DisplayName("Documents the twenty-three caseworker operations and the token they need")
     @Test
     void documentsTheCaseworkerOperations() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -106,16 +108,17 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Eighteen operations across ten paths: `/caseworker/cases` and the notes and witnesses collections each
-        // carry a GET and a POST, the case carries a GET and a PATCH, and the note and the witness each carry a
-        // GET, a PATCH and a DELETE -- the note's since 2026-09-08, the witness's since the Administrator gate
-        // landed. Both the paths and the count are asserted because neither alone is enough: a count could not
-        // tell a new verb on a known path from a new path, and the path list could not tell a route that was
-        // removed from one that never existed.
+        // Twenty-three operations across twelve paths: `/caseworker/cases`, the notes and witnesses collections
+        // and the saved-query collection each carry a GET and a POST, the case carries a GET and a PATCH, and the
+        // note, the witness and the saved query each carry a GET, a PATCH and a DELETE -- the note's since
+        // 2026-09-08, the witness's since the Administrator gate landed, the saved query's since the library did.
+        // Both the paths and the count are asserted because neither alone is enough: a count could not tell a new
+        // verb on a known path from a new path, and the path list could not tell a route that was removed from one
+        // that never existed.
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(18);
+        assertThat(operations).isEqualTo(23);
 
         // Every one of them needs a forwarded IDAM token, which the document has to say or the client generated
         // from it cannot make a call. Declared once, globally, because the service authenticates by default.
