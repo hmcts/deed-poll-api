@@ -38,12 +38,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The five saved-query endpoints, over HTTP, against a real database and a stub IDAM.
+ * The seven saved-query endpoints, over HTTP, against a real database and a stub IDAM.
  *
  * <p>The whole context rather than a {@code @WebMvcTest} slice, and not {@code @Transactional}, for the reasons
  * {@code CaseworkerNoteControllerTest} records: a slice does not get {@code SecurityConfiguration}, so it would
@@ -64,6 +65,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * a query they can see but may not change answers 403, because they can already see it and a 404 would be a lie
  * they cannot act on. Both are asserted including the body, since the whole property is that the two answers are
  * indistinguishable.
+ *
+ * <p><strong>The selection sub-resource is the one exception, in one direction.</strong> Its {@code DELETE}
+ * answers 204 for an id the caller cannot see, where every other operation would answer 404, and there is a test
+ * for each half of why: the row is keyed by the caller so nothing else is reachable, and a visibility check would
+ * trap a subscriber with a stale selection for a query its owner has unshared.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -173,6 +179,33 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
             mockMvc.perform(delete("/caseworker/saved-queries/" + id)).andExpect(status().isUnauthorized());
 
             assertThat(savedQueries.findById(UUID.fromString(id))).isPresent();
+        }
+
+        @Test
+        @DisplayName("refuses to select one, and records no selection")
+        void refusesASelect() throws Exception {
+            String id = save(OWNER, "Ops", true);
+
+            mockMvc.perform(put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isUnauthorized());
+
+            // A selection belongs to somebody, so an unauthenticated one is not a selection at all -- and the
+            // 401 has to come before the handler, not from inside it.
+            assertThat(selections.count()).isZero();
+        }
+
+        @Test
+        @DisplayName("refuses to unselect one, which stays selected")
+        void refusesADeselect() throws Exception {
+            String id = save(OWNER, "Ops", true);
+            selections.save(new SavedQuerySelection(UUID.fromString(id), OWNER.subject()));
+
+            // The one route that answers 204 to almost anything still answers 401 to a caller with no token: the
+            // idempotence is about the id, never about identity.
+            mockMvc.perform(delete("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isUnauthorized());
+
+            assertThat(selections.count()).isEqualTo(1);
         }
     }
 
@@ -648,6 +681,218 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
             // Not idempotent in the strict HTTP sense, and consistent with the reads -- deliberately unlike the
             // selection sub-resource, where unselecting something already unselected is not a mistake.
             as(OWNER, delete("/caseworker/saved-queries/" + id)).andExpect(status().isNotFound());
+        }
+    }
+
+    @Nested
+    @DisplayName("PUT /caseworker/saved-queries/{id}/selection")
+    class SelectSavedQuery {
+
+        @Test
+        @DisplayName("adds the query to the caller's list and answers 204")
+        void addsTheQueryToTheCallersList() throws Exception {
+            String id = save(OWNER, "Ops", true);
+
+            as(OWNER, put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+            // Through the list route, because that flag is what a navigation bar renders.
+            as(OWNER, get("/caseworker/saved-queries"))
+                .andExpect(jsonPath("$[0].selected").value(true));
+            as(OWNER, get("/caseworker/saved-queries/" + id))
+                .andExpect(jsonPath("$.selected").value(true));
+        }
+
+        @Test
+        @DisplayName("a second call is another 204 and not a second row")
+        void secondCallIsAnother204() throws Exception {
+            String id = save(OWNER, "Ops", true);
+
+            as(OWNER, put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+            // Idempotent: the request states the end state, which is true however many times it is sent, and a
+            // client retrying a lost response must not be told it has a duplicate to clean up.
+            as(OWNER, put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+
+            assertThat(selections.count()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("selects somebody else's shared query without any right to edit it")
+        void selectsSomebodyElsesSharedQuery() throws Exception {
+            String id = save(OWNER, "Ops", true);
+
+            // Decision 7, at the route: choosing to see a query is every caseworker's right, and keeping it in a
+            // sub-resource is what stops "add this to my list" needing the owner's permission. Asserted with
+            // editable false in the same breath, or the test would not be showing that the two are separate.
+            as(OTHER, put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+
+            as(OTHER, get("/caseworker/saved-queries/" + id))
+                .andExpect(jsonPath("$.selected").value(true))
+                .andExpect(jsonPath("$.editable").value(false));
+        }
+
+        @Test
+        @DisplayName("selections are per-user: one caller's does not appear in another's list")
+        void selectionsArePerUser() throws Exception {
+            String id = save(OWNER, "Ops", true);
+
+            as(OWNER, put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+
+            // The same shared query, two callers, two answers -- which is why selected cannot be a column.
+            as(OTHER, get("/caseworker/saved-queries/" + id))
+                .andExpect(jsonPath("$.selected").value(false));
+            assertThat(selections.existsByIdSavedQueryIdAndIdUserId(UUID.fromString(id), OTHER.subject()))
+                .isFalse();
+        }
+
+        @Test
+        @DisplayName("404s somebody else's unshared query, identically to an id that never existed")
+        void notFoundForSomebodyElsesUnsharedQuery() throws Exception {
+            String id = save(OWNER, "Private", false);
+
+            // Selecting must not be a way to discover a private query, so the body is asserted too: the two
+            // answers have to be indistinguishable.
+            as(OTHER, put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Saved query " + id + " not found"));
+            as(OTHER, put("/caseworker/saved-queries/" + UNKNOWN_ID + "/selection"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Saved query " + UNKNOWN_ID + " not found"));
+
+            assertThat(selections.count()).isZero();
+        }
+
+        @Test
+        @DisplayName("404s an Administrator selecting somebody else's unshared query")
+        void notFoundForAnAdministrator() throws Exception {
+            String id = save(OWNER, "Private", false);
+
+            as(ADMIN, put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNotFound());
+
+            assertThat(selections.count()).isZero();
+        }
+    }
+
+    @Nested
+    @DisplayName("DELETE /caseworker/saved-queries/{id}/selection")
+    class DeselectSavedQuery {
+
+        @Test
+        @DisplayName("removes the query from the caller's list and leaves the query alone")
+        void removesTheQueryFromTheCallersList() throws Exception {
+            String id = save(OWNER, "Ops", true);
+            as(OWNER, put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+
+            as(OWNER, delete("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+            // Unselecting is not deleting: the query is still in the library, just not in this list.
+            as(OWNER, get("/caseworker/saved-queries"))
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].selected").value(false));
+            assertThat(selections.count()).isZero();
+        }
+
+        @Test
+        @DisplayName("204s something that was never selected, because unselecting twice is not a mistake")
+        void answers204ForSomethingNeverSelected() throws Exception {
+            String id = save(OWNER, "Ops", true);
+
+            as(OWNER, delete("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+            as(OWNER, delete("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+        }
+
+        @Test
+        @DisplayName("204s an unknown id, and an id that is not an identifier at all")
+        void answers204ForAnUnknownId() throws Exception {
+            // The answer does not vary with the id, which is what makes the missing visibility check disclose
+            // nothing: there is no status code to probe with.
+            as(OWNER, delete("/caseworker/saved-queries/" + UNKNOWN_ID + "/selection"))
+                .andExpect(status().isNoContent());
+            as(OWNER, delete("/caseworker/saved-queries/not-a-uuid/selection"))
+                .andExpect(status().isNoContent());
+        }
+
+        @Test
+        @DisplayName("one caller cannot unselect another's, even on a query they both see")
+        void oneCallerCannotUnselectAnothers() throws Exception {
+            String id = save(OWNER, "Ops", true);
+            as(OWNER, put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+
+            // 204 rather than a refusal, and it removes nothing: the row is keyed by the caller, so the delete
+            // reaches OTHER's own selection -- which is not there -- and cannot reach OWNER's.
+            as(OTHER, delete("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+
+            as(OWNER, get("/caseworker/saved-queries/" + id))
+                .andExpect(jsonPath("$.selected").value(true));
+            assertThat(selections.existsByIdSavedQueryIdAndIdUserId(UUID.fromString(id), OWNER.subject()))
+                .isTrue();
+        }
+
+        @Test
+        @DisplayName("clears a stale selection for a query the caller can no longer see")
+        void clearsAStaleSelectionForAnInvisibleQuery() throws Exception {
+            String id = save(OWNER, "Ops", true);
+            as(OTHER, put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+            as(OWNER, patch("/caseworker/saved-queries/" + id), "{\"shared\":false}")
+                .andExpect(status().isOk());
+
+            // The reason the delete does not check visibility. The owner may re-share at any time, and a check
+            // here would leave OTHER unable to clear the one selection they most need to -- the query they can no
+            // longer see.
+            as(OTHER, delete("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+
+            assertThat(selections.count()).isZero();
+        }
+    }
+
+    @Nested
+    @DisplayName("a selected query whose owner then unshares it")
+    class UnsharedAfterSelection {
+
+        @Test
+        @DisplayName("stops appearing for the subscriber, while their selection row survives")
+        void stopsAppearingForTheSubscriber() throws Exception {
+            String id = save(OWNER, "Ops", true);
+            as(OTHER, put("/caseworker/saved-queries/" + id + "/selection"))
+                .andExpect(status().isNoContent());
+            as(OTHER, get("/caseworker/saved-queries"))
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].selected").value(true));
+
+            as(OWNER, patch("/caseworker/saved-queries/" + id), "{\"shared\":false}")
+                .andExpect(status().isOk());
+
+            // A selection is not a grant. Visibility is read afresh on every list, so unsharing takes the query
+            // out of every subscriber's -- the alternative would let a row written while a query was public keep
+            // a private one readable indefinitely.
+            as(OTHER, get("/caseworker/saved-queries"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+            as(OTHER, get("/caseworker/saved-queries/" + id))
+                .andExpect(status().isNotFound());
+
+            // And the row stays rather than being tidied on unshare: the owner may re-share, and the subscriber's
+            // choice is theirs to change. It is unreachable meanwhile, which is what the assertions above show.
+            assertThat(selections.existsByIdSavedQueryIdAndIdUserId(UUID.fromString(id), OTHER.subject()))
+                .isTrue();
+
+            // The owner still sees it, selected or not, so the query itself was not lost.
+            as(OWNER, get("/caseworker/saved-queries/" + id)).andExpect(status().isOk());
         }
     }
 

@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -19,7 +20,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQueryService;
 import java.util.List;
 
 /**
- * Saved and shared case-list queries: list, save, read, amend and delete.
+ * Saved and shared case-list queries: list, save, read, amend and delete, plus select and unselect.
  *
  * <p><strong>Why this resource is here and not in {@code deed-poll-admin}.</strong> A saved query needs
  * somewhere to persist per-user state, and the admin app owns no database and never will -- its only local
@@ -36,20 +37,22 @@ import java.util.List;
  * the note and witness deletes use. What the caller sees:
  *
  * <ul>
- *   <li>A query that is neither shared nor theirs is <strong>404</strong> on all five operations, carrying the
- *       message an id that never existed gets. Deliberate, and a reviewer who has not read this will read it as
- *       a bug: it is what keeps other people's private queries undiscoverable, since a 403 would confirm the id
- *       names something.</li>
+ *   <li>A query that is neither shared nor theirs is <strong>404</strong> on the five query operations, carrying
+ *       the message an id that never existed gets. Deliberate, and a reviewer who has not read this will read it
+ *       as a bug: it is what keeps other people's private queries undiscoverable, since a 403 would confirm the
+ *       id names something.</li>
  *   <li>A query they can see but may not change is <strong>403</strong>. They can already see it, so there is
  *       nothing left to conceal.</li>
  * </ul>
  *
  * <p><strong>Selection is a separate sub-resource</strong> and not a field on the query. Amending a query is the
  * owner's right; choosing to see it is every caseworker's, and keeping them apart is what stops "add this to my
- * list" needing edit permission. Duplicating a query is likewise not an operation: a client reads one and posts
- * a new one, which needs no endpoint because there is no invariant to protect.
+ * list" needing edit permission. Both of its verbs are idempotent, and its {@code DELETE} answers 204 for an id
+ * the caller cannot see rather than 404 -- the one place on this resource where an invisible query is not a 404,
+ * for the reason given on the method. Duplicating a query is likewise not an operation: a client reads one and
+ * posts a new one, which needs no endpoint because there is no invariant to protect.
  *
- * <p>None of these routes is annotated as requiring authentication, and all five do:
+ * <p>None of these routes is annotated as requiring authentication, and all seven do:
  * {@code SecurityConfiguration} authenticates {@code anyRequest()} that is not on a short infrastructure
  * allowlist, so a route is protected by having been written rather than by having been remembered. Every one of
  * them passes the caller, because on this resource identity is not audit trimming -- it decides what comes back.
@@ -138,5 +141,42 @@ public class CaseworkerSavedQueryController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable("id") String id) {
         savedQueries.removeSavedQuery(id, CurrentUsers.required());
+    }
+
+    /**
+     * Adds a query to the caller's own list. 204, and a second call is another 204 rather than a conflict.
+     *
+     * <p>A sub-resource rather than a field on the query, because that is what keeps "add this to my list" out of
+     * the owner's permission: amending a query is the owner's right, choosing to see it is every caseworker's. So
+     * this is permitted on somebody else's shared query, which is the case the library exists for, and it is
+     * <em>not</em> permitted on a query the caller cannot see -- that answers the same 404 as an id that never
+     * existed, since selecting must not be a way to discover a private query.
+     *
+     * <p>{@code PUT} rather than {@code POST}: the request states the end state -- this query is in my list --
+     * which is true however many times it is sent, and a client retrying a lost response must not be told it has
+     * a duplicate to clean up.
+     */
+    @PutMapping("/{id}/selection")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void select(@PathVariable("id") String id) {
+        savedQueries.addSelection(id, CurrentUsers.required());
+    }
+
+    /**
+     * Removes a query from the caller's own list. 204, whether or not it was in it.
+     *
+     * <p>Unselecting something already unselected is not a mistake, so it is not a 404 -- deliberately unlike
+     * {@code DELETE} on the query itself, where the thing being deleted is shared state and its absence is worth
+     * reporting. Here the state is the caller's own and the request only says what they want to be true of it.
+     *
+     * <p>It also answers 204 for a query the caller cannot see, which the service explains: the row is keyed by
+     * the caller, so the delete cannot reach anybody else's, and requiring visibility would trap a subscriber
+     * with a stale selection for a query its owner has unshared -- the one selection they most need to clear and
+     * the one they can no longer see. The answer does not vary with the id, so nothing is disclosed by it.
+     */
+    @DeleteMapping("/{id}/selection")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deselect(@PathVariable("id") String id) {
+        savedQueries.removeSelection(id, CurrentUsers.required());
     }
 }

@@ -7,6 +7,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.SavedQuery;
+import uk.gov.hmcts.reform.deedpoll.entity.SavedQuerySelection;
 import uk.gov.hmcts.reform.deedpoll.repository.SavedQueryRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.SavedQuerySelectionRepository;
 
@@ -39,8 +40,11 @@ import java.util.stream.Collectors;
  *
  * <ul>
  *   <li><strong>Not visible</strong> -- not shared, and not the caller's -- is a {@link NotFoundError} carrying
- *       exactly the message an id that never existed gets, for every operation. So no id is discoverable: a
- *       caller cannot probe for other people's private queries by watching status codes.</li>
+ *       exactly the message an id that never existed gets, for every operation on the query itself and for
+ *       {@link #addSelection}. So no id is discoverable: a caller cannot probe for other people's private
+ *       queries by watching status codes. {@link #removeSelection} reports nothing at all rather than a 404,
+ *       which discloses no more because its answer does not vary with the id -- see the method for why the
+ *       asymmetry is deliberate.</li>
  *   <li><strong>Visible but not editable</strong> -- somebody else's shared query, and the caller is not an
  *       administrator -- is a {@link ForbiddenError}. The caller can already see it, so there is nothing left
  *       to conceal, and a 404 here would be a lie a client cannot act on.</li>
@@ -185,6 +189,58 @@ public class SavedQueryService {
     @Transactional
     public void removeSavedQuery(String id, CurrentUser caller) {
         savedQueries.delete(editable(id, caller));
+    }
+
+    /**
+     * Adds a query to this caller's own list, idempotently.
+     *
+     * <p><strong>Visibility is the whole permission, and deliberately not edit rights.</strong> Amending a query
+     * is the owner's right; choosing to see it is every caseworker's, which is the point of selection being a
+     * sub-resource rather than a field. So a caller may select somebody else's shared query, which is the case
+     * the library exists for, and gets the ordinary 404 for one that is neither shared nor theirs -- a caller
+     * must not be able to discover a private query by selecting it.
+     *
+     * <p>A second call is not a conflict: it writes nothing and answers as the first did. Checked rather than
+     * left to an upsert because the row is <em>only</em> its key -- there is no column for a second write to
+     * update -- so "already selected" is the whole of the state and a repeat is genuinely nothing to do.
+     *
+     * <p><strong>A selection is not a grant.</strong> The row records a choice; what the caller may see is still
+     * decided by {@link SavedQueryPermissions#visibleTo}, read afresh on every list. So a query unshared by its
+     * owner after being selected stops appearing for the subscriber, and the row simply stays -- see
+     * {@link #removeSelection} for why it is left rather than tidied.
+     *
+     * @throws NotFoundError if there is no such query, or it is neither shared nor theirs
+     */
+    @Transactional
+    public void addSelection(String id, CurrentUser caller) {
+        SavedQuery query = visible(id, caller);
+        String userId = caller.requireUserId();
+        if (!selections.existsByIdSavedQueryIdAndIdUserId(query.getId(), userId)) {
+            selections.save(new SavedQuerySelection(query.getId(), userId));
+        }
+    }
+
+    /**
+     * Removes a query from this caller's own list, idempotently. Unselecting something not selected is not an
+     * error, so this reports nothing and cannot fail.
+     *
+     * <p><strong>No visibility check, which is an asymmetry with {@link #addSelection} and is the point rather
+     * than an oversight.</strong> The row is keyed by the query and <em>this caller</em>, so the delete reaches
+     * one row that is theirs by construction and no check could make it safer: the scoping is in the key, not in
+     * a guard. What a check would add is a state a caller cannot leave. A query unshared after being selected
+     * leaves a row behind that its owner may re-share at any time, resurfacing the query in a list the caller
+     * removed it from months earlier -- and requiring visibility to unselect is exactly what would stop them
+     * clearing it, because the query they need to unselect is the one they can no longer see.
+     *
+     * <p>Nothing is disclosed by that. The answer does not vary: an unknown id, an id that is not an identifier,
+     * somebody else's private query and a query the caller had genuinely selected all report the same nothing,
+     * so there is no status code to probe with. The caller is still resolved first, so an unidentified one is
+     * refused rather than deleting against a null user.
+     */
+    @Transactional
+    public void removeSelection(String id, CurrentUser caller) {
+        String userId = caller.requireUserId();
+        identifier(id).ifPresent(queryId -> selections.deleteByIdSavedQueryIdAndIdUserId(queryId, userId));
     }
 
     /**

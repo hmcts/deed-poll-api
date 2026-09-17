@@ -70,7 +70,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/cases/{id}/documents",
         "/caseworker/cases/{id}/documents/{documentId}/file",
         "/caseworker/saved-queries",
-        "/caseworker/saved-queries/{id}"
+        "/caseworker/saved-queries/{id}",
+        "/caseworker/saved-queries/{id}/selection"
     );
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -98,7 +99,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(paths.fieldNames()).toIterable().containsAll(CASEWORKER_PATHS);
     }
 
-    @DisplayName("Documents the twenty-three caseworker operations and the token they need")
+    @DisplayName("Documents the twenty-five caseworker operations and the token they need")
     @Test
     void documentsTheCaseworkerOperations() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -108,17 +109,18 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Twenty-three operations across twelve paths: `/caseworker/cases`, the notes and witnesses collections
-        // and the saved-query collection each carry a GET and a POST, the case carries a GET and a PATCH, and the
-        // note, the witness and the saved query each carry a GET, a PATCH and a DELETE -- the note's since
-        // 2026-09-08, the witness's since the Administrator gate landed, the saved query's since the library did.
+        // Twenty-five operations across thirteen paths: `/caseworker/cases`, the notes and witnesses collections
+        // and the saved-query collection each carry a GET and a POST, the case carries a GET and a PATCH, the
+        // note, the witness and the saved query each carry a GET, a PATCH and a DELETE, and a saved query's
+        // selection carries a PUT and a DELETE -- the note's since 2026-09-08, the witness's since the
+        // Administrator gate landed, the saved query's since the library did and the selection's with it.
         // Both the paths and the count are asserted because neither alone is enough: a count could not tell a new
         // verb on a known path from a new path, and the path list could not tell a route that was removed from one
         // that never existed.
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(23);
+        assertThat(operations).isEqualTo(25);
 
         // Every one of them needs a forwarded IDAM token, which the document has to say or the client generated
         // from it cannot make a call. Declared once, globally, because the service authenticates by default.

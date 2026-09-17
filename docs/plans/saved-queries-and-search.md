@@ -316,7 +316,17 @@ Selecting a query that is later unshared by its owner: the selection row survive
 visible. Decide and test which it is — **the caller should stop seeing it**, because visibility is decision 3's
 rule and a selection is not a grant.
 
-- [ ] `PUT`/`DELETE` idempotent both ways; permitted without edit rights; selecting a query the caller cannot see
+**As built, the two verbs differ on visibility, which is a deliberate refinement of "permitted for any caller who
+can see the query" above.** `PUT` requires visibility and 404s without it, because selecting must not be a way to
+discover a private query. `DELETE` requires none and answers 204 for any id: the row is keyed by the caller, so
+the delete reaches one row that is theirs by construction and no check could make it safer — the scoping is in
+the key, not in a guard. What a check *would* add is a state a caller cannot leave, and it is exactly the state
+the paragraph above creates: a query unshared after selection leaves a row its owner may re-share at any time,
+resurfacing the query in a list the caller removed it from, and requiring visibility to unselect is what would
+stop them clearing it. Nothing is disclosed, because the answer does not vary with the id. Both halves are
+tested.
+
+- [x] `PUT`/`DELETE` idempotent both ways; permitted without edit rights; selecting a query the caller cannot see
       is refused; a query unshared after selection stops appearing for the subscriber; selections are per-user and
       one user's cannot be read or written by another
 
