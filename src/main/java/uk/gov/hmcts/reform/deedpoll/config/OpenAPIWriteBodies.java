@@ -21,9 +21,12 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQuerySchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.util.Arrays;
 import java.util.LinkedHashSet;
@@ -31,26 +34,27 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Describes the nine write bodies that springdoc cannot describe by reflection.
+ * Describes the ten write bodies that springdoc cannot describe by reflection.
  *
  * <p><strong>Why any of this is needed.</strong> Every write payload in this service binds as a keyed map rather
  * than as declared components, because a patch turns on the difference between an omitted field and an explicit
  * null and a record of nullable components cannot express that -- the argument is in {@code KeyedRequestBody}.
- * The consequence is that the eight JSON write bodies are classes with no fields, so springdoc reflects over them
+ * The consequence is that the nine JSON write bodies are classes with no fields, so springdoc reflects over them
  * and publishes {@code CreateCaseRequest: {}}. The upload is worse: it takes a
  * {@code MultipartHttpServletRequest}, which springdoc does not recognise as a body at all, so that operation is
  * published with no request body whatsoever.
  *
  * <p>That matters because of what the document is for. It is published to {@code hmcts/cnp-api-docs} for
  * consumers to generate clients from, and a consumer cannot tell an empty schema from a body that takes no
- * fields. They would get eight request types with no properties and an upload they cannot call, with nothing in
+ * fields. They would get nine request types with no properties and an upload they cannot call, with nothing in
  * the document hinting that anything is missing -- which is the failure {@code OpenAPIPublisherTest} was written
  * to prevent for the paths, reaching the bodies instead. A published document that is silently empty is worse
  * than no document, because a consumer trusts it.
  *
  * <p><strong>Generated from the domain's own tables, not restated here.</strong> The case body's fields come from
  * {@link DeedPollSchemas#writeBodyFields()}, which is the table that validates them; the note limit comes from
- * {@link NoteForm#MAX_NOTE_LENGTH}; the witness caps come from {@link WitnessSchemas}; the upload's direction
+ * {@link NoteForm#MAX_NOTE_LENGTH}; the witness caps come from {@link WitnessSchemas}; the referral's caps and
+ * reason vocabulary come from {@link ReferralSchemas} and {@link ReferralReason}; the upload's direction
  * values come from {@link DocumentDirection}. A field
  * added to the schema therefore appears in the document without anyone editing this file, which is the only way
  * a description of sixty-seven fields stays true.
@@ -66,6 +70,12 @@ public class OpenAPIWriteBodies {
     private static final String UPDATE_WITNESS = "UpdateWitnessRequest";
     private static final String CREATE_SAVED_QUERY = "CreateSavedQueryRequest";
     private static final String UPDATE_SAVED_QUERY = "UpdateSavedQueryRequest";
+
+    /** The referral create body. There is no update sibling: amending a referral is raising another. */
+    private static final String CREATE_REFERRAL = "CreateReferralRequest";
+
+    /** The referral's reasons array, named once because it is the create body's only required field. */
+    private static final String REASONS_FIELD = "reasons";
 
     /** The saved-query name, named once because it is the create body's only required field. */
     private static final String NAME_FIELD = "name";
@@ -88,6 +98,7 @@ public class OpenAPIWriteBodies {
             describeNoteBodies(openApi);
             describeWitnessBodies(openApi);
             describeSavedQueryBodies(openApi);
+            describeReferralBody(openApi);
             describeUploadBody(openApi);
         };
     }
@@ -342,6 +353,66 @@ public class OpenAPIWriteBodies {
             + ". A bare sortField with no direction is read as ascending.");
         Arrays.stream(CaseSort.Direction.values()).forEach(d -> addEnumValue(directions, d.wire()));
         return directions;
+    }
+
+    /**
+     * The one referral body: {@code reasons} required, and two fields that are required conditionally.
+     *
+     * <p>The vocabularies and the caps are {@link ReferralReason} and {@link ReferralSchemas}'s own, so a member
+     * added to the enum appears in the document without this file being edited.
+     *
+     * <p><strong>The two conditional rules are described in prose rather than as constraints</strong>, because
+     * OpenAPI has no way to say "required when another field has a particular value" that a generated client
+     * would honour. Declaring {@code notes} required outright would describe a stricter API than exists -- most
+     * referrals need no explanation -- so the document says required-when, and the service is what enforces it.
+     *
+     * <p>There is no update body, and that is the shape of the feature: a referral is not edited in place, so
+     * the only write that carries a payload is the create.
+     */
+    private void describeReferralBody(OpenAPI openApi) {
+        Schema<?> create = schema(openApi, CREATE_REFERRAL);
+        if (create == null) {
+            return;
+        }
+        create.setType("object");
+        create.setProperties(null);
+
+        StringSchema reason = new StringSchema();
+        reason.setDescription("Matched exactly, as the stored form is the wire form.");
+        Arrays.stream(ReferralReason.values()).map(Enum::name).forEach(reason::addEnumItemObject);
+        create.addProperty(REASONS_FIELD, new ArraySchema()
+            .items(reason)
+            .minItems(1)
+            .description("Why the case is being referred. At least one, de-duplicated, and stored in the order "
+                + "they are sent. " + ReferralReason.Other + " requires notes."));
+        create.addProperty("notes", new StringSchema()
+            .maxLength(ReferralSchemas.MAX_NOTES_LENGTH)
+            .description("The single free-text field: the explanation " + ReferralReason.Other + " requires and "
+                + "the general referral note at once, rather than two near-identical fields. Trimmed, and a "
+                + "whitespace-only value counts as none."));
+        create.addProperty("urgency", referralUrgency());
+        create.addProperty("urgencyReason", new StringSchema()
+            .maxLength(ReferralSchemas.MAX_URGENCY_REASON_LENGTH)
+            .description("Why the referral jumped the queue. Required when urgency is " + Urgency.Urgent + "."));
+        create.addRequiredItem(REASONS_FIELD);
+        create.setAdditionalProperties(true);
+        create.setDescription("A referral of the case to the judiciary, raised unclaimed into the shared pool. "
+            + "reasons is the only field required outright; notes is required when " + ReferralReason.Other
+            + " is among them, and urgencyReason when urgency is " + Urgency.Urgent + ". The case comes from "
+            + "the path, the state is always Open, and there is no target judge -- who picks a referral up is a "
+            + "later transition -- so state, migrated and any assignee are ignored rather than refused, as any "
+            + "unknown key is. A case may hold many referrals over its lifetime but only one that is not "
+            + "closed or withdrawn, so a second live referral is a 409 rather than a 400.");
+    }
+
+    /** The referral's own urgency, which is the case's enum reused and may differ from the case's value. */
+    private Schema<?> referralUrgency() {
+        StringSchema urgency = new StringSchema();
+        urgency.setDescription("The referral's own urgency, separate from the case's and defaulting to "
+            + Urgency.Normal + ". Matched exactly: an unknown value is refused rather than read as "
+            + Urgency.Normal + ", because that would drop the one signal that gets a referral looked at.");
+        Arrays.stream(Urgency.values()).map(Enum::name).forEach(urgency::addEnumItemObject);
+        return urgency;
     }
 
     /**

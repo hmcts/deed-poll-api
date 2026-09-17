@@ -324,10 +324,25 @@ Then the spec, **in this same task** so `build` stays green:
   the endpoint table — add the four rows), `docs/RESUME.md`, `CLAUDE.md`. Leave `CasePaging.DEFAULT_SIZE`
   and the 25 MB upload constants alone.
 
-- [ ] Four operations live, DTOs not entities, referral read is a single round trip; `CASEWORKER_PATHS` has
+- [x] Four operations live, DTOs not entities, referral read is a single round trip; `CASEWORKER_PATHS` has
       the three new paths and the count is `29`; `OpenAPIPublisherTest` green; every prose operation count
       updated by grepping, not from a list; controller test boots the context and covers create (incl. the
       409), list newest-first, get, and withdraw (incl. the terminal 409); `./gradlew build` green
+
+**One piece of work this task's text does not mention, and it was mandatory rather than optional:
+`CreateReferralRequest` is the tenth keyed write body, and `OpenAPIPublisherTest.documentsEveryKeyedWriteBody`
+scans the classpath for `KeyedRequestBody` subclasses** — so a new body that `OpenAPIWriteBodies` does not
+describe fails `build` on the commit that introduces it, publishing `CreateReferralRequest: {}` to
+`cnp-api-docs` otherwise. `describeReferralBody` is that description, generated from `ReferralReason` and
+`ReferralSchemas` rather than restated, and the two conditional rules are carried in prose because OpenAPI
+cannot express "required when another field has a particular value" in a form a generated client would honour.
+That test was added *because* the saved-query bodies shipped empty, and it did its job here.
+
+Two smaller choices: withdrawal answers **200 with the withdrawn referral** rather than 204, because the row
+survives the transition and its new state is what a client re-rendering the tab needs; and the controller test
+drives `Claimed`/`Decided`/`Closed` straight into the repository to prove the two guards are written against
+terminal-ness and not against `Open`, which is the one assertion that cannot wait for api-2's transitions.
+Counts after this task, measured from `build/test-results`: **1,798 unit / 7 integration** (from 1,768 / 7).
 
 ### Task 4: Security and full validation
 
