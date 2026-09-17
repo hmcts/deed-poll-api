@@ -403,9 +403,34 @@ the instruction to grep kept it from going stale:
 git grep -inE '\b(18|eighteen|25|twenty-five)\b'
 ```
 
-- [ ] Security tests for namespace separation, no-roles, cross-user selection and unshared access; the spec
+- [x] Security tests for namespace separation, no-roles, cross-user selection and unshared access; the spec
       publishes all seven new operations; every stated operation count updated by grepping, not from a list;
       `OpenAPIPublisherTest` green
+
+**As built, three things a reader would otherwise have to reconstruct.**
+
+The spec half was already done, by task 5 rather than here: adding `q` to the published parameters meant booting
+`OpenAPIPublisherTest`, which fails on the count, so the three paths and 18 → 25 landed in that commit. What was
+left for this task was the *prose* count, which no test asserts — `README.md` ("Eighteen" → "Twenty-five", plus
+the seven table rows), `CLAUDE.md`, `docs/RESUME.md` and `api/caseworker/controller/package-info.java`. The grep
+also found `docs/plans/scope-gap-questions.md` claiming `OpenAPIPublisherTest` "says eighteen"; its neighbouring
+line about the *vendored* snapshot in `deed-poll-admin` is date-stamped "as at 2026-09-13" and stays as written,
+now flagged as behind this service rather than in step with it. `docs/plans/completed/witness-delete.md` states
+17 → 18 as history and is deliberately left alone.
+
+`package-info.java` needed two edits, not one. Its running-total sentence is the obvious one; the other is its
+claim that "there are two deletes, a note's and a witness's, and `DEEDPOLL_ADMIN` is required for both", which
+four deletes and an ownership rule made false. A count is not the only thing a new resource makes stale.
+
+**The new class is `SavedQuerySecurityTest`, and it is a plain unit test on purpose** — it asserts the four
+properties *through `SavedQueryService`*, which is the gap the two existing unit classes name and cannot close:
+`SavedQueryPermissionsTest` says outright that it cannot tell whether the service calls it, and
+`SavedQuerySelectionTest` covers the selection writes. So what is here is the read paths being scoped to the
+caller (the finders carry the caller's own id, verified as interactions, so another user's rows are never loaded
+rather than loaded and filtered) and the write paths refusing before they write. Thirteen tests, no container, so
+CI runs all of them. Its namespace rule is vacuous today for the same reason `NamespaceSeparationSecurityTest`'s
+three are — the citizen namespace is empty — and that is stated on the method; the mapping and
+no-entity-on-the-controller assertions either side of it are not.
 
 ### Task 7: Full validation
 

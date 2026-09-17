@@ -29,11 +29,11 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 
 ## The API surface
 
-Eighteen caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
+Twenty-five caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/caseworker/cases` | The case list, filtered by a saved-query `filter` key |
+| GET | `/caseworker/cases` | The case list — a `filter` key, `where` conditions, a `q` search term, `sort`, `page` and `size` |
 | GET | `/caseworker/cases/field-rules` | Show / hide / mandate rules for a `type`, `migrated` and `publishToGazette` |
 | GET | `/caseworker/cases/{id}` | One case **with** its notes, witnesses and documents — one call, not four |
 | GET | `/caseworker/document-types` | Every supporting-document type, with its applicability arrays |
@@ -51,10 +51,39 @@ Eighteen caseworker operations. `/swagger-ui.html` is the authority; this table 
 | DELETE | `/caseworker/cases/{id}/witnesses/{witnessId}` | Delete a witness — **Administrators only**, 204, and 404 through the wrong case |
 | POST | `/caseworker/cases/{id}/documents` | Upload a file (multipart) and record its document row |
 | GET | `/caseworker/cases/{id}/documents/{documentId}/file` | Stream a document's stored file back |
+| GET | `/caseworker/saved-queries` | The shared library plus the caller's own, each flagged `selected` and `editable` |
+| POST | `/caseworker/saved-queries` | Save a query — `name` required, unshared unless `shared` says otherwise |
+| GET | `/caseworker/saved-queries/{id}` | One saved query, if it is shared or theirs |
+| PATCH | `/caseworker/saved-queries/{id}` | Amend one — the owner, or an **Administrator** if it is shared |
+| DELETE | `/caseworker/saved-queries/{id}` | Delete one — same rule, 204, and its subscribers' selections cascade |
+| PUT | `/caseworker/saved-queries/{id}/selection` | Add it to the caller's own list — 204, idempotent, no edit rights needed |
+| DELETE | `/caseworker/saved-queries/{id}/selection` | Remove it from the caller's own list — 204 whether or not it was in it |
 
 There are deliberately **no** case deletes, no document-type writes and no `validate` endpoint. The domain
 implements and tests them; nothing consumes them, and the sibling prototype's mistake was building an API
-for an imagined consumer.
+for an imagined consumer. There is also no *duplicate* endpoint for a saved query: a client reads one and posts
+a new one with a new name, and there is no server-side invariant an endpoint would protect.
+
+The seven saved-query routes were the nineteenth to twenty-fifth, and they are the first resource here that is
+**not nested under a case** — a saved query is a way of finding cases rather than a thing belonging to one. The
+notes and witnesses routes get their scoping from the parent id in the path; this one has to get it from the
+entity, which is why its permission rules are written out rather than implied:
+
+- A query is **visible** if it is `shared` or the caller owns it. One that is neither is **404**, carrying the
+  message an id that never existed gets, so no id is discoverable by watching status codes. That includes an
+  Administrator naming somebody else's unshared query: the override reaches shared queries only, and the
+  visibility rule is what enforces that rather than a second check.
+- A query the caller can see but may not change is **403**. They are already looking at it, so there is nothing
+  left to conceal, and a 404 there would be a lie a client cannot act on.
+- **Selection is a separate sub-resource** rather than a field on the query. Amending a query is the owner's
+  right; choosing to see it is every caseworker's, and keeping them apart is what stops "add this to my list"
+  needing edit permission. A saved query is a **live reference, not a copy** — subscribers read the owner's
+  edits, because a shared definition each subscriber owns a diverging copy of is the spreadsheet this service
+  replaces.
+
+Sharing is a **library, not a push**: publishing a query makes it findable, and each caseworker chooses which
+found queries appear in their own navigation. Sharing with a *named* colleague is deliberately absent — this
+service has no user directory, and a query is already a URL, so pushing one at somebody is a link in Slack.
 
 The witness delete was the eighteenth, and is **the one witness route restricted by role**: the capability
 matrix puts "Delete witnesses" at ✗ for Basic User and ✓ for Administrator, the same split as deleting a
