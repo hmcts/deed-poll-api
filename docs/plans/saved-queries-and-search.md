@@ -58,11 +58,25 @@ adds no cross-team dependency. Named recipients remain an addition to the same t
    are exactly the parts of the list URL that define a view. Page is already dropped when a query is applied —
    page 4 of a previous result set is not a page of this one, and a saved query reopening on page 4 of results
    that have since changed is worse than useless.
-6. **Conditions are stored as `jsonb` and validated on write by the same `FormFields` validator that validates a
-   live query.** Not a child table: ordering and a join buy nothing here, and one table keeps the resource
-   atomic. **Validated on write, not on read** — a query whose field was later renamed fails when it is *run*,
-   with api's existing 400, which is the same error the caseworker would get from a hand-edited URL. Do not add a
+6. **Conditions are stored as `jsonb` and validated on write by the same validator that validates a live query.**
+   Not a child table: ordering and a join buy nothing here, and one table keeps the resource atomic.
+   **Validated on write, not on read** — a query whose field was later renamed fails when it is *run*, with api's
+   existing 400, which is the same error the caseworker would get from a hand-edited URL. Do not add a
    re-validation pass on read; it would put the cost of every rename on every list load.
+
+   **The stored shape is a JSON array of the wire strings, not structured objects.** The live-query validator is
+   `CaseQuery.parse(List<String> where)` (`CaseQuery.java:122`), and it takes the raw repeated `where` parameter —
+   `field:operator:value`, split on the first two colons. So `conditions` is `["state:in:ENROLED,SUBMITTED", …]`:
+   exactly what the URL carried. Reuse is then literal — `CaseQuery.parse` called on the deserialised array, with
+   no adapter, no second parser and no mapping layer — and a saved query round-trips a list URL byte for byte,
+   which is what makes decision 3's client-side duplicate a `GET` then a `POST` of the same value.
+
+   **Do not model conditions as structured JSON objects** (`{field, operator, values}`). It looks tidier and it
+   makes "the same validator" impossible: `parse` would have to be split, or a second validator written, and
+   decision 6's whole point is that there is one. It would also mean the stored form and the URL form can drift.
+   `sortField`/`sortDirection` are stored decomposed rather than as `CaseSort`'s `field:asc` wire string only
+   because they are two bounded scalars worth querying separately; `CaseSort.parse` (`CaseSort.java:127`) is still
+   the validator, so recompose the wire string and hand it that rather than re-checking the parts by hand.
 7. **Selection is a separate sub-resource, not a field on the query.** `PUT` and `DELETE` on
    `/caseworker/saved-queries/{id}/selection`, idempotent both ways. A `PATCH` on the query itself would mean
    *"editing the query"*, which is the owner's right — whereas choosing to see it is every user's right. Keeping
@@ -70,11 +84,18 @@ adds no cross-team dependency. Named recipients remain an addition to the same t
 8. **The search term is one parameter, `q`, on the existing `GET /caseworker/cases`.** Extend, do not add
    `POST .../search` — same reasoning as decision 1 of the existing query plan: a search must be bookmarkable and
    survive the back button.
-9. **`q` matches a reference exactly, or names loosely, and the two are ORed.** References: `referencenumber` and
-   `displayReference`, tolerant of case, hyphens and surrounding whitespace, so `kbdp2026-10100` and
-   `KBDP202610100` both find the same case. Names: `newForename`, `newSurname`, `oldForename`, `oldSurname`,
-   `parents`, `representativeName`. **Not addresses and not narrative** — those are excluded from the query
-   builder too, for the same reason.
+9. **`q` matches a reference exactly, or names loosely, and the two are ORed.** References: `displayReference` and
+   `referencenumber`. Names: `newForename`, `newSurname`, `oldForename`, `oldSurname`, `parents`,
+   `representativeName`. **Not addresses and not narrative** — those are excluded from the query builder too, for
+   the same reason.
+
+   **The two reference columns are different types and must be matched differently.** `displayReference` is `text`
+   (`V2__deed_poll.sql:28`) and holds the rendered `{prefix}{year}-{serial}` form, so it is the one that takes the
+   case-, hyphen- and whitespace-tolerant normalisation — `kbdp2026-10100` and `KBDP202610100` both finding the
+   same case is a statement about *this* column. `referencenumber` is `integer` (`V2__deed_poll.sql:27`,
+   `DeedPoll.java:80`) and holds only the serial component: **do not apply `lower()` or hyphen-stripping to it.**
+   Match it only when the whole normalised term parses as an integer, and compare numerically. A term that does
+   not parse contributes no `referencenumber` predicate at all rather than a cast that Postgres would refuse.
 10. **`q` ANDs with `filter` and `where`.** So "Smith, in Enroled, received in June" works. `q` is ORed
     internally across the fields in decision 9 and ANDed as a whole — get the bracketing right, because an
     accidental flat OR makes every condition ineffective and still returns plausible-looking rows.
@@ -174,9 +195,11 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 `build` is compile plus checkstyle across all five source sets, plus `test`, plus `integration`
 (`build.gradle:113`).
 
-**Take the baseline from master immediately before starting** and record it. It was 1,488 tests unflagged / 879
-with `INTEGRATION_TESTS_ENABLED=false`, plus 5 integration, when `tag-container-backed-tests.md` measured it — but
-work lands steadily, so measure rather than quote.
+**The baseline is measured, on this branch, at the point this plan starts:** `./gradlew build` green with
+**1,488 unit tests in 185 classes** and **6 integration tests in 3 classes**. Measured 2026-09-17 by summing
+`tests="…"` across `build/test-results/{test,integration}/*.xml`, which is how Task 7 should re-measure rather
+than reading a Gradle summary line. Note the integration figure: `tag-container-backed-tests.md` said 5, and it is
+6 — so re-measure any number this plan or another quotes, including this one.
 
 **A worker or container startup timeout is an environment failure, not a code failure.** This devcontainer's
 filesystem is slow enough that process startup races time out — the sibling repo's vitest suite failed 22 workers
@@ -188,36 +211,66 @@ rather than an assertion, **re-run before investigating**, and consider running 
 
 ### Task 1: Schema and entities
 
-`V5__saved_queries.sql`: two tables, mixed-case columns.
+`V5__saved_queries.sql`: two tables, **lower-case prefixed table names and mixed-case columns**. Both halves of
+that matter and they come from different reasons — see the naming note below before writing the DDL.
 
-`savedQuery` — `id` uuid pk, `name` text not null, `description` text null, `shared` boolean not null default
-false, `ownerId` text not null, `ownerName` text not null, `filter` text null, `conditions` jsonb not null,
+`deedpoll_savedquery` — `id` uuid pk, `name` text not null, `description` text null, `shared` boolean not null
+default false, `ownerId` text not null, `ownerName` text not null, `filter` text null, `conditions` jsonb not null,
 `sortField` text null, `sortDirection` text null, `searchTerm` text null, plus the audit columns this schema
 already uses.
 
-`savedQuerySelection` — `savedQueryId` uuid not null referencing `savedQuery` **on delete cascade**, `userId` text
-not null, composite primary key of the two. Cascade matters: decision 2 allows an owner to delete a query others
-have selected, and orphaned selection rows would resurface as broken navigation entries.
+`deedpoll_savedqueryselection` — `savedQueryId` uuid not null referencing `deedpoll_savedquery` **on delete
+cascade**, `userId` text not null, composite primary key of the two. Cascade matters: decision 2 allows an owner to
+delete a query others have selected, and orphaned selection rows would resurface as broken navigation entries.
+
+**On the naming, because the two conventions here have different justifications and an earlier draft of this plan
+got it wrong.** Table names follow the existing six exactly — `deedpoll_`-prefixed, all lower case
+(`deedpoll_deedpoll`, `deedpoll_notes`, `deedpoll_witness`, `deedpoll_supportingdocument`,
+`deedpoll_supportingdocumenttype`, `deedpoll_referencecounter`). **Columns stay mixed case**, because
+`globally_quoted_identifiers` and `PhysicalNamingStrategyStandardImpl` are set service-wide and apply to these
+tables too: a `snake_case` column here would be quoted as written and then not found. So this is not a case of
+copying the reference schema — saved queries are new behaviour with nothing in the reference to port — it is that
+the *mechanism* enforcing mixed-case columns is global, whereas nothing mechanical constrains a table name and
+consistency with the existing six is therefore the whole argument. Agreed with Steve 2026-09-17. **Implement, do
+not revisit**, and in particular do not "correct" the table names to match the column style.
+
+"the audit columns this schema already uses" means, exactly, the four at `V2__deed_poll.sql:141-144`:
+`"createdOn" timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP`, `"modifiedOn" timestamp(3) NOT NULL` with **no**
+default, `"createdBy" varchar(200)` and `"modifiedBy" varchar(200)`. `modifiedOn` is deliberately not defaulted —
+the application always writes it — so copy that rather than adding a default. Note `createdBy`/`modifiedBy` hold a
+display name, which is why decision 4's `ownerId` is a *separate* column and not a reuse of `createdBy`.
 
 Entities under `entity/`, repositories under `repository/`, both following the existing pattern.
 
+**The readiness check is a list that must be edited, not a check that discovers tables.** `DeedPollSchema.java:49`
+holds the six expected table names literally; add both new tables there or readiness will pass while describing a
+schema it is no longer checking.
+
 - [ ] `V5__saved_queries.sql` added and no committed migration edited; both entities validate against it under
-      `ddl-auto: validate`; `conditions` mapped with `@JdbcTypeCode(SqlTypes.JSON)`; selection cascades on delete;
-      health check still reports the schema it expects
+      `ddl-auto: validate`; audit columns match `V2`'s types and null/default choices exactly; `conditions` mapped
+      with `@JdbcTypeCode(SqlTypes.JSON)`; selection cascades on delete; both new tables added to
+      `DeedPollSchema`'s expected list and readiness green
 
 ### Task 2: The domain model and write-time validation
 
-`domain/savedqueries/`: the saved-query type, and validation of a submitted one. **Reuse the existing condition
-validator** — the one `FormFields` drives for a live query — rather than writing a second. Decision 6: validate on
-write, not on read.
+`domain/savedqueries/`: the saved-query type, and validation of a submitted one. **Reuse the existing validators,
+do not write second ones.** Decision 6: validate on write, not on read.
 
-Name required and bounded; description optional and bounded; `filter` must be one of the known filter keys;
-`sortField` must be a sortable field and `sortDirection` one of asc/desc; conditions validated exactly as a live
-query's are, with the same 400 shape and the same 20-condition cap.
+The validators to call, by name, because "the existing one" has been ambiguous once already:
 
-- [ ] Conditions validated by the same validator as a live query, not a copy; name/description bounds enforced;
-      an unknown filter key, an unsortable sort field and an invalid condition each 400 with the field named; the
-      condition cap applies; unit tests needing no container for all of it
+- **Conditions** — `CaseQuery.parse(List<String> where)` (`CaseQuery.java:122`), on the deserialised jsonb array.
+  It already enforces the 20-condition cap (`MAX_CONDITIONS`) and already throws `InvalidInputError` carrying one
+  `FieldError` per bad condition, addressed to `where.{index}`. That is the 400 shape; do not rebuild it.
+- **Sort** — `CaseSort.parse(String sort)` (`CaseSort.java:127`), given the recomposed `field:direction` string.
+  `CaseSort.sortableFields()` is the authority on which fields are sortable; do not duplicate that set.
+- **Filter** — `ListFilters.filterFor(Object key)` (`ListFilters.java:81`), against `LIST_FILTERS`.
+
+Name required and bounded; description optional and bounded — those two are the only genuinely new validation here.
+
+- [ ] Conditions validated by `CaseQuery.parse` itself and sort by `CaseSort.parse`, neither reimplemented nor
+      wrapped in a second parser; name/description bounds enforced; an unknown filter key, an unsortable sort field
+      and an invalid condition each 400 with the field named; the condition cap applies **because `CaseQuery`
+      applies it**, not via a new check; unit tests needing no container for all of it
 
 ### Task 3: The CRUD endpoints and their permissions
 
@@ -227,13 +280,31 @@ Visibility on read: a query is visible if `shared` or `ownerId` is the caller. `
 each flagged with whether the caller has selected it. Edit and delete: owner, **or** `DEEDPOLL_ADMIN` when the
 query is shared — decision 2, including the refinement that the override does not reach unshared queries.
 
-Follow the witness-delete ordering guard: **check permission before resolving the entity**, so a refused caller
-addressing a query that does not exist gets 403 rather than 404, and cannot use the difference to discover which
-ids exist.
+**On the ordering guard, and why this resource inverts the witness-delete one.** Witness delete could check
+permission before resolving the entity because its check is a *role* check — entity-independent, so it can run
+first. **A saved query's permission is a property of the entity** (`shared`, and whether `ownerId` is the caller),
+so it cannot be checked before the entity is read. Do not attempt it, and do not invent a role that would make it
+possible.
+
+The property that guard was protecting is still required, and is achieved the other way round: **resolve, then
+refuse — and return the same status for "invisible" as for "absent".** A caller who cannot see a query gets
+**404**, identically to a caller naming an id that has never existed, so the two are indistinguishable and no id is
+discoverable. Concretely:
+
+- Not visible (not shared, not theirs) → **404**, for every one of the five operations.
+- Visible but not editable (someone else's shared query, caller is not an admin) → **403**. The caller can already
+  see it, so there is nothing left to conceal, and 404 here would be a lie a client cannot act on.
+- Visible, shared, caller is `DEEDPOLL_ADMIN` → permitted for edit and delete.
+- Visible, unshared, caller is `DEEDPOLL_ADMIN` but not the owner → cannot arise: an admin does not see another
+  user's unshared query at all, so it is the 404 case. Test it as such, and note the visibility rule is what
+  enforces decision 2's refinement — there is no second check to write.
+
+**Implement this, do not revisit.** Both statuses are deliberate and a reviewer who has not read this paragraph
+will read the 404 as a bug.
 
 - [ ] Five operations; visibility is shared-or-mine; edit/delete allow owner and allow admin **only when shared**;
-      an admin is refused an unshared query they do not own; refuse-before-resolve asserted; a caller with no
-      roles fails closed; DTOs not entities
+      an admin naming another user's unshared query gets 404 and cannot distinguish it from an id that never
+      existed; a visible-but-not-editable query gets 403; a caller with no roles fails closed; DTOs not entities
 
 ### Task 4: Selection
 
@@ -277,6 +348,21 @@ reaching another's selections, and an unshared query reached by a non-owner.
 
 Then the published document. **`OpenAPIPublisherTest` asserts the caseworker operation count outright**, so it
 fails if this is missed — which is the point. The count moves 18 → 25.
+
+**Updating the number alone will not make it pass.** The count is summed *over a hard-coded path list* —
+`CASEWORKER_PATHS` at `OpenAPIPublisherTest.java:61`, ten entries today — and a second test asserts the published
+document contains all of them (`:96`). Three paths are new and must be added to that list, or the sum silently
+misses all seven operations and the assertion fails against 18 no matter what number is written:
+
+```
+/caseworker/saved-queries
+/caseworker/saved-queries/{id}
+/caseworker/saved-queries/{id}/selection
+```
+
+The list-and-count pairing is deliberate — the comment at `:113` explains that neither alone can distinguish a new
+verb on a known path from a new path — so update both, and keep the comment's arithmetic true rather than leaving
+it describing eighteen.
 
 **Grep for the number rather than trusting a list.** It is stated in at least six places: `OpenAPIPublisherTest`
 (both the path list and the `@DisplayName`), `api/caseworker/controller/package-info.java`, `README.md`,
