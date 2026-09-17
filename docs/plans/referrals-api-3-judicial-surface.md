@@ -88,13 +88,14 @@ UX one. The three rules below are the plan.
    engaged. Reading a referral the judge does *not* hold (a pool referral they have not claimed) touches
    nothing.
 
-8. **The judicial application view is a narrow projection whose exact field set is deferred to a flag.** It
-   carries what a judge needs to direct: the reference, application type, old and new names, and the
-   referral's own reasons/notes/urgency. It **excludes** the caseworker-only and administrative fields
-   (payment/fee references, internal audit trails, the admin-only privacy editability). Because "what a
-   judge may and must see to make a lawful direction" is a legal/policy question, not an engineering one,
-   this plan implements a defensible **minimum** and flags the field set for confirmation — see the flags at
-   the end. Notes are returned via the existing `NoteService.findNotes`, read-only.
+8. **The judicial application view is a narrow projection, and its field set is now CONFIRMED (Steve,
+   2026-09-17).** It carries what a judge needs to direct — the reference, application type, old and new
+   names, and the referral's own reasons/notes/urgency — and it **excludes** the caseworker-only and
+   administrative fields (payment/fee references, internal audit trails, the admin-only privacy editability).
+   This was written as a defensible *minimum* pending a legal/policy call ("what must a judge see to make a
+   lawful direction, and what must they not?"); **Steve has confirmed this exact set is correct.** Implement
+   it as stated — it is no longer provisional. Notes are returned via the existing `NoteService.findNotes`,
+   read-only. Any *addition* to this set is a fresh legal/policy decision, not an engineering one.
 
 ## The endpoints
 
@@ -259,12 +260,13 @@ grep finds. Add a judicial `package-info` operation note.
 These are the points where I made a defensible call to keep the plan whole, but that you should confirm or
 redirect. None blocks the plan being *written*; some should be settled before it is *run*.
 
-1. **The judicial application view's exact field set (plan decision 8) is a legal/policy question I could
-   only bound, not answer.** I implemented a defensible minimum — reference, application type, old/new
-   names, plus the referral's reasons/notes/urgency — and excluded payment/fee references, internal audit
-   trails and the admin-only privacy fields. **What must a judge see to make a lawful direction, and what
-   must they not see?** This is the one field in the feature where "too much" is a disclosure and "too
-   little" blocks a lawful decision. Worth a short conversation with the business/legal before api-3 runs.
+1. **RESOLVED (Steve, 2026-09-17): the judicial application view's field set (plan decision 8) is
+   confirmed.** This was the one field in the feature where "too much" is a disclosure and "too little"
+   blocks a lawful decision, so it was implemented as a defensible minimum — reference, application type,
+   old/new names, plus the referral's reasons/notes/urgency, excluding payment/fee references, internal
+   audit trails and the admin-only privacy fields — pending a legal/policy call. **Steve has confirmed that
+   exact set is correct.** Decision 8 is no longer provisional; build it as stated. Any later *addition* to
+   the set reopens the legal/policy question.
 
 2. **`/judicial/**` is a new third namespace (plan decision 1).** It sits alongside `caseworker` and the
    reserved-empty `citizen`. I judged this cleaner and safer than gating a subset of `/caseworker/**` by
