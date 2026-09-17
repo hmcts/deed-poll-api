@@ -12,6 +12,7 @@ import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
@@ -54,9 +55,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     private static final Path PUBLISHED_SPEC = Paths.get("/tmp/openapi-specs.json");
 
     /**
-     * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them plus the witness routes
-     * added afterwards. Listed rather than counted, because a count agrees with a spec that documents the right
-     * number of the wrong things.
+     * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
+     * added afterwards and the saved-query routes after those. Listed rather than counted, because a count agrees
+     * with a spec that documents the right number of the wrong things.
      */
     private static final List<String> CASEWORKER_PATHS = List.of(
         "/caseworker/cases",
@@ -68,7 +69,10 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/cases/{id}/witnesses",
         "/caseworker/cases/{id}/witnesses/{witnessId}",
         "/caseworker/cases/{id}/documents",
-        "/caseworker/cases/{id}/documents/{documentId}/file"
+        "/caseworker/cases/{id}/documents/{documentId}/file",
+        "/caseworker/saved-queries",
+        "/caseworker/saved-queries/{id}",
+        "/caseworker/saved-queries/{id}/selection"
     );
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -96,7 +100,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(paths.fieldNames()).toIterable().containsAll(CASEWORKER_PATHS);
     }
 
-    @DisplayName("Documents the eighteen caseworker operations and the token they need")
+    @DisplayName("Documents the twenty-five caseworker operations and the token they need")
     @Test
     void documentsTheCaseworkerOperations() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -106,16 +110,18 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Eighteen operations across ten paths: `/caseworker/cases` and the notes and witnesses collections each
-        // carry a GET and a POST, the case carries a GET and a PATCH, and the note and the witness each carry a
-        // GET, a PATCH and a DELETE -- the note's since 2026-09-08, the witness's since the Administrator gate
-        // landed. Both the paths and the count are asserted because neither alone is enough: a count could not
-        // tell a new verb on a known path from a new path, and the path list could not tell a route that was
-        // removed from one that never existed.
+        // Twenty-five operations across thirteen paths: `/caseworker/cases`, the notes and witnesses collections
+        // and the saved-query collection each carry a GET and a POST, the case carries a GET and a PATCH, the
+        // note, the witness and the saved query each carry a GET, a PATCH and a DELETE, and a saved query's
+        // selection carries a PUT and a DELETE -- the note's since 2026-09-08, the witness's since the
+        // Administrator gate landed, the saved query's since the library did and the selection's with it.
+        // Both the paths and the count are asserted because neither alone is enough: a count could not tell a new
+        // verb on a known path from a new path, and the path list could not tell a route that was removed from one
+        // that never existed.
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(18);
+        assertThat(operations).isEqualTo(25);
 
         // Every one of them needs a forwarded IDAM token, which the document has to say or the client generated
         // from it cannot make a call. Declared once, globally, because the service authenticates by default.
@@ -270,7 +276,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      * <p>The same argument as the write bodies, on the way in instead of the way out. The list binds its
      * parameters from a {@code MultiValueMap} because a repeated {@code where} cannot arrive any other way, and
      * springdoc reflects that into one required parameter literally named {@code parameters} -- a document that
-     * says a bare list request is a 400 and never mentions {@code where}, {@code sort}, {@code page} or
+     * says a bare list request is a 400 and never mentions {@code where}, {@code q}, {@code sort}, {@code page} or
      * {@code size}. {@link uk.gov.hmcts.reform.deedpoll.config.OpenAPIQueryParameters} replaces it; this pins
      * that it stays replaced, because {@code deed-poll-admin} generates its client from this document and the
      * reflected form is one a client cannot call the operation with at all.
@@ -296,7 +302,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .as("and so is the schema springdoc generated for it")
             .isTrue();
 
-        assertThat(byName.keySet()).containsExactlyInAnyOrder("filter", "where", "sort", "page", "size");
+        assertThat(byName.keySet()).containsExactlyInAnyOrder("filter", "where", "q", "sort", "page", "size");
 
         // Not one of them is required: a bare list is the service's front page, and the reflected document said
         // otherwise. This is the assertion that would have caught the published form.
@@ -331,5 +337,12 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         String sort = byName.get("sort").at("/description").asText();
         CaseSort.sortableFields()
             .forEach(field -> assertThat(sort).as("the document lists %s as sortable", field).contains(field));
+
+        // The searched columns come from the matcher for the same reason, and the description has to say the
+        // matching is not fuzzy: a consumer that promised typo tolerance would be promising for the service.
+        String search = byName.get("q").at("/description").asText();
+        CaseSearch.NAME_FIELDS
+            .forEach(field -> assertThat(search).as("the document lists %s as searched", field).contains(field));
+        assertThat(search).contains("not fuzzy");
     }
 }

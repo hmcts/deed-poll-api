@@ -16,9 +16,10 @@ See `docs/RESUME.md` for the current state and `docs/plans/` for the build plans
 ## Layout
 
 ```
-api/caseworker/{controller,dto}   the caseworker HTTP surface — 18 operations
+api/caseworker/{controller,dto}   the caseworker HTTP surface — 25 operations
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
+domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
 domain/auth                       CurrentUser, IdamClaims, Role — transport-independent
 auth/                             IDAM resource-server wiring (transport)
 entity/, repository/              JPA over a Flyway-owned schema

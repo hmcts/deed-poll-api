@@ -6,13 +6,15 @@
  *
  * <p><strong>Only the operations something actually calls</strong>, derived from what the sibling
  * {@code deed-poll-admin} does: no document-type writes, no document metadata create or patch, and no
- * {@code validate} endpoint, because they have no consumer. There are two deletes, a note's and a witness's,
- * and {@code Role#DEEDPOLL_ADMIN} is required for both -- restricted in {@code NoteService.removeNote} and
- * {@code WitnessService.removeWitness} rather than here, so the rule holds for a caller that is not a route.
+ * {@code validate} endpoint, because they have no consumer. Two of the deletes are role-gated, a note's and a
+ * witness's, and {@code Role#DEEDPOLL_ADMIN} is required for both -- restricted in {@code NoteService.removeNote}
+ * and {@code WitnessService.removeWitness} rather than here, so the rule holds for a caller that is not a route.
+ * A saved query's delete is not role-gated but <em>ownership</em>-gated, with an administrator override for a
+ * shared one, in {@code SavedQueryService}; and unselecting one is nobody's privilege but the caller's own.
  * The witness writes joined on the same test: the admin renders a case's witnesses and had no way to record
  * one, so the consumer arrived and the routes followed.
  *
- * <p>Five controllers, one per written resource, plus one for the reads -- which share theirs because they are
+ * <p>Six controllers, one per written resource, plus one for the reads -- which share theirs because they are
  * one thing to a consumer, everything a caseworker screen needs before it can render:
  *
  * <ul>
@@ -21,13 +23,16 @@
  *   <li>{@code CaseworkerNoteController} -- list, add, read, amend and delete a case's notes.</li>
  *   <li>{@code CaseworkerWitnessController} -- list, add, read, amend and delete a case's witnesses.</li>
  *   <li>{@code CaseworkerDocumentController} -- upload a file, and download one.</li>
+ *   <li>{@code CaseworkerSavedQueryController} -- list, save, read, amend and delete a saved query, and select
+ *       or unselect one. The only resource here not nested under a case, because a saved query is a way of
+ *       finding cases rather than a thing belonging to one.</li>
  * </ul>
  *
  * <p><strong>Every route in this package is one of those bullets; there is no route here that no controller
  * above describes.</strong> That is the property worth stating -- a running total is not, because it goes stale
  * the moment a route is added, which is exactly how the count recorded here came to say "twelve" after the note
- * delete made it thirteen -- and the four witness routes made it seventeen, and the witness delete eighteen.
- * Read the count off the mappings when you need it.
+ * delete made it thirteen -- and the four witness routes made it seventeen, the witness delete eighteen, and the
+ * seven saved-query routes twenty-five. Read the count off the mappings when you need it.
  *
  * <p>The reason a count was ever written down: plan 01's prose says eleven, while its own task list enumerates
  * more than that -- so the shortfall was a miscount rather than a decision, the same kind its task 4 records

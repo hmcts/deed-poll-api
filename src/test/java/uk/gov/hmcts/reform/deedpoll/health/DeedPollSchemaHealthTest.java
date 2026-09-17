@@ -23,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.reference.PrismaSchema;
 
 import java.util.List;
 import java.util.Properties;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -107,19 +108,40 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
     @DisplayName("DEED_POLL_TABLES")
     class DeedPollTables {
 
+        /**
+         * Tables this service has that the reference schema does not, because they are new behaviour rather
+         * than a port. Listed here so the assertion below stays exact -- "the reference's tables plus these"
+         * -- instead of degrading to "contains at least the reference's", which would stop catching the
+         * omission it exists to catch the moment the first unported table was added.
+         */
+        private static final List<String> NOT_IN_THE_REFERENCE = List.of(
+            "deedpoll_savedquery",
+            "deedpoll_savedqueryselection"
+        );
+
         @Test
-        @DisplayName("lists exactly the tables the reference schema maps")
+        @DisplayName("lists exactly the tables the reference schema maps, plus the ones that are not a port")
         void listsExactlyTheTablesTheReferenceSchemaMaps() {
             // The list cannot be derived -- see DeedPollSchema for why deriving it from the entities would be
             // circular -- so this is what stops it silently falling behind. A model added without updating it
             // would leave readiness passing on a database that lacks the new table, which is the failure this
             // whole check exists to prevent.
-            List<String> mapped = PrismaSchema.loadReference().models().values().stream()
-                .map(PrismaSchema.Model::table)
-                .sorted()
+            List<String> expected = Stream.concat(
+                    PrismaSchema.loadReference().models().values().stream().map(PrismaSchema.Model::table),
+                    NOT_IN_THE_REFERENCE.stream())
                 .toList();
 
-            assertThat(DeedPollSchema.DEED_POLL_TABLES).containsExactlyInAnyOrderElementsOf(mapped);
+            assertThat(DeedPollSchema.DEED_POLL_TABLES).containsExactlyInAnyOrderElementsOf(expected);
+        }
+
+        @Test
+        @DisplayName("the tables that are not a port are still tables the migrations create")
+        void theTablesThatAreNotAPortAreStillCreatedByTheMigrations() {
+            // The half of the assertion above that the reference cannot supply. Nothing checks an unported
+            // name against anything, so a typo in one -- in the list, or in V5 -- would leave readiness
+            // reporting a table missing on every environment forever. Asked of the migrated schema, so it
+            // fails here if V5 stopped creating them too.
+            assertThat(schema.missingDeedPollTables()).doesNotContainAnyElementsOf(NOT_IN_THE_REFERENCE);
         }
     }
 
@@ -154,8 +176,8 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
             + "'public' would answer nothing missing")
         void reportsAllOfThemMissingAgainstAnEmptySchema() {
             // This is the reference's "looks in the schema the connection resolves to" made an assertion about
-            // behaviour instead of about the SQL string. `public` next door has all six, so a query that looked
-            // there rather than at current_schema() would answer nothing missing and pass every other test
+            // behaviour instead of about the SQL string. `public` next door has them all, so a query that
+            // looked there rather than at current_schema() would answer nothing missing and pass every other test
             // here. Plan 02 puts a `ccd` schema in this database, at which point looking in the wrong one would
             // be worse than not looking.
             probeSchemaContaining();
@@ -168,11 +190,15 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
         @DisplayName("ignores tables that are not ours")
         void ignoresTablesThatAreNotOurs() {
             // Defensive, as it is in the reference: the bound `in` list should make a stray row impossible, but
-            // one must never be read as satisfying one of ours. The count is what says so -- six tables of ours
-            // plus one of somebody else's is still nothing missing, and six of somebody else's would be six.
-            probeSchemaContaining("deedpoll_deedpoll", "deedpoll_notes", "deedpoll_witness",
-                                  "deedpoll_supportingdocument", "deedpoll_supportingdocumenttype",
-                                  "deedpoll_referencecounter", "ccd_case_data");
+            // one must never be read as satisfying one of ours. The count is what says so -- every table of
+            // ours plus one of somebody else's is still nothing missing, and only somebody else's would be all
+            // of ours missing.
+            //
+            // Built from DEED_POLL_TABLES rather than named, because a hand-written copy of the list is a copy
+            // that a new table has to be added to in two places and will not be.
+            probeSchemaContaining(Stream.concat(DeedPollSchema.DEED_POLL_TABLES.stream(),
+                                                Stream.of("ccd_case_data"))
+                                      .toArray(String[]::new));
 
             assertThat(resolvingTo(PROBE_SCHEMA).missingDeedPollTables()).isEmpty();
         }

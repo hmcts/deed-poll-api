@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.domain.auth;
 
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
+import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.WriteContext;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 
@@ -17,9 +18,18 @@ import java.util.stream.Collectors;
  * lets the same reduction serve a citizen session later.
  *
  * <p>{@link #name} is only ever used as audit text ({@code createdBy} / {@code modifiedBy}), never for
- * authorisation -- that is driven entirely by {@link #roles} -- so a wrong name cannot escalate anything.
+ * authorisation -- so a wrong name cannot escalate anything. {@link #userId} is not audit text: it is the
+ * token's subject, and it <em>is</em> used for authorisation, because a saved query's permission turns on
+ * whether the caller owns it.
+ *
+ * <p><strong>{@link #userId} is the one component the reference interface does not have</strong>, and the
+ * divergence is deliberate. The reference resolved identity from {@code x-user-roles} / {@code x-user-name}
+ * headers, which carry no subject at all, and nothing in the ported domain owned a per-user resource -- a case
+ * belongs to an applicant, not to the caseworker who logged it. Saved queries do belong to a caseworker, and a
+ * display name is not an identity: two caseworkers can share one, and one caseworker's changes over time.
+ * {@link #name} would therefore be an owner key that reassigns queries when somebody marries.
  */
-public record CurrentUser(List<Role> roles, boolean isAdmin, String name) {
+public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String userId) {
 
     /**
      * Fallback author for a write with no identified user.
@@ -31,28 +41,63 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name) {
      */
     public static final String SERVICE_ACCOUNT_NAME = "# svc_HMCTS_LCPT_Dev";
 
-    /** Nobody in particular: no roles, not an admin, attributed to the service account. */
-    public static final CurrentUser ANONYMOUS = currentUser(List.of(), null);
+    /**
+     * Nobody in particular: no roles, not an admin, attributed to the service account, and with no
+     * subject -- so {@link #requireUserId()} refuses rather than letting an unidentified write own
+     * something.
+     */
+    public static final CurrentUser ANONYMOUS = currentUser(List.of(), null, null);
 
-    public CurrentUser(List<Role> roles, boolean isAdmin, String name) {
+    public CurrentUser(List<Role> roles, boolean isAdmin, String name, String userId) {
         this.roles = List.copyOf(roles);
         this.isAdmin = isAdmin;
         this.name = name;
+        this.userId = userId;
     }
 
     /**
-     * Build a caller from a resolved set of roles and an optional display name.
+     * Build a caller from a resolved set of roles, an optional display name and the token's subject.
      *
      * <p>{@code isAdmin} is derived rather than passed, exactly as the reference derives it: a caller
      * that could assert it independently of its roles is a caller that can be wrong about it.
+     *
+     * <p>{@code userId} gets no fallback, where {@code name} gets the service account. An unattributed
+     * <em>write</em> is still a write worth recording, so a missing name is substituted; an unidentified
+     * <em>owner</em> is not an owner, and substituting a placeholder would make every such caller the same
+     * person -- each able to edit and delete the others' queries. It is left null, and
+     * {@link #requireUserId()} is where that becomes a refusal.
      */
-    public static CurrentUser currentUser(List<Role> roles, String name) {
+    public static CurrentUser currentUser(List<Role> roles, String name, String userId) {
         String trimmed = name == null ? "" : name.trim();
+        String subject = userId == null ? "" : userId.trim();
         return new CurrentUser(
             roles,
             roles.contains(Role.DEEDPOLL_ADMIN),
-            trimmed.isEmpty() ? SERVICE_ACCOUNT_NAME : trimmed
+            trimmed.isEmpty() ? SERVICE_ACCOUNT_NAME : trimmed,
+            subject.isEmpty() ? null : subject
         );
+    }
+
+    /**
+     * The caller's stable id, refusing a caller who has none.
+     *
+     * <p>Every use of {@link #userId} goes through this rather than reading the component, because all of
+     * them are authorisation decisions about an owned resource: whose query this is, and whose selections
+     * these are. A null there would make both of those questions answer "the same anonymous everybody", so
+     * failing closed is the only safe reading and it belongs in one place rather than at each call site.
+     *
+     * <p>401 rather than 403: the caller has not been identified well enough to be refused for who they
+     * are. In practice a validated IDAM token always carries a subject and {@code IdamUserInfoClient}
+     * checks userinfo agrees with it, so this is the guard for a path that does not exist yet -- a citizen
+     * session, a batch job, {@link #ANONYMOUS} -- rather than for a token IDAM would issue.
+     *
+     * @throws UnauthorizedError if the caller has no subject
+     */
+    public String requireUserId() {
+        if (userId == null) {
+            throw new UnauthorizedError("The caller has no stable identifier, so this resource has no owner");
+        }
+        return userId;
     }
 
     /**

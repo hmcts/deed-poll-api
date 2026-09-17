@@ -16,6 +16,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseQuery;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseResults;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
@@ -86,6 +87,12 @@ public class CaseworkerReadController {
      * value that is not a key and falls back to "all", which is exactly what the paragraph above describes
      * and is pinned behaviour.
      *
+     * <p><strong>{@code q} is a parameter on this operation and not a search endpoint of its own.</strong> A
+     * search has to be bookmarkable and survive the back button, which is the same reason the filter and the
+     * conditions are parameters. It ANDs with both -- {@code ?filter=open&where=type:is:Adult&q=Smith} means
+     * all three -- and ORs internally across the reference and name columns; {@code CaseSpecifications} holds
+     * the bracketing, which is the part of this that can go wrong invisibly.
+     *
      * <p>Paginated, where the list this ports was not. A default page size means a bare request no longer
      * answers every row in the table, which is the point: an unbounded list endpoint is a denial of service
      * against its own database, and {@code CasePaging} records why the cap is not the client's to raise.
@@ -99,6 +106,7 @@ public class CaseworkerReadController {
         CaseResults results = deedPolls.findDeedPolls(
             resolved,
             CaseQuery.parse(parameters.get("where")),
+            CaseSearch.parse(single("q", parameters.get("q"))),
             CaseSort.parse(single("sort", parameters.get("sort"))),
             CasePaging.parse(single("page", parameters.get("page")), single("size", parameters.get("size"))));
         return CaseListResponse.of(resolved, results);

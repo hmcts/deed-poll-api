@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -29,7 +30,8 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The translation from a validated {@link CaseQuery} into SQL, against a real Postgres.
+ * The translation from a validated {@link CaseQuery} and a {@link CaseSearch} into SQL, against a real
+ * Postgres.
  *
  * <p><strong>A real database rather than an assertion about the predicate tree.</strong> Every
  * interesting claim here is one about SQL's semantics and not the application's: that {@code lower(col)
@@ -103,10 +105,34 @@ class CaseSpecificationsTest extends AbstractPostgresContainerTest {
      * As {@link #matching(String...)}, but composed with one filter tab.
      */
     private List<String> matching(ListFilters.ListFilter filter, String... where) {
-        return deedPolls.findAll(CaseSpecifications.matching(filter, CaseQuery.parse(List.of(where)))).stream()
+        return matching(filter, CaseSearch.NONE, where);
+    }
+
+    /**
+     * As above, with a search term as well: the ids of this test's rows the whole request admits.
+     */
+    private List<String> matching(ListFilters.ListFilter filter, CaseSearch search, String... where) {
+        return deedPolls.findAll(
+                CaseSpecifications.matching(filter, CaseQuery.parse(List.of(where)), search)).stream()
             .map(DeedPoll::getId)
             .filter(mine::contains)
             .toList();
+    }
+
+    /** The ids of this test's rows one term admits, under the "all" tab and with no conditions. */
+    private List<String> searching(String term) {
+        return matching(ALL, CaseSearch.parse(term));
+    }
+
+    /**
+     * The columns a search term is matched against, read from the matcher rather than transcribed.
+     *
+     * <p>So a column added to {@link CaseSearch#NAME_FIELDS} arrives here as a new case of the sweep below
+     * and has to work, rather than being covered by whichever other column a hand-written list happened to
+     * name. Declared out here because a nested class cannot hold a static provider.
+     */
+    static List<String> nameFields() {
+        return CaseSearch.NAME_FIELDS;
     }
 
     @Nested
@@ -451,6 +477,193 @@ class CaseSpecificationsTest extends AbstractPostgresContainerTest {
                 case ListFilters.In in -> deedPolls.findByStateInOrderByCreatedOnDesc(in.states());
                 case ListFilters.NotIn notIn -> deedPolls.findOpenOrderByCreatedOnDesc(notIn.states());
             };
+        }
+    }
+
+    @Nested
+    @DisplayName("search")
+    class Search {
+
+        /**
+         * A persisted case with a rendered reference and a serial, which no patch can set.
+         *
+         * <p>Both are allocated by {@code ReferenceNumberService} on a create through the service, and
+         * {@link CaseSpecificationsTest#persisted} writes through the field registry -- which does not make
+         * either writable, deliberately. A search fixture needs specific values in both columns, so they go
+         * on with the entity's own setters.
+         */
+        private DeedPoll referenced(String displayReference, Integer serial, Object... fields) {
+            DeedPoll record = persisted(fields);
+            record.setDisplayReference(displayReference);
+            record.setReferencenumber(serial);
+            entityManager.flush();
+            return record;
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @MethodSource("uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSpecificationsTest#nameFields")
+        @DisplayName("a term matches every one of the six name columns")
+        void matchesEveryNameColumn(String field) {
+            // One case per column, so a column left out of the OR fails on its own row rather than being
+            // covered by another. Read from the same list the predicate is built from, so a column added
+            // there arrives here too.
+            DeedPoll named = persisted(field, "Threepwood");
+            persisted("referralNotes", "Threepwood was mentioned in a note");
+
+            assertThat(searching("Threepwood")).containsExactly(named.getId());
+        }
+
+        @Test
+        @DisplayName("a name match is a case-insensitive substring")
+        void matchesNamesLoosely() {
+            DeedPoll stored = persisted("newSurname", "MacDonald");
+
+            assertThat(searching("cdon")).containsExactly(stored.getId());
+            assertThat(searching("CDON")).containsExactly(stored.getId());
+            assertThat(searching("MacDonald")).containsExactly(stored.getId());
+            assertThat(searching("Macdonalds")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a term is not matched against an address or a narrative field")
+        void doesNotMatchAddressesOrNarrative() {
+            // Decision 9's exclusion, executed. A row returned because the term appeared in a referral note
+            // is a row the caseworker cannot see the reason for, and the list shows neither column.
+            persisted("applicantAddress1", "12 Threepwood Avenue");
+            persisted("referralNotes", "Spoke to Threepwood");
+            persisted("representativeAddress1", "Threepwood Chambers");
+
+            assertThat(searching("Threepwood")).isEmpty();
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @ValueSource(strings = {"KBDP2026-10100", "kbdp2026-10100", "KBDP202610100", " kbdp 2026-10100 "})
+        @DisplayName("a reference matches whatever case, hyphens and spaces it was typed with")
+        void matchesAReferenceTolerantly(String typed) {
+            DeedPoll stored = referenced("KBDP2026-10100", 10100);
+
+            assertThat(searching(typed)).containsExactly(stored.getId());
+        }
+
+        @Test
+        @DisplayName("a reference match is exact, not a substring")
+        void matchesAReferenceExactly() {
+            referenced("KBDP2026-10100", 10100);
+
+            // A reference is an identifier a caseworker copies, so a partial one matching several cases would
+            // answer a question nobody asked -- and it is the exactness that makes referenceMatch actionable.
+            assertThat(searching("KBDP2026-1010")).isEmpty();
+            assertThat(searching("2026-10100")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a term that reads as a whole number matches the serial numerically")
+        void matchesTheSerialNumerically() {
+            DeedPoll stored = referenced("KBDP2026-10100", 10100);
+            referenced("KBDP2026-10101", 10101);
+
+            assertThat(searching("10100")).containsExactly(stored.getId());
+            // Numerically and not as text: a leading zero is the same number, where a text comparison of the
+            // integer column would have had to cast it and would then miss this.
+            assertThat(searching("010100")).containsExactly(stored.getId());
+        }
+
+        @Test
+        @DisplayName("a term that is not a whole number asks nothing of the serial")
+        void asksNothingOfTheSerialForANonNumericTerm() {
+            // The failure this rules out is a 500: casting an integer column to text, or binding "10100a" to
+            // an integer parameter, is a statement Postgres refuses -- so a name search would break the list
+            // rather than returning no rows.
+            referenced("KBDP2026-10100", 10100, "newSurname", "Threepwood");
+
+            assertThat(searching("10100a")).isEmpty();
+            assertThat(searching("Threepwood")).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("a caseworker's own LIKE wildcards are content, not wildcards")
+        void escapesLikeWildcards() {
+            // A term of a bare % matching every case in the service would look like a working search, which
+            // is what makes this worth an assertion rather than a comment.
+            DeedPoll literal = persisted("newSurname", "100%");
+            persisted("newSurname", "Nothing like it");
+
+            assertThat(searching("100%")).containsExactly(literal.getId());
+            // A bare % finds the row that really contains one and not every row, which is the whole claim:
+            // unescaped it would be a wildcard and would match both of these.
+            assertThat(searching("%")).containsExactly(literal.getId());
+            assertThat(searching("_")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a term that reads as SQL matches nothing rather than everything")
+        void bindsATermThatReadsAsSql() {
+            persisted("newSurname", "Threepwood");
+
+            assertThat(searching("' OR 1=1 --")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("the term is bracketed: it ANDs with a condition rather than flattening into it")
+        void bracketsTheTermAgainstACondition() {
+            // The test that fails if the grouping is flattened. Under a flat OR, `q=Threepwood AND
+            // type:is:Adult` would return all three of these -- the two Threepwoods for the term, and the
+            // Adult for the condition -- and every one of them looks like a plausible row.
+            DeedPoll both = persisted("newSurname", "Threepwood", "type", DeedPollType.Adult);
+            persisted("newSurname", "Threepwood", "type", DeedPollType.Minor);
+            persisted("newSurname", "Elsewhere", "type", DeedPollType.Adult);
+
+            assertThat(matching(ALL, CaseSearch.parse("Threepwood"), "type:is:Adult"))
+                .containsExactly(both.getId());
+        }
+
+        @Test
+        @DisplayName("the term is bracketed against the filter tab too")
+        void bracketsTheTermAgainstTheFilter() {
+            DeedPoll open = persisted("newSurname", "Threepwood", "state", DeedPollState.Received);
+            persisted("newSurname", "Threepwood", "state", DeedPollState.Enroled);
+            persisted("newSurname", "Elsewhere", "state", DeedPollState.Received);
+
+            assertThat(matching(ListFilters.filterFor("open"), CaseSearch.parse("Threepwood")))
+                .containsExactly(open.getId());
+        }
+
+        @Test
+        @DisplayName("the reference and the names are ORed with each other, not ANDed")
+        void orsTheReferenceAgainstTheNames() {
+            // Both halves of the disjunction, in one assertion: a term that is one case's reference and
+            // another's surname finds both. ANDing the two would find neither.
+            DeedPoll byReference = referenced("KBDP2026-10100", 10100, "newSurname", "Nothing");
+            DeedPoll byName = persisted("newSurname", "KBDP2026-10100");
+
+            assertThat(searching("KBDP2026-10100"))
+                .containsExactlyInAnyOrder(byReference.getId(), byName.getId());
+        }
+
+        @Test
+        @DisplayName("an empty term narrows nothing")
+        void anEmptyTermNarrowsNothing() {
+            DeedPoll only = persisted("newSurname", "Threepwood");
+
+            assertThat(matching(ALL, CaseSearch.NONE)).containsExactly(only.getId());
+            assertThat(matching(ALL, CaseSearch.parse("   "))).containsExactly(only.getId());
+        }
+
+        @Test
+        @DisplayName("the reference-only specification is the reference half and not the names")
+        void theReferenceOnlySpecificationIgnoresNames() {
+            // What referenceMatch is computed from: it must not report a case that merely has the term in a
+            // name column, or typing a surname would redirect the caseworker into a case.
+            DeedPoll byReference = referenced("KBDP2026-10100", 10100);
+            persisted("newSurname", "KBDP2026-10100");
+
+            List<String> hits = deedPolls.findAll(CaseSpecifications.matchingReference(
+                    ALL, CaseQuery.NONE, CaseSearch.parse("kbdp202610100"))).stream()
+                .map(DeedPoll::getId)
+                .filter(mine::contains)
+                .toList();
+
+            assertThat(hits).containsExactly(byReference.getId());
         }
     }
 

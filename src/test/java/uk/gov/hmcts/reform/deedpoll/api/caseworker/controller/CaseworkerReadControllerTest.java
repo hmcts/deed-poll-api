@@ -47,6 +47,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -207,15 +208,21 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("publishes only the six columns and the id, not the whole case")
+        @DisplayName("publishes only the list columns and the id, not the whole case")
         void publishesOnlyTheListColumns() throws Exception {
             // The row shape is the data-minimisation claim CaseSummaryResponse makes, so it is asserted
             // rather than described: a list of a few thousand cases must not hand out every applicant's
-            // contact details to render six columns.
-            newCase(Map.of("applicantEmail", "ada@example.invalid", "referralNotes", "Sensitive"));
+            // contact details to render seven columns.
+            newCase(Map.of(
+                "newSurname", "Threepwood",
+                "applicantEmail", "ada@example.invalid",
+                "referralNotes", "Sensitive"));
 
             authorised(get("/caseworker/cases"))
                 .andExpect(status().isOk())
+                // The one column beyond CASE_LIST_COLUMNS, and a correctness requirement of the search: a
+                // term matching a surname must return a row that can show the surname it matched.
+                .andExpect(jsonPath("$.cases[0].newSurname").value("Threepwood"))
                 .andExpect(jsonPath("$.cases[0].applicantEmail").doesNotExist())
                 .andExpect(jsonPath("$.cases[0].applicantTelephone").doesNotExist())
                 .andExpect(jsonPath("$.cases[0].referralNotes").doesNotExist())
@@ -697,6 +704,198 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
                 return List.of();
             }
             return List.of(expected.split(","));
+        }
+    }
+
+    /**
+     * The search box, over HTTP: the {@code q} parameter end to end.
+     *
+     * <p>{@code CaseSearchTest} pins how a term is read and {@code CaseSpecificationsTest} pins what SQL does
+     * with it. What is at stake here is the whole path, and the two things only it can get wrong: the
+     * bracketing -- a term that flattens into an OR with the conditions returns plausible rows and makes every
+     * one of them ineffective -- and {@code referenceMatch}, which no layer below the response carries.
+     */
+    @Nested
+    @DisplayName("GET /caseworker/cases q")
+    class CaseListSearch {
+
+        @Test
+        @DisplayName("matches a surname, and shows the surname it matched on")
+        void matchesASurnameAndShowsIt() throws Exception {
+            // Decision 13, executed: without newSurname on the row a caseworker searching "Smith" gets a
+            // table of forenames and cannot see why any row is in it.
+            queryCase("Ada", "newSurname", "Smithson");
+            queryCase("Barnaby", "newSurname", "Jones");
+
+            authorised(get("/caseworker/cases").param("q", "smith"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.cases[0].newForename").value("Ada"))
+                .andExpect(jsonPath("$.cases[0].newSurname").value("Smithson"))
+                .andExpect(jsonPath("$.total").value(1));
+        }
+
+        @Test
+        @DisplayName("matches across the name columns, and not an address or a note")
+        void matchesAcrossTheNameColumnsOnly() throws Exception {
+            queryCase("Ada", "oldSurname", "Threepwood");
+            queryCase("Barnaby", "parents", "Threepwood and Threepwood");
+            queryCase("Cyril", "representativeName", "Threepwood & Co");
+            queryCase("Dahlia", "applicantAddress1", "12 Threepwood Avenue");
+            queryCase("Elsie", "referralNotes", "Spoke to Threepwood");
+
+            assertThat(forenamesSearching("Threepwood"))
+                .containsExactlyInAnyOrder("Ada", "Barnaby", "Cyril");
+        }
+
+        @Test
+        @DisplayName("ANDs the term with the filter tab and with a where condition")
+        void andsTheTermWithTheFilterAndTheCondition() throws Exception {
+            // The bracketing, over HTTP. Under a flat OR every one of these four rows comes back: two for the
+            // term, one for the condition and one for the tab -- and the response would look right.
+            queryCase("Wanted", "newSurname", "Threepwood", "type", DeedPollType.Adult);
+            queryCase("Wrong type", "newSurname", "Threepwood", "type", DeedPollType.Minor);
+            queryCase("Wrong name", "newSurname", "Elsewhere", "type", DeedPollType.Adult);
+            queryCase("Wrong state",
+                "newSurname", "Threepwood",
+                "type", DeedPollType.Adult,
+                "state", DeedPollState.Enroled);
+
+            authorised(get("/caseworker/cases")
+                .param("filter", "open")
+                .param("where", "type:is:Adult")
+                .param("q", "threepwood"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.cases[0].newForename").value("Wanted"))
+                // The total counts what all three admit, which is the other half of the bracketing being
+                // right: a flattened OR would report four here while showing one.
+                .andExpect(jsonPath("$.total").value(1));
+        }
+
+        @Test
+        @DisplayName("finds a case by its reference, however it was typed, and says which case it was")
+        void findsACaseByItsReference() throws Exception {
+            DeedPoll record = newCase(Map.of("newForename", "Ada"));
+            String reference = record.getDisplayReference();
+            assertThat(reference).as("premise: the create allocated a rendered reference").isNotBlank();
+
+            for (String typed : List.of(reference, reference.toLowerCase(Locale.ROOT),
+                reference.replace("-", ""), " " + reference + " ")) {
+                authorised(get("/caseworker/cases").param("q", typed))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.cases.length()").value(1))
+                    .andExpect(jsonPath("$.cases[0].id").value(record.getId()))
+                    // Decision 11: the caseworker wants the case, and the UI must not have to infer that
+                    // from total == 1 -- which is also true of a surname only one case happens to carry.
+                    .andExpect(jsonPath("$.referenceMatch").value(record.getId()));
+            }
+        }
+
+        @Test
+        @DisplayName("finds a case by the serial component alone")
+        void findsACaseByTheSerialAlone() throws Exception {
+            DeedPoll record = newCase(Map.of("newForename", "Ada"));
+            assertThat(record.getReferencenumber()).as("premise: the create allocated a serial").isNotNull();
+
+            authorised(get("/caseworker/cases").param("q", String.valueOf(record.getReferencenumber())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.cases[0].id").value(record.getId()))
+                .andExpect(jsonPath("$.referenceMatch").value(record.getId()));
+        }
+
+        @Test
+        @DisplayName("referenceMatch is null for a name search, and for a request that did not search")
+        void referenceMatchIsNullWithoutAReferenceHit() throws Exception {
+            queryCase("Ada", "newSurname", "Threepwood");
+
+            // A name search that returns exactly one row is precisely the case a consumer would otherwise
+            // have inferred a reference hit from, so it is the one worth asserting.
+            authorised(get("/caseworker/cases").param("q", "threepwood"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.referenceMatch").value(nullValue()));
+
+            authorised(get("/caseworker/cases"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referenceMatch").value(nullValue()));
+
+            authorised(get("/caseworker/cases").param("q", "nobody at all"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(0))
+                .andExpect(jsonPath("$.referenceMatch").value(nullValue()));
+        }
+
+        @Test
+        @DisplayName("referenceMatch is null for a reference the filter excludes, and the list is empty")
+        void referenceMatchRespectsTheFilter() throws Exception {
+            DeedPoll enroled = newCase(Map.of("newForename", "Done", "dateEnroled", RECEIVED));
+
+            // A redirect to a case the tab does not show would be a disclosure by another route, and it would
+            // also be a redirect out of the list the caseworker was looking at.
+            authorised(get("/caseworker/cases")
+                .param("filter", "returned")
+                .param("q", enroled.getDisplayReference()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(0))
+                .andExpect(jsonPath("$.referenceMatch").value(nullValue()));
+        }
+
+        @Test
+        @DisplayName("a term that reads as SQL matches nothing rather than everything")
+        void bindsATermThatReadsAsSql() throws Exception {
+            // The most obviously attacker-controlled value this service accepts. It is bound by the Criteria
+            // API, so it is a string that matches nothing -- and the list still answering afterwards is what
+            // says no statement was issued.
+            queryCase("Ada", "newSurname", "Threepwood");
+
+            authorised(get("/caseworker/cases").param("q", "' OR 1=1 --"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0));
+
+            authorised(get("/caseworker/cases").param("q", "%"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(0));
+
+            authorised(get("/caseworker/cases"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(1));
+        }
+
+        @Test
+        @DisplayName("refuses q given twice rather than quietly picking the first")
+        void refusesQGivenTwice() throws Exception {
+            authorised(get("/caseworker/cases").param("q", "Smith", "Jones"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("q"))
+                .andExpect(jsonPath("$.errors[0].message").value("must be given at most once"));
+        }
+
+        @Test
+        @DisplayName("a blank q is the unnarrowed list rather than a search for nothing")
+        void blankTermIsTheUnnarrowedList() throws Exception {
+            queryCase("Ada", "newSurname", "Threepwood");
+            queryCase("Barnaby", "newSurname", "Jones");
+
+            authorised(get("/caseworker/cases").param("q", "   "))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(2))
+                .andExpect(jsonPath("$.referenceMatch").value(nullValue()));
+        }
+
+        /**
+         * The {@code newForename} of every case one term admits.
+         */
+        private List<String> forenamesSearching(String term) throws Exception {
+            String body = authorised(get("/caseworker/cases").param("q", term))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+            List<String> forenames = new ArrayList<>();
+            mapper.readTree(body).get("cases").forEach(row -> forenames.add(row.get("newForename").asText()));
+            return forenames;
         }
     }
 

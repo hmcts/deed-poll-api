@@ -54,7 +54,7 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
 
     /** An Administrator: the only caller a delete admits. */
     private static final CurrentUser ADMIN =
-        CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "An Admin");
+        CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "An Admin", "admin-1");
 
     /**
      * A Basic User: authenticated and named, holding no role this service recognises.
@@ -64,7 +64,7 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
      * {@code IdamClaims}. Both are asserted anyway, for the reason {@code NoteServiceTest} records: they are
      * different claims, and they stop being the same object the moment the enum grows a second role.
      */
-    private static final CurrentUser CASEWORKER = CurrentUser.currentUser(List.of(), "A Caseworker");
+    private static final CurrentUser CASEWORKER = CurrentUser.currentUser(List.of(), "A Caseworker", "caseworker-1");
 
     /** The reference's `witness` fixture. */
     private static final Map<String, Object> WITNESS = Map.of(

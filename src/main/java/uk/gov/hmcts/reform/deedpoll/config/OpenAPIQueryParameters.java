@@ -11,6 +11,7 @@ import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
 
@@ -20,7 +21,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Describes the four query parameters of the case list, which springdoc cannot describe by reflection.
+ * Describes the five query parameters of the case list, which springdoc cannot describe by reflection.
  *
  * <p>The same problem as {@link OpenAPIWriteBodies} and for the same underlying reason, one level out: the
  * binding is a keyed map rather than declared arguments. {@code CaseworkerReadController#cases} takes a
@@ -33,13 +34,15 @@ import java.util.stream.Collectors;
  * the map into a single query parameter literally named {@code parameters}, typed as a
  * {@code MultiValueMapStringString} component, and marks it {@code required: true} -- so the document says a
  * bare {@code GET /caseworker/cases} is a 400 when it is the service's front page, says nothing about
- * {@code where}, {@code sort}, {@code page} or {@code size}, and points a generated client at a parameter that
+ * {@code where}, {@code q}, {@code sort}, {@code page} or {@code size}, and points a generated client at a
+ * parameter that
  * does not exist. {@code deed-poll-admin} is the consumer that has to build a query builder against this
  * document, and a client generated from the reflected form could not call the operation at all.
  *
  * <p><strong>Generated from the domain's own tables, not restated here</strong> -- the convention
  * {@link OpenAPIWriteBodies} sets. The operator names and their arities come from {@link QueryOperator}, the
- * sortable fields and direction tokens from {@link CaseSort}, and the page defaults and cap from
+ * searched name columns from {@link CaseSearch}, the sortable fields and direction tokens from
+ * {@link CaseSort}, and the page defaults and cap from
  * {@link CasePaging}. An operator added to the enum therefore appears in the document without anyone editing
  * this file.
  */
@@ -75,7 +78,7 @@ public class OpenAPIQueryParameters {
     }
 
     /**
-     * Drops the invented parameter and adds the four real ones, leaving {@code filter} as springdoc found it --
+     * Drops the invented parameter and adds the five real ones, leaving {@code filter} as springdoc found it --
      * that one binds as a declared {@code String} and is described correctly already.
      */
     private void replaceReflectedParameter(Operation list) {
@@ -83,9 +86,31 @@ public class OpenAPIQueryParameters {
             list.getParameters().removeIf(parameter -> REFLECTED_PARAMETER.equals(parameter.getName()));
         }
         list.addParametersItem(where());
+        list.addParametersItem(search());
         list.addParametersItem(sort());
         list.addParametersItem(page());
         list.addParametersItem(size());
+    }
+
+    /**
+     * {@code q}, the search box: one term, matched against the reference or the names.
+     *
+     * <p>The name columns are read out of {@link CaseSearch} rather than restated, for the reason the
+     * operator table is read out of {@link QueryOperator}: a column added to the matcher appears in the
+     * document without anyone editing this file. The description says the matching is substring and
+     * case-insensitive because a consumer building a search box has to know it is not fuzzy -- "Smyth" does
+     * not find "Smith", and a UI that promised it would be promising for the service.
+     */
+    private Parameter search() {
+        return queryParameter("q", new StringSchema(),
+            "A search term. Matched against the case reference exactly -- tolerant of case, hyphens and "
+                + "spaces, so `kbdp2026-10100` and `KBDP202610100` find the same case -- or as a "
+                + "case-insensitive substring of " + String.join(", ", CaseSearch.NAME_FIELDS) + ". Those two "
+                + "are ORed, and the result is ANDed with `filter` and every `where` condition. Matching is "
+                + "substring and not fuzzy: a misspelling does not match. Addresses and narrative fields are "
+                + "deliberately not searched. Longer than " + CaseSearch.MAX_TERM_LENGTH + " characters is "
+                + "truncated rather than refused. Where the term matched one case's reference exactly, the "
+                + "response's `referenceMatch` carries that case's id.");
     }
 
     /**

@@ -15,7 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A case query, and a filter's state criterion, as something the database can answer.
+ * A case query, a search term and a filter's state criterion, as something the database can answer.
  *
  * <p>This is the "how" half of the list endpoint, and {@link CaseQuery} is the "what". The split is
  * deliberate and load-bearing: decentralised CCD ships an Elasticsearch indexer, so the question a
@@ -61,9 +61,58 @@ public final class CaseSpecifications {
      * @param query the conditions, possibly {@link CaseQuery#NONE}
      */
     public static Specification<DeedPoll> matching(ListFilters.ListFilter filter, CaseQuery query) {
+        return matching(filter, query, CaseSearch.NONE);
+    }
+
+    /**
+     * As {@link #matching(ListFilters.ListFilter, CaseQuery)}, with a search term as well.
+     *
+     * <p><strong>The bracketing is the whole of this method.</strong> The term is ORed internally across
+     * eight columns and the result is ANDed with the filter and every condition, as one part of the same
+     * flat list they are parts of -- so a search is {@code (filter) AND (condition) AND (reference OR
+     * name OR name …)}. A flat OR across all of it would return plausible-looking rows while making every
+     * condition and the tab ineffective, which is the failure mode worth naming: it does not look like a
+     * bug from the outside. {@link #searching} is one {@code Specification} for exactly that reason --
+     * {@code Specification.allOf} cannot flatten what reaches it as a single part.
+     *
+     * @param search the term, {@link CaseSearch#NONE} for a request that searched for nothing
+     */
+    public static Specification<DeedPoll> matching(ListFilters.ListFilter filter,
+                                                   CaseQuery query,
+                                                   CaseSearch search) {
+        List<Specification<DeedPoll>> parts = narrowing(filter, query);
+        if (!search.isEmpty()) {
+            parts.add(searching(search));
+        }
+        return combined(parts);
+    }
+
+    /**
+     * The same filter and conditions, narrowed to the <em>reference</em> half of the search alone.
+     *
+     * <p>What answers {@code CaseListResponse.referenceMatch}: a caseworker who types a reference wants the
+     * case rather than a list of one, and the service asks this to find out whether the term was one. It
+     * carries the filter and the conditions deliberately, so the answer can never be a case the list itself
+     * would not have shown -- a redirect to a case the caseworker cannot see in this tab would be a
+     * disclosure by a different route.
+     */
+    public static Specification<DeedPoll> matchingReference(ListFilters.ListFilter filter,
+                                                            CaseQuery query,
+                                                            CaseSearch search) {
+        List<Specification<DeedPoll>> parts = narrowing(filter, query);
+        parts.add(referencing(search));
+        return combined(parts);
+    }
+
+    /** The filter's criterion and each condition, as the flat list of parts they are ANDed as. */
+    private static List<Specification<DeedPoll>> narrowing(ListFilters.ListFilter filter, CaseQuery query) {
         List<Specification<DeedPoll>> parts = new ArrayList<>();
         filter.where().map(CaseSpecifications::inState).ifPresent(parts::add);
         query.conditions().stream().map(CaseSpecifications::satisfying).forEach(parts::add);
+        return parts;
+    }
+
+    private static Specification<DeedPoll> combined(List<Specification<DeedPoll>> parts) {
         // Unrestricted rather than an always-true predicate: "all" with no conditions is the absence of a
         // where clause, not a where clause that happens to admit everything.
         return parts.isEmpty() ? Specification.unrestricted() : Specification.allOf(parts);
@@ -91,6 +140,94 @@ public final class CaseSpecifications {
     /** One condition, as a specification of its own so the composition above stays a flat list. */
     private static Specification<DeedPoll> satisfying(CaseQuery.Condition condition) {
         return (root, query, cb) -> predicate(condition, root, cb);
+    }
+
+    /**
+     * The whole search term, as one bracketed part: a reference match OR a name match.
+     *
+     * <p>One specification and not two, so the OR cannot be flattened into the AND around it -- see
+     * {@link #matching(ListFilters.ListFilter, CaseQuery, CaseSearch)}.
+     */
+    private static Specification<DeedPoll> searching(CaseSearch search) {
+        return (root, query, cb) -> cb.or(reference(search, root, cb), names(search, root, cb));
+    }
+
+    /**
+     * The reference half alone, for the exact-hit lookup {@link #matchingReference} serves.
+     */
+    private static Specification<DeedPoll> referencing(CaseSearch search) {
+        return (root, query, cb) -> reference(search, root, cb);
+    }
+
+    /**
+     * The term as a reference: the rendered form, and the serial where the term reads as one.
+     *
+     * <p>Exact rather than a substring, on both columns. A reference is an identifier a caseworker copies,
+     * so a partial one matching several cases would answer a question nobody asked -- and it is the
+     * exactness that makes {@code referenceMatch} a fact the UI can act on. The two columns hold different
+     * things and are matched differently: see {@link CaseSearch}.
+     */
+    private static Predicate reference(CaseSearch search, Root<DeedPoll> root, CriteriaBuilder cb) {
+        List<Predicate> parts = new ArrayList<>();
+        parts.add(cb.equal(
+            normalisedReference(cb, root.get("displayReference")),
+            cb.literal(search.normalisedReference())));
+        // Only when the whole term reads as a whole number. A term that does not contributes nothing here
+        // rather than a cast of an integer column to text, which would be a predicate no index could ever
+        // serve and, for a term with a stray character in it, one Postgres would refuse outright.
+        search.serial().ifPresent(serial -> parts.add(cb.equal(root.get("referencenumber"), serial)));
+        return anyOf(cb, parts);
+    }
+
+    /**
+     * The term against each of the six name columns, ORed.
+     *
+     * <p>Every column goes through {@link #nameMatch}, which is the one place the matching rule lives.
+     */
+    private static Predicate names(CaseSearch search, Root<DeedPoll> root, CriteriaBuilder cb) {
+        return anyOf(cb, CaseSearch.NAME_FIELDS.stream()
+            .map(field -> nameMatch(cb, root.<String>get(field), search.term()))
+            .toList());
+    }
+
+    /**
+     * <strong>The matcher.</strong> One name column against the term, case-insensitively.
+     *
+     * <p>v1 is a case-insensitive substring and deliberately not fuzzy. Real typo tolerance -- "Smyth"
+     * finding "Smith" -- needs {@code pg_trgm}, which on Azure Flexible Server has to be allowlisted
+     * through the {@code azure.extensions} server parameter before {@code CREATE EXTENSION} will work, and
+     * that infra apply has not been made. <strong>This function is the whole of the swap</strong>: replacing
+     * the {@code like} below with a similarity comparison changes the matching rule everywhere and changes
+     * nothing else, which is why every column comes through here rather than building its own predicate.
+     *
+     * <p>The caseworker's own {@code %} and {@code _} are escaped, for the reason {@link #escaped} gives:
+     * a term of a bare {@code %} matching every case in the service would look like a working search.
+     */
+    private static Predicate nameMatch(CriteriaBuilder cb, Expression<String> column, String term) {
+        return like(cb, column, "%" + escaped(term) + "%");
+    }
+
+    /**
+     * {@code displayReference} with its hyphens and spaces removed and lowered, so the comparison is
+     * between two normalised values rather than between a normalised term and a stored one.
+     *
+     * <p>Applied to <strong>this column only</strong>. {@code referencenumber} is an integer and is
+     * compared numerically -- lowering or hyphen-stripping it would mean casting it to text first, which is
+     * exactly what {@link CaseSearch#serial()} exists to avoid.
+     */
+    private static Expression<String> normalisedReference(CriteriaBuilder cb, Expression<String> column) {
+        Expression<String> withoutHyphens =
+            cb.function("replace", String.class, column, cb.literal("-"), cb.literal(""));
+        Expression<String> withoutSpaces =
+            cb.function("replace", String.class, withoutHyphens, cb.literal(" "), cb.literal(""));
+        return cb.lower(withoutSpaces);
+    }
+
+    /**
+     * Several predicates ORed, as an array rather than a list because that is the overload JPA publishes.
+     */
+    private static Predicate anyOf(CriteriaBuilder cb, List<Predicate> parts) {
+        return cb.or(parts.toArray(new Predicate[0]));
     }
 
     /**

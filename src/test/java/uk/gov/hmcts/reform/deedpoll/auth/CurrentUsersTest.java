@@ -34,7 +34,7 @@ class CurrentUsersTest {
     @Test
     @DisplayName("gives the caller the request was authenticated as")
     void givesTheAuthenticatedCaller() {
-        CurrentUser caller = CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "A Caseworker");
+        CurrentUser caller = CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "A Caseworker", "idam-user-123");
         SecurityContextHolder.getContext().setAuthentication(new IdamAuthentication(token(), caller));
 
         assertThat(CurrentUsers.required()).isEqualTo(caller);
@@ -44,7 +44,7 @@ class CurrentUsersTest {
     @DisplayName("publishes the caller's roles as authorities too, so Spring's own checks can see them")
     void publishesRolesAsAuthorities() {
         IdamAuthentication authentication = new IdamAuthentication(
-            token(), CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "A Caseworker"));
+            token(), CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "A Caseworker", "idam-user-123"));
 
         assertThat(authentication.getAuthorities()).extracting(Object::toString)
             .containsExactly(Role.DEEDPOLL_ADMIN.claimValue());

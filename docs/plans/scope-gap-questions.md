@@ -101,10 +101,11 @@ routes closed by gaps 1 and 2. Note what is still absent — no `PATCH` or `DELE
 `/caseworker/document-types`, and nothing for deactivate / reactivate.
 
 > **That spec is `deed-poll-admin`'s vendored copy, so it is a snapshot rather than a live reading.** It was
-> refreshed from this service on 2026-09-13 (`deed-poll-admin#96`) and is currently in step — but it only ever
-> tracks the last refresh, so treat a disagreement between it and this table as the snapshot being stale rather
-> than as a finding. **To ask this service what it actually serves, read `/v3/api-docs` from a running
-> instance**; `OpenAPIPublisherTest` asserts the paths and the caseworker count against it, and says eighteen.
+> refreshed from this service on 2026-09-13 (`deed-poll-admin#96`) and **is now behind it** — the seven
+> saved-query routes landed afterwards — which is the point: it only ever tracks the last refresh, so treat a
+> disagreement between it and this table as the snapshot being stale rather than as a finding. **To ask this
+> service what it actually serves, read `/v3/api-docs` from a running instance**; `OpenAPIPublisherTest` asserts
+> the paths and the caseworker count against it, and says twenty-five.
 
 | # | Capability | Power App evidence | Service today | Verdict | Consequence |
 | --- | --- | --- | --- | --- | --- |

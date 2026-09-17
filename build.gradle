@@ -84,11 +84,13 @@ tasks.withType(Test).configureEach {
 
 test {
   useJUnitPlatform {
-    // The CNP VM agent has no Docker daemon. 22 src/test classes need Testcontainers -- 21 inherit
+    // The CNP VM agent has no Docker daemon. 23 src/test classes need Testcontainers -- 22 inherit
     // the tag from AbstractPostgresContainerTest, SchemaConformanceTest carries it directly -- and
-    // they account for 609 of the 1,488 tests (measured, 2026-09-15; the 322 in the earlier plan was
-    // an estimate). Excluding them keeps the other 879 running in CI instead of losing the whole
-    // suite to a static initialiser. Unset means exclude nothing, so a local run is unchanged.
+    // they account for 701 of the 1,688 tests (measured, 2026-09-17; it was 609 of 1,488 across 22
+    // classes on 2026-09-15, and the 322 in the plan before that was an estimate). Excluding them
+    // keeps the other 987 running in CI instead of losing the whole suite to a static initialiser.
+    // Re-measure rather than trusting these figures: they move whenever a container-backed class is
+    // added. Unset means exclude nothing, so a local run is unchanged.
     // STOPGAP: delete this when a Docker-capable agent exists.
     if (!integrationTestsEnabled) {
       excludeTags 'requires-docker'

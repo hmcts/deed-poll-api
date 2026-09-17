@@ -219,10 +219,62 @@ public class DeedPollService {
                                      CaseQuery query,
                                      CaseSort sort,
                                      CasePaging paging) {
+        return findDeedPolls(filter, query, CaseSearch.NONE, sort, paging);
+    }
+
+    /**
+     * As above, with a search term as well.
+     *
+     * <p>The term ANDs with the filter and the conditions and ORs internally across the reference and name
+     * columns, so "Smith, in Enroled, received in June" is one request; {@link CaseSpecifications} holds the
+     * bracketing and why it matters.
+     *
+     * <p>{@link CaseResults#referenceMatch()} comes from a second query rather than from the page, and the
+     * reasoning is in {@link #referenceMatch}. A request that searched for nothing does not make it.
+     *
+     * @param search the term, {@link CaseSearch#NONE} for a request with no {@code q}
+     */
+    @Transactional(readOnly = true)
+    public CaseResults findDeedPolls(ListFilters.ListFilter filter,
+                                     CaseQuery query,
+                                     CaseSearch search,
+                                     CaseSort sort,
+                                     CasePaging paging) {
         Page<DeedPoll> found = deedPolls.findAll(
-            CaseSpecifications.matching(filter, query),
+            CaseSpecifications.matching(filter, query, search),
             PageRequest.of(paging.index(), paging.size(), order(sort)));
-        return CaseResults.of(Computed.withComputedAll(found.getContent()), paging, found.getTotalElements());
+        return CaseResults.of(
+            Computed.withComputedAll(found.getContent()),
+            paging,
+            found.getTotalElements(),
+            referenceMatch(filter, query, search));
+    }
+
+    /**
+     * The id of the one case whose reference the term matched exactly, or null.
+     *
+     * <p><strong>Asked separately rather than read off the page, because the page cannot answer it.</strong>
+     * A term that is a reference is usually the only row in the result set, but not always -- a name search
+     * that happens to read as a serial, or a reference belonging to a case that sorts below the page
+     * boundary, would both make the fact invisible on page 1 while it is still true of the result set. The
+     * question is about the whole set, so it takes a query about the whole set.
+     *
+     * <p><strong>Two rows are no answer.</strong> {@code displayReference} is unique, but
+     * {@code referencenumber} is only the serial component and repeats across years and types, so a term of
+     * {@code 10100} can match several cases -- and there is then no single case for a UI to go to. Asking
+     * for two and requiring exactly one is what distinguishes that from a genuine single hit, and it is why
+     * this is not a {@code findOne}.
+     *
+     * <p>Skipped entirely for a request with no {@code q}: the extra query is the cost of having searched.
+     */
+    private String referenceMatch(ListFilters.ListFilter filter, CaseQuery query, CaseSearch search) {
+        if (search.isEmpty()) {
+            return null;
+        }
+        List<DeedPoll> hits = deedPolls.findAll(
+            CaseSpecifications.matchingReference(filter, query, search),
+            PageRequest.of(0, 2)).getContent();
+        return hits.size() == 1 ? hits.get(0).getId() : null;
     }
 
     /**
