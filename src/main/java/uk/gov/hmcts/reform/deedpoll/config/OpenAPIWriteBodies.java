@@ -15,8 +15,13 @@ import io.swagger.v3.oas.models.parameters.RequestBody;
 import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseQuery;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
+import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQuerySchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 
@@ -26,19 +31,19 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Describes the seven write bodies that springdoc cannot describe by reflection.
+ * Describes the nine write bodies that springdoc cannot describe by reflection.
  *
  * <p><strong>Why any of this is needed.</strong> Every write payload in this service binds as a keyed map rather
  * than as declared components, because a patch turns on the difference between an omitted field and an explicit
  * null and a record of nullable components cannot express that -- the argument is in {@code KeyedRequestBody}.
- * The consequence is that the four JSON write bodies are classes with no fields, so springdoc reflects over them
+ * The consequence is that the eight JSON write bodies are classes with no fields, so springdoc reflects over them
  * and publishes {@code CreateCaseRequest: {}}. The upload is worse: it takes a
  * {@code MultipartHttpServletRequest}, which springdoc does not recognise as a body at all, so that operation is
  * published with no request body whatsoever.
  *
  * <p>That matters because of what the document is for. It is published to {@code hmcts/cnp-api-docs} for
  * consumers to generate clients from, and a consumer cannot tell an empty schema from a body that takes no
- * fields. They would get six request types with no properties and an upload they cannot call, with nothing in
+ * fields. They would get eight request types with no properties and an upload they cannot call, with nothing in
  * the document hinting that anything is missing -- which is the failure {@code OpenAPIPublisherTest} was written
  * to prevent for the paths, reaching the bodies instead. A published document that is silently empty is worse
  * than no document, because a consumer trusts it.
@@ -59,6 +64,14 @@ public class OpenAPIWriteBodies {
     private static final String UPDATE_NOTE = "UpdateNoteRequest";
     private static final String CREATE_WITNESS = "CreateWitnessRequest";
     private static final String UPDATE_WITNESS = "UpdateWitnessRequest";
+    private static final String CREATE_SAVED_QUERY = "CreateSavedQueryRequest";
+    private static final String UPDATE_SAVED_QUERY = "UpdateSavedQueryRequest";
+
+    /** The saved-query name, named once because it is the create body's only required field. */
+    private static final String NAME_FIELD = "name";
+
+    /** The filter key, named once because both saved-query bodies declare it. */
+    private static final String FILTER_FIELD = "filter";
 
     private static final String NOTE_FIELD = "note";
 
@@ -74,6 +87,7 @@ public class OpenAPIWriteBodies {
             describeCaseBodies(openApi);
             describeNoteBodies(openApi);
             describeWitnessBodies(openApi);
+            describeSavedQueryBodies(openApi);
             describeUploadBody(openApi);
         };
     }
@@ -234,6 +248,100 @@ public class OpenAPIWriteBodies {
             new StringSchema().maxLength(WitnessSchemas.MAX_WITNESS_OCCUPATION_LENGTH));
         body.addProperty(DECLARANT_FIELD, new BooleanSchema()
             .description("Whether this witness is the declarant. One row type covers both."));
+    }
+
+    /**
+     * The two saved-query bodies: {@code name} required on create, everything else optional on both.
+     *
+     * <p>The bounds and the vocabularies are the domain's own -- {@link SavedQuerySchemas}'s name and description
+     * caps, {@link CaseSearch#MAX_TERM_LENGTH} for the term, {@link CaseQuery#MAX_CONDITIONS} for the array,
+     * {@link ListFilters#filterTabs()} for the filter keys, {@link CaseSort.Direction#wireTokens()} for the
+     * directions -- so a cap changed in one of those appears here without this file being edited.
+     *
+     * <p><strong>{@code conditions} is an array of the wire strings a list URL carried</strong>, not structured
+     * objects. That is the whole reason the live query's own validator can check a stored query, and a consumer
+     * that modelled it as objects would be unable to duplicate a query by reading one and posting it back. The
+     * enum of sortable fields is deliberately <em>not</em> published: there are more than sixty, and
+     * {@code CaseSort.sortableFields()} is the authority a client should read rather than a list frozen into a
+     * document.
+     */
+    private void describeSavedQueryBodies(OpenAPI openApi) {
+        Schema<?> create = schema(openApi, CREATE_SAVED_QUERY);
+        if (create != null) {
+            create.setType("object");
+            create.setProperties(null);
+            savedQueryFields(create);
+            create.addRequiredItem(NAME_FIELD);
+            create.setAdditionalProperties(true);
+            create.setDescription("A saved case-list query. Only name is required: a query that narrows nothing "
+                + "is legitimate, because \"everything, newest first\" is a view somebody wants a tab for. The "
+                + "owner comes from the caller's token, so ownerId cannot be set here, and page is not part of a "
+                + "view -- both are ignored rather than refused, as any unknown key is. Saving does not select: "
+                + "the new query is in the library and in nobody's list, including its owner's.");
+        }
+
+        Schema<?> update = schema(openApi, UPDATE_SAVED_QUERY);
+        if (update != null) {
+            update.setType("object");
+            update.setProperties(null);
+            savedQueryFields(update);
+            update.setAdditionalProperties(true);
+            // Nothing required, and unlike the note and witness patches an explicit null IS meaningful here:
+            // every column but name is nullable, so null clears it. That difference is the reason this
+            // description exists rather than reusing the witness wording.
+            update.setDescription("A patch. An omitted field is left as stored, and an explicit null clears the "
+                + "column -- unlike the note and witness patches, where no column is nullable and a null is a "
+                + "400. name cannot be cleared. An empty patch is accepted and re-stamps modifiedOn. Editing is "
+                + "the owner's right, or an Administrator's if the query is shared. Unknown keys are ignored.");
+        }
+    }
+
+    private void savedQueryFields(Schema<?> body) {
+        body.addProperty(NAME_FIELD, new StringSchema()
+            .minLength(1)
+            .maxLength(SavedQuerySchemas.MAX_NAME_LENGTH)
+            .description("What the query is called, as it appears in a navigation bar."));
+        body.addProperty("description", new StringSchema()
+            .maxLength(SavedQuerySchemas.MAX_DESCRIPTION_LENGTH));
+        body.addProperty("shared", new BooleanSchema()
+            .description("Whether the query is published to the library every caseworker can browse. Publishing "
+                + "makes it findable, not present in anyone else's list -- each user selects what they want to "
+                + "see. A shared query may also be amended or deleted by an Administrator."));
+        body.addProperty(FILTER_FIELD, filterKeys());
+        body.addProperty("conditions", new ArraySchema()
+            .items(new StringSchema())
+            .maxItems(CaseQuery.MAX_CONDITIONS)
+            .description("The where conditions as the wire strings a list URL carried -- "
+                + "\"field:operator:value\", split on the first two colons -- and NOT structured objects. "
+                + "Validated on write by the same parser a live query goes through, so a saved query "
+                + "round-trips a list URL unchanged."));
+        body.addProperty("sortField", new StringSchema()
+            .description("The field to order by. Any of CaseSort.sortableFields() -- the single-valued form "
+                + "fields plus the audit columns -- which is not enumerated here because there are more than "
+                + "sixty and a frozen copy would drift."));
+        body.addProperty("sortDirection", sortDirections());
+        body.addProperty("searchTerm", new StringSchema()
+            .maxLength(CaseSearch.MAX_TERM_LENGTH)
+            .description("The q search term this view carries, matched against the reference and the name "
+                + "columns. page is deliberately not stored: page 4 of a previous result set is not a page of "
+                + "this one."));
+    }
+
+    /** The filter keys, from the list's own table rather than a copy of it. */
+    private Schema<?> filterKeys() {
+        StringSchema keys = new StringSchema();
+        keys.setDescription("Which case-list filter tab the view opens on.");
+        ListFilters.filterTabs().forEach(tab -> addEnumValue(keys, tab.key()));
+        return keys;
+    }
+
+    /** The two direction tokens, matched exactly as the live sort parameter matches them. */
+    private Schema<?> sortDirections() {
+        StringSchema directions = new StringSchema();
+        directions.setDescription("Matched exactly: " + CaseSort.Direction.wireTokens()
+            + ". A bare sortField with no direction is read as ascending.");
+        Arrays.stream(CaseSort.Direction.values()).forEach(d -> addEnumValue(directions, d.wire()));
+        return directions;
     }
 
     /**
