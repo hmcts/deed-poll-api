@@ -205,6 +205,23 @@ api-1's numbers.
 unauthenticated closure), `integration` 7 (`OpenAPIPublisherTest` now asserts 30 caseworker operations across
 seventeen paths).
 
+**Final, after Task 4 (measured 2026-09-17, `./gradlew clean build` green from cold):** `test` **1,920**
+(+15 `ReferralSecurityTest` — 7 `JudicialGate`, 6 `NoRoles` (close permitted for a no-roles caller, for a
+judge's own token, and refused on each of the four non-`Decided` states), 2 `CrossCaseIsolation`),
+`integration` **7**. Against this branch's pre-Task-1 baseline of `test` 1,813 / `integration` 7, the plan
+added **107** tests.
+
+**What CI actually runs, with `INTEGRATION_TESTS_ENABLED=false`:** `test` **1,165 of 1,920** — the
+`requires-docker` tag excludes 755 — and `integration` **does not run at all** (`tasks.check.dependsOn`
+is conditional on the same flag), so `OpenAPIPublisherTest` and its 30-operation assertion are a local and
+PR-agent guarantee only. Of this plan's coverage, CI runs **170 referral tests** — every class under
+`domain/referrals`, `ReferralSecurityTest` and `ReferralStateTest`, which between them hold the whole state
+machine, the sweep's staleness arithmetic and every role gate — and excludes **47**: `ReferralRepositoryTest`
+(8, the atomic release `UPDATE` against real Postgres) and `CaseworkerReferralControllerTest` (39, which is
+where the status codes and the real tokens are), plus `ReferralBackfillTest` (4) and the referral half of
+`EntityMappingTest` (19 in the class). That split is the one the plan asked for and accepted: the decision
+logic is where CI runs it, and only the SQL and the HTTP shape need Docker.
+
 **A worker or container startup timeout is an environment failure, not a code failure** — re-run before
 investigating, and consider a `git archive` copy under `/tmp`.
 
@@ -286,11 +303,31 @@ cannot `close` through the caseworker endpoint via the same-role reasoning, and 
 for close (a referral of one case is unreachable through another's path). Keep the role assertions
 container-free.
 
-- [ ] Security tests: caseworker refused `claim`/`decide`, close cross-case-isolated, role gates fail
+- [x] Security tests: caseworker refused `claim`/`decide`, close cross-case-isolated, role gates fail
       closed; `./gradlew build` green from cold with `TESTCONTAINERS_RYUK_DISABLED=true`; checkstyle clean on
       all five source sets; test and integration totals recorded next to this branch's baseline; the count
       with `INTEGRATION_TESTS_ENABLED=false` recorded, so it is visible how much of this plan's coverage CI
       actually runs
+
+**Recorded in `ReferralSecurityTest`**, beside the create/read/withdraw refusals it already held: the three
+judicial transitions (`claim`, `touch`, `decide`) asserted from one list, so a fourth is gated by being added
+to the list rather than by somebody copying a test — refused for a caller with no roles *and* for an
+administrator (admin is a different role, not a wider one), refused before the case or the referral is read at
+all, and refused for a token asserting any of seven near-miss role strings, taken through `IdamClaims` rather
+than constructed, because the gate turns on an exact claim-value match and IDAM does not issue that value yet.
+The admitting side is stated too — a judge, and a judge reduced from a claims document — so the refusals are a
+rule rather than a service that refuses everybody. Close is cross-case-isolated (404 through another case, with
+the direction and its author untouched), and the judicial transitions are as well, even for the judge holding
+the referral. The transitions still have no route: asserted over `CaseworkerReferralController`'s handlers.
+
+**One deviation from this task's prose, flagged.** The prose asked for "a `JUDICIAL` token cannot `close`
+through the caseworker endpoint". It can, and the test says so: decision 4 is explicit that close takes any
+authenticated caseworker with **no** finer gate, so a token that happens to hold `JUDICIAL` is admitted like
+any other authenticated caller. "A judge does not close" is true of the process and of the surfaces — there is
+no closure route under `/judicial/**` and there will not be one — but it is not enforced by a role check, and
+asserting a refusal that does not exist would have meant either a wrong test or a gate decision 4 refused.
+The behaviour is written down instead, so adding a gate later is a deliberate change to a test rather than a
+silent tightening.
 
 ## Deliberately not in this plan
 
