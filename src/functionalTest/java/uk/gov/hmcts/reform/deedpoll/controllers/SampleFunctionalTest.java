@@ -6,21 +6,28 @@ import io.restassured.response.Response;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.test.context.SpringBootTest;
 
 import static io.restassured.RestAssured.given;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
+/**
+ * Functional test: the deployed service answers on its root path.
+ *
+ * <p><strong>This must not boot the application</strong>, for the reason recorded on
+ * {@link SampleSmokeTest} — the template's {@code @SpringBootTest(webEnvironment = DEFINED_PORT)} started a
+ * local copy on the Jenkins agent, whose datasource then fell back to the docker-compose defaults and failed
+ * on {@code Connection to localhost:5433 refused}. Master build #7 died that way, in this file, one stage
+ * after the same fix landed for the smoke test.
+ *
+ * <p>The localhost default is {@code 4550}, matching {@code server.port}. The template said {@code 8080},
+ * which is nothing this service has ever listened on.
+ */
 class SampleFunctionalTest {
-    protected static final String CONTENT_TYPE_VALUE = "application/json";
 
-    @Value("${TEST_URL:http://localhost:8080}")
-    private String testUrl;
+    private static final String TEST_URL = System.getenv().getOrDefault("TEST_URL", "http://localhost:4550");
 
     @BeforeEach
     public void setUp() {
-        RestAssured.baseURI = testUrl;
+        RestAssured.baseURI = TEST_URL;
         RestAssured.useRelaxedHTTPSValidation();
     }
 
@@ -34,6 +41,9 @@ class SampleFunctionalTest {
             .extract().response();
 
         Assertions.assertEquals(200, response.statusCode());
-        Assertions.assertTrue(response.asString().startsWith("Welcome"));
+        Assertions.assertTrue(
+            response.asString().startsWith("Welcome"),
+            () -> "Expected the root path to answer with the welcome message, got: " + response.asString()
+        );
     }
 }
