@@ -269,10 +269,33 @@ factories (`from(DeedPoll)` and `from(List<DeedPollWithComputed>)`). Add the **s
 its `from(DeedPollWithComputed)` factory (`SavedCaseResponse.java:169`). Update both DTOs' tests and any
 schema assertion in `OpenAPIPublisherTest`/`DeedPollSchemas` for the new property on each.
 
-- [ ] `V{n}` added (number verified against the branch), additive, column nullable, `NAMED_ENUM`-mapped, and
+- [x] `V{n}` added (number verified against the branch), additive, column nullable, `NAMED_ENUM`-mapped, and
       validates under `ddl-auto: validate`; entity round-trip test covers it; **both** `CaseSummaryResponse`
       (both factories) and `SavedCaseResponse` expose it; schema assertions updated for both; op count
       unchanged at 30; `./gradlew build` green
+
+**Done (2026-09-17). Two things the plan did not name, both forced by tests that already existed:**
+
+1. **`CaseDetailResponse` had to gain the field too, and the `DeedPollFields` reader had to land here rather
+   than in Task 3.** `SavedCaseResponseFieldsTest` pins the saved field set two ways — equal to
+   `DeedPollFields.readAll(...)`'s keys plus the derived counts, *and* equal to `CaseDetailResponse`'s
+   components minus the three children, in order. So decision 7's "expose it on `SavedCaseResponse`" is not
+   satisfiable in isolation: without the reader the first assertion fails, and without the detail response the
+   second does. Both were added in the referral block of all three (`readers()`, `CaseDetailResponse`,
+   `SavedCaseResponse`), at the same position. This does **not** pre-empt Task 3: queryability needs
+   `FormFields.FIELD_BY_NAME` as well (`CaseQuery.java:185`), and the field is on no form tab yet, so
+   `where=currentReferralState:…` is still refused as "names no case field" until Task 3 registers it.
+2. **`OpenAPIPublisherTest` needed no edit, and the op count is unchanged at 30 as predicted.** Decision 6
+   anticipated a schema-surface change; in fact that test asserts over *write-body* schemas
+   (`DeedPollSchemas.writeBodyFields()`, `CreateCaseRequest`/`UpdateCaseRequest`) and the response DTOs are
+   not among them. `currentReferralState` is read-only, so `writeBodyFields()` is unchanged. There is no
+   committed `openapi.json` and no `DeedPollSchemas` reference to either response DTO. The queryable-field
+   set is not asserted in that test either — Task 3's mention of it should be read the same way.
+
+**Also recorded:** the field is readable but **not** writable, which made
+`CaseResponseFields.NOT_WRITABLE_BY_A_CALLER` eight rather than seven (a caller able to patch it could tell
+the case list a case has a decided referral when it has none). `test` = 1923 / 246 classes, `integration` =
+7 / 3 classes, total 1930 against the 1927 baseline, 0 failures.
 
 ### Task 2: Recompute-from-truth, wired into every transition
 

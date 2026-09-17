@@ -129,6 +129,9 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         deedPoll.setNationalitySection(NationalitySection.Section11);
         deedPoll.setReferToMasterChoice(ReferToMaster.Yes);
         deedPoll.setMasterDecision(MasterDecision.Approved);
+        // The denormalised referral read-model, on the case's own row and typed with V6's "ReferralState"
+        // rather than a second enum: without @JdbcTypeCode(NAMED_ENUM) this write is refused as a varchar.
+        deedPoll.setCurrentReferralState(ReferralState.Decided);
         deedPoll.setReferencenumber(41);
         deedPoll.setDisplayReference("KBDR2026-41");
         deedPoll.setNewForename("Alex");
@@ -155,6 +158,7 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         assertThat(reloaded.getNationalitySection()).isEqualTo(NationalitySection.Section11);
         assertThat(reloaded.getReferToMasterChoice()).isEqualTo(ReferToMaster.Yes);
         assertThat(reloaded.getMasterDecision()).isEqualTo(MasterDecision.Approved);
+        assertThat(reloaded.getCurrentReferralState()).isEqualTo(ReferralState.Decided);
         assertThat(reloaded.getIShall()).containsExactly(1, 4, 5);
         assertThat(reloaded.getIHaveSubscribed()).containsExactly(2);
         assertThat(reloaded.getAndAlsoMyOld()).isEmpty();
@@ -394,6 +398,15 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         assertThat(reloaded.getPublishToGazette()).isNull();
         assertThat(reloaded.getDecisionDate()).isNull();
         assertThat(reloaded.getDecidedBy()).isNull();
+
+        // And V9's column defaults to null rather than to a state, which is what makes "no active referral"
+        // expressible at all. Null here even though the referral above is Open, because persisting a
+        // referral row is not what maintains the case's copy -- the transitions are, and this test performs
+        // none. A DEFAULT on the column would have had to name a state every case starts in, and there is
+        // none: the great majority of cases are never referred.
+        assertThat(entityManager.find(DeedPoll.class, deedPoll.getId()).getCurrentReferralState())
+            .as("a case with no transition behind it has no current referral state")
+            .isNull();
 
         // A referral has no meaning without its case, and V6's ON DELETE CASCADE is the database's, so
         // this needs the delete to actually reach it. An orphan would be a referral in the judicial pool
