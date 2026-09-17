@@ -283,12 +283,27 @@ transitions this plan owns.
 
 The service returns entities; DTO mapping is the controller's job (the `NoteService` precedent).
 
-- [ ] Create requires ≥1 reason, rejects an unknown reason, requires `notes` when `Other`, requires
+- [x] Create requires ≥1 reason, rejects an unknown reason, requires `notes` when `Other`, requires
       `urgencyReason` when `Urgent` — each a 400 with the field named, all in container-free unit tests; the
       one-open-per-case guard 409s against every non-terminal state and permits a fresh referral when all
       existing ones are terminal; withdraw moves `Open`→`Withdrawn` and 409s on a terminal referral; create
       and withdraw each write a case note attributed to the caller; every operation is case-scoped;
       `./gradlew build` green
+
+**One addition beyond the text above, and it is load-bearing rather than scope creep: the referral's two
+free-text fields are capped** (`ReferralSchemas.MAX_NOTES_LENGTH` 1000, `MAX_URGENCY_REASON_LENGTH` 500).
+Both columns are unbounded `text`, so these are not the database's limits — they are
+`NoteForm.MAX_NOTE_LENGTH`'s. Raising a referral writes a case note that quotes that text, and the notes
+column *is* bounded, so without a cap a long enough referral would be stored and *then* refused by the note
+it triggers, half way through the write. The composition lives in `ReferralNotes` precisely so the arithmetic
+is testable in one place, and `ReferralNotesTest` pins the worst case (every reason, both fields at their
+cap) against the notes validator rather than leaving it to the reader.
+
+Two smaller choices worth recording: an unknown *reason* does not also demand the `notes` that `Other`
+requires — a misspelled `Other` is one mistake, not two — and the create path has no update sibling, because
+a referral is not edited in place (amend = withdraw + re-raise), so `ReferralSchemas` has one parse method
+where `SavedQuerySchemas` has two. Counts after this task, measured from `build/test-results`:
+**1,768 unit / 7 integration** (from 1,709 / 7).
 
 ### Task 3: The endpoints, DTOs, and the published spec
 
