@@ -205,9 +205,17 @@ public record CaseSort(String field, Direction direction) {
          * offers, and {@code displayReference} sorts as text, so its order is not the order of the reference
          * numbers it renders. These four are the audit pair a caseworker really asks for ("what changed most
          * recently") and the two authors beside them.
+         *
+         * <p><strong>{@code List.of} and not {@code Set.of}, because the order is published.</strong>
+         * {@code Set.of}'s iteration order is deliberately randomised per JVM -- a salt applied at startup, so
+         * the same four names come out in a different order in each run. {@link #sortableFields()} feeds the
+         * {@code sort} parameter's description in the OpenAPI document, and {@code deed-poll-admin} vendors that
+         * document, so a randomised tail made every regeneration produce a spurious diff in those four names
+         * with nothing having changed. A duplicate here would be swallowed by the {@code LinkedHashSet} in
+         * {@link #names()} exactly as it was before.
          */
-        private static final Set<String> AUDIT_FIELDS =
-            Set.of("createdOn", "modifiedOn", "createdBy", "modifiedBy");
+        private static final List<String> AUDIT_FIELDS =
+            List.of("createdOn", "modifiedOn", "createdBy", "modifiedBy");
 
         private static final Set<String> NAMES = names();
 
