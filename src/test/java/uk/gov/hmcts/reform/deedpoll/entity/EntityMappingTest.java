@@ -382,6 +382,18 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         assertThat(reloaded.getUrgency()).isEqualTo(Urgency.Normal);
         assertThat(reloaded.getReasons()).isEmpty();
         assertThat(reloaded.getNotes()).isNull();
+        // V8's eight columns, all null on a referral nobody has picked up: an Open referral has no claim
+        // and no direction, and neither does a backfilled one. Asserted rather than assumed, because a
+        // NOT NULL or a default on any of them would have to invent a value for both cases -- and
+        // publishToGazette is the one where an invented false would read as a real judicial answer.
+        assertThat(reloaded.getClaimedBy()).isNull();
+        assertThat(reloaded.getClaimedAt()).isNull();
+        assertThat(reloaded.getLastTouchedAt()).isNull();
+        assertThat(reloaded.getDecision()).isNull();
+        assertThat(reloaded.getDirectionsText()).isNull();
+        assertThat(reloaded.getPublishToGazette()).isNull();
+        assertThat(reloaded.getDecisionDate()).isNull();
+        assertThat(reloaded.getDecidedBy()).isNull();
 
         // A referral has no meaning without its case, and V6's ON DELETE CASCADE is the database's, so
         // this needs the delete to actually reach it. An orphan would be a referral in the judicial pool
@@ -391,6 +403,62 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         entityManager.clear();
 
         assertThat(entityManager.find(Referral.class, id)).isNull();
+    }
+
+    @Test
+    @DisplayName("a claimed and decided referral round trips its claim and its direction")
+    void referralClaimAndDirectionRoundTrip() {
+        DeedPoll deedPoll = new DeedPoll();
+        deedPoll.setDateReceived(LocalDateTime.of(2026, 1, 4, 10, 0));
+        // The case's own snapshot of a historical decision, set to the other value so that a mapping which
+        // somehow read the case's column instead of the referral's would disagree with the assertion below.
+        deedPoll.setMasterDecision(MasterDecision.Rejected);
+        deedPoll.setPublishToLondonGazette(false);
+        entityManager.persist(deedPoll);
+
+        Referral referral = new Referral();
+        referral.setDeedPoll(deedPoll);
+        referral.setState(ReferralState.Decided);
+        referral.setClaimedBy("District Judge Example");
+        referral.setClaimedAt(LocalDateTime.of(2026, 4, 1, 9, 30));
+        referral.setLastTouchedAt(LocalDateTime.of(2026, 4, 1, 11, 15));
+        referral.setDecision(MasterDecision.Approved);
+        referral.setDirectionsText("Approved. Publish in the usual form; no further evidence required.");
+        referral.setPublishToGazette(true);
+        referral.setDecisionDate(LocalDateTime.of(2026, 4, 1, 11, 15));
+        referral.setDecidedBy("District Judge Example");
+        entityManager.persist(referral);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        Referral reloaded = entityManager.find(Referral.class, referral.getId());
+        // 'Decided' and 'Approved': the third and fourth native enum columns on this entity, and the two
+        // that only a transition reaches. Without @JdbcTypeCode(NAMED_ENUM) on "decision" Hibernate sends
+        // an integer ordinal and Postgres refuses it, so this assertion is what proves the annotation.
+        assertThat(reloaded.getState()).isEqualTo(ReferralState.Decided);
+        assertThat(reloaded.getDecision())
+            .as("the referral's direction, not the case's ported snapshot")
+            .isEqualTo(MasterDecision.Approved);
+        // Every one of these column names is mixed case, which is validation's blind spot: Hibernate
+        // compares them case-insensitively, so only a statement that quotes the name and runs finds a
+        // mis-cased mapping.
+        assertThat(reloaded.getClaimedBy()).isEqualTo("District Judge Example");
+        assertThat(reloaded.getClaimedAt()).isEqualTo(LocalDateTime.of(2026, 4, 1, 9, 30));
+        assertThat(reloaded.getLastTouchedAt())
+            .as("the sweep's input, later than the claim because the judge kept working")
+            .isEqualTo(LocalDateTime.of(2026, 4, 1, 11, 15));
+        assertThat(reloaded.getDirectionsText())
+            .isEqualTo("Approved. Publish in the usual form; no further evidence required.");
+        assertThat(reloaded.getPublishToGazette()).isTrue();
+        assertThat(reloaded.getDecisionDate()).isEqualTo(LocalDateTime.of(2026, 4, 1, 11, 15));
+        assertThat(reloaded.getDecidedBy()).isEqualTo("District Judge Example");
+
+        // V8 adds columns and touches nothing on the case. The flat block stays the pre-migration
+        // snapshot, so recording a direction on the referral leaves it saying what it always said.
+        DeedPoll reloadedCase = entityManager.find(DeedPoll.class, deedPoll.getId());
+        assertThat(reloadedCase.getMasterDecision()).isEqualTo(MasterDecision.Rejected);
+        assertThat(reloadedCase.isPublishToLondonGazette()).isFalse();
     }
 
     private List<UUID> selectionsOf(String userId) {

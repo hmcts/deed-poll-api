@@ -145,6 +145,16 @@ deedpoll:
     # jurisdiction have not been onboarded, so anything else here would be a guess that plan 02 would
     # then have to find and unpick. Nothing reads it yet -- it exists so no task has to invent one.
     case-type-id: DEED_POLL_PLACEHOLDER
+  referrals:
+    # How long a judge's claim on a referral survives their inactivity before it goes back into the
+    # shared pool. Measured from their last interaction with the referral, not from the claim, so a
+    # judge still reading the papers keeps it.
+    #
+    # Two hours is a guess about how judges will actually work -- long enough not to lose a referral
+    # while reading a case, short enough that a closed laptop does not hold one overnight. Tunable
+    # here, as an ISO-8601 duration, once there is real judicial behaviour to observe: PT30M, PT4H.
+    # A zero or negative value refuses to start rather than releasing every claim as it is made.
+    claim-expiry: ${DEEDPOLL_REFERRAL_CLAIM_EXPIRY:PT2H}
   documents:
     # Where LocalFilesystemDocumentStore keeps uploaded blobs. Development only: local disk does
     # not survive AKS, because pods are ephemeral and replicas do not share a volume. Real

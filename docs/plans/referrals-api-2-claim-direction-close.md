@@ -197,6 +197,9 @@ enum already exist. **Measure the baseline on this branch before Task 1** by sum
 `build/test-results/{test,integration}/*.xml`, and record it next to the final count in Task 4 — do not quote
 api-1's numbers.
 
+**Baseline measured on this branch, 2026-09-17, before Task 1: `test` 1,813, `integration` 7.** After Task 1:
+`test` 1,818 (+4 `ReferralPropertiesTest`, +1 `EntityMappingTest`), `integration` 7.
+
 **A worker or container startup timeout is an environment failure, not a code failure** — re-run before
 investigating, and consider a `git archive` copy under `/tmp`.
 
@@ -216,7 +219,7 @@ they validate against V8 under `ddl-auto: validate`. Extend the entity's round-t
 defaulting to `PT2H`), registered like `IdamProperties`, with the `deedpoll.referrals.claim-expiry` key added
 under the `deedpoll:` block in `application.yaml` and a comment that it is tunable.
 
-- [ ] `V8` added, additive, no committed migration or `deedpoll_deedpoll` column edited; the eight new
+- [x] `V8` added, additive, no committed migration or `deedpoll_deedpoll` column edited; the eight new
       columns validate under `ddl-auto: validate`; `decision` mapped `NAMED_ENUM`; entity round-trip test
       covers the new fields; `ReferralProperties` binds `deedpoll.referrals.claim-expiry` with a 2h default
       and a unit test proves the default and an override; `./gradlew build` green
