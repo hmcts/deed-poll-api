@@ -6,10 +6,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
+import org.springframework.core.type.filter.AssignableTypeFilter;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.springframework.test.web.servlet.MockMvc;
+import uk.gov.hmcts.reform.deedpoll.api.KeyedRequestBody;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
@@ -19,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 
 import java.io.OutputStream;
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -344,5 +349,78 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         CaseSearch.NAME_FIELDS
             .forEach(field -> assertThat(search).as("the document lists %s as searched", field).contains(field));
         assertThat(search).contains("not fuzzy");
+    }
+
+    /**
+     * Every keyed write body publishes its fields, rather than the empty schema springdoc would reflect.
+     *
+     * <p><strong>This exists because the saved-query bodies shipped empty.</strong> Both are
+     * {@code KeyedRequestBody} subclasses -- classes with no fields, deliberately, because a patch turns on the
+     * difference between an omitted field and an explicit null -- so springdoc published
+     * {@code CreateSavedQueryRequest: {}}. {@code OpenAPIWriteBodies} is what compensates and it was not extended
+     * when the resource was added, which nothing noticed: the assertions above check paths, operation counts and
+     * parameter descriptions, and none of them looks at a request body's properties.
+     *
+     * <p><strong>Derived from the classpath rather than a list, which is the point.</strong> A list here would
+     * need editing for the tenth keyed body exactly as {@code OpenAPIWriteBodies} did for the ninth, and would be
+     * forgotten the same way. Scanning for {@code KeyedRequestBody} subclasses means a new one fails this test on
+     * the commit that introduces it, before it can reach a consumer -- and an empty published schema is worse than
+     * a missing one, because a generated client compiles and then sends nothing.
+     */
+    @DisplayName("Publishes the fields of every keyed write body, so no consumer sees an empty schema")
+    @Test
+    void documentsEveryKeyedWriteBody() throws Exception {
+        JsonNode schemas = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                             .andExpect(status().isOk())
+                                             .andReturn()
+                                             .getResponse()
+                                             .getContentAsByteArray())
+            .at("/components/schemas");
+
+        List<Class<?>> keyedBodies = keyedRequestBodies();
+        assertThat(keyedBodies)
+            .as("the scan found the keyed bodies at all -- an empty list would make this test vacuous")
+            .isNotEmpty();
+
+        for (Class<?> body : keyedBodies) {
+            JsonNode schema = schemas.get(body.getSimpleName());
+            assertThat(schema)
+                .as("%s is published at all", body.getSimpleName())
+                .isNotNull();
+            assertThat(schema.at("/properties").isMissingNode())
+                .as("%s publishes its fields rather than an empty schema -- add it to OpenAPIWriteBodies",
+                    body.getSimpleName())
+                .isFalse();
+            assertThat(schema.at("/properties").size())
+                .as("%s publishes at least one property", body.getSimpleName())
+                .isPositive();
+        }
+    }
+
+    /**
+     * Every concrete {@code KeyedRequestBody} subclass under the DTO packages.
+     *
+     * <p>Spring's own scanner, so this needs no extra dependency. Abstract classes are excluded --
+     * {@code CaseWriteRequest} is a shared base and is not itself a body a route binds -- and springdoc names a
+     * schema after the concrete class in any case.
+     */
+    private static List<Class<?>> keyedRequestBodies() {
+        ClassPathScanningCandidateComponentProvider scanner =
+            new ClassPathScanningCandidateComponentProvider(false);
+        scanner.addIncludeFilter(new AssignableTypeFilter(KeyedRequestBody.class));
+        return scanner.findCandidateComponents("uk.gov.hmcts.reform.deedpoll.api").stream()
+            .map(BeanDefinition::getBeanClassName)
+            .map(OpenAPIPublisherTest::loaded)
+            .filter(type -> !Modifier.isAbstract(type.getModifiers()))
+            .toList();
+    }
+
+    private static Class<?> loaded(String name) {
+        try {
+            return Class.forName(name);
+        } catch (ClassNotFoundException impossible) {
+            // The scanner found it on this classpath, so it loads.
+            throw new IllegalStateException(name, impossible);
+        }
     }
 }
