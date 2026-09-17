@@ -18,6 +18,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.CreateReferralInput;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
@@ -27,12 +28,14 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
@@ -83,6 +86,12 @@ class ReferralSecurityTest {
 
     private static final UUID REFERRAL_ID = UUID.fromString("55555555-5555-5555-5555-555555555555");
 
+    /**
+     * The two statements of the inactivity sweep, which are the only ones on {@code ReferralRepository} that
+     * name no parent case -- because a sweep is about every case at once and there is no case to name.
+     */
+    private static final Set<String> SWEEP = Set.of("findStaleClaims", "releaseStaleClaim");
+
     /** A caller with no role this service asks about: the ordinary caseworker, and the fail-closed case. */
     private static final CurrentUser NO_ROLES = CurrentUser.currentUser(List.of(), "Otto Other", "other-1");
 
@@ -99,9 +108,11 @@ class ReferralSecurityTest {
         deedPolls = mock(DeedPollRepository.class);
         referrals = mock(ReferralRepository.class);
         notes = mock(NoteService.class);
-        service = new ReferralService(deedPolls, referrals, notes);
+        service = new ReferralService(deedPolls, referrals, notes,
+                                      new ReferralProperties(Duration.ofHours(2)));
 
         when(referrals.save(any())).thenAnswer(call -> call.getArgument(0));
+        when(referrals.findStaleClaims(any(), any())).thenReturn(List.of());
     }
 
     /** Both cases exist, so no refusal below is the parent check answering instead of the rule under test. */
@@ -344,7 +355,23 @@ class ReferralSecurityTest {
             // The behavioural half of this rule is in ReferralServiceTest; this is the half that stops it being
             // re-introduced. `findById` is inherited from JpaRepository and cannot be removed, so what is
             // asserted is that this interface declares nothing that reaches a referral without naming its case.
+            List<String> declared = Arrays.stream(ReferralRepository.class.getDeclaredMethods())
+                .map(Method::getName)
+                .toList();
+            // The exception is real, so it is named rather than pattern-matched: a third unscoped method has
+            // to be admitted here deliberately, and a rename that made this list vacuous fails too.
+            assertThat(declared).containsAll(SWEEP);
+
             for (Method finder : ReferralRepository.class.getDeclaredMethods()) {
+                if (SWEEP.contains(finder.getName())) {
+                    // What keeps the sweep inside the rule instead of beside it: neither statement hands back
+                    // a referral. The candidate query returns a three-field projection and the release returns
+                    // a row count, so an unscoped query cannot become an unscoped read of case data.
+                    assertThat(finder.getGenericReturnType().getTypeName())
+                        .as("%s hands back no referral", finder.getName())
+                        .doesNotContain(Referral.class.getName());
+                    continue;
+                }
                 assertThat(finder.getName())
                     .as("%s carries the parent case id", finder.getName())
                     .contains("DeedPollId");

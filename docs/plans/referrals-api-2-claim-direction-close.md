@@ -198,7 +198,9 @@ enum already exist. **Measure the baseline on this branch before Task 1** by sum
 api-1's numbers.
 
 **Baseline measured on this branch, 2026-09-17, before Task 1: `test` 1,813, `integration` 7.** After Task 1:
-`test` 1,818 (+4 `ReferralPropertiesTest`, +1 `EntityMappingTest`), `integration` 7.
+`test` 1,818 (+4 `ReferralPropertiesTest`, +1 `EntityMappingTest`), `integration` 7. After Task 2: `test` 1,854
+(+29 `ReferralServiceTest` — claim, touch and the sweep — +3 `ReferralNotesTest`, +4 `ReferralRepositoryTest`),
+`integration` 7.
 
 **A worker or container startup timeout is an environment failure, not a code failure** — re-run before
 investigating, and consider a `git archive` copy under `/tmp`.
@@ -241,7 +243,7 @@ under the `deedpoll:` block in `application.yaml` and a comment that it is tunab
 - A `touch` helper that refreshes `lastTouchedAt`, called by `claim` and (later, from api-3) by every
   judicial read/write of a held referral.
 
-- [ ] `Role.JUDICIAL` added with the convention claim value; `claim` requires `JUDICIAL` (403 without),
+- [x] `Role.JUDICIAL` added with the convention claim value; `claim` requires `JUDICIAL` (403 without),
       reclaims stale claims first, moves `Open`→`Claimed` stamping the three claim fields, and 409s on a
       non-`Open` referral; `reclaimStaleClaims` releases a claim older than the configured window and leaves
       a fresh one, writing exactly one service-account note per reclaimed row — staleness logic proven in a
