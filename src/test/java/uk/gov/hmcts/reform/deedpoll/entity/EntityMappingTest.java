@@ -20,6 +20,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.MaritalStatus;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Nationality;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NationalitySection;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.PostCounter;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferToMaster;
@@ -30,7 +31,9 @@ import uk.gov.hmcts.reform.deedpoll.reference.PrismaSchema;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -81,7 +84,7 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
             .map(EntityType::getJavaType)
             .collect(Collectors.toSet());
 
-        // The six ported models, then the three that are not a port. Exact rather than "contains", because
+        // The six ported models, then the four that are not a port. Exact rather than "contains", because
         // validation is vacuous for an entity Hibernate never saw and an entity dropped from the scan would
         // otherwise stop being checked silently.
         assertThat(mapped).containsExactlyInAnyOrder(
@@ -93,7 +96,8 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
             ReferenceCounter.class,
             SavedQuery.class,
             SavedQuerySelection.class,
-            Referral.class);
+            Referral.class,
+            Notification.class);
     }
 
     @TestFactory
@@ -472,6 +476,117 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         DeedPoll reloadedCase = entityManager.find(DeedPoll.class, deedPoll.getId());
         assertThat(reloadedCase.getMasterDecision()).isEqualTo(MasterDecision.Rejected);
         assertThat(reloadedCase.isPublishToLondonGazette()).isFalse();
+    }
+
+    @Test
+    @DisplayName("a notification round trips its personalisation, its state and both provider ids")
+    void notificationRoundTrips() {
+        DeedPoll deedPoll = new DeedPoll();
+        deedPoll.setDateReceived(LocalDateTime.of(2026, 1, 5, 10, 0));
+        entityManager.persist(deedPoll);
+
+        Referral referral = new Referral();
+        referral.setDeedPoll(deedPoll);
+        referral.setState(ReferralState.Decided);
+        referral.setDecision(MasterDecision.Rejected);
+        entityManager.persist(referral);
+
+        UUID providerId = UUID.randomUUID();
+        Notification notification = new Notification();
+        notification.setDeedPollId(deedPoll.getId());
+        notification.setReferralId(referral.getId());
+        notification.setTemplate("APPLICATION_REJECTED");
+        notification.setTemplateVersion(7);
+        notification.setRecipient("applicant@example.com");
+        // A nested value and a non-string one, because jsonb is the point: a mapping that stringified the
+        // map or kept only its first entry passes a single-string fixture and fails this.
+        notification.setPersonalisation(new LinkedHashMap<>(Map.of(
+            "reference_number", "2026/000123",
+            "judges_reason", "The evidence of use of the new name is insufficient.",
+            "applied_online", "yes")));
+        notification.setState(NotificationState.Sent);
+        notification.setAttempts(2);
+        notification.setNextAttemptAt(LocalDateTime.of(2026, 5, 1, 9, 0));
+        notification.setProviderNotificationId(providerId);
+        notification.setCreatedBy("A Caseworker");
+        entityManager.persist(notification);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        Notification reloaded = entityManager.find(Notification.class, notification.getId());
+        // The native enum column. Without @JdbcTypeCode(NAMED_ENUM) Hibernate sends an integer ordinal and
+        // Postgres refuses it, so this assertion is what proves the annotation is there.
+        assertThat(reloaded.getState()).isEqualTo(NotificationState.Sent);
+        assertThat(reloaded.getPersonalisation())
+            .as("read back out of jsonb, every entry of it")
+            .containsEntry("reference_number", "2026/000123")
+            .containsEntry("judges_reason", "The evidence of use of the new name is insufficient.")
+            .containsEntry("applied_online", "yes");
+        // Every one of these column names is mixed case, which is validation's blind spot: Hibernate
+        // compares them case-insensitively, so only a statement that quotes the name and runs finds a
+        // mis-cased mapping.
+        assertThat(reloaded.getDeedPollId())
+            .as("the parent is a bare id here, not a mapped relation -- see Notification")
+            .isEqualTo(deedPoll.getId());
+        assertThat(reloaded.getReferralId()).isEqualTo(referral.getId());
+        assertThat(reloaded.getTemplate())
+            .as("the EmailTemplate member name, never the Notify UUID")
+            .isEqualTo("APPLICATION_REJECTED");
+        assertThat(reloaded.getTemplateVersion()).isEqualTo(7);
+        assertThat(reloaded.getRecipient()).isEqualTo("applicant@example.com");
+        assertThat(reloaded.getAttempts()).isEqualTo(2);
+        assertThat(reloaded.getNextAttemptAt()).isEqualTo(LocalDateTime.of(2026, 5, 1, 9, 0));
+        assertThat(reloaded.getProviderNotificationId()).isEqualTo(providerId);
+        assertThat(reloaded.getCreatedBy())
+            .as("which caseworker sent it, which is content rather than audit noise")
+            .isEqualTo("A Caseworker");
+        assertThat(reloaded.getCreatedOn()).as("written by @PrePersist").isNotNull();
+        assertThat(reloaded.getModifiedOn()).as("NOT NULL with no database default").isNotNull();
+    }
+
+    @Test
+    @DisplayName("a notification defaults to Pending and claimable, and goes when its case goes")
+    void notificationDefaultsToPendingAndCascadesWithItsCase() {
+        DeedPoll deedPoll = new DeedPoll();
+        deedPoll.setDateReceived(LocalDateTime.of(2026, 1, 6, 10, 0));
+        entityManager.persist(deedPoll);
+
+        // The shape enqueue produces: Pending, no attempts, no referral, and an empty personalisation. The
+        // column is NOT NULL, so a mapping that wrote null for an empty map would fail on the first one.
+        Notification notification = new Notification();
+        notification.setDeedPollId(deedPoll.getId());
+        notification.setTemplate("APPLICATION_REJECTED");
+        notification.setRecipient("applicant@example.com");
+        notification.setCreatedBy("A Caseworker");
+        entityManager.persist(notification);
+        entityManager.flush();
+        entityManager.clear();
+
+        UUID id = notification.getId();
+        Notification reloaded = entityManager.find(Notification.class, id);
+        assertThat(reloaded.getState()).isEqualTo(NotificationState.Pending);
+        assertThat(reloaded.getAttempts()).isZero();
+        assertThat(reloaded.getPersonalisation()).isEmpty();
+        assertThat(reloaded.getReferralId()).as("not every template is referral-driven").isNull();
+        assertThat(reloaded.getTemplateVersion()).as("nothing previewed it, so no version is claimed").isNull();
+        assertThat(reloaded.getProviderNotificationId()).isNull();
+        assertThat(reloaded.getFailureReason()).isNull();
+        // Claimable the instant it is enqueued, which is what makes "the operation that enqueues also
+        // drains" work. @PrePersist writes it as well as the column's own DEFAULT, so the value is readable
+        // from the entity without a refresh.
+        assertThat(reloaded.getNextAttemptAt())
+            .as("due immediately, so the very next drain can take it")
+            .isNotNull()
+            .isEqualTo(reloaded.getCreatedOn());
+
+        // A notification has no meaning without its case, and V11's ON DELETE CASCADE is the database's, so
+        // this needs the delete to actually reach it.
+        entityManager.remove(entityManager.find(DeedPoll.class, deedPoll.getId()));
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(entityManager.find(Notification.class, id)).isNull();
     }
 
     private List<UUID> selectionsOf(String userId) {

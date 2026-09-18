@@ -142,7 +142,8 @@ expected, not a defect.
 
 ## What the outbox row is
 
-`V10__notifications.sql` adds one table. Mixed-case quoted column names, as every table here has.
+One table, shipped as `V11__notifications.sql` (`V10` was already taken -- see task 2). Mixed-case quoted
+column names, as every table here has.
 
 | Column | Type | Why |
 |---|---|---|
@@ -263,9 +264,47 @@ arguing why the `WHERE` is not redundant), `V8__referral_claim_and_direction.sql
   `nextAttemptAt` is not claimable, the unique index refuses a duplicate, and `jsonb` round-trips;
   container-free for the backoff arithmetic and the state machine.
 
-- [ ] `V10` applies cleanly and Hibernate validates against it, `claimNextDue` proven exclusive against real
+- [x] `V10` applies cleanly and Hibernate validates against it, `claimNextDue` proven exclusive against real
       Postgres, the unique index proven to refuse a second row, backoff and state transitions stated
       container-free, and `./gradlew build` green
+
+  **Shipped as `V11__notifications.sql`, not `V10`.** `V10__backfill_current_referral_state.sql` was already
+  committed, and this plan's own constraint says to take the next free number and say so.
+
+  Notes for the tasks that follow, decided or verified rather than assumed:
+  - **Claiming a row is a lease, not a state.** There is deliberately no `Claiming` member on
+    `"NotificationState"`. `claimNextDue` is one conditional `UPDATE` that re-asserts `Pending` and due,
+    increments `attempts` and pushes `nextAttemptAt` to `now + NotificationBackoff.LEASE` (5 minutes). So a
+    replica that dies mid-send leaves a `Pending` row with its attempt counted, claimable again when the lease
+    expires -- not a row stuck in a transient state. `attempts` moving at claim time is what stops a row that
+    kills the process being retried for ever.
+  - **`drain` is `REQUIRES_NEW`**, which settles task 5's contingency in advance: the case-list read may be
+    `readOnly` and does not need widening, and a failed send cannot roll back the read that triggered it. The
+    cost, stated in the javadoc: a concurrent drain **blocks** on a shared row rather than skipping it, then
+    takes nothing when the lock frees. Task 6's contention test should expect one email and serialisation, not
+    `SKIP LOCKED`.
+  - **The sender seam is `Optional<NotificationSender>`, and there is no implementation yet.** With no bean, a
+    drain claims nothing and every row stays `Pending` -- which is exactly what task 4's "a send leaving exactly
+    one `Pending` row" needs, and it means task 5 starts sending by adding one `@Service`. Nothing needs a
+    placeholder sender and none was written.
+  - **Task 4's enqueue should be `INSERT ... ON CONFLICT ("referralId", "template") WHERE "referralId" IS NOT
+    NULL DO NOTHING`**, which is why the unique index is partial rather than a table constraint. That is the only
+    way to honour decision 6's "a violated insert is a logged no-op" *inside the caller's transaction*: catching
+    a `DataIntegrityViolationException` marks the transaction rollback-only, and `REQUIRES_NEW` would commit the
+    row outside the transaction that caused it, against decision 4. `0` rows affected is the no-op to log.
+  - **`createdBy` is `NOT NULL` here**, unlike every other `createdBy` in this schema, because the caseworker
+    authored part of the content rather than merely touching a record.
+  - **A retryable failure is bounded**: `NotificationBackoff.MAX_ATTEMPTS` is 8, 1/2/4/8/16/32/60/60 minutes, and
+    the row is then `Failed` saying it gave up. pcs's `MaxRetriesFailureHandler` is the precedent; without it a
+    permanently-500ing row would be a cost on every caseworker read for ever. Constants rather than properties,
+    and the javadoc says when that should change.
+  - The parents are **bare ids, not `@ManyToOne`** -- the one deviation from `DeedPollNote` and `Referral`, and
+    the reason is the drain: it reads across every case and needs nothing off either parent. Both foreign keys
+    and both cascades are still the database's.
+  - `deedpoll_notification` was added to `DeedPollSchema.DEED_POLL_TABLES`, so readiness names it too.
+  - Totals after this task: `test` 2170, `integration` 8 (2132 + 8 after task 1). 38 new tests, of which 10 are
+    container-backed -- `build.gradle`'s exclusion comment is re-measured to **831 of 2,170 across 28 classes**,
+    1,339 running with `INTEGRATION_TESTS_ENABLED=false`.
 
 ### Task 3: The template, its resolved values and its slots
 
