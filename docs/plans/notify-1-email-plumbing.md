@@ -326,9 +326,53 @@ idiom), `src/main/java/uk/gov/hmcts/reform/deedpoll/entity/DeedPoll.java`.
   `reference_number` is refused rather than honoured** (decision 12); `directionsText` reaches the slot
   unaltered, including when null.
 
-- [ ] Resolved values come only from the case and referral, slots are the only client input and an attempt to
+- [x] Resolved values come only from the case and referral, slots are the only client input and an attempt to
       set a resolved value is refused, slot validation names every offending field at once, and `./gradlew
       build` green
+
+  Notes for the tasks that follow, decided or verified rather than assumed:
+  - **All four classes are in `notify/`, not `domain/`** -- `EmailSlot`, `EmailTemplate`, `EmailSlots`,
+    `ApplicationRejectedPersonalisation`. Task 1 and task 2 already put the vocabulary there and task 6's
+    ArchUnit rule draws its boundary round that package, so a content model split across two packages would put
+    half the feature outside the boundary that exists to contain it.
+  - **`EmailTemplate.key()` is the configuration key *and* the URL token**, deliberately one string:
+    `application-rejected`. So task 4's `{template}` path variable is the kebab-case key and
+    `EmailTemplate.byKey` is the lookup -- matched exactly, trimmed, so `APPLICATION-REJECTED` and
+    `application_rejected` are both empty. The **member name** is what the outbox row stores; `EmailTemplateTest`
+    pins it, because renaming the member would orphan every stored row.
+  - **`resolve` does not take the `Referral`.** Every resolved value comes off the case; the referral reaches
+    the email only as the `judges_reason` slot, which `EmailSlots.parse` pre-populated from `directionsText`.
+    Passing the referral as well would invite a second, un-edited copy of the judge's words into the same email
+    and make "what was this applicant told" a question with two answers. Task 4's send handler therefore reads
+    `directionsText` off the referral for `parse` and hands `resolve` only the case and the slots.
+  - **`applied_online` is true for `PostCounter.Online` and nothing else** -- `Counter`, `Post`, `Unknown` and an
+    unset channel all get the paper paragraph. The asymmetry is the safe direction, not an oversight: the paper
+    paragraph asks the applicant how they paid and where to send the refund, which recovers from a wrong guess,
+    whereas promising an automatic refund to a card nobody paid with leaves them waiting for money that never
+    comes. It is a JSON **Boolean**, not `"yes"`, because Notify's conditional reads a boolean directly.
+  - **`reference_number` is `displayReference`, never the `referencenumber` integer** -- the serial is an
+    internal component of the rendered reference and is not what the applicant was ever shown.
+  - **Every key is present even when the column is null**, as an empty string. Notify refuses a send whose
+    personalisation is missing a placeholder the template uses, so an absent key would turn a blank column into
+    a permanent failure on the drain rather than into an empty line.
+  - **Unknown keys are refused and named here, not stripped** -- the one place this departs from every other
+    schema in the service, and the reason is decision 12: the interesting unknown keys are exactly the ones a
+    client must not send, so stripping them would return success while ignoring the part that mattered. A
+    resolved key gets a different message from a key that does not exist, because they are different mistakes.
+  - **A slot refusal is a 400, not a 422.** `EmailSlots` throws `InvalidInputError` and `DomainErrorHandler`
+    already maps that to 400 with the per-field errors published. Task 4's 422 is *only* decision 7's blank
+    recipient, which is a fact about the case rather than about the payload.
+  - **The slot caps are `ReferralSchemas`' own constants** -- `judges_reason` is `MAX_DIRECTIONS_LENGTH` (4000)
+    so any recordable direction is sendable unedited, `additional_notes` is `MAX_NOTES_LENGTH` (1000). The one
+    case that can exceed the cap is a **V7-backfilled** direction, which the validator never saw; that is
+    refused with a "shorten it before sending" message rather than truncated, because a truncated quotation of a
+    judge is worse than asking a caseworker to edit one.
+  - `ApplicationRejectedPersonalisationTest` already asserts `toMap()` against the record's components by
+    reflection, so **task 6's personalisation-key rule has its mechanism** -- it needs the recipient and the
+    case-scoping halves, not this one rebuilt.
+  - Totals after this task: `test` 2218, `integration` 8 (2170 + 8 after task 2). 48 new tests, **all
+    container-free**, so `build.gradle`'s `requires-docker` figures are unchanged at 831 of 2,170 across 28
+    classes -- the denominator there is now 2,218; task 6 re-measures it.
 
 ### Task 4: The three operations
 
