@@ -1,5 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.repository;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -23,10 +25,19 @@ import java.util.UUID;
  * A caller wanting one referral has to say which case it belongs to, so a cross-case read or write is
  * not expressible rather than merely discouraged.
  *
- * <p>The exception is the inactivity sweep -- {@link #findStaleClaims} and {@link #releaseStaleClaim} -- which
- * is about every case at once and so has no case to be scoped to. It stays inside the rule rather than beside
- * it: the finder returns a three-field projection instead of an entity, and neither is reachable from a request
- * path that names a case.
+ * <p>There are two exceptions, and each is about every case at once rather than about <em>a</em> referral, so
+ * neither has a case to be scoped to:
+ *
+ * <ul>
+ *   <li>the inactivity sweep -- {@link #findStaleClaims} and {@link #releaseStaleClaim}. It stays inside the
+ *       rule rather than beside it: the finder returns a three-field projection instead of an entity, and
+ *       neither is reachable from a request path that names a case;</li>
+ *   <li>the judicial pool -- {@link #findByState}. The shared pool <em>is</em> the cross-case list, and a
+ *       judge reaches it without naming any case, which is the point of it: the judicial surface is keyed on
+ *       the referral so that a judge cannot name an application at all. The scoping this drops is replaced by
+ *       a state filter the caller does not choose ({@code Open} only) and, on every read of an individual
+ *       referral, by {@code JudicialReferralService.visibleTo}.</li>
+ * </ul>
  *
  * <p>This differs from {@link SavedQueryRepository}, which does read by id: a saved query's visibility
  * is a property of the entity, so it cannot be checked before the entity is loaded. A referral's scope
@@ -42,6 +53,33 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
 
     /** One referral, only if it belongs to the given case. */
     Optional<Referral> findByIdAndDeedPollId(UUID id, String deedPollId);
+
+    /**
+     * One page of the referrals in a given state, across every case -- the judicial pool.
+     *
+     * <p><strong>The order and the page are the database's, and that is the requirement rather than an
+     * implementation detail.</strong> The pool is worked urgent-first and oldest-first within each urgency
+     * band, so a caller that fetched and reordered would be sorting one page of an arbitrary slice -- the
+     * longest-waiting urgent referral would sit on page 4 and never be worked.
+     * {@code JudicialReferralService.POOL_ORDER} is the sort, and it relies on {@code "Urgency"} being declared
+     * {@code ('Normal', 'Urgent')} in {@code V1__enums.sql}: Postgres orders an enum by its declared order, so
+     * descending urgency is the most urgent first. {@code ReferralRepositoryTest} asserts that against a real
+     * Postgres, because the declaration order is the load-bearing part and no fake can stand in for it.
+     *
+     * <p>{@link org.springframework.data.domain.Page} rather than a list, because a pool without its total is
+     * a pool that cannot say how much work is waiting -- which is the number decision 15 is about, and the
+     * reason the page size is a page size and not a cap. The count is the same criterion the page was drawn
+     * from, so it comes from the same call.
+     *
+     * <p>No index backs this: the table is small, the plan that added the pool adds no migration, and an index
+     * on {@code "state"} alone would be nearly the whole table anyway. Adding one when the pool is slow is a
+     * migration, not a redesign.
+     *
+     * @param state the state a pooled referral is in, {@link ReferralState#Open}
+     * @param pageable the page and the order, which the caller supplies rather than this method naming
+     * @return the referrals on that page, with the total across every page
+     */
+    Page<Referral> findByState(ReferralState state, Pageable pageable);
 
     /**
      * Whether the case already holds a referral in one of the given states.

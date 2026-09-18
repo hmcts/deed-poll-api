@@ -6,13 +6,18 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
@@ -32,6 +37,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>The scoping is asserted by getting the wrong answer's absence, not by reading the method names:
  * two cases each hold a referral, and each finder is asked about both.
+ *
+ * <p>The judicial pool is here for the same reason as the sweep, and it is the one read that is deliberately
+ * <em>not</em> case-scoped: what makes it right is the database's ordering and paging. Urgent-first depends on
+ * {@code "Urgency"} being declared {@code ('Normal', 'Urgent')} in {@code V1__enums.sql}, because Postgres
+ * orders an enum by its declared order -- a fact only a real Postgres can assert -- and paging in working order
+ * is the difference between the longest-waiting urgent referral being on page 1 and it never being worked.
+ * {@code JudicialReferralServiceTest} asserts the other half container-free: that the service asks for that
+ * order rather than fetching and reordering.
  *
  * <p>The stale-claim sweep's two statements are here for a stronger reason: what makes them correct is SQL
  * that no fake can stand in for. {@code ReferralServiceTest} proves the arithmetic -- which rows the service
@@ -80,6 +93,18 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         // referrals created in the same millisecond have no order to assert.
         referral.setCreatedOn(createdOn);
         entityManager.persist(referral);
+        return referral;
+    }
+
+    /**
+     * An {@code Open} referral on a case of its own, with the urgency and age the pool orders by.
+     *
+     * <p>A case each because a case may hold only one live referral, so a pool of five is five cases -- which
+     * is also the shape the pool query has to cope with, being the one read here that is not case-scoped.
+     */
+    private Referral pooledReferral(Urgency urgency, LocalDateTime createdOn) {
+        Referral referral = persistedReferral(persistedCase(), ReferralState.Open, createdOn);
+        referral.setUrgency(urgency);
         return referral;
     }
 
@@ -261,6 +286,84 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(referrals.findStatesByDeedPollId(otherCase.getId()))
             .containsExactly(ReferralState.Open);
         assertThat(referrals.findStatesByDeedPollId(neverReferred.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("pools the Open referrals of every case, urgent first and longest-waiting within each band")
+    void poolsTheOpenReferralsInWorkingOrder() {
+        // Four cases, because the pool is the one read here that is deliberately not scoped to one: a judge
+        // reaches it without naming a case, which is what stops them naming one at all.
+        Referral normalAndNewer = pooledReferral(Urgency.Normal, LocalDateTime.of(2026, 4, 1, 9, 0));
+        Referral urgentAndOlder = pooledReferral(Urgency.Urgent, LocalDateTime.of(2026, 3, 1, 9, 0));
+        Referral normalAndOlder = pooledReferral(Urgency.Normal, LocalDateTime.of(2026, 2, 1, 9, 0));
+        Referral urgentAndNewer = pooledReferral(Urgency.Urgent, LocalDateTime.of(2026, 5, 1, 9, 0));
+        entityManager.flush();
+        entityManager.clear();
+
+        List<Referral> pool = referrals.findByState(
+            ReferralState.Open, PageRequest.of(0, 10, JudicialReferralService.POOL_ORDER)).getContent();
+
+        // Both halves of the order at once, and the fixture is built so that neither key alone produces this
+        // sequence: by age alone the oldest is a Normal one, and by urgency alone the two Urgent rows could come
+        // in either order. This is also what pins "Urgency" being declared ('Normal', 'Urgent') in V1 -- Postgres
+        // orders an enum by its declared order, which is the whole reason descending urgency means most urgent.
+        assertThat(pool).extracting(Referral::getId).containsExactly(
+            urgentAndOlder.getId(),
+            urgentAndNewer.getId(),
+            normalAndOlder.getId(),
+            normalAndNewer.getId());
+    }
+
+    @Test
+    @DisplayName("pools only Open referrals, so nothing a judge holds or a caseworker finished is offered again")
+    void poolsOnlyOpenReferrals() {
+        final Referral open = pooledReferral(Urgency.Normal, LocalDateTime.of(2026, 2, 1, 9, 0));
+        // One of every other state, each on its own case, because a case may hold only one live referral.
+        for (ReferralState state : List.of(ReferralState.Claimed, ReferralState.Decided,
+                                           ReferralState.Closed, ReferralState.Withdrawn)) {
+            persistedReferral(persistedCase(), state, LocalDateTime.of(2026, 1, 1, 9, 0));
+        }
+        entityManager.flush();
+        entityManager.clear();
+
+        Page<Referral> pool = referrals.findByState(
+            ReferralState.Open, PageRequest.of(0, 10, JudicialReferralService.POOL_ORDER));
+
+        // The filter is the pool's only scope, so it carries the weight the case id carries everywhere else
+        // here: a claimed referral shown in the pool would be two judges reading the same papers.
+        assertThat(pool.getContent()).extracting(Referral::getId).containsExactly(open.getId());
+        assertThat(pool.getTotalElements()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("pages the pool in the database, and reports the whole pool's total on every page")
+    void pagesThePoolInTheDatabase() {
+        List<Referral> byWorkingOrder = new ArrayList<>();
+        for (int day = 1; day <= 5; day++) {
+            byWorkingOrder.add(pooledReferral(Urgency.Normal, LocalDateTime.of(2026, 2, day, 9, 0)));
+        }
+        entityManager.flush();
+        entityManager.clear();
+
+        Page<Referral> first = referrals.findByState(
+            ReferralState.Open, PageRequest.of(0, 2, JudicialReferralService.POOL_ORDER));
+        Page<Referral> second = referrals.findByState(
+            ReferralState.Open, PageRequest.of(1, 2, JudicialReferralService.POOL_ORDER));
+        Page<Referral> pastTheEnd = referrals.findByState(
+            ReferralState.Open, PageRequest.of(9, 2, JudicialReferralService.POOL_ORDER));
+
+        // Two rows a page, sliced in working order rather than in insertion order, which is the claim a
+        // fetch-then-reorder would fail: the longest-waiting referral is on page 1 and not page 3.
+        assertThat(first.getContent()).extracting(Referral::getId)
+            .containsExactly(byWorkingOrder.get(0).getId(), byWorkingOrder.get(1).getId());
+        assertThat(second.getContent()).extracting(Referral::getId)
+            .containsExactly(byWorkingOrder.get(2).getId(), byWorkingOrder.get(3).getId());
+        // Empty rather than an error, and still counted: a judge on a page past the end is told how much is
+        // waiting, which is what makes a ten-row default a page size and not a cap.
+        assertThat(pastTheEnd.getContent()).isEmpty();
+        assertThat(pastTheEnd.getTotalElements()).isEqualTo(5);
+        assertThat(first.getTotalElements()).isEqualTo(5);
+        assertThat(first.getTotalPages()).isEqualTo(3);
     }
 
     @Test

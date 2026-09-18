@@ -184,11 +184,26 @@ referral service — keep it one clearly-judicial unit):
 Extend `NamespaceSeparationSecurityTest` to add `judicial` as a third namespace sharing no DTO with the
 other two (decision 4).
 
-- [ ] `api/judicial/{controller,dto}` exist with documented `package-info`; `visibleTo` implements decision
+- [x] `api/judicial/{controller,dto}` exist with documented `package-info`; `visibleTo` implements decision
       3 and is unit-tested container-free for every state and both judges; `pool` requires `JUDICIAL`, runs
       the sweep, orders urgent-then-oldest and pages with a total, proven by a container-free ordering test
       and a repository test for the SQL; `NamespaceSeparationSecurityTest` covers judicial;
       `./gradlew build` green
+
+**Task 1 as built.** `JudicialReferralService` (domain/referrals) holds both halves — `visibleTo` as a static
+predicate and `pool(caller, paging)` gating on `JUDICIAL`, sweeping, then querying. Ordering is
+`POOL_ORDER = urgency desc, createdOn asc` handed to the query: descending `Urgency` is most-urgent-first
+because `V1__enums.sql` declares the type `('Normal', 'Urgent')` and Postgres orders an enum by its declared
+order — `ReferralRepositoryTest` proves that against a real database, `JudicialReferralServiceTest` proves
+container-free that the service asks for it rather than fetching and reordering. `ReferralPool` carries the
+page and the pool's total (decision 15: a page size, not a cap; `POOL_PAGE_SIZE = 10`). The pool needed
+`ReferralRepository.findByState(state, pageable)`, a second documented exception to that interface's
+case-scoping rule; `ReferralSecurityTest` admits it deliberately, asserts it can only be asked for "a page of
+the referrals in this state" and never for one referral, and adds an ArchUnit rule that nothing but
+`JudicialReferralService` calls it.
+
+**Branch baseline, measured before Task 1** (for Task 4): `test` 1975, `integration` 7 — 1982 total. After
+Task 1: `test` 2005, `integration` 7 — 2012 total.
 
 ### Task 2: The pool and referral read endpoints
 
