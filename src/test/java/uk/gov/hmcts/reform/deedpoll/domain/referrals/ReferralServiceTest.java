@@ -28,6 +28,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.StaleClaim;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +48,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -101,6 +103,17 @@ class ReferralServiceTest {
     private NoteService notes;
     private ReferralService service;
 
+    /**
+     * Every referral the fake database holds, so the state projection can be answered from it.
+     *
+     * <p>What makes the current-referral-state recompute provable without a container: the service reads the
+     * states of a case's referrals <em>after</em> mutating one of them, so a stubbed constant would prove
+     * nothing about the transition. These are the same objects the transitions mutate, and a referral raised in
+     * the call under test is added by the {@code save} stub, so the projection sees exactly what the real
+     * query would.
+     */
+    private final List<Referral> rows = new ArrayList<>();
+
     @BeforeEach
     void createService() {
         deedPolls = mock(DeedPollRepository.class);
@@ -108,10 +121,36 @@ class ReferralServiceTest {
         notes = mock(NoteService.class);
         service = serviceWithClaimExpiry(CLAIM_EXPIRY);
 
-        // The repository hands back what it was given, as a real save does once the id is allocated.
-        when(referrals.save(any())).thenAnswer(call -> call.getArgument(0));
+        // The repository hands back what it was given, as a real save does once the id is allocated -- and
+        // records the row, because an INSERT is what makes the new referral visible to the state projection.
+        when(referrals.save(any())).thenAnswer(call -> {
+            Referral written = call.getArgument(0);
+            if (rows.stream().noneMatch(row -> row == written)) {
+                rows.add(written);
+            }
+            return written;
+        });
         // No stale claims unless a test says otherwise, so the sweep at the top of claim() is a no-op.
         when(referrals.findStaleClaims(any(), any())).thenReturn(List.of());
+        // Scoped to the case asked about, as the real query is: a recompute that read another case's referrals
+        // would pass a stub that ignored the argument.
+        when(referrals.findStatesByDeedPollId(anyString()))
+            .thenAnswer(call -> statesOf(call.getArgument(0)));
+    }
+
+    /** The states of one case's referrals, as they stand at the moment of the call. */
+    private List<ReferralState> statesOf(String deedPollId) {
+        return rows.stream()
+            .filter(row -> row.getDeedPoll() != null && deedPollId.equals(row.getDeedPoll().getId()))
+            .map(Referral::getState)
+            .toList();
+    }
+
+    /** The current referral state the service wrote onto the given case, which may legitimately be null. */
+    private ReferralState caseColumnWritten(String deedPollId) {
+        ArgumentCaptor<ReferralState> written = ArgumentCaptor.forClass(ReferralState.class);
+        verify(deedPolls).writeCurrentReferralState(eq(deedPollId), written.capture());
+        return written.getValue();
     }
 
     /** The same mocks, wired to a service configured with a different inactivity window. */
@@ -173,6 +212,7 @@ class ReferralServiceTest {
         referral.setCreatedOn(LocalDateTime.parse("2026-09-01T09:30:00"));
         referral.setModifiedOn(LocalDateTime.parse("2026-09-01T09:30:00"));
         when(referrals.findByIdAndDeedPollId(REFERRAL_ID, CASE_ID)).thenReturn(Optional.of(referral));
+        rows.add(referral);
         return referral;
     }
 
@@ -203,6 +243,7 @@ class ReferralServiceTest {
         referral.setCreatedOn(touched);
         referral.setModifiedOn(touched);
         when(referrals.findByIdAndDeedPollId(id, deedPollId)).thenReturn(Optional.of(referral));
+        rows.add(referral);
         return referral;
     }
 
@@ -1072,7 +1113,11 @@ class ReferralServiceTest {
             assertThat(parent.getMasterDecision()).isEqualTo(MasterDecision.Approved);
             assertThat(parent.getMasterDirections()).isEqualTo("Approved by Master Someone, 2019");
             assertThat(parent.isPublishToLondonGazette()).isTrue();
-            verifyNoInteractions(deedPolls);
+            // The one column of the case a transition may write is the denormalised read-model, and it is
+            // written by a statement rather than by saving the loaded case -- which is what keeps the flat
+            // block above safe even though the entity is in the transaction's session.
+            verify(deedPolls).writeCurrentReferralState(CASE_ID, ReferralState.Decided);
+            verifyNoMoreInteractions(deedPolls);
         }
     }
 
@@ -1333,6 +1378,254 @@ class ReferralServiceTest {
             verify(referrals, never()).releaseStaleClaim(any(), any(), any(), anyString());
             verify(referrals, never()).save(any());
             verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("refreshes the case columns of exactly the cases it released, in one set-based statement")
+        void refreshesTheColumnsOfTheCasesItReleased() {
+            Referral lapsedHere = storedClaim(OTHER_JUDGE, CLAIM_EXPIRY.plusMinutes(5));
+            Referral lapsedElsewhere =
+                storedClaimOn(OTHER_CASE_ID, SECOND_REFERRAL_ID, JUDGE, CLAIM_EXPIRY.plusHours(9));
+            Referral stillHeld = storedClaimOn("case-3", UNKNOWN_ID, JUDGE, Duration.ofMinutes(1));
+            rowsInTheDatabase(lapsedHere, lapsedElsewhere, stillHeld);
+
+            assertThat(service.reclaimStaleClaims()).isEqualTo(2);
+
+            // One statement for the whole sweep rather than a recompute per row: the sweep's argument is that a
+            // single statement settles a multi-replica race without a lock, and a read-model carried by a loop
+            // behind it would be only as atomic as the loop.
+            assertThat(casesRefreshed()).containsExactly(CASE_ID, OTHER_CASE_ID);
+            verify(deedPolls, never()).writeCurrentReferralState(anyString(), any());
+            // The case whose judge is still working is not in the set: its column already reads Claimed, and
+            // rewriting it would be a write to a row this call did not change.
+            assertThat(casesRefreshed()).doesNotContain("case-3");
+        }
+
+        @Test
+        @DisplayName("asks the set-based recompute about the non-terminal states, derived from the enum")
+        void refreshesAgainstTheNonTerminalStates() {
+            Referral lapsed = storedClaim(OTHER_JUDGE, CLAIM_EXPIRY.plusMinutes(5));
+            rowsInTheDatabase(lapsed);
+
+            service.reclaimStaleClaims();
+
+            // The same derivation the one-live-referral guard uses. Passed to the statement rather than spelled
+            // out in JPQL so that "in play" has one definition -- ReferralState.isTerminal() -- and a sixth
+            // state is covered by the recompute the moment it is added.
+            assertThat(liveStatesAsked())
+                .containsExactlyInAnyOrder(ReferralState.Open, ReferralState.Claimed, ReferralState.Decided);
+        }
+
+        @Test
+        @DisplayName("writes no case column at all when it released nothing")
+        void refreshesNothingWhenItReleasedNothing() {
+            Referral fresh = storedClaim(JUDGE, Duration.ofMinutes(1));
+            rowsInTheDatabase(fresh);
+
+            assertThat(service.reclaimStaleClaims()).isZero();
+
+            // The ordinary pool load. A sweep with nothing to do must not touch the case table, or the most
+            // polled judicial page would write to every case that has ever held a claim.
+            verifyNoInteractions(deedPolls);
+        }
+
+        /** The cases the one set-based statement was asked to recompute. */
+        private Collection<String> casesRefreshed() {
+            return refreshAsked().deedPollIds();
+        }
+
+        /** The states the set-based statement was told count as "in play". */
+        private Collection<ReferralState> liveStatesAsked() {
+            return refreshAsked().liveStates();
+        }
+
+        /**
+         * The arguments of the sweep's single recompute, asserting on the way that there was exactly one.
+         */
+        @SuppressWarnings("unchecked")
+        private RefreshAsked refreshAsked() {
+            ArgumentCaptor<Collection<String>> cases = ArgumentCaptor.forClass(Collection.class);
+            ArgumentCaptor<Collection<ReferralState>> live = ArgumentCaptor.forClass(Collection.class);
+            verify(deedPolls).refreshCurrentReferralStates(cases.capture(), live.capture());
+            return new RefreshAsked(cases.getValue(), live.getValue());
+        }
+    }
+
+    private record RefreshAsked(Collection<String> deedPollIds, Collection<ReferralState> liveStates) {
+    }
+
+    @Nested
+    @DisplayName("the case's current referral state")
+    class CurrentReferralStateColumn {
+
+        /** A referral of another case, for the questions about the recompute reading one case only. */
+        private static final UUID OTHER_CASES_REFERRAL_ID =
+            UUID.fromString("66666666-6666-6666-6666-666666666666");
+
+        @Test
+        @DisplayName("reads Open once a referral is raised")
+        void followsACreate() {
+            storedCase(CASE_ID);
+
+            service.createReferral(CASE_ID, minimal(), CASEWORKER);
+
+            assertThat(caseColumnWritten(CASE_ID)).isEqualTo(ReferralState.Open);
+        }
+
+        @Test
+        @DisplayName("reads Claimed once a judge picks the referral up")
+        void followsAClaim() {
+            stored(ReferralState.Open);
+
+            service.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            assertThat(caseColumnWritten(CASE_ID)).isEqualTo(ReferralState.Claimed);
+        }
+
+        @Test
+        @DisplayName("reads Decided once the judge records a direction -- the state the dashboard counts")
+        void followsADecision() {
+            storedClaim(JUDGE, Duration.ofMinutes(10));
+
+            service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE);
+
+            // The whole reason the column exists: "Returned -- action needed" is a filtered case list, and this
+            // write is what puts the case in it.
+            assertThat(caseColumnWritten(CASE_ID)).isEqualTo(ReferralState.Decided);
+        }
+
+        @Test
+        @DisplayName("goes back to null on close, rather than reading Closed for good")
+        void followsAClose() {
+            stored(ReferralState.Decided);
+
+            service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+
+            // The mistake a per-site push makes. Closed is terminal, so the case has no referral in play and the
+            // honest answer is null -- a case left reading Closed would sit in the "action needed" queue after
+            // the caseworker actioned it, and every count drawn from the column would be wrong.
+            assertThat(caseColumnWritten(CASE_ID)).isNull();
+        }
+
+        @Test
+        @DisplayName("goes back to null on withdraw, so the case is referable again")
+        void followsAWithdrawal() {
+            stored(ReferralState.Open);
+
+            service.withdrawReferral(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+
+            assertThat(caseColumnWritten(CASE_ID)).isNull();
+        }
+
+        @Test
+        @DisplayName("reads Open again for a case referred a second time, ignoring its terminal history")
+        void ignoresTerminalHistoryWhenACaseIsReferredAgain() {
+            storedCase(CASE_ID);
+            history(ReferralState.Withdrawn);
+            history(ReferralState.Closed);
+
+            service.createReferral(CASE_ID, minimal(), CASEWORKER);
+
+            // The recompute reads every referral of the case and takes the one still in play, so a case with a
+            // long history reads the state of its new referral rather than of its last finished one.
+            assertThat(caseColumnWritten(CASE_ID)).isEqualTo(ReferralState.Open);
+        }
+
+        @Test
+        @DisplayName("is null after withdrawing the live one even when the case holds finished referrals")
+        void isNullWhenOnlyTerminalReferralsRemain() {
+            stored(ReferralState.Claimed);
+            history(ReferralState.Closed);
+
+            service.withdrawReferral(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+
+            assertThat(caseColumnWritten(CASE_ID)).isNull();
+        }
+
+        @Test
+        @DisplayName("reads only the addressed case's referrals, never another case's live one")
+        void readsOnlyTheAddressedCasesReferrals() {
+            stored(ReferralState.Open);
+            // Another case with a referral in play at the same time, which is the ordinary state of the service.
+            storedClaimOn(OTHER_CASE_ID, OTHER_CASES_REFERRAL_ID, JUDGE, Duration.ofMinutes(1));
+
+            service.withdrawReferral(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+
+            // Scoped to the case: a recompute reading across cases would answer Claimed here and put a case with
+            // no referral into the judicial pool's counts.
+            verify(referrals).findStatesByDeedPollId(CASE_ID);
+            verify(referrals, never()).findStatesByDeedPollId(OTHER_CASE_ID);
+            assertThat(caseColumnWritten(CASE_ID)).isNull();
+        }
+
+        @Test
+        @DisplayName("is not written by touch, which moves lastTouchedAt and not the state")
+        void isNotWrittenByTouch() {
+            storedClaim(JUDGE, Duration.ofMinutes(30));
+
+            service.touch(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            // The seventh mutating method, and the one transition list this deliberately leaves out: a keepalive
+            // changes no state, so recomputing the column would be a write to a case row on every judicial read.
+            verifyNoInteractions(deedPolls);
+        }
+
+        @Test
+        @DisplayName("survives the sweep taking a lapsed claim back inside the same claim call")
+        void endsAtClaimedWhenTheSweepRanFirst() {
+            Referral lapsed = storedClaim(OTHER_JUDGE, CLAIM_EXPIRY.plusMinutes(5));
+            rowsInTheDatabase(lapsed);
+
+            service.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            // claim() sweeps before it reads, so this case's column is refreshed twice in one transaction: the
+            // set-based statement takes it to Open, and the claim's own recompute takes it on to Claimed. The
+            // order matters, and getting it wrong would leave a claimed referral's case reading Open.
+            assertThat(lapsed.getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(caseColumnWritten(CASE_ID)).isEqualTo(ReferralState.Claimed);
+        }
+
+        @Test
+        @DisplayName("is not written when the transition was refused")
+        void isNotWrittenWhenTheTransitionWasRefused() {
+            stored(ReferralState.Closed);
+
+            // Three refusals, each of which leaves the referral table as it was: closing a terminal referral,
+            // withdrawing one, and claiming one. A recompute after a refused transition would be harmless today
+            // and a write to a case row for every mistyped click.
+            assertThatThrownBy(() -> service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
+                .isInstanceOf(ConflictError.class);
+            assertThatThrownBy(() -> service.withdrawReferral(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
+                .isInstanceOf(ConflictError.class);
+            assertThatThrownBy(() -> service.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(ConflictError.class);
+
+            verify(deedPolls, never()).writeCurrentReferralState(anyString(), any());
+        }
+
+        @Test
+        @DisplayName("is not written when the case does not exist")
+        void isNotWrittenForACaseThatDoesNotExist() {
+            assertThatThrownBy(() -> service.createReferral(CASE_ID, minimal(), CASEWORKER))
+                .isInstanceOf(NotFoundError.class);
+
+            verify(deedPolls, never()).writeCurrentReferralState(anyString(), any());
+        }
+
+        /**
+         * A finished referral in the case's history: on the case, in the fake database, and not addressable.
+         *
+         * <p>Not stubbed into {@code findByIdAndDeedPollId}, because history is what the recompute reads past
+         * rather than what a transition acts on.
+         */
+        private void history(ReferralState state) {
+            DeedPoll parent = new DeedPoll();
+            parent.setId(CASE_ID);
+            Referral referral = new Referral();
+            referral.setId(UUID.randomUUID());
+            referral.setDeedPoll(parent);
+            referral.setState(state);
+            rows.add(referral);
         }
     }
 }

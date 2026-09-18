@@ -318,10 +318,49 @@ Class-level javadoc on the helper: the column is a denormalised read-model of th
 from truth after every transition and never set to a per-site value — a reviewer who has not read this plan
 will otherwise "simplify" it into a drifting push.
 
-- [ ] `refreshCurrentReferralState` recomputes NULL-when-all-terminal / the-one-non-terminal-state, proven
+- [x] `refreshCurrentReferralState` recomputes NULL-when-all-terminal / the-one-non-terminal-state, proven
       container-free; called by create/withdraw/claim/decide/close; `reclaimStaleClaims` updates the column
       set-based in its own transaction; a test per transition asserts the case column matches the referral's
       new state (and NULL after withdraw/close); `./gradlew build` green
+
+**Done (2026-09-18). Four things the plan did not name, each a decision the code now carries:**
+
+1. **The column is written by a one-column statement, never by saving the loaded case.** `DeedPollRepository`
+   gained `writeCurrentReferralState(id, state)` (`update DeedPoll d set d.currentReferralState = :state`)
+   because `DeedPoll` has no dirty-column tracking, so `save` writes every column, and a referral transition
+   holds no lock on the case row — it would read the case, then write all of it, discarding whatever a
+   concurrent patch committed in between (the lost update `findByIdForUpdate` exists to stop on the patch path).
+   A single-column `UPDATE` cannot lose a write to another column, so the referral flows need no lock on the
+   case at all. Consequence for the tests: `ReferralServiceTest`'s "does not write the case's flat master
+   columns" could no longer assert `verifyNoInteractions(deedPolls)`; it now asserts the one permitted write and
+   `verifyNoMoreInteractions`, which is the stronger claim.
+2. **The bulk mirror is keyed on the cases the sweep actually released, and it still recomputes from truth.**
+   Mirroring the sweep's `WHERE` *after* the releases would match nothing — a released row is already `'Open'`
+   with `lastTouchedAt` NULL — and mirroring it *before* would include rows another replica takes. So
+   `refreshCurrentReferralStates(deedPollIds, liveStates)` is one statement over exactly the ids whose release
+   answered 1, and it sets each column from a correlated read of that case's non-terminal referral rather than
+   to the `'Open'` the sweep happens to produce. Decision 2's "never a per-site value" therefore holds at the
+   bulk site too, and a case whose referrals are by then all terminal gets NULL, which a hard-coded `'Open'`
+   could not have given. `liveStates` is passed in from `LIVE_STATES` so `isTerminal()` stays the single
+   definition. `reclaimStaleClaims` still returns releases (= notes written), not cases.
+3. **`claim` refreshes the column twice in one transaction, and the order is load-bearing.** Its nested
+   `reclaimStaleClaims()` may take this very case's lapsed claim back (column → `Open`) a moment before the
+   claim's own recompute takes it to `Claimed`. Pinned by a unit test and by a container test, because the
+   reverse order would commit a claimed referral whose case reads `Open`.
+4. **`touch` has no call, as the Task 0 gate predicted**, and there is now a test that says so rather than a
+   comment: a keepalive changes no state, so recomputing there would write to a case row on every judicial read.
+
+**Where the rule lives:** `CurrentReferralState` (a class, so the reasoning has somewhere to sit) holds the pure
+projection and `CurrentReferralStateTest` proves it with no container — including that a backfilled
+`Closed`-only case is NULL, which is half of Task 3's assertion arriving early. `DeedPollRepositoryTest` proves
+both statements against real Postgres (the null write is a value, not a no-op; the subquery gives NULL for an
+all-terminal case), `ReferralRepositoryTest` proves the state projection is scoped to its case, and
+`CaseworkerReferralControllerTest` walks a referral through raise → claim → decide → close over HTTP and a real
+database, reading the **committed** column after each step — which is the transactionality claim, since every
+read is of a row the transition's own transaction wrote.
+
+**Counts:** `test` = 1964 / 249 classes, `integration` = 7 / 3, total 1971 against Task 1's 1930 and the 1927
+branch baseline; 0 failures, 0 errors.
 
 ### Task 3: The queryable field, and the backfill assertion
 

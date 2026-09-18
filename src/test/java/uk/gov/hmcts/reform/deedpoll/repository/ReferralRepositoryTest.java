@@ -237,6 +237,33 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("reads the states of one case's referrals, all of them, and never another case's")
+    void readsTheStatesOfOneCasesReferrals() {
+        DeedPoll deedPoll = persistedCase();
+        persistedReferral(deedPoll, ReferralState.Closed, LocalDateTime.of(2026, 2, 1, 9, 0));
+        persistedReferral(deedPoll, ReferralState.Withdrawn, LocalDateTime.of(2026, 3, 1, 9, 0));
+        persistedReferral(deedPoll, ReferralState.Decided, LocalDateTime.of(2026, 4, 1, 9, 0));
+
+        DeedPoll otherCase = persistedCase();
+        persistedReferral(otherCase, ReferralState.Open, LocalDateTime.of(2026, 5, 1, 9, 0));
+
+        final DeedPoll neverReferred = persistedCase();
+        entityManager.flush();
+        entityManager.clear();
+
+        // Every state rather than the non-terminal ones: "all of them are terminal, so the case has no referral
+        // in play" is CurrentReferralState's half of the answer, and a query that pre-filtered would move the
+        // terminal split out of ReferralState.isTerminal() and into a finder name.
+        assertThat(referrals.findStatesByDeedPollId(deedPoll.getId()))
+            .containsExactlyInAnyOrder(ReferralState.Closed, ReferralState.Withdrawn, ReferralState.Decided);
+        // Scoped, like every other finder here: a recompute that read across cases would put a case with no
+        // referral into the dashboard's counts.
+        assertThat(referrals.findStatesByDeedPollId(otherCase.getId()))
+            .containsExactly(ReferralState.Open);
+        assertThat(referrals.findStatesByDeedPollId(neverReferred.getId())).isEmpty();
+    }
+
+    @Test
     @DisplayName("counts Claimed and Decided as states a case may already be holding")
     void countsClaimedAndDecidedAsNonTerminal() {
         // The states no operation reaches yet. The guard is written against "non-terminal" rather than
