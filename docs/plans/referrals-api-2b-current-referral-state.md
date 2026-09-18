@@ -84,7 +84,12 @@ owned here:
      a case never persists with a referral in one state and a case column naming another. A test asserts this
      for each transition.
 
-3. **The backfill leaves the column NULL for every migrated case** (migration `V{n}`, additive). api-1's
+3. **The backfill leaves the column NULL for every migrated case** (migration `V{n}`, additive).
+   **CORRECTED IN TASK 3 — read that note before this decision.** The premise below is false: `V7` creates a
+   `Closed` referral only for a case whose Master decided, and a live **`Open`** one for a case referred and
+   still awaiting a decision. NULL is right for the first and wrong for the second, so `V10` recomputes the
+   column from the referral table instead of leaving it defaulted. What survives is the prohibition: never
+   write `Closed` onto a case. api-1's
    `V7__backfill_referrals.sql` creates one `Closed` referral per legacy case that had referral data
    (api-1 decision, "state = 'Closed' where …"). `Closed` is terminal, so **the correct current state for
    every backfilled case is NULL** — there is no active referral. The new column defaults to NULL and the
@@ -379,10 +384,61 @@ Assert the backfill leaves the column NULL for every migrated case (decision 3):
 `V7`-backfilled data (or a unit test of the projection rule against a `Closed`-only referral set) showing the
 current state is NULL, not `Closed`.
 
-- [ ] Field registered read-only + queryable, `FormFieldsTest` green (labels set resolves);
+- [x] Field registered read-only + queryable, `FormFieldsTest` green (labels set resolves);
       `where=currentReferralState:is:Decided` and `:isEmpty` proven to select the right rows in a
       `CaseSpecifications`/`CaseQuery` test; backfilled cases assert NULL current state; the queryable-field
       set assertion in `OpenAPIPublisherTest` updated; `./gradlew build` green
+
+**Done (2026-09-18). Decision 3 was wrong about `V7`, and correcting it is the one thing this task added
+that the plan did not name:**
+
+1. **`V7` does NOT create only `Closed` referrals, so "the column is NULL for every migrated case" was not
+   the honest assertion.** `V7__backfill_referrals.sql` has a two-armed state rule, and only the first arm
+   is terminal: `masterDecision` set → `'Closed'`, but **`dateReferred` set with no decision → `'Open'`** —
+   deliberately, because a live backlog item must go into the pool rather than into a state nobody ever
+   answers (`ReferralBackfillTest.anAwaitingCaseGetsAnOpenReferral` has pinned that since api-1). Decision 3
+   and `V9`'s own comment both restate the plan's belief that every backfilled referral is `Closed`. So a
+   case referred before cutover and still awaiting its decision comes out of `V7` with a **live `Open`
+   referral and, under `V9` alone, a case column reading NULL** — the read model disagreeing with the
+   referral table from the first minute of the first environment, and the case missing from every "which
+   cases have a live referral" query until a judge happened to claim it. Asserting NULL there, as the task
+   text asked, would have pinned that as intended behaviour.
+2. **The fix is `V10__backfill_current_referral_state.sql`, not an edit to `V9`.** `V9` is committed and has
+   run, so its comment stands as written and wrong; `V10` is additive data-only and states the correction in
+   full. It writes the column from **a correlated read of the case's own non-terminal referral** — the same
+   projection `DeedPollRepository.refreshCurrentReferralStates` runs after the sweep and
+   `CurrentReferralState` holds for one case — rather than a third copy of `V7`'s `CASE`, so decision 2's
+   "never a per-site value" holds at the migration site too. `'Closed'`/`'Withdrawn'` are excluded by the
+   subquery, so decision 3's actual prohibition (**never write `Closed` onto a case**) is structural: a
+   decided legacy case still reads NULL. Stated as *not terminal* rather than as the three live states, so a
+   sixth non-terminal member added later is included by default. Idempotent, and no-op on a fresh database.
+3. **Where the assertions live.** `ReferralBackfillTest.CurrentReferralStateColumn` runs both committed files
+   in version order against real Postgres and asserts all three shapes `V7` distinguishes — decided → NULL
+   (not `Closed`), never-referred → NULL, **awaiting → `Open`** — plus idempotence on a re-run, which is the
+   likeliest way that file is ever executed again. The container-free half of decision 3 was already proven
+   in Task 2 by `CurrentReferralStateTest` (a `Closed`-only referral set projects to NULL).
+
+**Three more things the plan did not name:**
+
+4. **The queryable-field count assertion is in `CaseQueryTest`, not `OpenAPIPublisherTest`** — exactly as
+   Task 1's note predicted. `acceptsEveryStoredFormField` pins `allFields()` at 70 → **71** and the queryable
+   subset at 68 → **69**; `OpenAPIPublisherTest` needed no edit, because it asserts over write-body schemas
+   and this field is read-only.
+5. **The rendered field landed in the General card beside `State`, not on the Referral tab**, and that is
+   load-bearing rather than cosmetic: the Referral tab hides itself on a case not referred to the Master, so
+   a field the dashboard filters on would have been invisible on exactly the cases it counts. `DetailViewTest`'s
+   General-column assertion is updated for the third of "ours" that trails its related field. Decision 4's
+   flagged consequence is therefore now real and visible — *Steve: say if the read-only field is unwanted.*
+6. **`REFERRAL_STATE_LABEL` is the first `DynamicsValues` label set with no matching `_VALUE` map**, and it
+   labels all five members. There is no Dynamics integer to state (Dynamics had no referral entity), and
+   inventing one would put a number in `EnumValuesConformanceTest`'s way that no Dataverse export can
+   confirm — that test's list is explicit, so it needed no change. All five are labelled because the terminal
+   split is `ReferralState`'s business, not the label map's, and a missing member renders as nothing at all;
+   `FormFieldsTest.labelsEveryReferralState` pins that. It also makes the query fail closed: an unknown state
+   is refused through the labels set (`currentReferralState:is:Returned` → "has no value").
+
+**Counts:** `test` = 1975 / 251 classes, `integration` = 7 / 3, total 1982 against Task 2's 1971, Task 1's
+1930 and the 1927 branch baseline; 0 failures, 0 errors.
 
 ### Task 4: Full validation
 

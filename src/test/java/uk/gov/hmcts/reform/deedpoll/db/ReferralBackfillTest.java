@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.db;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -25,7 +26,8 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * What {@code V7__backfill_referrals.sql} actually does to real rows.
+ * What {@code V7__backfill_referrals.sql} -- and {@code V10__backfill_current_referral_state.sql}
+ * behind it -- actually does to real rows.
  *
  * <p>Nothing else can assert this. The migration runs during every context boot, but against an empty
  * case table, so it inserts nothing and a statement that selected the wrong cases -- or mapped the
@@ -43,7 +45,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Transactional
 class ReferralBackfillTest extends AbstractPostgresContainerTest {
 
-    private static final String MIGRATION = "db/migration/V7__backfill_referrals.sql";
+    private static final String REFERRALS = "db/migration/V7__backfill_referrals.sql";
+
+    private static final String CURRENT_STATE = "db/migration/V10__backfill_current_referral_state.sql";
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -53,10 +57,14 @@ class ReferralBackfillTest extends AbstractPostgresContainerTest {
 
     /** The committed migration, as committed. */
     private static String backfillSql() {
-        try (var stream = new ClassPathResource(MIGRATION).getInputStream()) {
+        return sqlOf(REFERRALS);
+    }
+
+    private static String sqlOf(String migration) {
+        try (var stream = new ClassPathResource(migration).getInputStream()) {
             return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new UncheckedIOException("Could not read " + MIGRATION, e);
+            throw new UncheckedIOException("Could not read " + migration, e);
         }
     }
 
@@ -172,5 +180,96 @@ class ReferralBackfillTest extends AbstractPostgresContainerTest {
             assertThat(row).containsEntry("state", "Closed");
             assertThat(row.get("createdOn")).isNotNull();
         });
+    }
+
+    /**
+     * What the pair of backfills leaves on the case's own {@code currentReferralState} column.
+     *
+     * <p>Both files, in order, because the second is only meaningful after the first: V7 writes the
+     * referrals and V10 projects them onto the case. Run together they are what a cutover environment
+     * actually experiences, and the three shapes below are the three V7 distinguishes.
+     */
+    @Nested
+    @DisplayName("the case's currentReferralState after both backfills")
+    class CurrentReferralStateColumn {
+
+        /** The column, cast to text for the same driver reason the referral query casts its enums. */
+        private Object currentStateOf(String deedPollId) {
+            return jdbcTemplate.queryForMap("""
+                select "currentReferralState"::text as "currentReferralState"
+                from "deedpoll_deedpoll"
+                where "id" = ?
+                """, deedPollId).get("currentReferralState");
+        }
+
+        /** Both files in version order, flushing first because raw SQL does not see the session. */
+        private void runBothBackfills() {
+            entityManager.flush();
+            jdbcTemplate.execute(sqlOf(REFERRALS));
+            jdbcTemplate.execute(sqlOf(CURRENT_STATE));
+        }
+
+        @Test
+        @DisplayName("a decided legacy case is NULL, not Closed")
+        void decidedLegacyCaseIsNull() {
+            // The assertion V9's comment is about, and the one thing the backfill must NOT do: 'Closed' is
+            // terminal, so the case has no referral in play. Writing 'Closed' here would make every migrated
+            // case read as having a live-but-closed referral -- the one-referral-per-case snapshot model the
+            // referral table replaced. Asserted rather than written: the subquery cannot produce a terminal
+            // state, so this is NULL by construction and stays NULL if the statement is re-run.
+            DeedPoll decided = persistedCase(LocalDateTime.of(2026, 2, 1, 9, 0), MasterDecision.Approved);
+
+            runBothBackfills();
+
+            assertThat(referralsOf(decided.getId())).singleElement()
+                .satisfies(row -> assertThat(row).containsEntry("state", "Closed"));
+            assertThat(currentStateOf(decided.getId())).isNull();
+        }
+
+        @Test
+        @DisplayName("a case that was never referred is NULL, having no referral at all")
+        void anUnreferredCaseIsNull() {
+            DeedPoll neverReferred = persistedCase(null, null);
+
+            runBothBackfills();
+
+            assertThat(referralsOf(neverReferred.getId())).isEmpty();
+            assertThat(currentStateOf(neverReferred.getId())).isNull();
+        }
+
+        @Test
+        @DisplayName("a legacy case still awaiting its decision is Open, because its referral is")
+        void anAwaitingLegacyCaseIsOpen() {
+            // The case the plan's decision 3 missed, and the reason V10 exists. V7's state rule has two arms
+            // and only one is 'Closed': a case referred before cutover with no decision back gets a LIVE
+            // 'Open' referral, so NULL would be the read model disagreeing with the referral table from the
+            // first minute of the first environment -- and the case would be absent from every "which cases
+            // have a live referral" query until a judge happened to claim it.
+            DeedPoll awaiting = persistedCase(LocalDateTime.of(2026, 3, 1, 9, 0), null);
+
+            runBothBackfills();
+
+            assertThat(referralsOf(awaiting.getId())).singleElement()
+                .satisfies(row -> assertThat(row).containsEntry("state", "Open"));
+            assertThat(currentStateOf(awaiting.getId())).isEqualTo("Open");
+        }
+
+        @Test
+        @DisplayName("running the projection twice changes nothing, so a re-run is safe")
+        void isIdempotent() {
+            // It is an UPDATE from a correlated read with no state of its own. Pinned because a repair run
+            // against a live environment is the likeliest way this file is ever executed again.
+            // One list rather than two locals only because checkstyle's declaration-to-use distance counts
+            // the statements between; the pair is the awaiting case and the decided one, in that order.
+            List<String> ids = List.of(
+                persistedCase(LocalDateTime.of(2026, 3, 1, 9, 0), null).getId(),
+                persistedCase(LocalDateTime.of(2026, 2, 1, 9, 0), MasterDecision.Approved).getId());
+
+            runBothBackfills();
+            jdbcTemplate.execute(sqlOf(CURRENT_STATE));
+
+            assertThat(currentStateOf(ids.get(0))).as("the awaiting case").isEqualTo("Open");
+            assertThat(currentStateOf(ids.get(1))).as("the decided case").isNull();
+        }
     }
 }

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -159,6 +160,34 @@ class CaseQueryTest {
         }
 
         @Test
+        @DisplayName("admits currentReferralState, which is the whole reason it is a form field")
+        void admitsCurrentReferralState() {
+            // The exact condition admin-2's "Returned -- action needed" count and its worklist both issue.
+            // It is queryable only because FormFields registers it and DeedPollFields reads it, so this
+            // pins both halves: dropping either would refuse the dashboard's only query.
+            CaseQuery.Condition decided = only("currentReferralState:is:Decided");
+
+            assertThat(decided.kind()).isEqualTo(FieldKind.ENUM);
+            assertThat(decided.field().readOnly()).isTrue();
+            assertThat(decided.values()).containsExactly(ReferralState.Decided.name());
+            assertThat(DeedPollFields.isWritable("currentReferralState")).isFalse();
+
+            // The other half of the pair: a case with no live referral at all.
+            assertThat(only("currentReferralState:isEmpty").operator()).isEqualTo(QueryOperator.IS_EMPTY);
+            assertThat(only("currentReferralState:isOneOf:Open,Claimed,Decided").values())
+                .containsExactly("Open", "Claimed", "Decided");
+        }
+
+        @Test
+        @DisplayName("refuses a referral state the enum does not have")
+        void refusesAnUnknownReferralState() {
+            // Fails closed through the labels set, which is why REFERRAL_STATE_LABEL names all five
+            // members rather than only the three a case column ever holds.
+            assertThat(errorFor("currentReferralState:is:Returned").message())
+                .isEqualTo("currentReferralState has no value 'Returned'");
+        }
+
+        @Test
         @DisplayName("refuses a derived field, which has no column to query")
         void refusesADerivedField() {
             // The two day counts are computed at read time from the dates either side of them.
@@ -174,8 +203,8 @@ class CaseQueryTest {
                 .filter(name -> DeedPollFields.readableFields().contains(name))
                 .toList();
 
-            assertThat(FormFields.allFields()).hasSize(70);
-            assertThat(queryable).hasSize(68)
+            assertThat(FormFields.allFields()).hasSize(71);
+            assertThat(queryable).hasSize(69)
                 .doesNotContain("daysReceivedToEnroled", "daysReceivedToReturned");
             FormFields.allFields().stream()
                 .filter(field -> queryable.contains(field.name()))

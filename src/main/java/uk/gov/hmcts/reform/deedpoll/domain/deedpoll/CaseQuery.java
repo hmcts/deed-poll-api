@@ -177,10 +177,12 @@ public record CaseQuery(List<Condition> conditions) {
      * never reaches a query -- and the refusal quotes it back truncated, so the response stays bounded
      * whatever was sent.
      *
-     * <p>Queryable is not the same as editable: all five read-only fields are queryable, because
-     * {@code referencenumber} and {@code state} are among the most useful things to ask about and
-     * neither is editable. What a field does need is a column -- the two computed day counts are
-     * derived at read time, so there is nothing to query them against.
+     * <p>Queryable is not the same as editable: every read-only field is queryable, because
+     * {@code referencenumber}, {@code state} and {@code currentReferralState} are among the most useful
+     * things to ask about and none of them is editable -- the last of those is read-only precisely
+     * because a caller able to patch it could tell the case list a case has a decided referral when it
+     * has none. What a field does need is a column -- the two computed day counts are derived at read
+     * time, so there is nothing to query them against.
      */
     private static FieldDef queryableField(String name) {
         FieldDef field = FormFields.FIELD_BY_NAME.get(name);

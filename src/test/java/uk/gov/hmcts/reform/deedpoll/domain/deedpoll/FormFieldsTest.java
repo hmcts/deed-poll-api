@@ -3,7 +3,9 @@ package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.enums.DynamicsValues;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 
+import java.util.EnumSet;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -117,6 +119,21 @@ class FormFieldsTest {
                     .isEmpty();
             }
         }
+    }
+
+    @Test
+    @DisplayName("labels every referral state, including the two a case column never holds")
+    void labelsEveryReferralState() {
+        // currentReferralState is only ever NULL or one of the three non-terminal states, so the terminal
+        // two are unreachable through the case form. They are labelled anyway: the terminal split belongs to
+        // ReferralState, and a set missing a member renders that member as nothing at all if it ever moves.
+        // Nothing else in the codebase can catch that, because the value is read out of a map by name.
+        assertThat(FormFields.enumOptions("currentReferralState"))
+            .extracting(FormFields.SelectOption::value)
+            .containsExactly(EnumSet.allOf(ReferralState.class).stream().map(Enum::name).toArray(String[]::new));
+        assertThat(FormFields.enumOptions("currentReferralState"))
+            .extracting(FormFields.SelectOption::text)
+            .containsExactly("Open", "Claimed", "Decided", "Closed", "Withdrawn");
     }
 
     @Test

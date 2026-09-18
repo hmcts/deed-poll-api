@@ -42,13 +42,20 @@ public final class FormFields {
     /** The Application tab: General, Names, Addresses, Nationality, Declarations. */
     private static final TabDef APPLICATION_TAB = TabDef.of("application", "Application", List.of(
         // Column positions replicate power_app/screenshots/application_general.png, read down the left
-        // column then the right. Two departures, both deliberate:
+        // column then the right. Three departures, all deliberate:
         //   - `displayReference` and `urgencyreason` have no place on the source card. They are ours
         //     (the reference the user actually quotes, and the reason a case was flagged urgent), so
         //     they follow their related field.
         //   - The source card also shows "Refer to Master?", which we own on the Referral tab because
         //     it drives that tab's visibility. Duplicating one field across two editable forms would
         //     give it two save paths.
+        //   - `currentReferralState` is ours too, and it is here rather than on the Referral tab
+        //     because it is the case's own summary of where its live referral has got to -- the
+        //     question "State" answers for the case, asked about the referral. It is registered as a
+        //     form field at all because that is what makes it queryable: `CaseQuery.queryableField`
+        //     admits a name only if FIELD_BY_NAME holds it. Rendering it read-only beside State is the
+        //     cost of that, and the Referral tab hides itself on a case not referred to the Master, so
+        //     a field a dashboard filters on would have been invisible on exactly the cases it counts.
         new SectionDef("General", List.of(
             number("referencenumber", "Reference number", LEFT).asReadOnly(),
             text("displayReference", "Display reference", LEFT).asReadOnly(),
@@ -71,6 +78,8 @@ public final class FormFields {
 
             enumField("privacy", "Privacy", "privacy", RIGHT).asNotNullable(),
             enumField("state", "State", "state", RIGHT).asReadOnly(),
+            enumField("currentReferralState", "Current referral state", "currentReferralState", RIGHT)
+                .asReadOnly(),
             enumField("urgency", "Urgency", "urgency", RIGHT).asNotNullable(),
             text("urgencyreason", "Urgency reason", RIGHT),
             text("onlineApplicationReference", "Online application reference", RIGHT),
