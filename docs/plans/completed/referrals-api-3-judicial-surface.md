@@ -184,11 +184,26 @@ referral service — keep it one clearly-judicial unit):
 Extend `NamespaceSeparationSecurityTest` to add `judicial` as a third namespace sharing no DTO with the
 other two (decision 4).
 
-- [ ] `api/judicial/{controller,dto}` exist with documented `package-info`; `visibleTo` implements decision
+- [x] `api/judicial/{controller,dto}` exist with documented `package-info`; `visibleTo` implements decision
       3 and is unit-tested container-free for every state and both judges; `pool` requires `JUDICIAL`, runs
       the sweep, orders urgent-then-oldest and pages with a total, proven by a container-free ordering test
       and a repository test for the SQL; `NamespaceSeparationSecurityTest` covers judicial;
       `./gradlew build` green
+
+**Task 1 as built.** `JudicialReferralService` (domain/referrals) holds both halves — `visibleTo` as a static
+predicate and `pool(caller, paging)` gating on `JUDICIAL`, sweeping, then querying. Ordering is
+`POOL_ORDER = urgency desc, createdOn asc` handed to the query: descending `Urgency` is most-urgent-first
+because `V1__enums.sql` declares the type `('Normal', 'Urgent')` and Postgres orders an enum by its declared
+order — `ReferralRepositoryTest` proves that against a real database, `JudicialReferralServiceTest` proves
+container-free that the service asks for it rather than fetching and reordering. `ReferralPool` carries the
+page and the pool's total (decision 15: a page size, not a cap; `POOL_PAGE_SIZE = 10`). The pool needed
+`ReferralRepository.findByState(state, pageable)`, a second documented exception to that interface's
+case-scoping rule; `ReferralSecurityTest` admits it deliberately, asserts it can only be asked for "a page of
+the referrals in this state" and never for one referral, and adds an ArchUnit rule that nothing but
+`JudicialReferralService` calls it.
+
+**Branch baseline, measured before Task 1** (for Task 4): `test` 1975, `integration` 7 — 1982 total. After
+Task 1: `test` 2005, `integration` 7 — 2012 total.
 
 ### Task 2: The pool and referral read endpoints
 
@@ -204,11 +219,42 @@ other two (decision 4).
 
 DTOs are judicial-namespace types; the controller returns them, never an entity and never a caseworker DTO.
 
-- [ ] Pool endpoint returns judicial summaries + a total and 401s an unauthenticated caller; detail endpoint
+- [x] Pool endpoint returns judicial summaries + a total and 401s an unauthenticated caller; detail endpoint
       returns the referral + narrow application view + read-only notes for a visible referral and 404s an
       invisible one (withdrawn, closed, or another judge's) indistinguishably from a non-existent id;
       reading a held referral refreshes `lastTouchedAt`, reading a pool referral does not; controller test
       boots the context; no judicial DTO references a caseworker DTO; `./gradlew build` green
+
+**Task 2 as built.** `JudicialReferralController` at `/judicial/referrals`, two handlers, both thin: `pool` reads
+`page`/`size` through `CasePaging.parse(page, size, POOL_PAGE_SIZE)` — a new three-argument overload, because the
+default screenful belongs to the page being rendered while the cap and every refusal stay `CasePaging`'s — and
+`referral` maps one `JudicialReferralView`. Five judicial DTOs, no type shared with caseworker:
+`JudicialPoolResponse`/`JudicialReferralSummary` (a queue of referrals, carrying **no** case field at all — not
+even the reference, since reaching the application is the detail read), `JudicialReferralDetail`,
+`JudicialCaseView` (decision 8's eight fields, with the exclusions enumerated on the record) and
+`JudicialCaseNote` (note, author, when — narrower than `NoteResponse`: no id a judge can address, no amendment
+trail).
+
+`JudicialReferralService.referral(referralId, caller)` gates `JUDICIAL`, resolves, `visibleTo`-or-404, then calls
+api-2's `touch` **only when the caller holds it** — `Claimed` by them, which is narrower than visible, because
+`touch` 409s on the `Decided` referral visibility admits. The notes come from `NoteService.findNotes`, unchanged.
+
+**The one new declaration, and the plan's flag 3 made concrete.** `ReferralRepository.findWithCaseById` is the
+finder by referral id alone that api-1 forbids, admitted as the third documented exception: the judicial surface
+has no case id to scope with, so `visibleTo` stands where the parent id stands. It join-fetches the case, which is
+a correctness requirement rather than a tuning choice (`Referral.deedPoll` is `LAZY` and `open-in-view` is false,
+so mapping `JudicialCaseView` after the transaction would otherwise be a `LazyInitializationException`);
+`ReferralRepositoryTest` asserts the fetch with `Hibernate.isInitialized`, and `ReferralSecurityTest` adds an
+ArchUnit rule that nothing but `JudicialReferralService` calls it, plus rules that no judicial handler takes a
+case id and that the judicial controller neither returns nor binds an entity.
+
+`JudicialReferralControllerTest` (24 tests, container-backed, CI-excluded) is the first test in the suite where
+the **judge holds a real token** — `StubIdam` serves a userinfo document carrying the judicial claim — so the
+role gate, the 404s and the mutating reads are asserted end to end: the sweep releases a lapsed claim and offers
+it in the same response, a held referral's clock is refreshed and a pool referral's is not, another judge's
+referral answers a body byte-for-byte identical to a non-existent id's, and the excluded fields are asserted
+absent by *value* over the whole document as well as by name. After Task 2: `test` 2050, `integration` 7 — 2057
+total.
 
 ### Task 3: The claim and direction endpoints
 
@@ -226,20 +272,86 @@ Then the spec, **this task**: add `JUDICIAL_PATHS` (`/judicial/referrals`,
 it, **leave the caseworker count at 30**, and state the judicial operation count (4) in the prose files a
 grep finds. Add a judicial `package-info` operation note.
 
-- [ ] Claim and direction are live, gated `JUDICIAL`, 404 on an invisible referral, and surface api-2's 409s
+- [x] Claim and direction are live, gated `JUDICIAL`, 404 on an invisible referral, and surface api-2's 409s
       (claim non-`Open`; direct one not held) and 400 (bad direction) unchanged; spec publishes all four
       judicial paths and `OpenAPIPublisherTest` asserts them; caseworker count still 30; judicial count
       stated in prose by grepping; controller test boots the context; `./gradlew build` green
+
+**Task 3 as built.** `JudicialReferralService.claim(referralId, caller)` and `direct(referralId, direction, caller)`
+are the visibility check in front of an api-2 transition and nothing else: gate `JUDICIAL`, resolve by referral id,
+`visibleTo`-or-404, then call `ReferralService.claim` / `decide` with the case **resolved from the referral**. The
+resolve-and-refuse step is now one private `visible(...)` shared with the Task 2 read, so there is a single place
+that can answer "you cannot have this" and a single message every refusal gives.
+
+**The one asymmetry, and it is deliberate: `claim` sweeps first and `direct` does not.** A claim that lapsed a
+moment ago leaves a row still `Claimed` by the judge who abandoned it, which `visibleTo` says the next judge may
+not see — so checking visibility first would 404 a referral the pool is about to offer. Sweeping first makes the
+two agree (api-2's `claim` sweeps again, one query that finds nothing inside the same transaction). `direct` must
+*not* sweep: a judge submitting a direction was working the referral, and a sweep there would take it off them
+between their reading the papers and their answering. Their claim can still lapse by another judge's pool load,
+and that is then api-2's 409 — but not this request's doing.
+
+**Both writes answer with `JudicialReferralDetail`** — the same document the read gives, because the judicial
+surface has one representation of a referral and the screen after a claim is the papers. So there is no second
+judicial response DTO and no duplicate mapping. The one new DTO is `JudicialDirectionRequest`, a
+`KeyedRequestBody` over `ReferralSchemas.parseDirection`, where `state`, `decidedBy`, `decisionDate` and any case
+id have nowhere to land.
+
+Three statuses, three questions, asserted over HTTP: **404** for a referral this judge may not see (another
+judge's claim, withdrawn under them, terminal, unknown, not a UUID), **409** for one they can see and cannot act
+on (their own `Claimed` or `Decided` referral re-claimed; directing a pool referral they never claimed), **400**
+for a direction the schema refuses — both offending fields at once, and `publishToGazette: "false"` refused rather
+than read truthily. `OpenAPIPublisherTest` gains `JUDICIAL_PATHS`, a `containsAll` and a judicial operation count
+of 4 asserted **separately**, with `CASEWORKER_PATHS` proven disjoint from it so the caseworker thirty cannot
+drift by a judicial route being folded in; `OpenAPIWriteBodies` describes the direction body from
+`MasterDecision` and `ReferralSchemas.MAX_DIRECTIONS_LENGTH`, which the classpath-scanning
+`documentsEveryKeyedWriteBody` rule requires. Judicial count stated in `package-info.java`, `README.md` (a
+judicial surface section), `docs/RESUME.md` and `CLAUDE.md`; the caseworker 30 is untouched everywhere the grep
+found it. After Task 3: `test` 2086, `integration` 8 — 2094 total.
 
 ### Task 4: Security and full validation
 
 - Security tests: a **caseworker** token is refused every judicial route (403 from the role gate), an
   unauthenticated caller gets 401, and one judge cannot read, claim or direct a referral another judge holds
   (404, the visibility rule). Keep the role and visibility assertions container-free.
-- [ ] Caseworker-refused-on-judicial, unauthenticated-401, and cross-judge-isolation tests pass; namespace
+- [x] Caseworker-refused-on-judicial, unauthenticated-401, and cross-judge-isolation tests pass; namespace
       separation green; `./gradlew build` green from cold with `TESTCONTAINERS_RYUK_DISABLED=true`;
       checkstyle clean on all five source sets; test and integration totals recorded next to this branch's
       baseline; the count with `INTEGRATION_TESTS_ENABLED=false` recorded
+
+**Task 4 as built.** `JudicialSecurityTest` (config, container-free) states the three refusals **across the whole
+surface at once**, which is what the per-operation tests of tasks 1–3 could not: every assertion is driven from one
+`operations()` list, and `theseAreEveryJudicialOperation` asserts that list is the whole of it — against
+`JudicialReferralService`'s public *instance* methods (`visibleTo` is static, which is how it says it is a predicate
+rather than an operation) and against the controller's handler count. So a fifth judicial operation is covered by
+being added to the list rather than by somebody remembering to copy three tests.
+
+**The 401 is asserted as a property of the allowlist, not over HTTP**, and that is the point rather than a
+compromise: nothing in `SecurityConfiguration` mentions `/judicial/**` — it authenticates `anyRequest()` not on a
+short infrastructure allowlist — so what protects the surface is that the allowlist does not reach it.
+`isAuthenticatedByOmission` reads `PUBLIC_PATHS` reflectively (private on purpose; a test is not a reason to widen
+it) and asserts no pattern `AntPathMatcher`-matches any of the four judicial paths, then asserts the matcher does
+match `/health/**` so the loop cannot pass vacuously. Both container-backed classes that assert the 401 over real
+HTTP are CI-excluded; this one runs everywhere.
+
+Role gate: a caseworker, an administrator and each of the seven near-miss claim strings are refused all four
+operations with a `ForbiddenError` naming the role, and `verifyNoInteractions` on repository, transitions and notes
+proves the refusal precedes the lookup *and the pool's sweep* — a caseworker who could sweep by being refused often
+enough could move another judge's claim. The counterpart is asserted too: a judge built from a claims document is
+admitted all four, so the refusals are a rule rather than a dead surface. Cross-judge isolation: another judge's
+`Claimed`/`Decided` referral is 404 to read, claim and direct, with the message an unknown id gets (both asserted
+against the template, so a change that broke both identically still fails), no transition runs, the holder's claim
+and clock are untouched, and the pool never loads it because `Open` is in the query rather than in a filter over its
+result. The same fixture read by the judge who *does* hold it is admitted and refreshes their clock — one caller
+cannot tell a per-judge rule from a service that refuses everybody.
+
+**Final validation.** `./gradlew clean build` green from cold with `TESTCONTAINERS_RYUK_DISABLED=true`; checkstyle
+clean on all five source sets (one violation found and fixed: a method name whose second character was uppercase).
+**Counts: `test` 2098, `integration` 8 — 2106 total, against this branch's baseline of 1982** (`test` 1975,
+`integration` 7), so the three tasks added 124 tests. With `INTEGRATION_TESTS_ENABLED=false` — the CNP agent's
+shape — **1277 of the 2098 run**, the other 821 being the 27 container-backed classes, which is why the role and
+visibility rules are stated container-free. `build.gradle`'s exclusion comment carried the pre-api-3 figures and has
+been re-measured in place, as it asks its reader to do.
 
 ## Deliberately not in this plan
 
@@ -293,3 +405,35 @@ redirect. None blocks the plan being *written*; some should be settled before it
    spec published, and `deed-poll-admin`'s `openapi.json` refreshed, plus a Task 0 reconciliation gate. idam-1
    (the judicial role) is small and may not warrant a ralphex run, but is written up so the running order is
    complete.
+
+6. **RESOLVED (Steve, 2026-09-18): the lapse note names the judge who let a claim go, every other judge on that
+   case can read it, and that is correct — keep it.** Raised in review as a possible disclosure. The mechanism:
+   `ReferralNotes.claimLapsed` writes *"Referral claim by <judge> lapsed after inactivity"* onto the **case's**
+   note timeline, and `JudicialReferralDetail.caseNotes` returns that timeline to any judge who can see a referral
+   on the case — so *judge A claims → lets it lapse → judge B loads the pool and opens it* tells judge B who had
+   the papers before them. Decision 3's "one judge cannot learn another **holds** a case" is unaffected (present
+   tense: the claim is gone by then), but the past-tense fact is legible, so it needed a call.
+
+   **The call is that the name is load-bearing, not merely tolerable.** A lapse says nothing about *why*: the
+   previous judge may have been part-way through a complex point of law. Naming them lets the judge picking the
+   referral up go and ask, rather than starting the same research again or duplicating work already done. An
+   anonymous *"a claim lapsed"* would cost exactly that conversation, and the office's own need for the "who" is
+   then a second reason rather than the only one. So this is **not** a case of accepting a leak for convenience —
+   the disclosure is the feature.
+
+   Recorded on `ReferralNotes.claimLapsed` itself, as a *do not remove the name* note pointing back here, because
+   the tempting "fix" for a future reviewer who spots the judicial read-through is precisely to anonymise it.
+   The two options this rejects, for the record: dropping the name from the note text, and filtering the judicial
+   note projection (which would also have contradicted this plan's "notes via `NoteService.findNotes`,
+   unchanged").
+
+7. **FIXED IN REVIEW (2026-09-18): `CurrentUser`'s javadoc said `name` is "never used for authorisation",
+   which this plan made false.** `JudicialReferralService.visibleTo` authorises on `CurrentUser.name()`, and
+   api-2's `ReferralService.requireHeldBy` already did — so the class every future reader consults for that
+   invariant was asserting the opposite of the code, and `visibleTo` called itself "the one place" when there
+   were two. Both are corrected, and the two consequences are now written down where they belong: a display-name
+   collision lets one judge see and direct another's claimed referral, and a display-name **change** locks a
+   judge out of their own claimed referral (404 to read, 409 to direct) until the sweep releases it — which it
+   does, because `releaseStaleClaim` matches on `lastTouchedAt` and never on the name. **Keying the claim
+   columns on the token subject is the actual fix and it is a migration** — worth scheduling alongside idam-1,
+   since that is when real judicial identities first exist.

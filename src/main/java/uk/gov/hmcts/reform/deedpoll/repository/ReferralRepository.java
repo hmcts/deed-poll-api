@@ -1,5 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.repository;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -23,10 +25,27 @@ import java.util.UUID;
  * A caller wanting one referral has to say which case it belongs to, so a cross-case read or write is
  * not expressible rather than merely discouraged.
  *
- * <p>The exception is the inactivity sweep -- {@link #findStaleClaims} and {@link #releaseStaleClaim} -- which
- * is about every case at once and so has no case to be scoped to. It stays inside the rule rather than beside
- * it: the finder returns a three-field projection instead of an entity, and neither is reachable from a request
- * path that names a case.
+ * <p>There are three exceptions, and every one of them belongs to the judicial surface or to the sweep, which
+ * are the two things in this service that are about every case at once rather than about <em>a</em> case's
+ * referrals:
+ *
+ * <ul>
+ *   <li>the inactivity sweep -- {@link #findStaleClaims} and {@link #releaseStaleClaim}. It stays inside the
+ *       rule rather than beside it: the finder returns a three-field projection instead of an entity, and
+ *       neither is reachable from a request path that names a case;</li>
+ *   <li>the judicial pool -- {@link #findByState}. The shared pool <em>is</em> the cross-case list, and a
+ *       judge reaches it without naming any case, which is the point of it: the judicial surface is keyed on
+ *       the referral so that a judge cannot name an application at all. The scoping this drops is replaced by
+ *       a state filter the caller does not choose ({@code Open} only) and, on every read of an individual
+ *       referral, by {@code JudicialReferralService.visibleTo};</li>
+ *   <li>the judicial read of one referral -- {@link #findWithCaseById}. This is the exception that is a finder
+ *       by referral id alone, which the paragraph above forbids, and it exists because the judicial surface
+ *       carries no case id to scope with: a judicial URL is {@code /judicial/referrals/{referralId}} precisely
+ *       so that a judge cannot name an application. <strong>The safety boundary has moved rather than
+ *       gone</strong> -- {@code JudicialReferralService.visibleTo} is what stands where the parent id stands on
+ *       the caseworker surface -- and {@code ReferralSecurityTest} enforces that by asserting nothing but
+ *       {@code JudicialReferralService} calls it.</li>
+ * </ul>
  *
  * <p>This differs from {@link SavedQueryRepository}, which does read by id: a saved query's visibility
  * is a property of the entity, so it cannot be checked before the entity is loaded. A referral's scope
@@ -42,6 +61,57 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
 
     /** One referral, only if it belongs to the given case. */
     Optional<Referral> findByIdAndDeedPollId(UUID id, String deedPollId);
+
+    /**
+     * One page of the referrals in a given state, across every case -- the judicial pool.
+     *
+     * <p><strong>The order and the page are the database's, and that is the requirement rather than an
+     * implementation detail.</strong> The pool is worked urgent-first and oldest-first within each urgency
+     * band, so a caller that fetched and reordered would be sorting one page of an arbitrary slice -- the
+     * longest-waiting urgent referral would sit on page 4 and never be worked.
+     * {@code JudicialReferralService.POOL_ORDER} is the sort, and it relies on {@code "Urgency"} being declared
+     * {@code ('Normal', 'Urgent')} in {@code V1__enums.sql}: Postgres orders an enum by its declared order, so
+     * descending urgency is the most urgent first. {@code ReferralRepositoryTest} asserts that against a real
+     * Postgres, because the declaration order is the load-bearing part and no fake can stand in for it.
+     *
+     * <p>{@link org.springframework.data.domain.Page} rather than a list, because a pool without its total is
+     * a pool that cannot say how much work is waiting -- which is the number decision 15 is about, and the
+     * reason the page size is a page size and not a cap. The count is the same criterion the page was drawn
+     * from, so it comes from the same call.
+     *
+     * <p>No index backs this: the table is small, the plan that added the pool adds no migration, and an index
+     * on {@code "state"} alone would be nearly the whole table anyway. Adding one when the pool is slow is a
+     * migration, not a redesign.
+     *
+     * @param state the state a pooled referral is in, {@link ReferralState#Open}
+     * @param pageable the page and the order, which the caller supplies rather than this method naming
+     * @return the referrals on that page, with the total across every page
+     */
+    Page<Referral> findByState(ReferralState state, Pageable pageable);
+
+    /**
+     * One referral and the application it was raised on, by referral id alone -- the judicial read.
+     *
+     * <p><strong>The one finder here that names no case, and the reason is the judicial surface's shape rather
+     * than convenience.</strong> A judicial URL carries a referral id and nothing else, so there is no parent to
+     * scope with; the check that replaces the scope is
+     * {@code JudicialReferralService.visibleTo}, which admits the shared pool and the caller's own claimed and
+     * decided referrals and answers 404 for everything else. It is therefore only safe while it is reachable
+     * from that one gated place, which is a rule {@code ReferralSecurityTest} asserts in bytecode rather than a
+     * comment: a caseworker path calling this would have an unscoped read of any referral with neither the
+     * caseworker surface's parent id nor the judicial surface's visibility check in front of it.
+     *
+     * <p><strong>The case is join-fetched, and that is a correctness requirement.</strong>
+     * {@code Referral.deedPoll} is {@code LAZY} and {@code spring.jpa.open-in-view} is false, so a controller
+     * mapping the narrow judicial application view after the transaction closed would hit a
+     * {@code LazyInitializationException} on an uninitialised proxy. Fetching it in the same statement is also
+     * one round trip instead of two.
+     *
+     * @param id the referral, whoever it belongs to
+     * @return the referral with its application loaded, or empty for an id nothing was stored under
+     */
+    @Query("select r from Referral r join fetch r.deedPoll where r.id = :id")
+    Optional<Referral> findWithCaseById(@Param("id") UUID id);
 
     /**
      * Whether the case already holds a referral in one of the given states.

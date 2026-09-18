@@ -26,6 +26,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQuerySchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.util.Arrays;
@@ -34,19 +35,19 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Describes the ten write bodies that springdoc cannot describe by reflection.
+ * Describes the eleven write bodies that springdoc cannot describe by reflection.
  *
  * <p><strong>Why any of this is needed.</strong> Every write payload in this service binds as a keyed map rather
  * than as declared components, because a patch turns on the difference between an omitted field and an explicit
  * null and a record of nullable components cannot express that -- the argument is in {@code KeyedRequestBody}.
- * The consequence is that the nine JSON write bodies are classes with no fields, so springdoc reflects over them
+ * The consequence is that the ten JSON write bodies are classes with no fields, so springdoc reflects over them
  * and publishes {@code CreateCaseRequest: {}}. The upload is worse: it takes a
  * {@code MultipartHttpServletRequest}, which springdoc does not recognise as a body at all, so that operation is
  * published with no request body whatsoever.
  *
  * <p>That matters because of what the document is for. It is published to {@code hmcts/cnp-api-docs} for
  * consumers to generate clients from, and a consumer cannot tell an empty schema from a body that takes no
- * fields. They would get nine request types with no properties and an upload they cannot call, with nothing in
+ * fields. They would get ten request types with no properties and an upload they cannot call, with nothing in
  * the document hinting that anything is missing -- which is the failure {@code OpenAPIPublisherTest} was written
  * to prevent for the paths, reaching the bodies instead. A published document that is silently empty is worse
  * than no document, because a consumer trusts it.
@@ -54,7 +55,8 @@ import java.util.Set;
  * <p><strong>Generated from the domain's own tables, not restated here.</strong> The case body's fields come from
  * {@link DeedPollSchemas#writeBodyFields()}, which is the table that validates them; the note limit comes from
  * {@link NoteForm#MAX_NOTE_LENGTH}; the witness caps come from {@link WitnessSchemas}; the referral's caps and
- * reason vocabulary come from {@link ReferralSchemas} and {@link ReferralReason}; the upload's direction
+ * reason vocabulary come from {@link ReferralSchemas} and {@link ReferralReason}; the judicial direction's cap
+ * and decision vocabulary from {@link ReferralSchemas} and {@link MasterDecision}; the upload's direction
  * values come from {@link DocumentDirection}. A field
  * added to the schema therefore appears in the document without anyone editing this file, which is the only way
  * a description of sixty-seven fields stays true.
@@ -73,6 +75,15 @@ public class OpenAPIWriteBodies {
 
     /** The referral create body. There is no update sibling: amending a referral is raising another. */
     private static final String CREATE_REFERRAL = "CreateReferralRequest";
+
+    /** The judicial direction body -- the only payload the judicial surface accepts. */
+    private static final String JUDICIAL_DIRECTION = "JudicialDirectionRequest";
+
+    /** The direction's decision, named once because it is required and the resource is named after it. */
+    private static final String DECISION_FIELD = "decision";
+
+    /** The Gazette flag, named once because it is the direction's second required field. */
+    private static final String GAZETTE_FIELD = "publishToGazette";
 
     /** The referral's reasons array, named once because it is the create body's only required field. */
     private static final String REASONS_FIELD = "reasons";
@@ -99,6 +110,7 @@ public class OpenAPIWriteBodies {
             describeWitnessBodies(openApi);
             describeSavedQueryBodies(openApi);
             describeReferralBody(openApi);
+            describeDirectionBody(openApi);
             describeUploadBody(openApi);
         };
     }
@@ -413,6 +425,54 @@ public class OpenAPIWriteBodies {
             + Urgency.Normal + ", because that would drop the one signal that gets a referral looked at.");
         Arrays.stream(Urgency.values()).map(Enum::name).forEach(urgency::addEnumItemObject);
         return urgency;
+    }
+
+    /**
+     * The one judicial body: a judge's direction, with two required fields and one optional.
+     *
+     * <p>The decision vocabulary is {@link MasterDecision}'s and the cap is
+     * {@link ReferralSchemas#MAX_DIRECTIONS_LENGTH}, so both reach the document from what enforces them.
+     *
+     * <p><strong>{@code publishToGazette} is declared required and as a boolean, and both halves matter to a
+     * consumer.</strong> Publication puts the applicant's former and new names in a public notice, so the schema
+     * refuses the string {@code "false"} rather than reading it truthily -- a document that called this a string
+     * would have clients sending the one value that coerces wrongly. Required because a direction that did not
+     * answer it is not a direction.
+     *
+     * <p>Nothing here can name the referral, the case, the state, the author or the date: the referral is the
+     * path, the case is resolved from it, and the rest come from the clock and the token. Those keys are stripped
+     * as any unknown one is, and {@code JudicialDirectionRequest} says why each absence is a rule.
+     */
+    private void describeDirectionBody(OpenAPI openApi) {
+        Schema<?> direction = schema(openApi, JUDICIAL_DIRECTION);
+        if (direction == null) {
+            return;
+        }
+        direction.setType("object");
+        direction.setProperties(null);
+
+        StringSchema decision = new StringSchema();
+        decision.setDescription("What the judge decided. Matched exactly, as the stored form is the wire form.");
+        Arrays.stream(MasterDecision.values()).map(Enum::name).forEach(decision::addEnumItemObject);
+        direction.addProperty(DECISION_FIELD, decision);
+        direction.addProperty("directionsText", new StringSchema()
+            .maxLength(ReferralSchemas.MAX_DIRECTIONS_LENGTH)
+            .description("What the judge directed. Optional: an approval that needs no comment is a real "
+                + "answer. Trimmed, and a whitespace-only value counts as none."));
+        direction.addProperty(GAZETTE_FIELD, new BooleanSchema()
+            .description("Whether the change is to be published in the London Gazette. The judge's decision, "
+                + "never derived from a caseworker's referral reasons. A JSON boolean -- the string \"false\" "
+                + "is refused rather than coerced, because publication cannot be taken back."));
+        direction.addRequiredItem(DECISION_FIELD);
+        direction.addRequiredItem(GAZETTE_FIELD);
+        direction.setAdditionalProperties(true);
+        direction.setDescription("The holding judge's direction on a referral, recorded once and complete -- "
+            + "there is no draft and no patch, because the check-your-answers page and the attestation are the "
+            + "admin's. Permitted only on a referral this caller currently holds, so a referral withdrawn under "
+            + "them or taken back by the inactivity sweep is a 409 rather than a late direction on a referral "
+            + "that moved on. The referral comes from the path and the case is resolved from it -- a judicial "
+            + "URL carries no case id -- and the state, decidedBy and decisionDate come from the transition, "
+            + "the token and the clock, so all of them are ignored rather than refused, as any unknown key is.");
     }
 
     /**

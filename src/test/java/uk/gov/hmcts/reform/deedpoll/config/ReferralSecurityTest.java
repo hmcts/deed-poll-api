@@ -1,6 +1,8 @@
 package uk.gov.hmcts.reform.deedpoll.config;
 
+import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.domain.JavaMethodCall;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,9 +11,12 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.controller.CaseworkerReferralController;
+import uk.gov.hmcts.reform.deedpoll.api.judicial.controller.JudicialReferralController;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
@@ -21,6 +26,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.CreateReferralInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
@@ -42,6 +48,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -105,10 +113,39 @@ class ReferralSecurityTest {
     private static final UUID REFERRAL_ID = UUID.fromString("55555555-5555-5555-5555-555555555555");
 
     /**
-     * The two statements of the inactivity sweep, which are the only ones on {@code ReferralRepository} that
-     * name no parent case -- because a sweep is about every case at once and there is no case to name.
+     * The two statements of the inactivity sweep, which name no parent case -- because a sweep is about every
+     * case at once and there is no case to name.
      */
     private static final Set<String> SWEEP = Set.of("findStaleClaims", "releaseStaleClaim");
+
+    /**
+     * The judicial pool, which names no parent case either -- because the shared pool <em>is</em> the cross-case
+     * list, and a judge reaches it without naming any case, which is what stops them naming one at all.
+     *
+     * <p>Listed separately from {@link #SWEEP} because it cannot make the sweep's promise: it hands back
+     * referrals. What it promises instead is asserted below -- it can only ever answer "a page of the referrals
+     * in this state", never "this referral" -- and the scoping it does without is replaced by
+     * {@code JudicialReferralService.visibleTo} on every read of an individual referral.
+     */
+    private static final Set<String> POOL = Set.of("findByState");
+
+    /**
+     * The judicial read of one referral, which is the finder by referral id alone that the interface's own rule
+     * forbids -- admitted here because the judicial surface has no case id to scope with.
+     *
+     * <p>A judicial URL is {@code /judicial/referrals/{referralId}} precisely so that a judge cannot name an
+     * application, so the safety boundary moves rather than disappearing: where a caseworker read is scoped by
+     * its parent, a judicial read is scoped by {@code JudicialReferralService.visibleTo}. That makes this the
+     * most dangerous declaration in the repository, and it is admitted with two rules rather than a comment --
+     * nothing but {@code JudicialReferralService} may call it, and the visibility check that replaces the scope
+     * is pinned state by state in {@code JudicialReferralServiceTest}.
+     */
+    private static final Set<String> JUDICIAL_READ = Set.of("findWithCaseById");
+
+    /** Every finder that names no parent case, for the declaration rule that admits each one deliberately. */
+    private static final Set<String> UNSCOPED = Stream.of(SWEEP, POOL, JUDICIAL_READ)
+        .flatMap(Set::stream)
+        .collect(Collectors.toUnmodifiableSet());
 
     /** A caller with no role this service asks about: the ordinary caseworker, and the fail-closed case. */
     private static final CurrentUser NO_ROLES = CurrentUser.currentUser(List.of(), "Otto Other", "other-1");
@@ -252,6 +289,96 @@ class ReferralSecurityTest {
         private static final JavaClasses CLASSES = new ClassFileImporter()
             .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
             .importPackages("uk.gov.hmcts.reform.deedpoll");
+
+        /**
+         * The unscoped finder the judicial pool needs is reachable from the judicial service and nowhere else.
+         *
+         * <p>This is what keeps decision 2 from being a hole. {@code findByState} carries no case id, so a
+         * caseworker path that called it would have a cross-case read of referrals with none of the caseworker
+         * surface's scoping and none of the judicial surface's role gate -- and the declaration rule above
+         * cannot catch that, because it admits the method deliberately. The gate lives on
+         * {@code JudicialReferralService.pool}, so the rule is that nothing else calls the finder at all.
+         */
+        @Test
+        @DisplayName("only the judicial service reaches the unscoped pool finder")
+        void onlyTheJudicialServiceReachesThePoolFinder() {
+            noClasses()
+                .that().doNotHaveFullyQualifiedName(JudicialReferralService.class.getName())
+                .should().callMethodWhere(DescribedPredicate.describe(
+                    "a call to the unscoped pool finder",
+                    (JavaMethodCall call) -> POOL.contains(call.getName())
+                        && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
+                .check(CLASSES);
+        }
+
+        /**
+         * And the same rule for the finder by referral id alone, where it matters most.
+         *
+         * <p>{@code findWithCaseById} answers with a referral -- and with its whole application attached -- for
+         * any id at all, with no parent to scope it and nothing in the declaration to stop a caller. It is safe
+         * only because the single place that calls it checks {@code visibleTo} first and 404s otherwise, so a
+         * second caller is not a duplication of that check, it is a route around it: a caseworker path calling
+         * this would have a cross-case read of every referral and every case behind them with neither the
+         * caseworker surface's parent id nor the judicial surface's role gate in front of it.
+         */
+        @Test
+        @DisplayName("only the judicial service reaches the finder by referral id alone")
+        void onlyTheJudicialServiceReachesTheByIdFinder() {
+            noClasses()
+                .that().doNotHaveFullyQualifiedName(JudicialReferralService.class.getName())
+                .should().callMethodWhere(DescribedPredicate.describe(
+                    "a call to the unscoped by-id finder",
+                    (JavaMethodCall call) -> JUDICIAL_READ.contains(call.getName())
+                        && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
+                .check(CLASSES);
+        }
+
+        /**
+         * Neither judicial route names a case, which is the other half of decision 2.
+         *
+         * <p>The repository rules above are about what can be <em>asked</em>; this is about what can be
+         * <em>said</em>. A judicial handler taking a case id would let a judge name an application directly, and
+         * the visibility check -- which is about a referral -- would have nothing to say about it.
+         */
+        @Test
+        @DisplayName("every judicial route is keyed on the referral, and no judicial handler takes a case id")
+        void everyJudicialRouteIsKeyedOnTheReferral() {
+            RequestMapping mapping = JudicialReferralController.class.getAnnotation(RequestMapping.class);
+
+            assertThat(mapping).isNotNull();
+            assertThat(mapping.value()).containsExactly("/judicial/referrals");
+
+            for (Method handler : judicialHandlers()) {
+                List<String> pathVariables = Arrays.stream(handler.getParameters())
+                    .map(parameter -> parameter.getAnnotation(PathVariable.class))
+                    .filter(Objects::nonNull)
+                    .map(PathVariable::value)
+                    .toList();
+
+                assertThat(pathVariables)
+                    .as("%s names a referral or nothing, and never a case", handler.getName())
+                    .isSubsetOf("referralId");
+            }
+        }
+
+        @Test
+        @DisplayName("the judicial controller neither returns nor accepts an entity")
+        void theJudicialControllerNeitherReturnsNorAcceptsAnEntity() {
+            // The same rule as the caseworker controller's, and the stakes are higher: the referral the judicial
+            // read resolves has its application join-fetched onto it, so a handler that returned the entity would
+            // publish the whole case -- every payment reference, every workflow date, the privacy field -- to the
+            // one audience the narrow projection exists for.
+            for (Method method : judicialHandlers()) {
+                assertThat(packageOf(method.getReturnType()))
+                    .as("%s does not return an entity", method.getName())
+                    .doesNotContain(".entity");
+                for (Class<?> parameter : method.getParameterTypes()) {
+                    assertThat(packageOf(parameter))
+                        .as("%s does not bind an entity", method.getName())
+                        .doesNotContain(".entity");
+                }
+            }
+        }
 
         @Test
         @DisplayName("every referral route is a caseworker route nested under a case, by its mapping")
@@ -704,19 +831,44 @@ class ReferralSecurityTest {
         }
 
         @Test
-        @DisplayName("could not be addressed even by mistake: no lookup by referral id alone is declared")
+        @DisplayName("could not be addressed by mistake: every finder carries the case but the three admitted")
         void cannotBeAddressedByIdAlone() {
             // The behavioural half of this rule is in ReferralServiceTest; this is the half that stops it being
             // re-introduced. `findById` is inherited from JpaRepository and cannot be removed, so what is
-            // asserted is that this interface declares nothing that reaches a referral without naming its case.
+            // asserted is that this interface declares nothing that reaches a referral without naming its case --
+            // except the three exceptions below, each of which is admitted with a rule rather than a comment.
             List<String> declared = Arrays.stream(ReferralRepository.class.getDeclaredMethods())
                 .map(Method::getName)
                 .toList();
-            // The exception is real, so it is named rather than pattern-matched: a third unscoped method has
-            // to be admitted here deliberately, and a rename that made this list vacuous fails too.
-            assertThat(declared).containsAll(SWEEP);
+            // The exceptions are real, so they are named rather than pattern-matched: a further unscoped method
+            // has to be admitted here deliberately, and a rename that made these lists vacuous fails too.
+            assertThat(declared).containsAll(UNSCOPED);
 
             for (Method finder : ReferralRepository.class.getDeclaredMethods()) {
+                if (JUDICIAL_READ.contains(finder.getName())) {
+                    // The one that can make no promise about its answer: it hands back a referral, by id, for any
+                    // caller, with the whole application attached. What is asserted instead is the shape that
+                    // makes the rule above sufficient -- an id and nothing else, so there is no second question
+                    // this finder could be asked and no filter a caller could think it was applying.
+                    assertThat(finder.getParameterTypes())
+                        .as("%s takes a referral id and nothing else", finder.getName())
+                        .containsExactly(UUID.class);
+                    continue;
+                }
+                if (POOL.contains(finder.getName())) {
+                    // The pool cannot make the sweep's promise, because handing back referrals is the point of
+                    // it. Its own promise is that the question it can be asked has no referral in it: a state
+                    // and a page, so the answer is always "the referrals in this state" and never "this
+                    // referral". The state is JudicialReferralService's -- Open -- rather than a caller's, and
+                    // the individual reads the judicial surface does are guarded by visibleTo instead.
+                    assertThat(finder.getParameterTypes())
+                        .as("%s takes a state and a page, and no referral id", finder.getName())
+                        .containsExactly(ReferralState.class, Pageable.class);
+                    assertThat(finder.getReturnType())
+                        .as("%s answers a page rather than one referral", finder.getName())
+                        .isEqualTo(Page.class);
+                    continue;
+                }
                 if (SWEEP.contains(finder.getName())) {
                     // What keeps the sweep inside the rule instead of beside it: neither statement hands back
                     // a referral. The candidate query returns a three-field projection and the release returns
@@ -775,6 +927,13 @@ class ReferralSecurityTest {
     /** The controller's own handler methods, without the synthetic ones the compiler adds. */
     private static List<Method> handlers() {
         return Arrays.stream(CaseworkerReferralController.class.getDeclaredMethods())
+            .filter(method -> !method.isSynthetic())
+            .toList();
+    }
+
+    /** The judicial controller's own handler methods, likewise. */
+    private static List<Method> judicialHandlers() {
+        return Arrays.stream(JudicialReferralController.class.getDeclaredMethods())
             .filter(method -> !method.isSynthetic())
             .toList();
     }

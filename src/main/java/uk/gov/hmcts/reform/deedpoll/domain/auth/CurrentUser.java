@@ -17,10 +17,28 @@ import java.util.stream.Collectors;
  * there and reduced to this by {@link IdamClaims}. Nothing here assumes that mechanism, which is what
  * lets the same reduction serve a citizen session later.
  *
- * <p>{@link #name} is only ever used as audit text ({@code createdBy} / {@code modifiedBy}), never for
- * authorisation -- so a wrong name cannot escalate anything. {@link #userId} is not audit text: it is the
- * token's subject, and it <em>is</em> used for authorisation, because a saved query's permission turns on
- * whether the caller owns it.
+ * <p>{@link #name} is audit text ({@code createdBy} / {@code modifiedBy}), and {@link #userId} is not: it is
+ * the token's subject, and it is what authorisation should turn on -- a saved query's permission turns on
+ * whether the caller owns it, keyed on the subject for the reason set out below.
+ *
+ * <p><strong>There are two places that authorise on {@link #name} anyway, and they are the referral's claim.</strong>
+ * {@code ReferralService.requireHeldBy} (who may direct a referral) and {@code JudicialReferralService.visibleTo}
+ * (which referrals a judge may see at all) both compare this name against the referral's {@code claimedBy} /
+ * {@code decidedBy} columns, because those columns hold a name and keying a claim on the subject is a migration
+ * neither plan had. <strong>So a wrong name is not harmless here, and this paragraph used to say it was.</strong>
+ * Two consequences, both recorded rather than hidden:
+ *
+ * <ul>
+ *   <li>two judges sharing a display name can see and direct each other's claimed referrals -- and on the
+ *       judicial surface that means the application and its notes, since {@code visibleTo} is the only boundary
+ *       in front of a finder by referral id;</li>
+ *   <li>a judge whose IDAM display name changes stops being able to see their own claimed referral -- 404 to
+ *       read, 409 to direct -- until the inactivity sweep releases it, which it will, because
+ *       {@code releaseStaleClaim} matches on {@code lastTouchedAt} and never on the name.</li>
+ * </ul>
+ *
+ * <p>Keying the claim on {@link #userId} is the fix and it is a migration, not a refactor. Until then, do not
+ * add a third site: authorise on the subject.
  *
  * <p><strong>{@link #userId} is the one component the reference interface does not have</strong>, and the
  * divergence is deliberate. The reference resolved identity from {@code x-user-roles} / {@code x-user-name}

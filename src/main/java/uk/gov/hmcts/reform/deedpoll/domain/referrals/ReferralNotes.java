@@ -66,18 +66,6 @@ public final class ReferralNotes {
     }
 
     /**
-     * The note for a referral being withdrawn, naming when it was raised and what for.
-     *
-     * <p>Said again rather than left to the reader to pair up with the earlier note: a case may carry several
-     * referrals over its life, and a bare "referral withdrawn" in a grid of thirty notes does not say which.
-     *
-     * <p>Takes the stored referral rather than an id, because the id is a uuid a caseworker cannot recognise
-     * and the raised date and reasons are what they can.
-     *
-     * <p>A referral with no reasons is a backfilled one -- the source store had no such field -- so it says
-     * so rather than trailing off after an empty list.
-     */
-    /**
      * The note for a claim the inactivity sweep took back, naming the judge who was holding it.
      *
      * <p><strong>The only event on the timeline that no column records.</strong> Claiming a referral is
@@ -85,6 +73,16 @@ public final class ReferralNotes {
      * discoverable; a lapse <em>erases</em> the claim it is about, so without this the case would show a
      * referral that had quietly gone back into the pool with nothing to say it ever left. It is authored by
      * the service account rather than by a caseworker, because no person did it.
+     *
+     * <p><strong>Naming the judge is deliberate and it is not only for the office (Steve, 2026-09-18). Do not
+     * remove the name to narrow what the judiciary can see.</strong> This note reaches other judges: it is on the
+     * case's timeline, and {@code JudicialReferralDetail} returns that timeline to any judge who can see a
+     * referral on the case -- so the judge who picks a lapsed referral out of the pool learns who had it before
+     * them. That is the point rather than a leak. A lapse says nothing about why: the previous judge may have
+     * been part-way through a complex point of law, and the one picking it up can now go and ask them instead of
+     * starting again or duplicating their work. An anonymous "a claim lapsed" would cost exactly that
+     * conversation. The residual disclosure -- that a judge's inactivity is legible to colleagues -- was weighed
+     * and accepted for that reason; see flag 6 of {@code docs/plans/completed/referrals-api-3-judicial-surface.md}.
      *
      * <p>The judge's name is bounded here rather than trusted. It arrives from a token, the column holding
      * it is unbounded {@code text}, and the notes column is not -- so a pathological display name would make
@@ -101,6 +99,18 @@ public final class ReferralNotes {
             + "the judicial pool and can be picked up again.";
     }
 
+    /**
+     * The note for a referral being withdrawn, naming when it was raised and what for.
+     *
+     * <p>Said again rather than left to the reader to pair up with the earlier note: a case may carry several
+     * referrals over its life, and a bare "referral withdrawn" in a grid of thirty notes does not say which.
+     *
+     * <p>Takes the stored referral rather than an id, because the id is a uuid a caseworker cannot recognise
+     * and the raised date and reasons are what they can.
+     *
+     * <p>A referral with no reasons is a backfilled one -- the source store had no such field -- so it says
+     * so rather than trailing off after an empty list.
+     */
     public static String withdrawn(Referral referral) {
         String reasons = referral.getReasons().isEmpty()
             ? "no reasons recorded"
