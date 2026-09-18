@@ -442,10 +442,45 @@ that the plan did not name:**
 
 ### Task 4: Full validation
 
-- [ ] `./gradlew build` green from cold with `TESTCONTAINERS_RYUK_DISABLED=true`; checkstyle clean on all five
+- [x] `./gradlew build` green from cold with `TESTCONTAINERS_RYUK_DISABLED=true`; checkstyle clean on all five
       source sets; op count still 30 (no path added); test and integration totals recorded next to this
       branch's baseline, and the count with `INTEGRATION_TESTS_ENABLED=false` recorded so it is visible how
       much of this plan's coverage CI actually runs
+
+**Done (2026-09-18). `./gradlew clean build` green from cold, twice** (once to validate the tree as Task 3 left
+it, once after the one edit below), checkstyle **0 violations across all five** source sets (`main`, `test`,
+`integrationTest`, `smokeTest`, `functionalTest`), **0 failures and 0 errors**, nothing skipped.
+
+| run | tests | classes |
+|---|---|---|
+| branch baseline (Task 0) | 1927 (`test` 1920 + `integration` 7) | 245 + 3 |
+| Task 1 | 1930 | 246 + 3 |
+| Task 2 | 1971 | 249 + 3 |
+| **final: `./gradlew clean build`** | **1982** (`test` **1975** + `integration` **7**) | **251 + 3** |
+| **final: `INTEGRATION_TESTS_ENABLED=false ./gradlew test --rerun-tasks`** | **1202** | **168** |
+
+**Op count still 30**, asserted rather than eyeballed: `OpenAPIPublisherTest` (5 tests, passing) sums the verbs
+over `CASEWORKER_PATHS` and pins `isEqualTo(30)` — this plan added a field to existing responses and no path,
+exactly as decision 6 said.
+
+**What CI actually runs of this plan: 1202 of the 1982 — so 780 are not run there** (773 `requires-docker`
+tests excluded from `test`, plus all 7 `integration`). The gate is verified two ways, not assumed: under
+`INTEGRATION_TESTS_ENABLED=false` the `:integration` task is absent from the `check` graph, and with the
+variable unset it is present. (`grep -c ':integration'` on the dry-run reads 1 either way — it matches
+`:integrationTestClasses`, the *compile* task, which runs in both cases; grep the task name exactly, or the
+gate looks broken when it is fine.)
+
+**One edit, comment-only:** `build.gradle`'s exclusion comment carried measured figures and an instruction to
+re-measure rather than trust them, so it now reads **773 of 1,975 / the other 1,202** in place of the stale
+741 / 1,813 / 1,072. The **26 tagged classes are unchanged** (25 inheriting the tag from
+`AbstractPostgresContainerTest` + `SchemaConformanceTest` carrying it directly): this plan's container-backed
+cases landed as `@Nested` blocks on classes already tagged, which is also why the XML class count (251) is far
+above the tagged-class count — a `@Nested` block reports as its own testsuite.
+
+**Both open questions in this plan remain open and are Steve's, not blockers** — the read-only "Current
+referral state" now renders in the General card beside "State" (decision 4's flagged cost, real and visible),
+and the five label strings are display-only. **api-2b is complete; the consumer is admin-2, which can now
+issue `?where=currentReferralState:is:Decided`.**
 
 ## Deliberately not in this plan
 
