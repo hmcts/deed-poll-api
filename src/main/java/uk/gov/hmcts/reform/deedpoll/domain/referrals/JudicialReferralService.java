@@ -5,6 +5,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
@@ -20,14 +21,21 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * What a judge may see, and the shared pool they work from.
+ * What a judge may see, the shared pool they work from, and the two things they write.
  *
  * <p><strong>A separate unit from {@link ReferralService} on purpose, and it adds no transition.</strong> Every
  * state change the judicial surface performs is a call into one of that service's transitions -- {@code claim},
  * {@code touch}, {@code decide} -- which keeps one place owning how a referral changes state. What lives here
  * is the half of the judicial surface that service has no notion of: <em>who may see which referral</em>, the
- * cross-case list a judge works from, and the read that resolves one referral to the application and the notes
- * behind it. All three are the judicial persona's, and none is reachable by a caseworker token.
+ * cross-case list a judge works from, and the resolution of one referral id to the application and the notes
+ * behind it. All four methods are the judicial persona's, and none is reachable by a caseworker token.
+ *
+ * <p><strong>{@link #claim} and {@link #direct} are that resolution in front of a transition, and nothing
+ * else.</strong> Neither guards a state, stamps a column or writes a note: the {@code Open}-only rule, the
+ * holder-only rule, and every column either sets are {@link ReferralService}'s, which is also where a caller
+ * that is not this service -- a test, a later scheduled sweep -- meets the same rules. What they add is the step
+ * a judicial caller cannot do without: turning a referral id into a case, having first established that this
+ * judge may see the referral at all.
  *
  * <p><strong>The role gate is on every method here, including the reads.</strong> The transitions gate
  * themselves; these have to gate themselves too, because the pool and the judicial projection of an application
@@ -222,18 +230,117 @@ public class JudicialReferralService {
     @Transactional
     public JudicialReferralView referral(String referralId, CurrentUser caller) {
         caller.requireAnyRole(Role.JUDICIAL);
-
-        Referral referral = identifier(referralId)
-            .flatMap(referrals::findWithCaseById)
-            // Part of the lookup rather than a branch after it, so there is one exit for "you cannot have this"
-            // and no second place that could answer a different status.
-            .filter(found -> visibleTo(found, caller))
-            .orElseThrow(() -> new NotFoundError("Referral " + referralId + " not found"));
+        Referral referral = visible(referralId, caller);
 
         DeedPoll application = referral.getDeedPoll();
         if (heldBy(referral, caller)) {
             referralService.touch(application.getId(), referralId, caller);
         }
+        return view(referral, application);
+    }
+
+    /**
+     * A judge taking a referral out of the shared pool -- the first of the two things a judge writes.
+     *
+     * <p><strong>It adds no transition logic.</strong> The state change is {@link ReferralService#claim}, which
+     * owns the {@code Open}-only guard and the columns it stamps; what this method contributes is the half that
+     * service cannot express, because it is the half that has no case id: resolving the referral, refusing it
+     * with a 404 if this judge may not see it, and handing the transition the case it resolved.
+     *
+     * <p><strong>The sweep runs before the visibility check, and that ordering is the point.</strong> A claim
+     * that lapsed a moment ago leaves a row that is still {@code Claimed} by the judge who abandoned it -- which
+     * {@link #visibleTo} says this caller may not see -- so checking visibility first would answer 404 for a
+     * referral that is, by the rule the pool is drawn from, available. Sweeping first makes the two agree: the
+     * lapsed claim is released, the referral is {@code Open}, and it is visible to every judge including this
+     * one. {@link ReferralService#claim} sweeps again defensively, which costs one query that finds nothing
+     * inside this transaction and keeps that transition correct for a caller that is not this method.
+     *
+     * <p><strong>Two refusals, and they are different questions.</strong> A referral this judge may not see at
+     * all is a {@link NotFoundError}, indistinguishable from an id that never existed. A referral they can see
+     * but cannot claim -- one already {@code Claimed} or {@code Decided}, theirs included -- is the
+     * {@code ConflictError} api-2 defined, because by then the caller is looking at it and a 404 would be a lie
+     * they cannot act on. That split is the same one the saved-query surface makes between invisible and
+     * unmodifiable.
+     *
+     * @param referralId the referral, as it appears in the path
+     * @param caller the judge claiming it
+     * @return the referral as this judge now holds it, with the application and notes the next screen renders
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws NotFoundError if there is no such referral, or this caller may not see it
+     * @throws ConflictError if the referral is not {@code Open}
+     */
+    @Transactional
+    public JudicialReferralView claim(String referralId, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+        // Before the resolve, for the reason the pool sweeps before it queries: a referral whose claim has just
+        // lapsed belongs to the pool, and the visibility check has to be asked about the post-sweep row.
+        referralService.reclaimStaleClaims();
+
+        Referral referral = visible(referralId, caller);
+        DeedPoll application = referral.getDeedPoll();
+        return view(referralService.claim(application.getId(), referralId, caller), application);
+    }
+
+    /**
+     * The holding judge recording their direction -- the second and last thing a judge writes.
+     *
+     * <p>{@link ReferralService#decide} owns all of it: that only the judge currently holding the referral may
+     * direct it, that the direction is recorded atomically rather than drafted, and that {@code decidedBy} and
+     * {@code decisionDate} come from the token and the clock rather than from the payload. This method resolves
+     * the referral without a case id and refuses an invisible one, exactly as {@link #claim} does.
+     *
+     * <p><strong>No sweep here, unlike {@link #claim}, and that is deliberate.</strong> A judge submitting a
+     * direction on a claim this request would have released is a judge who was working the referral, and
+     * sweeping first would take it off them between their reading it and their answering it. Their claim may
+     * still lapse -- another judge's pool load releases it, and their submission is then the
+     * {@code ConflictError} api-2 defined -- but this request will not be the one that does it to them.
+     *
+     * <p>The direction is already validated when it arrives: {@link ReferralSchemas#parseDirection} is the only
+     * way to build a {@link DirectionInput}, so a malformed one is a 400 before this method is reached.
+     *
+     * @param referralId the referral, as it appears in the path
+     * @param direction what the judge decided, directed, and whether to publish in the London Gazette
+     * @param caller the judge directing it
+     * @return the referral carrying the direction just recorded
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws NotFoundError if there is no such referral, or this caller may not see it
+     * @throws ConflictError if the referral is not currently claimed by this caller
+     */
+    @Transactional
+    public JudicialReferralView direct(String referralId, DirectionInput direction, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+
+        Referral referral = visible(referralId, caller);
+        DeedPoll application = referral.getDeedPoll();
+        return view(referralService.decide(application.getId(), referralId, direction, caller), application);
+    }
+
+    /**
+     * The referral this id names, if this caller may see it -- and the same 404 for every way they may not.
+     *
+     * <p>The filter is part of the lookup rather than a branch after it, so there is one exit for "you cannot
+     * have this" and no second place that could answer a different status. One method rather than one per
+     * operation, because the property decision 3 turns on is that <em>every</em> judicial read and write refuses
+     * identically: an unknown id, an id that is not a UUID, a withdrawn or closed referral and one another judge
+     * holds all produce this message, so no referral id is discoverable by comparing refusals.
+     */
+    private Referral visible(String referralId, CurrentUser caller) {
+        return identifier(referralId)
+            .flatMap(referrals::findWithCaseById)
+            .filter(found -> visibleTo(found, caller))
+            .orElseThrow(() -> new NotFoundError("Referral " + referralId + " not found"));
+    }
+
+    /**
+     * One referral, its application and that application's timeline -- what every method here answers with.
+     *
+     * <p>The same three things after a claim or a direction as after a read, because the judicial surface has one
+     * representation of a referral and a transition's answer is that representation: the screen a judge sees next
+     * is the papers, so a leaner write response would only cost them the read they are about to make. The
+     * application is passed in rather than re-navigated, since {@code Referral.deedPoll} is {@code LAZY} and the
+     * caller has already resolved it join-fetched.
+     */
+    private JudicialReferralView view(Referral referral, DeedPoll application) {
         return new JudicialReferralView(referral, application, notes.findNotes(application.getId()));
     }
 

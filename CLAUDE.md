@@ -17,6 +17,7 @@ See `docs/RESUME.md` for the current state and `docs/plans/` for the build plans
 
 ```
 api/caseworker/{controller,dto}   the caseworker HTTP surface — 30 operations
+api/judicial/{controller,dto}     the judicial surface — 4 operations, keyed on the referral, never on the case
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
@@ -57,6 +58,12 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   produced, so read one through `DeedPollFields.asType` rather than casting.
 - **Never return an entity from a controller.** Separate request and response DTOs per operation
   under `api/…/dto`.
+- **The judicial surface is scoped by visibility, not by the case.** A caseworker read names its parent
+  (`/caseworker/cases/{id}/…`); a judicial URL carries a referral id and no case id at all, so
+  `JudicialReferralService.visibleTo` stands where the parent id stands — the pool, plus this judge's own
+  `Claimed`/`Decided` referrals. Anything else is **404**, in the same words an unknown id gets; the only
+  403 is the `Role.JUDICIAL` gate. Its four operations must not reuse a caseworker DTO, and an ArchUnit
+  rule fails the build if one does.
 - **A controller test must boot the whole context.** A `@WebMvcTest` slice does not get
   `SecurityConfiguration` — its include list covers `SecurityFilterChain` beans, and a
   `@Configuration` that merely *declares* one is not itself one — so a slice asserts Boot's defaults

@@ -15,7 +15,8 @@ committed, one commit per task, plus a review-fixes commit on top. `master` hold
 | Tasks complete and committed | **0–16**, all of them |
 | Flyway migrations | 7 — enums, `DeedPoll`, children, list indexes, saved queries, referrals, the referral backfill |
 | Caseworker endpoints | 30 — 13 from plan 01, plus the four witness routes, the witness delete, the seven saved-query routes, the four referral routes and the referral closure added afterwards |
-| `/citizen/**` | exists, empty, shares no DTO with `/caseworker/**` |
+| Judicial endpoints | 4 — the shared pool, one referral, claim and direction, on `/judicial/**`. Not part of the thirty: a separate namespace for a separate audience, gated on `Role.JUDICIAL`, which IDAM does not issue yet |
+| `/citizen/**` | exists, empty, shares no DTO with `/caseworker/**` or `/judicial/**` |
 
 `./gradlew build` is green. Two things about running it here, both recorded in the README as well:
 export `TESTCONTAINERS_RYUK_DISABLED=true` on this machine, and Testcontainers reaches its

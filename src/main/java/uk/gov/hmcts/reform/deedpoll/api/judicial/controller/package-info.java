@@ -25,6 +25,21 @@
  * including the two reads, because the pool and the judicial application view belong to the judicial persona
  * and a caseworker has their own richer surface.
  *
+ * <p><strong>Four operations, on one controller, and the four are the whole judicial persona.</strong> Two reads
+ * -- the shared pool ({@code GET /judicial/referrals}) and one referral with its narrow application view and the
+ * case's notes ({@code GET /judicial/referrals/&#123;referralId&#125;}) -- and two writes, claiming a pool
+ * referral ({@code POST .../claim}) and recording a direction on one they hold ({@code POST .../direction}).
+ * Stated as a number here, unlike the caseworker package's deliberate refusal to keep a running total, because
+ * four is not a tally of what has accumulated: it is decision 13's boundary, and a fifth route is a change to
+ * that boundary rather than a route. In particular there is no judicial <em>closure</em> -- closing a referral is
+ * the office's acknowledgement that the direction has been actioned -- no judicial note, no case list and no case
+ * search. A judge cannot enumerate deed poll applications.
+ *
+ * <p>Neither write adds transition logic: both call a {@code ReferralService} transition, which owns the
+ * {@code Open}-only rule, the holder-only rule and every column either stamps. So the 409s a judge can meet
+ * -- claiming a referral somebody got to first, directing one they no longer hold -- are that service's, stated
+ * there once rather than re-implemented here.
+ *
  * <p>Every route here is authenticated by default -- see {@code SecurityConfiguration}, whose allowlist is
  * deliberately not per-namespace -- so {@code /judicial/**} was protected the moment it existed, and an
  * unauthenticated caller gets 401 before routing.

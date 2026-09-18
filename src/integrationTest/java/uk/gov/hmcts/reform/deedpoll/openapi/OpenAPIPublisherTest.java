@@ -23,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 
 import java.io.OutputStream;
 import java.lang.reflect.Modifier;
@@ -88,6 +89,24 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/cases/{id}/referrals/{referralId}/closure"
     );
 
+    /**
+     * Every route the judicial surface has, and deliberately <strong>not</strong> folded into
+     * {@link #CASEWORKER_PATHS}.
+     *
+     * <p>Asserted the same way and counted separately, because they are a different surface for a different
+     * audience: adding them to the caseworker list would make the caseworker count -- a number the README, the
+     * resume notes and a package comment all state -- misreport what a caseworker can do. Listed rather than
+     * counted for the reason the caseworker paths are, and listed <em>at all</em> so that a judicial route which
+     * silently vanished from the spec fails the build exactly as a caseworker one would. {@code deed-poll-admin}
+     * generates its client from this document, so an unpublished route is an unbuildable judicial screen.
+     */
+    private static final List<String> JUDICIAL_PATHS = List.of(
+        "/judicial/referrals",
+        "/judicial/referrals/{referralId}",
+        "/judicial/referrals/{referralId}/claim",
+        "/judicial/referrals/{referralId}/direction"
+    );
+
     private static final ObjectMapper JSON = new ObjectMapper();
 
     @Autowired
@@ -111,6 +130,40 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         JsonNode paths = JSON.readTree(specs).get("paths");
         assertThat(paths).isNotNull();
         assertThat(paths.fieldNames()).toIterable().containsAll(CASEWORKER_PATHS);
+        assertThat(paths.fieldNames()).toIterable().containsAll(JUDICIAL_PATHS);
+    }
+
+    /**
+     * The four judicial operations, published and counted apart from the caseworker surface's thirty.
+     *
+     * <p>Both halves for the reason the caseworker assertion gives: a count cannot tell a new verb on a known
+     * path from a new path, and a path list cannot tell a route that was removed from one that never existed.
+     *
+     * <p><strong>Four operations across four paths</strong> -- the pool and one referral each carry a {@code GET},
+     * and a referral's claim and its direction each carry a {@code POST}. There is no third write and no judicial
+     * closure: closing a referral is the office's acknowledgement that the direction has been actioned, so it
+     * lives on the caseworker surface and its absence here is the decision rather than an omission.
+     */
+    @DisplayName("Documents the four judicial operations, separately from the caseworker count")
+    @Test
+    void documentsTheJudicialOperations() throws Exception {
+        JsonNode paths = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                           .andExpect(status().isOk())
+                                           .andReturn()
+                                           .getResponse()
+                                           .getContentAsByteArray())
+            .get("paths");
+
+        assertThat(paths.fieldNames()).toIterable().containsAll(JUDICIAL_PATHS);
+
+        long operations = JUDICIAL_PATHS.stream()
+            .mapToLong(path -> paths.get(path).size())
+            .sum();
+        assertThat(operations).isEqualTo(4);
+
+        // And the caseworker count is untouched by their arrival, asserted here as well as above: the judicial
+        // routes are a new surface, so the number that describes the old one must not have moved.
+        assertThat(CASEWORKER_PATHS).doesNotContainAnyElementsOf(JUDICIAL_PATHS);
     }
 
     @DisplayName("Documents the thirty caseworker operations and the token they need")
@@ -174,7 +227,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * The seven operations that take a body, asserted to actually describe one.
+     * Every operation that takes a body, asserted to actually describe one -- the judicial direction included.
      *
      * <p>The same argument as the path assertions above, one level in. Every write body in this service binds as a
      * keyed map rather than as declared components -- see {@code KeyedRequestBody} for why it has to -- so
@@ -300,6 +353,34 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(spec.at("/components/schemas/UpdateReferralRequest").isMissingNode())
             .as("there is no referral patch body, because there is no referral patch")
             .isTrue();
+
+        // The judicial direction: two required fields and one optional, with the cap and the vocabulary taken from
+        // what enforces them rather than from whatever the document happens to say.
+        String direction = "/components/schemas/JudicialDirectionRequest/properties/";
+        assertThat(spec.at(direction + "directionsText/maxLength").asInt())
+            .isEqualTo(ReferralSchemas.MAX_DIRECTIONS_LENGTH);
+        List<String> publishedDecisions = StreamSupport
+            .stream(spec.at(direction + "decision/enum").spliterator(), false)
+            .map(JsonNode::asText)
+            .toList();
+        assertThat(publishedDecisions)
+            .containsExactlyElementsOf(Arrays.stream(MasterDecision.values()).map(Enum::name).toList());
+        // A boolean and required, which is the pair that matters: publication puts the applicant's former and new
+        // names in a public notice, so a document calling this a string would have clients sending "false" -- the
+        // one value a truthy read gets wrong, and a disclosure that cannot be taken back.
+        assertThat(typesOf(spec.at(direction + "publishToGazette"))).contains("boolean");
+        assertThat(spec.at("/components/schemas/JudicialDirectionRequest/required").size()).isEqualTo(2);
+        assertThat(StreamSupport
+                       .stream(spec.at("/components/schemas/JudicialDirectionRequest/required").spliterator(),
+                               false)
+                       .map(JsonNode::asText)
+                       .toList())
+            .containsExactlyInAnyOrder("decision", "publishToGazette");
+        // Nothing nullable anywhere on it: a direction is recorded once and complete, so there is no field to
+        // clear and no patch that could clear one.
+        assertThat(typesOf(spec.at(direction + "decision")))
+            .as("a direction cannot be cleared, so the document offers no null")
+            .doesNotContain("null");
 
         // The upload, which had no body at all: the media type is as load-bearing as the fields, because a client
         // that posts JSON to it fails whatever field names it uses.

@@ -272,10 +272,42 @@ Then the spec, **this task**: add `JUDICIAL_PATHS` (`/judicial/referrals`,
 it, **leave the caseworker count at 30**, and state the judicial operation count (4) in the prose files a
 grep finds. Add a judicial `package-info` operation note.
 
-- [ ] Claim and direction are live, gated `JUDICIAL`, 404 on an invisible referral, and surface api-2's 409s
+- [x] Claim and direction are live, gated `JUDICIAL`, 404 on an invisible referral, and surface api-2's 409s
       (claim non-`Open`; direct one not held) and 400 (bad direction) unchanged; spec publishes all four
       judicial paths and `OpenAPIPublisherTest` asserts them; caseworker count still 30; judicial count
       stated in prose by grepping; controller test boots the context; `./gradlew build` green
+
+**Task 3 as built.** `JudicialReferralService.claim(referralId, caller)` and `direct(referralId, direction, caller)`
+are the visibility check in front of an api-2 transition and nothing else: gate `JUDICIAL`, resolve by referral id,
+`visibleTo`-or-404, then call `ReferralService.claim` / `decide` with the case **resolved from the referral**. The
+resolve-and-refuse step is now one private `visible(...)` shared with the Task 2 read, so there is a single place
+that can answer "you cannot have this" and a single message every refusal gives.
+
+**The one asymmetry, and it is deliberate: `claim` sweeps first and `direct` does not.** A claim that lapsed a
+moment ago leaves a row still `Claimed` by the judge who abandoned it, which `visibleTo` says the next judge may
+not see — so checking visibility first would 404 a referral the pool is about to offer. Sweeping first makes the
+two agree (api-2's `claim` sweeps again, one query that finds nothing inside the same transaction). `direct` must
+*not* sweep: a judge submitting a direction was working the referral, and a sweep there would take it off them
+between their reading the papers and their answering. Their claim can still lapse by another judge's pool load,
+and that is then api-2's 409 — but not this request's doing.
+
+**Both writes answer with `JudicialReferralDetail`** — the same document the read gives, because the judicial
+surface has one representation of a referral and the screen after a claim is the papers. So there is no second
+judicial response DTO and no duplicate mapping. The one new DTO is `JudicialDirectionRequest`, a
+`KeyedRequestBody` over `ReferralSchemas.parseDirection`, where `state`, `decidedBy`, `decisionDate` and any case
+id have nowhere to land.
+
+Three statuses, three questions, asserted over HTTP: **404** for a referral this judge may not see (another
+judge's claim, withdrawn under them, terminal, unknown, not a UUID), **409** for one they can see and cannot act
+on (their own `Claimed` or `Decided` referral re-claimed; directing a pool referral they never claimed), **400**
+for a direction the schema refuses — both offending fields at once, and `publishToGazette: "false"` refused rather
+than read truthily. `OpenAPIPublisherTest` gains `JUDICIAL_PATHS`, a `containsAll` and a judicial operation count
+of 4 asserted **separately**, with `CASEWORKER_PATHS` proven disjoint from it so the caseworker thirty cannot
+drift by a judicial route being folded in; `OpenAPIWriteBodies` describes the direction body from
+`MasterDecision` and `ReferralSchemas.MAX_DIRECTIONS_LENGTH`, which the classpath-scanning
+`documentsEveryKeyedWriteBody` rule requires. Judicial count stated in `package-info.java`, `README.md` (a
+judicial surface section), `docs/RESUME.md` and `CLAUDE.md`; the caseworker 30 is untouched everywhere the grep
+found it. After Task 3: `test` 2086, `integration` 8 — 2094 total.
 
 ### Task 4: Security and full validation
 

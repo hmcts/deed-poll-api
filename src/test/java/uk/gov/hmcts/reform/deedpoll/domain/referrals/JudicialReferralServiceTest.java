@@ -13,6 +13,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
@@ -22,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
@@ -39,13 +41,14 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
  * The judicial boundary, with no database and no HTTP: who may see which referral, what the shared pool asks the
- * database for, and what the read of one referral refuses, resolves and refreshes.
+ * database for, what the read of one referral refuses, resolves and refreshes, and what the two writes delegate.
  *
  * <p><strong>Container-free deliberately, and it is the reason these rules live in this class at all.</strong>
  * The container-backed classes are excluded where CI runs -- {@code INTEGRATION_TESTS_ENABLED=false} on an agent
@@ -464,6 +467,224 @@ class JudicialReferralServiceTest {
 
             assertThat(unheld.getClaimedBy()).isNull();
             verifyNoInteractions(referralService, notes);
+        }
+    }
+
+    /**
+     * The two writes, which are the visibility check in front of an api-2 transition and nothing else.
+     *
+     * <p>What is asserted here is exactly that: that the gate and the 404 come first, that the transition is
+     * called with the case <em>resolved from the referral</em> rather than with anything a caller supplied, and
+     * that nothing about a state change is decided in this service. {@code ReferralService} is a mock, so a test
+     * that passes while this class quietly guarded {@code Open} itself would be asserting the duplicate rather
+     * than the delegation -- which is why the conflicts are asserted as the mock's exception travelling out
+     * untouched.
+     */
+    @Nested
+    @DisplayName("claim")
+    class Claim {
+
+        @Test
+        @DisplayName("refuses a caseworker and an admin, before sweeping, resolving or claiming anything")
+        void refusesANonJudicialCaller() {
+            for (CurrentUser caller : List.of(CASEWORKER, ADMIN)) {
+                assertThatThrownBy(() -> service.claim(REFERRAL_ID.toString(), caller))
+                    .isInstanceOf(ForbiddenError.class)
+                    .hasMessageContaining(Role.JUDICIAL.claimValue());
+            }
+
+            // The gate is the first statement, so a refused caller cannot trigger the mutating sweep -- which
+            // writes notes and moves other judges' claims -- by being refused often enough.
+            referrals.verifyNothingRead();
+            verifyNoInteractions(referralService, notes);
+        }
+
+        @Test
+        @DisplayName("sweeps before it resolves, so a claim that has just lapsed is claimable rather than a 404")
+        void sweepsBeforeItResolves() {
+            stored(ReferralState.Open, null);
+
+            service.claim(REFERRAL_ID.toString(), JUDGE);
+
+            // Order, and it is the whole reason the sweep is here at all: a referral whose claim lapsed a moment
+            // ago is still Claimed by the judge who abandoned it, which visibleTo says this caller may not see. So
+            // resolving first would answer 404 for a referral the pool is about to offer them.
+            InOrder order = inOrder(referralService, referrals.repository());
+            order.verify(referralService).reclaimStaleClaims();
+            order.verify(referrals.repository()).findWithCaseById(REFERRAL_ID);
+            order.verify(referralService).claim(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+        }
+
+        @Test
+        @DisplayName("hands the transition the case resolved from the referral, and answers with the papers")
+        void delegatesToTheTransition() {
+            Referral pooled = stored(ReferralState.Open, null);
+            Referral claimed = referral(ReferralState.Claimed, JUDGE);
+            when(referralService.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE)).thenReturn(claimed);
+            DeedPollNote note = new DeedPollNote();
+            when(notes.findNotes(CASE_ID)).thenReturn(List.of(note));
+
+            JudicialReferralView view = service.claim(REFERRAL_ID.toString(), JUDGE);
+
+            // The case id is never a parameter of the judicial surface, so this is the one place it can come from.
+            verify(referralService).claim(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+            // The transition's answer, not the row that was resolved: the state a judge is shown has to be the
+            // post-transition one, and returning the pre-claim referral would show them Open.
+            assertThat(view.referral()).isSameAs(claimed).isNotSameAs(pooled);
+            assertThat(view.application().getId()).isEqualTo(CASE_ID);
+            // The same three things a read answers with, because the screen after a claim is the papers.
+            assertThat(view.caseNotes()).containsExactly(note);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s a terminal referral without claiming it")
+        void notFoundForATerminalReferral(ReferralState terminal) {
+            stored(terminal, JUDGE);
+
+            assertThatThrownBy(() -> service.claim(REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).claim(any(), any(), any());
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Claimed", "Decided"})
+        @DisplayName("404s a referral another judge holds, in the words an unknown id gets, and claims nothing")
+        void notFoundForAnotherJudgesReferral(ReferralState held) {
+            stored(held, JUDGE);
+
+            // Indistinguishable from an id that never existed: a judge who guesses at ids must not be able to tell
+            // "somebody else has this" from "there is no such referral", or the pool becomes a list of what other
+            // judges are working on.
+            assertThatThrownBy(() -> service.claim(REFERRAL_ID.toString(), OTHER_JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+            assertThatThrownBy(() -> service.claim(UNKNOWN_ID.toString(), OTHER_JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + UNKNOWN_ID + " not found");
+
+            verify(referralService, never()).claim(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("404s an id that is not a UUID, without asking the database about it")
+        void notFoundForAnIdThatIsNotAUuid() {
+            assertThatThrownBy(() -> service.claim("not-a-uuid", JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral not-a-uuid not found");
+
+            verify(referrals.repository(), never()).findWithCaseById(any());
+        }
+
+        @Test
+        @DisplayName("lets the transition's conflict out untouched, rather than deciding claimability itself")
+        void passesTheTransitionsConflictThrough() {
+            // A referral this judge may see and may not claim -- their own Decided one, or an Open one another
+            // judge took between their loading the pool and their clicking. ReferralService owns that rule, and the
+            // point of this test is that nothing here duplicates it: a 409 from the transition is the answer, where
+            // a second guard in this service would eventually disagree with the first.
+            stored(ReferralState.Decided, JUDGE);
+            when(referralService.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE))
+                .thenThrow(new ConflictError("Referral " + REFERRAL_ID + " is Decided"));
+
+            assertThatThrownBy(() -> service.claim(REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining("Decided");
+        }
+    }
+
+    @Nested
+    @DisplayName("direct")
+    class Direct {
+
+        private static final DirectionInput APPROVAL =
+            new DirectionInput(MasterDecision.Approved, Optional.of("Granted"), true);
+
+        @Test
+        @DisplayName("refuses a caseworker and an admin, before resolving or recording anything")
+        void refusesANonJudicialCaller() {
+            for (CurrentUser caller : List.of(CASEWORKER, ADMIN)) {
+                assertThatThrownBy(() -> service.direct(REFERRAL_ID.toString(), APPROVAL, caller))
+                    .isInstanceOf(ForbiddenError.class)
+                    .hasMessageContaining(Role.JUDICIAL.claimValue());
+            }
+
+            referrals.verifyNothingRead();
+            verifyNoInteractions(referralService, notes);
+        }
+
+        @Test
+        @DisplayName("hands the transition the direction and the case resolved from the referral")
+        void delegatesToTheTransition() {
+            stored(ReferralState.Claimed, JUDGE);
+            Referral decided = referral(ReferralState.Decided, JUDGE);
+            when(referralService.decide(CASE_ID, REFERRAL_ID.toString(), APPROVAL, JUDGE)).thenReturn(decided);
+
+            JudicialReferralView view = service.direct(REFERRAL_ID.toString(), APPROVAL, JUDGE);
+
+            // The direction travels unaltered: decidedBy and decisionDate are the transition's to set from the
+            // token and the clock, and there is nothing for this service to add to what the schema validated.
+            verify(referralService).decide(CASE_ID, REFERRAL_ID.toString(), APPROVAL, JUDGE);
+            assertThat(view.referral()).isSameAs(decided);
+        }
+
+        @Test
+        @DisplayName("does not sweep, so this request cannot take the referral off the judge answering it")
+        void doesNotSweep() {
+            stored(ReferralState.Claimed, JUDGE);
+
+            service.direct(REFERRAL_ID.toString(), APPROVAL, JUDGE);
+
+            // The deliberate difference from claim. A judge submitting a direction was working the referral, and a
+            // sweep here would release it between their reading the papers and their answering. Their claim may
+            // still lapse by another judge's pool load, and that is then the transition's 409 -- but not this
+            // request's doing.
+            verify(referralService, never()).reclaimStaleClaims();
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s a terminal referral without recording a direction")
+        void notFoundForATerminalReferral(ReferralState terminal) {
+            stored(terminal, JUDGE);
+
+            assertThatThrownBy(() -> service.direct(REFERRAL_ID.toString(), APPROVAL, JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).decide(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("404s a referral another judge holds, so one judge cannot direct another's case")
+        void notFoundForAnotherJudgesClaim() {
+            stored(ReferralState.Claimed, JUDGE);
+
+            // The visibility rule doing the work the case-scoping does on the caseworker surface: this is a 404
+            // rather than the 409 the holder check would give, because the referral is not this judge's to be told
+            // anything about.
+            assertThatThrownBy(() -> service.direct(REFERRAL_ID.toString(), APPROVAL, OTHER_JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).decide(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("lets the transition's conflict out untouched for a pool referral nobody holds")
+        void passesTheTransitionsConflictThrough() {
+            // Visible and not held: an Open referral is visible to every judge, and directing one nobody has
+            // claimed is the transition's conflict rather than this service's -- so a judge who skipped the claim
+            // is told plainly instead of writing a direction onto an unclaimed referral.
+            stored(ReferralState.Open, null);
+            when(referralService.decide(CASE_ID, REFERRAL_ID.toString(), APPROVAL, JUDGE))
+                .thenThrow(new ConflictError("Referral " + REFERRAL_ID + " is not claimed by " + JUDGE.name()));
+
+            assertThatThrownBy(() -> service.direct(REFERRAL_ID.toString(), APPROVAL, JUDGE))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining("not claimed by");
         }
     }
 

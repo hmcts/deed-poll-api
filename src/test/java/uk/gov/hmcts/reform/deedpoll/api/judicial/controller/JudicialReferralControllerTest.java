@@ -48,15 +48,19 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
+import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The two judicial read endpoints, over HTTP, against a real database and a stub IDAM.
+ * All four judicial endpoints -- the two reads and the two writes -- over HTTP, against a real database and a
+ * stub IDAM.
  *
  * <p>The whole context rather than a {@code @WebMvcTest} slice, for the reason every controller test here gives:
  * a slice does not get {@code SecurityConfiguration}, so it would assert Spring Boot's defaults rather than this
@@ -68,6 +72,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * {@code /judicial/**} is authenticated by omission, that the role gate is a 403 and an invisible referral a 404,
  * that the narrow projection really is what goes on the wire, and that the mutating read -- the sweep on the pool
  * and the claim refresh on the detail -- happens through a real transaction.
+ *
+ * <p><strong>The two writes are here for a third reason: which status code each of api-2's refusals becomes.</strong>
+ * The transitions' own rules are pinned in {@code ReferralServiceTest} and their delegation in
+ * {@code JudicialReferralServiceTest}; what only a booted service shows is that an invisible referral is a 404, a
+ * visible one in the wrong state is api-2's 409, and a malformed direction is a 400 naming each offending field --
+ * three answers to three different questions, which a judge on a stale dashboard has to be able to tell apart.
  *
  * <p><strong>The judge is a token holder here, unlike everywhere else in the suite.</strong> IDAM does not issue
  * {@code Role.JUDICIAL} yet, so the stub is asked for a userinfo document carrying the claim value -- which is the
@@ -560,6 +570,314 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             authorised(get(POOL + "/" + mine)).andExpect(status().isOk());
 
             assertThat(stored(mine).getLastTouchedAt()).isEqualTo(touched);
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /judicial/referrals/{referralId}/claim")
+    class ClaimReferral {
+
+        @Test
+        @DisplayName("takes a pool referral, records the claim under this judge, and answers with the papers")
+        void claimsAPoolReferral() throws Exception {
+            String caseId = named(newCase(), "Robin");
+            String referralId = raise(caseId, Urgency.Normal);
+
+            authorised(post(POOL + "/" + referralId + "/claim"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(referralId))
+                .andExpect(jsonPath("$.state").value(ReferralState.Claimed.name()))
+                .andExpect(jsonPath("$.claimedBy").value(JUDGE_NAME))
+                .andExpect(jsonPath("$.claimedAt").exists())
+                // The same document the read gives, because the screen after a claim is the papers -- so a client
+                // renders them without a second call.
+                .andExpect(jsonPath("$.application.newSurname").value("Smyth"))
+                .andExpect(jsonPath("$.caseNotes.length()").value(1));
+
+            Referral claimed = stored(referralId);
+            assertThat(claimed.getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(claimed.getClaimedBy()).isEqualTo(JUDGE_NAME);
+            // Stamped at the claim as well, so a referral picked up and never touched again lapses two hours after
+            // it was picked up rather than never.
+            assertThat(claimed.getLastTouchedAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("drops it off the shared pool, so no second judge is offered it")
+        void takesItOutOfThePool() throws Exception {
+            String referralId = raise(newCase(), Urgency.Normal);
+
+            authorised(post(POOL + "/" + referralId + "/claim")).andExpect(status().isOk());
+
+            authorised(get(POOL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0));
+        }
+
+        @Test
+        @DisplayName("404s a referral another judge holds, and leaves their claim alone")
+        void notFoundForAnotherJudgesClaim() throws Exception {
+            String theirs = claimedBy(OTHER_JUDGE_NAME);
+
+            // 404 rather than the 409 a claimable-state check would give, because the visibility rule answers
+            // first: this judge is not entitled to learn that the referral exists, let alone who has it.
+            authorised(post(POOL + "/" + theirs + "/claim"))
+                .andExpect(status().isNotFound())
+                .andExpect(content().string(not(containsString(OTHER_JUDGE_NAME))));
+
+            assertThat(stored(theirs).getClaimedBy()).isEqualTo(OTHER_JUDGE_NAME);
+        }
+
+        @Test
+        @DisplayName("409s this judge's own claim rather than silently re-claiming it")
+        void conflictsOnItsOwnClaim() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            // Visible to them and not Open, which is where a 409 lives on this surface: they are looking at it, so
+            // a 404 would be a lie they cannot act on. And no silent re-claim -- two judges each shown "claimed by
+            // me" for different reasons is worse than one being told plainly that somebody got there first.
+            authorised(post(POOL + "/" + mine + "/claim"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString(ReferralState.Open.name())));
+
+            assertThat(stored(mine).getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(stored(mine).getClaimedBy()).isEqualTo(JUDGE_NAME);
+        }
+
+        @Test
+        @DisplayName("409s a referral this judge already directed, because a direction is not re-openable")
+        void conflictsOnItsOwnDecision() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+
+            authorised(post(POOL + "/" + mine + "/claim")).andExpect(status().isConflict());
+
+            assertThat(stored(mine).getState()).isEqualTo(ReferralState.Decided);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s a terminal referral, in the words an unknown id gets")
+        void notFoundForATerminalReferral(ReferralState terminal) throws Exception {
+            String referralId = raise(newCase(), Urgency.Normal);
+            moveTo(referralId, terminal);
+
+            authorised(post(POOL + "/" + referralId + "/claim"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + referralId + " not found"));
+
+            assertThat(stored(referralId).getState()).isEqualTo(terminal);
+        }
+
+        @Test
+        @DisplayName("404s an unknown id and one that is not a UUID at all")
+        void notFoundForAnUnknownId() throws Exception {
+            authorised(post(POOL + "/" + UNKNOWN_ID + "/claim")).andExpect(status().isNotFound());
+            authorised(post(POOL + "/not-a-uuid/claim")).andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("claims a referral whose previous claim has just lapsed, rather than answering 404")
+        void claimsAReferralWhoseClaimHasLapsed() throws Exception {
+            String lapsed = claimedBy(OTHER_JUDGE_NAME);
+            lapse(lapsed);
+
+            // The sweep runs before the visibility check for exactly this: the row is still Claimed by the other
+            // judge, so a check-first order would refuse a referral the pool would have offered.
+            authorised(post(POOL + "/" + lapsed + "/claim"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.claimedBy").value(JUDGE_NAME));
+
+            assertThat(stored(lapsed).getClaimedBy()).isEqualTo(JUDGE_NAME);
+            // And the lapse is on the timeline, because releasing a claim erases the fact it is about.
+            assertThat(notes.findAll())
+                .anySatisfy(note -> assertThat(note.getNote()).contains(OTHER_JUDGE_NAME));
+        }
+
+        @Test
+        @DisplayName("401s without a token, and claims nothing")
+        void refusesAnUnauthenticatedCaller() throws Exception {
+            String referralId = raise(newCase(), Urgency.Normal);
+
+            mockMvc.perform(post(POOL + "/" + referralId + "/claim")).andExpect(status().isUnauthorized());
+
+            assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Open);
+        }
+
+        @Test
+        @DisplayName("403s a caseworker token naming the role, and claims nothing")
+        void refusesACaseworker() throws Exception {
+            String referralId = raise(newCase(), Urgency.Normal);
+            asCaseworker();
+
+            authorised(post(POOL + "/" + referralId + "/claim"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value(containsString(Role.JUDICIAL.claimValue())));
+
+            assertThat(stored(referralId).getClaimedBy()).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /judicial/referrals/{referralId}/direction")
+    class RecordDirection {
+
+        /** The shortest complete direction: a decision, what was directed, and the Gazette answer. */
+        private static final String APPROVAL = """
+            {"decision": "Approved", "directionsText": "Granted", "publishToGazette": true}""";
+
+        @Test
+        @DisplayName("records the direction on a referral this judge holds, under their own name")
+        void recordsADirection() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            authorised(post(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(APPROVAL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value(ReferralState.Decided.name()))
+                .andExpect(jsonPath("$.decision").value(MasterDecision.Approved.name()))
+                .andExpect(jsonPath("$.directionsText").value("Granted"))
+                .andExpect(jsonPath("$.publishToGazette").value(true))
+                .andExpect(jsonPath("$.decisionDate").exists())
+                // From the token and the clock, never from the payload: a direction that could name its own author
+                // would be a signature anybody could forge.
+                .andExpect(jsonPath("$.decidedBy").value(JUDGE_NAME));
+
+            Referral directed = stored(mine);
+            assertThat(directed.getState()).isEqualTo(ReferralState.Decided);
+            assertThat(directed.getDecidedBy()).isEqualTo(JUDGE_NAME);
+            assertThat(directed.getPublishToGazette()).isTrue();
+        }
+
+        @Test
+        @DisplayName("ignores a payload's attempt to name the state, the author or the date")
+        void stripsWhatTheJudgeMayNotSet() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            authorised(post(POOL + "/" + mine + "/direction")
+                           .contentType(APPLICATION_JSON)
+                           .content("""
+                               {"decision": "Rejected", "publishToGazette": false, "state": "Closed",
+                                "decidedBy": "Somebody Else", "decisionDate": "2020-01-01T00:00:00",
+                                "deedPollId": "forged"}"""))
+                .andExpect(status().isOk())
+                // Stripped rather than refused, as any unknown key is -- and each absence is a rule: a judge does
+                // not close their own referral, and cannot sign one as anybody else.
+                .andExpect(jsonPath("$.state").value(ReferralState.Decided.name()))
+                .andExpect(jsonPath("$.decidedBy").value(JUDGE_NAME))
+                .andExpect(jsonPath("$.decision").value(MasterDecision.Rejected.name()))
+                .andExpect(jsonPath("$.publishToGazette").value(false));
+
+            assertThat(stored(mine).getState()).isEqualTo(ReferralState.Decided);
+        }
+
+        @Test
+        @DisplayName("400s a direction the schema refuses, naming every offending field at once")
+        void refusesAnInvalidDirection() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            authorised(post(POOL + "/" + mine + "/direction")
+                           .contentType(APPLICATION_JSON)
+                           .content("""
+                               {"decision": "approved", "publishToGazette": "false"}"""))
+                .andExpect(status().isBadRequest())
+                // Both wrong, both reported: a decision matched exactly rather than case-insensitively, and a
+                // Gazette flag that is a boolean rather than a string read truthily.
+                .andExpect(jsonPath("$.errors.length()").value(2))
+                .andExpect(jsonPath("$.errors[*].field")
+                               .value(containsInAnyOrder("decision", "publishToGazette")));
+
+            assertThat(stored(mine).getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(stored(mine).getDecision()).isNull();
+        }
+
+        @Test
+        @DisplayName("409s a pool referral this judge has not claimed, and records nothing")
+        void conflictsOnAReferralItDoesNotHold() throws Exception {
+            String waiting = raise(newCase(), Urgency.Normal);
+
+            // Visible to every judge and held by none: directing it would write a direction onto an unclaimed
+            // referral, so the transition's holder check answers instead.
+            authorised(post(POOL + "/" + waiting + "/direction").contentType(APPLICATION_JSON).content(APPROVAL))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString("not claimed by " + JUDGE_NAME)));
+
+            assertThat(stored(waiting).getDecision()).isNull();
+            assertThat(stored(waiting).getState()).isEqualTo(ReferralState.Open);
+        }
+
+        @Test
+        @DisplayName("404s a referral withdrawn under the judge who was holding it")
+        void notFoundForAReferralWithdrawnUnderThem() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+            moveTo(mine, ReferralState.Withdrawn);
+
+            // Withdrawn is invisible, so this is the 404 -- which is the honest answer: the referral the judge was
+            // reading has been pulled back, and there is nothing of it left for them to direct.
+            authorised(post(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(APPROVAL))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + mine + " not found"));
+
+            assertThat(stored(mine).getDecision()).isNull();
+        }
+
+        @Test
+        @DisplayName("404s a referral another judge holds, and records nothing on it")
+        void notFoundForAnotherJudgesClaim() throws Exception {
+            String theirs = claimedBy(OTHER_JUDGE_NAME);
+
+            // 404 and not 409, because the visibility rule answers before the holder check: this judge is not
+            // entitled to know the referral exists, let alone that somebody else has it.
+            authorised(post(POOL + "/" + theirs + "/direction").contentType(APPLICATION_JSON).content(APPROVAL))
+                .andExpect(status().isNotFound())
+                .andExpect(content().string(not(containsString(OTHER_JUDGE_NAME))));
+
+            assertThat(stored(theirs).getDecision()).isNull();
+            assertThat(stored(theirs).getClaimedBy()).isEqualTo(OTHER_JUDGE_NAME);
+        }
+
+        @Test
+        @DisplayName("leaves the direction visible to the judge who recorded it, and to nobody else")
+        void leavesTheDirectionReadableByItsAuthor() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+            authorised(post(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(APPROVAL))
+                .andExpect(status().isOk());
+
+            authorised(get(POOL + "/" + mine))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.decision").value(MasterDecision.Approved.name()));
+
+            // And the other judge cannot, which is what makes "a judge's own decided referrals" a rule about
+            // ownership rather than about the state.
+            asJudge(OTHER_JUDGE_NAME);
+            authorised(get(POOL + "/" + mine)).andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("401s without a token, and records nothing")
+        void refusesAnUnauthenticatedCaller() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            mockMvc.perform(post(POOL + "/" + mine + "/direction")
+                                .contentType(APPLICATION_JSON)
+                                .content(APPROVAL))
+                .andExpect(status().isUnauthorized());
+
+            assertThat(stored(mine).getDecision()).isNull();
+        }
+
+        @Test
+        @DisplayName("403s a caseworker token, even on a referral they could name, and records nothing")
+        void refusesACaseworker() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+            asCaseworker();
+
+            // A caseworker does not decide a referral, and the refusal is the role gate rather than the holder
+            // check: closing an actioned direction is their half of the loop, recording one is not.
+            authorised(post(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(APPROVAL))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value(containsString(Role.JUDICIAL.claimValue())));
+
+            assertThat(stored(mine).getDecision()).isNull();
         }
     }
 

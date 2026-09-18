@@ -2,9 +2,10 @@
 
 ## Purpose
 
-The backend service for deed poll case management. It serves the caseworker admin service and will
-later also serve the citizen-facing service, which is why it has separate `/caseworker/**` and
-`/citizen/**` namespaces.
+The backend service for deed poll case management. It serves the caseworker admin service and the
+judiciary's own referral screens, and will later also serve the citizen-facing service — which is why
+it has separate `/caseworker/**`, `/judicial/**` and `/citizen/**` namespaces, sharing no DTO between
+them.
 
 It is a port of the TypeScript domain layer in the sibling repo
 [`hmcts/deed-poll-admin`](https://github.com/hmcts/deed-poll-admin) (`libs/deed-poll`), which is the
@@ -29,7 +30,8 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 
 ## The API surface
 
-Thirty caseworker operations. `/swagger-ui.html` is the authority; this table is the map.
+Thirty caseworker operations, plus four judicial ones on a namespace of their own (below).
+`/swagger-ui.html` is the authority; this table is the map.
 
 | Method | Path | What it does |
 |---|---|---|
@@ -118,12 +120,50 @@ timeline concept in this domain beyond the notes grid and the referral has to ap
 look. Claiming and deciding write none — both are legible from the referral's own row — and the inactivity
 sweep writes one as the service account, because a lapsed claim erases the fact it is about.
 
-**Claiming a referral and recording a direction are the judge's half of the loop, and they have no HTTP route
-here.** Both are transitions on `ReferralService` — role-gated to `Role.JUDICIAL`, exercised by unit tests
-holding a `CurrentUser` — and the judicial pool, the read-through to a case's papers and the endpoints that call
-them are a later plan on a `/judicial/**` surface, not additions to the caseworker one. A claim lapses after
+**Claiming a referral and recording a direction are the judge's half of the loop, and they have no route on this
+surface.** Both are transitions on `ReferralService` — role-gated to `Role.JUDICIAL` — exposed on the judicial
+namespace below rather than bolted onto the caseworker one. A claim lapses after
 `deedpoll.referrals.claim-expiry` (two hours by default) of the holding judge's inactivity, taken back as a side
 effect of loading the judicial pool rather than by a scheduler.
+
+### The judicial surface
+
+**Four operations, on a namespace of their own.** They are *not* part of the thirty above: a judge is not a
+caseworker with fewer permissions, and `/judicial/**` has its own controllers and its own DTOs so that a
+caseworker response — which carries every field a caseworker sees, the admin-only privacy fields included —
+cannot be reused for the judiciary by accident. An ArchUnit rule asserts the separation in bytecode.
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/judicial/referrals` | The shared pool — the `Open` referrals waiting for a judge, urgent first then longest-waiting, paged ten at a time with the pool's total |
+| GET | `/judicial/referrals/{referralId}` | One referral, a **narrow** view of its application, and the case's notes — read-only |
+| POST | `/judicial/referrals/{referralId}/claim` | Claim a pool referral — it becomes theirs and drops off every other judge's |
+| POST | `/judicial/referrals/{referralId}/direction` | Record a direction — `decision`, optional `directionsText`, and `publishToGazette` |
+
+Every route requires `Role.JUDICIAL`, which **IDAM does not issue yet**, enforced in the domain rather than by a
+route matcher — so the whole surface fails closed for every token in existence today. Four rules are the surface:
+
+- **Keyed on the referral, never on the case.** There is no `{caseId}` in a judicial URL, because a judge does
+  not browse cases and must not be able to name one; the service resolves the case *from* the referral. That
+  inverts the caseworker surface's case-scoping rule, so the safety boundary **moves** rather than disappearing:
+  where a caseworker read is scoped by its parent, a judicial read is scoped by visibility.
+- **Visibility.** A referral is visible to a judge if it is `Open` — in the pool — or it is `Claimed`/`Decided`
+  and it is theirs. Anything else is **404**: withdrawn, closed, or another judge's, in the same words an id that
+  never existed gets, so no referral id is discoverable and one judge cannot learn another holds a case. The only
+  403 here is the role gate. A referral they can see but not act on is a **409** — claiming one somebody got to
+  first, directing one they no longer hold — because by then they are looking at it.
+- **Two writes and no more.** No editing case data, no notes, no raising or withdrawing referrals, and no
+  closure: closing is the office's acknowledgement that the direction has been actioned. Both writes are the
+  api-2 transitions, so nothing about a state change is decided on this surface.
+- **Two reads that write.** Loading the pool runs the inactivity sweep first, so a lapsed claim is released and
+  the referral is back in the pool in the same response that observed it; and opening a referral a judge *holds*
+  refreshes its inactivity clock, because a judge reading the papers is working the case. Opening a pool referral
+  they have not claimed touches nothing.
+
+The judicial application view is a **confirmed minimum** (Steve, 2026-09-17): the reference, the application
+type, the old and new names, and the referral's own reasons, notes and urgency. It excludes payment and fee
+references, applicant contact details, workflow dates, internal audit trails and the admin-only privacy field.
+Any *addition* to that set is a legal and policy decision, not an engineering one.
 
 The witness delete was the eighteenth, and is **the one witness route restricted by role**: the capability
 matrix puts "Delete witnesses" at ✗ for Basic User and ✓ for Administrator, the same split as deleting a
