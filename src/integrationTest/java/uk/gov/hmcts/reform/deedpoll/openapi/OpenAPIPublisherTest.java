@@ -24,6 +24,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
+import uk.gov.hmcts.reform.deedpoll.notify.ApplicationRejectedPersonalisation;
+import uk.gov.hmcts.reform.deedpoll.notify.EmailSlot;
 
 import java.io.OutputStream;
 import java.lang.reflect.Modifier;
@@ -65,9 +67,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
     /**
      * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
-     * added afterwards, the saved-query routes after those, the referral routes after those and the closure the
-     * referral state machine added last. Listed rather than counted, because a count agrees with a spec that
-     * documents the right number of the wrong things.
+     * added afterwards, the saved-query routes after those, the referral routes after those, the closure the
+     * referral state machine added and the three email routes the Notify send path added last. Listed rather than
+     * counted, because a count agrees with a spec that documents the right number of the wrong things.
      */
     private static final List<String> CASEWORKER_PATHS = List.of(
         "/caseworker/cases",
@@ -86,7 +88,10 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/cases/{id}/referrals",
         "/caseworker/cases/{id}/referrals/{referralId}",
         "/caseworker/cases/{id}/referrals/{referralId}/withdrawal",
-        "/caseworker/cases/{id}/referrals/{referralId}/closure"
+        "/caseworker/cases/{id}/referrals/{referralId}/closure",
+        "/caseworker/cases/{id}/emails",
+        "/caseworker/cases/{id}/emails/{template}",
+        "/caseworker/cases/{id}/emails/{template}/preview"
     );
 
     /**
@@ -134,7 +139,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * The four judicial operations, published and counted apart from the caseworker surface's thirty.
+     * The four judicial operations, published and counted apart from the caseworker surface's thirty-three.
      *
      * <p>Both halves for the reason the caseworker assertion gives: a count cannot tell a new verb on a known
      * path from a new path, and a path list cannot tell a route that was removed from one that never existed.
@@ -166,7 +171,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(CASEWORKER_PATHS).doesNotContainAnyElementsOf(JUDICIAL_PATHS);
     }
 
-    @DisplayName("Documents the thirty caseworker operations and the token they need")
+    @DisplayName("Documents the thirty-three caseworker operations and the token they need")
     @Test
     void documentsTheCaseworkerOperations() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -176,13 +181,16 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Thirty operations across seventeen paths: `/caseworker/cases`, the notes and witnesses collections,
+        // Thirty-three operations across twenty paths: `/caseworker/cases`, the notes and witnesses collections,
         // the saved-query collection and the referrals collection each carry a GET and a POST, the case carries a
         // GET and a PATCH, the note, the witness and the saved query each carry a GET, a PATCH and a DELETE, a
         // saved query's selection carries a PUT and a DELETE, one referral carries a GET, and its withdrawal and
         // its closure each carry a POST -- the note's delete since 2026-09-08, the witness's since the
         // Administrator gate landed, the saved query's since the library did and the selection's with it, the
         // four referral routes with the referrals feature and the closure with the referral state machine.
+        // The last three are the Email tab's: the case's emails collection carries a GET saying which emails
+        // apply, and one email type carries a POST to send it and a POST to preview it. Preview is a POST despite
+        // being a read, because the caseworker's slot text is the input and a URL would log a judge's reason.
         // The judge's own operations -- claiming a referral and recording a direction -- are deliberately not
         // here: they are transitions on ReferralService with no route yet, and when they get one it is on a
         // judicial surface rather than this one, so this count stays the caseworker count.
@@ -192,7 +200,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(30);
+        assertThat(operations).isEqualTo(33);
 
         // Every one of them needs a forwarded IDAM token, which the document has to say or the client generated
         // from it cannot make a call. Declared once, globally, because the service authenticates by default.
@@ -381,6 +389,35 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(typesOf(spec.at(direction + "decision")))
             .as("a direction cannot be cleared, so the document offers no null")
             .doesNotContain("null");
+
+        // The two email bodies, which carry the slots and nothing else. Both are asserted rather than one, because
+        // they are separate types for separate operations and the customiser could describe either alone.
+        for (String email : List.of("PreviewEmailRequest", "SendEmailRequest")) {
+            String slots = "/components/schemas/" + email + "/properties/";
+            assertThat(spec.at(slots + EmailSlot.JUDGES_REASON.placeholder() + "/maxLength").asInt())
+                .isEqualTo(ReferralSchemas.MAX_DIRECTIONS_LENGTH);
+            assertThat(spec.at(slots + EmailSlot.ADDITIONAL_NOTES.placeholder() + "/maxLength").asInt())
+                .isEqualTo(ReferralSchemas.MAX_NOTES_LENGTH);
+            // The slots are the whole body: a client must not be told it may send reference_number, which is the
+            // one thing this payload exists to refuse.
+            assertThat(spec.at("/components/schemas/" + email + "/properties").size())
+                .isEqualTo(EmailSlot.values().length);
+            assertThat(spec.at(slots + ApplicationRejectedPersonalisation.REFERENCE_NUMBER).isMissingNode())
+                .as("%s does not offer a resolved value as a field", email)
+                .isTrue();
+            // The only body in the document that closes itself, and the only one where the service refuses an
+            // unknown key rather than stripping it. Publishing true here would describe an API that quietly
+            // ignored an attempt to set the reference an applicant is told.
+            assertThat(spec.at("/components/schemas/" + email + "/additionalProperties").asBoolean(true))
+                .as("%s refuses unknown keys rather than ignoring them", email)
+                .isFalse();
+            // Nothing declared required: judges_reason is required of the email and not of the request, because it
+            // is pre-populated from the direction -- a client declaring it mandatory would refuse the ordinary
+            // case, which is a caseworker sending the judge's words unaltered.
+            assertThat(spec.at("/components/schemas/" + email + "/required").isMissingNode())
+                .as("%s declares no required field", email)
+                .isTrue();
+        }
 
         // The upload, which had no body at all: the media type is as load-bearing as the fields, because a client
         // that posts JSON to it fails whatever field names it uses.

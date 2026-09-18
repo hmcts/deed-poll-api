@@ -396,9 +396,59 @@ for the controller idiom, and the api-3 judicial controller for how thin a handl
   exists, 200 with subject and HTML from the stub, and a send leaving exactly one `Pending` row.
 - `OpenAPIPublisherTest`: add the three paths, move the caseworker count to **33**, leave judicial at 4.
 
-- [ ] Three operations live and documented, the caseworker count is 33 with judicial still 4, preview returns
+- [x] Three operations live and documented, the caseworker count is 33 with judicial still 4, preview returns
       Notify's own rendering and writes no row, send enqueues exactly one row, 422 on a blank recipient, and
       `./gradlew build` green
+
+  Notes for the tasks that follow, decided or verified rather than assumed:
+  - **The paths carry `{id}`, not `{caseId}`.** `/caseworker/cases/{id}/emails`,
+    `/caseworker/cases/{id}/emails/{template}` and `/caseworker/cases/{id}/emails/{template}/preview`, matching
+    every other caseworker route -- the plan's `{caseId}` above was illustrative. `CASEWORKER_PATHS` names them
+    that way and the count is 33.
+  - **Two new statuses, and each needed a domain error the reference does not have.**
+    `IncompleteDataError` → **422** (the record is missing something the operation needs; it carries `FieldError`s
+    so the tab can name `applicantEmail`) and `UpstreamFailureError` → **502** (a dependency refused). Both are
+    mapped in `DomainErrorHandler`, which stays the one place a status is decided. 422 is not 409 because a retry
+    of a send to an applicant with no address fails identically for ever; 502 is not 500 because a 500 sends
+    whoever is paged to read *this* service's logs for somebody else's answer. **A temporary Notify failure is the
+    same 502 as a permanent one**, with the verdict in the message: a preview has no retry to model, so a 503 would
+    tell a caseworker nothing they could act on differently.
+  - **There is no "403 without the caseworker role", because there is no such role.** That bullet in the task's
+    test list is not applicable rather than skipped: the only role gate in this service is `Role.JUDICIAL` on the
+    judicial surface, and sending is an ordinary caseworker action exactly as raising and closing a referral is.
+    What is asserted instead, in both test classes, is the decision itself -- a caller holding no roles may send.
+  - **The drain is called from the controller, after `send` returns, and it has to be.** `drain()` is
+    `REQUIRES_NEW`, so calling it inside the enqueueing transaction would suspend that transaction and the drain
+    would not see the row it was meant to send. Task 5 should pin the case-list read the same way -- outside the
+    read's own transaction -- rather than move this call inside the service.
+  - **`templateVersion` is null on an enqueued row and that is not a gap.** The send asks Notify to render nothing,
+    so there is no version to record; task 5's sender should store the version Notify reports when it *accepts* the
+    send, which is where decision 14's "under which wording" actually becomes answerable.
+  - **The recipient is checked before the slot payload.** A caseworker whose case has no address cannot fix that by
+    editing what they typed, so refusing the payload first would be two refusals where one was useful. **A preview
+    does not check it at all** -- reading what would go out before anybody has chased the applicant for an address
+    is legitimate.
+  - **`NotificationClientException`'s public `String` constructor reports `400` for every message**, whatever the
+    text says (probed against the 6.1.0 jar). So a mocked-client test can only ever reach the `PERMANENT` branch,
+    and every other verdict needs a real round trip -- which is why the 429/500 preview cases live in the
+    container-backed class against `StubNotify` and not in `CaseEmailServiceTest`.
+  - **The enqueue is `INSERT ... ON CONFLICT ("referralId", "template") WHERE "referralId" IS NOT NULL DO
+    NOTHING`**, as task 2's note prescribed, and the personalisation is bound as JSON text with
+    `CAST(:personalisation AS jsonb)` -- so `CaseEmailService` serialises the map with the context's `ObjectMapper`.
+    `0` rows is logged and answered with the existing row's id and `enqueued: false`, which is a **200**: a second
+    click is a stale screen rather than a failure, and telling the caseworker it failed would invite a third.
+  - **The `GET` reports `provisioned` per template, not per response**, from `NotifyProperties.isProvisioned`. It is
+    false in every real environment until notify-0 lands, which is what a tab should say instead of offering a
+    button whose preview is a 502. It also publishes each template's slots with their caps, so a form does not
+    hard-code them -- but **not** the pre-populated text: `ReferralResponse.directionsText` already carries it on
+    the referral read the same screen makes.
+  - **Both email bodies publish `additionalProperties: false`**, the only bodies in the document that do, because
+    they are the only payload where an unknown key is refused rather than stripped. Neither declares
+    `judges_reason` required: it is required of the *email* and not of the *request*, since it is pre-populated.
+  - Totals after this task: `test` 2267, `integration` 8 (2218 + 8 after task 3). 49 new tests, of which 29 are
+    container-backed (`CaseworkerEmailControllerTest`) and 20 container-free (`CaseEmailServiceTest`) --
+    `build.gradle`'s exclusion comment is re-measured to **860 of 2,267 across 29 classes**, 1,407 running with
+    `INTEGRATION_TESTS_ENABLED=false`.
 
 ### Task 5: Drain — the send
 

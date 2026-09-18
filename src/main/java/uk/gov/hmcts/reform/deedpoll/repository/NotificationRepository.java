@@ -10,6 +10,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -25,11 +26,83 @@ import java.util.UUID;
  *
  * <p>{@link #findByDeedPollIdOrderByCreatedOnDesc} is the case-scoped half, for the Email tab's
  * history, and it is scoped like every other finder in this package.
+ *
+ * <p>There is one write here as well as the claim -- {@link #enqueue} -- and it is native for the same
+ * reason: what makes it correct is the {@code ON CONFLICT} clause, which has no JPA spelling, and
+ * writing it anywhere but in the statement would hide the one line that stops an applicant being told
+ * twice that their application was refused.
  */
 public interface NotificationRepository extends JpaRepository<Notification, UUID> {
 
     /** One case's notifications, newest first -- the Email tab's history. */
     List<Notification> findByDeedPollIdOrderByCreatedOnDesc(String deedPollId);
+
+    /**
+     * The row a send already wrote for this referral and template, if there is one.
+     *
+     * <p>Read only after {@link #enqueue} answered {@code 0}, to answer the caseworker with the id of the email
+     * that was already owed rather than with nothing. It is not a check performed before the insert: that is the
+     * race the partial unique index exists to settle, and a check-then-insert has a window this does not.
+     *
+     * <p>Named by its case as well as by its referral, so it is scoped like every other finder here even though
+     * the referral id alone would identify the row. The caller has already resolved the referral through the
+     * case, so a mismatch is not reachable -- which is the point: it stays unreachable by construction rather
+     * than by the caller remembering.
+     */
+    Optional<Notification> findByDeedPollIdAndReferralIdAndTemplate(String deedPollId,
+                                                                   UUID referralId,
+                                                                   String template);
+
+    /**
+     * Enqueues one owed email, unless this referral has already had this template.
+     *
+     * <p><strong>{@code ON CONFLICT ... DO NOTHING} rather than a caught exception, and that is a correctness
+     * choice rather than a stylistic one.</strong> Idempotency here is the partial unique index, so the second
+     * insert has to be refused by the database; the question is only what the refusal does to the caller. A
+     * {@code DataIntegrityViolationException} would mark the caseworker's transaction rollback-only, so a
+     * double-click would fail the whole request after the first click had already succeeded -- and moving the
+     * insert into its own transaction to avoid that would commit the row outside the transaction that caused it,
+     * which is the one thing the outbox is supposed to guarantee. This statement refuses the duplicate inside the
+     * caller's transaction and leaves it usable: {@code 0} rows is the no-op to log, not an error.
+     *
+     * <p>The conflict target repeats the index's own predicate -- {@code WHERE "referralId" IS NOT NULL} -- because
+     * that is how Postgres is told which partial index to infer. Without it the statement does not compile against
+     * this schema at all, which is why the index is partial rather than a table constraint.
+     *
+     * <p>Native SQL for the reason {@link #claimNextDue} is: this <em>is</em> the statement, and the
+     * {@code ON CONFLICT} clause has no JPA spelling. Identifiers are quoted because they are mixed case.
+     * {@code 'Pending'} and {@code 0} are literals rather than parameters because a newly enqueued row is always
+     * owed and has never been attempted -- a caller able to pass either could enqueue a row that was already
+     * {@code Sent}. {@code CAST(:personalisation AS jsonb)} because the value arrives as the JSON text Jackson
+     * produced and {@code jsonb} will not take a bare string.
+     *
+     * @param id the row id, which is also the {@code reference} the send will carry to Notify
+     * @param deedPollId the case the email is about
+     * @param referralId the referral that caused it, which with {@code template} is the idempotency key
+     * @param template the {@code EmailTemplate} member name, never the Notify UUID
+     * @param recipient the address resolved at send, frozen so a later edit cannot redirect an email already owed
+     * @param personalisation the resolved values and the caseworker's slots, as JSON text
+     * @param now the instant to stamp, and when the row becomes claimable -- immediately
+     * @param createdBy the caseworker who sent it, who authored part of the content
+     * @return 1 if this statement enqueued the row, 0 if this referral had already had this template
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+        INSERT INTO "deedpoll_notification" (
+                    "id", "deedPollId", "referralId", "template", "recipient", "personalisation",
+                    "state", "attempts", "nextAttemptAt", "createdBy", "createdOn", "modifiedOn", "modifiedBy")
+             VALUES (:id, :deedPollId, :referralId, :template, :recipient, CAST(:personalisation AS jsonb),
+                    'Pending', 0, :now, :createdBy, :now, :now, :createdBy)
+        ON CONFLICT ("referralId", "template") WHERE "referralId" IS NOT NULL DO NOTHING
+        """)
+    int enqueue(@Param("id") UUID id,
+                @Param("deedPollId") String deedPollId,
+                @Param("referralId") UUID referralId,
+                @Param("template") String template,
+                @Param("recipient") String recipient,
+                @Param("personalisation") String personalisation,
+                @Param("now") LocalDateTime now,
+                @Param("createdBy") String createdBy);
 
     /**
      * The ids of the rows a drain could take right now, oldest due first.
