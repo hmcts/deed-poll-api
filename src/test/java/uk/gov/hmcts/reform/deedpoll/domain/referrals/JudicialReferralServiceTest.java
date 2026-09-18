@@ -14,9 +14,13 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
+import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
@@ -25,7 +29,9 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,8 +44,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * The judicial boundary, with no database and no HTTP: who may see which referral, and what the shared pool
- * asks the database for.
+ * The judicial boundary, with no database and no HTTP: who may see which referral, what the shared pool asks the
+ * database for, and what the read of one referral refuses, resolves and refreshes.
  *
  * <p><strong>Container-free deliberately, and it is the reason these rules live in this class at all.</strong>
  * The container-backed classes are excluded where CI runs -- {@code INTEGRATION_TESTS_ENABLED=false} on an agent
@@ -69,15 +75,25 @@ class JudicialReferralServiceTest {
     private static final CurrentUser ADMIN =
         CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "An Admin", "admin-2");
 
+    /** The case every fixture referral below belongs to, which no judicial URL ever carries. */
+    private static final String CASE_ID = "case-1";
+
+    private static final UUID REFERRAL_ID = UUID.fromString("55555555-5555-5555-5555-555555555555");
+
+    /** An id of the right shape that nothing was stored under: the other half of every 404 comparison. */
+    private static final UUID UNKNOWN_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
+
     private ReferralRepositoryStub referrals;
     private ReferralService referralService;
+    private NoteService notes;
     private JudicialReferralService service;
 
     @BeforeEach
     void createService() {
         referrals = new ReferralRepositoryStub();
         referralService = mock(ReferralService.class);
-        service = new JudicialReferralService(referrals.repository(), referralService);
+        notes = mock(NoteService.class);
+        service = new JudicialReferralService(referrals.repository(), referralService, notes);
     }
 
     /**
@@ -304,6 +320,170 @@ class JudicialReferralServiceTest {
     }
 
     /**
+     * Decision 3 again, one layer out: what the read does with a referral a judge may not see, and what it
+     * refreshes when they may.
+     *
+     * <p>The 404s are asserted <em>by message</em> against the message an unknown id gets, not merely by type.
+     * Indistinguishability is the property -- a withdrawn referral, another judge's, and one that never existed
+     * have to answer identically or a referral id becomes discoverable by comparing refusals -- and a test that
+     * only checked the exception class would pass against a message naming the state.
+     */
+    @Nested
+    @DisplayName("referral")
+    class ReadReferral {
+
+        /** The message every refusal of this read has to give, whatever the reason for it. */
+        private static final String NOT_FOUND = "Referral " + REFERRAL_ID + " not found";
+
+        @Test
+        @DisplayName("refuses a caseworker and an admin, before reading or touching anything")
+        void refusesANonJudicialCaller() {
+            for (CurrentUser caller : List.of(CASEWORKER, ADMIN)) {
+                assertThatThrownBy(() -> service.referral(REFERRAL_ID.toString(), caller))
+                    .isInstanceOf(ForbiddenError.class)
+                    .hasMessageContaining(Role.JUDICIAL.claimValue());
+            }
+
+            // The gate is the first statement, so a caseworker learns nothing about whether the referral exists,
+            // and their refused read cannot stamp a claim's inactivity clock.
+            referrals.verifyNothingRead();
+            verifyNoInteractions(referralService, notes);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Open", "Claimed", "Decided"})
+        @DisplayName("returns the referral, its application and its notes for one this judge may see")
+        void returnsAVisibleReferral(ReferralState state) {
+            Referral referral = stored(state, JUDGE);
+            DeedPollNote note = new DeedPollNote();
+            note.setNote("Fee taken, papers scanned");
+            when(notes.findNotes(CASE_ID)).thenReturn(List.of(note));
+
+            JudicialReferralView view = service.referral(REFERRAL_ID.toString(), JUDGE);
+
+            assertThat(view.referral()).isSameAs(referral);
+            // Resolved from the referral rather than named by the caller, which is the whole of decision 2: a
+            // judicial URL carries no case id, so this is the only way the application is reached.
+            assertThat(view.application().getId()).isEqualTo(CASE_ID);
+            assertThat(view.caseNotes()).containsExactly(note);
+            verify(notes).findNotes(CASE_ID);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s a terminal referral even for the judge who directed it, and reads no notes")
+        void notFoundForATerminalReferral(ReferralState terminal) {
+            stored(terminal, JUDGE);
+
+            assertThatThrownBy(() -> service.referral(REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage(NOT_FOUND);
+
+            // The refusal comes before the case is reached at all, so an invisible referral does not even cause
+            // its application's timeline to be loaded.
+            verifyNoInteractions(notes);
+            verifyNoInteractions(referralService);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Claimed", "Decided"})
+        @DisplayName("404s another judge's referral in the same words as an id nothing was stored under")
+        void notFoundForAnotherJudgesReferral(ReferralState held) {
+            stored(held, JUDGE);
+
+            assertThatThrownBy(() -> service.referral(REFERRAL_ID.toString(), OTHER_JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage(NOT_FOUND);
+
+            // And the comparison that makes it a property rather than a coincidence: the same read of an id that
+            // never existed says exactly the same thing, so one judge cannot learn that another holds a case.
+            assertThatThrownBy(() -> service.referral(UNKNOWN_ID.toString(), OTHER_JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + UNKNOWN_ID + " not found");
+        }
+
+        @Test
+        @DisplayName("404s an id that is not a UUID, without asking the database about it")
+        void notFoundForAnIdThatIsNotAUuid() {
+            assertThatThrownBy(() -> service.referral("not-a-uuid", JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral not-a-uuid not found");
+
+            // Nothing could ever have been stored under it, so it is the same 404 rather than a 400 -- and the
+            // repository is never asked, because there is no id to ask about.
+            referrals.verifyNothingRead();
+        }
+
+        @Test
+        @DisplayName("refreshes the claim when this judge is holding the referral")
+        void refreshesTheClaimOfTheHoldingJudge() {
+            stored(ReferralState.Claimed, JUDGE);
+
+            service.referral(REFERRAL_ID.toString(), JUDGE);
+
+            // Decision 7: a judge reading the papers of a referral they claimed is working it, so the inactivity
+            // clock restarts. Through the api-2 transition rather than by stamping the column here, so there is
+            // one place that owns what a touch is -- and it is given the case resolved from the referral.
+            verify(referralService).touch(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+        }
+
+        @Test
+        @DisplayName("touches nothing when the referral is in the pool")
+        void touchesNothingOnAPoolReferral() {
+            stored(ReferralState.Open, JUDGE);
+
+            service.referral(REFERRAL_ID.toString(), JUDGE);
+
+            // A pool referral is visible to every judge, so a read that stamped it would let any judge move a row
+            // they have not claimed -- and would make looking indistinguishable from working.
+            verifyNoInteractions(referralService);
+        }
+
+        @Test
+        @DisplayName("touches nothing on this judge's own decided referral, which has no claim left to refresh")
+        void touchesNothingOnADecidedReferral() {
+            stored(ReferralState.Decided, JUDGE);
+
+            service.referral(REFERRAL_ID.toString(), JUDGE);
+
+            // Visible to them and not held by them: ReferralService.touch demands state Claimed, so calling it
+            // here would turn a perfectly legitimate read into a 409. Held is narrower than visible.
+            verifyNoInteractions(referralService);
+        }
+
+        @Test
+        @DisplayName("touches nothing on a Claimed referral with no holder recorded")
+        void touchesNothingOnAnUnheldClaim() {
+            Referral unheld = stored(ReferralState.Claimed, null);
+
+            // Invisible to everybody, so this is a 404 first -- but the reason it is worth its own test is the
+            // null: comparing the caller's name against the column rather than the other way round is what makes
+            // both the visibility check and the held check false instead of throwing.
+            assertThatThrownBy(() -> service.referral(REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(NotFoundError.class);
+
+            assertThat(unheld.getClaimedBy()).isNull();
+            verifyNoInteractions(referralService, notes);
+        }
+    }
+
+    /**
+     * A referral of {@link #CASE_ID} in the given state, stored where the judicial read can find it.
+     *
+     * <p>Through {@code findWithCaseById}, which is the finder by referral id alone that only this service may
+     * use: the fixture mirrors the one read the judicial surface has, rather than a case-scoped one it does not.
+     */
+    private Referral stored(ReferralState state, CurrentUser holder) {
+        DeedPoll parent = new DeedPoll();
+        parent.setId(CASE_ID);
+        Referral referral = referral(state, holder);
+        referral.setId(REFERRAL_ID);
+        referral.setDeedPoll(parent);
+        referrals.storing(referral);
+        return referral;
+    }
+
+    /**
      * A referral in the given state, claimed and decided by the given judge where those columns apply.
      *
      * <p>Both columns are set for every state rather than only the ones that would really carry them, because
@@ -345,6 +525,13 @@ class JudicialReferralServiceTest {
                 Pageable asked = call.getArgument(1);
                 return page(page, asked, total);
             });
+        }
+
+        /**
+         * This referral is the only one stored, reachable by its own id and by no other.
+         */
+        void storing(Referral referral) {
+            when(repository.findWithCaseById(referral.getId())).thenReturn(Optional.of(referral));
         }
 
         void verifyNothingRead() {

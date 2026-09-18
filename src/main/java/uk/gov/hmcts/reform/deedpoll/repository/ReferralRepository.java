@@ -25,8 +25,9 @@ import java.util.UUID;
  * A caller wanting one referral has to say which case it belongs to, so a cross-case read or write is
  * not expressible rather than merely discouraged.
  *
- * <p>There are two exceptions, and each is about every case at once rather than about <em>a</em> referral, so
- * neither has a case to be scoped to:
+ * <p>There are three exceptions, and every one of them belongs to the judicial surface or to the sweep, which
+ * are the two things in this service that are about every case at once rather than about <em>a</em> case's
+ * referrals:
  *
  * <ul>
  *   <li>the inactivity sweep -- {@link #findStaleClaims} and {@link #releaseStaleClaim}. It stays inside the
@@ -36,7 +37,14 @@ import java.util.UUID;
  *       judge reaches it without naming any case, which is the point of it: the judicial surface is keyed on
  *       the referral so that a judge cannot name an application at all. The scoping this drops is replaced by
  *       a state filter the caller does not choose ({@code Open} only) and, on every read of an individual
- *       referral, by {@code JudicialReferralService.visibleTo}.</li>
+ *       referral, by {@code JudicialReferralService.visibleTo};</li>
+ *   <li>the judicial read of one referral -- {@link #findWithCaseById}. This is the exception that is a finder
+ *       by referral id alone, which the paragraph above forbids, and it exists because the judicial surface
+ *       carries no case id to scope with: a judicial URL is {@code /judicial/referrals/{referralId}} precisely
+ *       so that a judge cannot name an application. <strong>The safety boundary has moved rather than
+ *       gone</strong> -- {@code JudicialReferralService.visibleTo} is what stands where the parent id stands on
+ *       the caseworker surface -- and {@code ReferralSecurityTest} enforces that by asserting nothing but
+ *       {@code JudicialReferralService} calls it.</li>
  * </ul>
  *
  * <p>This differs from {@link SavedQueryRepository}, which does read by id: a saved query's visibility
@@ -80,6 +88,30 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * @return the referrals on that page, with the total across every page
      */
     Page<Referral> findByState(ReferralState state, Pageable pageable);
+
+    /**
+     * One referral and the application it was raised on, by referral id alone -- the judicial read.
+     *
+     * <p><strong>The one finder here that names no case, and the reason is the judicial surface's shape rather
+     * than convenience.</strong> A judicial URL carries a referral id and nothing else, so there is no parent to
+     * scope with; the check that replaces the scope is
+     * {@code JudicialReferralService.visibleTo}, which admits the shared pool and the caller's own claimed and
+     * decided referrals and answers 404 for everything else. It is therefore only safe while it is reachable
+     * from that one gated place, which is a rule {@code ReferralSecurityTest} asserts in bytecode rather than a
+     * comment: a caseworker path calling this would have an unscoped read of any referral with neither the
+     * caseworker surface's parent id nor the judicial surface's visibility check in front of it.
+     *
+     * <p><strong>The case is join-fetched, and that is a correctness requirement.</strong>
+     * {@code Referral.deedPoll} is {@code LAZY} and {@code spring.jpa.open-in-view} is false, so a controller
+     * mapping the narrow judicial application view after the transaction closed would hit a
+     * {@code LazyInitializationException} on an uninitialised proxy. Fetching it in the same statement is also
+     * one round trip instead of two.
+     *
+     * @param id the referral, whoever it belongs to
+     * @return the referral with its application loaded, or empty for an id nothing was stored under
+     */
+    @Query("select r from Referral r join fetch r.deedPoll where r.id = :id")
+    Optional<Referral> findWithCaseById(@Param("id") UUID id);
 
     /**
      * Whether the case already holds a referral in one of the given states.

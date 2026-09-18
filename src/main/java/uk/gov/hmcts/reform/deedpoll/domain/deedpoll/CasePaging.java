@@ -73,11 +73,8 @@ public record CasePaging(int page, int size) {
     }
 
     /**
-     * Reads the {@code page} and {@code size} parameters into a validated slice.
-     *
-     * <p>Both are read together and refused together, so a request that got both wrong is told about both
-     * -- the same reason {@link CaseQuery#parse} collects its conditions' errors. They are one question
-     * ("which rows"), asked with two parameters.
+     * Reads the {@code page} and {@code size} parameters into a validated slice, defaulting the size to the
+     * case list's {@link #DEFAULT_SIZE}.
      *
      * @param page the raw {@code page} parameter, or null for a request that sent none
      * @param size the raw {@code size} parameter, or null for a request that sent none
@@ -85,9 +82,41 @@ public record CasePaging(int page, int size) {
      * @throws InvalidInputError with a {@link FieldError} per unusable parameter
      */
     public static CasePaging parse(String page, String size) {
+        return parse(page, size, DEFAULT_SIZE);
+    }
+
+    /**
+     * Reads the {@code page} and {@code size} parameters into a validated slice, with the caller saying how
+     * many rows a request that named no size gets.
+     *
+     * <p>Both are read together and refused together, so a request that got both wrong is told about both
+     * -- the same reason {@link CaseQuery#parse} collects its conditions' errors. They are one question
+     * ("which rows"), asked with two parameters.
+     *
+     * <p><strong>The default is the caller's and the cap is not.</strong> A screenful is a property of the
+     * page being rendered -- twenty-five rows of the case list's table, ten papers of the judicial pool
+     * ({@code JudicialReferralService.POOL_PAGE_SIZE}) -- so a second surface with its own screenful is a
+     * parameter here rather than a second parser that would also have to re-derive the refusals and the
+     * clamp. What stays this class's, because it is a property of the service and not of the page, is
+     * {@link #MAX_SIZE} and every refusal below: a caller cannot raise the cap by passing a default above
+     * it, and the guard says so rather than silently clamping a value no request sent.
+     *
+     * @param page the raw {@code page} parameter, or null for a request that sent none
+     * @param size the raw {@code size} parameter, or null for a request that sent none
+     * @param whenSizeAbsent how many rows a request that named no size gets, 1 to {@link #MAX_SIZE}
+     * @return the slice asked for, or the first page of {@code whenSizeAbsent} rows for a request that asked
+     *     for none
+     * @throws InvalidInputError with a {@link FieldError} per unusable parameter
+     */
+    public static CasePaging parse(String page, String size, int whenSizeAbsent) {
+        if (whenSizeAbsent < 1 || whenSizeAbsent > MAX_SIZE) {
+            throw new IllegalArgumentException(
+                "A default page size is 1 to " + MAX_SIZE + ", and was " + whenSizeAbsent);
+        }
+
         List<FieldError> errors = new ArrayList<>();
         int number = number("page", page, FIRST_PAGE, errors);
-        int rows = number("size", size, DEFAULT_SIZE, errors);
+        int rows = number("size", size, whenSizeAbsent, errors);
 
         if (number < FIRST_PAGE) {
             errors.add(new FieldError("page", "is 1-based, and was " + quoted(page)));

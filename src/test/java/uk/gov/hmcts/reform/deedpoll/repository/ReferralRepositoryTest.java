@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.repository;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import org.hibernate.Hibernate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -159,6 +160,31 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         // the only way to read a referral and it answers empty for the wrong parent.
         assertThat(referrals.findByIdAndDeedPollId(referral.getId(), otherCase.getId())).isEmpty();
         assertThat(referrals.findByIdAndDeedPollId(UUID.randomUUID(), deedPoll.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("finds a referral by id with its application already loaded, for the judicial read")
+    void findsAReferralByIdWithItsApplicationLoaded() {
+        DeedPoll deedPoll = persistedCase();
+        deedPoll.setNewForename("Robin");
+        Referral referral = persistedReferral(deedPoll, ReferralState.Open, LocalDateTime.of(2026, 2, 1, 9, 0));
+        entityManager.flush();
+        entityManager.clear();
+
+        Referral found = referrals.findWithCaseById(referral.getId()).orElseThrow();
+
+        // The join fetch is the part only a real session can assert. Referral.deedPoll is LAZY and
+        // spring.jpa.open-in-view is false, so a judicial DTO mapped after the transaction closed would hit a
+        // LazyInitializationException unless the case came back with the referral -- and a test that merely read
+        // a field inside the session would pass either way.
+        assertThat(Hibernate.isInitialized(found.getDeedPoll()))
+            .as("the application arrives initialised rather than as a proxy to be resolved later")
+            .isTrue();
+        assertThat(found.getDeedPoll().getNewForename()).isEqualTo("Robin");
+        // No case in the question, which is what makes this the judicial exception to the scoping rule: the
+        // referral is reachable by its own id alone, and JudicialReferralService.visibleTo is what stands where
+        // the parent id stands on the caseworker surface.
+        assertThat(referrals.findWithCaseById(UUID.randomUUID())).isEmpty();
     }
 
     @Test

@@ -219,11 +219,42 @@ Task 1: `test` 2005, `integration` 7 — 2012 total.
 
 DTOs are judicial-namespace types; the controller returns them, never an entity and never a caseworker DTO.
 
-- [ ] Pool endpoint returns judicial summaries + a total and 401s an unauthenticated caller; detail endpoint
+- [x] Pool endpoint returns judicial summaries + a total and 401s an unauthenticated caller; detail endpoint
       returns the referral + narrow application view + read-only notes for a visible referral and 404s an
       invisible one (withdrawn, closed, or another judge's) indistinguishably from a non-existent id;
       reading a held referral refreshes `lastTouchedAt`, reading a pool referral does not; controller test
       boots the context; no judicial DTO references a caseworker DTO; `./gradlew build` green
+
+**Task 2 as built.** `JudicialReferralController` at `/judicial/referrals`, two handlers, both thin: `pool` reads
+`page`/`size` through `CasePaging.parse(page, size, POOL_PAGE_SIZE)` — a new three-argument overload, because the
+default screenful belongs to the page being rendered while the cap and every refusal stay `CasePaging`'s — and
+`referral` maps one `JudicialReferralView`. Five judicial DTOs, no type shared with caseworker:
+`JudicialPoolResponse`/`JudicialReferralSummary` (a queue of referrals, carrying **no** case field at all — not
+even the reference, since reaching the application is the detail read), `JudicialReferralDetail`,
+`JudicialCaseView` (decision 8's eight fields, with the exclusions enumerated on the record) and
+`JudicialCaseNote` (note, author, when — narrower than `NoteResponse`: no id a judge can address, no amendment
+trail).
+
+`JudicialReferralService.referral(referralId, caller)` gates `JUDICIAL`, resolves, `visibleTo`-or-404, then calls
+api-2's `touch` **only when the caller holds it** — `Claimed` by them, which is narrower than visible, because
+`touch` 409s on the `Decided` referral visibility admits. The notes come from `NoteService.findNotes`, unchanged.
+
+**The one new declaration, and the plan's flag 3 made concrete.** `ReferralRepository.findWithCaseById` is the
+finder by referral id alone that api-1 forbids, admitted as the third documented exception: the judicial surface
+has no case id to scope with, so `visibleTo` stands where the parent id stands. It join-fetches the case, which is
+a correctness requirement rather than a tuning choice (`Referral.deedPoll` is `LAZY` and `open-in-view` is false,
+so mapping `JudicialCaseView` after the transaction would otherwise be a `LazyInitializationException`);
+`ReferralRepositoryTest` asserts the fetch with `Hibernate.isInitialized`, and `ReferralSecurityTest` adds an
+ArchUnit rule that nothing but `JudicialReferralService` calls it, plus rules that no judicial handler takes a
+case id and that the judicial controller neither returns nor binds an entity.
+
+`JudicialReferralControllerTest` (24 tests, container-backed, CI-excluded) is the first test in the suite where
+the **judge holds a real token** — `StubIdam` serves a userinfo document carrying the judicial claim — so the
+role gate, the 404s and the mutating reads are asserted end to end: the sweep releases a lapsed claim and offers
+it in the same response, a held referral's clock is refreshed and a pool referral's is not, another judge's
+referral answers a body byte-for-byte identical to a non-existent id's, and the excluded fields are asserted
+absent by *value* over the whole document as well as by name. After Task 2: `test` 2050, `integration` 7 — 2057
+total.
 
 ### Task 3: The claim and direction endpoints
 

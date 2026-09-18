@@ -6,12 +6,18 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
+import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
+
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * What a judge may see, and the shared pool they work from.
@@ -19,9 +25,9 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
  * <p><strong>A separate unit from {@link ReferralService} on purpose, and it adds no transition.</strong> Every
  * state change the judicial surface performs is a call into one of that service's transitions -- {@code claim},
  * {@code touch}, {@code decide} -- which keeps one place owning how a referral changes state. What lives here
- * is the half of the judicial surface that service has no notion of: <em>who may see which referral</em>, and
- * the cross-case list a judge works from. Both are the judicial persona's, and neither is reachable by a
- * caseworker token.
+ * is the half of the judicial surface that service has no notion of: <em>who may see which referral</em>, the
+ * cross-case list a judge works from, and the read that resolves one referral to the application and the notes
+ * behind it. All three are the judicial persona's, and none is reachable by a caseworker token.
  *
  * <p><strong>The role gate is on every method here, including the reads.</strong> The transitions gate
  * themselves; these have to gate themselves too, because the pool and the judicial projection of an application
@@ -75,10 +81,14 @@ public class JudicialReferralService {
 
     private final ReferralRepository referrals;
     private final ReferralService referralService;
+    private final NoteService notes;
 
-    public JudicialReferralService(ReferralRepository referrals, ReferralService referralService) {
+    public JudicialReferralService(ReferralRepository referrals,
+                                   ReferralService referralService,
+                                   NoteService notes) {
         this.referrals = referrals;
         this.referralService = referralService;
+        this.notes = notes;
     }
 
     /**
@@ -169,5 +179,88 @@ public class JudicialReferralService {
         Page<Referral> found = referrals.findByState(
             ReferralState.Open, PageRequest.of(paging.index(), paging.size(), POOL_ORDER));
         return ReferralPool.of(found.getContent(), paging, found.getTotalElements());
+    }
+
+    /**
+     * One referral, the application behind it and that application's notes -- what a judge opens to direct it.
+     *
+     * <p><strong>This is the read decision 2 inverts an api-1 rule for, so what guards it matters more than
+     * what it returns.</strong> The referral is resolved by id alone, because a judicial URL carries no case id
+     * -- a judge must not be able to name an application -- and every one of the three answers below is the
+     * <em>same</em> 404:
+     *
+     * <ul>
+     *   <li>an id nothing was ever stored under, including one that is not a UUID at all;</li>
+     *   <li>a referral that exists and this caller may not see -- {@code Withdrawn}, {@code Closed}, or
+     *       {@code Claimed}/{@code Decided} by another judge ({@link #visibleTo});</li>
+     *   <li>and therefore, deliberately, no way to tell those apart. A 403 here would confirm that a referral
+     *       exists, and a distinct message would tell one judge that another holds the case.</li>
+     * </ul>
+     *
+     * <p><strong>It refreshes the claim when the caller holds it, and touches nothing when they do not</strong>
+     * (decision 7). A judge reading the papers of a referral they claimed is working it, so the inactivity clock
+     * restarts -- which is what stops the sweep taking a case off somebody who is plainly still engaged, and it
+     * is the reason the expiry is measured from the last interaction rather than from the claim. Reading a pool
+     * referral they have not claimed is a read and nothing else: it must not stamp a row every judge can see,
+     * and it must not look like a claim.
+     *
+     * <p>Held means {@code Claimed} <em>by this caller</em>, which is narrower than visible: a judge's own
+     * {@code Decided} referral is visible to them and has no claim left to refresh, and calling
+     * {@link ReferralService#touch} on one would be a {@code ConflictError} on a read that is perfectly
+     * legitimate. So the condition here is the one {@code touch} itself enforces, asked before it is called
+     * rather than caught afterwards.
+     *
+     * <p>The notes come from {@link NoteService#findNotes} -- the same read the caseworker timeline uses, with no
+     * judicial variant -- and a judge writes none. There is no judicial note route and no judicial author: what
+     * a judge records is the direction, on the referral.
+     *
+     * @param referralId the referral, as it appears in the path
+     * @param caller the judge asking
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws NotFoundError if there is no such referral, or this caller may not see it
+     */
+    @Transactional
+    public JudicialReferralView referral(String referralId, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+
+        Referral referral = identifier(referralId)
+            .flatMap(referrals::findWithCaseById)
+            // Part of the lookup rather than a branch after it, so there is one exit for "you cannot have this"
+            // and no second place that could answer a different status.
+            .filter(found -> visibleTo(found, caller))
+            .orElseThrow(() -> new NotFoundError("Referral " + referralId + " not found"));
+
+        DeedPoll application = referral.getDeedPoll();
+        if (heldBy(referral, caller)) {
+            referralService.touch(application.getId(), referralId, caller);
+        }
+        return new JudicialReferralView(referral, application, notes.findNotes(application.getId()));
+    }
+
+    /**
+     * Whether this caller is the judge currently holding this referral -- a claim of theirs to refresh.
+     *
+     * <p>Both halves, for the reason {@code ReferralService.requireHeldBy} asks both: the state says a claim
+     * exists and the name says whose. Compared against the caller's name rather than the column's, so a
+     * {@code Claimed} row with no holder -- which V7's backfill really produced -- is false rather than an
+     * exception.
+     */
+    private static boolean heldBy(Referral referral, CurrentUser caller) {
+        return referral.getState() == ReferralState.Claimed && caller.name().equals(referral.getClaimedBy());
+    }
+
+    /**
+     * The id as a UUID, or empty for anything that is not one -- which no row can be stored under.
+     *
+     * <p>So a malformed id is the same 404 as an unknown one, exactly as {@code ReferralService} answers on the
+     * caseworker surface: it is an id nothing could ever have been stored under, and a 400 would tell a caller
+     * probing ids which of their guesses were the right shape.
+     */
+    private static Optional<UUID> identifier(String id) {
+        try {
+            return Optional.of(UUID.fromString(id));
+        } catch (IllegalArgumentException notAnIdentifier) {
+            return Optional.empty();
+        }
     }
 }
