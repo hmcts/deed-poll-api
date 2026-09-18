@@ -71,7 +71,8 @@ public class JudicialReferralService {
      * The order the pool is worked in: urgent referrals first, and the longest-waiting first within each
      * urgency band (decisions 15 and 16).
      *
-     * <p><strong>Descending urgency is ascending {@code Urgency}</strong>, and that is not a trick: the
+     * <p><strong>Urgent-first is <em>descending</em> the {@code Urgency} type</strong>, which is what
+     * {@code desc("urgency")} below says, and it is not a trick: the
      * {@code "Urgency"} Postgres type is declared {@code ('Normal', 'Urgent')} in {@code V1__enums.sql} -- the
      * reference's own option-set order -- and Postgres orders an enum by its declared order, so the last member
      * is the most urgent. A third urgency added above {@code Urgent} later would sort above it for free, and one
@@ -124,11 +125,13 @@ public class JudicialReferralService {
      *
      * <p><strong>The identity compared is the display name</strong>, because that is what {@code claimedBy} and
      * {@code decidedBy} hold -- the claim is recorded under the name resolved from the judge's token, and
-     * {@code ReferralService.touch} and {@code decide} already authorise against the same column. It is the one
-     * place this codebase authorises on {@code CurrentUser.name()} rather than on the subject, and it is a
-     * consequence of the columns rather than a choice made here: keying a claim on the subject is a migration,
-     * which this plan does not have. Two judges sharing a display name would see each other's claimed
-     * referrals, which is the residual risk and is recorded rather than hidden.
+     * {@code ReferralService.touch} and {@code decide} already authorise against the same column. It is one of the
+     * two places this codebase authorises on {@code CurrentUser.name()} rather than on the subject -- the other is
+     * {@code ReferralService.requireHeldBy}, which the transitions above go through -- and it is a consequence of
+     * the columns rather than a choice made here: keying a claim on the subject is a migration, which this plan
+     * does not have. The residual risks are recorded on {@link CurrentUser} rather than hidden: two judges sharing
+     * a display name see each other's claimed referrals, and a judge whose display name changes loses their own
+     * until the sweep releases it.
      *
      * <p>A static method, so it is provable without a database or a Spring context and so no caller can be
      * tempted to answer the question itself.

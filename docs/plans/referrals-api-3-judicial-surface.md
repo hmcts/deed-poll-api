@@ -405,3 +405,31 @@ redirect. None blocks the plan being *written*; some should be settled before it
    spec published, and `deed-poll-admin`'s `openapi.json` refreshed, plus a Task 0 reconciliation gate. idam-1
    (the judicial role) is small and may not warrant a ralphex run, but is written up so the running order is
    complete.
+
+6. **RAISED IN REVIEW (2026-09-18), and it is a policy call rather than a bug: the lapse note names the judge
+   who let a claim go, and every other judge on that case can read it.** Decision 3 says the 404s mean "one
+   judge cannot learn another holds a case", and that holds in the present tense — but `ReferralNotes.claimLapsed`
+   writes *"Referral claim by <judge> lapsed after inactivity"* onto the **case's** note timeline, and
+   `JudicialReferralDetail.caseNotes` returns that timeline to any judge who can see any referral on the case.
+   So the sequence *judge A claims → lets it lapse → judge B loads the pool and opens it* tells judge B that
+   judge A had the papers and did not act on them. The path is real, not theoretical: the sweep that writes the
+   note is the same one the pool read triggers.
+
+   Nothing here is a coding error — the note exists because the **office** needs to know why a referral came
+   back, which is a good reason, and its `createdBy` is correctly the service account rather than a person. The
+   question is whether a judge's inactivity is disclosable to their colleagues, and that is yours, not
+   engineering's. Three options, cheapest first: leave it (the disclosure is narrow and arguably proper);
+   drop the name from the note text (the office loses the "who" and keeps the "why"); or filter the judicial
+   note projection, which is the one option that contradicts this plan's "notes via `NoteService.findNotes`,
+   unchanged" and so needs the plan reopening rather than a patch.
+
+7. **FIXED IN REVIEW (2026-09-18): `CurrentUser`'s javadoc said `name` is "never used for authorisation",
+   which this plan made false.** `JudicialReferralService.visibleTo` authorises on `CurrentUser.name()`, and
+   api-2's `ReferralService.requireHeldBy` already did — so the class every future reader consults for that
+   invariant was asserting the opposite of the code, and `visibleTo` called itself "the one place" when there
+   were two. Both are corrected, and the two consequences are now written down where they belong: a display-name
+   collision lets one judge see and direct another's claimed referral, and a display-name **change** locks a
+   judge out of their own claimed referral (404 to read, 409 to direct) until the sweep releases it — which it
+   does, because `releaseStaleClaim` matches on `lastTouchedAt` and never on the name. **Keying the claim
+   columns on the token subject is the actual fix and it is a migration** — worth scheduling alongside idam-1,
+   since that is when real judicial identities first exist.
