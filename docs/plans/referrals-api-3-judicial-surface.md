@@ -314,10 +314,44 @@ found it. After Task 3: `test` 2086, `integration` 8 — 2094 total.
 - Security tests: a **caseworker** token is refused every judicial route (403 from the role gate), an
   unauthenticated caller gets 401, and one judge cannot read, claim or direct a referral another judge holds
   (404, the visibility rule). Keep the role and visibility assertions container-free.
-- [ ] Caseworker-refused-on-judicial, unauthenticated-401, and cross-judge-isolation tests pass; namespace
+- [x] Caseworker-refused-on-judicial, unauthenticated-401, and cross-judge-isolation tests pass; namespace
       separation green; `./gradlew build` green from cold with `TESTCONTAINERS_RYUK_DISABLED=true`;
       checkstyle clean on all five source sets; test and integration totals recorded next to this branch's
       baseline; the count with `INTEGRATION_TESTS_ENABLED=false` recorded
+
+**Task 4 as built.** `JudicialSecurityTest` (config, container-free) states the three refusals **across the whole
+surface at once**, which is what the per-operation tests of tasks 1–3 could not: every assertion is driven from one
+`operations()` list, and `theseAreEveryJudicialOperation` asserts that list is the whole of it — against
+`JudicialReferralService`'s public *instance* methods (`visibleTo` is static, which is how it says it is a predicate
+rather than an operation) and against the controller's handler count. So a fifth judicial operation is covered by
+being added to the list rather than by somebody remembering to copy three tests.
+
+**The 401 is asserted as a property of the allowlist, not over HTTP**, and that is the point rather than a
+compromise: nothing in `SecurityConfiguration` mentions `/judicial/**` — it authenticates `anyRequest()` not on a
+short infrastructure allowlist — so what protects the surface is that the allowlist does not reach it.
+`isAuthenticatedByOmission` reads `PUBLIC_PATHS` reflectively (private on purpose; a test is not a reason to widen
+it) and asserts no pattern `AntPathMatcher`-matches any of the four judicial paths, then asserts the matcher does
+match `/health/**` so the loop cannot pass vacuously. Both container-backed classes that assert the 401 over real
+HTTP are CI-excluded; this one runs everywhere.
+
+Role gate: a caseworker, an administrator and each of the seven near-miss claim strings are refused all four
+operations with a `ForbiddenError` naming the role, and `verifyNoInteractions` on repository, transitions and notes
+proves the refusal precedes the lookup *and the pool's sweep* — a caseworker who could sweep by being refused often
+enough could move another judge's claim. The counterpart is asserted too: a judge built from a claims document is
+admitted all four, so the refusals are a rule rather than a dead surface. Cross-judge isolation: another judge's
+`Claimed`/`Decided` referral is 404 to read, claim and direct, with the message an unknown id gets (both asserted
+against the template, so a change that broke both identically still fails), no transition runs, the holder's claim
+and clock are untouched, and the pool never loads it because `Open` is in the query rather than in a filter over its
+result. The same fixture read by the judge who *does* hold it is admitted and refreshes their clock — one caller
+cannot tell a per-judge rule from a service that refuses everybody.
+
+**Final validation.** `./gradlew clean build` green from cold with `TESTCONTAINERS_RYUK_DISABLED=true`; checkstyle
+clean on all five source sets (one violation found and fixed: a method name whose second character was uppercase).
+**Counts: `test` 2098, `integration` 8 — 2106 total, against this branch's baseline of 1982** (`test` 1975,
+`integration` 7), so the three tasks added 124 tests. With `INTEGRATION_TESTS_ENABLED=false` — the CNP agent's
+shape — **1277 of the 2098 run**, the other 821 being the 27 container-backed classes, which is why the role and
+visibility rules are stated container-free. `build.gradle`'s exclusion comment carried the pre-api-3 figures and has
+been re-measured in place, as it asks its reader to do.
 
 ## Deliberately not in this plan
 
