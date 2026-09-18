@@ -17,6 +17,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 
 import java.math.BigDecimal;
@@ -374,6 +375,82 @@ class CaseSpecificationsTest extends AbstractPostgresContainerTest {
 
             assertThat(matching("masterDecision:isEmpty")).containsExactly(undecided.getId());
             assertThat(matching("masterDecision:isNotEmpty")).containsExactly(decided.getId());
+        }
+    }
+
+    @Nested
+    @DisplayName("currentReferralState")
+    class CurrentReferralStateField {
+
+        /**
+         * A persisted case whose referral-state column holds the given state, or NULL for none.
+         *
+         * <p>Set through the entity rather than through {@link DeedPollFields#write}, because the field is
+         * deliberately not writable -- a patch able to set it could tell the case list a case has a decided
+         * referral when it has none. The referral service writes it with a one-column statement; a fixture
+         * has no transition to run, so it sets the column and flushes.
+         */
+        private DeedPoll withState(ReferralState state) {
+            DeedPoll deedPoll = persisted("newForename", "Referred");
+            deedPoll.setCurrentReferralState(state);
+            entityManager.flush();
+            return deedPoll;
+        }
+
+        @Test
+        @DisplayName("is:Decided selects exactly the cases with a decided referral -- admin-2's query")
+        void isDecidedSelectsTheReturnedActionNeededQueue() {
+            // The one query the dashboard's "Returned -- action needed" tile and its drill-in worklist both
+            // issue. The count is the response's `total` for this filter and the list is the same filter
+            // clicked, so this single assertion is what both of them rest on.
+            withState(ReferralState.Open);
+            withState(ReferralState.Claimed);
+            withState(null);
+            DeedPoll decided = withState(ReferralState.Decided);
+
+            assertThat(matching("currentReferralState:is:Decided")).containsExactly(decided.getId());
+        }
+
+        @Test
+        @DisplayName("isEmpty selects the cases with no live referral, and isNotEmpty the rest")
+        void isEmptySelectsTheCasesWithNoLiveReferral() {
+            // NULL is the honest answer for a case that never had a referral AND for one whose referrals are
+            // all terminal -- a closed or withdrawn referral leaves no live state, so both read the same. A
+            // backfilled case is in the first group by construction (see ReferralBackfillTest).
+            DeedPoll never = persisted("newForename", "Ada");
+            DeedPoll finished = withState(null);
+            DeedPoll live = withState(ReferralState.Claimed);
+
+            assertThat(matching("currentReferralState:isEmpty"))
+                .containsExactlyInAnyOrder(never.getId(), finished.getId());
+            assertThat(matching("currentReferralState:isNotEmpty")).containsExactly(live.getId());
+        }
+
+        @Test
+        @DisplayName("isOneOf selects any of the live states, and never a terminal one")
+        void isOneOfSelectsTheLiveStates() {
+            // The three non-terminal states are the only values the column ever holds, so asking for all
+            // three is "every case with a live referral" said the long way -- pinned because a caseworker
+            // queue may well want Open and Claimed together.
+            DeedPoll open = withState(ReferralState.Open);
+            DeedPoll claimed = withState(ReferralState.Claimed);
+            withState(ReferralState.Decided);
+
+            assertThat(matching("currentReferralState:isOneOf:Open,Claimed"))
+                .containsExactlyInAnyOrder(open.getId(), claimed.getId());
+        }
+
+        @Test
+        @DisplayName("composes with a filter tab, so a queue can be narrowed to open cases")
+        void composesWithAFilterTab() {
+            DeedPoll openCase = withState(ReferralState.Decided);
+            DeedPollFields.write(openCase, "state", DeedPollState.Received);
+            DeedPoll enroled = withState(ReferralState.Decided);
+            DeedPollFields.write(enroled, "state", DeedPollState.Enroled);
+            entityManager.flush();
+
+            assertThat(matching(ListFilters.filterFor("open"), "currentReferralState:is:Decided"))
+                .containsExactly(openCase.getId());
         }
     }
 

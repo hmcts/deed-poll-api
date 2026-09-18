@@ -19,7 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * What {@link SavedCaseResponse} publishes, and that each field carries its own value.
  *
  * <p>The same two questions {@link CaseDetailResponseFieldsTest} asks of the read response, for the same reason
- * -- seventy-six positional arguments, thirty-five of them {@code String} -- with one addition that matters
+ * -- seventy-seven positional arguments, thirty-five of them {@code String} -- with one addition that matters
  * more here than there.
  *
  * <p><strong>The field set is pinned against {@code CaseDetailResponse}'s, not only against

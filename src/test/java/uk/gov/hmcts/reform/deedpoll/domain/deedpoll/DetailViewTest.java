@@ -519,9 +519,11 @@ class DetailViewTest {
         @DisplayName("splits General into the Dynamics form column positions")
         void splitsGeneralIntoTheDynamicsFormColumnPositions() {
             // Read down power_app/screenshots/application_general.png: Reference Number top left, Privacy
-            // top right. Two of ours trail their related field (see FormFields). This is the ADULT case, so
-            // the four minor fields that would close the left column are hidden -- see the minor-case test
-            // for those.
+            // top right. Three of ours trail their related field (see FormFields), the third being Current
+            // referral state under State -- it renders because being a form field is what makes it
+            // queryable, which is the visible cost the referral read-model plan accepted. This is the ADULT
+            // case, so the four minor fields that would close the left column are hidden -- see the
+            // minor-case test for those.
             ColumnsBlock<DetailRow> general = cols(section("General"));
             assertThat(keys(general.left())).containsExactly(
                 "Reference number",
@@ -536,6 +538,7 @@ class DetailViewTest {
             assertThat(keys(general.right())).containsExactly(
                 "Privacy",
                 "State",
+                "Current referral state",
                 "Urgency",
                 "Urgency reason",
                 "Online application reference",

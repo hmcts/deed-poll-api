@@ -59,6 +59,24 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
     boolean existsByDeedPollIdAndStateIn(String deedPollId, Collection<ReferralState> states);
 
     /**
+     * Every state one case's referrals are in -- the input to the case's denormalised current referral state.
+     *
+     * <p>States rather than entities, and all of them rather than the non-terminal ones. The projection
+     * because {@code CurrentReferralState} needs nothing else off the row and the recompute runs at every
+     * transition; all of them because "every referral is terminal, so the case has none in play" is the rule's
+     * own half of the answer, and a finder that pre-filtered would move the terminal split out of
+     * {@link ReferralState#isTerminal()} and into a query name.
+     *
+     * <p>Scoped to its case like every other finder here, which is what makes the recompute of one case's
+     * column unable to read another's referrals.
+     *
+     * @param deedPollId the parent case
+     * @return one state per referral of that case, in no particular order, empty for a case never referred
+     */
+    @Query("select r.state from Referral r where r.deedPoll.id = :deedPollId")
+    List<ReferralState> findStatesByDeedPollId(@Param("deedPollId") String deedPollId);
+
+    /**
      * The claimed referrals nobody has touched since {@code cutoff} -- the sweep's candidates.
      *
      * <p><strong>Not scoped to a case, and it is the one finder that is not.</strong> The rule stated at the

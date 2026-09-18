@@ -780,6 +780,183 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         }
     }
 
+    @Nested
+    @DisplayName("the case's currentReferralState column")
+    class CurrentReferralStateColumn {
+
+        @Test
+        @DisplayName("follows the referral through its whole lifecycle, and is null again once it is closed")
+        void followsTheWholeLifecycle() throws Exception {
+            // Read after each transition has committed, which is the point: every assertion here is of a row
+            // written by the transition's own transaction, so a case can never be found holding a referral in
+            // one state with its column naming another.
+            String caseId = newCase();
+            // Never referred. Null is a real answer -- "no referral in play" -- and not a value nobody got
+            // round to writing.
+            assertThat(currentReferralState(caseId)).isNull();
+
+            String referralId = raise(caseId, ONE_REASON);
+            assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Open);
+
+            CurrentUser judge = judge();
+            referralService.claim(caseId, referralId, judge);
+            assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Claimed);
+
+            referralService.decide(caseId, referralId, approval(), judge);
+            // The state the dashboard's "returned -- action needed" count is a filtered list of.
+            assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Decided);
+
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
+                .andExpect(status().isOk());
+            // Closed is terminal, so the case has no referral in play again. A column left reading Closed would
+            // keep every actioned case in that queue for good, which is the mistake a per-site push makes.
+            assertThat(currentReferralState(caseId)).isNull();
+            assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Closed);
+        }
+
+        @Test
+        @DisplayName("is null again after a withdrawal, and Open again when the case is referred a second time")
+        void followsAWithdrawalAndASecondReferral() throws Exception {
+            String caseId = newCase();
+            String withdrawn = raise(caseId, ONE_REASON);
+
+            withdraw(caseId, withdrawn);
+
+            assertThat(currentReferralState(caseId)).isNull();
+
+            // The history is now one Withdrawn referral, and the recompute reads past it: the case's answer is
+            // the state of the referral in play, not of the last one to finish.
+            raise(caseId, ONE_REASON);
+            assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Open);
+            assertThat(referrals.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(2);
+        }
+
+        @Test
+        @DisplayName("is written on the case the referral belongs to, and on no other")
+        void writesOnlyTheReferralsOwnCase() throws Exception {
+            String caseId = newCase();
+            final String otherCaseId = newCase();
+
+            String referralId = raise(caseId, ONE_REASON);
+            referralService.claim(caseId, referralId, judge());
+            referralService.decide(caseId, referralId, approval(), judge());
+
+            assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Decided);
+            // The count admin-2 draws off this column is a count of cases, so a transition that wrote a
+            // neighbouring case's column would inflate it with cases that have no referral at all.
+            assertThat(currentReferralState(otherCaseId)).isNull();
+        }
+
+        @Test
+        @DisplayName("goes back to Open when the sweep hands a lapsed claim back to the pool")
+        void followsTheSweep() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            referralService.claim(caseId, referralId, judge());
+            assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Claimed);
+            lapse(referralId);
+
+            assertThat(referralService.reclaimStaleClaims()).isEqualTo(1);
+
+            // The one transition whose column write is a single set-based statement rather than the per-case
+            // recompute, asserted through the real statement, a real referral row and a real commit.
+            assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Open);
+            assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Open);
+        }
+
+        @Test
+        @DisplayName("the sweep refreshes every case it released in one statement, and leaves the others alone")
+        void followsTheSweepAcrossCases() throws Exception {
+            String lapsedHere = newCase();
+            String lapsedElsewhere = newCase();
+            String stillHeld = newCase();
+            String heldHere = claimed(lapsedHere);
+            String heldElsewhere = claimed(lapsedElsewhere);
+            claimed(stillHeld);
+            // Backdated only once every claim has been made: claim() sweeps before it reads, so a claim lapsed
+            // mid-fixture would be taken back by the next claim's own sweep rather than by the one under test.
+            lapse(heldHere);
+            lapse(heldElsewhere);
+
+            assertThat(referralService.reclaimStaleClaims()).isEqualTo(2);
+
+            assertThat(currentReferralState(lapsedHere)).isEqualTo(ReferralState.Open);
+            assertThat(currentReferralState(lapsedElsewhere)).isEqualTo(ReferralState.Open);
+            // Its judge is still working, so it is not in the set the statement was keyed on and its column is
+            // untouched -- which is also what stops a pool load writing to every case that ever held a claim.
+            assertThat(currentReferralState(stillHeld)).isEqualTo(ReferralState.Claimed);
+        }
+
+        @Test
+        @DisplayName("ends at Claimed when the claim call's own sweep reclaimed the referral first")
+        void endsAtClaimedWhenTheSweepRanFirst() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            referralService.claim(caseId, referralId, judge());
+            lapse(referralId);
+
+            // The nested case: claim() sweeps before it reads, so this one transaction refreshes the column
+            // twice -- the set-based statement takes it to Open and the claim's own recompute takes it on to
+            // Claimed. In the wrong order it would commit a claimed referral whose case reads Open.
+            referralService.claim(caseId, referralId, otherJudge());
+
+            assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Claimed);
+            assertThat(stored(referralId).getClaimedBy()).isEqualTo("District Judge Okafor");
+        }
+
+        @Test
+        @DisplayName("is left null by a refused transition")
+        void isNotWrittenByARefusedTransition() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            withdraw(caseId, referralId);
+
+            // A second withdrawal is refused, and the refusal is a whole rolled-back transaction: the column is
+            // the answer the successful withdrawal left, not one a failed attempt half-wrote.
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/withdrawal"))
+                .andExpect(status().isConflict());
+
+            assertThat(currentReferralState(caseId)).isNull();
+        }
+
+        /** A referral of the given case, raised and then claimed by a judge. */
+        private String claimed(String caseId) throws Exception {
+            String referralId = raise(caseId, ONE_REASON);
+            referralService.claim(caseId, referralId, judge());
+            return referralId;
+        }
+
+        /** The case's column as it stands committed, read in a session of its own. */
+        private ReferralState currentReferralState(String caseId) {
+            return deedPolls.findById(caseId).orElseThrow().getCurrentReferralState();
+        }
+
+        /** A direction that needs no comment, for the tests that are about the column and not the direction. */
+        private DirectionInput approval() {
+            return new DirectionInput(MasterDecision.Approved, Optional.of("Approved"), false);
+        }
+
+        private CurrentUser judge() {
+            return CurrentUser.currentUser(List.of(Role.JUDICIAL), JUDGE_NAME, "judge-1");
+        }
+
+        private CurrentUser otherJudge() {
+            return CurrentUser.currentUser(List.of(Role.JUDICIAL), "District Judge Okafor", "judge-2");
+        }
+
+        /**
+         * Backdates a claim past any configured expiry window, so the next sweep takes it back.
+         *
+         * <p>Off the row's own {@code claimedAt} rather than off {@code LocalDateTime.now()}, so the arithmetic
+         * cannot depend on which clock the test and the service each read.
+         */
+        private void lapse(String referralId) {
+            Referral referral = stored(referralId);
+            referral.setLastTouchedAt(referral.getClaimedAt().minusHours(9));
+            referrals.saveAndFlush(referral);
+        }
+    }
+
     /** A stored case with a Date Received, which is all reference-number allocation needs. */
     private String newCase() {
         return deedPollService.createDeedPoll(DeedPollPatch.of(Map.of("dateReceived", RECEIVED)))

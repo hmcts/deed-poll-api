@@ -13,6 +13,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.NationalitySection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.PostCounter;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferToMaster;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.math.BigDecimal;
@@ -47,7 +48,7 @@ import java.util.List;
  *
  * <p>The mapping is written out one field at a time rather than derived by reflection from
  * {@link DeedPollFields}, for the reason that registry itself is written out: a field is published by being
- * listed. The hazard that buys -- a canonical constructor with seventy-nine positional arguments, where two
+ * listed. The hazard that buys -- a canonical constructor with eighty positional arguments, where two
  * transposed {@code String}s compile silently -- is covered by a test that populates every field with a
  * distinct value and compares the response against the record field by field.
  */
@@ -137,6 +138,13 @@ public record CaseDetailResponse(
     LocalDateTime dateDecisionDirectionsReceived,
     String referralNotes,
     boolean publishToLondonGazette,
+
+    // --- Current referral state, denormalised ---
+    // Not part of the ported block above: a read-model of the referral table, maintained by the referral
+    // state machine, holding the state of the case's one live referral or null when it has none. Here
+    // rather than only on the list row because the two case responses publish the same case, and a field
+    // that appeared on a list and vanished on the detail read would be a field a client cannot rely on.
+    ReferralState currentReferralState,
 
     // --- Return / refund ---
     String returnReason,
@@ -245,6 +253,8 @@ public record CaseDetailResponse(
             record.getDateDecisionDirectionsReceived(),
             record.getReferralNotes(),
             record.isPublishToLondonGazette(),
+
+            record.getCurrentReferralState(),
 
             record.getReturnReason(),
             record.getRefundAmount(),

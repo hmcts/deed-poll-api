@@ -254,6 +254,12 @@ public final class DeedPollFields {
         readers.put("referralNotes", DeedPoll::getReferralNotes);
         readers.put("publishToLondonGazette", DeedPoll::isPublishToLondonGazette);
 
+        // Readable but deliberately not writable, like state: it is a read-model of the referral table
+        // maintained by the referral state machine, so a caller that could patch it could tell the case
+        // list a case has a decided referral when it has none. Readable because it is a stored column
+        // and the two case responses publish it, and because CaseQuery admits a name only if it is here.
+        readers.put("currentReferralState", DeedPoll::getCurrentReferralState);
+
         // --- Return / refund ---
         readers.put("returnReason", DeedPoll::getReturnReason);
         readers.put("refundAmount", DeedPoll::getRefundAmount);

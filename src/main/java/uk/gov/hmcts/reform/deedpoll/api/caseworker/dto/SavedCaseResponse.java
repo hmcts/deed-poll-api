@@ -13,6 +13,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.NationalitySection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.PostCounter;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferToMaster;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.math.BigDecimal;
@@ -35,7 +36,7 @@ import java.util.List;
  * and response types per operation, and the reason is that a shared type drifts towards being whatever every
  * caller needed; that reason does not reach here, because a create and a patch return the same thing -- the
  * stored case -- and the reference returns byte-for-byte the same shape from both. Two identical
- * seventy-six-component records would be a duplication with no reader and two places to update a column in.
+ * seventy-seven-component records would be a duplication with no reader and two places to update a column in.
  * The request types are separate, because those really do differ in what they mean by an absent field.
  *
  * <p>Enum names, offset-free date-times and the derived day counts all follow
@@ -43,7 +44,7 @@ import java.util.List;
  * same case in two different wire formats.
  *
  * <p>Written out field by field for the reason {@link DeedPollFields} is: a field is published by being listed.
- * {@code SavedCaseResponseFieldsTest} covers the hazard that buys -- a canonical constructor of seventy-six
+ * {@code SavedCaseResponseFieldsTest} covers the hazard that buys -- a canonical constructor of seventy-seven
  * positional arguments, thirty-five of them {@code String} -- and also pins this field set against
  * {@code CaseDetailResponse}'s, so the two cannot silently diverge by more than the children.
  */
@@ -133,6 +134,14 @@ public record SavedCaseResponse(
     LocalDateTime dateDecisionDirectionsReceived,
     String referralNotes,
     boolean publishToLondonGazette,
+
+    // --- Current referral state, denormalised ---
+    // Published on the write response as well as the read one, exactly as state is, and for a reason
+    // beyond symmetry: deed-poll-admin's in-memory mock derives its queryable field set from THIS
+    // schema's keys, so a `where=currentReferralState:is:Decided` call -- the dashboard's own count --
+    // 400s there unless the property is here. On the real api queryability comes from DeedPollFields
+    // and is independent of any DTO; the mock is what admin develops against.
+    ReferralState currentReferralState,
 
     // --- Return / refund ---
     String returnReason,
@@ -237,6 +246,8 @@ public record SavedCaseResponse(
             record.getDateDecisionDirectionsReceived(),
             record.getReferralNotes(),
             record.isPublishToLondonGazette(),
+
+            record.getCurrentReferralState(),
 
             record.getReturnReason(),
             record.getRefundAmount(),

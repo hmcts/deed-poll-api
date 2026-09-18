@@ -20,6 +20,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.StaleClaim;
 
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -100,6 +101,13 @@ import java.util.stream.Collectors;
  *       timer -- and it is deliberately out of scope.</li>
  * </ul>
  *
+ * <p><strong>Every transition also refreshes the case's denormalised {@code currentReferralState}</strong>, in
+ * the transition's own transaction, so a case never persists with a referral in one state and its column naming
+ * another. The rule and the reason it is a recompute rather than a push are on {@link CurrentReferralState};
+ * {@link #reclaimStaleClaims()} does it set-based because it is the one site that moves many referrals at once.
+ * {@link #touch} does not do it, and that is not an omission: it moves {@code lastTouchedAt} and never
+ * {@code state}, so there is nothing for the column to have changed to.
+ *
  * <p>The service returns entities, not view models, as {@code NoteService} does. Mapping to DTOs is the
  * controller's job.
  */
@@ -172,6 +180,7 @@ public class ReferralService {
 
         Referral saved = referrals.save(referral);
         notes.createNote(deedPollId, new CreateNoteInput(ReferralNotes.raised(dto)), caller.noteAuthor());
+        refreshCurrentReferralState(deedPollId);
         return saved;
     }
 
@@ -241,6 +250,9 @@ public class ReferralService {
 
         Referral saved = referrals.save(referral);
         notes.createNote(deedPollId, new CreateNoteInput(ReferralNotes.withdrawn(saved)), caller.noteAuthor());
+        // Withdrawn is terminal, so this normally writes NULL: the case has no referral in play again, and is
+        // referable again. A push that set the case to Withdrawn would be the drift CurrentReferralState warns of.
+        refreshCurrentReferralState(deedPollId);
         return saved;
     }
 
@@ -286,7 +298,12 @@ public class ReferralService {
         referral.setLastTouchedAt(now);
         referral.setModifiedBy(caller.name());
         referral.setModifiedOn(now);
-        return referrals.save(referral);
+
+        Referral saved = referrals.save(referral);
+        // After the sweep above, not instead of it: the sweep may have moved this very case's column to Open a
+        // moment ago, and this recompute is what takes it on to Claimed.
+        refreshCurrentReferralState(deedPollId);
+        return saved;
     }
 
     /**
@@ -372,7 +389,12 @@ public class ReferralService {
         referral.setLastTouchedAt(now);
         referral.setModifiedBy(caller.name());
         referral.setModifiedOn(now);
-        return referrals.save(referral);
+
+        Referral saved = referrals.save(referral);
+        // The transition the dashboard's "returned -- action needed" count is drawn from: this is what puts the
+        // case into that queue, by way of its column reading Decided.
+        refreshCurrentReferralState(deedPollId);
+        return saved;
     }
 
     /**
@@ -414,7 +436,13 @@ public class ReferralService {
         // Stamped rather than left to @PreUpdate, for the reason withdraw's is: Hibernate fires @PreUpdate
         // only when its dirty check finds a changed property.
         referral.setModifiedOn(AuditClock.now());
-        return referrals.save(referral);
+
+        Referral saved = referrals.save(referral);
+        // Closed is terminal, so this writes NULL and the case leaves the "returned -- action needed" queue.
+        // Setting the column to Closed here is the specific mistake CurrentReferralState is written against: it
+        // would leave every actioned case in that queue for good.
+        refreshCurrentReferralState(deedPollId);
+        return saved;
     }
 
     /**
@@ -433,6 +461,13 @@ public class ReferralService {
      * nothing gets no note -- that is the case where the judge touched it, a caseworker withdrew it, or
      * another replica released it in the moment between the two queries.
      *
+     * <p><strong>The case columns are refreshed by one set-based statement at the end, not by the per-case
+     * recompute in the loop.</strong> This is the one transition that moves many referrals, so its read-model
+     * counterpart is one statement over the whole set for the same reason the releases are conditional: only a
+     * single statement is atomic, and a per-row recompute would also be a query pair per reclaimed claim.
+     * Exactly the cases this call released are refreshed -- not every candidate -- because a candidate whose
+     * release answered 0 belongs to another replica, which refreshes its case itself.
+     *
      * @return how many claims this call released, which is the number of notes it wrote
      */
     @Transactional
@@ -440,6 +475,9 @@ public class ReferralService {
         LocalDateTime now = AuditClock.now();
         LocalDateTime cutoff = now.minus(properties.claimExpiry());
 
+        // Insertion-ordered and de-duplicated: one case can hold only one claim, so this is normally one entry
+        // per release, and the set is what the single closing statement is keyed on.
+        Set<String> reclaimedCases = new LinkedHashSet<>();
         int reclaimed = 0;
         for (StaleClaim stale : referrals.findStaleClaims(ReferralState.Claimed, cutoff)) {
             // The same cutoff the candidates were found with, not a freshly computed one: the two have to be
@@ -448,13 +486,33 @@ public class ReferralService {
                 continue;
             }
             reclaimed++;
+            reclaimedCases.add(stale.deedPollId());
             // NoteAuthor.NONE: no person did this, so it is attributed to the service account rather than to
             // whichever caseworker or judge happened to trigger the load that noticed it.
             notes.createNote(stale.deedPollId(),
                              new CreateNoteInput(ReferralNotes.claimLapsed(stale.claimedBy())),
                              NoteAuthor.NONE);
         }
+
+        if (!reclaimedCases.isEmpty()) {
+            deedPolls.refreshCurrentReferralStates(reclaimedCases, LIVE_STATES);
+        }
         return reclaimed;
+    }
+
+    /**
+     * Recomputes one case's denormalised current referral state from the referral table.
+     *
+     * <p>Called at the tail of every transition that changes a referral's state, inside that transition's
+     * transaction. It reads the states of the case's referrals and writes the one that is still in play, or
+     * NULL. <strong>Why it recomputes rather than being told what the transition did is on
+     * {@link CurrentReferralState}, and it is the point of the whole mechanism</strong> -- read that before
+     * replacing this with an argument.
+     */
+    private void refreshCurrentReferralState(String deedPollId) {
+        deedPolls.writeCurrentReferralState(
+            deedPollId,
+            CurrentReferralState.of(referrals.findStatesByDeedPollId(deedPollId)).orElse(null));
     }
 
     /**

@@ -5,6 +5,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -19,11 +20,16 @@ import java.util.List;
  * once per case in the service; a narrow row is the honest contract and the data-minimising one, and it is not
  * a performance micro-optimisation to say so.
  *
- * <p><strong>{@code newSurname} is the one column beyond that list, and it is a correctness requirement
+ * <p><strong>{@code newSurname} is a column beyond that list, and it is a correctness requirement
  * rather than a nicety.</strong> The search term matches on surname among other names, so without it a
  * caseworker searching "Smith" gets a table of forenames that cannot show them why any row is in it.
  * {@code CASE_LIST_COLUMNS} is deliberately left alone: it is the ported Dynamics view and the conformance
  * tests read it as the specification, so the divergence belongs here, where the reason for it is.
+ *
+ * <p><strong>{@code currentReferralState} is the other, and it is here for the same kind of reason.</strong>
+ * The "Returned -- action needed" queue is a filtered list -- {@code ?where=currentReferralState:is:Decided},
+ * whose {@code total} is also the dashboard's count -- so a row in that list has to be able to show the value
+ * that put it there. It is null for the great majority of cases, which have no live referral.
  *
  * <p>The consequence is that a new column on the list page needs a field here. That is the intended direction:
  * a field reaches a caller by being asked for.
@@ -43,6 +49,8 @@ import java.util.List;
  * @param state the derived state
  * @param newForename the applicant's new forename
  * @param newSurname the applicant's new surname, which the search matches on and the list therefore shows
+ * @param currentReferralState the state of the case's one live referral, or null when it has none -- the column
+ *     the "Returned -- action needed" queue filters on, so a row in that queue can say why it is there
  */
 public record CaseSummaryResponse(
     String id,
@@ -52,7 +60,8 @@ public record CaseSummaryResponse(
     DeedPollType type,
     DeedPollState state,
     String newForename,
-    String newSurname) {
+    String newSurname,
+    ReferralState currentReferralState) {
 
     /** One case as a list row. */
     public static CaseSummaryResponse from(DeedPoll record) {
@@ -64,7 +73,8 @@ public record CaseSummaryResponse(
             record.getType(),
             record.getState(),
             record.getNewForename(),
-            record.getNewSurname());
+            record.getNewSurname(),
+            record.getCurrentReferralState());
     }
 
     /** The list, preserving the order the domain returned it in -- which is newest first. */

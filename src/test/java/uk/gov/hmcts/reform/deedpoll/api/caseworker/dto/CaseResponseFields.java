@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.api.caseworker.dto;
 
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollFields;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 
 import java.lang.reflect.RecordComponent;
 import java.math.BigDecimal;
@@ -21,7 +22,7 @@ import static org.assertj.core.api.Assertions.fail;
  * Populating a case so that every field of a response DTO carries a value no other field could have.
  *
  * <p>Shared by {@link CaseDetailResponseFieldsTest} and {@link SavedCaseResponseFieldsTest}, which ask the same
- * question of two records whose canonical constructors take seventy-nine and seventy-six positional arguments:
+ * question of two records whose canonical constructors take eighty and seventy-seven positional arguments:
  * two same-typed arguments transposed by a careless edit compile silently and swap two fields on every response.
  * One fixture rather than two copies, because a divergence between them would be a difference in how carefully
  * the two DTOs are checked, which is not a difference anybody means to make.
@@ -40,9 +41,14 @@ final class CaseResponseFields {
 
     /**
      * Set directly rather than through a patch: {@link DeedPollFields} deliberately cannot write them.
+     *
+     * <p>The first seven are allocated or stamped by the service. {@code currentReferralState} is unwritable for
+     * a different reason -- it is a read-model of the referral table, so a caller able to patch it could tell the
+     * case list a case has a decided referral when it has none.
      */
     static final Set<String> NOT_WRITABLE_BY_A_CALLER = Set.of(
-        "id", "referencenumber", "displayReference", "createdOn", "modifiedOn", "createdBy", "modifiedBy");
+        "id", "referencenumber", "displayReference", "createdOn", "modifiedOn", "createdBy", "modifiedBy",
+        "currentReferralState");
 
     private static final LocalDateTime BASE = LocalDateTime.parse("2026-01-01T09:00:00");
 
@@ -162,6 +168,7 @@ final class CaseResponseFields {
             case "modifiedOn" -> record.setModifiedOn((LocalDateTime) value);
             case "createdBy" -> record.setCreatedBy((String) value);
             case "modifiedBy" -> record.setModifiedBy((String) value);
+            case "currentReferralState" -> record.setCurrentReferralState((ReferralState) value);
             default -> fail(name + " is neither writable through DeedPollFields nor set here");
         }
     }

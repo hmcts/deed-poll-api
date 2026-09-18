@@ -1,0 +1,38 @@
+-- The case's current referral state, as a column the case list can filter on.
+--
+-- Purely additive. It ADDs one nullable column to "deedpoll_deedpoll" and does nothing else: no column
+-- is dropped, retyped or renamed, no committed migration is touched, and nothing on
+-- "deedpoll_referral" changes. V2's flat referral block ("masterName", "masterDecision" and the rest)
+-- stays the ported historical snapshot; this is not part of it and is not written by the same code.
+--
+-- WHY A COLUMN AT ALL, when the answer is already in "deedpoll_referral".state. Because the case list
+-- filters on columns of "deedpoll_deedpoll" and nothing else: every filterable field resolves through
+-- `root.get(name)` against that one entity (CaseSpecifications), so "which cases have a referral the
+-- judge has decided" -- the dashboard's "Returned - action needed" count and the worklist behind it --
+-- has no expressible form without a column here. The alternative considered was a correlated subquery
+-- evaluated at query time, which would have needed a new branch in CaseSpecifications that does not
+-- fit the "a field is a column" model that class is built on. A real enum column is queryable through
+-- the exact path "state" already uses, and adds no predicate code and no join.
+--
+-- WHAT NULL MEANS, and why it is the honest default rather than a missing value. NULL is "this case has
+-- no active referral right now": either it never had one, or all of its referrals are terminal
+-- (Closed/Withdrawn). A non-NULL value is exactly one of 'Open'/'Claimed'/'Decided' -- the
+-- non-terminal states -- and it can be a single column rather than a lie because a case has at most
+-- one non-terminal referral at a time: ReferralService.createReferral 409s when the case already has a
+-- live one, so there is never a second active referral this column would also have to represent.
+--
+-- NOT BACKFILLED, deliberately. V7__backfill_referrals.sql creates one 'Closed' referral per legacy
+-- case that had referral data. 'Closed' is terminal, so the correct current state for every backfilled
+-- case is NULL -- the default this ADD COLUMN leaves -- and writing 'Closed' here would make every
+-- migrated case read as having a live-but-closed referral, which is precisely the
+-- one-referral-per-case snapshot model the referral table replaced.
+--
+-- No type is created: "ReferralState" is V6's, defined with all five members in one go so that the
+-- later plans would need no ALTER TYPE. Reused here rather than mirrored.
+--
+-- The column name is mixed case for the mechanical reason V6 states: `globally_quoted_identifiers` and
+-- `PhysicalNamingStrategyStandardImpl` are set service-wide, so a snake_case column would be quoted as
+-- written and Hibernate would not find it.
+
+ALTER TABLE "deedpoll_deedpoll"
+    ADD COLUMN "currentReferralState" "ReferralState";

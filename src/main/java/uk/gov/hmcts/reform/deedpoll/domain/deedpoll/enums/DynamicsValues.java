@@ -10,6 +10,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.NationalitySection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.PostCounter;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferToMaster;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.util.Collections;
@@ -186,6 +187,28 @@ public final class DynamicsValues {
         entry(DocumentDirection.Outgoing, "Outgoing"));
 
     /**
+     * Human-readable label for each referral state.
+     *
+     * <p><strong>Labels with no matching {@code _VALUE} map, and deliberately so.</strong> Every other
+     * set here pairs a label map with a Dynamics integer map, because the source store held the field.
+     * {@link ReferralState} is native to this service ({@code V6__referrals.sql}) and Dynamics never had
+     * a referral entity, so there is no integer to state and inventing one would put a number in
+     * {@code EnumValuesConformanceTest}'s way that no Dataverse export can confirm. The column stores
+     * the member name, which is what {@link #byName} keys on, so the labels work without one.
+     *
+     * <p>All five members are labelled even though {@code currentReferralState} only ever holds the
+     * three non-terminal ones: {@link ReferralState#isTerminal() terminal} is the referral's business,
+     * not this map's, and a label set missing a member renders that member as nothing at all if the
+     * split ever moves.
+     */
+    public static final Map<ReferralState, String> REFERRAL_STATE_LABEL = values(
+        entry(ReferralState.Open, "Open"),
+        entry(ReferralState.Claimed, "Claimed"),
+        entry(ReferralState.Decided, "Decided"),
+        entry(ReferralState.Closed, "Closed"),
+        entry(ReferralState.Withdrawn, "Withdrawn"));
+
+    /**
      * Labels for the {@code iShall} multiselect.
      *
      * <p>The three multiselects are stored as {@code integer[]} on the record, so these maps are
@@ -256,6 +279,7 @@ public final class DynamicsValues {
         out.put("masterDecision", byName(MASTER_DECISION_LABEL));
         out.put("referToMaster", byName(REFER_TO_MASTER_LABEL));
         out.put("documentDirection", byName(DOCUMENT_DIRECTION_LABEL));
+        out.put("currentReferralState", byName(REFERRAL_STATE_LABEL));
         out.put("iShall", byName(I_SHALL_LABEL));
         out.put("iHaveSubscribed", byName(I_HAVE_SUBSCRIBED_LABEL));
         out.put("andAlsoMyOld", byName(AND_ALSO_MY_OLD_LABEL));

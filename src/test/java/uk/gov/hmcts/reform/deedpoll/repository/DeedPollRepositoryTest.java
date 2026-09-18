@@ -9,9 +9,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
@@ -34,6 +37,13 @@ class DeedPollRepositoryTest extends AbstractPostgresContainerTest {
      * The states "open" excludes, as {@code ListFilters} defines it.
      */
     private static final Set<DeedPollState> FINISHED = EnumSet.of(DeedPollState.Enroled, DeedPollState.Returned);
+
+    /**
+     * The states a referral is still in play in, as {@link ReferralState#isTerminal()} defines them -- what the
+     * service passes the set-based recompute rather than a list written into the query.
+     */
+    private static final Set<ReferralState> NON_TERMINAL =
+        EnumSet.copyOf(Arrays.stream(ReferralState.values()).filter(state -> !state.isTerminal()).toList());
 
     @Autowired
     private DeedPollRepository deedPolls;
@@ -119,5 +129,72 @@ class DeedPollRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(matching).extracting(DeedPoll::getId)
             .contains(received.getId())
             .doesNotContain(noState.getId());
+    }
+
+    @Test
+    @DisplayName("writes one case's current referral state, and writes null as a value rather than skipping it")
+    void writesOneCasesCurrentReferralState() {
+        DeedPoll deedPoll = persisted(DeedPollState.Received, LocalDateTime.of(2026, 1, 11, 10, 0));
+        final DeedPoll untouched = persisted(DeedPollState.Received, LocalDateTime.of(2026, 1, 11, 10, 0));
+        entityManager.flush();
+
+        assertThat(deedPolls.writeCurrentReferralState(deedPoll.getId(), ReferralState.Decided)).isEqualTo(1);
+        entityManager.clear();
+
+        // The enum is written as its own name, not an ordinal: the column is the "ReferralState" Postgres type,
+        // and reading Decided back is what says the statement bound it as one.
+        assertThat(entityManager.find(DeedPoll.class, deedPoll.getId()).getCurrentReferralState())
+            .isEqualTo(ReferralState.Decided);
+        // One case, addressed by id: a statement that dropped its WHERE would take every case into the
+        // dashboard's "returned -- action needed" queue at once.
+        assertThat(entityManager.find(DeedPoll.class, untouched.getId()).getCurrentReferralState()).isNull();
+
+        // Back to null, which is the value a close or a withdrawal has to write. A statement that treated null
+        // as "nothing to do" would leave every actioned case in that queue for good.
+        assertThat(deedPolls.writeCurrentReferralState(deedPoll.getId(), null)).isEqualTo(1);
+        entityManager.clear();
+        assertThat(entityManager.find(DeedPoll.class, deedPoll.getId()).getCurrentReferralState()).isNull();
+    }
+
+    @Test
+    @DisplayName("recomputes many cases' current referral state from the referral table in one statement")
+    void recomputesManyCasesFromTheReferralTable() {
+        // The sweep's shape: several cases whose claims lapsed in the same call. Each column is set from the
+        // case's own non-terminal referral rather than to the state the sweep happens to move a claim to, so
+        // the bulk site cannot drift from the per-case one.
+        DeedPoll reopened = caseWithReferrals(ReferralState.Open);
+        DeedPoll stillDecided = caseWithReferrals(ReferralState.Closed, ReferralState.Decided);
+        DeedPoll finished = caseWithReferrals(ReferralState.Closed, ReferralState.Withdrawn);
+        DeedPoll notInTheSet = caseWithReferrals(ReferralState.Claimed);
+        deedPolls.writeCurrentReferralState(notInTheSet.getId(), ReferralState.Claimed);
+        entityManager.flush();
+
+        int written = deedPolls.refreshCurrentReferralStates(
+            List.of(reopened.getId(), stillDecided.getId(), finished.getId()), NON_TERMINAL);
+
+        assertThat(written).isEqualTo(3);
+        entityManager.clear();
+        assertThat(entityManager.find(DeedPoll.class, reopened.getId()).getCurrentReferralState())
+            .isEqualTo(ReferralState.Open);
+        assertThat(entityManager.find(DeedPoll.class, stillDecided.getId()).getCurrentReferralState())
+            .isEqualTo(ReferralState.Decided);
+        // Every referral terminal, so null -- the answer a hard-coded 'Open' could not have given, and the one
+        // every migrated case has after V7 seeds it a single Closed referral.
+        assertThat(entityManager.find(DeedPoll.class, finished.getId()).getCurrentReferralState()).isNull();
+        // Outside the set the sweep released, so untouched: its judge is still working.
+        assertThat(entityManager.find(DeedPoll.class, notInTheSet.getId()).getCurrentReferralState())
+            .isEqualTo(ReferralState.Claimed);
+    }
+
+    /** A case holding one referral per given state, so a recompute has a history to read past. */
+    private DeedPoll caseWithReferrals(ReferralState... states) {
+        DeedPoll deedPoll = persisted(DeedPollState.Received, LocalDateTime.of(2026, 1, 12, 10, 0));
+        for (ReferralState state : states) {
+            Referral referral = new Referral();
+            referral.setDeedPoll(deedPoll);
+            referral.setState(state);
+            entityManager.persist(referral);
+        }
+        return deedPoll;
     }
 }

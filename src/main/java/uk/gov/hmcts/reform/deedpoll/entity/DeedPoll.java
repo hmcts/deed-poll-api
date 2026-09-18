@@ -26,6 +26,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.NationalitySection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.PostCounter;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferToMaster;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.math.BigDecimal;
@@ -344,6 +345,18 @@ public class DeedPoll {
 
     @Column(name = "publishToLondonGazette", nullable = false)
     private boolean publishToLondonGazette = true;
+
+    // --- Current referral state, denormalised ---
+    // NOT part of the ported block above, and not maintained by anything that writes it. This is a
+    // read-model of "deedpoll_referral".state, maintained by the referral state machine so that the
+    // case list can filter on it: it is the state of this case's one non-terminal referral, or null
+    // when it has none. Null is therefore a real answer -- no active referral -- and never a value
+    // that was not got round to. See V9__current_referral_state.sql for why the answer is copied here
+    // rather than joined for.
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Column(name = "currentReferralState")
+    private ReferralState currentReferralState;
 
     // --- Return / refund ---
     @Column(name = "returnReason")

@@ -336,7 +336,8 @@ public final class CaseSpecifications {
      * member NAME, because the domain's field metadata knows which set a field draws on and not which
      * Java enum the column is. Here the column is to hand, so the name resolves through
      * {@link Path#getJavaType()} -- which means the parameter binds as the enum Hibernate maps, and the
-     * translation never has to name a single one of the ten enum types by hand.
+     * translation never has to name a single one of the eleven enum types by hand. That is what made
+     * {@code currentReferralState} filterable with no code here at all.
      */
     private static Predicate enumeration(CaseQuery.Condition condition, Root<DeedPoll> root, CriteriaBuilder cb) {
         Path<Object> column = root.get(condition.fieldName());

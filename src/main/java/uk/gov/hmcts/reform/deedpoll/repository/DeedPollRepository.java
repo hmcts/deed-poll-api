@@ -5,10 +5,12 @@ import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 
 import java.util.Collection;
 import java.util.List;
@@ -104,4 +106,67 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
      */
     @Query("select d from DeedPoll d where d.state is null or d.state not in :states order by d.createdOn desc")
     List<DeedPoll> findOpenOrderByCreatedOnDesc(@Param("states") Collection<DeedPollState> states);
+
+    /**
+     * Writes one case's denormalised current referral state -- the recompute's second half.
+     *
+     * <p><strong>A statement over the one column, not {@code save} on the loaded case.</strong> This entity has
+     * no dirty-column tracking, so a save writes every column back, and a referral transition holds no lock on
+     * the case row: it would read the case, then write all of it a moment later, discarding whatever a
+     * concurrent patch committed in between -- the lost update {@link #findByIdForUpdate} exists to prevent for
+     * the patch path. A single-column {@code UPDATE} cannot lose a write to any other column, so the referral
+     * flows need no lock on the case at all.
+     *
+     * <p>{@code null} is a value this is asked to write and not a no-op: it is what a case whose last live
+     * referral has just been closed or withdrawn must read.
+     *
+     * <p>The persistence context is deliberately <strong>not</strong> cleared. A bulk statement bypasses the
+     * session, so a case already loaded in it keeps the old value -- which is harmless here because no referral
+     * flow reads the case's own referral state back, and none writes the case, while clearing would detach the
+     * referral the service returns for the controller to map.
+     *
+     * @param id    the case
+     * @param state its current referral state, or null when it has no referral in play
+     * @return 1 if the case exists, 0 if it does not
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("update DeedPoll d set d.currentReferralState = :state where d.id = :id")
+    int writeCurrentReferralState(@Param("id") String id, @Param("state") ReferralState state);
+
+    /**
+     * Recomputes the current referral state of many cases at once, from the referral table.
+     *
+     * <p><strong>For the stale-claim sweep, which is the one transition that moves many referrals in one
+     * statement.</strong> Calling the per-case recompute in a loop behind it would be a query pair per
+     * reclaimed claim and, worse, would put the sweep's own atomicity back in the application: the sweep's
+     * argument is that a conditional {@code UPDATE} settles a multi-replica race without a lock, and its
+     * read-model counterpart is only as atomic as the statement that carries it. So this is one statement over
+     * the whole set.
+     *
+     * <p><strong>Still recompute-from-truth</strong>, and not {@code SET 'Open'} for the state the sweep
+     * happens to move a claim to: the value comes from a correlated read of the case's own non-terminal
+     * referral, so the bulk site cannot drift from the single-case one. A case whose referrals are by then all
+     * terminal gets NULL from the subquery, which is the right answer and the one a hard-coded value could not
+     * give.
+     *
+     * <p>The subquery yields at most one row because a case holds at most one non-terminal referral -- the
+     * invariant {@code ReferralService.createReferral} enforces with a 409. If that guard were ever removed,
+     * this statement would fail loudly rather than pick a state arbitrarily, which is the preferable failure.
+     *
+     * @param deedPollIds the cases to recompute, which must not be empty
+     * @param liveStates  the non-terminal states, passed in so {@link ReferralState#isTerminal()} stays the one
+     *                    definition of "in play" rather than being spelled out again in JPQL
+     * @return how many case rows were written
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("""
+        update DeedPoll d
+           set d.currentReferralState = (select r.state
+                                           from Referral r
+                                          where r.deedPoll.id = d.id
+                                            and r.state in :liveStates)
+         where d.id in :deedPollIds
+        """)
+    int refreshCurrentReferralStates(@Param("deedPollIds") Collection<String> deedPollIds,
+                                     @Param("liveStates") Collection<ReferralState> liveStates);
 }
