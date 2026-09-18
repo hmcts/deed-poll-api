@@ -406,22 +406,26 @@ redirect. None blocks the plan being *written*; some should be settled before it
    (the judicial role) is small and may not warrant a ralphex run, but is written up so the running order is
    complete.
 
-6. **RAISED IN REVIEW (2026-09-18), and it is a policy call rather than a bug: the lapse note names the judge
-   who let a claim go, and every other judge on that case can read it.** Decision 3 says the 404s mean "one
-   judge cannot learn another holds a case", and that holds in the present tense — but `ReferralNotes.claimLapsed`
-   writes *"Referral claim by <judge> lapsed after inactivity"* onto the **case's** note timeline, and
-   `JudicialReferralDetail.caseNotes` returns that timeline to any judge who can see any referral on the case.
-   So the sequence *judge A claims → lets it lapse → judge B loads the pool and opens it* tells judge B that
-   judge A had the papers and did not act on them. The path is real, not theoretical: the sweep that writes the
-   note is the same one the pool read triggers.
+6. **RESOLVED (Steve, 2026-09-18): the lapse note names the judge who let a claim go, every other judge on that
+   case can read it, and that is correct — keep it.** Raised in review as a possible disclosure. The mechanism:
+   `ReferralNotes.claimLapsed` writes *"Referral claim by <judge> lapsed after inactivity"* onto the **case's**
+   note timeline, and `JudicialReferralDetail.caseNotes` returns that timeline to any judge who can see a referral
+   on the case — so *judge A claims → lets it lapse → judge B loads the pool and opens it* tells judge B who had
+   the papers before them. Decision 3's "one judge cannot learn another **holds** a case" is unaffected (present
+   tense: the claim is gone by then), but the past-tense fact is legible, so it needed a call.
 
-   Nothing here is a coding error — the note exists because the **office** needs to know why a referral came
-   back, which is a good reason, and its `createdBy` is correctly the service account rather than a person. The
-   question is whether a judge's inactivity is disclosable to their colleagues, and that is yours, not
-   engineering's. Three options, cheapest first: leave it (the disclosure is narrow and arguably proper);
-   drop the name from the note text (the office loses the "who" and keeps the "why"); or filter the judicial
-   note projection, which is the one option that contradicts this plan's "notes via `NoteService.findNotes`,
-   unchanged" and so needs the plan reopening rather than a patch.
+   **The call is that the name is load-bearing, not merely tolerable.** A lapse says nothing about *why*: the
+   previous judge may have been part-way through a complex point of law. Naming them lets the judge picking the
+   referral up go and ask, rather than starting the same research again or duplicating work already done. An
+   anonymous *"a claim lapsed"* would cost exactly that conversation, and the office's own need for the "who" is
+   then a second reason rather than the only one. So this is **not** a case of accepting a leak for convenience —
+   the disclosure is the feature.
+
+   Recorded on `ReferralNotes.claimLapsed` itself, as a *do not remove the name* note pointing back here, because
+   the tempting "fix" for a future reviewer who spots the judicial read-through is precisely to anonymise it.
+   The two options this rejects, for the record: dropping the name from the note text, and filtering the judicial
+   note projection (which would also have contradicted this plan's "notes via `NoteService.findNotes`,
+   unchanged").
 
 7. **FIXED IN REVIEW (2026-09-18): `CurrentUser`'s javadoc said `name` is "never used for authorisation",
    which this plan made false.** `JudicialReferralService.visibleTo` authorises on `CurrentUser.name()`, and
