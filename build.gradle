@@ -216,6 +216,13 @@ dependencies {
   */
   implementation group: 'org.springframework.cloud', name: 'spring-cloud-starter-openfeign', version: '4.3.3'
 
+  /*
+    GOV.UK Notify. Pinned as pcs-api pins it (`apps/pcs/pcs-api/build.gradle:437`); `apps/pcs/CLAUDE.md`
+    says 6.0.0 and is stale. Nothing sends yet: there is no Notify service for deed poll, so the API key
+    and the template IDs are placeholders and every test talks to StubNotify. See docs/plans/notify-1.
+  */
+  implementation group: 'uk.gov.service.notify', name: 'notifications-java-client', version: '6.2.0-RELEASE'
+
   implementation group: 'org.flywaydb', name: 'flyway-core'
   runtimeOnly group: 'org.flywaydb', name: 'flyway-database-postgresql'
   runtimeOnly group: 'org.postgresql', name: 'postgresql'

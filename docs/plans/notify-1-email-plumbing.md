@@ -221,10 +221,27 @@ Read first: `apps/pcs/pcs-api/src/main/java/uk/gov/hmcts/reform/pcs/config/Notif
 - `StubNotify` in `src/test/java/.../notify/`, modelled on `StubIdam`: stubs the send and the preview endpoints
   with Notify-shaped bodies, and can be told to answer any status so the taxonomy is provable over real HTTP.
 
-- [ ] `notifications-java-client` on the compile classpath, one `NotificationClient` bean from config, the
+- [x] `notifications-java-client` on the compile classpath, one `NotificationClient` bean from config, the
       placeholder template ID greppable alongside `DEED_POLL_PLACEHOLDER`, `NotificationFailure.classify`
       covering 400/403/429/500 and a default with a container-free test per branch, `StubNotify` serving both
       endpoints and an arbitrary error, and `./gradlew build` green
+
+  Notes for the tasks that follow, verified rather than assumed:
+  - **A send must be answered `201`, not `200`.** The client compares the status to 201 exactly and treats a
+    200 as a failure carrying status 200 -- which `classify` calls technical. `StubNotify.stubSend` answers 201;
+    the preview endpoint is an ordinary 200.
+  - **Paths, read off the jar's constant pool:** `POST /v2/notifications/email` and
+    `POST /v2/template/{templateId}/preview`.
+  - **`NotificationClientException`'s status-carrying constructor is package-private**, so the only way to get
+    one with a status on it is a real HTTP round trip -- hence `StubNotifyTest` as well as
+    `NotificationFailureTest`, and hence `stubSendStatus`/`stubPreviewStatus`.
+  - **An empty API key does not fail construction** (checked against the 6.1.0 jar), so the service starts
+    unprovisioned and fails at the first send with a 403. `getHttpResult()` is `0` for a call that never reached
+    Notify, which falls to technical -- deliberately terminal, since a retry might duplicate a delivered email.
+  - `StubNotify` echoes the request's `reference` back through WireMock response templating, so task 5's "the
+    Notify reference is the row id" is assertable from the response.
+  - Totals after this task: `test` 2132, `integration` 8 (baseline on this branch was 2098 + 8). All 34 new
+    tests are container-free, so `build.gradle`'s `requires-docker` figures are unchanged.
 
 ### Task 2: The outbox table and its drain
 
