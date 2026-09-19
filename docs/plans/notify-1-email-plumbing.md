@@ -20,6 +20,13 @@ notify-2, in the `deed-poll-admin` repo.
 **Scope is the admin system.** Every send is a caseworker action and the outbox drain is pinned to one, which
 is what makes a sweep-based outbox safe here — no citizen-facing send waits on a queue nobody visits.
 
+**Delivery is at-least-once, not exactly-once.** The unique index stops a caseworker's double-click and stops
+two replicas racing, which is what "an applicant is never told twice" means here. It does not cover a replica
+that dies after Notify accepts a send but before the outcome commits: the row is still `Pending` with its
+lease, and the next drain sends it again. The alternative — treating an unconfirmed send as delivered — risks
+an applicant never being told their application was refused, which is the worse failure. Stated here because
+the trade is otherwise only visible in task 1's note on why technical failures are terminal.
+
 **No GOV.UK Notify service exists for deed poll yet** — no API key, no templates, no template IDs. This plan is
 therefore written the way `deed-poll-admin`'s plans 11 and 12 were: buildable and fully testable now against a
 WireMock double, with the real template ID and key arriving later. Task 1 establishes the placeholder
@@ -69,6 +76,22 @@ expected, not a defect.
    `referralId` is not null — one *Application Rejected* per referral, ever. A caseworker double-clicking, or
    two replicas racing, must not tell an applicant twice that their application was refused. A violated insert
    is a logged no-op, not an error that fails the caseworker's request. See flag 4 on whether this generalises.
+
+   **Correction, found reviewing this plan before task 5 — the index is stricter than the rule it was meant to
+   enforce, and task 7 exists to fix it.** The conflict target carries no predicate on `state`, so a row the
+   drain gave up on occupies the slot exactly as a delivered one does: the referral can never be emailed about
+   again. For two of the three terminal paths that is correct and deliberate — a technical failure or an
+   exhausted retry *might* have been delivered, and task 1's note is explicit that terminal is the conservative
+   reading. But `classify` maps 400 and 403 to **permanent**, and a permanent failure is Notify refusing the
+   request: nothing was sent, so there is nothing to duplicate. The email is blocked by a rule whose only
+   justification does not apply to it. The likeliest way to hit it is the one task 1 already predicts — an
+   unprovisioned API key returning 403 — which would poison every case a caseworker emailed during the
+   misconfiguration window, permanently and with no way back.
+
+   Proven rather than argued: `NotificationRepositoryTest` now enqueues against a real Postgres behind a row
+   left `Failed`, and the statement answers `0` while `claimNextDue` also answers `0` — the row is unreachable
+   from both directions, and nothing in `src/main` moves a row out of `Failed`. Those three tests are also the
+   first coverage `enqueue` has ever had; every other test of it mocks the repository.
 
 7. **A blank recipient is refused at send, not skipped.** `applicantEmail` is nullable `text`
    (`V2__deed_poll.sql:54`). This differs from `pcs-api`, which skips silently — and the difference is the
@@ -125,7 +148,8 @@ expected, not a defect.
     unbounded value composes a payload the far end refuses, and the refusal lands somewhere unhelpful.
 
 14. **The outbox row records what was sent, not how to rebuild it.** Personalisation is resolved at send and
-    stored as `jsonb`, and the row also stores the Notify `templateVersion` the preview returned. So the
+    stored as `jsonb`, and the row also stores the `templateVersion` Notify reports when it accepts the send —
+    null until then, so a row that never reached Notify has no version. So the
     question "what was this applicant actually told, and under which wording" is answerable from one row —
     which matters most precisely when a caseworker edited the judge's reason.
 
@@ -151,7 +175,7 @@ column names, as every table here has.
 | `deedPollId` | text, FK to the case | Who it is about; how a caseworker read finds it |
 | `referralId` | `uuid`, FK, nullable | The referral that caused it. Nullable because later templates are not all referral-driven |
 | `template` | text | The `EmailTemplate` member name, not the Notify UUID — the UUID is config and differs per environment |
-| `templateVersion` | int, nullable | What Notify rendered at preview (decision 14) |
+| `templateVersion` | int, nullable | What Notify rendered at send, null until Notify accepts one (decision 14) |
 | `recipient` | text | Resolved at send, so a later change to the case cannot redirect an email already owed |
 | `personalisation` | `jsonb` | Resolved at send, including the caseworker's slots. `SqlTypes.JSON`, as `SavedQuery.conditions` does it |
 | `state` | `"NotificationState"` enum | `Pending`, `Sent`, `Failed` |
@@ -458,7 +482,12 @@ Read first: Task 1's `NotificationFailure`, Task 2's `NotificationOutbox`, `Judi
 the javadoc pattern that explains why a read writes.
 
 - `NotifyEmailSender implements NotificationSender` — `sendEmail(templateId, recipient, personalisation, reference)`
-  with the row id as the `reference`; stores `providerNotificationId` on success.
+  with the row id as the `reference`; stores `providerNotificationId` on success, and the `templateVersion`
+  Notify reports with the acceptance (decision 14) — the row has no version before that.
+- **`NotificationClientException`'s message is the response, not the request.** Its status-carrying constructor
+  builds `"Status code: " + httpResult + " " + body`, where `body` is what the client read from
+  `getErrorStream()` — verified with `javap` against the jar. Do not write a javadoc claiming it quotes the
+  request that was made; two drafts of this task already did.
 - Failures through `NotificationFailure`: permanent → `Failed` with the reason; temporary → stays `Pending`
   with a backed-off `nextAttemptAt`; technical → `Failed`, logged at error.
 - The drain is pinned to **the caseworker case-list read**, the most frequent caseworker action and so the
@@ -470,7 +499,7 @@ the javadoc pattern that explains why a read writes.
   `nextAttemptAt`; a drain with nothing due sends nothing. Container-free: the classification wiring, and that
   the Notify `reference` is the row id.
 
-- [ ] A pending row sends through `StubNotify` and records its provider id, a 400 fails terminally, a 500
+- [x] A pending row sends through `StubNotify` and records its provider id, a 400 fails terminally, a 500
       retries with backoff, the drain is reachable from a caseworker read whose javadoc explains the mutation,
       no test touches real Notify, and `./gradlew build` green
 
@@ -493,6 +522,45 @@ the javadoc pattern that explains why a read writes.
 - [ ] Personalisation-key, recipient and case-scoping rules stated container-free, the ArchUnit rule proves the
       client has one route, two concurrent drains send one email, `./gradlew build` green from cold, checkstyle
       clean on five source sets, and both totals recorded with the `INTEGRATION_TESTS_ENABLED=false` figure
+
+### Task 7: Let a permanently refused email be sent again
+
+Added while reviewing this plan before task 5. Decision 6 has the full argument; the short form is that the
+unique index blocks a re-send after a **permanent** failure, where Notify refused the request and nothing was
+delivered, so the duplicate the index exists to prevent is not possible. Technical and exhausted-temporary
+failures stay terminal — that is deliberate, and task 1's note says why.
+
+Read first: decision 6, `NotificationRepository.enqueue`'s javadoc on why the conflict target repeats the
+index predicate, and `V11__notifications.sql`.
+
+- **A new migration, `V12`. `V11` is committed and is never edited** — this repo's rule, and the index is
+  already in environments.
+- The index has to stop covering permanently-failed rows. `failureReason` is free text
+  (`"PERMANENT: 403 ..."`), so predicating an index on it would make a `LIKE` load-bearing. Prefer a dedicated
+  column — the taxonomy verdict stored as its own value when the row is settled — and a partial index of the
+  shape `WHERE "referralId" IS NOT NULL AND NOT ("state" = 'Failed' AND <verdict> = 'PERMANENT')`.
+- **`enqueue`'s `ON CONFLICT` target must be updated to repeat the new predicate verbatim.** Postgres infers a
+  partial index by matching its predicate, so a target that does not match the new index does not compile
+  against the schema at all. This is the same trap the existing javadoc documents.
+- Re-enqueueing writes a **new row** rather than resetting the old one. The failed attempt stays as history, so
+  "what happened to this applicant's email" keeps its full answer, and `findByDeedPollIdOrderByCreatedOnDesc`
+  already returns both newest-first.
+- Tests, container-backed, alongside the three this review already added to `NotificationRepositoryTest`: a row
+  failed **permanently** admits a second `enqueue`, which answers `1`; a row failed **technically** and one
+  failed after exhausting its retries both still answer `0`; and a `Pending` row still answers `0`, so the
+  double-click rule is untouched. Container-free: that settling a permanent failure records the verdict the
+  index reads.
+
+- [ ] A permanently failed email can be enqueued again and a technically failed one still cannot, the new
+      index ships as `V12` with `V11` unedited, `enqueue`'s conflict target matches the new predicate, the
+      failed attempt survives as history, and `./gradlew build` green
+
+**`notify-3` rewrites this same index, and ships after this task.** Its mutual-exclusion rule re-keys the
+index from `("referralId", "template")` to `("referralId", "exclusionGroup")` so that templates ③ and ④
+cannot both be sent for one referral. That is a later migration built on top of this one, not a competing
+design: it must carry this task's permanent-failure predicate through unchanged, and `enqueue`'s conflict
+target has to move with it for the same reason it moves here. Whoever writes that migration should read this
+task first rather than reconstructing the predicate.
 
 ---
 
@@ -551,8 +619,32 @@ the javadoc pattern that explains why a read writes.
    the Email tab the caseworker is choosing the email anyway, which resolves it neatly — but confirm that is
    the intent before notify-3 is written, because the alternative is modelling per-reason outcomes.
 
+   **Update:** `notify-3-request-confirmation-to-proceed.md` is now written and its decision 1 takes that
+   position — the caseworker chooses, and `NonPublication` only gates whether the email is *offered*. Still
+   worth your confirmation, because it is the one decision in notify-3 that would invalidate the plan rather
+   than adjust it.
+
 7. **Whether the caseworker edits the judge's reason or sends it verbatim is still unconfirmed.** The design
    works either way: the slot is pre-populated from `directionsText` and editable. But if editing is normal, the
    stored personalisation is the *only* record of what the applicant was told, which is why decision 14 stores
    it rather than recomputing. If editing turns out to be forbidden, the slot becomes a resolved value and
    decision 12 gets simpler.
+
+8. **Nothing over HTTP tells a caseworker that a send failed, and this plan's own decision 7 says why that
+   matters.** The three operations are availability, preview and send; the send answers once the row is
+   enqueued, and the row's later verdict is never published. `findByDeedPollIdOrderByCreatedOnDesc` exists and
+   is documented as "the Email tab's history", but has no caller in `src/main`. Decision 7 refuses a blank
+   recipient with a 422 *precisely so a caseworker is never left believing an applicant was told something* —
+   and every asynchronous failure reintroduces exactly that, silently. Not fixed here because the Email tab is
+   notify-2's and a read endpoint is arguably its scope, so **this is a scope call rather than a defect**: if
+   notify-2 slips, this ships a send whose failures nobody can see. Decide before task 5 completes, not after.
+
+9. **Delivery is at-least-once, and that is now stated in the overview — confirm the trade is the one you
+   want.** Task 1's note reasons that a technical failure is terminal "since a retry might duplicate a
+   delivered email", which concedes the service cannot always tell an accepted send from a lost one. The same
+   ambiguity has a second shape: `settle` commits in its own transaction, so a replica that dies after Notify
+   accepts but before that commit leaves the row `Pending` with its lease, and the next drain sends it again.
+   No code change is proposed — the outbox is deliberately built this way and task 7 keeps it that way. The
+   open question is only whether "an applicant may occasionally be told twice" is acceptable to the business,
+   given the alternative is "an applicant is occasionally never told". Worth asking, because it has never been
+   asked.

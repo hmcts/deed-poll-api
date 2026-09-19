@@ -68,6 +68,25 @@ public enum EmailTemplate {
             .findFirst();
     }
 
+    /**
+     * The template whose <em>member name</em> is {@code name}, or empty if no member has it.
+     *
+     * <p>The other half of the split this class's javadoc describes, and the direction the drain reads in: an
+     * outbox row stores the member name, so the sender has to turn that back into a member to find the
+     * configured Notify UUID. Empty rather than an exception, because the one way this happens is a member
+     * renamed after rows were written -- which the sender reports as a permanent failure naming the row, rather
+     * than as a crash that takes the rest of the batch with it.
+     */
+    public static Optional<EmailTemplate> byName(String name) {
+        if (name == null) {
+            return Optional.empty();
+        }
+        String trimmed = name.trim();
+        return Arrays.stream(values())
+            .filter(candidate -> candidate.name().equals(trimmed))
+            .findFirst();
+    }
+
     /** Every key, for a refusal that has to say what it would have accepted. */
     public static String keys() {
         return Arrays.stream(values()).map(EmailTemplate::key).collect(Collectors.joining(", "));

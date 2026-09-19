@@ -49,11 +49,12 @@ import java.util.UUID;
  * rather than skipping it -- acceptable while the limit is a handful of rows, and it is still correct:
  * the blocked statement re-evaluates its predicate once the lock is released and takes nothing.
  *
- * <p><strong>Notify is reached only through {@link NotificationSender}, and there may be no
- * implementation.</strong> Until the send lands there is no bean of that type, so a drain claims nothing
- * and every row stays {@code Pending} -- the right answer for a service with no Notify credentials,
- * because the alternatives are failing rows that could have been sent or claiming them and throwing
- * them away.
+ * <p><strong>Notify is reached only through {@link NotificationSender}, and a context may have no
+ * implementation.</strong> {@link NotifyEmailSender} is the one this service ships, so an ordinary context
+ * sends; a context without that bean claims nothing and leaves every row {@code Pending}, which is what
+ * makes the state machine below provable with no network and would be the right behaviour for a
+ * deployment deliberately configured not to send -- the alternatives are failing rows that could have
+ * been sent, or claiming them and throwing them away.
  */
 @Service
 public class NotificationOutbox {
@@ -87,6 +88,7 @@ public class NotificationOutbox {
      *
      * @return how many notifications Notify accepted
      */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public int drain() {
         return drain(DEFAULT_LIMIT);
     }
@@ -176,6 +178,13 @@ public class NotificationOutbox {
             case SendOutcome.Sent success -> {
                 row.setState(NotificationState.Sent);
                 row.setProviderNotificationId(success.providerNotificationId());
+                if (success.templateVersion() != null) {
+                    // Written only when Notify named one, so a Notify that answered without a version cannot
+                    // blank a version the row already had. This is the column decision 14 exists for: the row was
+                    // enqueued with no rendering, so the wording the applicant actually read is knowable only from
+                    // the answer to the send.
+                    row.setTemplateVersion(success.templateVersion());
+                }
                 // Cleared, not kept: a row that succeeded on its third attempt should not still read as
                 // though the second attempt's failure were its verdict.
                 row.setFailureReason(null);

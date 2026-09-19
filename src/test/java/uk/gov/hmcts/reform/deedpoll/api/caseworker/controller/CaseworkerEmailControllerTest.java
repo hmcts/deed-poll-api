@@ -432,7 +432,7 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
     class SendEmail {
 
         @Test
-        @DisplayName("enqueues exactly one Pending row, frozen with what was resolved")
+        @DisplayName("enqueues and drains exactly one row, frozen with what was resolved")
         void enqueuesOneRow() throws Exception {
             String caseId = refusedCase();
             String referralId = referrals.findByDeedPollIdOrderByCreatedOnDesc(caseId).getFirst().getId().toString();
@@ -444,18 +444,16 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.enqueued").value(true));
 
             assertThat(notifications.findAll()).singleElement().satisfies(row -> {
-                // Pending, not Sent: there is no NotificationSender bean yet, so the drain the send triggers
-                // claims nothing. That is the right answer for a service with no Notify credentials.
-                assertThat(row.getState()).isEqualTo(NotificationState.Pending);
+                assertThat(row.getState()).isEqualTo(NotificationState.Sent);
                 assertThat(row.getDeedPollId()).isEqualTo(caseId);
                 assertThat(row.getReferralId()).hasToString(referralId);
                 // The member name, never the Notify UUID: the UUID is configuration and differs per environment.
                 assertThat(row.getTemplate()).isEqualTo(EmailTemplate.APPLICATION_REJECTED.name());
                 assertThat(row.getRecipient()).isEqualTo(APPLICANT_EMAIL);
-                // Enqueued without a preview, so there is no rendered version to record.
-                assertThat(row.getTemplateVersion()).isNull();
-                assertThat(row.getAttempts()).isZero();
-                assertThat(row.getProviderNotificationId()).isNull();
+                // Enqueued without a preview; the version comes from Notify accepting the send.
+                assertThat(row.getTemplateVersion()).isEqualTo(StubNotify.TEMPLATE_VERSION);
+                assertThat(row.getAttempts()).isOne();
+                assertThat(row.getProviderNotificationId()).isEqualTo(StubNotify.NOTIFICATION_ID);
                 // The caseworker, because they authored part of what the applicant reads.
                 assertThat(row.getCreatedBy()).isEqualTo("A Caseworker");
                 assertThat(row.getNextAttemptAt()).isNotNull();
@@ -481,14 +479,55 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("talks to Notify not at all: the row is owed and the drain is what sends it")
-        void doesNotSendInline() throws Exception {
+        @DisplayName("drains after enqueue commits, carrying the row id as Notify's reference")
+        void drainsAfterEnqueueCommits() throws Exception {
             authorised(post(sendOf(refusedCase())), "{}").andExpect(status().isOk());
 
-            // The drain runs on this request and has no sender to hand the row to, so nothing reached the stub.
-            // A send that called Notify from the handler would not be an outbox at all.
-            assertThat(NOTIFY.emailRequests()).isEmpty();
+            Notification row = notifications.findAll().getFirst();
+            assertThat(NOTIFY.emailRequests()).singleElement().satisfies(request -> {
+                try {
+                    assertThat(JSON.readTree(request.getBodyAsString()).path("reference").asText())
+                        .isEqualTo(row.getId().toString());
+                } catch (Exception exception) {
+                    throw new AssertionError("StubNotify received unreadable JSON", exception);
+                }
+            });
             assertThat(NOTIFY.previewRequests()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a 400 refusal fails the row terminally and does not retry it")
+        void permanentRefusalFailsTheRow() throws Exception {
+            NOTIFY.stubSendStatus(400);
+
+            authorised(post(sendOf(refusedCase())), "{}").andExpect(status().isOk());
+
+            assertThat(notifications.findAll()).singleElement().satisfies(row -> {
+                assertThat(row.getState()).isEqualTo(NotificationState.Failed);
+                assertThat(row.getAttempts()).isOne();
+                assertThat(row.getProviderNotificationId()).isNull();
+                assertThat(row.getFailureReason())
+                    .isEqualTo("PERMANENT: GOV.UK Notify refused the send with status 400");
+            });
+            assertThat(NOTIFY.emailRequests()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("a 500 leaves the row Pending, counted once and backed off")
+        void temporaryFailureBacksTheRowOff() throws Exception {
+            NOTIFY.stubSendStatus(500);
+
+            authorised(post(sendOf(refusedCase())), "{}").andExpect(status().isOk());
+
+            assertThat(notifications.findAll()).singleElement().satisfies(row -> {
+                assertThat(row.getState()).isEqualTo(NotificationState.Pending);
+                assertThat(row.getAttempts()).isOne();
+                assertThat(row.getProviderNotificationId()).isNull();
+                assertThat(row.getFailureReason())
+                    .isEqualTo("TEMPORARY: GOV.UK Notify refused the send with status 500");
+                assertThat(row.getNextAttemptAt()).isAfter(row.getModifiedOn());
+            });
+            assertThat(NOTIFY.emailRequests()).hasSize(1);
         }
 
         @Test

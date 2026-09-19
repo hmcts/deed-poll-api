@@ -22,16 +22,23 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentTypeService;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
+import uk.gov.hmcts.reform.deedpoll.notify.NotificationOutbox;
 
 import java.util.List;
 
 /**
  * The caseworker read surface: the case list, one case, the field rules and the document types.
  *
- * <p>Four of the eleven operations plan 01 builds, and the four that only read. They are one controller because
+ * <p>Four of the eleven operations plan 01 builds, and the four whose answer is a read. They are one controller
+ * because
  * they are one thing to a consumer -- everything a caseworker screen needs before it can render -- and because
  * grouping the reads keeps each write resource's controller about that resource. Writes arrive with tasks 14
  * and 15.
+ *
+ * <p><strong>One of them writes, and it is the case list.</strong> It drains the notification outbox after it has
+ * answered, which is how an owed email gets sent in a service with no scheduler -- {@link #cases} has the argument
+ * and {@code NotificationOutbox} has the rest of it. Nothing about the response depends on it, and the read itself
+ * is still read-only.
  *
  * <p>Every method here resolves parameters, calls a domain service and maps the result. There is no
  * {@code if (found == null)} branch anywhere: the services report absence by throwing {@code NotFoundError},
@@ -49,9 +56,19 @@ public class CaseworkerReadController {
     private final DeedPollService deedPolls;
     private final DocumentTypeService documentTypes;
 
-    public CaseworkerReadController(DeedPollService deedPolls, DocumentTypeService documentTypes) {
+    /**
+     * Injected so the case list can empty the notification outbox -- see {@link #cases} for why a read does
+     * that, and {@link NotificationOutbox} for why there is no scheduler to do it instead.
+     */
+    private final NotificationOutbox outbox;
+
+    public CaseworkerReadController(DeedPollService deedPolls,
+                                    DocumentTypeService documentTypes,
+                                    NotificationOutbox outbox) {
+
         this.deedPolls = deedPolls;
         this.documentTypes = documentTypes;
+        this.outbox = outbox;
     }
 
     /**
@@ -96,6 +113,25 @@ public class CaseworkerReadController {
      * <p>Paginated, where the list this ports was not. A default page size means a bare request no longer
      * answers every row in the table, which is the point: an unbounded list endpoint is a denial of service
      * against its own database, and {@code CasePaging} records why the cap is not the client's to raise.
+     *
+     * <p><strong>This read empties the notification outbox, and that is a decision rather than a stray call.</strong>
+     * It is the same decision {@code JudicialReferralService.pool} makes about the lapsed-claim sweep, for the same
+     * reason: this service has no scheduler -- no {@code @EnableScheduling}, no Quartz, no db-scheduler -- so
+     * nothing notices an email that is owed and due on a timer, and rather than introduce one the drain hangs off
+     * the traffic that is already there. The case list is the most frequent caseworker request, which is what makes
+     * it the analogue of the judicial pool: an email left backed off by a temporary Notify failure is picked up by
+     * whoever next opens the list, rather than waiting for the caseworker who sent it to come back. That is safe
+     * only because the whole feature is the admin system -- every send is a caseworker action, so the queue is
+     * emptied by the people who fill it. {@link NotificationOutbox} has the full argument.
+     *
+     * <p><strong>Drained here rather than inside {@link DeedPollService#findDeedPolls}, and after it has
+     * returned.</strong> The list is a {@code readOnly = true} transaction and stays one -- a read-only list is
+     * worth keeping, and a drain does not need it widened, because {@code drain()} runs in its own transaction
+     * ({@code REQUIRES_NEW}). Calling it inside the read would suspend that transaction for the drain and then
+     * resume it, which works but puts a write inside a method whose whole contract is that it does not write; a
+     * failure in the drain also cannot spoil a response that has already been computed.
+     * {@code CaseworkerEmailController} drains after its send for the related but stronger reason recorded there:
+     * inside the enqueueing transaction the drain would not see the row it was meant to send.
      */
     @GetMapping("/cases")
     public CaseListResponse cases(
@@ -109,7 +145,9 @@ public class CaseworkerReadController {
             CaseSearch.parse(single("q", parameters.get("q"))),
             CaseSort.parse(single("sort", parameters.get("sort"))),
             CasePaging.parse(single("page", parameters.get("page")), single("size", parameters.get("size"))));
-        return CaseListResponse.of(resolved, results);
+        CaseListResponse response = CaseListResponse.of(resolved, results);
+        outbox.drain();
+        return response;
     }
 
     /**
