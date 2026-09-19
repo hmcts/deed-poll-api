@@ -60,6 +60,13 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
 
     private static final String TEMPLATE = "APPLICATION_REJECTED";
 
+    private static final String RECIPIENT = "applicant@example.com";
+
+    /**
+     * What {@code CaseEmailService} binds: the resolved personalisation as the jsonb column's text.
+     */
+    private static final String PERSONALISATION = "{\"reference_number\":\"2026/000123\"}";
+
     @Autowired
     private NotificationRepository notifications;
 
@@ -229,6 +236,75 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
             .isInstanceOf(PersistenceException.class)
             // Named, so the assertion is about this index and not about any duplicate key at all.
             .hasStackTraceContaining("deedpoll_notification_referral_template_key");
+    }
+
+    @Test
+    @DisplayName("enqueues one owed row, Pending and never attempted")
+    void enqueuesOneOwedRow() {
+        DeedPoll deedPoll = persistedCase();
+        Referral referral = persistedReferral(deedPoll);
+        UUID id = UUID.randomUUID();
+
+        // The statement itself, against a real Postgres. Every other test of it mocks this repository, so
+        // the jsonb cast, the literals and the ON CONFLICT clause are only ever executed here.
+        int enqueued = notifications.enqueue(id, deedPoll.getId(), referral.getId(), TEMPLATE,
+                                             RECIPIENT, PERSONALISATION, NOW, "A Caseworker");
+
+        assertThat(enqueued).isOne();
+        entityManager.clear();
+        Notification written = entityManager.find(Notification.class, id);
+        assertThat(written.getState()).isEqualTo(NotificationState.Pending);
+        assertThat(written.getAttempts()).isZero();
+        assertThat(written.getNextAttemptAt()).isEqualTo(NOW);
+        assertThat(written.getPersonalisation()).containsEntry("reference_number", "2026/000123");
+    }
+
+    @Test
+    @DisplayName("enqueues nothing for a referral and template already owed, answering 0 rather than throwing")
+    void enqueuesNothingForARowAlreadyOwed() {
+        DeedPoll deedPoll = persistedCase();
+        Referral referral = persistedReferral(deedPoll);
+        owed(deedPoll, referral, NOW);
+        entityManager.flush();
+
+        // The caseworker's double click. ON CONFLICT DO NOTHING rather than a caught exception, so the
+        // caller's transaction stays usable -- the second click is a no-op to log, not a failed request.
+        int enqueued = notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(), TEMPLATE,
+                                             RECIPIENT, PERSONALISATION, NOW, "A Caseworker");
+
+        assertThat(enqueued).isZero();
+        entityManager.clear();
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId())).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("enqueues nothing for a referral whose email has terminally failed, so the send cannot be retried")
+    void enqueuesNothingForATerminallyFailedRow() {
+        DeedPoll deedPoll = persistedCase();
+        Referral referral = persistedReferral(deedPoll);
+        Notification failed = owed(deedPoll, referral, NOW);
+        failed.setState(NotificationState.Failed);
+        failed.setFailureReason("PERMANENT: 403 the API key is not provisioned");
+        entityManager.flush();
+
+        // The conflict target is ("referralId", "template") with no predicate on "state", so a row the drain
+        // gave up on occupies the slot exactly as an owed one does.
+        int enqueued = notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(), TEMPLATE,
+                                             RECIPIENT, PERSONALISATION, NOW, "A Caseworker");
+
+        assertThat(enqueued)
+            .as("a terminally failed email blocks its own replacement")
+            .isZero();
+
+        entityManager.clear();
+        List<Notification> onCase = notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId());
+        assertThat(onCase).hasSize(1);
+        // And the row that blocks it is unreachable from either direction: the drain refuses it because it is
+        // not Pending, and enqueue refuses a new one because the index does not care that it is not. Nothing
+        // in the service moves a row out of Failed, so this referral can never be emailed about again.
+        assertThat(onCase.getFirst().getState()).isEqualTo(NotificationState.Failed);
+        assertThat(notifications.claimNextDue(onCase.getFirst().getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT))
+            .isZero();
     }
 
     @Test
