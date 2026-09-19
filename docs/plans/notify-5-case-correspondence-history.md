@@ -69,6 +69,28 @@ an applicant was told.
    external service being reachable, and the text would be subject to **Notify's** retention rather than the
    court's. History must be self-contained.
 
+   **Correction, found checking the client rather than assuming — the stored body is plain text, and no HTML
+   version of a sent email exists anywhere.** `SendEmailResponse.getBody()` returns a `String` and the class
+   has no HTML accessor at all; neither does `Notification`. **Only `TemplatePreview` has `getHtml()`, and it
+   returns `Optional<String>`.** So the *preview* can be shown as the applicant will see it, and the
+   *history* cannot — what is stored is Notify's plain-text rendering of the template, with the
+   personalisation substituted. That is still the real content and still the right thing to store, but three
+   things follow and each of them would otherwise be discovered late:
+
+   - **This is not notify-2's decision 3 problem.** That decision wraps preview HTML in a sandboxed `iframe`
+     because it is HTML. A stored body is text, so it renders through Nunjucks' autoescaping in the ordinary
+     way — **do not reach for `| safe`, and do not reuse the iframe**. Preserve newlines with CSS, not markup.
+   - **Notify's body is Markdown-flavoured**, because that is what the template author writes. Bullets and
+     headings will appear as `*` and `#`. Rendering it as Markdown would mean trusting caseworker free text
+     through a Markdown renderer, which is the escaping problem decision 3 exists to avoid — so **show it as
+     text**, and accept that a caseworker sees the source of a list rather than a list.
+   - **The screen must not claim to be the email.** Label it as the wording that was sent, not as a copy of
+     what the applicant received, because the applicant received branded HTML. Task 4 owns that sentence.
+
+   **Storing the preview's HTML instead was considered and rejected.** It would need a `preview` call at send
+   time — a second Notify call per send, against the same rate limit, for a rendering that may legitimately
+   differ from the one that went out. The text is what the service can know for free and for certain.
+
 3. **The stored body is written once and never updated**, the same argument as notify-4's decision 7. It is
    the record of a thing that happened. A re-send is a new row — notify-1's task 7 already establishes that
    shape.
@@ -137,6 +159,8 @@ an applicant was told.
   calling Notify, which decision 2 refuses. Anything sent before this ships shows metadata only, and the
   response must represent that honestly rather than as an empty email. Flag 1.
 - **Body is `text`, not `varchar`.** It is a rendered email and its length is Notify's business.
+- **The body is plain text and there is no HTML alternative to store.** Decision 2's correction. The column
+  holds Notify's text rendering; nothing in the client offers the HTML for a *sent* email.
 - **The recipient stays frozen.** A history that resolved the recipient from the case at read time would show
   the current address for an email sent to a previous one, which is the exact failure `Notification`'s
   javadoc says freezing exists to prevent.
@@ -230,6 +254,11 @@ Read first: `NotificationSecurityTest`, and decisions 9, 10 and 13.
 - **The state's public wording is settled here.** `Sent` means *accepted by GOV.UK Notify*, and the field
   name, its javadoc and the spec description all say that rather than "delivered". A caseworker reading
   "Delivered" concludes the applicant has it; the service does not know that.
+- **So is the wording for the body**, for the same reason and following decision 2's correction: what is
+  stored is Notify's **plain-text** rendering, and the applicant received branded HTML. The spec description
+  for the field says so, so that `deed-poll-admin` labels it as the wording that was sent rather than as a
+  copy of the email. A screen that presents text as though it were the email invites "that is not what they
+  got".
 - `NotificationSecurityTest` extended rather than duplicated: history for one case never contains another
   case's row — the finder is case-scoped, so this asserts the scoping rather than hoping for it — and a
   resolved document list never names a document belonging to another case.
@@ -287,7 +316,8 @@ Read first: `NotificationSecurityTest`, and decisions 9, 10 and 13.
 5. **`deed-poll-admin` needs a follow-on plan to consume this**, and notify-2 should be amended rather than
    rewritten: its decision 8 is already marked `[PROVISIONAL]` against exactly this, and its decision 11
    defers the content half with *"it is api's data to serve"*. Once this ships, both can be resolved and the
-   `[PROVISIONAL]` marker removed.
+   `[PROVISIONAL]` marker removed. **Carry decision 2's correction across with it** — notify-2's decision 3
+   is written for preview HTML, and history is text, so the two must not share a renderer.
 
 6. **The caseworker sign-off question from notify-2's flag 5 is still open**, and history makes it visible in
    a new way: if every email ends `Kind regards,` with nothing after it, that will now be on a screen where
