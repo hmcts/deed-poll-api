@@ -244,7 +244,7 @@ decisions 5 and 6.
   availability; **no Notify call is made** by the `GET`, asserted rather than assumed; and the operation
   count is unchanged.
 
-- [ ] One call returns availability, history and slot defaults, no Notify call happens on a read, the spec is
+- [x] One call returns availability, history and slot defaults, no Notify call happens on a read, the spec is
       updated, and `./gradlew build` green
 
 ### Task 4: Wording, security and full validation

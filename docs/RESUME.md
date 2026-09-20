@@ -3,9 +3,9 @@
 Rewritten **2026-09-20**. **Read this before restarting the loop.**
 
 The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1 is
-merged and notify-5 is in progress on `notify-5`. Tasks 1 and 2 capture the exact subject and plain-text
-body returned when Notify accepts a send and provide the case-scoped correspondence read. Task 3, the
-combined Email-tab response, is next.
+merged and notify-5 is in progress on `notify-5`. Tasks 1–3 capture the exact subject and plain-text body,
+provide the case-scoped correspondence read, and return availability, history and slot defaults from the
+existing Email-tab GET. Task 4, wording, security and final validation, is next.
 
 ## Where the Notify work actually is — read this before anything else
 
@@ -13,7 +13,7 @@ The implementation is one coherent branch:
 
 | Where | What is there |
 |---|---|
-| `notify-5` | **notify-5 Tasks 1–2 complete.** V13 captures rendered content and the service exposes case-scoped history |
+| `notify-5` | **notify-5 Tasks 1–3 complete.** The existing GET now returns availability, history and slot defaults |
 | `origin/master` | notify-1 complete and merged in PR #29; all five API plans present |
 
 V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 on `notify-5` adds the
@@ -28,7 +28,7 @@ row; its failed history remains unchanged when the replacement is sent.
 | Caseworker endpoints | **33**, across eight controllers under `api/caseworker/controller/` |
 | Judicial endpoints | **4** on `/judicial/**` — the shared pool, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,296** — `test` 2,288 + `integration` 8, measured after notify-5 task 2 |
+| Tests | **2,299** — `test` 2,291 + `integration` 8, measured after notify-5 task 3 |
 | `./gradlew build` | green on `notify-5`, with `TESTCONTAINERS_RYUK_DISABLED=true` exported |
 
 Thirteen plans are in [`plans/completed/`](plans/completed/). The arc since plan 01: the domain gaps
@@ -46,7 +46,7 @@ build them:
 
 ```
 notify-1  the send path                     COMPLETE
-notify-5  what was sent, and when            case correspondence history   TASKS 1–2 OF 4 COMPLETE
+notify-5  what was sent, and when            case correspondence history   TASKS 1–3 OF 4 COMPLETE
 notify-3  request confirmation to proceed    three exclusive templates
 notify-3b track the applicant's reply
 notify-4  generate the deed forms            needs a spike first
@@ -205,7 +205,7 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 | File | State |
 |---|---|
 | `notify-1-email-plumbing.md` | **Complete and merged.** All seven tasks landed in PR #29 |
-| `notify-5-case-correspondence-history.md` | **In progress.** Tasks 1–2 of 4 complete; Task 3 is next |
+| `notify-5-case-correspondence-history.md` | **In progress.** Tasks 1–3 of 4 complete; Task 4 is next |
 | `notify-3-request-confirmation-to-proceed.md` | Ready. Re-keys notify-1 task 7's index — read whichever migration exists first |
 | `notify-3b-confirmation-tracking.md` | Ready, but flag 1 wants a business answer on `signatureRequestedDate` |
 | `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
@@ -217,6 +217,9 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 There is also a follow-on owed to **`deed-poll-admin`**: notify-2's decision 8 is `[PROVISIONAL]` and its
 decision 11 defers case correspondence history to "a later plan… it is api's data to serve". notify-5 is
 that data; once it lands, notify-2 can be amended and both resolved. notify-5's flag 5 records it.
+The concrete Task 3 contract is now `CaseEmailsResponse`: `availability` retains the existing
+`EmailTypeResponse` entries, with `history` and `slotDefaults` alongside it. The operation count remains
+33; admin should refresh its generated client from the published spec rather than hand-writing this shape.
 
 ## Do not let a session drift into
 

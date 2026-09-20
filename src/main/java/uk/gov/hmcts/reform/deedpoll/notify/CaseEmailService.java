@@ -26,6 +26,7 @@ import uk.gov.service.notify.NotificationClient;
 import uk.gov.service.notify.NotificationClientException;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -131,6 +132,23 @@ public class CaseEmailService {
     }
 
     /**
+     * Everything the Email tab needs, resolved without asking Notify to render anything.
+     *
+     * <p>Defaults come from {@link #compose}, the same path preview and send use, so a compose form opens with
+     * exactly the values an empty preview request would use without spending a Notify API call merely to discover
+     * them.
+     */
+    @Transactional(readOnly = true)
+    public CaseEmailOverview overview(String deedPollId) {
+        List<EmailAvailability> availability = available(deedPollId);
+        List<EmailSlotDefaults> defaults = availability.stream()
+            .filter(EmailAvailability::applicable)
+            .map(entry -> slotDefaults(deedPollId, entry.template()))
+            .toList();
+        return new CaseEmailOverview(availability, correspondence(deedPollId), defaults);
+    }
+
+    /**
      * Every email attempt recorded for one case, newest first.
      *
      * <p>The repository supplies the order. Document ids are read only from keys declared by the stored template
@@ -179,6 +197,15 @@ public class CaseEmailService {
         List<CorrespondenceDocument> carried =
             CorrespondenceDocument.from(notification, template.documentKeys(), caseDocuments);
         return CaseCorrespondence.from(notification, template, carried);
+    }
+
+    private EmailSlotDefaults slotDefaults(String deedPollId, EmailTemplate template) {
+        Map<String, Object> personalisation = compose(deedPollId, template, Map.of()).personalisation();
+        Map<String, String> fields = new LinkedHashMap<>();
+        for (EmailSlot slot : template.slots()) {
+            fields.put(slot.placeholder(), (String) personalisation.getOrDefault(slot.placeholder(), ""));
+        }
+        return new EmailSlotDefaults(template, fields);
     }
 
     /**

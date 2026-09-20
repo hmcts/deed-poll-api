@@ -6,8 +6,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseEmailsResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailPreviewResponse;
-import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailTypeResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.PreviewEmailRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SendEmailRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SentEmailResponse;
@@ -16,8 +16,6 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.notify.CaseEmailService;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailTemplate;
 import uk.gov.hmcts.reform.deedpoll.notify.NotificationOutbox;
-
-import java.util.List;
 
 /**
  * The emails a caseworker can send about a case: what may be sent, what one will look like, and sending it.
@@ -81,18 +79,19 @@ public class CaseworkerEmailController {
     }
 
     /**
-     * Which emails apply to this case, and why not for the rest.
+     * Everything the Email tab needs: availability, correspondence history and pre-populated slot defaults.
      *
-     * <p>Every type, applicable or not, with the reason on the ones that are not: a tab shown a shorter list with
-     * no explanation would leave a caseworker asking somebody why the refusal letter is missing.
+     * <p>Availability still contains every type, applicable or not, with the reason on the ones that are not.
+     * History and defaults are returned alongside it so the tab needs one request, and this read never calls
+     * Notify.
      *
      * <p>404 for a case that does not exist rather than an empty list, for the reason the notes and referrals
      * lists give: an empty answer would mean both "no such case" and "this case can send nothing", and only one of
      * those is true.
      */
     @GetMapping
-    public List<EmailTypeResponse> emails(@PathVariable("id") String id) {
-        return EmailTypeResponse.from(emails.available(id));
+    public CaseEmailsResponse emails(@PathVariable("id") String id) {
+        return CaseEmailsResponse.from(emails.overview(id));
     }
 
     /**

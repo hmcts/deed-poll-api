@@ -221,6 +221,36 @@ class CaseEmailServiceTest {
                 verifyNoInteractions(notify);
             }
 
+            @Nested
+            @DisplayName("email tab overview")
+            class Overview {
+
+                @Test
+                @DisplayName("returns availability, history and pre-populated defaults without calling Notify")
+                void returnsEverythingWithoutNotify() {
+                    storedCase();
+                    refusedReferral();
+                    Notification sent = notification(
+                        UUID.randomUUID(), LocalDateTime.of(2026, 9, 20, 10, 0), NotificationState.Sent);
+                    when(notifications.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(sent));
+                    when(documents.findByDeedPollIdOrderByCreatedOnAsc(CASE_ID)).thenReturn(List.of());
+
+                    CaseEmailOverview overview = emails.overview(CASE_ID);
+
+                    assertThat(overview.availability()).singleElement()
+                        .satisfies(entry -> assertThat(entry.applicable()).isTrue());
+                    assertThat(overview.history()).singleElement()
+                        .satisfies(entry -> assertThat(entry.id()).isEqualTo(sent.getId()));
+                    assertThat(overview.slotDefaults()).singleElement().satisfies(defaults -> {
+                        assertThat(defaults.template()).isEqualTo(EmailTemplate.APPLICATION_REJECTED);
+                        assertThat(defaults.fields()).containsExactly(
+                            Map.entry(EmailSlot.JUDGES_REASON.placeholder(), DIRECTION),
+                            Map.entry(EmailSlot.ADDITIONAL_NOTES.placeholder(), ""));
+                    });
+                    verifyNoInteractions(notify);
+                }
+            }
+
             @Test
             @DisplayName("returns an empty list for a case with no correspondence")
             void returnsAnEmptyHistory() {
