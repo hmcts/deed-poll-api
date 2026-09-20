@@ -28,19 +28,25 @@ row; its failed history remains unchanged when the replacement is sent.
 | Caseworker endpoints | **33**, across eight controllers under `api/caseworker/controller/` |
 | Judicial endpoints | **4** on `/judicial/**` — the shared pool, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,300** — `test` 2,292 + `integration` 8, measured after notify-5 task 4 |
+| Tests | **2,314** on `referrals-api-4` — `test` 2,306 + `integration` 8, measured after that plan's task 3. `master` is 2,300 (`test` 2,292), measured after notify-5 task 4 |
 | Docker-free CI | **1,424 unit tests**, measured with `INTEGRATION_TESTS_ENABLED=false` |
-| `./gradlew build` | green from cold after notify-5, with `TESTCONTAINERS_RYUK_DISABLED=true` exported |
+| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `master` after notify-5, and on `referrals-api-4` after its task 3 |
 
 Thirteen plans are in [`plans/completed/`](plans/completed/). The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
 then the original referrals feature in four completed plans — create/withdraw, claim/direction/close,
 `currentReferralState`, and the judicial surface — plus two CI plans and the ACR migration.
 
-**The original referrals backend is merged, but business testing has reopened one rule.**
-[`plans/referrals-api-4-caseworker-completion.md`](plans/referrals-api-4-caseworker-completion.md) prevents a
-`Decided` referral being withdrawn while preserving the existing `Decided → Closed` caseworker action. Its
-companion admin plan adds the missing closure journey.
+**The original referrals backend is merged, and business testing reopened one rule, which is now closed.**
+[`plans/referrals-api-4-caseworker-completion.md`](plans/referrals-api-4-caseworker-completion.md) is
+**complete on branch `referrals-api-4`, not yet merged**: a `Decided` referral can no longer be withdrawn,
+and the existing `Decided → Closed` caseworker action is untouched. The authority is a second enum predicate,
+`ReferralState.canBeWithdrawn()` (`Open || Claimed`), added *beside* `isTerminal()` rather than narrowing it —
+narrowing `isTerminal()` is the plausible-looking mistake, and would also have moved the one-live-referral
+guard and `currentReferralState`, letting a case raise a second referral beside a decided one. **No contract
+delta**: no migration, no enum member, no DTO, 33 caseworker and 4 judicial operations unchanged, which
+`OpenAPIPublisherTest` passing untouched is the evidence for. Its companion admin plan adds the missing
+closure journey — the API half is already there.
 [`plans/referrals-api-5-lifecycle-case-notes.md`](plans/referrals-api-5-lifecycle-case-notes.md) then records
 claim, direction and closure in the existing case Notes timeline.
 [`plans/referrals-api-6-judicial-my-referrals.md`](plans/referrals-api-6-judicial-my-referrals.md) adds the
@@ -222,7 +228,7 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 | `notify-3b-confirmation-tracking.md` | Ready, but flag 1 wants a business answer on `signatureRequestedDate` |
 | `notify-6-chase-missing-documents.md` | **Drafted.** Assumes a provisioned template with required caseworker text; Task 0 verifies it |
 | `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
-| `referrals-api-4-caseworker-completion.md` | **Planned.** Tightens withdrawal to `Open`/`Claimed`; no contract or migration change. Must precede the admin caseworker-completion plan |
+| `referrals-api-4-caseworker-completion.md` | **Complete on `referrals-api-4`, unmerged.** Withdrawal tightened to `Open`/`Claimed` via `ReferralState.canBeWithdrawn()`; no contract or migration change. Still must precede the admin caseworker-completion plan |
 | `referrals-api-5-lifecycle-case-notes.md` | **Planned.** Adds claim, direction and closure notes after referral follow-up 4; no contract or migration change |
 | `referrals-api-6-judicial-my-referrals.md` | **Planned.** Adds a judge-owned `Claimed`/`Decided` list after moving referral authorization from display names to stable IDAM subjects |
 | `role-model-generalisation.md` | **Gated, and may not be needed.** A behaviour-preserving refactor of `boolean isAdmin` into capabilities. Gated on scope question Q0.1 and, preferably, on a first successful deployment — so that a failed deploy is unambiguously a deployment problem and not a 33-site refactor |

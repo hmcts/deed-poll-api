@@ -53,7 +53,7 @@ import java.util.List;
  * is its parent's, which is in the path.
  *
  * <p>None of the three conflicts these routes can answer is stated here. The one-live-referral guard, the
- * withdraw-only-while-live guard and the close-only-when-{@code Decided} guard are all in
+ * withdraw-only-before-a-direction guard and the close-only-when-{@code Decided} guard are all in
  * {@code ReferralService}, which throws {@code ConflictError}, and {@code DomainErrorHandler} turns that into a
  * 409 -- so the rules hold for a caller that is not a route.
  *
@@ -123,10 +123,19 @@ public class CaseworkerReferralController {
      * <p>200 with the withdrawn referral rather than 204, because the row survives the transition and its new
      * state is the answer -- a client re-rendering the referrals tab has it without a second read.
      *
-     * <p>409 for a referral that is already terminal, and deliberately not a second 204: withdrawing twice is a
-     * caseworker acting on a stale screen, and a success would tell them their click did something it did not.
-     * The guard is written against "non-terminal" rather than against {@code Open}, so the claimed and decided
-     * states the directions plan adds need no change here.
+     * <p>409 for anything a caseworker may no longer pull back, and deliberately not a second 204: withdrawing
+     * twice is a caseworker acting on a stale screen, and a success would tell them their click did something it
+     * did not. The guard asks {@code ReferralState.canBeWithdrawn()}, so it permits {@code Open} and
+     * {@code Claimed} -- a referral a judge is merely holding may still be corrected or cancelled, and the
+     * transition voids the claim -- and refuses the rest.
+     *
+     * <p><strong>{@code Decided} is refused, and it is not terminal.</strong> A direction has come back and the
+     * office is obliged to action it rather than discard it, so the move on a decided referral is the closure
+     * route below, not this one. Its 409 says so, in different words from the {@code Closed}/{@code Withdrawn}
+     * one, because being sent to the closure journey and being told the referral is already finished are
+     * different facts. The guard is therefore deliberately <em>not</em> written against "non-terminal": that
+     * question still has its own callers -- the one-live-referral guard above and {@code currentReferralState} --
+     * and answering it differently to serve this route would move both.
      */
     @PostMapping("/{referralId}/withdrawal")
     public ReferralResponse withdraw(@PathVariable("id") String id,

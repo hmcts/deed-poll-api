@@ -289,7 +289,43 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 
 Record final unit/integration totals and compare them with Task 0's baseline.
 
-- [ ] Documentation reflects the revised rule; full build green; final test totals recorded
+- [x] Documentation reflects the revised rule; full build green; final test totals recorded
+
+#### What Task 3 did, 2026-09-20
+
+**One main-source file still stated the old rule, and the search for it was exhaustive rather than assumed.**
+Every mention of withdrawal across `src/main`, `src/test` and `docs/` (excluding the vendored
+`src/test/resources/reference/`) was read. Tasks 1 and 2 had already corrected `ReferralState`,
+`ReferralService` and the tests; what remained was `CaseworkerReferralController`:
+
+- its withdrawal Javadoc claimed "409 for a referral that is already terminal" and then said the guard "is
+  written against *non-terminal* rather than against `Open`, so the claimed and decided states the directions
+  plan adds need no change here" — the exact sentence that would talk a future change back into the old rule.
+  It now names `canBeWithdrawn()`, says why `Claimed` is still withdrawable and `Decided` is not, and records
+  that writing the guard against "non-terminal" is deliberately *not* what happens, because that question has
+  its own callers.
+- the class Javadoc's "withdraw-only-while-**live** guard" became "withdraw-only-**before-a-direction**", since
+  `Decided` is live and no longer withdrawable, so the old name had quietly become a wrong description.
+
+Everything else checked and deliberately left alone: the `Closed`/`Withdrawn` terminal-pair prose in
+`ReferralResponse`, `CurrentReferralState`, `ReferralRepository`, `DeedPollRepository`, `JudicialReferralService`
+and `V6`/`V9`/`V10` is about the *terminal* question, which this plan did not change, and a migration may not be
+edited in any case.
+
+**Superseding banners were already in place and were verified, not added twice.**
+`completed/referrals-api-1-create-and-withdraw.md` and `completed/referrals-api-2-claim-direction-close.md` each
+carry a follow-up banner naming this plan; `api-2b` and `api-3` say nothing about withdrawability, so neither
+needed one. The live plans `referrals-api-5` and `referrals-api-6` already describe withdrawal as
+`Open`/`Claimed`, so no future plan restores the old rule from an archived one.
+
+`docs/RESUME.md` now describes today rather than the plan: this plan is complete on `referrals-api-4` and
+unmerged, with the `canBeWithdrawn()`-beside-`isTerminal()` reason and the no-contract-delta evidence stated
+where a next session reads it first, and the live-plans table row moved off **Planned**.
+
+**Final totals, measured:** `test` 2,306 over 300 result files and `integration` 8 over 3 — **2,314**, zero
+failures, zero errors, `./gradlew build` successful in 4m 1s. Identical to Task 2, which is the expected result
+for a documentation task: no test was added or removed. Against Task 0's baseline of **2,300** the plan is
+**+14** in total — Task 1's 9 and Task 2's 5 — with no change to the 33 caseworker and 4 judicial operations.
 
 ## Flags for the business — raised 2026-09-20, not blocking this plan
 
