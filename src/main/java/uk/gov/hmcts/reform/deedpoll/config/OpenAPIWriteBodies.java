@@ -28,6 +28,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
+import uk.gov.hmcts.reform.deedpoll.notify.EmailSlot;
 
 import java.util.Arrays;
 import java.util.LinkedHashSet;
@@ -35,19 +36,19 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Describes the eleven write bodies that springdoc cannot describe by reflection.
+ * Describes the thirteen write bodies that springdoc cannot describe by reflection.
  *
  * <p><strong>Why any of this is needed.</strong> Every write payload in this service binds as a keyed map rather
  * than as declared components, because a patch turns on the difference between an omitted field and an explicit
  * null and a record of nullable components cannot express that -- the argument is in {@code KeyedRequestBody}.
- * The consequence is that the ten JSON write bodies are classes with no fields, so springdoc reflects over them
+ * The consequence is that the twelve JSON write bodies are classes with no fields, so springdoc reflects over them
  * and publishes {@code CreateCaseRequest: {}}. The upload is worse: it takes a
  * {@code MultipartHttpServletRequest}, which springdoc does not recognise as a body at all, so that operation is
  * published with no request body whatsoever.
  *
  * <p>That matters because of what the document is for. It is published to {@code hmcts/cnp-api-docs} for
  * consumers to generate clients from, and a consumer cannot tell an empty schema from a body that takes no
- * fields. They would get ten request types with no properties and an upload they cannot call, with nothing in
+ * fields. They would get twelve request types with no properties and an upload they cannot call, with nothing in
  * the document hinting that anything is missing -- which is the failure {@code OpenAPIPublisherTest} was written
  * to prevent for the paths, reaching the bodies instead. A published document that is silently empty is worse
  * than no document, because a consumer trusts it.
@@ -57,7 +58,7 @@ import java.util.Set;
  * {@link NoteForm#MAX_NOTE_LENGTH}; the witness caps come from {@link WitnessSchemas}; the referral's caps and
  * reason vocabulary come from {@link ReferralSchemas} and {@link ReferralReason}; the judicial direction's cap
  * and decision vocabulary from {@link ReferralSchemas} and {@link MasterDecision}; the upload's direction
- * values come from {@link DocumentDirection}. A field
+ * values come from {@link DocumentDirection}; the email slots and their caps from {@link EmailSlot}. A field
  * added to the schema therefore appears in the document without anyone editing this file, which is the only way
  * a description of sixty-seven fields stays true.
  */
@@ -78,6 +79,9 @@ public class OpenAPIWriteBodies {
 
     /** The judicial direction body -- the only payload the judicial surface accepts. */
     private static final String JUDICIAL_DIRECTION = "JudicialDirectionRequest";
+
+    /** The two email bodies. Identical in shape and separate types, for the reason the DTOs give. */
+    private static final String[] EMAIL_BODIES = {"PreviewEmailRequest", "SendEmailRequest"};
 
     /** The direction's decision, named once because it is required and the resource is named after it. */
     private static final String DECISION_FIELD = "decision";
@@ -111,6 +115,7 @@ public class OpenAPIWriteBodies {
             describeSavedQueryBodies(openApi);
             describeReferralBody(openApi);
             describeDirectionBody(openApi);
+            describeEmailBodies(openApi);
             describeUploadBody(openApi);
         };
     }
@@ -473,6 +478,59 @@ public class OpenAPIWriteBodies {
             + "that moved on. The referral comes from the path and the case is resolved from it -- a judicial "
             + "URL carries no case id -- and the state, decidedBy and decisionDate come from the transition, "
             + "the token and the clock, so all of them are ignored rather than refused, as any unknown key is.");
+    }
+
+    /**
+     * The two email bodies: the slots a caseworker fills, and nothing else.
+     *
+     * <p>Generated from {@link EmailSlot} itself, so a slot added to a template appears in the document without
+     * this file being edited and carries the cap the schema actually enforces.
+     *
+     * <p><strong>{@code additionalProperties} is set false here, and it is the only body in this file where that
+     * is true of the service.</strong> Everywhere else an unknown key is stripped, so publishing {@code false}
+     * would describe a stricter API than exists. An email payload is the exception by design: the interesting
+     * unknown keys are exactly the ones a client must not send -- {@code reference_number},
+     * {@code applied_online} -- and stripping them would return success while ignoring the part that mattered.
+     * They are refused and named, so the document says so.
+     *
+     * <p>{@code judges_reason} is described as required in prose rather than declared required, because it is
+     * required <em>of the email</em> and not of the request: it is pre-populated from the judge's direction, so a
+     * body that omits it is accepted whenever the referral has one. A generated client declaring it mandatory
+     * would refuse the ordinary case, which is a caseworker sending the judge's words unaltered.
+     */
+    private void describeEmailBodies(OpenAPI openApi) {
+        for (String name : EMAIL_BODIES) {
+            Schema<?> body = schema(openApi, name);
+            if (body == null) {
+                continue;
+            }
+            body.setType("object");
+            body.setProperties(null);
+            Arrays.stream(EmailSlot.values()).forEach(slot ->
+                body.addProperty(slot.placeholder(), slotSchema(slot)));
+            body.setAdditionalProperties(false);
+            body.setDescription("The slots a caseworker fills in, and the whole of what a client may set. Every "
+                + "other value in the email -- the reference number, the applicant's former names, and which "
+                + "refund paragraph is rendered -- is resolved from the case, and a request naming one of them is "
+                + "a 400 that says which: a caseworker altering the reference an applicant is told, or flipping "
+                + "the refund branch, is a correctness and a fraud problem rather than a convenience. An unknown "
+                + "key is likewise refused and named rather than ignored, unlike every other body here. "
+                + "judges_reason is required of the email but not of the request: it is pre-populated from the "
+                + "referral's direction, so a body omitting it is accepted whenever a direction was recorded, and "
+                + "refused with that field named when none was. An over-long slot is refused rather than "
+                + "truncated, because a truncated quotation of a judge is worse than being asked to shorten one.");
+        }
+    }
+
+    /**
+     * One slot, with the cap the slot enforces rather than a number written here.
+     */
+    private Schema<?> slotSchema(EmailSlot slot) {
+        return new StringSchema()
+            .maxLength(slot.maxLength())
+            .description(slot.required()
+                             ? "Required, and pre-populated from the referral's direction when it is omitted."
+                             : "Optional. Anything the caseworker wants to add to the approved wording.");
     }
 
     /**

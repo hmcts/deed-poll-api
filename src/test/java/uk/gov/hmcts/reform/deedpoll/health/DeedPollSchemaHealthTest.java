@@ -117,7 +117,8 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
         private static final List<String> NOT_IN_THE_REFERENCE = List.of(
             "deedpoll_savedquery",
             "deedpoll_savedqueryselection",
-            "deedpoll_referral"
+            "deedpoll_referral",
+            "deedpoll_notification"
         );
 
         @Test

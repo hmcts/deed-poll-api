@@ -139,6 +139,25 @@ idam:
     totp-secret: ${DEED_POLL_API_S2S_SECRET:}
     microservice: ${S2S_SERVICE_NAME:deed_poll_api}
 
+notify:
+  # GOV.UK Notify. No Notify service exists for deed poll yet -- no API key, no templates, no template IDs --
+  # so everything here is either the real public endpoint or a placeholder, and nothing can send until
+  # notify-0 provisions them. See NotifyProperties.
+  #
+  # The real base URL as the default, because that is where every provisioned environment points; a test
+  # overrides it to StubNotify. Harmless while the key is empty: nothing can be sent without one.
+  api-url: ${NOTIFY_API_URL:https://api.notifications.service.gov.uk}
+  # A secret, with no working default, for the reason idam.s2s-auth.totp-secret has none. It is not in the
+  # `deed-poll` vault yet, which is why charts/deed-poll-api/values.yaml names no Notify secret -- a chart
+  # naming a secret the vault does not hold fails to deploy. notify-0 adds both ends together.
+  api-key: ${NOTIFY_API_KEY:}
+  templates:
+    # The Notify template UUID, which differs per environment and so is configuration rather than a constant
+    # in Java. DEED_POLL_PLACEHOLDER is the same literal deedpoll.ccd.case-type-id uses, so one grep lists
+    # every external identifier this service is still waiting on. With it set, Notify answers a preview with
+    # 400 and a send with 403 -- both permanent, which is the correct answer to "this template does not exist".
+    application-rejected: ${NOTIFY_TEMPLATE_APPLICATION_REJECTED:DEED_POLL_PLACEHOLDER}
+
 deedpoll:
   ccd:
     # The one place a CCD case type is named, and deliberately not the real value: the case type and

@@ -12,9 +12,11 @@ import org.springframework.web.multipart.MultipartException;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
+import uk.gov.hmcts.reform.deedpoll.domain.IncompleteDataError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
+import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 
 import java.util.List;
@@ -24,8 +26,10 @@ import java.util.List;
  *
  * <p>Ported from {@code apps/api/src/errors.ts}, and the mapping is that file's: 400 for
  * {@link InvalidInputError}, 404 for {@link NotFoundError}, 401 for {@link UnauthorizedError}, 403 for
- * {@link ForbiddenError}, 409 for {@link ConflictError}. Doing it in one place rather than per handler is why
- * every controller can call the domain and throw, and why a missing case cannot answer 404 on one route and
+ * {@link ForbiddenError}, 409 for {@link ConflictError}. Two are not the reference's, because the reference sent
+ * no email and so had nothing to answer them for: 422 for {@link IncompleteDataError} and 502 for
+ * {@link UpstreamFailureError}, each argued on the error itself. Doing it in one place rather than per handler is
+ * why every controller can call the domain and throw, and why a missing case cannot answer 404 on one route and
  * 500 on another.
  *
  * <p>This is also what keeps the domain free of HTTP. {@code NotFoundError} is not a
@@ -95,6 +99,33 @@ public class DomainErrorHandler {
     @ExceptionHandler(ConflictError.class)
     public ResponseEntity<ApiError> conflict(ConflictError error) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiError.of(error.getMessage()));
+    }
+
+    /**
+     * The request is fine and the record it is about is missing something the operation needs.
+     *
+     * <p>422 rather than 409 or 400, and the argument is on {@link IncompleteDataError}: there is nothing in the
+     * payload to correct and nothing that will change by retrying, because the missing value is a column of the
+     * stored record. The fields are published exactly as a 400's are -- they are what lets a client say which
+     * column is empty rather than "something went wrong".
+     */
+    @ExceptionHandler(IncompleteDataError.class)
+    public ResponseEntity<ApiError> incompleteData(IncompleteDataError error) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+            .body(ApiError.of(error.getMessage(), error.errors()));
+    }
+
+    /**
+     * A service this one depends on refused or could not answer.
+     *
+     * <p>502 rather than 500, so the answer names where the failure was: this service worked and its dependency
+     * did not. The message is the domain's own composed text, because an outbound client's exception message
+     * contains its dependency's response -- the point {@link #unreadableBody()} makes about the framework's
+     * messages, with more at stake.
+     */
+    @ExceptionHandler(UpstreamFailureError.class)
+    public ResponseEntity<ApiError> upstreamFailure(UpstreamFailureError error) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(ApiError.of(error.getMessage()));
     }
 
     /**

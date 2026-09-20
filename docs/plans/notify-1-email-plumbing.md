@@ -499,7 +499,7 @@ the javadoc pattern that explains why a read writes.
   `nextAttemptAt`; a drain with nothing due sends nothing. Container-free: the classification wiring, and that
   the Notify `reference` is the row id.
 
-- [ ] A pending row sends through `StubNotify` and records its provider id, a 400 fails terminally, a 500
+- [x] A pending row sends through `StubNotify` and records its provider id, a 400 fails terminally, a 500
       retries with backoff, the drain is reachable from a caseworker read whose javadoc explains the mutation,
       no test touches real Notify, and `./gradlew build` green
 
@@ -519,7 +519,12 @@ the javadoc pattern that explains why a read writes.
   `INTEGRATION_TESTS_ENABLED=false`. Re-measure `build.gradle`'s exclusion comment if this plan adds a
   container-backed class, as that comment instructs.
 
-- [ ] Personalisation-key, recipient and case-scoping rules stated container-free, the ArchUnit rule proves the
+Measured 2026-09-20: the branch baseline before Task 1 was **2,098 `test` + 8 `integration`**; after Task 6 it
+is **2,281 `test` + 8 `integration`**, of which **1,415** run with
+`INTEGRATION_TESTS_ENABLED=false`. Thirty test classes need Docker and account for the excluded 866; the new
+one is `NotificationOutboxConcurrencyTest`.
+
+- [x] Personalisation-key, recipient and case-scoping rules stated container-free, the ArchUnit rule proves the
       client has one route, two concurrent drains send one email, `./gradlew build` green from cold, checkstyle
       clean on five source sets, and both totals recorded with the `INTEGRATION_TESTS_ENABLED=false` figure
 
@@ -539,6 +544,11 @@ index predicate, and `V11__notifications.sql`.
   (`"PERMANENT: 403 ..."`), so predicating an index on it would make a `LIKE` load-bearing. Prefer a dedicated
   column — the taxonomy verdict stored as its own value when the row is settled — and a partial index of the
   shape `WHERE "referralId" IS NOT NULL AND NOT ("state" = 'Failed' AND <verdict> = 'PERMANENT')`.
+  **Implemented refinement:** V12 uses
+  `("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT')`. The sketch above is unsafe when
+  the verdict is null: SQL's `NOT NULL` is still null, so a failed row written by an older application during
+  a rolling deployment would disappear from the index and permit a duplicate. `IS DISTINCT FROM` makes null
+  mean *unknown and still blocking*; only an explicit `PERMANENT` leaves the slot.
 - **`enqueue`'s `ON CONFLICT` target must be updated to repeat the new predicate verbatim.** Postgres infers a
   partial index by matching its predicate, so a target that does not match the new index does not compile
   against the schema at all. This is the same trap the existing javadoc documents.
@@ -551,7 +561,7 @@ index predicate, and `V11__notifications.sql`.
   double-click rule is untouched. Container-free: that settling a permanent failure records the verdict the
   index reads.
 
-- [ ] A permanently failed email can be enqueued again and a technically failed one still cannot, the new
+- [x] A permanently failed email can be enqueued again and a technically failed one still cannot, the new
       index ships as `V12` with `V11` unedited, `enqueue`'s conflict target matches the new predicate, the
       failed attempt survives as history, and `./gradlew build` green
 

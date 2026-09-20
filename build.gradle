@@ -84,15 +84,24 @@ tasks.withType(Test).configureEach {
 
 test {
   useJUnitPlatform {
-    // The CNP VM agent has no Docker daemon. 27 src/test classes need Testcontainers -- 26 inherit
+    // The CNP VM agent has no Docker daemon. 30 src/test classes need Testcontainers -- 29 inherit
     // the tag from AbstractPostgresContainerTest, SchemaConformanceTest carries it directly -- and
-    // they account for 821 of the 2,098 tests (measured, 2026-09-18 after the judicial-surface plan,
-    // which added the 27th class: JudicialReferralControllerTest, the first one holding a judicial
-    // token; it was 773 of 1,975 across 26 classes after the currentReferralState plan, 741 of 1,813
-    // after the referrals plan, 701 of 1,688 across 23 before it, and 609 of 1,488 across 22 on
-    // 2026-09-15). Excluding them keeps the other 1,277 running in CI -- the judicial role gate and
-    // visibility rule among them, stated container-free in JudicialSecurityTest for that reason --
-    // instead of losing the whole suite to a static initialiser.
+    // they account for 867 of the 2,282 tests (measured, 2026-09-20 after notify-1 task 7, which
+    // extends NotificationRepositoryTest with the permanent-versus-uncertain resend boundary while
+    // leaving the Docker-free count at 1,415); it was 866 of 2,281 after task 6, which added the 30th
+    // class: NotificationOutboxConcurrencyTest, proving two real transactions send one row once; it
+    // was 865 of 2,276 after task 5, whose sender tests are container-free and whose HTTP send-outcome
+    // tests extend the existing CaseworkerEmailControllerTest; it was 860 of 2,267 after
+    // task 4, which added the 29th class: CaseworkerEmailControllerTest, where the three email routes
+    // are asserted over real HTTP against a real Postgres and a stub Notify; task 3 added no
+    // container-backed class and task 2 added the 28th, NotificationRepositoryTest, where the outbox's
+    // conditional claim is proved exclusive against a real Postgres; it was 831 of 2,218 across 28
+    // classes after task 3, 821 of 2,098 across 27 after the judicial-surface plan, 773 of 1,975 across
+    // 26 after the currentReferralState plan, 741 of 1,813 after the referrals plan, 701 of 1,688
+    // across 23 before it, and 609 of 1,488 across 22 on 2026-09-15). Excluding them keeps the other 1,415
+    // running in CI -- the judicial role gate, the visibility rule, the notification outbox's whole
+    // state machine and the email operations' own rules among them, each stated container-free for
+    // that reason -- instead of losing the whole suite to a static initialiser.
     // Re-measure rather than trusting these figures: they move whenever a container-backed class is
     // added. Unset means exclude nothing, so a local run is unchanged.
     // STOPGAP: delete this when a Docker-capable agent exists.
@@ -215,6 +224,13 @@ dependencies {
     OpenFeign is on the classpath to build it. Version pinned as pcs-api pins it.
   */
   implementation group: 'org.springframework.cloud', name: 'spring-cloud-starter-openfeign', version: '4.3.3'
+
+  /*
+    GOV.UK Notify. Pinned as pcs-api pins it (`apps/pcs/pcs-api/build.gradle:437`); `apps/pcs/CLAUDE.md`
+    says 6.0.0 and is stale. Nothing sends yet: there is no Notify service for deed poll, so the API key
+    and the template IDs are placeholders and every test talks to StubNotify. See docs/plans/notify-1.
+  */
+  implementation group: 'uk.gov.service.notify', name: 'notifications-java-client', version: '6.2.0-RELEASE'
 
   implementation group: 'org.flywaydb', name: 'flyway-core'
   runtimeOnly group: 'org.flywaydb', name: 'flyway-database-postgresql'
