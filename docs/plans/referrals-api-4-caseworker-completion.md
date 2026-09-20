@@ -134,7 +134,7 @@ and OpenAPI publisher assertions. Confirm:
 
 Record the build/test baseline. Stop on any contract or state-machine drift.
 
-- [ ] Current referral implementation and OpenAPI reconciled; baseline recorded; no files changed
+- [x] Current referral implementation and OpenAPI reconciled; baseline recorded; no files changed
 
 #### Reconciliation performed 2026-09-20, before the run — read this rather than repeating it
 
@@ -156,6 +156,21 @@ from it too. Narrowing `isTerminal()` — the obvious-looking way to make `Decid
 therefore also let a case hold a second referral alongside a `Decided` one. Add `canBeWithdrawn()` and leave
 `isTerminal()` exactly as it is; the enum's own Javadoc ("a referral may only be withdrawn while it is
 non-terminal") is then the wording to correct, not the method.
+
+**Re-verified on `referrals-api-4` at `65da02a`, 2026-09-20.** Every row of the table above still held, and
+the baseline re-measured to the same totals: `test` 2,292 over 300 result files and `integration` 8 over 3 —
+**2,300**, zero failures, zero errors, `./gradlew build` green.
+
+The trap above is in fact **wider than two callers**, and the count is the thing to correct rather than the
+conclusion. `ReferralState.isTerminal()` is asked by `ReferralService.LIVE_STATES`, by
+`CurrentReferralState.of` (which is what makes the denormalised column NULL for a terminal state), and
+through Javadoc-linked contracts by `ReferralRepository` and `DeedPollRepository`, whose live-state sets the
+callers pass in are derived from it — `DeedPollRepositoryTest`, `ReferralRepositoryTest`,
+`CurrentReferralStateTest`, `ReferralStateTest` and `CaseworkerReferralControllerTest` all derive their
+parameter sets from it as well. So narrowing it would move the one-referral-per-case guard, the read-model
+column *and* several test parameter sets at once. `canBeWithdrawn()` as a second, independent predicate
+remains the right shape; `CaseworkerReferralControllerTest:364-368` is the one existing parameter set that
+derives withdrawable states from `isTerminal()` and therefore the one Task 2 must repoint.
 
 ### Task 1: Tighten the domain withdrawal rule
 
