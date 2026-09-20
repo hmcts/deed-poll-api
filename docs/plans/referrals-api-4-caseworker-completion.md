@@ -98,6 +98,28 @@ This is a service-rule change over existing states and operations:
 The admin mock must adopt the same changed withdrawal behaviour in its companion plan, but the published
 wire contract remains identical.
 
+## Validation Commands
+
+**These run after every task, so everything here must be green after every task — not only at the end.**
+
+```bash
+export TESTCONTAINERS_RYUK_DISABLED=true
+./gradlew build
+```
+
+`build` is compile + checkstyle across the source sets + `test` + `integration`, so `OpenAPIPublisherTest` and
+`NamespaceSeparationSecurityTest` — the two that would catch an accidental contract or namespace change — both
+run here. That matters to this plan more than to most, because decision 6 is that there is **no** contract
+delta: a passing `OpenAPIPublisherTest` is the evidence for it.
+
+**This plan is not stacked** — it branches from `master`, where the referral state machine and the closure
+transition already exist and notify-1/notify-5 are merged. **Measure the baseline before Task 1** by summing
+`tests="…"` across `build/test-results/{test,integration}/*.xml`, and record it next to the final count in
+Task 3 rather than copying a total from an earlier plan.
+
+**A worker or container startup timeout is an environment failure, not a code failure** — re-run before
+investigating.
+
 ## Tasks
 
 ### Task 0: Reconcile the current implementation
@@ -113,6 +135,27 @@ and OpenAPI publisher assertions. Confirm:
 Record the build/test baseline. Stop on any contract or state-machine drift.
 
 - [ ] Current referral implementation and OpenAPI reconciled; baseline recorded; no files changed
+
+#### Reconciliation performed 2026-09-20, before the run — read this rather than repeating it
+
+Checked against source on `master` at `135bb1a`. Every premise in this plan held; nothing had drifted.
+
+| Premise | Verified |
+|---|---|
+| Withdrawal accepts `Open`, `Claimed`, `Decided` | `ReferralService.withdrawReferral` guards on `referral.getState().isTerminal()` |
+| Closure accepts only `Decided` | `ReferralService.close` guards on `!= ReferralState.Decided` |
+| Both refresh the denormalised column | both call `refreshCurrentReferralState(deedPollId)` |
+| No newer work moved the state machine | five members unchanged in `ReferralState`; 33 caseworker + 4 judicial operations |
+
+**Baseline, measured not copied:** `test` 2,292 and `integration` 8 — **2,300**, zero failures, across 300 +
+3 result files, with `./gradlew build` green from `TESTCONTAINERS_RYUK_DISABLED=true`.
+
+**The trap in decision 1, stated with its location.** `ReferralState.isTerminal()` has **two** callers, and
+only one of them is withdrawal: `ReferralService.LIVE_STATES` derives the one-live-referral-per-case guard
+from it too. Narrowing `isTerminal()` — the obvious-looking way to make `Decided` unwithdrawable — would
+therefore also let a case hold a second referral alongside a `Decided` one. Add `canBeWithdrawn()` and leave
+`isTerminal()` exactly as it is; the enum's own Javadoc ("a referral may only be withdrawn while it is
+non-terminal") is then the wording to correct, not the method.
 
 ### Task 1: Tighten the domain withdrawal rule
 
@@ -168,6 +211,19 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 Record final unit/integration totals and compare them with Task 0's baseline.
 
 - [ ] Documentation reflects the revised rule; full build green; final test totals recorded
+
+## Flags for the business — raised 2026-09-20, not blocking this plan
+
+1. **A `Decided` referral that should never be actioned has no honest exit.** `ReferralService.LIVE_STATES`
+   counts `Decided` as live, so after decision 1 a case holding one can neither withdraw it nor raise a
+   replacement: the only remaining transition is `close`, which records that the direction *was actioned*.
+   For the normal path that is exactly right. For a referral raised in error, or a direction made moot
+   because the application itself moved on, the only action available records something untrue.
+
+   Steve's decision, 2026-09-20: **implement decision 1 as written and flag this**, rather than inventing an
+   escape hatch. A withdrawal-with-reason for `Decided`, or a distinct "no longer required" terminal state,
+   would each need a business rule for its wording and audit, and neither has one. Do not add either in this
+   plan.
 
 ## Out of scope
 
