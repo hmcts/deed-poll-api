@@ -3,6 +3,9 @@
 > **Follow-up:** `../referrals-api-4-caseworker-completion.md` preserves `Decided → Closed` but prevents a
 > caseworker withdrawing a `Decided` referral. Its companion admin plan exposes this plan's existing closure
 > operation as the missing caseworker completion journey.
+>
+> `../referrals-api-5-lifecycle-case-notes.md` supersedes this plan's deliberate omission of notes for claim,
+> direction and closure after business testing required every lifecycle transition in the case timeline.
 
 ## Overview
 
