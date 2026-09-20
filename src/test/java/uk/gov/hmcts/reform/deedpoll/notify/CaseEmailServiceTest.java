@@ -352,7 +352,7 @@ class CaseEmailServiceTest {
                 // The taxonomy's verdict, so the difference between "wrong request" and "Notify is unwell" is
                 // legible to whoever reads the answer.
                 .hasMessageContaining(NotificationFailure.PERMANENT.name())
-                // And nothing the client said: its message quotes the request that was made.
+                // And nothing the client said: its message contains the dependency's response.
                 .hasMessageNotContaining("secret");
         }
 

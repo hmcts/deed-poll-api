@@ -402,7 +402,7 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         authorised(post(previewOf(refusedCase())), "{}")
             .andExpect(status().isBadGateway())
             .andExpect(jsonPath("$.error").value(Matchers.containsString("PERMANENT")))
-            // Nothing the client library said reaches the caller: its message quotes the request that was made.
+            // Nothing the client library said reaches the caller: its message contains Notify's response.
             .andExpect(jsonPath("$.error").value(Matchers.not(
                 Matchers.containsString(StubNotify.SERVICE_ID))));
 

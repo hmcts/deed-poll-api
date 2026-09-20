@@ -519,7 +519,12 @@ the javadoc pattern that explains why a read writes.
   `INTEGRATION_TESTS_ENABLED=false`. Re-measure `build.gradle`'s exclusion comment if this plan adds a
   container-backed class, as that comment instructs.
 
-- [ ] Personalisation-key, recipient and case-scoping rules stated container-free, the ArchUnit rule proves the
+Measured 2026-09-20: the branch baseline before Task 1 was **2,098 `test` + 8 `integration`**; after Task 6 it
+is **2,281 `test` + 8 `integration`**, of which **1,415** run with
+`INTEGRATION_TESTS_ENABLED=false`. Thirty test classes need Docker and account for the excluded 866; the new
+one is `NotificationOutboxConcurrencyTest`.
+
+- [x] Personalisation-key, recipient and case-scoping rules stated container-free, the ArchUnit rule proves the
       client has one route, two concurrent drains send one email, `./gradlew build` green from cold, checkstyle
       clean on five source sets, and both totals recorded with the `INTEGRATION_TESTS_ENABLED=false` figure
 

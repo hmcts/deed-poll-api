@@ -18,8 +18,8 @@ package uk.gov.hmcts.reform.deedpoll.domain;
  *
  * <p><strong>The message is composed here, never copied from the dependency.</strong> Nothing a client or a
  * library said about a failed call reaches a caller: {@code DomainErrorHandler} makes the same point about
- * framework messages, and the stake is higher for an outbound call, whose exception text quotes the request that
- * was made. The full detail is logged by whoever throws this.
+ * framework messages, and the stake is higher for an outbound call, whose exception text contains the
+ * dependency's response. The full detail is logged by whoever throws this.
  */
 public class UpstreamFailureError extends RuntimeException {
 

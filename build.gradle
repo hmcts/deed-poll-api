@@ -84,18 +84,19 @@ tasks.withType(Test).configureEach {
 
 test {
   useJUnitPlatform {
-    // The CNP VM agent has no Docker daemon. 29 src/test classes need Testcontainers -- 28 inherit
+    // The CNP VM agent has no Docker daemon. 30 src/test classes need Testcontainers -- 29 inherit
     // the tag from AbstractPostgresContainerTest, SchemaConformanceTest carries it directly -- and
-    // they account for 865 of the 2,276 tests (measured, 2026-09-19 after notify-1 task 5, whose
-    // sender tests are container-free and whose HTTP send-outcome tests extend the existing
-    // CaseworkerEmailControllerTest); it was 860 of 2,267 after task 4, which added the 29th class:
-    // CaseworkerEmailControllerTest, where the three email routes are asserted over real HTTP against
-    // a real Postgres and a stub Notify; task 3 added no container-backed class and task 2 added the
-    // 28th, NotificationRepositoryTest, where the outbox's conditional claim is proved exclusive
-    // against a real Postgres; it was 831 of 2,218 across 28 classes after task 3, 821 of 2,098 across
-    // 27 after the judicial-surface plan, 773 of 1,975 across 26 after the currentReferralState plan,
-    // 741 of 1,813 after the referrals plan, 701 of 1,688 across 23 before it, and 609 of 1,488 across
-    // 22 on 2026-09-15). Excluding them keeps the other 1,411
+    // they account for 866 of the 2,281 tests (measured, 2026-09-20 after notify-1 task 6, which
+    // added the 30th class: NotificationOutboxConcurrencyTest, proving two real transactions send one
+    // row once); it was 865 of 2,276 after task 5, whose sender tests are container-free and whose HTTP
+    // send-outcome tests extend the existing CaseworkerEmailControllerTest; it was 860 of 2,267 after
+    // task 4, which added the 29th class: CaseworkerEmailControllerTest, where the three email routes
+    // are asserted over real HTTP against a real Postgres and a stub Notify; task 3 added no
+    // container-backed class and task 2 added the 28th, NotificationRepositoryTest, where the outbox's
+    // conditional claim is proved exclusive against a real Postgres; it was 831 of 2,218 across 28
+    // classes after task 3, 821 of 2,098 across 27 after the judicial-surface plan, 773 of 1,975 across
+    // 26 after the currentReferralState plan, 741 of 1,813 after the referrals plan, 701 of 1,688
+    // across 23 before it, and 609 of 1,488 across 22 on 2026-09-15). Excluding them keeps the other 1,415
     // running in CI -- the judicial role gate, the visibility rule, the notification outbox's whole
     // state machine and the email operations' own rules among them, each stated container-free for
     // that reason -- instead of losing the whole suite to a static initialiser.

@@ -120,7 +120,7 @@ public class DomainErrorHandler {
      *
      * <p>502 rather than 500, so the answer names where the failure was: this service worked and its dependency
      * did not. The message is the domain's own composed text, because an outbound client's exception message
-     * quotes the request that was made -- the point {@link #unreadableBody()} makes about the framework's
+     * contains its dependency's response -- the point {@link #unreadableBody()} makes about the framework's
      * messages, with more at stake.
      */
     @ExceptionHandler(UpstreamFailureError.class)

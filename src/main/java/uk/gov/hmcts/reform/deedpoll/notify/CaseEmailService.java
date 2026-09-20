@@ -148,8 +148,8 @@ public class CaseEmailService {
             return EmailPreview.from(notify.generateTemplatePreview(templateId, composed.personalisation()));
         } catch (NotificationClientException refused) {
             NotificationFailure verdict = NotificationFailure.classify(refused);
-            // Logged in full here and summarised in the answer: the client's message quotes the request that was
-            // made, and this body is rendered by whatever is on the other end.
+            // Logged in full here and summarised in the answer: the client's message contains Notify's response,
+            // and this body is rendered by whatever is on the other end.
             LOG.warn("Notify would not render {} for case {} ({}, status {})",
                      template.key(), deedPollId, verdict, refused.getHttpResult(), refused);
             throw new UpstreamFailureError("GOV.UK Notify could not render the " + template.key()
