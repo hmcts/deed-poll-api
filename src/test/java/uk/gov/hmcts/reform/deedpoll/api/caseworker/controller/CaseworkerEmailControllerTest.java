@@ -298,7 +298,7 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.history[0].template").value(REJECTED))
                 .andExpect(jsonPath("$.history[0].templateName").value("Application rejected"))
                 .andExpect(jsonPath("$.history[0].recipient").value(APPLICANT_EMAIL))
-                .andExpect(jsonPath("$.history[0].state").value("Sent"))
+                .andExpect(jsonPath("$.history[0].notifyState").value("Sent"))
                 .andExpect(jsonPath("$.history[0].subject").value("Your application has been rejected"))
                 .andExpect(jsonPath("$.history[0].body").value("Because the Master said so."))
                 .andExpect(jsonPath("$.history[0].documents").isEmpty())

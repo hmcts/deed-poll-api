@@ -48,6 +48,7 @@ class CaseEmailsResponseTest {
             .satisfies(entry -> assertThat(entry.template()).isEqualTo(template.key()));
         assertThat(response.history()).singleElement().satisfies(entry -> {
             assertThat(entry.id()).isEqualTo(correspondence.id().toString());
+            assertThat(entry.notifyState()).isEqualTo(NotificationState.Sent);
             assertThat(entry.subject()).isEqualTo(correspondence.subject());
             assertThat(entry.body()).isEqualTo(correspondence.body());
         });

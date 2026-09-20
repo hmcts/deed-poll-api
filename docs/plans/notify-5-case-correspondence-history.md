@@ -267,9 +267,13 @@ Read first: `NotificationSecurityTest`, and decisions 9, 10 and 13.
 - Confirm the whole chain by hand once against a real case: send, drain, read, and check the body shown is
   the body Notify rendered.
 
-- [ ] State wording says what the service actually knows, cross-case leakage is covered by test, the chain is
+- [x] State wording says what the service actually knows, cross-case leakage is covered by test, the chain is
       confirmed end to end, `./gradlew build` green from cold, checkstyle clean on five source sets, and both
       totals recorded
+
+Completed with 2,292 unit tests and 8 integration tests in the full build; the Docker-free CI path runs
+1,424 unit tests. `CaseworkerEmailControllerTest` exercises send, drain and read against a real Postgres case
+and `StubNotify`, asserting that the history body is the wording returned by Notify.
 
 ---
 

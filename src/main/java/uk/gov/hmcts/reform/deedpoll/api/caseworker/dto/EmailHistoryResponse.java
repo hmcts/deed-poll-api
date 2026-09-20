@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 import uk.gov.hmcts.reform.deedpoll.notify.CaseCorrespondence;
 
@@ -18,10 +19,10 @@ import java.util.List;
  * @param createdOn when the caseworker requested the send
  * @param createdBy the caseworker who requested it
  * @param recipient the email address frozen when the row was enqueued
- * @param state the outbox state
+ * @param notifyState the outbox state, where Sent means accepted by Notify rather than delivered
  * @param failureReason the recorded failure, or null when none exists
  * @param subject the rendered subject, or null when no accepted send was captured
- * @param body the rendered plain-text wording, or null when no accepted send was captured
+ * @param body the rendered plain-text wording, not the branded HTML email, or null when none was captured
  * @param documents case documents carried by the email
  */
 public record EmailHistoryResponse(
@@ -31,9 +32,11 @@ public record EmailHistoryResponse(
     LocalDateTime createdOn,
     String createdBy,
     String recipient,
-    NotificationState state,
+    @Schema(description = "Outbox state. Sent means accepted by GOV.UK Notify; it does not mean delivered.")
+    NotificationState notifyState,
     String failureReason,
     String subject,
+    @Schema(description = "The wording GOV.UK Notify rendered as plain text. The applicant received branded HTML.")
     String body,
     List<CorrespondenceDocumentResponse> documents
 ) {
