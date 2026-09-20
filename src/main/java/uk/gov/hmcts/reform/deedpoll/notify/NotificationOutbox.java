@@ -186,6 +186,8 @@ public class NotificationOutbox {
                     // the answer to the send.
                     row.setTemplateVersion(success.templateVersion());
                 }
+                row.setSubject(success.subject());
+                row.setBody(success.body());
                 // Cleared, not kept: a row that succeeded on its third attempt should not still read as
                 // though the second attempt's failure were its verdict.
                 row.setFailureReason(null);

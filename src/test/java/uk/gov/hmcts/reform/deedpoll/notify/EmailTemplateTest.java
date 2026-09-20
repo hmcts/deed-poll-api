@@ -41,6 +41,12 @@ class EmailTemplateTest {
             assertThat(EmailTemplate.APPLICATION_REJECTED.key()).isEqualTo("application-rejected");
         }
 
+        @Test
+        @DisplayName("the display name is explicit rather than derived from a stored enum member")
+        void displayNameIsForCaseworkers() {
+            assertThat(EmailTemplate.APPLICATION_REJECTED.displayName()).isEqualTo("Application rejected");
+        }
+
         @ParameterizedTest
         @EnumSource(EmailTemplate.class)
         @DisplayName("every template's key round trips, and no two share one")
@@ -77,6 +83,12 @@ class EmailTemplateTest {
         void slotsAreTheCaseworkersTwo() {
             assertThat(EmailTemplate.APPLICATION_REJECTED.slots())
                 .containsExactly(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES);
+        }
+
+        @Test
+        @DisplayName("the rejection email carries no documents")
+        void rejectedEmailCarriesNoDocuments() {
+            assertThat(EmailTemplate.APPLICATION_REJECTED.documentKeys()).isEmpty();
         }
 
         @Test

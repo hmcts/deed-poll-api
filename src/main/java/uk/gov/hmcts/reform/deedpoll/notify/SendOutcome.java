@@ -26,8 +26,11 @@ public sealed interface SendOutcome {
      * @param templateVersion the version of the Notify template that rendered what went out, or null if Notify
      *     named none. This is where "under which wording was this applicant told" becomes answerable: the row was
      *     enqueued without asking Notify to render anything, so the version only exists once a send is accepted
+     * @param subject the subject Notify rendered, or null if it named none
+     * @param body the plain-text body Notify rendered, or null if it named none
      */
-    record Sent(UUID providerNotificationId, Integer templateVersion) implements SendOutcome {
+    record Sent(UUID providerNotificationId, Integer templateVersion, String subject, String body)
+        implements SendOutcome {
     }
 
     /**
@@ -46,14 +49,26 @@ public sealed interface SendOutcome {
      * <p>Without a template version, for a Notify that named the notification but not the wording.
      */
     static SendOutcome sent(UUID providerNotificationId) {
-        return new Sent(providerNotificationId, null);
+        return new Sent(providerNotificationId, null, null, null);
     }
 
     /**
      * {@link Sent}, with the wording Notify says it rendered.
      */
     static SendOutcome sent(UUID providerNotificationId, Integer templateVersion) {
-        return new Sent(providerNotificationId, templateVersion);
+        return new Sent(providerNotificationId, templateVersion, null, null);
+    }
+
+    /**
+     * {@link Sent}, with the exact wording Notify says it rendered.
+     */
+    static SendOutcome sent(
+        UUID providerNotificationId,
+        Integer templateVersion,
+        String subject,
+        String body
+    ) {
+        return new Sent(providerNotificationId, templateVersion, subject, body);
     }
 
     /**

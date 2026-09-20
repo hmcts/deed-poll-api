@@ -134,6 +134,21 @@ public class Notification {
     private UUID providerNotificationId;
 
     /**
+     * The exact subject Notify returned when it accepted the send. Null until and unless the row is sent.
+     */
+    @Column(name = "subject")
+    private String subject;
+
+    /**
+     * Notify's plain-text rendering of the accepted email. Null until and unless the row is sent.
+     *
+     * <p>This is correspondence history and may contain applicant and caseworker-authored content. It must
+     * never be logged.
+     */
+    @Column(name = "body")
+    private String body;
+
+    /**
      * The taxonomy's verdict and whatever Notify said, kept on a row still waiting as well as on a
      * failed one -- "waiting, and here is why the last attempt did not work" is a question the Email
      * tab asks.

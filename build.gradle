@@ -86,9 +86,11 @@ test {
   useJUnitPlatform {
     // The CNP VM agent has no Docker daemon. 30 src/test classes need Testcontainers -- 29 inherit
     // the tag from AbstractPostgresContainerTest, SchemaConformanceTest carries it directly -- and
-    // they account for 867 of the 2,282 tests (measured, 2026-09-20 after notify-1 task 7, which
-    // extends NotificationRepositoryTest with the permanent-versus-uncertain resend boundary while
-    // leaving the Docker-free count at 1,415); it was 866 of 2,281 after task 6, which added the 30th
+    // they account for 868 of the 2,292 tests (measured, 2026-09-20 after notify-5 task 4, which
+    // extends CaseworkerEmailControllerTest with the send-drain-read correspondence chain while
+    // leaving 1,424 Docker-free tests); it was 867 of 2,282 after notify-1 task 7, which extended
+    // NotificationRepositoryTest with the permanent-versus-uncertain resend boundary; it was 866 of
+    // 2,281 after task 6, which added the 30th
     // class: NotificationOutboxConcurrencyTest, proving two real transactions send one row once; it
     // was 865 of 2,276 after task 5, whose sender tests are container-free and whose HTTP send-outcome
     // tests extend the existing CaseworkerEmailControllerTest; it was 860 of 2,267 after
@@ -98,7 +100,7 @@ test {
     // conditional claim is proved exclusive against a real Postgres; it was 831 of 2,218 across 28
     // classes after task 3, 821 of 2,098 across 27 after the judicial-surface plan, 773 of 1,975 across
     // 26 after the currentReferralState plan, 741 of 1,813 after the referrals plan, 701 of 1,688
-    // across 23 before it, and 609 of 1,488 across 22 on 2026-09-15). Excluding them keeps the other 1,415
+    // across 23 before it, and 609 of 1,488 across 22 on 2026-09-15). Excluding them keeps the other 1,424
     // running in CI -- the judicial role gate, the visibility rule, the notification outbox's whole
     // state machine and the email operations' own rules among them, each stated container-free for
     // that reason -- instead of losing the whole suite to a static initialiser.

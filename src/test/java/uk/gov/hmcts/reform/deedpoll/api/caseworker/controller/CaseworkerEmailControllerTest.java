@@ -220,14 +220,21 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         void appliesAfterARefusal() throws Exception {
             authorised(get("/caseworker/cases/" + refusedCase() + "/emails"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(EmailTemplate.values().length))
-                .andExpect(jsonPath("$[0].template").value(REJECTED))
-                .andExpect(jsonPath("$[0].applicable").value(true))
+                .andExpect(jsonPath("$.availability.length()").value(EmailTemplate.values().length))
+                .andExpect(jsonPath("$.availability[0].template").value(REJECTED))
+                .andExpect(jsonPath("$.availability[0].applicable").value(true))
                 // No reason when it applies: the field exists to explain a refusal, not to be filled in anyway.
-                .andExpect(jsonPath("$[0].reason").doesNotExist())
+                .andExpect(jsonPath("$.availability[0].reason").doesNotExist())
                 // Provisioned because this context points at the stub. Every real environment answers false until
                 // notify-0 lands, which is what a tab should say instead of offering the button.
-                .andExpect(jsonPath("$[0].provisioned").value(true));
+                .andExpect(jsonPath("$.availability[0].provisioned").value(true))
+                .andExpect(jsonPath("$.history").isEmpty())
+                .andExpect(jsonPath("$.slotDefaults[0].template").value(REJECTED))
+                .andExpect(jsonPath("$.slotDefaults[0].fields.judges_reason").value(DIRECTION))
+                .andExpect(jsonPath("$.slotDefaults[0].fields.additional_notes").value(""));
+
+            assertThat(NOTIFY.previewRequests()).isEmpty();
+            assertThat(NOTIFY.emailRequests()).isEmpty();
         }
 
         @Test
@@ -235,14 +242,18 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         void publishesTheSlots() throws Exception {
             authorised(get("/caseworker/cases/" + refusedCase() + "/emails"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].slots.length()").value(EmailSlot.values().length))
-                .andExpect(jsonPath("$[0].slots[0].name").value(EmailSlot.JUDGES_REASON.placeholder()))
-                .andExpect(jsonPath("$[0].slots[0].required").value(true))
+                .andExpect(jsonPath("$.availability[0].slots.length()").value(EmailSlot.values().length))
+                .andExpect(jsonPath("$.availability[0].slots[0].name")
+                               .value(EmailSlot.JUDGES_REASON.placeholder()))
+                .andExpect(jsonPath("$.availability[0].slots[0].required").value(true))
                 // ReferralSchemas' own cap, so a direction that was recordable is always sendable unedited.
-                .andExpect(jsonPath("$[0].slots[0].maxLength").value(ReferralSchemas.MAX_DIRECTIONS_LENGTH))
-                .andExpect(jsonPath("$[0].slots[1].name").value(EmailSlot.ADDITIONAL_NOTES.placeholder()))
-                .andExpect(jsonPath("$[0].slots[1].required").value(false))
-                .andExpect(jsonPath("$[0].slots[1].maxLength").value(ReferralSchemas.MAX_NOTES_LENGTH));
+                .andExpect(jsonPath("$.availability[0].slots[0].maxLength")
+                               .value(ReferralSchemas.MAX_DIRECTIONS_LENGTH))
+                .andExpect(jsonPath("$.availability[0].slots[1].name")
+                               .value(EmailSlot.ADDITIONAL_NOTES.placeholder()))
+                .andExpect(jsonPath("$.availability[0].slots[1].required").value(false))
+                .andExpect(jsonPath("$.availability[0].slots[1].maxLength")
+                               .value(ReferralSchemas.MAX_NOTES_LENGTH));
         }
 
         @Test
@@ -252,10 +263,12 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
             // caseworker asking somebody why the refusal letter is missing.
             authorised(get("/caseworker/cases/" + newCase() + "/emails"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(EmailTemplate.values().length))
-                .andExpect(jsonPath("$[0].template").value(REJECTED))
-                .andExpect(jsonPath("$[0].applicable").value(false))
-                .andExpect(jsonPath("$[0].reason").value(Matchers.containsString("refused")));
+                .andExpect(jsonPath("$.availability.length()").value(EmailTemplate.values().length))
+                .andExpect(jsonPath("$.availability[0].template").value(REJECTED))
+                .andExpect(jsonPath("$.availability[0].applicable").value(false))
+                .andExpect(jsonPath("$.availability[0].reason").value(Matchers.containsString("refused")))
+                .andExpect(jsonPath("$.history").isEmpty())
+                .andExpect(jsonPath("$.slotDefaults").isEmpty());
         }
 
         @Test
@@ -268,7 +281,34 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
 
             authorised(get("/caseworker/cases/" + caseId + "/emails"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].applicable").value(false));
+                .andExpect(jsonPath("$.availability[0].applicable").value(false));
+        }
+
+        @Test
+        @DisplayName("returns availability, history and defaults without a Notify read")
+        void returnsEverythingTheTabNeeds() throws Exception {
+            String caseId = refusedCase();
+            authorised(post(sendOf(caseId)), "{}").andExpect(status().isOk());
+            assertThat(NOTIFY.emailRequests()).hasSize(1);
+
+            authorised(get("/caseworker/cases/" + caseId + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.availability[0].template").value(REJECTED))
+                .andExpect(jsonPath("$.history.length()").value(1))
+                .andExpect(jsonPath("$.history[0].template").value(REJECTED))
+                .andExpect(jsonPath("$.history[0].templateName").value("Application rejected"))
+                .andExpect(jsonPath("$.history[0].recipient").value(APPLICANT_EMAIL))
+                .andExpect(jsonPath("$.history[0].notifyState").value("Sent"))
+                .andExpect(jsonPath("$.history[0].subject").value("Your application has been rejected"))
+                .andExpect(jsonPath("$.history[0].body").value("Because the Master said so."))
+                .andExpect(jsonPath("$.history[0].documents").isEmpty())
+                .andExpect(jsonPath("$.slotDefaults[0].template").value(REJECTED))
+                .andExpect(jsonPath("$.slotDefaults[0].fields.judges_reason").value(DIRECTION));
+
+            assertThat(NOTIFY.emailRequests())
+                .as("the GET reads its stored history rather than asking Notify")
+                .hasSize(1);
+            assertThat(NOTIFY.previewRequests()).isEmpty();
         }
 
         @Test
@@ -454,6 +494,8 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 assertThat(row.getTemplateVersion()).isEqualTo(StubNotify.TEMPLATE_VERSION);
                 assertThat(row.getAttempts()).isOne();
                 assertThat(row.getProviderNotificationId()).isEqualTo(StubNotify.NOTIFICATION_ID);
+                assertThat(row.getSubject()).isEqualTo("Your application has been rejected");
+                assertThat(row.getBody()).isEqualTo("Because the Master said so.");
                 // The caseworker, because they authored part of what the applicant reads.
                 assertThat(row.getCreatedBy()).isEqualTo("A Caseworker");
                 assertThat(row.getNextAttemptAt()).isNotNull();
@@ -506,6 +548,8 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 assertThat(row.getState()).isEqualTo(NotificationState.Failed);
                 assertThat(row.getAttempts()).isOne();
                 assertThat(row.getProviderNotificationId()).isNull();
+                assertThat(row.getSubject()).isNull();
+                assertThat(row.getBody()).isNull();
                 assertThat(row.getFailureReason())
                     .isEqualTo("PERMANENT: GOV.UK Notify refused the send with status 400");
             });

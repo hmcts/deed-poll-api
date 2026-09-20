@@ -202,6 +202,18 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .sum();
         assertThat(operations).isEqualTo(33);
 
+        JsonNode emailResponse = spec.at("/components/schemas/CaseEmailsResponse/properties");
+        assertThat(emailResponse.fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("availability", "history", "slotDefaults");
+        JsonNode history = spec.at("/components/schemas/EmailHistoryResponse/properties");
+        assertThat(history.has("state")).isFalse();
+        assertThat(history.path("notifyState").path("description").asText())
+            .contains("accepted by GOV.UK Notify")
+            .contains("does not mean delivered");
+        assertThat(history.path("body").path("description").asText())
+            .contains("plain text")
+            .contains("branded HTML");
+
         // Every one of them needs a forwarded IDAM token, which the document has to say or the client generated
         // from it cannot make a call. Declared once, globally, because the service authenticates by default.
         assertThat(spec.at("/components/securitySchemes/bearerAuth/scheme").asText()).isEqualTo("bearer");

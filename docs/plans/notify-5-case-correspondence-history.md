@@ -204,7 +204,7 @@ Read first: `SendOutcome`, `NotifyEmailSender.send`, `NotificationOutbox.settle`
   row with its own body and leaves the first row's untouched. Container-backed: both columns round-trip,
   including a body containing newlines and non-ASCII characters — an applicant's name may contain either.
 
-- [ ] The rendered subject and body are captured from the send response with no extra Notify call, failures
+- [x] The rendered subject and body are captured from the send response with no extra Notify call, failures
       leave them null, the columns round-trip, nothing logs the body, and `./gradlew build` green
 
 ### Task 2: The case-scoped read
@@ -223,7 +223,7 @@ Read first: `NotificationRepository:38` — the finder already exists — and de
   newest first, with content on the first and null on the others; a case with no emails returns an empty list
   rather than a 404; and the raw personalisation appears nowhere in the response.
 
-- [ ] One case's emails are readable newest-first with content where it exists, documents are resolved for
+- [x] One case's emails are readable newest-first with content where it exists, documents are resolved for
       display, the personalisation is not exposed, and `./gradlew build` green
 
 ### Task 3: One call for the whole tab
@@ -244,7 +244,7 @@ decisions 5 and 6.
   availability; **no Notify call is made** by the `GET`, asserted rather than assumed; and the operation
   count is unchanged.
 
-- [ ] One call returns availability, history and slot defaults, no Notify call happens on a read, the spec is
+- [x] One call returns availability, history and slot defaults, no Notify call happens on a read, the spec is
       updated, and `./gradlew build` green
 
 ### Task 4: Wording, security and full validation
@@ -267,9 +267,13 @@ Read first: `NotificationSecurityTest`, and decisions 9, 10 and 13.
 - Confirm the whole chain by hand once against a real case: send, drain, read, and check the body shown is
   the body Notify rendered.
 
-- [ ] State wording says what the service actually knows, cross-case leakage is covered by test, the chain is
+- [x] State wording says what the service actually knows, cross-case leakage is covered by test, the chain is
       confirmed end to end, `./gradlew build` green from cold, checkstyle clean on five source sets, and both
       totals recorded
+
+Completed with 2,292 unit tests and 8 integration tests in the full build; the Docker-free CI path runs
+1,424 unit tests. `CaseworkerEmailControllerTest` exercises send, drain and read against a real Postgres case
+and `StubNotify`, asserting that the history body is the wording returned by Notify.
 
 ---
 

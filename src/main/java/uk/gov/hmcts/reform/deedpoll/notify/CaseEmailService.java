@@ -14,19 +14,25 @@ import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
+import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.service.notify.NotificationClient;
 import uk.gov.service.notify.NotificationClientException;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * The emails a caseworker may send about one case: which ones apply, what one will look like, and owing it.
@@ -85,6 +91,7 @@ public class CaseEmailService {
     private final DeedPollRepository deedPolls;
     private final ReferralRepository referrals;
     private final NotificationRepository notifications;
+    private final DeedPollSupportingDocumentRepository documents;
     private final NotificationClient notify;
     private final NotifyProperties properties;
 
@@ -97,6 +104,7 @@ public class CaseEmailService {
     public CaseEmailService(DeedPollRepository deedPolls,
                            ReferralRepository referrals,
                            NotificationRepository notifications,
+                           DeedPollSupportingDocumentRepository documents,
                            NotificationClient notify,
                            NotifyProperties properties,
                            ObjectMapper json) {
@@ -104,6 +112,7 @@ public class CaseEmailService {
         this.deedPolls = deedPolls;
         this.referrals = referrals;
         this.notifications = notifications;
+        this.documents = documents;
         this.notify = notify;
         this.properties = properties;
         this.json = json;
@@ -120,6 +129,83 @@ public class CaseEmailService {
     public List<EmailAvailability> available(String deedPollId) {
         requireCase(deedPollId);
         return Arrays.stream(EmailTemplate.values()).map(template -> availability(template, deedPollId)).toList();
+    }
+
+    /**
+     * Everything the Email tab needs, resolved without asking Notify to render anything.
+     *
+     * <p>Defaults come from {@link #compose}, the same path preview and send use, so a compose form opens with
+     * exactly the values an empty preview request would use without spending a Notify API call merely to discover
+     * them.
+     */
+    @Transactional(readOnly = true)
+    public CaseEmailOverview overview(String deedPollId) {
+        List<EmailAvailability> availability = available(deedPollId);
+        List<EmailSlotDefaults> defaults = availability.stream()
+            .filter(EmailAvailability::applicable)
+            .map(entry -> slotDefaults(deedPollId, entry.template()))
+            .toList();
+        return new CaseEmailOverview(availability, correspondence(deedPollId), defaults);
+    }
+
+    /**
+     * Every email attempt recorded for one case, newest first.
+     *
+     * <p>The repository supplies the order. Document ids are read only from keys declared by the stored template
+     * and resolved only among this case's documents, so neither raw personalisation nor another case's document
+     * can cross this boundary. An obsolete template remains visible with no documents rather than making the
+     * entire history unreadable.
+     *
+     * @throws NotFoundError if there is no such case
+     */
+    @Transactional(readOnly = true)
+    public List<CaseCorrespondence> correspondence(String deedPollId) {
+        requireCase(deedPollId);
+        List<Notification> history = notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPollId);
+        if (history.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, DeedPollSupportingDocument> caseDocuments =
+            documents.findByDeedPollIdOrderByCreatedOnAsc(deedPollId).stream()
+                .collect(Collectors.toMap(DeedPollSupportingDocument::getId, Function.identity()));
+
+        return history.stream().map(notification -> correspondence(notification, caseDocuments)).toList();
+    }
+
+    private static CaseCorrespondence correspondence(
+        Notification notification,
+        Map<String, DeedPollSupportingDocument> caseDocuments
+    ) {
+        Optional<EmailTemplate> knownTemplate = EmailTemplate.byName(notification.getTemplate());
+        if (knownTemplate.isEmpty()) {
+            return new CaseCorrespondence(
+                notification.getId(),
+                notification.getTemplate(),
+                notification.getTemplate(),
+                notification.getCreatedOn(),
+                notification.getCreatedBy(),
+                notification.getRecipient(),
+                notification.getState(),
+                notification.getFailureReason(),
+                notification.getSubject(),
+                notification.getBody(),
+                List.of());
+        }
+
+        EmailTemplate template = knownTemplate.get();
+        List<CorrespondenceDocument> carried =
+            CorrespondenceDocument.from(notification, template.documentKeys(), caseDocuments);
+        return CaseCorrespondence.from(notification, template, carried);
+    }
+
+    private EmailSlotDefaults slotDefaults(String deedPollId, EmailTemplate template) {
+        Map<String, Object> personalisation = compose(deedPollId, template, Map.of()).personalisation();
+        Map<String, String> fields = new LinkedHashMap<>();
+        for (EmailSlot slot : template.slots()) {
+            fields.put(slot.placeholder(), (String) personalisation.getOrDefault(slot.placeholder(), ""));
+        }
+        return new EmailSlotDefaults(template, fields);
     }
 
     /**

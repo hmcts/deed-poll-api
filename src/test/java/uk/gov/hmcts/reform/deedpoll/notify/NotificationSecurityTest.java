@@ -13,16 +13,22 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailPreviewResponse;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseEmailsResponse;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CorrespondenceDocumentResponse;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailHistoryResponse;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailSlotDefaultsResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailTypeResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SentEmailResponse;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.PostCounter;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.service.notify.NotificationClient;
@@ -84,6 +90,8 @@ class NotificationSecurityTest {
 
     private NotificationRepository notifications;
 
+    private DeedPollSupportingDocumentRepository documents;
+
     private NotificationClient notify;
 
     private CaseEmailService emails;
@@ -93,11 +101,13 @@ class NotificationSecurityTest {
         deedPolls = mock(DeedPollRepository.class);
         referrals = mock(ReferralRepository.class);
         notifications = mock(NotificationRepository.class);
+        documents = mock(DeedPollSupportingDocumentRepository.class);
         notify = mock(NotificationClient.class);
         emails = new CaseEmailService(
             deedPolls,
             referrals,
             notifications,
+            documents,
             notify,
             new NotifyProperties(
                 "https://notify.invalid",
@@ -162,6 +172,49 @@ class NotificationSecurityTest {
     }
 
     @Test
+    @DisplayName("correspondence history cannot read another case's notification or document")
+    void correspondenceIsCaseScoped() {
+        storedCase(CASE_ID);
+        storedCase(OTHER_CASE_ID);
+        Notification onCase = notification();
+        Notification elsewhere = notification();
+        elsewhere.setId(UUID.randomUUID());
+        elsewhere.setDeedPollId(OTHER_CASE_ID);
+        when(notifications.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(onCase));
+        when(notifications.findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID)).thenReturn(List.of(elsewhere));
+        when(documents.findByDeedPollIdOrderByCreatedOnAsc(CASE_ID)).thenReturn(List.of());
+
+        assertThat(emails.correspondence(CASE_ID))
+            .extracting(CaseCorrespondence::id)
+            .containsExactly(onCase.getId())
+            .doesNotContain(elsewhere.getId());
+
+        verify(notifications).findByDeedPollIdOrderByCreatedOnDesc(CASE_ID);
+        verify(notifications, never()).findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID);
+        verify(documents).findByDeedPollIdOrderByCreatedOnAsc(CASE_ID);
+        verify(documents, never()).findByDeedPollIdOrderByCreatedOnAsc(OTHER_CASE_ID);
+
+        DeedPollSupportingDocument otherCasesDocument = new DeedPollSupportingDocument();
+        otherCasesDocument.setId("other-case-document");
+        otherCasesDocument.setName("Private evidence");
+        DeedPollSupportingDocument onCasesDocument = new DeedPollSupportingDocument();
+        onCasesDocument.setId("on-case-document");
+        onCasesDocument.setName("Enrolled deed poll");
+        onCase.setPersonalisation(Map.of(
+            "deed_document", onCasesDocument.getId(),
+            "private_document", otherCasesDocument.getId()));
+
+        assertThat(CorrespondenceDocument.from(
+            onCase,
+            List.of("deed_document", "private_document"),
+            Map.of(onCasesDocument.getId(), onCasesDocument)))
+            .as("only the case-scoped document map may satisfy a frozen reference")
+            .containsExactly(new CorrespondenceDocument(onCasesDocument.getId(), onCasesDocument.getName()))
+            .doesNotContain(new CorrespondenceDocument(
+                otherCasesDocument.getId(), otherCasesDocument.getName()));
+    }
+
+    @Test
     @DisplayName("the Notify API key appears in neither sender logs nor an email response type")
     void apiKeyIsNotPublishedOrLogged() {
         StubNotify stub = new StubNotify();
@@ -178,19 +231,31 @@ class NotificationSecurityTest {
 
             assertThat(logs.list)
                 .extracting(ILoggingEvent::getFormattedMessage)
-                .noneMatch(message -> message.contains(stub.apiKey()));
+                .noneMatch(message -> message.contains(stub.apiKey())
+                    || message.contains("Because the Master said so."));
         } finally {
             logger.detachAppender(logs);
             logs.stop();
             stub.stop();
         }
 
-        assertThat(Stream.of(EmailTypeResponse.class, EmailPreviewResponse.class, SentEmailResponse.class)
+        assertThat(Stream.of(
+                           CaseEmailsResponse.class,
+                           CorrespondenceDocumentResponse.class,
+                           EmailHistoryResponse.class,
+                           EmailSlotDefaultsResponse.class,
+                           EmailTypeResponse.class,
+                           EmailPreviewResponse.class,
+                           SentEmailResponse.class)
                        .flatMap(type -> Arrays.stream(type.getRecordComponents()))
                        .map(RecordComponent::getName))
             .noneMatch(name -> name.equalsIgnoreCase("apiKey")
                 || name.equalsIgnoreCase("secret")
                 || name.equalsIgnoreCase("credentials"));
+
+        assertThat(Arrays.stream(EmailHistoryResponse.class.getRecordComponents())
+                       .map(RecordComponent::getName))
+            .doesNotContain("personalisation", "delivered", "opened", "downloaded");
     }
 
     @Test

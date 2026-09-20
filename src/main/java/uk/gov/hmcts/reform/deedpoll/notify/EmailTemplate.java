@@ -39,17 +39,29 @@ public enum EmailTemplate {
      */
     APPLICATION_REJECTED(
         "application-rejected",
+        "Application rejected",
         ApplicationRejectedPersonalisation.RESOLVED_KEYS,
-        List.of(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES));
+        List.of(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES),
+        List.of());
 
     private final String key;
+    private final String displayName;
     private final List<String> resolvedKeys;
     private final List<EmailSlot> slots;
+    private final List<String> documentKeys;
 
-    EmailTemplate(String key, List<String> resolvedKeys, List<EmailSlot> slots) {
+    EmailTemplate(
+        String key,
+        String displayName,
+        List<String> resolvedKeys,
+        List<EmailSlot> slots,
+        List<String> documentKeys
+    ) {
         this.key = key;
+        this.displayName = displayName;
         this.resolvedKeys = List.copyOf(resolvedKeys);
         this.slots = List.copyOf(slots);
+        this.documentKeys = List.copyOf(documentKeys);
     }
 
     /**
@@ -99,6 +111,11 @@ public enum EmailTemplate {
         return key;
     }
 
+    /** The name a caseworker sees for this email type. */
+    public String displayName() {
+        return displayName;
+    }
+
     /** The personalisation keys resolved from the case; a client may not set any of these. */
     public List<String> resolvedKeys() {
         return resolvedKeys;
@@ -107,6 +124,16 @@ public enum EmailTemplate {
     /** The slots a caseworker fills, in the order a form should show them. */
     public List<EmailSlot> slots() {
         return slots;
+    }
+
+    /**
+     * Personalisation keys whose frozen values are supporting-document ids.
+     *
+     * <p>Empty until a template carries documents. Declaring the keys on the template keeps correspondence
+     * history from mistaking an arbitrary personalisation value for a document id.
+     */
+    public List<String> documentKeys() {
+        return documentKeys;
     }
 
     /**
