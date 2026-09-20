@@ -2,21 +2,21 @@
 
 Rewritten **2026-09-20**. **Read this before restarting the loop.**
 
-The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1 is
-merged and notify-5 is complete on `notify-5`. Its four tasks capture the exact subject and plain-text body,
-provide the case-scoped correspondence read, return availability, history and slot defaults from the existing
-Email-tab GET, and pin the public wording and cross-case security boundary.
+The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1 and
+notify-5 are merged on `master`. notify-5's four tasks capture the exact subject and plain-text body, provide
+the case-scoped correspondence read, return availability, history and slot defaults from the existing Email-tab
+GET, and pin the public wording and cross-case security boundary. notify-3 has been reviewed against that
+merged implementation and its dated correction section is part of the plan, not optional commentary.
 
 ## Where the Notify work actually is — read this before anything else
 
-The implementation is one coherent branch:
+The implementation is on `master`:
 
 | Where | What is there |
 |---|---|
-| `notify-5` | **notify-5 complete.** The existing GET returns availability, history and slot defaults |
-| `origin/master` | notify-1 complete and merged in PR #29; all five API plans present |
+| `master` / `origin/master` | notify-1 and notify-5 complete and merged in PRs #29 and #30 |
 
-V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 on `notify-5` adds the
+V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 adds the
 nullable rendered subject and plain-text body. Only a definite permanent refusal permits a replacement
 row; its failed history remains unchanged when the replacement is sent.
 
@@ -24,13 +24,13 @@ row; its failed history remains unchanged when the replacement is sent.
 
 | | |
 |---|---|
-| Flyway migrations | **13 on `notify-5`** — V13 adds the rendered subject and plain-text body |
+| Flyway migrations | **13 on `master`** — V13 adds the rendered subject and plain-text body |
 | Caseworker endpoints | **33**, across eight controllers under `api/caseworker/controller/` |
 | Judicial endpoints | **4** on `/judicial/**` — the shared pool, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
 | Tests | **2,300** — `test` 2,292 + `integration` 8, measured after notify-5 task 4 |
 | Docker-free CI | **1,424 unit tests**, measured with `INTEGRATION_TESTS_ENABLED=false` |
-| `./gradlew build` | green from cold on `notify-5`, with `TESTCONTAINERS_RYUK_DISABLED=true` exported |
+| `./gradlew build` | green from cold after notify-5, with `TESTCONTAINERS_RYUK_DISABLED=true` exported |
 
 Thirteen plans are in [`plans/completed/`](plans/completed/). The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
@@ -206,8 +206,8 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 | File | State |
 |---|---|
 | `notify-1-email-plumbing.md` | **Complete and merged.** All seven tasks landed in PR #29 |
-| `notify-5-case-correspondence-history.md` | **Complete.** All four tasks implemented and validated; ready for PR |
-| `notify-3-request-confirmation-to-proceed.md` | Ready. Re-keys notify-1 task 7's index — read whichever migration exists first |
+| `notify-5-case-correspondence-history.md` | **Complete and merged.** All four tasks landed in PR #30 |
+| `notify-3-request-confirmation-to-proceed.md` | **Reviewed and ready.** Its 2026-09-20 corrections govern V14, referral selection and exclusion conflicts |
 | `notify-3b-confirmation-tracking.md` | Ready, but flag 1 wants a business answer on `signatureRequestedDate` |
 | `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
 | `role-model-generalisation.md` | **Gated, and may not be needed.** A behaviour-preserving refactor of `boolean isAdmin` into capabilities. Gated on scope question Q0.1 and, preferably, on a first successful deployment — so that a failed deploy is unambiguously a deployment problem and not a 33-site refactor |

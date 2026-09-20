@@ -176,6 +176,67 @@ investigating.
 
 ---
 
+## Corrections from the pre-implementation review — 2026-09-20
+
+These corrections were checked against notify-1 and notify-5 as merged on `master`. They supersede any
+less-specific wording in the tasks below; the original wording remains so the reasoning that led here is not
+lost.
+
+1. **Choose the newest rejected referral first, then test whether it includes `NonPublication`.** Do not search
+   for the newest rejected *non-publication* referral: that can skip a newer rejected referral and revive an
+   older outcome the existing `APPLICATION_REJECTED` rule treats as superseded. Both templates must start from
+   the same newest rejected referral. ④ is applicable only if that referral's reasons include
+   `ReferralReason.NonPublication.name()`, which also guarantees that ③ and ④ use the same `referralId` when
+   both are offered and can therefore be made mutually exclusive by one database key.
+
+2. **The migration is V14 and must be safe during a rolling deployment.** V13 now exists on `master`.
+   `exclusionGroup` is a non-null text column copied onto every row and mapped on `Notification`; the migration
+   must give it a database default of `REFERRAL_OUTCOME` as it is added. `APPLICATION_REJECTED` is the only
+   template an old application instance can enqueue, so that default both backfills every existing row correctly
+   and keeps old instances able to insert while old and new pods overlap. New code still binds
+   `template.exclusionGroup().name()` explicitly. The replacement index is
+   `("referralId", "exclusionGroup")`, retaining V12's predicate verbatim:
+   `WHERE "referralId" IS NOT NULL AND ("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT')`.
+   `NotificationRepository.enqueue` must repeat that exact conflict target and predicate.
+
+3. **A zero-row enqueue has two different meanings after re-keying and must not use the current template
+   finder.** The existing
+   `findByDeedPollIdAndReferralIdAndTemplate` cannot find a row for the counterpart template. Add a case-scoped
+   lookup by referral and exclusion group which applies the same blocking predicate as the index. If the
+   blocking row has the requested template, preserve notify-1's idempotent second-click response (`200`,
+   `enqueued: false`, original row id). If it has the counterpart template, throw `ConflictError` (`409`)
+   naming that template and its `createdOn`. Describe it as already requested/recorded, not necessarily
+   delivered: a blocking row may be `Pending`, `Sent`, or an uncertain `Failed` row.
+
+4. **Availability must use the index's definition of a blocker.** A historical row with
+   `state = Failed` and `failureVerdict = PERMANENT` does not occupy the unique index and must not hide either
+   template; Notify definitely sent nothing and notify-1 deliberately permits a replacement. A pending, sent,
+   technical, exhausted-temporary, or verdict-less failed row does block the counterpart. State this in
+   container-free service tests and prove the predicate against PostgreSQL in the repository tests.
+
+5. **The judge's direction still reaches Notify once, through the editable `judges_reason` slot.** Decision 4
+   means `RequestConfirmationToProceedPersonalisation` must not read `directionsText` or add a second resolved
+   key for it. It does not mean the final personalisation map lacks the direction's text: `EmailSlots.parse`
+   pre-populates `judges_reason` from it. Test that there is no extra `directions_text`/judge-direction key and
+   that the record's resolved values contain only `RESOLVED_KEYS`; separately retain the existing slot-default
+   test for `judges_reason`.
+
+6. **Reply-to wiring uses the verified five-argument client overload.** Version `6.2.0-RELEASE` exposes
+   `sendEmail(templateId, recipient, personalisation, reference, emailReplyToId)`. Add
+   `notify.email-reply-to-id: ${NOTIFY_EMAIL_REPLY_TO_ID:}` to `application.yaml`, trim it in
+   `NotifyProperties`, and make per-template provisioning require a non-blank value only when
+   `invitesReply` is true. `NotifyEmailSender` must continue using the four-argument overload for ③ and use the
+   five-argument overload for ④, so adding a global reply-to does not silently change an email that does not
+   invite a reply.
+
+7. **OpenAPI validation is the deliverable here, not an untracked file refresh.** `OpenAPIPublisherTest`
+   writes `/tmp/openapi-specs.json`; this repository does not publish or commit that output. Task 3 must prove
+   the existing Email-tab schema exposes both template entries without changing the 33-operation count.
+   Importing that generated document and regenerating the TypeScript client remains notify-2 Task 0 in
+   `deed-poll-admin`.
+
+---
+
 ## Tasks
 
 ### Task 1: The template, its resolved values and the two new conditionals
