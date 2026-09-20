@@ -68,7 +68,7 @@ public class NotifyEmailSender implements NotificationSender {
      * body, and the row's {@code failureReason} is displayed to a caseworker.
      *
      * @param notification the claimed row, with its attempt already counted
-     * @return {@link SendOutcome.Sent} with Notify's notification id and template version, or
+     * @return {@link SendOutcome.Sent} with Notify's notification id, template version and rendered wording, or
      *     {@link SendOutcome.Failed} with the taxonomy's verdict
      */
     @Override
@@ -97,7 +97,11 @@ public class NotifyEmailSender implements NotificationSender {
             LOG.info("Notification {} for case {} accepted by Notify as {} (template {} version {})",
                      notification.getId(), notification.getDeedPollId(), accepted.getNotificationId(),
                      template.key(), accepted.getTemplateVersion());
-            return SendOutcome.sent(accepted.getNotificationId(), accepted.getTemplateVersion());
+            return SendOutcome.sent(
+                accepted.getNotificationId(),
+                accepted.getTemplateVersion(),
+                accepted.getSubject(),
+                accepted.getBody());
         } catch (NotificationClientException refused) {
             NotificationFailure verdict = NotificationFailure.classify(refused);
             LOG.warn("Notify would not send notification {} for case {} ({}, status {})",

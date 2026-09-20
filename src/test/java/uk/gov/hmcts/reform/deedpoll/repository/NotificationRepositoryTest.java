@@ -301,11 +301,23 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
 
         entityManager.clear();
         List<Notification> onCase = notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId());
+        Notification replacement = onCase.getFirst();
+        replacement.setState(NotificationState.Sent);
+        replacement.setSubject("Your deed poll application");
+        replacement.setBody("Dear Zoë,\n\nYour application was refused.");
+        entityManager.flush();
+        entityManager.clear();
+        onCase = notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId());
+
         assertThat(onCase).extracting(Notification::getId)
             .containsExactly(replacementId, failed.getId());
         assertThat(onCase.get(1).getState()).isEqualTo(NotificationState.Failed);
         assertThat(onCase.get(1).getFailureVerdict()).isEqualTo(NotificationFailureVerdict.PERMANENT);
-        assertThat(onCase.getFirst().getState()).isEqualTo(NotificationState.Pending);
+        assertThat(onCase.get(1).getSubject()).isNull();
+        assertThat(onCase.get(1).getBody()).isNull();
+        assertThat(onCase.getFirst().getState()).isEqualTo(NotificationState.Sent);
+        assertThat(onCase.getFirst().getSubject()).isEqualTo("Your deed poll application");
+        assertThat(onCase.getFirst().getBody()).isEqualTo("Dear Zoë,\n\nYour application was refused.");
     }
 
     @Test

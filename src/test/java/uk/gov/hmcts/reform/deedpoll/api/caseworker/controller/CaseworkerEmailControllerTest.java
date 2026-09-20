@@ -454,6 +454,8 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 assertThat(row.getTemplateVersion()).isEqualTo(StubNotify.TEMPLATE_VERSION);
                 assertThat(row.getAttempts()).isOne();
                 assertThat(row.getProviderNotificationId()).isEqualTo(StubNotify.NOTIFICATION_ID);
+                assertThat(row.getSubject()).isEqualTo("Your application has been rejected");
+                assertThat(row.getBody()).isEqualTo("Because the Master said so.");
                 // The caseworker, because they authored part of what the applicant reads.
                 assertThat(row.getCreatedBy()).isEqualTo("A Caseworker");
                 assertThat(row.getNextAttemptAt()).isNotNull();
@@ -506,6 +508,8 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 assertThat(row.getState()).isEqualTo(NotificationState.Failed);
                 assertThat(row.getAttempts()).isOne();
                 assertThat(row.getProviderNotificationId()).isNull();
+                assertThat(row.getSubject()).isNull();
+                assertThat(row.getBody()).isNull();
                 assertThat(row.getFailureReason())
                     .isEqualTo("PERMANENT: GOV.UK Notify refused the send with status 400");
             });

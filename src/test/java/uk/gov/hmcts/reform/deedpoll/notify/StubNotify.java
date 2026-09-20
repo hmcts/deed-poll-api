@@ -84,13 +84,20 @@ public final class StubNotify {
      * therefore looks like an outage rather than a success, which is a confusing half-hour to lose.
      */
     public void stubSend(UUID notificationId) {
+        stubSend(notificationId, "Your application has been rejected", "Because the Master said so.");
+    }
+
+    /**
+     * A Notify that accepts a send and returns the supplied rendered wording.
+     */
+    public void stubSend(UUID notificationId, String subject, String body) {
         server.stubFor(post(urlPathEqualTo("/v2/notifications/email")).willReturn(createdJson("""
             {
               "id": "%s",
               "reference": "{{jsonPath request.body '$.reference'}}",
               "content": {
-                "subject": "Your application has been rejected",
-                "body": "Because the Master said so.",
+                "subject": %s,
+                "body": %s,
                 "from_email": "deed-poll@notifications.service.gov.uk"
               },
               "template": {
@@ -100,8 +107,8 @@ public final class StubNotify {
               },
               "uri": "%s/v2/notifications/%s"
             }
-            """.formatted(notificationId, TEMPLATE_ID, TEMPLATE_VERSION, baseUrl(), TEMPLATE_ID,
-            baseUrl(), notificationId))));
+            """.formatted(notificationId, quote(subject), quote(body), TEMPLATE_ID, TEMPLATE_VERSION,
+            baseUrl(), TEMPLATE_ID, baseUrl(), notificationId))));
     }
 
     /**

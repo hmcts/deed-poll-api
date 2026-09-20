@@ -50,7 +50,11 @@ class NotifyEmailSenderTest {
         SendOutcome outcome = sender.send(row);
 
         assertThat(outcome)
-            .isEqualTo(new SendOutcome.Sent(StubNotify.NOTIFICATION_ID, StubNotify.TEMPLATE_VERSION));
+            .isEqualTo(new SendOutcome.Sent(
+                StubNotify.NOTIFICATION_ID,
+                StubNotify.TEMPLATE_VERSION,
+                "Your application has been rejected",
+                "Because the Master said so."));
         assertThat(notify.emailRequests()).singleElement().satisfies(request -> {
             JsonNode body;
             try {

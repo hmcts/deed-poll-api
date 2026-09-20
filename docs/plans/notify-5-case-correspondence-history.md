@@ -204,7 +204,7 @@ Read first: `SendOutcome`, `NotifyEmailSender.send`, `NotificationOutbox.settle`
   row with its own body and leaves the first row's untouched. Container-backed: both columns round-trip,
   including a body containing newlines and non-ASCII characters — an applicant's name may contain either.
 
-- [ ] The rendered subject and body are captured from the send response with no extra Notify call, failures
+- [x] The rendered subject and body are captured from the send response with no extra Notify call, failures
       leave them null, the columns round-trip, nothing logs the body, and `./gradlew build` green
 
 ### Task 2: The case-scoped read

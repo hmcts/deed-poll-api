@@ -90,11 +90,18 @@ class NotificationOutboxTest {
             row.setFailureVerdict(NotificationFailureVerdict.TEMPORARY);
             UUID providerId = UUID.randomUUID();
 
-            boolean accepted = outbox.settle(row, SendOutcome.sent(providerId), NOW);
+            boolean accepted = outbox.settle(row, SendOutcome.sent(
+                providerId,
+                7,
+                "Your application has been rejected",
+                "Dear Alex,\n\nYour application was refused."), NOW);
 
             assertThat(accepted).isTrue();
             assertThat(row.getState()).isEqualTo(NotificationState.Sent);
             assertThat(row.getProviderNotificationId()).isEqualTo(providerId);
+            assertThat(row.getTemplateVersion()).isEqualTo(7);
+            assertThat(row.getSubject()).isEqualTo("Your application has been rejected");
+            assertThat(row.getBody()).isEqualTo("Dear Alex,\n\nYour application was refused.");
             assertThat(row.getFailureReason()).isNull();
             assertThat(row.getFailureVerdict()).isNull();
             assertThat(row.getModifiedBy())
@@ -156,6 +163,8 @@ class NotificationOutboxTest {
                 case TECHNICAL -> NotificationFailureVerdict.TECHNICAL;
                 case TEMPORARY -> throw new IllegalStateException("excluded by @EnumSource");
             });
+            assertThat(row.getSubject()).isNull();
+            assertThat(row.getBody()).isNull();
             assertThat(row.getNextAttemptAt())
                 .as("not backed off: a terminal row is never claimable again, so nothing reads this")
                 .isEqualTo(lease);
