@@ -14,6 +14,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationFailureVerdict;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 
 import java.time.LocalDateTime;
@@ -139,6 +140,19 @@ public class Notification {
      */
     @Column(name = "failureReason")
     private String failureReason;
+
+    /**
+     * The machine-readable half of {@link #failureReason}, used by the partial unique index to distinguish a
+     * permanent refusal -- where Notify definitely sent nothing -- from every uncertain outcome.
+     *
+     * <p>Nullable on a row that has never failed, and on an old row written during a rolling deployment by an
+     * application instance that predates V12. The index treats null as uncertain and keeps it in the uniqueness
+     * slot; only an explicit {@link NotificationFailureVerdict#PERMANENT} permits a new row.
+     */
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Column(name = "failureVerdict")
+    private NotificationFailureVerdict failureVerdict;
 
     /**
      * The caseworker who sent it, and not nullable unlike every other {@code createdBy} here: they

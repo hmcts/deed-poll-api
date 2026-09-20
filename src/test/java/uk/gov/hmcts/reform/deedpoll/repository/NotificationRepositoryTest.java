@@ -13,6 +13,7 @@ import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationFailureVerdict;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 
@@ -123,6 +124,7 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         alreadySent.setState(NotificationState.Sent);
         Notification givenUpOn = owed(NOW.minusHours(4));
         givenUpOn.setState(NotificationState.Failed);
+        givenUpOn.setFailureVerdict(NotificationFailureVerdict.TECHNICAL);
         entityManager.flush();
         entityManager.clear();
 
@@ -204,6 +206,7 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         sent.setState(NotificationState.Sent);
         Notification failed = owed(NOW.minusHours(1));
         failed.setState(NotificationState.Failed);
+        failed.setFailureVerdict(NotificationFailureVerdict.TECHNICAL);
         entityManager.flush();
 
         // Each of these is a row the statement's own predicate has to refuse, because the candidate list and
@@ -278,33 +281,56 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("enqueues nothing for a referral whose email has terminally failed, so the send cannot be retried")
-    void enqueuesNothingForATerminallyFailedRow() {
+    @DisplayName("enqueues a new row after a permanent refusal and keeps the failed attempt as history")
+    void enqueuesAfterAPermanentRefusal() {
         DeedPoll deedPoll = persistedCase();
         Referral referral = persistedReferral(deedPoll);
         Notification failed = owed(deedPoll, referral, NOW);
         failed.setState(NotificationState.Failed);
+        failed.setFailureVerdict(NotificationFailureVerdict.PERMANENT);
         failed.setFailureReason("PERMANENT: 403 the API key is not provisioned");
         entityManager.flush();
+        UUID replacementId = UUID.randomUUID();
 
-        // The conflict target is ("referralId", "template") with no predicate on "state", so a row the drain
-        // gave up on occupies the slot exactly as an owed one does.
-        int enqueued = notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(), TEMPLATE,
-                                             RECIPIENT, PERSONALISATION, NOW, "A Caseworker");
+        int enqueued = notifications.enqueue(replacementId, deedPoll.getId(), referral.getId(), TEMPLATE,
+                                             RECIPIENT, PERSONALISATION, NOW.plusMinutes(1), "A Caseworker");
 
         assertThat(enqueued)
-            .as("a terminally failed email blocks its own replacement")
-            .isZero();
+            .as("Notify definitely refused the first request, so there is nothing to duplicate")
+            .isOne();
 
         entityManager.clear();
         List<Notification> onCase = notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId());
-        assertThat(onCase).hasSize(1);
-        // And the row that blocks it is unreachable from either direction: the drain refuses it because it is
-        // not Pending, and enqueue refuses a new one because the index does not care that it is not. Nothing
-        // in the service moves a row out of Failed, so this referral can never be emailed about again.
-        assertThat(onCase.getFirst().getState()).isEqualTo(NotificationState.Failed);
-        assertThat(notifications.claimNextDue(onCase.getFirst().getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT))
-            .isZero();
+        assertThat(onCase).extracting(Notification::getId)
+            .containsExactly(replacementId, failed.getId());
+        assertThat(onCase.get(1).getState()).isEqualTo(NotificationState.Failed);
+        assertThat(onCase.get(1).getFailureVerdict()).isEqualTo(NotificationFailureVerdict.PERMANENT);
+        assertThat(onCase.getFirst().getState()).isEqualTo(NotificationState.Pending);
+    }
+
+    @Test
+    @DisplayName("technical, exhausted-temporary and verdict-less failures still block a replacement")
+    void uncertainFailuresStillBlockAReplacement() {
+        for (FailureFixture fixture : List.of(
+            new FailureFixture(NotificationFailureVerdict.TECHNICAL, "TECHNICAL: connection reset"),
+            new FailureFixture(NotificationFailureVerdict.TEMPORARY,
+                               "Gave up after 5 attempts: TEMPORARY: Notify unavailable"),
+            new FailureFixture(null, "written by an older application instance"))) {
+
+            DeedPoll deedPoll = persistedCase();
+            Referral referral = persistedReferral(deedPoll);
+            Notification failed = owed(deedPoll, referral, NOW);
+            failed.setState(NotificationState.Failed);
+            failed.setFailureVerdict(fixture.verdict());
+            failed.setFailureReason(fixture.reason());
+            entityManager.flush();
+
+            assertThat(notifications.enqueue(
+                UUID.randomUUID(), deedPoll.getId(), referral.getId(), TEMPLATE,
+                RECIPIENT, PERSONALISATION, NOW.plusMinutes(1), "A Caseworker"))
+                .as(fixture.reason())
+                .isZero();
+        }
     }
 
     @Test
@@ -342,5 +368,8 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
             .doesNotContain(elsewhere.getId());
         // And the personalisation comes back through jsonb on a row read by a finder rather than by find().
         assertThat(found.getFirst().getPersonalisation()).containsEntry("reference_number", "2026/000123");
+    }
+
+    private record FailureFixture(NotificationFailureVerdict verdict, String reason) {
     }
 }

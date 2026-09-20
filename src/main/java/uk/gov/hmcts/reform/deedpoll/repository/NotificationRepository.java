@@ -65,9 +65,10 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
      * which is the one thing the outbox is supposed to guarantee. This statement refuses the duplicate inside the
      * caller's transaction and leaves it usable: {@code 0} rows is the no-op to log, not an error.
      *
-     * <p>The conflict target repeats the index's own predicate -- {@code WHERE "referralId" IS NOT NULL} -- because
-     * that is how Postgres is told which partial index to infer. Without it the statement does not compile against
-     * this schema at all, which is why the index is partial rather than a table constraint.
+     * <p>The conflict target repeats the index's own predicate verbatim because that is how Postgres is told
+     * which partial index to infer. It includes the null-safe failure-verdict expression added by V12: only an
+     * explicit permanent refusal leaves the slot, while an older row with no verdict remains blocking. Without
+     * the whole predicate the statement does not compile against this schema at all.
      *
      * <p>Native SQL for the reason {@link #claimNextDue} is: this <em>is</em> the statement, and the
      * {@code ON CONFLICT} clause has no JPA spelling. Identifiers are quoted because they are mixed case.
@@ -93,7 +94,10 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
                     "state", "attempts", "nextAttemptAt", "createdBy", "createdOn", "modifiedOn", "modifiedBy")
              VALUES (:id, :deedPollId, :referralId, :template, :recipient, CAST(:personalisation AS jsonb),
                     'Pending', 0, :now, :createdBy, :now, :now, :createdBy)
-        ON CONFLICT ("referralId", "template") WHERE "referralId" IS NOT NULL DO NOTHING
+        ON CONFLICT ("referralId", "template")
+        WHERE "referralId" IS NOT NULL
+          AND ("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT')
+        DO NOTHING
         """)
     int enqueue(@Param("id") UUID id,
                 @Param("deedPollId") String deedPollId,

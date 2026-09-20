@@ -544,6 +544,12 @@ index predicate, and `V11__notifications.sql`.
   (`"PERMANENT: 403 ..."`), so predicating an index on it would make a `LIKE` load-bearing. Prefer a dedicated
   column — the taxonomy verdict stored as its own value when the row is settled — and a partial index of the
   shape `WHERE "referralId" IS NOT NULL AND NOT ("state" = 'Failed' AND <verdict> = 'PERMANENT')`.
+
+  **Implemented refinement:** V12 uses
+  `("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT')`. The sketch above is unsafe when
+  the verdict is null: SQL's `NOT NULL` is still null, so a failed row written by an older application during
+  a rolling deployment would disappear from the index and permit a duplicate. `IS DISTINCT FROM` makes null
+  mean *unknown and still blocking*; only an explicit `PERMANENT` leaves the slot.
 - **`enqueue`'s `ON CONFLICT` target must be updated to repeat the new predicate verbatim.** Postgres infers a
   partial index by matching its predicate, so a target that does not match the new index does not compile
   against the schema at all. This is the same trap the existing javadoc documents.
@@ -556,7 +562,7 @@ index predicate, and `V11__notifications.sql`.
   double-click rule is untouched. Container-free: that settling a permanent failure records the verdict the
   index reads.
 
-- [ ] A permanently failed email can be enqueued again and a technically failed one still cannot, the new
+- [x] A permanently failed email can be enqueued again and a technically failed one still cannot, the new
       index ships as `V12` with `V11` unedited, `enqueue`'s conflict target matches the new predicate, the
       failed attempt survives as history, and `./gradlew build` green
 

@@ -11,6 +11,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationFailureVerdict;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 
@@ -86,6 +87,7 @@ class NotificationOutboxTest {
             // A row that failed twice and succeeded on the third attempt. Its stored reason is the second
             // attempt's, and leaving it there would make a sent email read as a failed one on the Email tab.
             row.setFailureReason("TEMPORARY: 429 rate limited");
+            row.setFailureVerdict(NotificationFailureVerdict.TEMPORARY);
             UUID providerId = UUID.randomUUID();
 
             boolean accepted = outbox.settle(row, SendOutcome.sent(providerId), NOW);
@@ -94,6 +96,7 @@ class NotificationOutboxTest {
             assertThat(row.getState()).isEqualTo(NotificationState.Sent);
             assertThat(row.getProviderNotificationId()).isEqualTo(providerId);
             assertThat(row.getFailureReason()).isNull();
+            assertThat(row.getFailureVerdict()).isNull();
             assertThat(row.getModifiedBy())
                 .as("no person drained, so the service account wrote it")
                 .isEqualTo(CurrentUser.SERVICE_ACCOUNT_NAME);
@@ -130,6 +133,7 @@ class NotificationOutboxTest {
             // Kept on a row that is still waiting, so "waiting, and here is why the last attempt did not
             // work" is answerable by the Email tab rather than only by the logs.
             assertThat(row.getFailureReason()).isEqualTo("TEMPORARY: 429 rate limited");
+            assertThat(row.getFailureVerdict()).isEqualTo(NotificationFailureVerdict.TEMPORARY);
             assertThat(row.getProviderNotificationId()).isNull();
             verify(notifications).save(row);
         }
@@ -147,6 +151,11 @@ class NotificationOutboxTest {
             // the status means, and a retry might duplicate a delivery that did happen.
             assertThat(row.getState()).isEqualTo(NotificationState.Failed);
             assertThat(row.getFailureReason()).isEqualTo(failure + ": 400 bad template");
+            assertThat(row.getFailureVerdict()).isEqualTo(switch (failure) {
+                case PERMANENT -> NotificationFailureVerdict.PERMANENT;
+                case TECHNICAL -> NotificationFailureVerdict.TECHNICAL;
+                case TEMPORARY -> throw new IllegalStateException("excluded by @EnumSource");
+            });
             assertThat(row.getNextAttemptAt())
                 .as("not backed off: a terminal row is never claimable again, so nothing reads this")
                 .isEqualTo(lease);
@@ -165,6 +174,7 @@ class NotificationOutboxTest {
             // reading the Email tab needs to tell "Notify refused this" from "we stopped asking".
             assertThat(row.getFailureReason())
                 .isEqualTo("Gave up after " + NotificationBackoff.MAX_ATTEMPTS + " attempts: TEMPORARY: 500");
+            assertThat(row.getFailureVerdict()).isEqualTo(NotificationFailureVerdict.TEMPORARY);
         }
     }
 

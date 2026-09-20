@@ -86,10 +86,12 @@ test {
   useJUnitPlatform {
     // The CNP VM agent has no Docker daemon. 30 src/test classes need Testcontainers -- 29 inherit
     // the tag from AbstractPostgresContainerTest, SchemaConformanceTest carries it directly -- and
-    // they account for 866 of the 2,281 tests (measured, 2026-09-20 after notify-1 task 6, which
-    // added the 30th class: NotificationOutboxConcurrencyTest, proving two real transactions send one
-    // row once); it was 865 of 2,276 after task 5, whose sender tests are container-free and whose HTTP
-    // send-outcome tests extend the existing CaseworkerEmailControllerTest; it was 860 of 2,267 after
+    // they account for 867 of the 2,282 tests (measured, 2026-09-20 after notify-1 task 7, which
+    // extends NotificationRepositoryTest with the permanent-versus-uncertain resend boundary while
+    // leaving the Docker-free count at 1,415); it was 866 of 2,281 after task 6, which added the 30th
+    // class: NotificationOutboxConcurrencyTest, proving two real transactions send one row once; it
+    // was 865 of 2,276 after task 5, whose sender tests are container-free and whose HTTP send-outcome
+    // tests extend the existing CaseworkerEmailControllerTest; it was 860 of 2,267 after
     // task 4, which added the 29th class: CaseworkerEmailControllerTest, where the three email routes
     // are asserted over real HTTP against a real Postgres and a stub Notify; task 3 added no
     // container-backed class and task 2 added the 28th, NotificationRepositoryTest, where the outbox's

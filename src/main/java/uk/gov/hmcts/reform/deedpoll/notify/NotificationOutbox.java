@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationFailureVerdict;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 
@@ -188,9 +189,11 @@ public class NotificationOutbox {
                 // Cleared, not kept: a row that succeeded on its third attempt should not still read as
                 // though the second attempt's failure were its verdict.
                 row.setFailureReason(null);
+                row.setFailureVerdict(null);
                 accepted = true;
             }
             case SendOutcome.Failed failed -> {
+                row.setFailureVerdict(verdict(failed.failure()));
                 boolean exhausted = NotificationBackoff.exhausted(row.getAttempts());
                 if (failed.failure().retryable() && !exhausted) {
                     row.setNextAttemptAt(NotificationBackoff.nextAttemptAt(now, row.getAttempts()));
@@ -220,5 +223,19 @@ public class NotificationOutbox {
     /** The verdict and what Notify said, which is what a human reading the Email tab needs. */
     private static String reason(SendOutcome.Failed failed) {
         return failed.failure() + ": " + failed.reason();
+    }
+
+    /**
+     * The HTTP-aware taxonomy reduced to the enum V12 stores.
+     *
+     * <p>An exhaustive switch rather than {@code valueOf}: adding a runtime category must make this fail to
+     * compile, because the database enum needs a migration before it can store another value.
+     */
+    private static NotificationFailureVerdict verdict(NotificationFailure failure) {
+        return switch (failure) {
+            case PERMANENT -> NotificationFailureVerdict.PERMANENT;
+            case TEMPORARY -> NotificationFailureVerdict.TEMPORARY;
+            case TECHNICAL -> NotificationFailureVerdict.TECHNICAL;
+        };
     }
 }
