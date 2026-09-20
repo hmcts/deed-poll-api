@@ -1,5 +1,9 @@
 # Plan: referrals to the judiciary (2 of 3) — the referral state machine: claim, direction, close
 
+> **Follow-up:** `../referrals-api-4-caseworker-completion.md` preserves `Decided → Closed` but prevents a
+> caseworker withdrawing a `Decided` referral. Its companion admin plan exposes this plan's existing closure
+> operation as the missing caseworker completion journey.
+
 ## Overview
 
 **Second of three api plans** for the in-app judiciary-referral feature (the whole feature is seven plans;

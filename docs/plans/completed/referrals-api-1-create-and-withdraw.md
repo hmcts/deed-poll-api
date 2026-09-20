@@ -1,5 +1,9 @@
 # Plan: referrals to the judiciary (1 of 3) — the referral, its lifecycle, create and withdraw
 
+> **Follow-up:** `../referrals-api-4-caseworker-completion.md` supersedes this plan's rule that every
+> non-terminal referral may be withdrawn. Business testing requires `Decided` to be actioned through
+> `Closed`; only `Open` and `Claimed` remain withdrawable.
+
 ## Overview
 
 This is the **first of three api plans** for one end-to-end feature: moving the referral-to-a-Master/judge

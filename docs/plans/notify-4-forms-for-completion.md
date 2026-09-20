@@ -2,7 +2,7 @@
 
 ## Overview
 
-Adds the last two of the four templates, and they are the ones the taxonomy rates **medium-high volume**:
+Adds the last two of the original four templates, and they are the ones the taxonomy rates **medium-high volume**:
 the email an applicant receives once their application has been checked, carrying the forms they must print,
 sign in front of two witnesses, have sworn by a commissioner of oaths, and post back.
 
@@ -420,7 +420,7 @@ cannot tell. Decision 8 of this plan is what lets notify-5 show *which* document
   decision 9 puts the document references in the frozen personalisation — which together are what let
   notify-5 show *which documents* an email carried rather than only that one was sent.
 
-Also not here: the **⑤ Gazette notice** template the taxonomy names as missing; **pre-filling any of the five
+Also not here: the **⑥ Gazette notice** template the taxonomy names as deferred; **pre-filling any of the five
 static forms**; **delivery callbacks**; and **plan 03's CDAM store**, which this plan depends on
 architecturally but does not deliver.
 
