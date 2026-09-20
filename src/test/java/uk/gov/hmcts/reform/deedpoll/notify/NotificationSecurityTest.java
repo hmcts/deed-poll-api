@@ -23,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.PostCounter;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.service.notify.NotificationClient;
@@ -98,6 +99,7 @@ class NotificationSecurityTest {
             deedPolls,
             referrals,
             notifications,
+            mock(DeedPollSupportingDocumentRepository.class),
             notify,
             new NotifyProperties(
                 "https://notify.invalid",

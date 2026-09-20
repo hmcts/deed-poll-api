@@ -3,8 +3,9 @@
 Rewritten **2026-09-20**. **Read this before restarting the loop.**
 
 The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1 is
-merged and notify-5 is in progress on `notify-5`. Task 1 captures the exact subject and plain-text body
-returned when Notify accepts a send; Task 2, the case-scoped read, is next.
+merged and notify-5 is in progress on `notify-5`. Tasks 1 and 2 capture the exact subject and plain-text
+body returned when Notify accepts a send and provide the case-scoped correspondence read. Task 3, the
+combined Email-tab response, is next.
 
 ## Where the Notify work actually is — read this before anything else
 
@@ -12,7 +13,7 @@ The implementation is one coherent branch:
 
 | Where | What is there |
 |---|---|
-| `notify-5` | **notify-5 Task 1 complete.** V13 adds rendered subject/body and the send settlement captures both |
+| `notify-5` | **notify-5 Tasks 1–2 complete.** V13 captures rendered content and the service exposes case-scoped history |
 | `origin/master` | notify-1 complete and merged in PR #29; all five API plans present |
 
 V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 on `notify-5` adds the
@@ -27,8 +28,8 @@ row; its failed history remains unchanged when the replacement is sent.
 | Caseworker endpoints | **33**, across eight controllers under `api/caseworker/controller/` |
 | Judicial endpoints | **4** on `/judicial/**` — the shared pool, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,290** — `test` 2,282 + `integration` 8, measured after notify-5 task 1 |
-| `./gradlew build` | green from cold on `notify-5`, with `TESTCONTAINERS_RYUK_DISABLED=true` exported |
+| Tests | **2,296** — `test` 2,288 + `integration` 8, measured after notify-5 task 2 |
+| `./gradlew build` | green on `notify-5`, with `TESTCONTAINERS_RYUK_DISABLED=true` exported |
 
 Thirteen plans are in [`plans/completed/`](plans/completed/). The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
@@ -45,7 +46,7 @@ build them:
 
 ```
 notify-1  the send path                     COMPLETE
-notify-5  what was sent, and when            case correspondence history   TASK 1 OF 4 COMPLETE
+notify-5  what was sent, and when            case correspondence history   TASKS 1–2 OF 4 COMPLETE
 notify-3  request confirmation to proceed    three exclusive templates
 notify-3b track the applicant's reply
 notify-4  generate the deed forms            needs a spike first
@@ -204,7 +205,7 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 | File | State |
 |---|---|
 | `notify-1-email-plumbing.md` | **Complete and merged.** All seven tasks landed in PR #29 |
-| `notify-5-case-correspondence-history.md` | **In progress.** Task 1 of 4 complete; Task 2 is next |
+| `notify-5-case-correspondence-history.md` | **In progress.** Tasks 1–2 of 4 complete; Task 3 is next |
 | `notify-3-request-confirmation-to-proceed.md` | Ready. Re-keys notify-1 task 7's index — read whichever migration exists first |
 | `notify-3b-confirmation-tracking.md` | Ready, but flag 1 wants a business answer on `signatureRequestedDate` |
 | `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |

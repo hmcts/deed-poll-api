@@ -17,11 +17,15 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationFailureVerdict;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.PostCounter;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.service.notify.NotificationClient;
@@ -74,6 +78,7 @@ class CaseEmailServiceTest {
     private DeedPollRepository deedPolls;
     private ReferralRepository referrals;
     private NotificationRepository notifications;
+    private DeedPollSupportingDocumentRepository documents;
     private NotificationClient notify;
     private CaseEmailService emails;
 
@@ -82,13 +87,14 @@ class CaseEmailServiceTest {
         deedPolls = mock(DeedPollRepository.class);
         referrals = mock(ReferralRepository.class);
         notifications = mock(NotificationRepository.class);
+        documents = mock(DeedPollSupportingDocumentRepository.class);
         notify = mock(NotificationClient.class);
         // A provisioned template, so nothing here turns on the placeholder. The unprovisioned case is a Notify
         // refusal, which is asserted in its own test below.
         NotifyProperties properties = new NotifyProperties(
             "https://notify.invalid", "key", Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1"));
         emails = new CaseEmailService(
-            deedPolls, referrals, notifications, notify, properties, new ObjectMapper());
+            deedPolls, referrals, notifications, documents, notify, properties, new ObjectMapper());
     }
 
     @Nested
@@ -145,7 +151,7 @@ class CaseEmailServiceTest {
             // With no configured template ID -- which is every environment until notify-0 lands -- a send fails on
             // the drain and a preview is a 502. NotifyProperties.isProvisioned exists for this sentence.
             CaseEmailService unprovisioned = new CaseEmailService(
-                deedPolls, referrals, notifications, notify,
+                deedPolls, referrals, notifications, documents, notify,
                 new NotifyProperties("https://notify.invalid", "", Map.of()), new ObjectMapper());
             storedCase();
             refusedReferral();
@@ -154,6 +160,108 @@ class CaseEmailServiceTest {
                 assertThat(entry.applicable()).isTrue();
                 assertThat(entry.provisioned()).isFalse();
             });
+        }
+
+        @Nested
+        @DisplayName("case correspondence")
+        class Correspondence {
+
+            @Test
+            @DisplayName("returns sent, pending and failed attempts newest first with content only where captured")
+            void returnsEveryAttemptNewestFirst() {
+                storedCase();
+                Notification sent = notification(
+                    UUID.fromString("33333333-3333-3333-3333-333333333333"),
+                    LocalDateTime.of(2026, 9, 20, 10, 0),
+                    NotificationState.Sent);
+                sent.setSubject("Your application has been rejected");
+                sent.setBody("Dear Alex,\n\nYour application was refused.");
+                Notification pending = notification(
+                    UUID.fromString("44444444-4444-4444-4444-444444444444"),
+                    LocalDateTime.of(2026, 9, 20, 9, 0),
+                    NotificationState.Pending);
+                Notification failed = notification(
+                    UUID.fromString("55555555-5555-5555-5555-555555555555"),
+                    LocalDateTime.of(2026, 9, 20, 8, 0),
+                    NotificationState.Failed);
+                failed.setFailureVerdict(NotificationFailureVerdict.PERMANENT);
+                failed.setFailureReason("PERMANENT: GOV.UK Notify refused the send with status 400");
+                when(notifications.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID))
+                    .thenReturn(List.of(sent, pending, failed));
+                when(documents.findByDeedPollIdOrderByCreatedOnAsc(CASE_ID)).thenReturn(List.of());
+
+                List<CaseCorrespondence> history = emails.correspondence(CASE_ID);
+
+                assertThat(history).extracting(CaseCorrespondence::id)
+                    .containsExactly(sent.getId(), pending.getId(), failed.getId());
+                assertThat(history.getFirst()).satisfies(entry -> {
+                    assertThat(entry.template()).isEqualTo("application-rejected");
+                    assertThat(entry.templateName()).isEqualTo("Application rejected");
+                    assertThat(entry.createdOn()).isEqualTo(sent.getCreatedOn());
+                    assertThat(entry.createdBy()).isEqualTo("A Caseworker");
+                    assertThat(entry.recipient()).isEqualTo(RECIPIENT);
+                    assertThat(entry.state()).isEqualTo(NotificationState.Sent);
+                    assertThat(entry.failureReason()).isNull();
+                    assertThat(entry.subject()).isEqualTo("Your application has been rejected");
+                    assertThat(entry.body()).isEqualTo("Dear Alex,\n\nYour application was refused.");
+                    assertThat(entry.documents()).isEmpty();
+                });
+                assertThat(history.get(1)).satisfies(entry -> {
+                    assertThat(entry.state()).isEqualTo(NotificationState.Pending);
+                    assertThat(entry.subject()).isNull();
+                    assertThat(entry.body()).isNull();
+                });
+                assertThat(history.get(2)).satisfies(entry -> {
+                    assertThat(entry.state()).isEqualTo(NotificationState.Failed);
+                    assertThat(entry.failureReason()).startsWith("PERMANENT:");
+                    assertThat(entry.subject()).isNull();
+                    assertThat(entry.body()).isNull();
+                });
+                verify(notifications).findByDeedPollIdOrderByCreatedOnDesc(CASE_ID);
+                verifyNoInteractions(notify);
+            }
+
+            @Test
+            @DisplayName("returns an empty list for a case with no correspondence")
+            void returnsAnEmptyHistory() {
+                storedCase();
+                when(notifications.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of());
+
+                assertThat(emails.correspondence(CASE_ID)).isEmpty();
+
+                verify(documents, never()).findByDeedPollIdOrderByCreatedOnAsc(anyString());
+                verifyNoInteractions(notify);
+            }
+
+            @Test
+            @DisplayName("the history model cannot expose raw personalisation")
+            void doesNotExposeRawPersonalisation() {
+                assertThat(CaseCorrespondence.class.getRecordComponents())
+                    .extracting(component -> component.getName())
+                    .doesNotContain("personalisation");
+            }
+
+            @Test
+            @DisplayName("resolves only declared document references into names and ids")
+            void resolvesDeclaredDocuments() {
+                Notification notification = notification(
+                    UUID.randomUUID(), LocalDateTime.of(2026, 9, 20, 10, 0), NotificationState.Sent);
+                notification.setPersonalisation(Map.of(
+                    "deed_document", "document-1",
+                    "caseworker_text", "document-2"));
+                DeedPollSupportingDocument carried = new DeedPollSupportingDocument();
+                carried.setId("document-1");
+                carried.setName("Enrolled deed poll");
+                DeedPollSupportingDocument notCarried = new DeedPollSupportingDocument();
+                notCarried.setId("document-2");
+                notCarried.setName("Application evidence");
+
+                assertThat(CorrespondenceDocument.from(
+                    notification,
+                    List.of("deed_document"),
+                    Map.of(carried.getId(), carried, notCarried.getId(), notCarried)))
+                    .containsExactly(new CorrespondenceDocument("document-1", "Enrolled deed poll"));
+            }
         }
 
         @Test
@@ -438,6 +546,19 @@ class CaseEmailServiceTest {
         deedPoll.setPostCounter(PostCounter.Online);
         when(deedPolls.findById(CASE_ID)).thenReturn(Optional.of(deedPoll));
         return deedPoll;
+    }
+
+    private static Notification notification(UUID id, LocalDateTime createdOn, NotificationState state) {
+        Notification notification = new Notification();
+        notification.setId(id);
+        notification.setDeedPollId(CASE_ID);
+        notification.setTemplate(EmailTemplate.APPLICATION_REJECTED.name());
+        notification.setRecipient(RECIPIENT);
+        notification.setPersonalisation(Map.of("reference_number", "DP2026-000123"));
+        notification.setState(state);
+        notification.setCreatedBy("A Caseworker");
+        notification.setCreatedOn(createdOn);
+        return notification;
     }
 
     /** The case's one refused referral, carrying the direction the slot is pre-populated from. */

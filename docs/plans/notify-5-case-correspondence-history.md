@@ -223,7 +223,7 @@ Read first: `NotificationRepository:38` — the finder already exists — and de
   newest first, with content on the first and null on the others; a case with no emails returns an empty list
   rather than a 404; and the raw personalisation appears nowhere in the response.
 
-- [ ] One case's emails are readable newest-first with content where it exists, documents are resolved for
+- [x] One case's emails are readable newest-first with content where it exists, documents are resolved for
       display, the personalisation is not exposed, and `./gradlew build` green
 
 ### Task 3: One call for the whole tab
