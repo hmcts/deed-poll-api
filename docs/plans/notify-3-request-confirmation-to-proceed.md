@@ -2,7 +2,7 @@
 
 ## Overview
 
-Adds the second of the four templates: the email a caseworker sends when the judge **refused a
+Adds the second of the original four templates: the email a caseworker sends when the judge **refused a
 non-publication request but enrolment may still go ahead**. The applicant is asked to confirm they still want
 the deed enrolled, or to say they do not and be refunded.
 
@@ -333,7 +333,8 @@ Read first: `CaseEmailService.cause()`, `availability()` and `EmailAvailability`
   send, exactly as notify-1 cannot — that is expected, not a defect.
 - **The two *forms for completion* emails (notify-4).** Blocked on document generation, which Notify cannot
   do, and on the attachment-wording decision in taxonomy §5.4.
-- **The missing fifth email**, the Gazette notice PDF. No template was supplied; taxonomy §5.2.
+- **The deferred sixth email**, the Gazette notice PDF. No template was supplied; taxonomy §5.2. notify-6
+  added the fifth template by assuming a missing-documents chase.
 - **Any change to `deed-poll-admin`.** The Email tab is notify-2's and is designed to need none.
 - **Modelling per-reason referral outcomes.** Decision 1 settles this by letting the caseworker choose. If
   that is ever revisited, it is a change to the direction model and a plan of its own.

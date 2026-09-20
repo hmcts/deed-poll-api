@@ -12,7 +12,7 @@ Read first: [`NOTIFY_TEMPLATE_TAXONOMY.md`](../../../deed-poll-admin/.business_c
 the design decisions this plan implements.
 
 **The shape of the feature, decided 2026-09-18.** A caseworker does not receive an automatic email on a state
-change, because three of the four templates require text a human writes. Instead: an **Email tab** in
+change, because three of the original four templates require text a human writes. Instead: an **Email tab** in
 `deed-poll-admin` where the caseworker picks an email type, is shown the template **populated from case and
 referral data**, adds their text into defined slots, and sends. This plan is the api half. The tab itself is
 notify-2, in the `deed-poll-admin` repo.
@@ -620,9 +620,10 @@ task first rather than reconstructing the predicate.
    `("referralId", "template")`. A later template that legitimately sends twice for one referral — a reminder —
    needs a different key. Flagged so the constraint is not read as a universal rule.
 
-5. **The reply-to address blocks three of four templates.** ① ② ④ all invite a reply, so notify-0 needs a
+5. **The reply-to address blocks three of the original four templates.** ① ② ④ all invite a reply, so notify-0 needs a
    monitored inbox registered and verified with Notify and its `emailReplyToId` configured. This plan's single
    template does not reply, so it does not surface the need — the kind of thing discovered late.
+   **Update 2026-09-20:** notify-6's assumed missing-documents chase also invites a reply.
 
 6. **`MasterDecision` is `Approved | Rejected` only, and two different emails hang off `Rejected`.** Taxonomy
    §4 has the detail. This plan dodges it by shipping only the enrolment-refused email; notify-3 cannot. With
