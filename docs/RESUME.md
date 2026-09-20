@@ -1,23 +1,35 @@
 # Resume state — where the next session picks up
 
-Rewritten **2026-09-18**. **Read this before restarting the loop.**
+Rewritten **2026-09-20**. **Read this before restarting the loop.**
 
-The previous version was written 7 September and had gone eleven days stale in a way that mattered: it
-said "plan 01 is complete, there is no plan 02 or 03" and stopped there, with no mention of the thirteen
-plans completed since; and its first open item told the reader to raise a `cnp-jenkins-config` entry
-that was merged on 14 September. A resumed session following it would have re-raised a closed request.
-The rule this file exists to serve: **it must describe today, or it actively misleads.**
+The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1 is
+complete — all seven tasks, the cold build, and the Docker-free count — and this branch is being merged
+to `master`. The next API plan is notify-5, not notify-3: correspondence history must exist before
+notify-4 starts attaching legal documents to emails.
+
+## Where the Notify work actually is — read this before anything else
+
+The implementation is one coherent branch:
+
+| Where | What is there |
+|---|---|
+| `notify-plans` | **notify-1 complete and pushed.** Client, outbox, one template, three operations, real send drain, security/contention coverage, and permanent-refusal resend |
+| `origin/master` | All five API plans and the current RESUME; receives the implementation when the notify-1 PR merges |
+
+The worktree is clean. V11 creates the outbox and V12 persists a machine-readable failure verdict so
+only a definite permanent refusal permits a replacement row. Pending, sent, temporary, technical and
+verdict-less legacy rows remain protected against duplicate sends.
 
 ## What is built, on `master`
 
 | | |
 |---|---|
-| Flyway migrations | **10** — enums, `DeedPoll`, children, list indexes, saved queries, referrals + backfill, claim/direction, `currentReferralState` + backfill |
-| Caseworker endpoints | **30**, across seven controllers under `api/caseworker/controller/` |
+| Flyway migrations | **12** — the existing ten plus V11's notification outbox and V12's durable failure verdict |
+| Caseworker endpoints | **33**, across eight controllers under `api/caseworker/controller/` |
 | Judicial endpoints | **4** on `/judicial/**` — the shared pool, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,106** — `test` 2,098 + `integration` 8. Measured 2026-09-18 after `referrals-api-3` |
-| `./gradlew build` | green locally, with `TESTCONTAINERS_RYUK_DISABLED=true` exported |
+| Tests | **2,290** — `test` 2,282 + `integration` 8, measured after notify-1 task 7 |
+| `./gradlew build` | green from cold on `notify-plans`, with `TESTCONTAINERS_RYUK_DISABLED=true` exported |
 
 Thirteen plans are in [`plans/completed/`](plans/completed/). The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
@@ -27,29 +39,45 @@ then the whole referrals feature in four plans — create/withdraw, claim/direct
 **The referrals backend is finished.** All four api-side plans are merged. The remaining referrals work
 is in `deed-poll-admin`, not here.
 
-## What the next session does: `notify-1`
+## The Notify series: five plans, and the order they should run in
 
-Branch **`notify-plans`**, one commit ahead of `master`, pushed, no PR. It carries one file:
-[`plans/notify-1-email-plumbing.md`](plans/notify-1-email-plumbing.md) — 408 lines, six tasks, reviewed
-and merged as a plan on 18 September. **No implementation exists**: no `notifications-java-client` in
-`build.gradle`, no notify package, no migration.
+All five are on `master` as of PR #26. The numbering is the order they were written, **not** the order to
+build them:
 
-It gives the service a GOV.UK Notify send path and proves it with exactly one template — the
-*Application Rejected* email — behind a WireMock double. Four things to hold before starting:
+```
+notify-1  the send path                     COMPLETE
+notify-5  what was sent, and when            case correspondence history   DO THIS NEXT
+notify-3  request confirmation to proceed    three exclusive templates
+notify-3b track the applicant's reply
+notify-4  generate the deed forms            needs a spike first
+```
 
-1. **It cannot send a real email, and preview cannot render, until `notify-0`.** No Notify service exists
-   for deed poll: no API key, no templates, no template IDs. That is expected, not a defect, and Task 1
-   establishes the placeholder convention. `notify-0` is Steve's.
-2. **Measure the baseline on the branch before Task 1.** The plan says 2,106 and says to confirm rather
-   than assume. Sum `tests="…"` across `build/test-results/{test,integration}/*.xml`.
-3. **The outbox is drained by a mutating read, not a scheduler** — deliberately, matching
-   `ReferralService`'s inactivity sweep and the judicial pool's `reclaimStaleClaims()`. Decision 4 in the
-   plan explains why, and decision 5 says to re-read `ReferralRepository.releaseStaleClaim` before Task 2.
-   This is the one place the plan diverges from `pcs-api`, knowingly.
-4. **The plan's seven flags for Steve are unresolved.** Flag 2 is the one that could bite a session: the
-   400/403-permanent, 429/500-temporary error taxonomy is read off `pcs-api`, not off Notify's docs, which
-   are blocked from this devcontainer. The method signatures *were* verified with `javap`. The taxonomy
-   was not.
+**notify-5 before notify-4 is deliberate**, and it is notify-5's flag 4. notify-4 attaches legal documents
+to emails; shipping that while a permanent failure is still invisible means an applicant who never
+receives their deed forms and a court that cannot tell. notify-5 also depends on nothing from `notify-0`,
+so it can run while template authoring is still outstanding — which no other plan in the series can.
+
+Four things a session should hold before touching any of them:
+
+1. **Nothing can send a real email, and preview cannot render, until `notify-0`.** No Notify service
+   exists for deed poll: no API key, no templates, no template IDs. That is expected, not a defect;
+   notify-1 task 1 establishes the placeholder convention. `notify-0` is Steve's.
+2. **notify-3 re-keys notify-1 task 7's index, which is now V12.** It must carry V12's null-safe
+   permanent-failure predicate through unchanged rather than reconstructing it. Both plans carry the
+   reciprocal note. Getting this wrong silently changes which rows the partial index covers.
+3. **notify-4's task 1 is a spike that is allowed to fail.** The deed templates the business supplied are
+   Dynamics 365 Word templates — 30 content controls bound by XPath to a custom XML part, no merge fields.
+   Whether docx4j can bind them is unproven. The fallback is Docmosis used for **conversion only**,
+   modelled on finrem's `DocumentConversionService`, which needs no CCD, CDAM, S2S or IDAM — none of
+   which this service has.
+4. **notify-5 rests on one verified fact.** `SendEmailResponse` carries `getSubject()` and `getBody()`, so
+   the rendered email comes back inside the send acceptance: history is exact at no extra Notify call and
+   nothing against the rate limit. Confirmed with `javap` against `6.2.0-RELEASE`. If that turns out to be
+   wrong, the plan's cost changes completely.
+
+**There is no download tracking and there never can be.** No download concept exists anywhere in the
+Notify Java client, and `getStatus()` is delivery status only. notify-5 owns the wording as much as the
+data, because a screen saying "Sent" gets read as "they have it".
 
 ## Deployment — what is actually true
 
@@ -61,7 +89,8 @@ is deleted deliberately**, because the template's named `rpe` / `spring-boot-tem
 product. `OpenAPIPublisherTest` still writes `/tmp/openapi-specs.json` and **nothing consumes it** — the
 spec no longer reaches `hmcts/cnp-api-docs`, an accepted gap worth revisiting.
 
-What has moved since 7 September:
+Everything in this section was last verified **2026-09-18**; nothing since has touched deployment, and
+nothing in this repo can confirm the external half. Re-check rather than quote.
 
 - **`cnp-jenkins-config` is done** — merged 14 September, as one PR covering all four repos, not four
   requests. Jenkins will build this repo.
@@ -71,13 +100,14 @@ What has moved since 7 September:
 - **The ACR migration is done** — `hmctspublic` → `hmctsprod` in `Dockerfile`, `Chart.yaml` and
   `values.yaml`. That nagger was what failed master build #3.
 - **CI runs without Docker.** `INTEGRATION_TESTS_ENABLED=false` (set by `Jenkinsfile_CNP`) drops
-  `integration` from `check` and excludes the `requires-docker` tag from `test`. **1,277 of the 2,098
-  unit tests run in CI**; the other 821 sit in 27 container-backed classes. Re-measure rather than trust
-  that split — it moves whenever such a class is added, and `build.gradle:87-98` carries the history.
+  `integration` from `check` and excludes the `requires-docker` tag from `test`. After notify-1 that is
+  **1,415 of 2,282** unit tests running in CI, with 867 in 30 container-backed classes.
+  `build.gradle:87-103` carries the full history and instructs the next plan to re-measure it.
 - **The chart is wired for workload identity** — `useWorkloadIdentity: true`, `saEnabled: true`, reading
   the shared `deed-poll-{env}` vault for `app-insights-connection-string` and the four `postgres-*`
   secrets. The matching identity, federated credential and service-account annotation are
-  `cnp-flux-config`'s, not this repo's.
+  `cnp-flux-config`'s, not this repo's. **A Notify API key will need adding to that vault and to this
+  list** — `notify-0`'s other half, and easy to forget because it is not in this repo.
 
 **This repo's first master build has still never been proven green.** Both CI plans say so explicitly:
 `build.hmcts.net` is behind Azure AD App Proxy and unreachable from the devcontainer, the Docker-less
@@ -100,7 +130,9 @@ What it does **not** give, and each of these is a real constraint on what a sess
 
 1. **No `deed-poll-api` client and no S2S registration.** This service is a resource server; it validates
    tokens minted for `deed-poll-admin`. Nothing here calls another CFT service yet, so `idam.s2s-auth` is
-   configured and unused.
+   configured and unused. **Notify does not change this** — it is a direct HTTPS call with its own API
+   key, not a CFT service behind S2S, which is precisely why the whole Notify series can proceed without
+   the registration.
 2. **No judicial role.** `Role.JUDICIAL` gates the four `/judicial/**` operations and IDAM issues no such
    role, so that surface cannot be exercised by a real token in any environment. Its tests are the only
    proof it works.
@@ -117,21 +149,34 @@ What it does **not** give, and each of these is a real constraint on what a sess
 
 ## Open items that are Steve's, not a session's
 
-1. **The backend's `.internal` address does not exist.** `charts/deed-poll-api/values.yaml` sets
+1. **`notify-0`** — create the GOV.UK Notify service, API key and templates; turn on **send a file by
+   email** (notify-4 needs it, and it is off by default); register and verify a monitored reply-to inbox
+   (three of four templates invite a reply); record the real rate limit and the real retention default.
+   The checklist is `../deed-poll-admin/.business_context/NOTIFY_PROVISIONING_REQUEST.md`, corrected and
+   merged 19 September. **All five Notify plans depend on this and none of them can be demonstrated
+   without it.**
+2. **The five blank forms are not in `doc_templates/`.** LOC021, LOC023, LOC024, LOC027 and LOC028 are
+   named by the taxonomy and attached by notify-4, and nobody has supplied them. Two of the seven
+   documents (LOC020 adult, LOC022 minor) are generated and present; the other five are static and
+   missing. **notify-4 cannot finish without them.**
+3. **What `signatureRequestedDate` means.** `CaseState.deriveState` derives `AwaitingSignature` from it
+   being non-null, so sending the forms-for-completion email *is* the signature request — but it is also
+   patchable through `DeedPollPatch`, so a caseworker can set it by hand. notify-3b flag 1 and notify-4
+   flag 2 ask the same question and should be answered together.
+4. **`DOCUMENT_STORE_ROOT` must not reach a deployed environment — and this is now urgent.** Local disk
+   does not survive AKS and replicas do not share a volume. It was tolerable while nothing wrote
+   documents; notify-4 generates deeds and stores them, so the gap becomes a data-loss gap. Real storage
+   is plan 03.
+5. **The backend's `.internal` address does not exist.** `charts/deed-poll-api/values.yaml` sets
    `ingressHost` to `deed-poll-api-{env}.service.core-compute-{env}.internal`, which `deed-poll-admin`'s
    chart already expects. That name is created by a two-line entry in `backend_lb_config.yaml` in
    **`hmcts/azure-platform-terraform`** — not by Jenkins, not by Flux, not by this chart. An earlier plan
    that proposed creating it through the deployment tooling was set aside on 17 September for exactly that
    reason. **Not yet raised.**
-2. **No probe paths.** `charts/deed-poll-api/` has no `readiness`/`liveness` configuration at all, so
+6. **No probe paths.** `charts/deed-poll-api/` has no `readiness`/`liveness` configuration at all, so
    nothing points at `/health/readiness` or `/health/liveness`. The `cnp-flux-config` namespace and
    HelmRelease are also outstanding, and Jenkins folder configuration is unconfirmed.
-3. **`notify-0`** — create the GOV.UK Notify service, API key and templates; register and verify a
-   monitored reply-to inbox (flag 5: three of four templates invite a reply); record the real rate limit
-   (flag 3: preview calls Notify).
-4. **`DOCUMENT_STORE_ROOT` must not reach a deployed environment.** Local disk does not survive AKS and
-   replicas do not share a volume. Real storage is plan 03.
-5. **A Docker-capable CNP agent** is the real fix for the CI gating, and is an external dependency —
+7. **A Docker-capable CNP agent** is the real fix for the CI gating, and is an external dependency —
    tracked in `cft-workspace/TRACKER.local.md` §4.
 
 ## There is still no plan 02 or 03
@@ -142,7 +187,13 @@ Both remain deliberately unwritten, and for unchanged reasons:
   definition. The case type and jurisdiction ID are **unconfirmed**; `deedpoll.ccd.case-type-id:
   DEED_POLL_PLACEHOLDER` in `application.yaml` is the single constant any reference must go through.
 - **Plan 03 — CDAM.** Real document storage, hash tokens, the attach cycle, replacing
-  `LocalFilesystemDocumentStore` behind the existing `DocumentStore` seam.
+  `LocalFilesystemDocumentStore` behind the existing `DocumentStore` seam. **notify-4 now pushes on
+  this** — see open item 4.
+
+Their absence is also why notify-4 does **not** use `doc-assembly` the way `pcs-api` does:
+`DocAssemblyRequest` needs a `caseTypeId` and `jurisdictionId`, and `DocAssemblyResponse` returns a
+`renditionOutputLocation` and a `hashToken` rather than bytes — so that route would couple the Notify
+series to both unwritten plans. Verified against the client's source, not assumed.
 
 Retiring `apps/api` in the sibling repo and cutting `apps/web` over to HTTP is later work in a different
 repo, and must not happen until this service is deployed and serving.
@@ -153,19 +204,35 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 
 | File | State |
 |---|---|
-| `notify-1-email-plumbing.md` | **Next.** Ready to run; see above |
+| `notify-1-email-plumbing.md` | **Complete.** All seven tasks implemented, validated, pushed and being merged |
+| `notify-5-case-correspondence-history.md` | **Next after notify-1.** Needs nothing from `notify-0`. Flag 4 argues the ordering |
+| `notify-3-request-confirmation-to-proceed.md` | Ready. Re-keys notify-1 task 7's index — read whichever migration exists first |
+| `notify-3b-confirmation-tracking.md` | Ready, but flag 1 wants a business answer on `signatureRequestedDate` |
+| `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
 | `role-model-generalisation.md` | **Gated, and may not be needed.** A behaviour-preserving refactor of `boolean isAdmin` into capabilities. Gated on scope question Q0.1 and, preferably, on a first successful deployment — so that a failed deploy is unambiguously a deployment problem and not a 33-site refactor |
 | `role-based-access-findings.md` | Findings, not a plan. The measured inventory of what could be role-gated, so the business question is asked against a concrete list |
 | `role-based-access-questions-for-the-business.md` | **Resolved 2026-09-11**, never sent; the business's `.docx` answered it. Kept for the reasoning |
-| `scope-gap-questions.md` | **Q0.1 answered 2026-09-12** — functional parity with the Power App is the minimum. Now the evidenced gap analysis, with verification commands per row |
+| `scope-gap-questions.md` | **Q0.1 answered 2026-09-12** — functional parity with the Power App is the minimum. Now the evidenced gap analysis, with verification commands per row. Six parity gaps still have no plan |
+
+There is also a follow-on owed to **`deed-poll-admin`**: notify-2's decision 8 is `[PROVISIONAL]` and its
+decision 11 defers case correspondence history to "a later plan… it is api's data to serve". notify-5 is
+that data; once it lands, notify-2 can be amended and both resolved. notify-5's flag 5 records it.
 
 ## Do not let a session drift into
 
 Writing plan 02 or 03 from guesses. Editing `src/test/resources/reference/` — it is a verbatim vendored
 copy of the specification and the conformance tests read it as ground truth, so if one looks wrong, stop
-and report. Editing a committed Flyway migration. Inventing an IDAM role name, a case type or a
-jurisdiction ID. Inferring the state of a Jenkins build from the code, rather than asking for the log.
+and report. Editing a committed Flyway migration — **including `V11__notifications.sql`, which is
+committed as V11 and V12**; notify-3 and notify-4 each take the next free number and say so. Inventing
+an IDAM role name, a case type or a jurisdiction ID. Inferring the state of a Jenkins build from the code,
+rather than asking for the log.
+
+Two habits this repo's plans expect, because breaking them has cost time before: **append corrections
+rather than rewriting** a plan, so the reasoning survives; and **verify before asserting** — three claims
+in the session that produced notify-4 and notify-5 were wrong and were caught only by checking, one of
+them because a `head`-truncated grep was reported as a complete result.
 
 Full context, if a session needs the *why*:
-`../deed-poll-admin/.business_context/DEED_POLL_API_PLAN.md`. Per-clone conventions that break silently:
-`../CLAUDE.md` in this repo's root.
+`../deed-poll-admin/.business_context/DEED_POLL_API_PLAN.md`, and for the email work
+`NOTIFY_TEMPLATE_TAXONOMY.md` and `NOTIFY_PROVISIONING_REQUEST.md` beside it. Per-clone conventions that
+break silently: `../CLAUDE.md` in this repo's root.

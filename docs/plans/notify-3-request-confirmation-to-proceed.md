@@ -1,0 +1,326 @@
+# notify-3 — *Request confirmation to proceed*, the second email
+
+## Overview
+
+Adds the second of the four templates: the email a caseworker sends when the judge **refused a
+non-publication request but enrolment may still go ahead**. The applicant is asked to confirm they still want
+the deed enrolled, or to say they do not and be refunded.
+
+Everything this email needs already exists. notify-1 built the client, the error taxonomy, the outbox, the
+drain and the three operations, and built them to take a second template: `EmailTemplate` is an enum whose
+members carry their own resolved keys and slots, `CaseEmailService.cause()` is a `switch` with no `default`
+so a new member **fails to compile** until somebody says what makes it applicable, and `EmailSlots.parse`
+already refuses a request that tries to set a resolved value. This plan is mostly a new enum member, a new
+personalisation record, and the rules for when the email is offered.
+
+Read first: [`NOTIFY_TEMPLATE_TAXONOMY.md`](../../../deed-poll-admin/.business_context/NOTIFY_TEMPLATE_TAXONOMY.md)
+§3, §4 and §6, and this repo's `notify-1-email-plumbing.md` — its decisions are this plan's decisions except
+where said otherwise below.
+
+**The template's actual words, read from the supplied `.docx` rather than inferred.** Worth having in front of
+you, because three separate design points fall out of it:
+
+> Your application was referred to a judge for a decision as you provided us with a statement requesting for
+> your **[child's] [delete if an adult application]** details not to be published in The Gazette.
+>
+> On **XX/YY/ZZZZ** we received instructions from the judge on this matter. They have rejected your request.
+> They have stated the following:
+>
+> **"…" [Enter judge's comments]**
+>
+> If you still wish to enrol the deed poll then let us know **by replying to this email** so we can pass on
+> your **[child's]** change of name for enrolment.
+>
+> **[If the applicant applied online …]** … we will issue your refund to the same account you used to pay.
+> **[If the applicant applied on paper …]** … please provide the old and new name, how payment was made, …
+
+**This plan depends on notify-1 being finished, including its task 7.** Task 7 is what lets a permanently
+refused send be sent again; without it a misconfigured environment permanently poisons a referral, and this
+plan doubles the number of ways to reach that. It also depends on **notify-0** for the template UUID, exactly
+as notify-1 does — the placeholder convention is already in place and nothing here changes it.
+
+**Scope is the api.** The Email tab is notify-2's, and notify-2 was written to need no change when a template
+is added — its task 4 asserts that. If this plan forces a change in `deed-poll-admin`, that is a finding worth
+reporting rather than a change worth making quietly.
+
+---
+
+## Decisions taken — implement these, do not revisit
+
+1. **The caseworker chooses which email to send; the service does not derive it.** This is taxonomy §4's
+   recommendation and it is settled here. `MasterDecision` is only `Approved | Rejected`, and a rejection
+   means "enrolment refused" for template ③ and "your non-publication request is refused, enrolment may still
+   proceed" for ④ — opposite outcomes. The discriminator would have to be `ReferralReason`, and referrals are
+   deliberately multi-select: one raised for both `NonPublication` *and* `DeclarantRequirementsNotMet` gets one
+   `Rejected` and one free-text direction covering both, which cannot be decomposed. A caseworker is already
+   reading the direction in order to action it, so choosing is work they are doing anyway.
+
+2. **`NonPublication` is necessary for ④ to be offered, but not sufficient to send it.** Availability is
+   derivable in the safe direction only: a `Rejected` referral whose `reasons` do **not** include
+   `NonPublication` cannot be about a non-publication request, so ④ is not applicable and the `GET` says so.
+   A referral that does include it offers **both** ③ and ④, and the caseworker picks. `Referral.reasons` is
+   `List<String>` holding `ReferralReason` member names, so the check is against
+   `ReferralReason.NonPublication.name()` and not a free-text match.
+
+3. **③ and ④ are mutually exclusive for one referral, and the database enforces it (Steve, 2026-09-19).**
+   The partial unique index is on `("referralId", "template")`, so it stops a second ③ and a second ④ but
+   permits one of each — and those two emails contradict each other: one says enrolment is refused, the other
+   asks whether to proceed with enrolment.
+
+   **Enforced by widening the existing index, not by adding a second mechanism.** `EmailTemplate` gains an
+   **exclusion group**; the notification row stores the group alongside the template; and the unique index
+   becomes `("referralId", "exclusionGroup")`. ③ and ④ share the group `REFERRAL_OUTCOME`, so one referral
+   gets one of them, decided atomically by Postgres rather than by a check with a race in it. A template
+   alone in its group behaves exactly as today, so this is a generalisation of the existing rule rather than
+   a new one beside it.
+
+   **The group is declared on the enum rather than in a pair table, and that is the load-bearing part.**
+   A table of incompatible pairs is data, and data cannot force a decision: somebody adds a fifth template,
+   forgets to add its rows, and it silently excludes nothing. This codebase deliberately does the opposite —
+   `CaseEmailService.cause()` is "a `switch` with no `default`, so a template added to the enum does not
+   silently inherit another one's rule: it fails to compile until somebody says what makes it applicable."
+   A group as a required constructor argument on the enum member has that same property, and a pair table
+   does not. So the enum decides the grouping and the database enforces it.
+
+   **The stored group is deliberately a copy, not a lookup.** The index needs a column, and a row keeps the
+   group it was written under — so re-grouping templates later cannot retrospectively make two already-sent
+   emails conflict. That is the right direction: history stays true to what was sent.
+
+4. **The referral is a parameter to this personalisation, unlike template ③'s — and the guard stays.**
+   `ApplicationRejectedPersonalisation` deliberately refuses the referral so that a second, un-edited copy of
+   the judge's words cannot reach the same email. ④ needs `Referral.decisionDate` for "On XX/YY/ZZZZ we
+   received instructions from the judge", which is not the judge's words and has no slot. So the referral is
+   passed, and the rule it was protecting is restated as a narrower one: **`directionsText` is never read
+   here.** The javadoc says so and a test asserts the resolved map does not contain it.
+
+5. **`XX/YY/ZZZZ` becomes `decision_date`, formatted for an applicant.** It is a literal in the document
+   today — a date nobody turned into a merge field. `Referral.decisionDate` is a `LocalDateTime`; the
+   applicant sees a date, so it is formatted as one (`d MMMM yyyy`, the format the rest of this service shows
+   a member of the public) and not as an ISO timestamp. Formatted in the resolver rather than in the template,
+   because Notify has no date formatting.
+
+6. **"Minor" is four enum members' worth of question, not two.** `DeedPollType` is
+   `Adult | AdultTransgender | Minor | MinorTransgender`, so the `[child's]` branch is
+   `Minor || MinorTransgender` and not `type == Minor`. A `switch` with no `default` over `DeedPollType`, so a
+   fifth member added later fails to compile rather than silently addressing a child's application as an
+   adult's. Sent as a JSON boolean `is_minor`, for the reason `applied_online` is a boolean.
+
+7. **The refund branch is template ③'s rule, reused unchanged.** Same discriminator — `PostCounter.Online` is
+   the only value that gets the "we will refund the account you paid from" paragraph, everything else
+   including `Unknown` and unset gets the paper paragraph that asks the applicant how they paid. The asymmetry
+   is deliberate and `ApplicationRejectedPersonalisation.appliedOnline` documents why. **Extract it rather than
+   copy it**, so the two emails cannot drift into disagreeing about who gets an automatic refund.
+
+8. **Both slots are unchanged.** `JUDGES_REASON` required, `ADDITIONAL_NOTES` optional, same caps.
+   `EmailSlot`'s javadoc already says requiredness holds for the whole proposed template set, and this is the
+   second template proving it. No new slot member.
+
+9. **This email invites a reply, and the reply-to is a provisioning dependency Steve owns.** Two of its
+   paragraphs say "let us know by replying to this email", so the default Notify no-reply sender would lose
+   the answer this email exists to collect. Steve owns registering and verifying the monitored inbox
+   (2026-09-19) and it is assumed to be in place, so this plan does not design around its absence — but it
+   **does** make the assumption fail loudly rather than silently. `emailReplyToId` is required configuration
+   for a template that invites a reply, and `isProvisioned` for such a template is false without it, exactly
+   as it is false without a template UUID. Both are notify-0's to supply and neither is a secret.
+
+10. **Whether a template invites a reply is a property of the template, not of the service.** ③ does not
+    invite one and must not start requiring a reply-to; ④ does. So the flag lives on `EmailTemplate` beside
+    `key()` and `slots()`, and `isProvisioned` takes the template rather than answering for the whole
+    service. That keeps the Email tab able to say "this email cannot be sent yet" about one template without
+    disabling the other.
+
+---
+
+## Constraints
+
+notify-1's constraints apply in full — Java 21, `-Werror`, checkstyle on five source sets,
+`TESTCONTAINERS_RYUK_DISABLED=true`, DTOs never entities, a controller test boots the whole context, never
+edit `src/test/resources/reference/`, no live Notify call in any test. Additional:
+
+- **One migration, and it supersedes notify-1's task 7 index.** Decision 3 needs an `"exclusionGroup"` column
+  and a rewritten unique index — and task 7 rewrites that *same* index to stop a permanently failed send
+  blocking its own replacement. **They must not be written independently.** notify-1 ships first, so this
+  plan's migration takes task 7's predicate as its starting point and widens the key from `"template"` to
+  `"exclusionGroup"`, keeping the permanent-failure exclusion intact. Read task 7's migration before writing
+  this one, and re-state its predicate rather than reconstructing it from memory.
+- **Take the next free migration number and say so**, as notify-1's task 2 had to. `V11` is committed and
+  task 7 takes `V12`; do not assume `V13` is free without looking.
+- **No other schema change.** Every value this email needs is already a column. If this plan reaches for one
+  that is not, stop — that is a taxonomy error worth reporting, since §2 asserts all four emails resolve
+  against the existing model.
+- **Do not change `deed-poll-admin`.** notify-2's design intent is that a new template appears with no change
+  there. If something forces one, report it rather than making it.
+- **Container-free where CI runs it.** Same rule and same reason as notify-1: availability, the applicability
+  rules, the resolved-values-are-not-input rule and the minor branch need no container and must be stated
+  container-free.
+- **notify-1 must be merged first**, including its task 7. Do not start against a branch where tasks 5–7 are
+  open.
+
+---
+
+## Validation Commands
+
+**These run after every task, so everything here must be green after every task — not only at the end.**
+
+```bash
+export TESTCONTAINERS_RYUK_DISABLED=true
+./gradlew build
+```
+
+**Measure the baseline on this branch before Task 1** by summing `tests="…"` across
+`build/test-results/{test,integration}/*.xml`, and record it next to the final count in Task 3. Confirm rather
+than assume — notify-1 moved these figures and its task 7 moved them again.
+
+**A worker or container startup timeout is an environment failure, not a code failure** — re-run before
+investigating.
+
+---
+
+## Tasks
+
+### Task 1: The template, its resolved values and the two new conditionals
+
+Read first: `EmailTemplate`, `ApplicationRejectedPersonalisation` and `EmailSlots.parse`.
+
+- `REQUEST_CONFIRMATION_TO_PROCEED("request-confirmation-to-proceed", …)` added to `EmailTemplate`, with
+  `JUDGES_REASON` and `ADDITIONAL_NOTES`. Adding the member breaks `CaseEmailService.cause()` and
+  `reasonNotApplicable()` at compile time by design — that is the prompt for Task 2, not a problem to route
+  around.
+- `RequestConfirmationToProceedPersonalisation`, a record beside the existing one, resolving:
+  `reference_number`, `online_application_reference`, `old_forename`, `old_surname`, `applied_online`,
+  **`is_minor`**, **`decision_date`**, plus the two slots. `RESOLVED_KEYS` declared on the record and read by
+  the enum, as ③ does it.
+- **Extract the refund branch** so both records call one `appliedOnline(PostCounter)` rather than two copies
+  (decision 7). Moving it is a refactor of ③'s code — keep its javadoc, which is the argument for the
+  asymmetry, with the code.
+- `isMinor(DeedPollType)` as a `switch` with no `default` (decision 6).
+- `decision_date` formatted `d MMMM yyyy` from `Referral.decisionDate`, empty string when null — for the
+  reason every other key is present even when blank: Notify refuses a send whose personalisation is missing a
+  placeholder the template uses.
+- Tests, container-free: every resolved key present and in `toMap()` order; `is_minor` true for `Minor` and
+  `MinorTransgender` and false for both adult members; `applied_online` true only for `Online`; a null
+  `decisionDate` renders empty rather than absent; and **`directionsText` appears nowhere in the resolved map**
+  even though the referral is in scope (decision 4).
+
+- [ ] The template resolves its own personalisation, the refund branch is shared with ③ rather than copied,
+      `is_minor` covers all four `DeedPollType` members, `decision_date` is a formatted date, the judge's
+      direction never leaks into a resolved value, and `./gradlew build` green
+
+### Task 2: When the email is offered, and when it is refused
+
+Read first: `CaseEmailService.cause()`, `availability()` and `EmailAvailability`.
+
+- `cause()` gains its branch: the newest `Rejected` referral whose `reasons` contain
+  `ReferralReason.NonPublication.name()` (decision 2). Newest first, for the reason ③ is — an older refusal
+  has been superseded.
+- `reasonNotApplicable()` gains its sentence, naming the actual reason: no rejected referral, or one that was
+  not about non-publication. Those are two different sentences and a caseworker can act on the difference.
+- **The mutual-exclusion rule (decision 3)** ships as its own migration, read together with notify-1's task 7:
+  an `"exclusionGroup"` column on `deedpoll_notification`, backfilled for existing rows from their template,
+  and the unique index re-keyed from `("referralId", "template")` to `("referralId", "exclusionGroup")` while
+  keeping task 7's permanent-failure predicate exactly as task 7 left it. `EmailTemplate` gains the group as a
+  required constructor argument — ③ and ④ both `REFERRAL_OUTCOME` — and `enqueue` binds it alongside the
+  template.
+- **The `GET` still reports it, because a 409 is a bad way to find out.** `availability()` says ④ is
+  unavailable once ③ has a row in its group for that referral and vice versa. That is a courtesy, not the
+  enforcement: the index is the enforcement, and the check is there so the Email tab can grey the option out
+  rather than let a caseworker compose an email that will be refused on submit.
+- The refusal, when the index does fire, is a **409** naming which email was already sent and when — not a
+  `DataIntegrityViolationException` reaching the caseworker. `enqueue` already answers `0` on conflict rather
+  than throwing, and that path is reused, so the caseworker's transaction stays usable exactly as it does for
+  a double-click.
+- Tests, container-free: offered for a rejected non-publication referral; not offered when the referral was
+  rejected for other reasons only; not offered when there is no rejected referral; offered for a multi-reason
+  referral that includes `NonPublication`, **alongside ③**, because the caseworker chooses; and the
+  availability check hides the counterpart once one is sent, in both directions. Container-backed, in
+  `NotificationRepositoryTest` beside the three this review already added: enqueueing ④ for a referral that
+  already has ③ answers `0` and leaves one row, the backfill gives every existing row the right group, and a
+  template alone in its group still behaves exactly as it did before the re-keying.
+
+- [ ] ④ is offered exactly when a rejected non-publication referral exists and its counterpart has not been
+      sent, the index refuses the second email of a group rather than a service check doing it, existing rows
+      are backfilled, a single-template group behaves as before, and `./gradlew build` green
+
+### Task 3: Security, the reply-to, and full validation
+
+- `NotificationSecurityTest` extended rather than duplicated: ④'s personalisation contains **only** its own
+  keys, asserted against the record's components; its recipient is `applicantEmail` and never
+  `representativeEmail`; and a caseworker cannot reach another case's ④ operations.
+- **The reply-to (decisions 9 and 10):** `EmailTemplate` gains an `invitesReply` flag — false for ③, true for
+  ④ — and `NotifyProperties` gains `emailReplyToId`. `isProvisioned` becomes per-template: a template that
+  invites a reply is unprovisioned without a reply-to, exactly as any template is without a UUID. The send
+  passes `emailReplyToId`; ③'s call is unchanged. Tested container-free: ④ reads unprovisioned with no
+  reply-to configured while ③ still reads provisioned, and the id reaches the send when it is set.
+- **Re-check the ArchUnit rule still holds** — nothing outside the notify package reaches `NotificationClient`.
+  It should pass untouched; if it does not, something in this plan took a shortcut.
+- Full validation: cold `./gradlew build` with `TESTCONTAINERS_RYUK_DISABLED=true`, checkstyle clean on five
+  source sets, `test` and `integration` totals recorded next to this plan's baseline, and the count with
+  `INTEGRATION_TESTS_ENABLED=false`. Re-measure `build.gradle`'s exclusion comment if this plan adds a
+  container-backed class, as that comment instructs.
+- Refresh the OpenAPI output so notify-2 can see the new template without a change of its own, exactly as
+  notify-1's contract reached it.
+
+- [ ] ④'s keys, recipient and case-scoping stated container-free, ④ reads unprovisioned without a reply-to
+      while ③ still reads provisioned, the ArchUnit rule passes untouched, the OpenAPI output is refreshed,
+      and `./gradlew build` green from cold with both totals recorded
+
+---
+
+## Deliberately not in this plan
+
+- **notify-0, the provisioning.** The template UUID and the reply-to address. Without them this email cannot
+  send, exactly as notify-1 cannot — that is expected, not a defect.
+- **The two *forms for completion* emails (notify-4).** Blocked on document generation, which Notify cannot
+  do, and on the attachment-wording decision in taxonomy §5.4.
+- **The missing fifth email**, the Gazette notice PDF. No template was supplied; taxonomy §5.2.
+- **Any change to `deed-poll-admin`.** The Email tab is notify-2's and is designed to need none.
+- **Modelling per-reason referral outcomes.** Decision 1 settles this by letting the caseworker choose. If
+  that is ever revisited, it is a change to the direction model and a plan of its own.
+
+---
+
+## Flags for Steve — pick these up on return
+
+1. **The reply-to inbox is yours and is assumed in place (Steve, 2026-09-19).** Decisions 9 and 10 build on
+   that assumption rather than working around it, and make it visible: ④ reports itself unprovisioned until
+   `emailReplyToId` is configured, so a deployment missing it says so in the Email tab instead of quietly
+   sending from no-reply. Nothing here blocks on it; this flag is now only a reminder that the inbox must be
+   **monitored**, not merely registered — a verified address nobody reads fails in exactly the same way as no
+   address at all, and does it invisibly.
+
+2. **Mutual exclusion is decided: the database enforces it (Steve, 2026-09-19).** Decision 3 has the shape.
+   You asked for the exclusion-table option, and I have implemented its *intent* — enforcement in data rather
+   than a service check — but as an **exclusion group on the enum plus a re-keyed unique index**, not as a
+   table of incompatible pairs. The reason is the convention `CaseEmailService.cause()` already relies on: a
+   table is data, and data cannot make anyone notice it. Add a fifth template, forget its rows, and it
+   silently excludes nothing. A group as a required constructor argument cannot be forgotten, and the index
+   still does the enforcing. **If you specifically wanted pairs to be editable without a deploy, say so and I
+   will swap it** — but note that adding a template needs a deploy anyway, so runtime-editable pairings buy
+   nothing this feature can use.
+
+   One limitation worth knowing: a group is a strict partition, so it cannot express "A excludes B, B
+   excludes C, A and C are fine". Nothing in the four-template set needs that — ③④ are one group and ①②
+   would be another — but a fifth template that half-overlaps two others would need the pair table after all.
+
+3. **`XX/YY/ZZZZ` is evidence these documents were never proofread as templates.** Decision 5 turns it into
+   `decision_date`, but it suggests the supplied `.docx` files should be re-read by whoever authors the Notify
+   versions rather than transcribed. Taxonomy §5 lists five more content gaps of the same kind.
+
+4. **The taxonomy says "adult vs minor is chosen by `type`", which is not quite true.** `DeedPollType` has
+   four members, and `AdultTransgender` / `MinorTransgender` have to fall on the right side of the `[child's]`
+   branch. Decision 6 handles it, but the same gloss appears in the notify-4 rows of §6 — where it picks
+   *which template* rather than which sentence, so getting it wrong sends an applicant the wrong email
+   entirely. Worth correcting in the taxonomy before notify-4.
+
+5. **Tracking the reply is now its own plan — `notify-3b-confirmation-tracking.md`.** ④ leaves a case waiting
+   on an answer, and without somewhere to record that answer the email is a message rather than a process.
+   That plan is written and **notify-3 should not go live without it**; the dependency is stated in both.
+   What it cannot settle on its own is in its own flags — chiefly that the case state is a derived cascade
+   ported from Dynamics, so "awaiting confirmation" cannot become a ninth `DeedPollState`.
+
+6. **①② are mutually exclusive too, and this mechanism does not cover them.** The adult and minor
+   forms-for-completion emails should never both go to one applicant, but they are not referral-driven, so
+   the partial index — `WHERE "referralId" IS NOT NULL` — does not apply to either. Their exclusivity is per
+   *case*, not per referral, and nothing enforces it today. Out of scope here because neither template
+   exists yet, but notify-4 inherits the problem and the group column will be sitting there looking like it
+   already solved it. It has not.

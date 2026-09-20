@@ -544,7 +544,6 @@ index predicate, and `V11__notifications.sql`.
   (`"PERMANENT: 403 ..."`), so predicating an index on it would make a `LIKE` load-bearing. Prefer a dedicated
   column — the taxonomy verdict stored as its own value when the row is settled — and a partial index of the
   shape `WHERE "referralId" IS NOT NULL AND NOT ("state" = 'Failed' AND <verdict> = 'PERMANENT')`.
-
   **Implemented refinement:** V12 uses
   `("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT')`. The sketch above is unsafe when
   the verdict is null: SQL's `NOT NULL` is still null, so a failed row written by an older application during
