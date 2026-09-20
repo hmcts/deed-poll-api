@@ -18,9 +18,12 @@ package uk.gov.hmcts.reform.deedpoll.entity.enums;
  * {@link #Withdrawn} are reached today: {@link #Claimed}, {@link #Decided} and {@link #Closed} arrive
  * with the directions plans, which then add transitions rather than an {@code ALTER TYPE}.
  *
- * <p>The split that matters to the guards is {@linkplain #isTerminal() terminal or not}. A case may
- * hold many referrals but at most one non-terminal, and a referral may only be withdrawn while it is
- * non-terminal.
+ * <p><strong>Two splits matter to the guards, and they are deliberately not the same split.</strong>
+ * {@linkplain #isTerminal() Terminal or not} answers how many referrals a case may hold: many over its
+ * lifetime, at most one non-terminal at a time. {@linkplain #canBeWithdrawn() Withdrawable or not}
+ * answers whether the office may still pull one back, and it is the narrower of the two -- {@link #Decided}
+ * is non-terminal and nonetheless not withdrawable, because a judge has recorded a direction on it and the
+ * office's remaining move is to action it and close it.
  */
 public enum ReferralState {
 
@@ -44,14 +47,41 @@ public enum ReferralState {
     /**
      * Whether this state is an end state, from which no transition leaves.
      *
-     * <p>Asked rather than listed at each call site, because the two rules that depend on it -- one
-     * open referral per case, and withdraw-only-while-live -- have to agree about it, and a later
-     * state added to the enum but not to one of two hand-written sets would break exactly one of
-     * them.
+     * <p>Asked rather than listed at each call site, because the rules that depend on it -- one live
+     * referral per case, and the denormalised {@code currentReferralState} column that says which one --
+     * have to agree about it, and a later state added to the enum but not to one of two hand-written sets
+     * would break exactly one of them.
+     *
+     * <p><strong>Withdrawal is no longer one of those rules, and narrowing this to make it one again would
+     * move both of them.</strong> See {@link #canBeWithdrawn()}.
      *
      * @return true for {@link #Closed} and {@link #Withdrawn}
      */
     public boolean isTerminal() {
         return this == Closed || this == Withdrawn;
+    }
+
+    /**
+     * Whether the office may still pull a referral in this state back.
+     *
+     * <p>Narrower than {@linkplain #isTerminal() non-terminal}, and a second independent predicate rather
+     * than a narrowing of that one, because {@link #Decided} is deliberately both: non-terminal, so the case
+     * still holds it and cannot raise a second beside it, and not withdrawable, because a direction exists
+     * and withdrawing it would discard judicial work the office is obliged to action. {@code Decided ->
+     * Closed} is the transition that records the office having actioned it.
+     *
+     * <p>Narrowing {@code isTerminal()} instead would be the plausible-looking mistake and would move two
+     * unrelated rules at once: a case could hold a second referral beside a decided one, and the
+     * {@code currentReferralState} column would go NULL while a direction was still waiting to be actioned,
+     * dropping the case out of the "returned -- action needed" queue.
+     *
+     * <p>Asked rather than listed at each call site for the reason {@link #isTerminal()} is, and named after
+     * the business rule rather than after the two states, so a sixth state is a decision taken here rather
+     * than a case quietly missing from a controller.
+     *
+     * @return true for {@link #Open} and {@link #Claimed}
+     */
+    public boolean canBeWithdrawn() {
+        return this == Open || this == Claimed;
     }
 }

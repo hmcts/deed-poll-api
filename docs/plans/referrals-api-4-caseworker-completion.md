@@ -188,8 +188,32 @@ Update `ReferralServiceTest` to prove:
 
 Update service documentation that currently says every non-terminal referral is withdrawable.
 
-- [ ] Domain withdrawal rule accepts only `Open`/`Claimed`; every state covered; refused writes have no side
+- [x] Domain withdrawal rule accepts only `Open`/`Claimed`; every state covered; refused writes have no side
       effects; focused unit tests green
+
+#### What Task 1 did, 2026-09-20
+
+`ReferralState.canBeWithdrawn()` is the new domain authority — `Open || Claimed` — added **beside**
+`isTerminal()` rather than narrowing it, for the reason Task 0 recorded. `isTerminal()` is byte-for-byte
+unchanged, so `LIVE_STATES`, `CurrentReferralState.of` and every test parameter set derived from it are
+untouched; only `ReferralService.withdrawReferral`'s guard moved.
+
+The 409 wording splits in two, in `ReferralService.refusedWithdrawal`:
+
+- `Decided` → `Referral {id} is Decided -- a direction has been recorded on it and must be actioned and the
+  referral closed, rather than withdrawn`;
+- `Closed`/`Withdrawn` → the existing `Referral {id} is already {state} and cannot be withdrawn`, left
+  verbatim because `CaseworkerReferralControllerTest` asserts it as an exact string.
+
+Tests: `ReferralStateTest` gains three (the withdrawable set, `Decided` non-terminal-yet-unwithdrawable, and
+withdrawable ⊂ non-terminal so the two predicates cannot contradict). `ReferralServiceTest.Withdrawing` gains
+the `Decided` refusal — no save, no note, **no `writeCurrentReferralState`**, direction intact — and a
+`@EnumSource(ReferralState.class)` case that asks the service about all five states and expects whatever
+`canBeWithdrawn()` says, so a sixth state cannot slip through untested. The claimed-withdrawal test now uses a
+real `storedClaim(JUDGE, …)` and proves the judge's later `decide` is refused.
+
+`./gradlew build` green: `test` 2,301 over 300 result files, `integration` 8 over 3 — **2,309**, zero failures,
+zero errors. Baseline was 2,300, so +9, which is exactly the tests added (3 + 1 + 5 parameterised).
 
 ### Task 2: Prove the HTTP and read-model behaviour
 

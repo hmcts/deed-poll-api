@@ -623,17 +623,54 @@ class ReferralServiceTest {
         }
 
         @Test
-        @DisplayName("withdraws a referral a judge is already holding")
+        @DisplayName("withdraws a referral a judge is holding, and that voids their claim")
         void withdrawsAReferralAJudgeIsAlreadyHolding() {
-            // The guard is written against "not terminal" rather than "== Open", so the states the directions
-            // plan adds need no change here. Claimed is not reachable yet, which is exactly why the guard has
-            // to be right about it before anything can produce one.
-            stored(ReferralState.Claimed);
+            // Claimed stays withdrawable under the tightened rule, and this is why: the office may need to
+            // correct or cancel a referral while the papers are out, and the judge has recorded nothing yet.
+            // The new rule starts at the direction, not at the claim.
+            storedClaim(JUDGE, Duration.ofMinutes(5));
 
             assertThatCode(() -> service.withdrawReferral(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
                 .doesNotThrowAnyException();
 
             assertThat(saved().getState()).isEqualTo(ReferralState.Withdrawn);
+            // And the transition is what makes withdrawing a held referral safe rather than a race: the judge
+            // who had the papers open no longer holds a Claimed referral, so a late direction is refused
+            // instead of landing on a referral the office pulled back.
+            assertThatThrownBy(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining(ReferralState.Withdrawn.name());
+        }
+
+        @Test
+        @DisplayName("409s a Decided referral, naming the direction that has to be actioned instead")
+        void refusesADecidedReferral() {
+            // The rule this plan exists for. Decided is deliberately non-terminal -- the case still holds the
+            // referral and may not raise a second -- and it is nonetheless not withdrawable, because a judge
+            // has recorded a direction and withdrawing it would discard judicial work the office is obliged
+            // to action. Closing it is the office's move.
+            Referral referral = stored(ReferralState.Decided);
+            referral.setDecision(MasterDecision.Approved);
+            referral.setDecidedBy("District Judge Bell");
+
+            assertThatThrownBy(() -> service.withdrawReferral(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining(ReferralState.Decided.name())
+                // Not the "already X" wording a terminal refusal gets: the referral is not finished, and a
+                // caseworker looking at a returned direction must be told what to do with it rather than that
+                // they have already withdrawn it.
+                .hasMessageContaining("must be actioned")
+                .hasMessageNotContaining("already");
+
+            // Nothing moved, and the direction is untouched: a refusal that had half-written would be worse
+            // than the behaviour it replaces.
+            assertThat(referral.getState()).isEqualTo(ReferralState.Decided);
+            assertThat(referral.getDecision()).isEqualTo(MasterDecision.Approved);
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+            // And the case stays in the "returned -- action needed" queue, because the column is not recomputed
+            // at all -- a refused transition writes nothing to the case row.
+            verify(deedPolls, never()).writeCurrentReferralState(anyString(), any());
         }
 
         @ParameterizedTest
@@ -644,13 +681,34 @@ class ReferralServiceTest {
 
             assertThatThrownBy(() -> service.withdrawReferral(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
                 .isInstanceOf(ConflictError.class)
-                .hasMessageContaining(terminal.name());
+                .hasMessage("Referral " + REFERRAL_ID + " is already " + terminal + " and cannot be withdrawn");
 
             // Not idempotent-and-silent, and not a rewrite: a closed referral must not be turned into a
             // withdrawn one, which would erase the fact that a direction was actioned.
             assertThat(referral.getState()).isEqualTo(terminal);
             verify(referrals, never()).save(any());
             verifyNoInteractions(notes);
+        }
+
+        @ParameterizedTest
+        @EnumSource(ReferralState.class)
+        @DisplayName("agrees with ReferralState.canBeWithdrawn() about every state there is")
+        void agreesWithTheEnumAboutEveryState(ReferralState state) {
+            // Exhaustive over values() rather than over the four states named above, so a sixth state added to
+            // the enum is answered here by whatever decision was taken on canBeWithdrawn() rather than falling
+            // through this class untested.
+            stored(state);
+
+            if (state.canBeWithdrawn()) {
+                assertThatCode(() -> service.withdrawReferral(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
+                    .doesNotThrowAnyException();
+                assertThat(saved().getState()).isEqualTo(ReferralState.Withdrawn);
+            } else {
+                assertThatThrownBy(() -> service.withdrawReferral(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
+                    .isInstanceOf(ConflictError.class)
+                    .hasMessageContaining(state.name());
+                verify(referrals, never()).save(any());
+            }
         }
 
         @Test
