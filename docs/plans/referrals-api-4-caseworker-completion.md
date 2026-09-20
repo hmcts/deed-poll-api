@@ -231,8 +231,48 @@ parameter sets currently treat `Decided` as withdrawable.
 This task changes behaviour only. Regenerate/verify OpenAPI and assert that the path, operation and schema
 sets are unchanged.
 
-- [ ] Controller and security tests prove `Decided` cannot be withdrawn but can be closed; case read model
+- [x] Controller and security tests prove `Decided` cannot be withdrawn but can be closed; case read model
       follows both outcomes; OpenAPI has no shape delta
+
+#### What Task 2 did, 2026-09-20
+
+Behaviour-only, as decision 6 requires: no main-source file changed at all, so the whole task is tests.
+
+`CaseworkerReferralControllerTest.WithdrawReferral` gains three, each reaching `Decided` through the real claim
+and direction rather than by writing the state into the row:
+
+- **`withdrawsAReferralAJudgeIsHolding`** — the permitting half, over the route. `Claimed → Withdrawn` is 200,
+  the claim survives on the row (`claimedBy` is still published), `currentReferralState` goes NULL, and the
+  holding judge's later `decide` is then refused, which is what makes withdrawing a held referral safe rather
+  than a race.
+- **`refusesWithdrawingADecidedReferral`** — 409 asserted as the exact new message, then the row still `Decided`
+  with `decision` and `directionsText` intact, `currentReferralState` **still `Decided`** so the case stays in the
+  "returned — action needed" queue, and still one note.
+- **`leavesADecidedReferralCloseable`** — the refusal is a redirection, not a dead end: the refused withdrawal is
+  followed by a 200 closure on the same referral, the direction survives into the closure response, and
+  `currentReferralState` becomes NULL only once the direction has been actioned.
+
+`ReferralSecurityTest` repoints its withdrawal-refusal parameter set from `{Closed, Withdrawn}` to
+`{Decided, Closed, Withdrawn}`, so `Decided` is refused for an administrator exactly as for a caller with no
+roles — an escape hatch only admins had would be the version of this rule that got used. `@EnumSource` takes
+names and not a predicate, so a second test asserts that the named set *is* the complement of `canBeWithdrawn()`,
+which is what stops the two drifting.
+
+**Task 0's instruction to repoint `CaseworkerReferralControllerTest:364-368` was based on a misreading, and the
+line was left on `isTerminal()` deliberately.** That parameter set belongs to
+`refusesWhileClaimedOrDecided` — the **one-live-referral** guard on the *create* route, not the withdrawal guard —
+and `isTerminal()` is the correct authority for it. `Decided` is precisely where the two predicates part: it may
+not be withdrawn and nonetheless still blocks a second referral. Repointing it to `canBeWithdrawn()` would have
+asserted that a case holding a decided referral may raise another, which is the bug Task 0's own trap note warned
+about, arriving from the test side instead of the enum side. The comment there now says which guard it is and why
+it stays.
+
+**No contract delta, as evidence rather than as assertion:** `OpenAPIPublisherTest` passed untouched — 33
+caseworker operations across 20 paths, 4 judicial, every body schema unchanged.
+
+`./gradlew build` green: `test` 2,306 over 300 result files, `integration` 8 over 3 — **2,314**, zero failures,
+zero errors. Task 1 ended at 2,309, so +5: the three controller tests, the `Decided` parameter case, and the
+enum-agreement test.
 
 ### Task 3: Documentation and full validation
 

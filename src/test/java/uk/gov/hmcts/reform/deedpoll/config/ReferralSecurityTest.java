@@ -541,11 +541,15 @@ class ReferralSecurityTest {
         }
 
         @ParameterizedTest
-        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
-        @DisplayName("is refused a terminal referral exactly as an administrator is, and nothing is written")
-        void isRefusedATerminalReferralAsAnAdministratorIs(ReferralState terminal) {
-            Referral referral = stored(terminal);
+        @EnumSource(value = ReferralState.class, names = {"Decided", "Closed", "Withdrawn"})
+        @DisplayName("is refused an unwithdrawable referral exactly as an administrator is, and nothing is written")
+        void isRefusedAnUnwithdrawableReferralAsAnAdministratorIs(ReferralState unwithdrawable) {
+            Referral referral = stored(unwithdrawable);
 
+            // Decided belongs in this set and not in the permitted one, which is the rule the completion plan
+            // added: a direction the office is obliged to action must not be discardable, by an administrator
+            // least of all -- an escape hatch that only admins had would be the version of this rule that gets
+            // used. The two terminal states are refused for the older reason below.
             for (CurrentUser caller : List.of(NO_ROLES, ADMIN)) {
                 assertThatThrownBy(() -> service.withdrawReferral(CASE_ID, REFERRAL_ID.toString(), caller))
                     .isInstanceOf(ConflictError.class);
@@ -554,9 +558,20 @@ class ReferralSecurityTest {
             // The refusal has to come before the write, not after it: a 409 that had already withdrawn a closed
             // referral would erase the fact that a direction was actioned, and the status code cannot tell the
             // two apart.
-            assertThat(referral.getState()).isEqualTo(terminal);
+            assertThat(referral.getState()).isEqualTo(unwithdrawable);
             verify(referrals, never()).save(any());
             verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("and those are exactly the states ReferralState.canBeWithdrawn() refuses, with none left out")
+        void theRefusedStatesAreTheEnumsOwn() {
+            // The list above is named rather than derived, because @EnumSource takes names -- so this is what
+            // stops the pair drifting. A sixth state is then a decision taken on the enum and reflected here,
+            // rather than a state no caller is ever asked about.
+            assertThat(Arrays.stream(ReferralState.values()).filter(state -> !state.canBeWithdrawn()))
+                .as("every unwithdrawable state is exercised by the parameterised refusal above")
+                .containsExactly(ReferralState.Decided, ReferralState.Closed, ReferralState.Withdrawn);
         }
 
         @ParameterizedTest
