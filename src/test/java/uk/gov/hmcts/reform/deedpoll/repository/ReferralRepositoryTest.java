@@ -20,11 +20,13 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -47,6 +49,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * is the difference between the longest-waiting urgent referral being on page 1 and it never being worked.
  * {@code JudicialReferralServiceTest} asserts the other half container-free: that the service asks for that
  * order rather than fetching and reordering.
+ *
+ * <p>The personal list is here for the same reasons and one of its own. Its membership rule is <em>SQL</em> -- two
+ * state arms reading two different owner columns, and a null owner matching nothing because {@code =} is never true
+ * of one -- so a fake applying the same predicate in Java would be asserting a second implementation of it rather
+ * than the one that runs. Its order adds two facts only Postgres can state: that {@code "ReferralState"} being
+ * declared in lifecycle order puts {@code Claimed} above {@code Decided}, and that the {@code uuid} tie-break which
+ * makes paging stable compares sixteen unsigned bytes rather than two signed longs.
  *
  * <p>The stale-claim sweep's two statements are here for a stronger reason: what makes them correct is SQL
  * that no fake can stand in for. {@code ReferralServiceTest} proves the arithmetic -- which rows the service
@@ -73,6 +82,18 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
     private static final LocalDateTime CUTOFF = NOW.minusHours(2);
 
     private static final String SERVICE_ACCOUNT = "# svc_HMCTS_LCPT_Dev";
+
+    /**
+     * The order Postgres compares {@code uuid} in: sixteen bytes, unsigned.
+     *
+     * <p>Not {@link UUID#compareTo}, which compares the two halves as <em>signed</em> longs -- so a v4 id whose
+     * first bit is set sorts first in Java and last in Postgres, and about half of them have it set. The personal
+     * list's tie-break expectation is built with this rather than with the natural order, which is the difference
+     * between asserting Postgres's behaviour and asserting Java's.
+     */
+    private static final Comparator<UUID> AS_POSTGRES_ORDERS_THEM =
+        Comparator.comparing(UUID::getMostSignificantBits, Long::compareUnsigned)
+            .thenComparing(UUID::getLeastSignificantBits, Long::compareUnsigned);
 
     @Autowired
     private ReferralRepository referrals;
@@ -129,6 +150,35 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
     /** A stable-looking IDAM subject for a fixture judge, which is emphatically not their display name. */
     private static String subjectOf(String judge) {
         return "idam-" + judge.toLowerCase(Locale.UK).replace(' ', '-');
+    }
+
+    /**
+     * A referral on a case of its own, in the given state, owned by the given judge's subject and nobody else.
+     *
+     * <p>Both owner columns, as a real claim and a real direction leave them: only the holder may direct, so a
+     * {@code Decided} row carries the same subject in both. Every state gets them, not only the two that would
+     * really carry them, because what the personal list's two arms have to exclude is exactly an {@code Open},
+     * {@code Closed} or {@code Withdrawn} row that still names the judge who had it.
+     *
+     * <p>A case each, for the reason {@link #pooledReferral} takes one: a case may hold only one live referral.
+     */
+    private Referral ownedReferral(ReferralState state, String judge, Urgency urgency, LocalDateTime createdOn) {
+        Referral referral = persistedReferral(persistedCase(), state, createdOn);
+        referral.setUrgency(urgency);
+        referral.setClaimedBy(judge);
+        referral.setClaimedById(subjectOf(judge));
+        referral.setDecidedBy(judge);
+        referral.setDecidedById(subjectOf(judge));
+        return referral;
+    }
+
+    /**
+     * One page of a judge's own referrals, as {@code JudicialReferralService.mine} asks for it.
+     */
+    private Page<Referral> personalList(String judge, int page, int size) {
+        return referrals.findOwnedBy(
+            subjectOf(judge), ReferralState.Claimed, ReferralState.Decided,
+            PageRequest.of(page, size, JudicialReferralService.MINE_ORDER));
     }
 
     @Test
@@ -409,6 +459,152 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(pastTheEnd.getTotalElements()).isEqualTo(5);
         assertThat(first.getTotalElements()).isEqualTo(5);
         assertThat(first.getTotalPages()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("lists a judge's own claimed and decided referrals, and no other state of theirs")
+    void listsOneJudgesOwnOutstandingWork() {
+        Referral claimed = ownedReferral(ReferralState.Claimed, "District Judge Bell",
+                                        Urgency.Normal, LocalDateTime.of(2026, 2, 1, 9, 0));
+        Referral decided = ownedReferral(ReferralState.Decided, "District Judge Bell",
+                                        Urgency.Normal, LocalDateTime.of(2026, 3, 1, 9, 0));
+        // The three states that are not this judge's outstanding work, each still naming them: Open belongs to the
+        // shared pool however it got there, and Closed and Withdrawn are the office taking the referral back. A
+        // predicate written on the owner columns alone would list all three.
+        Referral open = ownedReferral(ReferralState.Open, "District Judge Bell",
+                                      Urgency.Normal, LocalDateTime.of(2026, 1, 1, 9, 0));
+        Referral closed = ownedReferral(ReferralState.Closed, "District Judge Bell",
+                                        Urgency.Normal, LocalDateTime.of(2026, 1, 2, 9, 0));
+        Referral withdrawn = ownedReferral(ReferralState.Withdrawn, "District Judge Bell",
+                                           Urgency.Normal, LocalDateTime.of(2026, 1, 3, 9, 0));
+        entityManager.flush();
+        entityManager.clear();
+
+        Page<Referral> mine = personalList("District Judge Bell", 0, 10);
+
+        assertThat(mine.getContent()).extracting(Referral::getId)
+            .containsExactly(claimed.getId(), decided.getId())
+            .doesNotContain(open.getId(), closed.getId(), withdrawn.getId());
+        assertThat(mine.getTotalElements()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("lists nobody else's, including a different judge who shares the display name")
+    void listsNobodyElsesWork() {
+        final Referral theirs = ownedReferral(ReferralState.Claimed, "District Judge Bell",
+                                              Urgency.Normal, LocalDateTime.of(2026, 2, 1, 9, 0));
+        final Referral anotherJudges = ownedReferral(ReferralState.Claimed, "District Judge Okafor",
+                                                    Urgency.Normal, LocalDateTime.of(2026, 2, 2, 9, 0));
+        // The row the ownership migration exists for: same display name, different person, so a different subject.
+        Referral namesakes = ownedReferral(ReferralState.Decided, "District Judge Bell",
+                                           Urgency.Normal, LocalDateTime.of(2026, 2, 3, 9, 0));
+        namesakes.setClaimedById("idam-a-different-bell");
+        namesakes.setDecidedById("idam-a-different-bell");
+        // And the pre-migration row: a claim whose display name is recorded and whose owner is not. It is on
+        // nobody's list rather than on the list of whoever shares the name, which is the fail-closed half of V14 --
+        // SQL's = is never true of a null column, so no fall back to the name is even expressible here.
+        Referral noOwner = ownedReferral(ReferralState.Claimed, "District Judge Bell",
+                                         Urgency.Normal, LocalDateTime.of(2026, 2, 4, 9, 0));
+        noOwner.setClaimedById(null);
+        noOwner.setDecidedById(null);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(personalList("District Judge Bell", 0, 10).getContent()).extracting(Referral::getId)
+            .containsExactly(theirs.getId())
+            .doesNotContain(anotherJudges.getId(), namesakes.getId(), noOwner.getId());
+        // Both directions, because one judge's list cannot tell a per-subject predicate from one that lists
+        // everything: the other judge sees their own referral and nothing of this judge's.
+        assertThat(personalList("District Judge Okafor", 0, 10).getContent()).extracting(Referral::getId)
+            .containsExactly(anotherJudges.getId());
+        assertThat(referrals.findOwnedBy("idam-a-different-bell", ReferralState.Claimed, ReferralState.Decided,
+                                         PageRequest.of(0, 10, JudicialReferralService.MINE_ORDER)).getContent())
+            .extracting(Referral::getId)
+            .containsExactly(namesakes.getId());
+    }
+
+    @Test
+    @DisplayName("orders a judge's work claimed first, then urgent, then longest-held, then by id")
+    void ordersAJudgesWorkForResuming() {
+        String judge = "District Judge Bell";
+        // Deliberately built so that no single key produces the expected sequence: the oldest referral is Decided,
+        // the only Urgent Decided one is the newest, and the two tied rows differ in nothing but their ids.
+        Referral decidedNormal = ownedReferral(ReferralState.Decided, judge,
+                                               Urgency.Normal, LocalDateTime.of(2026, 1, 1, 9, 0));
+        Referral decidedUrgent = ownedReferral(ReferralState.Decided, judge,
+                                               Urgency.Urgent, LocalDateTime.of(2026, 6, 1, 9, 0));
+        Referral claimedNormal = ownedReferral(ReferralState.Claimed, judge,
+                                               Urgency.Normal, LocalDateTime.of(2026, 3, 1, 9, 0));
+        Referral claimedUrgentOlder = ownedReferral(ReferralState.Claimed, judge,
+                                                    Urgency.Urgent, LocalDateTime.of(2026, 2, 1, 9, 0));
+        Referral tiedA = ownedReferral(ReferralState.Claimed, judge,
+                                       Urgency.Urgent, LocalDateTime.of(2026, 2, 1, 9, 0));
+        entityManager.flush();
+        entityManager.clear();
+
+        List<Referral> mine = personalList(judge, 0, 10).getContent();
+
+        // Claimed above Decided is the "ReferralState" type being declared in lifecycle order in V6 and Postgres
+        // ordering an enum by its declaration -- the same fact POOL_ORDER leans on for urgency, and only a real
+        // database can state it. The id is last, and the two tied rows are compared in the order Postgres compares
+        // uuid in, which is what makes paging through this list stable rather than nearly stable.
+        List<UUID> tied = Stream.of(claimedUrgentOlder.getId(), tiedA.getId())
+            .sorted(AS_POSTGRES_ORDERS_THEM)
+            .toList();
+        assertThat(mine).extracting(Referral::getId).containsExactly(
+            tied.get(0),
+            tied.get(1),
+            claimedNormal.getId(),
+            decidedUrgent.getId(),
+            decidedNormal.getId());
+    }
+
+    @Test
+    @DisplayName("pages a judge's work in the database, and reports their whole total on every page")
+    void pagesAJudgesWorkInTheDatabase() {
+        String judge = "District Judge Bell";
+        List<Referral> byWorkingOrder = new ArrayList<>();
+        for (int day = 1; day <= 5; day++) {
+            byWorkingOrder.add(ownedReferral(ReferralState.Claimed, judge,
+                                             Urgency.Normal, LocalDateTime.of(2026, 2, day, 9, 0)));
+        }
+        // Another judge's, so the totals below are this judge's and not the table's.
+        ownedReferral(ReferralState.Claimed, "District Judge Okafor",
+                      Urgency.Normal, LocalDateTime.of(2026, 2, 1, 9, 0));
+        entityManager.flush();
+        entityManager.clear();
+
+        Page<Referral> first = personalList(judge, 0, 2);
+        Page<Referral> second = personalList(judge, 1, 2);
+        Page<Referral> pastTheEnd = personalList(judge, 9, 2);
+
+        // Two rows a page, sliced in working order rather than insertion order, and counted over the same predicate
+        // the page was drawn from: a total that came from the page's row count would say "2 of 2" on every page.
+        assertThat(first.getContent()).extracting(Referral::getId)
+            .containsExactly(byWorkingOrder.get(0).getId(), byWorkingOrder.get(1).getId());
+        assertThat(second.getContent()).extracting(Referral::getId)
+            .containsExactly(byWorkingOrder.get(2).getId(), byWorkingOrder.get(3).getId());
+        assertThat(pastTheEnd.getContent()).isEmpty();
+        assertThat(pastTheEnd.getTotalElements()).isEqualTo(5);
+        assertThat(first.getTotalElements()).isEqualTo(5);
+        assertThat(first.getTotalPages()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("lists a Decided referral for whoever decided it, not for whoever claimed it")
+    void listsADecisionForItsAuthor() {
+        // The two arms really do read different columns, which is the shape a hand-off would produce: the judge who
+        // claimed it is not the one who directed it, and the direction is the one that is theirs to re-read.
+        Referral handedOver = ownedReferral(ReferralState.Decided, "District Judge Bell",
+                                           Urgency.Normal, LocalDateTime.of(2026, 2, 1, 9, 0));
+        handedOver.setClaimedById(subjectOf("District Judge Okafor"));
+        handedOver.setClaimedBy("District Judge Okafor");
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(personalList("District Judge Bell", 0, 10).getContent())
+            .extracting(Referral::getId).containsExactly(handedOver.getId());
+        assertThat(personalList("District Judge Okafor", 0, 10).getContent()).isEmpty();
     }
 
     @Test

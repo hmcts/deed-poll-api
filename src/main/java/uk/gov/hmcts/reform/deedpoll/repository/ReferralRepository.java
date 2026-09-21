@@ -25,7 +25,7 @@ import java.util.UUID;
  * A caller wanting one referral has to say which case it belongs to, so a cross-case read or write is
  * not expressible rather than merely discouraged.
  *
- * <p>There are three exceptions, and every one of them belongs to the judicial surface or to the sweep, which
+ * <p>There are four exceptions, and every one of them belongs to the judicial surface or to the sweep, which
  * are the two things in this service that are about every case at once rather than about <em>a</em> case's
  * referrals:
  *
@@ -38,6 +38,10 @@ import java.util.UUID;
  *       the referral so that a judge cannot name an application at all. The scoping this drops is replaced by
  *       a state filter the caller does not choose ({@code Open} only) and, on every read of an individual
  *       referral, by {@code JudicialReferralService.visibleTo};</li>
+ *   <li>one judge's own work -- {@link #findOwnedBy}. The personal list is the other cross-case judicial list,
+ *       and it names no case for the same reason the pool does not. What replaces the scoping here is narrower
+ *       than the pool's: the rows are those whose owner column holds the caller's own IDAM subject, which is a
+ *       scope a caller cannot widen because it comes from their token rather than from the request;</li>
  *   <li>the judicial read of one referral -- {@link #findWithCaseById}. This is the exception that is a finder
  *       by referral id alone, which the paragraph above forbids, and it exists because the judicial surface
  *       carries no case id to scope with: a judicial URL is {@code /judicial/referrals/{referralId}} precisely
@@ -88,6 +92,59 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * @return the referrals on that page, with the total across every page
      */
     Page<Referral> findByState(ReferralState state, Pageable pageable);
+
+    /**
+     * One page of the referrals a single judge has in hand -- the personal list behind
+     * {@code GET /judicial/referrals/mine}.
+     *
+     * <p><strong>Two arms rather than one, because the two states record their owner in different
+     * columns.</strong> A claimed referral belongs to whoever holds it ({@code claimedById}) and a decided one to
+     * whoever directed it ({@code decidedById}); they agree in practice, because only the holder may direct, but
+     * they are separate columns and a hand-off would make them differ. So the predicate asks each state about its
+     * own column instead of either one about both -- which is also what keeps this and
+     * {@code JudicialReferralService.visibleTo} the same rule, so the list cannot offer a referral whose link then
+     * answers 404.
+     *
+     * <p><strong>No other state appears, and that is the membership rule rather than a filter.</strong>
+     * {@code Open} belongs to the shared pool, and {@code Closed}/{@code Withdrawn} are the office taking the
+     * referral back -- so a terminal row that still names the judge who had it is excluded by the state arms,
+     * whatever its owner columns still hold.
+     *
+     * <p><strong>A null owner matches nothing, which is the fail-closed half.</strong> SQL's {@code =} is never
+     * true of a null column, so a claim made before {@code V14__referral_owner_subjects.sql} -- and every referral
+     * V7 backfilled -- is on nobody's list, with no fall back to the display name. That is deliberate: the name
+     * fall back would put two judges who share one on each other's lists, which is precisely the disclosure V14
+     * removed. A null {@code owner} argument likewise matches nothing rather than everything, though the caller
+     * refuses one first.
+     *
+     * <p><strong>The database filters, orders, pages and counts.</strong> The alternative -- read the referrals
+     * and pick the caller's out in Java -- would page an arbitrary slice and would have to count separately, so a
+     * judge's second page could omit work their first page's total had promised.
+     * {@code JudicialReferralService.MINE_ORDER} is the sort, and the count is Spring Data's over this same
+     * predicate, so the two cannot describe different result sets.
+     *
+     * <p>The states are parameters rather than literals in the JPQL for the reason {@link #findStaleClaims}'s is:
+     * the caller says out loud which states it means a judge's own work to be in, instead of two places having to
+     * be kept in step.
+     *
+     * <p>No index backs this either, for the reason given above for the pool and in V14: the table is small and
+     * the predicate reads the same {@code "state"} column the pool already scans without one.
+     *
+     * @param owner the caller's IDAM subject, from their token and never from the request
+     * @param claimed the state a held referral is in, {@link ReferralState#Claimed}
+     * @param decided the state a directed referral is in, {@link ReferralState#Decided}
+     * @param pageable the page and the order, which the caller supplies rather than this method naming
+     * @return the referrals on that page, with the total across every page
+     */
+    @Query("""
+        select r from Referral r
+         where (r.state = :claimed and r.claimedById = :owner)
+            or (r.state = :decided and r.decidedById = :owner)
+        """)
+    Page<Referral> findOwnedBy(@Param("owner") String owner,
+                               @Param("claimed") ReferralState claimed,
+                               @Param("decided") ReferralState decided,
+                               Pageable pageable);
 
     /**
      * One referral and the application it was raised on, by referral id alone -- the judicial read.

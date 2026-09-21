@@ -300,8 +300,44 @@ Repository tests prove predicate, ordering, paging, tie-break, null-owner exclus
 different subjects sharing the same display name. Service tests prove role/subject gates, sweep-before-query
 and no in-memory filtering.
 
-- [ ] Owner-scoped query and service implemented; stale rows cannot be revived; ordering/paging/isolation
+- [x] Owner-scoped query and service implemented; stale rows cannot be revived; ordering/paging/isolation
       proven; focused tests green
+
+#### What Task 2 did, 2026-09-21
+
+`ReferralRepository.findOwnedBy(owner, claimed, decided, pageable)` is one JPQL query with two state arms —
+`Claimed` against `claimedById`, `Decided` against `decidedById` — so the predicate is the same rule
+`visibleTo` applies to an owner, and a null owner column matches nothing because SQL `=` never does. No index,
+for the reason V6 and V14 both give. The count is Spring Data's over the same predicate, so the rows and the
+total cannot describe different result sets. It is the **fourth** unscoped finder, admitted in
+`ReferralSecurityTest` with a promise of its own (an owner, two states and a page; never a referral id) and an
+ArchUnit rule that nothing but `JudicialReferralService` calls it — because a second caller would be a second
+place that could pass an owner a *request* had named.
+
+`JudicialReferralService.mine(caller, paging)` requires `JUDICIAL`, then `requireUserId()` **before the sweep**
+(as `claim` does — an unidentified caller must not release somebody else's lapsed claim on their way to a 401),
+then `reclaimStaleClaims()`, then the query. `MINE_ORDER` is `state` asc, `urgency` desc, `createdOn` asc, `id`
+asc: ascending state is `Claimed` before `Decided` because `V6` declares `"ReferralState"` in lifecycle order,
+and the id tie-break is what makes paging stable rather than nearly stable. The page size is the pool's
+`POOL_PAGE_SIZE` — same dashboard, same screenful, one number to keep in step.
+
+A new domain page type `ReferralWorkload`, because reusing `ReferralPool` would put "the pool" in the name of a
+response that is the opposite collection. Its page count and the pool's now come from one place,
+`CasePaging.pagesOf` — `CaseResults` still derives its own and should come here the next time the case list is
+opened.
+
+Tests: five container-backed ones in `ReferralRepositoryTest` (membership including `Open`/`Closed`/`Withdrawn`
+rows that still name the judge, namesake and null-owner exclusion in both directions, the four-key order with a
+tie-break compared the way **Postgres** orders `uuid` — sixteen unsigned bytes, not `UUID.compareTo`'s two
+signed longs — database paging with another judge's row present, and a direction listed for its author rather
+than its claimant); a `Mine` nest in `JudicialReferralServiceTest` (role and subject gates refusing before the
+sweep, sweep-before-query in order, the exact question asked, subject-not-name, a rename keeping its list, no
+in-memory filtering, totals and immutability); and `mine` added to `JudicialSecurityTest.operations()`, so the
+whole surface's role-gate and near-miss rules cover it today. That class's controller assertion is now
+`ROUTED_OPERATIONS = 4` — the service is deliberately one ahead of the controller until Task 3 publishes the
+route, which Task 3 takes to 5.
+
+`./gradlew build` green: `test` **2,363** + `integration` **8** = **2,371**, zero failures (Task 1: 2,351).
 
 ### Task 3: Publish `GET /judicial/referrals/mine`
 

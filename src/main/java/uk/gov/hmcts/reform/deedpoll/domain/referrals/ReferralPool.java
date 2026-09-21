@@ -39,22 +39,11 @@ public record ReferralPool(List<Referral> referrals, int page, int size, long to
      * no way for a caller to report a total and a page count that disagree.
      */
     public static ReferralPool of(List<Referral> referrals, CasePaging paging, long total) {
-        return new ReferralPool(referrals, paging.page(), paging.size(), total, pages(total, paging.size()));
+        return new ReferralPool(referrals, paging.page(), paging.size(), total, paging.pagesOf(total));
     }
 
     /** Whether this page has anything on it, which a page past the end of the pool does not. */
     public boolean isEmpty() {
         return referrals.isEmpty();
-    }
-
-    /**
-     * How many pages of the given size a total needs, rounded up so a partial last page is a page.
-     *
-     * <p>Long arithmetic, as {@code CaseResults} does it: the intermediate would overflow an int for a total
-     * near {@link Integer#MAX_VALUE}, which is a pool this service will never have but not a reason to write it
-     * wrongly.
-     */
-    private static int pages(long total, int size) {
-        return (int) ((total + size - 1) / size);
     }
 }

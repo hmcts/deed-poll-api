@@ -48,7 +48,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * The judicial boundary, with no database and no HTTP: who may see which referral, what the shared pool asks the
+ * The judicial boundary, with no database and no HTTP: who may see which referral, what the two lists ask the
  * database for, what the read of one referral refuses, resolves and refreshes, and what the two writes delegate.
  *
  * <p><strong>Container-free deliberately, and it is the reason these rules live in this class at all.</strong>
@@ -406,6 +406,201 @@ class JudicialReferralServiceTest {
             ReferralPool pool = service.pool(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
 
             assertThatThrownBy(() -> pool.referrals().add(new Referral()))
+                .isInstanceOf(UnsupportedOperationException.class);
+        }
+    }
+
+    /**
+     * The personal list: the same three claims as the pool -- gated, sweeps first, and lets the database filter,
+     * order and page -- plus the one the pool has no notion of, that whose list it is comes from the token.
+     *
+     * <p>What the <em>membership</em> is cannot be asserted here, because it is a predicate in SQL:
+     * {@code ReferralRepositoryTest} runs it against a real Postgres, which is also the only thing that can say
+     * that {@code Claimed} really sorts above {@code Decided} and that a null owner really matches nothing. What is
+     * asserted here is the half that is about this class: the question it asks, that it asks it with the caller's
+     * subject and never their display name, and that it does not touch the answer it gets back.
+     */
+    @Nested
+    @DisplayName("mine")
+    class Mine {
+
+        @Test
+        @DisplayName("refuses a caseworker, and refuses before sweeping or querying anything")
+        void refusesACaseworker() {
+            assertThatThrownBy(() -> service.mine(CASEWORKER, JudicialReferralService.FIRST_POOL_PAGE))
+                .isInstanceOf(ForbiddenError.class)
+                .hasMessageContaining(Role.JUDICIAL.claimValue());
+
+            // The gate is the first statement, so a refused caller costs no query and cannot trigger the mutating
+            // sweep -- the pool's rule, and it has to hold on the second read-write list too.
+            verifyNoInteractions(referralService);
+            referrals.verifyNothingRead();
+        }
+
+        @Test
+        @DisplayName("refuses an admin too: judicial is not a level of seniority")
+        void refusesAnAdmin() {
+            assertThatThrownBy(() -> service.mine(ADMIN, JudicialReferralService.FIRST_POOL_PAGE))
+                .isInstanceOf(ForbiddenError.class);
+
+            verifyNoInteractions(referralService);
+            referrals.verifyNothingRead();
+        }
+
+        @Test
+        @DisplayName("refuses a judge with no subject before sweeping, because they own nothing to list")
+        void refusesACallerWithNoSubject() {
+            assertThatThrownBy(() -> service.mine(UNIDENTIFIED_JUDGE, JudicialReferralService.FIRST_POOL_PAGE))
+                .isInstanceOf(UnauthorizedError.class);
+
+            // Before the sweep, exactly as claim() refuses one: the sweep is the first thing this method writes,
+            // and a caller on their way to a 401 must not be able to release somebody else's lapsed claim. Asking
+            // for the subject first is also what stops "everybody's list" being expressible at all.
+            verifyNoInteractions(referralService);
+            referrals.verifyNothingRead();
+        }
+
+        @Test
+        @DisplayName("sweeps lapsed claims before it queries, so a claim that lapsed is off this list already")
+        void sweepsBeforeItQueries() {
+            referrals.owning(List.of(), 0);
+
+            service.mine(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
+
+            // Order, not merely occurrence, and the reason is sharper here than for the pool: a stale claim left on
+            // this page is one the judge would open, and opening it calls touch -- so the expiry window would be
+            // revived by the very list that should have stopped showing it.
+            InOrder order = inOrder(referralService, referrals.repository());
+            order.verify(referralService).reclaimStaleClaims();
+            order.verify(referrals.repository()).findOwnedBy(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("asks for this judge's own Claimed and Decided referrals, in the fixed order, one page")
+        void asksForThisJudgesOwnWork() {
+            referrals.owning(List.of(), 0);
+
+            service.mine(JUDGE, new CasePaging(3, 20));
+
+            ArgumentCaptor<Pageable> asked = ArgumentCaptor.forClass(Pageable.class);
+            verify(referrals.repository()).findOwnedBy(
+                eq(JUDGE.userId()), eq(ReferralState.Claimed), eq(ReferralState.Decided), asked.capture());
+            Pageable pageable = asked.getValue();
+
+            // Spelled out rather than compared against MINE_ORDER, which would assert the constant against itself.
+            // Ascending state is Claimed before Decided because "ReferralState" is declared in lifecycle order;
+            // ReferralRepositoryTest runs that, and the urgency and id keys, against a real database.
+            assertThat(pageable.getSort()).containsExactly(
+                Sort.Order.asc("state"),
+                Sort.Order.desc("urgency"),
+                Sort.Order.asc("createdOn"),
+                Sort.Order.asc("id"));
+            assertThat(pageable.getPageNumber()).isEqualTo(2);
+            assertThat(pageable.getPageSize()).isEqualTo(20);
+        }
+
+        @Test
+        @DisplayName("asks by the caller's subject and never by their display name")
+        void asksBySubjectAndNeverByName() {
+            referrals.owning(List.of(), 0);
+
+            service.mine(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
+
+            // The whole reason the ownership migration comes before this list rather than after it. Keyed on the
+            // display name, "my referrals" would have listed a namesake's outstanding work -- an enumeration, where
+            // the individual read at least needed the referral's id.
+            verify(referrals.repository(), never()).findOwnedBy(eq(JUDGE.name()), any(), any(), any());
+            verify(referrals.repository()).findOwnedBy(eq("judge-3"), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("follows the subject through a rename, so a renamed judge keeps their own list")
+        void followsTheSubjectThroughARename() {
+            referrals.owning(List.of(), 0);
+
+            // The other half of the defect V14 removed: a judge who married or took a title used to lose their own
+            // claimed referrals. The list is asked for by the subject their claims were stamped with, which their
+            // new display name has no bearing on.
+            service.mine(RENAMED_JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
+
+            verify(referrals.repository()).findOwnedBy(eq(JUDGE.userId()), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("returns the page in the order the database gave it, with the whole list's total")
+        void returnsThePageAsTheDatabaseOrderedIt() {
+            Referral claimed = referral(ReferralState.Claimed, JUDGE);
+            Referral urgentDecided = referral(ReferralState.Decided, JUDGE);
+            urgentDecided.setUrgency(Urgency.Urgent);
+            Referral decided = referral(ReferralState.Decided, JUDGE);
+            // Handed back in the order the query would have produced: claimed work first, and the urgent decided
+            // one above the normal one. A service that re-sorted by urgency, or by state alone, would not leave
+            // these three in this order.
+            List<Referral> asOrdered = List.of(claimed, urgentDecided, decided);
+            referrals.owning(asOrdered, 23);
+
+            ReferralWorkload mine = service.mine(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
+
+            assertThat(mine.referrals()).containsExactlyElementsOf(asOrdered);
+            // The total is the list's and not the page's: twenty-three outstanding, ten shown, so three pages --
+            // which is what tells a judge how much of their own work is behind the page they are looking at.
+            assertThat(mine.total()).isEqualTo(23);
+            assertThat(mine.totalPages()).isEqualTo(3);
+            assertThat(mine.page()).isEqualTo(1);
+            assertThat(mine.size()).isEqualTo(10);
+            assertThat(mine.isEmpty()).isFalse();
+        }
+
+        @Test
+        @DisplayName("filters nowhere but in the query, so the rows and the total describe the same result set")
+        void filtersNowhereButInTheQuery() {
+            // A row the membership rule excludes, handed back by the stub on purpose. The service returns it, which
+            // is the point: there is no second filter in Java. This is not a claim about what the list contains --
+            // that is the query's, asserted against a real Postgres -- it is a claim about where the filtering is.
+            // A Java filter here would drop rows the total had already counted, so page 2 would omit work page 1
+            // promised, and the rows it dropped would have been loaded for this judge anyway.
+            Referral somebodyElses = referral(ReferralState.Claimed, OTHER_JUDGE);
+            referrals.owning(List.of(somebodyElses), 1);
+
+            ReferralWorkload mine = service.mine(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
+
+            assertThat(mine.referrals()).containsExactly(somebodyElses);
+            assertThat(mine.total()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("a judge holding nothing gets a page with no rows and no pages, not an error")
+        void holdingNothingIsAnEmptyPage() {
+            referrals.owning(List.of(), 0);
+
+            ReferralWorkload mine = service.mine(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
+
+            assertThat(mine.isEmpty()).isTrue();
+            assertThat(mine.totalPages()).isZero();
+            assertThat(mine.total()).isZero();
+        }
+
+        @Test
+        @DisplayName("a page past the end is empty but still says how much this judge has in hand")
+        void pagePastTheEndStillReportsTheTotal() {
+            referrals.owning(List.of(), 12);
+
+            ReferralWorkload mine = service.mine(JUDGE, new CasePaging(9, 10));
+
+            assertThat(mine.isEmpty()).isTrue();
+            assertThat(mine.total()).isEqualTo(12);
+            assertThat(mine.totalPages()).isEqualTo(2);
+            assertThat(mine.page()).isEqualTo(9);
+        }
+
+        @Test
+        @DisplayName("the returned page cannot be modified through the caller's list")
+        void theReturnedPageIsACopy() {
+            referrals.owning(List.of(referral(ReferralState.Claimed, JUDGE)), 1);
+
+            ReferralWorkload mine = service.mine(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
+
+            assertThatThrownBy(() -> mine.referrals().add(new Referral()))
                 .isInstanceOf(UnsupportedOperationException.class);
         }
     }
@@ -833,7 +1028,7 @@ class JudicialReferralServiceTest {
     }
 
     /**
-     * The referral repository, answering the pool query with a page the test chose.
+     * The referral repository, answering either list's query with a page the test chose.
      *
      * <p>A small wrapper rather than a bare mock so that "nothing was read" is one assertion: the refusal test
      * has to say that a gated-out caller reached neither the sweep nor the query, and
@@ -854,6 +1049,21 @@ class JudicialReferralServiceTest {
         void returning(List<Referral> page, long total) {
             when(repository.findByState(any(), any())).thenAnswer(call -> {
                 Pageable asked = call.getArgument(1);
+                return page(page, asked, total);
+            });
+        }
+
+        /**
+         * The caller's personal list holds {@code total} referrals, of which these are the ones on the page asked
+         * for.
+         *
+         * <p>Answers whatever owner and states it is asked about, deliberately: the predicate belongs to the query
+         * and is asserted against a real Postgres, so a stub that applied it here would be asserting a second
+         * implementation of it -- and would hide a service that filtered in Java.
+         */
+        void owning(List<Referral> page, long total) {
+            when(repository.findOwnedBy(any(), any(), any(), any())).thenAnswer(call -> {
+                Pageable asked = call.getArgument(3);
                 return page(page, asked, total);
             });
         }

@@ -49,7 +49,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * What the judicial surface refuses, asserted over all four of its operations at once, with no database and no
+ * What the judicial surface refuses, asserted over every one of its operations at once, with no database and no
  * HTTP.
  *
  * <p><strong>The three properties this class exists for are the plan's:</strong> a caseworker token is refused
@@ -132,6 +132,17 @@ class JudicialSecurityTest {
     /** An id of the right shape that nothing was stored under: the other half of every 404 comparison. */
     private static final UUID UNKNOWN_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
 
+    /**
+     * How many judicial operations have a route today.
+     *
+     * <p>{@link #operations()} is the service's surface, and it is one ahead of the controller's while {@code mine}
+     * is gated but unpublished -- the shape the transitions themselves were in before the judicial controller
+     * existed, and safe for the same reason: a gate on a surface nobody can reach refuses everybody. Written as a
+     * number rather than derived, so publishing the route is a deliberate edit of this line and not a count that
+     * quietly follows whatever the controller happens to declare.
+     */
+    private static final int ROUTED_OPERATIONS = 4;
+
     /** Every judicial path, as a caller would type it: what the allowlist must not match. */
     private static final List<String> JUDICIAL_PATHS = List.of(
         "/judicial/referrals",
@@ -159,8 +170,8 @@ class JudicialSecurityTest {
     /**
      * One judicial operation, named so a failure says which of them let a caller through or refused one wrongly.
      *
-     * @param keyedOnAReferral whether it names a referral -- three of the four do, and the pool is the list they
-     *                         are reached from, so the visibility questions below are asked of those three
+     * @param keyedOnAReferral whether it names a referral -- three do, and the other two are the lists they are
+     *                         reached from, so the visibility questions below are asked of those three
      */
     private record Operation(String name, boolean keyedOnAReferral, BiConsumer<String, CurrentUser> apply) {
 
@@ -184,6 +195,10 @@ class JudicialSecurityTest {
         return List.of(
             new Operation("pool", false,
                           (referralId, caller) -> service.pool(caller, JudicialReferralService.FIRST_POOL_PAGE)),
+            // The judge's own outstanding work. Keyed on nothing a caller types: whose list it is comes from the
+            // token, which is why it names no referral and takes no owner.
+            new Operation("mine", false,
+                          (referralId, caller) -> service.mine(caller, JudicialReferralService.FIRST_POOL_PAGE)),
             new Operation("referral", true, (referralId, caller) -> service.referral(referralId, caller)),
             new Operation("claim", true, (referralId, caller) -> service.claim(referralId, caller)),
             new Operation("direct", true, (referralId, caller) -> service.direct(referralId, direction(), caller)));
@@ -251,7 +266,7 @@ class JudicialSecurityTest {
     class JudicialSurface {
 
         @Test
-        @DisplayName("is these four operations and no others, so the rules below are asserted over all of it")
+        @DisplayName("is these operations and no others, so the rules below are asserted over all of it")
         void theseAreEveryJudicialOperation() {
             // The assertion that makes this class more than three more tests. Both halves are needed: the service
             // is where the gate and the visibility check live, and the controller is what a caller can reach, so
@@ -273,8 +288,11 @@ class JudicialSecurityTest {
             assertThat(Arrays.stream(JudicialReferralController.class.getDeclaredMethods())
                            .filter(method -> !method.isSynthetic())
                            .toList())
-                .as("the judicial controller exposes four operations and no more")
-                .hasSameSizeAs(operations());
+                .as("the judicial controller exposes the routed operations and no more")
+                .hasSize(ROUTED_OPERATIONS);
+            // And every route is one of the gated operations above, which is the half that matters: a handler
+            // reaching past this service would be the hole, and a gated method with no route yet is not.
+            assertThat(ROUTED_OPERATIONS).isLessThanOrEqualTo(operations().size());
         }
 
         @Test
@@ -382,6 +400,7 @@ class JudicialSecurityTest {
                 "sub", "judge-3"));
             Referral held = stored(ReferralState.Claimed, judgeFromToken);
             when(referrals.findByState(any(), any())).thenReturn(emptyPool());
+            when(referrals.findOwnedBy(anyString(), any(), any(), any())).thenReturn(emptyPool());
             when(transitions.claim(anyString(), anyString(), any())).thenReturn(held);
             when(transitions.decide(anyString(), anyString(), any(), any())).thenReturn(held);
 
@@ -498,6 +517,40 @@ class JudicialSecurityTest {
             // rows it forgot would already be in memory behind a response.
             verify(referrals).findByState(eq(ReferralState.Open), any());
             verify(referrals, never()).findAll();
+        }
+
+        @Test
+        @DisplayName("is not on another judge's personal list, which is asked for by subject and never by name")
+        void isNotOnAnotherJudgesPersonalList() {
+            stored(ReferralState.Claimed, OTHER_JUDGE);
+            when(referrals.findOwnedBy(anyString(), any(), any(), any())).thenReturn(new PageImpl<>(List.of()));
+
+            service.mine(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
+
+            // The strongest form of the personal list's isolation, and the reason it is stated here rather than
+            // only as an outcome: the owner is in the query, taken from the caller's own token, so another judge's
+            // referrals are never loaded at all. A list keyed on the display name would have handed this caller a
+            // namesake's whole outstanding work rather than requiring them to guess a referral id -- which is why
+            // neither name appears in the question asked.
+            verify(referrals).findOwnedBy(
+                eq(JUDGE.userId()), eq(ReferralState.Claimed), eq(ReferralState.Decided), any());
+            verify(referrals, never()).findOwnedBy(eq(OTHER_JUDGE.userId()), any(), any(), any());
+            verify(referrals, never()).findOwnedBy(eq(JUDGE.name()), any(), any(), any());
+            verify(referrals, never()).findAll();
+        }
+
+        @Test
+        @DisplayName("and a namesake of the holder gets their own list, not the holder's")
+        void namesakeGetsTheirOwnPersonalList() {
+            stored(ReferralState.Claimed, JUDGE);
+            when(referrals.findOwnedBy(anyString(), any(), any(), any())).thenReturn(new PageImpl<>(List.of()));
+
+            service.mine(NAMESAKE_JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
+
+            // These two callers differ in nothing a referral row records except the subject, and the subject is the
+            // only thing asked for -- so the namesake's list is theirs and empty, rather than the holder's.
+            verify(referrals).findOwnedBy(eq(NAMESAKE_JUDGE.userId()), any(), any(), any());
+            verify(referrals, never()).findOwnedBy(eq(JUDGE.userId()), any(), any(), any());
         }
     }
 }

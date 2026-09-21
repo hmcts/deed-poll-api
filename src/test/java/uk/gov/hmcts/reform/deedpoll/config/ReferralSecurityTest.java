@@ -142,8 +142,20 @@ class ReferralSecurityTest {
      */
     private static final Set<String> JUDICIAL_READ = Set.of("findWithCaseById");
 
+    /**
+     * The judge's personal list, which names no parent case either -- and is the one unscoped finder that carries
+     * a scope of its own.
+     *
+     * <p>Listed separately from {@link #POOL} because what makes it safe is different: the pool's rows are the
+     * shared work every judge may see, whereas these are one judge's, so the filter has to be an identity. It is
+     * the caller's IDAM subject, which comes from their token and not from the request, so a judge cannot widen it
+     * to another's -- and the states are the two {@code JudicialReferralService.visibleTo} admits for an owner,
+     * which is what keeps the list and the boundary from disagreeing.
+     */
+    private static final Set<String> PERSONAL_LIST = Set.of("findOwnedBy");
+
     /** Every finder that names no parent case, for the declaration rule that admits each one deliberately. */
-    private static final Set<String> UNSCOPED = Stream.of(SWEEP, POOL, JUDICIAL_READ)
+    private static final Set<String> UNSCOPED = Stream.of(SWEEP, POOL, PERSONAL_LIST, JUDICIAL_READ)
         .flatMap(Set::stream)
         .collect(Collectors.toUnmodifiableSet());
 
@@ -308,6 +320,27 @@ class ReferralSecurityTest {
                 .should().callMethodWhere(DescribedPredicate.describe(
                     "a call to the unscoped pool finder",
                     (JavaMethodCall call) -> POOL.contains(call.getName())
+                        && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
+                .check(CLASSES);
+        }
+
+        /**
+         * And the same rule for the personal list, which is a cross-case read keyed on an identity.
+         *
+         * <p>{@code findOwnedBy} takes the subject whose referrals to hand back, so a caller that chose it would be
+         * choosing whose work to read -- which is exactly what {@code /judicial/referrals/mine} refuses to let a
+         * request do. The gate is that {@code JudicialReferralService.mine} passes
+         * {@code CurrentUser.requireUserId()} and nothing else, so the rule is that nothing else calls the finder
+         * at all: a second caller would be a second place that could pass an owner a caller had named.
+         */
+        @Test
+        @DisplayName("only the judicial service reaches the owner-scoped personal finder")
+        void onlyTheJudicialServiceReachesThePersonalFinder() {
+            noClasses()
+                .that().doNotHaveFullyQualifiedName(JudicialReferralService.class.getName())
+                .should().callMethodWhere(DescribedPredicate.describe(
+                    "a call to the owner-scoped personal finder",
+                    (JavaMethodCall call) -> PERSONAL_LIST.contains(call.getName())
                         && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
                 .check(CLASSES);
         }
@@ -852,12 +885,12 @@ class ReferralSecurityTest {
         }
 
         @Test
-        @DisplayName("could not be addressed by mistake: every finder carries the case but the three admitted")
+        @DisplayName("could not be addressed by mistake: every finder carries the case but the admitted few")
         void cannotBeAddressedByIdAlone() {
             // The behavioural half of this rule is in ReferralServiceTest; this is the half that stops it being
             // re-introduced. `findById` is inherited from JpaRepository and cannot be removed, so what is
             // asserted is that this interface declares nothing that reaches a referral without naming its case --
-            // except the three exceptions below, each of which is admitted with a rule rather than a comment.
+            // except the exceptions below, each of which is admitted with a rule rather than a comment.
             List<String> declared = Arrays.stream(ReferralRepository.class.getDeclaredMethods())
                 .map(Method::getName)
                 .toList();
@@ -885,6 +918,21 @@ class ReferralSecurityTest {
                     assertThat(finder.getParameterTypes())
                         .as("%s takes a state and a page, and no referral id", finder.getName())
                         .containsExactly(ReferralState.class, Pageable.class);
+                    assertThat(finder.getReturnType())
+                        .as("%s answers a page rather than one referral", finder.getName())
+                        .isEqualTo(Page.class);
+                    continue;
+                }
+                if (PERSONAL_LIST.contains(finder.getName())) {
+                    // The personal list hands back referrals like the pool, so its promise is also about the
+                    // question it can be asked: an owner, the two states a judge's own work is in, and a page --
+                    // and no referral id, so the answer is always "this owner's referrals" and never "this
+                    // referral". The owner is a subject rather than a case id, which is why this is admitted here
+                    // instead of satisfying the DeedPollId rule below: it is scoped by identity, and the identity
+                    // is the caller's own token.
+                    assertThat(finder.getParameterTypes())
+                        .as("%s takes an owner, two states and a page, and no referral id", finder.getName())
+                        .containsExactly(String.class, ReferralState.class, ReferralState.class, Pageable.class);
                     assertThat(finder.getReturnType())
                         .as("%s answers a page rather than one referral", finder.getName())
                         .isEqualTo(Page.class);

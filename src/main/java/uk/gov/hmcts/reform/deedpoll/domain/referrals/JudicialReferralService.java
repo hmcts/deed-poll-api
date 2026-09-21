@@ -21,14 +21,15 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * What a judge may see, the shared pool they work from, and the two things they write.
+ * What a judge may see, the two lists they work from, and the two things they write.
  *
  * <p><strong>A separate unit from {@link ReferralService} on purpose, and it adds no transition.</strong> Every
  * state change the judicial surface performs is a call into one of that service's transitions -- {@code claim},
  * {@code touch}, {@code decide} -- which keeps one place owning how a referral changes state. What lives here
- * is the half of the judicial surface that service has no notion of: <em>who may see which referral</em>, the
- * cross-case list a judge works from, and the resolution of one referral id to the application and the notes
- * behind it. All four methods are the judicial persona's, and none is reachable by a caseworker token.
+ * is the half of the judicial surface that service has no notion of: <em>who may see which referral</em>, the two
+ * cross-case lists a judge works from -- the shared pool and their own outstanding work -- and the resolution of
+ * one referral id to the application and the notes behind it. Every method here is the judicial persona's, and
+ * none is reachable by a caseworker token.
  *
  * <p><strong>{@link #claim} and {@link #direct} are that resolution in front of a transition, and nothing
  * else.</strong> Neither guards a state, stamps a column or writes a note: the {@code Open}-only rule, the
@@ -48,7 +49,13 @@ import java.util.UUID;
  * rule is that a referral is named by its case, which is what makes a cross-case caseworker read inexpressible.
  * The judicial surface cannot work that way: a judge must not be able to name a case at all, so a judicial URL
  * carries a referral id and the case is resolved from it. {@link #visibleTo} is what replaces the scoping, and
- * every judicial read and write runs through it before anything is returned.
+ * every read and write of an individual referral runs through it before anything is returned.
+ *
+ * <p>The two lists cannot ask it -- a predicate in Java is not a query, and filtering a page after the database
+ * drew it is how a list comes to disagree with its own total -- so each states the same rule in SQL instead: the
+ * pool is {@code Open} only, and {@link #mine} is the caller's own subject in the two states {@code visibleTo}
+ * admits for an owner. Where a list and the boundary disagreed, the list would offer a referral whose link
+ * answered 404.
  */
 @Service
 public class JudicialReferralService {
@@ -61,6 +68,10 @@ public class JudicialReferralService {
      * <strong>It is a page size and not a cap</strong> -- the whole pool is reachable by paging, and
      * {@link ReferralPool#total()} says how much is waiting -- which is the distinction that makes a small
      * default safe.
+     *
+     * <p>{@link #mine} defaults to the same ten, because it is the same dashboard and the same screenful; it is
+     * named for the pool because the pool is where the number was decided, and a second constant of the same
+     * value would be two numbers to keep in step rather than one.
      */
     public static final int POOL_PAGE_SIZE = 10;
 
@@ -87,6 +98,34 @@ public class JudicialReferralService {
      */
     public static final Sort POOL_ORDER =
         Sort.by(Sort.Order.desc("urgency"), Sort.Order.asc("createdOn"));
+
+    /**
+     * The order a judge's own referrals are listed in: unfinished work first, then the pool's own order within
+     * each state, then the id so that the sequence is never arbitrary.
+     *
+     * <p><strong>Ascending state is {@code Claimed} before {@code Decided}, and it is the same fact about Postgres
+     * that {@link #POOL_ORDER} relies on rather than a second trick.</strong> The {@code "ReferralState"} type is
+     * declared {@code ('Open', 'Claimed', 'Decided', 'Closed', 'Withdrawn')} in {@code V6__referrals.sql} -- the
+     * lifecycle order -- and Postgres orders an enum by its declared order, so ascending it is earliest-in-the-
+     * lifecycle first. Only two of the five can appear here, so what this says is that a referral still waiting for
+     * a direction sorts above one the office is already actioning: the point of the list is resuming outstanding
+     * work, and a judge with a page of finished directions above it would have to scroll to find any.
+     *
+     * <p>Then {@link #POOL_ORDER}'s two keys, for its reasons: urgent first, longest-waiting first within each
+     * urgency band.
+     *
+     * <p><strong>Then the id, which the pool does not have and this needs.</strong> Two referrals raised in the
+     * same state, urgency and instant are common here in a way they are not in a pool of one referral per case --
+     * a judge claims several in a sitting, and V7's backfilled rows share a timestamp -- and without a final key
+     * Postgres may return them in either order between one page and the next, which is how a row can appear twice
+     * or not at all while a judge pages through. The id is arbitrary as an order and deterministic as a tie-break,
+     * which is exactly what is wanted: it is not shown, it is only stable.
+     */
+    public static final Sort MINE_ORDER = Sort.by(
+        Sort.Order.asc("state"),
+        Sort.Order.desc("urgency"),
+        Sort.Order.asc("createdOn"),
+        Sort.Order.asc("id"));
 
     private final ReferralRepository referrals;
     private final ReferralService referralService;
@@ -202,6 +241,65 @@ public class JudicialReferralService {
         Page<Referral> found = referrals.findByState(
             ReferralState.Open, PageRequest.of(paging.index(), paging.size(), POOL_ORDER));
         return ReferralPool.of(found.getContent(), paging, found.getTotalElements());
+    }
+
+    /**
+     * The referrals this judge has in hand: the ones they are holding, and the directions the office has not yet
+     * actioned.
+     *
+     * <p><strong>Why it exists at all.</strong> Claiming a referral moves it out of {@link #pool}, which was the
+     * only judicial list -- so the successful claim removed the referral from the only page that linked to it, and
+     * a judge who left the papers could not find them again without the id. The judicial boundary
+     * ({@link #visibleTo}) always admitted a judge's own {@code Claimed} and {@code Decided} referrals; this is the
+     * list that finally matches it.
+     *
+     * <p><strong>Membership is the same predicate as visibility, restricted to the two states a judge owns.</strong>
+     * {@code Claimed} where this caller holds it, {@code Decided} where this caller directed it, and nothing else:
+     * {@code Open} belongs to the shared pool, and {@code Closed}/{@code Withdrawn} are the judiciary's involvement
+     * being over, exactly as {@code visibleTo} says. Same rule in both places on purpose -- a list that offered a
+     * referral its own link answered 404 for would be worse than no list.
+     *
+     * <p><strong>The subject is required before anything else reads or writes, and a row with no owner is on
+     * nobody's list.</strong> Ownership is {@code claimedById}/{@code decidedById} and never the display name, so
+     * two judges who share one have separate lists -- which matters more here than anywhere: a list keyed on a name
+     * would <em>enumerate</em> a namesake's referrals, where the individual read at least needed their id. A
+     * pre-migration row whose owner is null therefore appears for nobody, which is the fail-closed consequence
+     * {@code V14__referral_owner_subjects.sql} documents rather than a gap to be patched with a name.
+     *
+     * <p><strong>It sweeps first, like the pool and for a sharper reason (decision 3 of this plan).</strong>
+     * Without it, a claim that had lapsed would sit in "my referrals" until somebody else loaded the pool, and
+     * opening it from there would call {@code touch} and revive an expired claim -- so the expiry would depend on
+     * which page a judge happened to load. So the transaction is read-write, and the sweep may take a row out of
+     * this very response and return it to the shared pool; its existing lapse note is the record of that.
+     *
+     * <p><strong>The database filters, orders, pages and counts</strong> -- {@link #MINE_ORDER} and
+     * {@code ReferralRepository.findOwnedBy}. A Java filter over a wider read would page an arbitrary slice and
+     * would have to count separately, and the total is the answer to "how much am I in the middle of".
+     *
+     * <p>A page past the end is an empty page and not an error, as the pool's is.
+     *
+     * @param caller the judge asking, whose token is the only source of whose list this is
+     * @param paging which page and how many rows, {@link #FIRST_POOL_PAGE} for a request that asked for none
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError if the caller carries no stable subject, so
+     *     there is no list that is theirs
+     */
+    @Transactional
+    public ReferralWorkload mine(CurrentUser caller, CasePaging paging) {
+        caller.requireAnyRole(Role.JUDICIAL);
+        // Before the sweep, which is the first thing here that writes anything: an unidentified caller owns
+        // nothing, so they have no list -- and letting them release somebody else's lapsed claim on their way to a
+        // 401 is the same mistake claim() refuses for the same reason.
+        String owner = caller.requireUserId();
+        // Before the query, for the pool's reason and one of its own: a claim that lapsed while this judge was
+        // away is not theirs any more, and a sweep afterwards would leave it on this page for them to open --
+        // which would touch it and revive a claim the expiry window had already ended.
+        referralService.reclaimStaleClaims();
+
+        Page<Referral> found = referrals.findOwnedBy(
+            owner, ReferralState.Claimed, ReferralState.Decided,
+            PageRequest.of(paging.index(), paging.size(), MINE_ORDER));
+        return ReferralWorkload.of(found.getContent(), paging, found.getTotalElements());
     }
 
     /**
