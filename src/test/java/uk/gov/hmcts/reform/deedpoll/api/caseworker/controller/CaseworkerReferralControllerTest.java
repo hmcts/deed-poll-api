@@ -208,6 +208,9 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isUnauthorized());
 
             assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Decided);
+            // And the timeline is only what raising it wrote: the 401 happens before the transition, so nothing
+            // says a direction was actioned by a caller the service never saw.
+            assertThat(notes.count()).isOne();
         }
     }
 
@@ -666,8 +669,10 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             // And the case row is untouched too, so the case stays in the "returned -- action needed" queue: a
             // direction must not drop off the office's worklist because somebody clicked withdraw.
             assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Decided);
-            // Only the note the create wrote: the refusal is a whole rolled-back transaction.
-            assertThat(notes.count()).isOne();
+            // Only the three the lifecycle wrote -- raised, claimed, direction recorded -- and no fourth saying
+            // the referral was withdrawn: the refusal is a whole rolled-back transaction.
+            assertThat(notes.count()).isEqualTo(3);
+            assertThat(notes.findAll()).noneSatisfy(note -> assertThat(note.getNote()).contains("withdrawn"));
         }
 
         @Test
@@ -857,18 +862,61 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("writes no case note, unlike raising and withdrawing")
-        void writesNoCaseNote() throws Exception {
+        @DisplayName("writes a case note saying the direction was actioned, authored by the closing caseworker")
+        void writesACaseNote() throws Exception {
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
-            moveTo(referralId, ReferralState.Decided);
+            decide(caseId, referralId, MasterDecision.Approved, "Approved. Publish in the Gazette.", true);
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-civil"));
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
                 .andExpect(status().isOk());
 
-            // Only the note the create wrote: Closed is on the row, and the "returned -- action needed" queue
-            // keys off the state rather than off the timeline.
+            // Four, in lifecycle order: raised, claimed, direction recorded, direction actioned. Closing is the
+            // one step no column records after the fact, because it puts the case's column back to null.
+            assertThat(notes.count()).isEqualTo(4);
+            assertThat(notes.findAll()).anySatisfy(note -> {
+                assertThat(note.getNote()).contains("marked as actioned", "Minor");
+                // The caseworker who actioned it, through a real token, while decidedBy on the row still says
+                // which judge directed it.
+                assertThat(note.getCreatedBy()).isEqualTo("Another Caseworker");
+                assertThat(note.getNote()).doesNotContain(referralId);
+            });
+            assertThat(stored(referralId).getDecidedBy()).isEqualTo(JUDGE_NAME);
+        }
+
+        @Test
+        @DisplayName("writes no note for a closure it refused, because the whole transaction rolls back")
+        void writesNoNoteForARefusedClosure() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+
+            // Open, so the route refuses it: the referral is still in the pool with no direction on it.
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
+                .andExpect(status().isConflict());
+
+            // Only the note raising it wrote. A timeline saying a direction was actioned on a referral that was
+            // never directed is worse than a timeline silent about a refused click.
             assertThat(notes.count()).isOne();
+            assertThat(notes.findAll())
+                .noneSatisfy(note -> assertThat(note.getNote()).contains("marked as actioned"));
+        }
+
+        @Test
+        @DisplayName("writes no note on the other case when a cross-case closure is refused")
+        void writesNoNoteOnTheWrongCase() throws Exception {
+            String caseId = newCase();
+            String otherCaseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            moveTo(referralId, ReferralState.Decided);
+
+            authorised(post("/caseworker/cases/" + otherCaseId + "/referrals/" + referralId + "/closure"))
+                .andExpect(status().isNotFound());
+
+            // Only the raising note, and on the case that was really referred: the actioning of one case's
+            // direction must not appear on another case's timeline.
+            assertThat(notes.findAll()).singleElement()
+                .satisfies(note -> assertThat(note.getDeedPoll().getId()).isEqualTo(caseId));
         }
     }
 

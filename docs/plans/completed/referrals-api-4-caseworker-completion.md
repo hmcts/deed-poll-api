@@ -1,5 +1,9 @@
 # Plan: referrals to the judiciary (API follow-up 4) — caseworker completion rules
 
+> **Follow-up:** `../referrals-api-5-lifecycle-case-notes.md` is the separate plan decision 5 below deferred
+> to. It is complete: claim, direction and closure each write one case note, so this plan's out-of-scope line
+> for them is closed rather than outstanding. It changed no state, rule or contract of this plan's.
+
 ## Overview
 
 Business testing of the completed referral feature found that a caseworker can still withdraw a referral
@@ -84,6 +88,11 @@ their existing conflict/not-found/unauthorized behaviour.
 The feedback also asks for a note at each lifecycle transition. That is recommendation 2 and will be planned
 separately. Do not add only a closure note here: doing one transition opportunistically would leave the audit
 policy inconsistent and pre-empt the wording/authorship decisions needed for the whole lifecycle.
+
+**Done separately, as this said it would be:** `../referrals-api-5-lifecycle-case-notes.md` added the claim,
+direction and closure notes together, with one wording and authorship decision covering all three. The
+closure note this plan refused to add opportunistically is authored by the closing caseworker; `decidedBy`
+on the row still names the judge.
 
 ### 6. No migration or contract-version work
 
@@ -343,7 +352,8 @@ for a documentation task: no test was added or removed. Against Task 0's baselin
 ## Out of scope
 
 - The admin tab consolidation, direction display and closure journey — the companion admin plan.
-- Case notes for claim, direction or closure — referral audit plan, recommendation 2.
+- Case notes for claim, direction or closure — recommendation 2, since done in
+  `../referrals-api-5-lifecycle-case-notes.md`.
 - A judge's “My referrals” list — recommendation 3, planned in
   `referrals-api-6-judicial-my-referrals.md`.
 - Mapping a judicial decision to an application state or case date without an approved business rule.

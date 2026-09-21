@@ -44,13 +44,16 @@ import java.util.List;
  * are not on this surface at all rather than a check bolted on here. So unlike the note and witness deletes,
  * nothing below these handlers asks what the caller may do.
  *
- * <p><strong>The caller is passed to every write for authorship, not authorisation.</strong> Raising and
- * withdrawing each write a note onto the case timeline as the acting caseworker -- there is no timeline concept
- * in this domain beyond the notes grid, so the referral has to appear where caseworkers already look -- and
- * {@code ReferralService} takes the whole {@code CurrentUser} because it needs a name for the audit columns and
- * an author for that note. Closing writes no note, and still takes the caller for the audit columns: who closed
- * a referral is the record of who says the direction was actioned. The reads take none: a referral's visibility
- * is its parent's, which is in the path.
+ * <p><strong>The caller is passed to every write for authorship, not authorisation.</strong> All three writes
+ * here -- raising, withdrawing and closing -- put a note onto the case timeline as the acting caseworker, and
+ * there is no timeline concept in this domain beyond the notes grid, so the referral has to appear where
+ * caseworkers already look. {@code ReferralService} takes the whole {@code CurrentUser} because it needs a name
+ * for the audit columns and an author for that note, and on closure the two say different things: {@code
+ * decidedBy} on the row is the judge who directed it, and the note's {@code createdBy} is who in the office
+ * carried it out. Closing wrote no note until
+ * {@code docs/plans/referrals-api-5-lifecycle-case-notes.md} -- the row's {@code Closed} was taken to say
+ * everything a note could, and business testing found it does not say <em>when</em> the office acted. The reads
+ * take no caller: a referral's visibility is its parent's, which is in the path.
  *
  * <p>None of the three conflicts these routes can answer is stated here. The one-live-referral guard, the
  * withdraw-only-before-a-direction guard and the close-only-when-{@code Decided} guard are all in

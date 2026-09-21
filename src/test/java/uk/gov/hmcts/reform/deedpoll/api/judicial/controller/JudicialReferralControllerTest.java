@@ -50,6 +50,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -595,7 +596,11 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 // The same document the read gives, because the screen after a claim is the papers -- so a client
                 // renders them without a second call.
                 .andExpect(jsonPath("$.application.newSurname").value("Smyth"))
-                .andExpect(jsonPath("$.caseNotes.length()").value(1));
+                // Two notes: the caseworker's "referred to the judiciary" and this claim's own, written by the
+                // transition in the same request and therefore already on the timeline it answers with.
+                .andExpect(jsonPath("$.caseNotes.length()").value(2))
+                .andExpect(jsonPath("$.caseNotes[*].note",
+                                    hasItem(containsString("claimed by the judiciary"))));
 
             Referral claimed = stored(referralId);
             assertThat(claimed.getState()).isEqualTo(ReferralState.Claimed);
@@ -603,6 +608,12 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             // Stamped at the claim as well, so a referral picked up and never touched again lapses two hours after
             // it was picked up rather than never.
             assertThat(claimed.getLastTouchedAt()).isNotNull();
+            // And the claim note is the judge's own, over a real token rather than a CurrentUser a test built:
+            // createdBy is where the name lives, which is why the prose does not repeat it.
+            assertThat(notes.findAll())
+                .filteredOn(note -> note.getNote().contains("claimed by the judiciary"))
+                .singleElement()
+                .satisfies(note -> assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME));
         }
 
         @Test
@@ -749,6 +760,18 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             assertThat(directed.getState()).isEqualTo(ReferralState.Decided);
             assertThat(directed.getDecidedBy()).isEqualTo(JUDGE_NAME);
             assertThat(directed.getPublishToGazette()).isTrue();
+            // The direction note, authored by the deciding judge and a summary rather than a copy: the decision
+            // and the Gazette answer are in it and the directions text is not, because a direction may be twice
+            // as long as a note may be.
+            assertThat(notes.findAll())
+                .filteredOn(note -> note.getNote().contains("Judicial direction recorded"))
+                .singleElement()
+                .satisfies(note -> {
+                    assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME);
+                    assertThat(note.getNote()).contains("Decision: " + MasterDecision.Approved.name(),
+                                                        "Publish to the London Gazette: Yes");
+                    assertThat(note.getNote()).doesNotContain("Granted");
+                });
         }
 
         @Test

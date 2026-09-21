@@ -3,6 +3,11 @@
 > **Follow-up:** `../referrals-api-6-judicial-my-referrals.md` completes this plan's intended list boundary
 > with a judge-owned `Claimed`/`Decided` collection. It also replaces display-name authorization with stable
 > IDAM-subject ownership before that collection can safely enumerate referrals.
+>
+> `../referrals-api-5-lifecycle-case-notes.md` adds claim and direction notes to the timeline this plan's
+> `JudicialReferralDetail.caseNotes` returns, so flag 6's accepted disclosure now extends to them: a judge
+> reading a lapsed referral out of the pool sees who claimed it and what was directed, on the same reasoning
+> that had the lapse note name its former holder. It changed no route, DTO or field on this surface.
 
 ## Overview
 

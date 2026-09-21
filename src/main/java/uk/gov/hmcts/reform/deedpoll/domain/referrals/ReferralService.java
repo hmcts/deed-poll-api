@@ -110,6 +110,19 @@ import java.util.stream.Collectors;
  *       timer -- and it is deliberately out of scope.</li>
  * </ul>
  *
+ * <p><strong>Every successful transition writes exactly one case note, and nothing else writes one.</strong>
+ * Raise, withdraw, {@link #claim}, {@link #decide} and {@link #close} each call {@code notes.createNote} once,
+ * with prose from {@link ReferralNotes} and {@code caller.noteAuthor()} as the author -- the person who caused
+ * the transition, which on a claim or a direction is the judge. {@link #reclaimStaleClaims()} is the one
+ * exception to the authorship rule, not to the counting rule: it writes one note per released claim as
+ * {@link NoteAuthor#NONE}, because no person did it. Each note is created after the referral is saved and
+ * inside the same transaction, so there is no successful transition without its note and no note for one that
+ * was refused or rolled back. {@link #touch} writes none -- a read is not a transition -- and neither does the
+ * backfill migration, which does not revisit history. The first three referral plans deliberately noted only
+ * raise, withdraw and a lapse, on the grounds that a column already carried the rest;
+ * {@code docs/plans/referrals-api-5-lifecycle-case-notes.md} supersedes that, because a row states where a
+ * referral is <em>now</em> and the grid is the only place that says when each step happened.
+ *
  * <p><strong>Every transition also refreshes the case's denormalised {@code currentReferralState}</strong>, in
  * the transition's own transaction, so a case never persists with a referral in one state and its column naming
  * another. The rule and the reason it is a recompute rather than a push are on {@link CurrentReferralState};
@@ -283,9 +296,13 @@ public class ReferralService {
      * somebody got there first. A judge who is still working keeps their claim by interacting with it, which
      * refreshes {@code lastTouchedAt} -- see {@link #touch}.
      *
-     * <p><strong>No case note.</strong> A claim is legible from the referral's own row -- {@code claimedBy}
-     * and {@code claimedAt} -- so a note would be a second copy of a fact already on the record. The sweep
-     * writes one because a lapse erases the fact it is about.
+     * <p><strong>One case note, authored by the claiming judge.</strong> The referral's own row says who holds
+     * it <em>now</em>, and the Notes grid is the only place that says when each step happened -- so without this
+     * a caseworker reading the timeline saw a referral leave and come back with nothing in between. Written
+     * after the claim is stored and inside the same transaction, so a refused claim leaves no note saying the
+     * judiciary has the papers. See {@link ReferralNotes} and
+     * {@code docs/plans/referrals-api-5-lifecycle-case-notes.md}, which supersede the earlier reasoning that a
+     * claim needed no note because a column already carried it.
      *
      * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
      * @throws NotFoundError  if there is no such referral, or it belongs to another case
@@ -315,6 +332,10 @@ public class ReferralService {
         referral.setModifiedOn(now);
 
         Referral saved = referrals.save(referral);
+        // The claiming judge, not the service account: a person did this, and noteAuthor() is what puts their
+        // name in createdBy -- which is why the prose says "claimed by the judiciary" rather than naming them
+        // a second time.
+        notes.createNote(deedPollId, new CreateNoteInput(ReferralNotes.claimed(saved)), caller.noteAuthor());
         // After the sweep above, not instead of it: the sweep may have moved this very case's column to Open a
         // moment ago, and this recompute is what takes it on to Claimed.
         refreshCurrentReferralState(deedPollId);
@@ -378,10 +399,11 @@ public class ReferralService {
      * will never look at it again. It costs nothing and it keeps the column meaning "when a judge last did
      * something with this", which is what a caseworker asking how long the judiciary had it reads.
      *
-     * <p><strong>No case note</strong>, for the reason {@link #claim} writes none: the direction is on the
-     * referral's own row, in five columns the referrals tab publishes, so a note would be a second copy of a
-     * recorded fact that could then disagree with it. The sweep writes one because a lapse erases the fact it
-     * is about.
+     * <p><strong>One case note, authored by the deciding judge</strong>, for the reason {@link #claim} writes
+     * one: the timeline is where a caseworker reads <em>when</em> the direction came back. It is a summary and
+     * not a copy -- the decision and the Gazette answer, and a pointer to the referral for the direction itself
+     * -- because {@code directionsText} may be twice as long as a note may be, so quoting it would make a valid
+     * direction fail the note it triggers. {@link ReferralNotes#directionRecorded} owns that reasoning.
      *
      * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
      * @throws NotFoundError  if there is no such referral, or it belongs to another case
@@ -406,6 +428,12 @@ public class ReferralService {
         referral.setModifiedOn(now);
 
         Referral saved = referrals.save(referral);
+        // Composed from the saved referral rather than from the input, so the note reads the decision and the
+        // Gazette answer as they were stored -- and is written inside this transaction, so a rolled-back
+        // direction leaves no note announcing one.
+        notes.createNote(deedPollId,
+                         new CreateNoteInput(ReferralNotes.directionRecorded(saved)),
+                         caller.noteAuthor());
         // The transition the dashboard's "returned -- action needed" count is drawn from: this is what puts the
         // case into that queue, by way of its column reading Decided.
         refreshCurrentReferralState(deedPollId);
@@ -437,6 +465,15 @@ public class ReferralService {
      * columns</strong>: those are the pre-migration snapshot, and syncing them would make the case say two
      * different things over time and re-introduce the one-referral-per-case model this feature replaced.
      *
+     * <p><strong>One case note, authored by the closing caseworker.</strong> The one lifecycle step no column
+     * records after the fact: this transition writes {@code Closed} and the case's
+     * {@code currentReferralState} back to null, so without the note the timeline would show a direction
+     * arriving and then nothing, and "has anyone actioned this?" would have no answer on the case. Written
+     * after the closure is stored and inside the same transaction, so a refused closure leaves no note saying
+     * the direction was actioned. The earlier reasoning -- that the row's own {@code Closed} said everything a
+     * note could -- is superseded by {@code docs/plans/referrals-api-5-lifecycle-case-notes.md}, which found
+     * that it says only where the referral is now and never when the office acted.
+     *
      * @throws NotFoundError if there is no such referral, or it belongs to another case
      * @throws ConflictError if the referral is not {@code Decided}
      */
@@ -455,6 +492,11 @@ public class ReferralService {
         referral.setModifiedOn(AuditClock.now());
 
         Referral saved = referrals.save(referral);
+        // The caseworker who actioned the direction, not the judge who gave it: decidedBy on the row still says
+        // who directed it, and this note's createdBy is who carried it out.
+        notes.createNote(deedPollId,
+                         new CreateNoteInput(ReferralNotes.directionActioned(saved)),
+                         caller.noteAuthor());
         // Closed is terminal, so this writes NULL and the case leaves the "returned -- action needed" queue.
         // Setting the column to Closed here is the specific mistake CurrentReferralState is written against: it
         // would leave every actioned case in that queue for good.

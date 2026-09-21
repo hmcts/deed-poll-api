@@ -43,6 +43,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -66,9 +67,10 @@ import static org.mockito.Mockito.when;
  * {@code CaseworkerReferralControllerTest} proves against a real database and a real token that the routes
  * reach them and which status code each answer becomes.
  *
- * <p>The note service is mocked for the same reason: the claim is that create and withdraw each write one
- * note attributed to the acting caseworker, and the author is an argument rather than something the stored
- * note distinguishes from a service-account write except by its text.
+ * <p>The note service is mocked for the same reason: the claim is that every successful transition writes one
+ * note attributed to the actor that caused it -- the caseworker who raised or withdrew, the judge who claimed
+ * or directed, the service account for a lapse -- and the author is an argument rather than something the
+ * stored note distinguishes from a service-account write except by its text.
  */
 class ReferralServiceTest {
 
@@ -318,6 +320,27 @@ class ReferralServiceTest {
         ArgumentCaptor<String> caseId = ArgumentCaptor.forClass(String.class);
         verify(notes).createNote(caseId.capture(), text.capture(), author.capture());
         return new NoteWritten(caseId.getValue(), text.getValue().note(), author.getValue());
+    }
+
+    /**
+     * Every note the service wrote, in the order it wrote them.
+     *
+     * <p>What {@link #noteWritten()} cannot state, and the reason it is worth a second helper: a claim whose own
+     * sweep released a lapsed claim first writes two notes in one call, and the order of the two is the history
+     * -- lapsed, then claimed again -- rather than an implementation detail.
+     */
+    private List<NoteWritten> notesWritten() {
+        ArgumentCaptor<CreateNoteInput> text = ArgumentCaptor.forClass(CreateNoteInput.class);
+        ArgumentCaptor<NoteAuthor> author = ArgumentCaptor.forClass(NoteAuthor.class);
+        ArgumentCaptor<String> caseId = ArgumentCaptor.forClass(String.class);
+        verify(notes, atLeastOnce()).createNote(caseId.capture(), text.capture(), author.capture());
+        List<NoteWritten> written = new ArrayList<>();
+        for (int i = 0; i < text.getAllValues().size(); i++) {
+            written.add(new NoteWritten(caseId.getAllValues().get(i),
+                                        text.getAllValues().get(i).note(),
+                                        author.getAllValues().get(i)));
+        }
+        return written;
     }
 
     private record NoteWritten(String deedPollId, String text, NoteAuthor author) {
@@ -815,6 +838,9 @@ class ReferralServiceTest {
 
             assertThat(referral.getState()).isEqualTo(state);
             verify(referrals, never()).save(any());
+            // And no note either: a timeline saying the judiciary claimed a referral it did not claim is worse
+            // than a timeline that is silent about a refused click.
+            verifyNoInteractions(notes);
         }
 
         @Test
@@ -831,6 +857,9 @@ class ReferralServiceTest {
             assertThat(referral.getClaimedBy()).isEqualTo("District Judge Bell");
             assertThat(referral.getLastTouchedAt()).isNotNull();
             verify(referrals, never()).save(any());
+            // No second claim note for a claim that did not happen: the note follows the transition, so a
+            // refreshed dashboard does not grow a note per click.
+            verifyNoInteractions(notes);
         }
 
         @Test
@@ -846,8 +875,12 @@ class ReferralServiceTest {
             Referral written = saved();
             assertThat(written.getState()).isEqualTo(ReferralState.Claimed);
             assertThat(written.getClaimedBy()).isEqualTo("District Judge Bell");
-            // And the case says the first judge's claim lapsed, so the timeline explains the handover.
-            assertThat(noteWritten().text()).contains("District Judge Okafor", "lapsed after inactivity");
+            // And the case says the first judge's claim lapsed, so the timeline explains the handover -- then
+            // says the second judge has it, which is this call's own transition.
+            assertThat(notesWritten()).hasSize(2);
+            assertThat(notesWritten().get(0).text())
+                .contains("District Judge Okafor", "lapsed after inactivity");
+            assertThat(notesWritten().get(1).text()).contains("claimed by the judiciary");
         }
 
         @Test
@@ -878,15 +911,53 @@ class ReferralServiceTest {
         }
 
         @Test
-        @DisplayName("writes no case note, because the claim is on the referral's own row")
-        void writesNoCaseNote() {
+        @DisplayName("writes one case note attributed to the claiming judge, saying which referral it is")
+        void writesACaseNoteAttributedToTheClaimingJudge() {
             stored(ReferralState.Open);
 
             service.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE);
 
-            // claimedBy and claimedAt say who has it, so a note would be a second copy of a recorded fact.
-            // A lapse is different -- it erases the fact -- which is why only the sweep writes one.
-            verifyNoInteractions(notes);
+            NoteWritten note = noteWritten();
+            // The judge who claimed it, not the service account and not a caseworker: they are the actor, and
+            // createdBy is where their name belongs -- which is why the prose does not name them a second time.
+            assertThat(note.author().author()).isEqualTo("District Judge Bell");
+            assertThat(note.deedPollId()).isEqualTo(CASE_ID);
+            assertThat(note.text()).isEqualTo(
+                "Referral raised on 1 September 2026, reasons: Minor, claimed by the judiciary.");
+            // A case may carry several referrals over its life, so the note has to say which one -- by the
+            // raised date and reasons a caseworker can recognise, never by a uuid they cannot.
+            assertThat(note.text()).doesNotContain(REFERRAL_ID.toString());
+        }
+
+        @Test
+        @DisplayName("writes claimed, lapsed and claimed again, in that order and each to its own actor")
+        void writesTheWholeLapseAndReclaimSequence() {
+            Referral referral = stored(ReferralState.Open);
+            rowsInTheDatabase(referral);
+
+            service.claim(CASE_ID, REFERRAL_ID.toString(), OTHER_JUDGE);
+            // The first judge stops working on it, which is what an abandoned claim is: the row is otherwise
+            // exactly the one their claim produced.
+            referral.setLastTouchedAt(AuditClock.now().minus(CLAIM_EXPIRY.plusMinutes(1)));
+            service.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            // There is no "reclaimed" transition, and this is the honest sequence rather than a summary: the
+            // next successful claim writes another claim note, so the grid reads claimed, lapsed, claimed.
+            assertThat(notesWritten()).satisfiesExactly(
+                claimed -> {
+                    assertThat(claimed.text()).contains("claimed by the judiciary");
+                    assertThat(claimed.author().author()).isEqualTo("District Judge Okafor");
+                },
+                lapsed -> {
+                    assertThat(lapsed.text()).contains("District Judge Okafor", "lapsed after inactivity");
+                    // The service released it, not the judge whose claim call happened to notice, so the lapse
+                    // stays the service account's note between two human-authored ones.
+                    assertThat(lapsed.author()).isEqualTo(NoteAuthor.NONE);
+                },
+                reclaimed -> {
+                    assertThat(reclaimed.text()).contains("claimed by the judiciary");
+                    assertThat(reclaimed.author().author()).isEqualTo("District Judge Bell");
+                });
         }
     }
 
@@ -964,6 +1035,20 @@ class ReferralServiceTest {
 
             verify(referrals, never()).save(any());
         }
+
+        @Test
+        @DisplayName("writes no case note, however many times a judge reads the papers")
+        void writesNoCaseNote() {
+            storedClaim(JUDGE, Duration.ofMinutes(5));
+
+            service.touch(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+            service.touch(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            // A touch is not a lifecycle transition -- it moves lastTouchedAt and never state -- and every
+            // judicial read of a held referral is one, so a note each would bury the four that matter under a
+            // page of "still reading".
+            verifyNoInteractions(notes);
+        }
     }
 
     @Nested
@@ -1037,6 +1122,7 @@ class ReferralServiceTest {
                 .hasMessageContaining(Role.JUDICIAL.claimValue());
 
             verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
         }
 
         @Test
@@ -1073,6 +1159,9 @@ class ReferralServiceTest {
             assertThat(referral.getState()).isEqualTo(ReferralState.Claimed);
             assertThat(referral.getDecision()).isNull();
             verify(referrals, never()).save(any());
+            // And nothing on the other judge's case timeline either, which would otherwise be the one trace of
+            // an attempt the guard refused.
+            verifyNoInteractions(notes);
         }
 
         @Test
@@ -1091,6 +1180,9 @@ class ReferralServiceTest {
             assertThat(referral.getState()).isEqualTo(ReferralState.Withdrawn);
             assertThat(referral.getDecision()).isNull();
             assertThat(referral.getDecidedBy()).isNull();
+            // The withdrawal's note and no direction note: the timeline ends where the referral did.
+            assertThat(notesWritten()).singleElement()
+                .satisfies(note -> assertThat(note.text()).contains("withdrawn"));
         }
 
         @Test
@@ -1109,6 +1201,10 @@ class ReferralServiceTest {
 
             assertThat(referral.getDecision()).isNull();
             verify(referrals, never()).save(any());
+            // The sweep's lapse note and nothing after it: the direction that arrived too late left no trace
+            // suggesting it landed.
+            assertThat(notesWritten()).singleElement()
+                .satisfies(note -> assertThat(note.text()).contains("lapsed after inactivity"));
         }
 
         @ParameterizedTest
@@ -1141,14 +1237,52 @@ class ReferralServiceTest {
         }
 
         @Test
-        @DisplayName("writes no case note, because the direction is on the referral's own row")
-        void writesNoCaseNote() {
+        @DisplayName("writes one case note attributed to the deciding judge, summarising the direction")
+        void writesACaseNoteAttributedToTheDecidingJudge() {
             storedClaim(JUDGE, Duration.ofMinutes(10));
 
-            service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE);
+            service.decide(CASE_ID, REFERRAL_ID.toString(),
+                           direction("Approved", "Granted. Publish in the Gazette.", true), JUDGE);
 
-            // Five columns the referrals tab publishes say what was directed, so a note would be a second copy
-            // that could then disagree with them.
+            NoteWritten note = noteWritten();
+            assertThat(note.author().author()).isEqualTo("District Judge Bell");
+            assertThat(note.deedPollId()).isEqualTo(CASE_ID);
+            // The decision and the Gazette answer in full, because those two are what a caseworker scanning the
+            // grid needs in order to know whether anything is waiting for them.
+            assertThat(note.text()).isEqualTo(
+                "Judicial direction recorded for referral raised on 1 September 2026, reasons: Minor."
+                    + " Decision: Approved. Publish to the London Gazette: Yes."
+                    + " See the referral for the full direction.");
+            assertThat(note.text()).doesNotContain(REFERRAL_ID.toString());
+        }
+
+        @Test
+        @DisplayName("summarises rather than copies the direction, so even the longest one writes its note")
+        void doesNotCopyTheDirectionsTextIntoTheNote() {
+            storedClaim(JUDGE, Duration.ofMinutes(10));
+            String longest = "x".repeat(ReferralSchemas.MAX_DIRECTIONS_LENGTH);
+
+            service.decide(CASE_ID, REFERRAL_ID.toString(), direction("Rejected", longest, false), JUDGE);
+
+            NoteWritten note = noteWritten();
+            // The whole reason the note is a summary: a direction may be twice as long as a note may be, so
+            // copying it would make a valid direction fail the note it triggers and roll the direction back.
+            assertThat(note.text()).doesNotContain("xxx");
+            assertThat(NoteForm.validateNoteText(note.text())).isEmpty();
+            // And the direction itself is stored in full, which is what the note points at.
+            assertThat(saved().getDirectionsText()).isEqualTo(longest);
+        }
+
+        @Test
+        @DisplayName("writes no note for a direction it refused, whatever became of the referral")
+        void writesNoNoteForARefusedDirection() {
+            stored(ReferralState.Decided);
+
+            // Decided included, which is what stops a second direction adding a second note that would read as
+            // though a judge had directed the referral twice.
+            assertThatThrownBy(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
+                .isInstanceOf(ConflictError.class);
+
             verifyNoInteractions(notes);
         }
 
@@ -1266,6 +1400,9 @@ class ReferralServiceTest {
 
             assertThat(referral.getState()).isEqualTo(ReferralState.Decided);
             verify(referrals, never()).save(any());
+            // And nothing on either case's timeline: a note written by a refused cross-case closure would put
+            // the actioning of one case's direction onto another case.
+            verifyNoInteractions(notes);
         }
 
         @Test
@@ -1275,18 +1412,64 @@ class ReferralServiceTest {
                 .isInstanceOf(NotFoundError.class);
 
             verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
+            verifyNoInteractions(notes);
         }
 
         @Test
-        @DisplayName("writes no case note")
-        void writesNoCaseNote() {
+        @DisplayName("writes one case note attributed to the closing caseworker, saying which referral it is")
+        void writesACaseNoteAttributedToTheClosingCaseworker() {
             stored(ReferralState.Decided);
 
             service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
 
-            // Closed is on the row, and the "returned -- action needed" queue keys off the state rather than off
-            // the timeline, so there is nothing a note would tell a reader the referral does not.
-            verifyNoInteractions(notes);
+            NoteWritten note = noteWritten();
+            // The caseworker who actioned it, not the judge who directed it: decidedBy on the row still says who
+            // directed it, and createdBy here says who carried it out.
+            assertThat(note.author().author()).isEqualTo("Ada Caseworker");
+            assertThat(note.deedPollId()).isEqualTo(CASE_ID);
+            assertThat(note.text()).isEqualTo(
+                "Judicial direction for referral raised on 1 September 2026, reasons: Minor, marked as actioned.");
+            // Pairable with the direction note a few rows above it in the same grid, by the raised date and
+            // reasons a caseworker can recognise rather than by a uuid they cannot.
+            assertThat(note.text()).doesNotContain(REFERRAL_ID.toString());
+        }
+
+        @Test
+        @DisplayName("acknowledges the direction without quoting it, however long the judge's text was")
+        void doesNotQuoteTheDirectionInTheNote() {
+            Referral referral = stored(ReferralState.Decided);
+            String longest = "x".repeat(ReferralSchemas.MAX_DIRECTIONS_LENGTH);
+            referral.setDecision(MasterDecision.Approved);
+            referral.setDirectionsText(longest);
+            referral.setPublishToGazette(true);
+            referral.setDecidedBy("District Judge Bell");
+
+            service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+
+            NoteWritten note = noteWritten();
+            // The closure note does not repeat the decision either -- the direction note is a few rows up -- so
+            // the longest possible direction still writes a note the validator accepts rather than rolling the
+            // closure back.
+            assertThat(note.text()).doesNotContain("xxx");
+            assertThat(NoteForm.validateNoteText(note.text())).isEmpty();
+            // And the direction the caseworker actioned is still there in full, which is the record of what
+            // they actioned.
+            assertThat(saved().getDirectionsText()).isEqualTo(longest);
+        }
+
+        @Test
+        @DisplayName("writes no second note for a closure it refused, so one actioning is one note")
+        void writesNoNoteForASecondClosure() {
+            stored(ReferralState.Decided);
+
+            service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+            // The closure took the referral to Closed, so the same click again is a conflict -- and a timeline
+            // saying the direction was actioned twice would read as two pieces of work.
+            assertThatThrownBy(() -> service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
+                .isInstanceOf(ConflictError.class);
+
+            assertThat(notesWritten()).singleElement()
+                .satisfies(note -> assertThat(note.text()).contains("marked as actioned"));
         }
 
         @Test

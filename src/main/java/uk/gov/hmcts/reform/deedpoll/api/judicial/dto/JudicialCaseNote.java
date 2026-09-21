@@ -8,10 +8,13 @@ import java.util.List;
 /**
  * One note from the application's timeline, as a judge reads it: what was recorded, by whom, and when.
  *
- * <p><strong>Read-only, and there is no judicial write.</strong> There is no note route on {@code /judicial/**}
- * and no judicial note author: what a judge records is the direction, on the referral. The timeline is here
- * because it is where the office writes what happened to an application -- the referral itself appears on it --
- * and a judge asked to direct a case has to be able to read that history.
+ * <p><strong>Read-only: there is no note route on {@code /judicial/**}.</strong> What a judge submits is the
+ * direction, on the referral, and no judicial request carries note text. A judge's <em>name</em> does appear in
+ * {@code createdBy} on this timeline, because claiming a referral and recording a direction each write one note
+ * authored by the judge who did it -- see {@code docs/plans/referrals-api-5-lifecycle-case-notes.md} -- but the
+ * prose is composed by {@code ReferralNotes}, not supplied. The timeline is here because it is where the office
+ * writes what happened to an application -- the referral itself appears on it -- and a judge asked to direct a
+ * case has to be able to read that history.
  *
  * <p><strong>Narrower than {@code NoteResponse}, and not by accident.</strong> The note's id is left out because
  * a judge addresses no note -- an id that no judicial route accepts would be a key published for nothing -- and
