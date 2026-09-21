@@ -237,8 +237,23 @@ existing user-authored text verbatim and avoid UUIDs and applicant data.
 Extend `ReferralNotesTest` to pin exact prose, migrated/no-reason handling, both decisions, both Gazette
 answers, and the 2,000-character invariant. Prove the 4,000-character `directionsText` never enters the note.
 
-- [ ] Three new composers and shared referral identity implemented; exact wording and length invariants
+- [x] Three new composers and shared referral identity implemented; exact wording and length invariants
       covered by container-free tests
+
+`ReferralNotes.claimed`, `.directionRecorded` and `.directionActioned` are the three; the shared identity is
+the private `identifies(Referral)`, a fragment (`raised on 1 September 2026, reasons: Minor, Other`) rather
+than a sentence, which is what let `withdrawn` adopt it with its tested output unchanged. Wording follows
+decision 6, with the multi-sentence direction note joined by single spaces rather than the plan sample's line
+break, matching `withdrawn` and `claimLapsed`.
+
+Two null columns are answered as `not recorded` rather than defaulted: a hand-repaired `Decided` row read as
+`Rejected` / not-published would be a decision nobody made, which is the coercion `ReferralSchemas.gazette`
+already refuses. Neither is reachable through `decide`.
+
+`ReferralNotesTest` is 10 tests → **19**: exact prose for all three, migrated/no-reason handling on claim and
+actioned, both decisions × both Gazette answers, the null-column row, a 4,000-character `directionsText` proven
+absent from the note, and every composer through `NoteForm.validateNoteText` for both every-reason and
+no-reason referrals. `./gradlew build` green — `test` **2,319** (2,310 + 9) + `integration` 8, zero failures.
 
 ### Task 2: Write claimed and direction notes
 

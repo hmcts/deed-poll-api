@@ -7,14 +7,24 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import java.time.format.DateTimeFormatter;
 
 /**
- * The text of the case notes a referral writes as it is raised, withdrawn, and taken back from a judge who
- * stopped working on it.
+ * The text of the case notes a referral writes as it moves through its lifecycle: raised, claimed, directed,
+ * actioned, withdrawn, and taken back from a judge who stopped working on it.
  *
  * <p><strong>Why a referral writes a note at all.</strong> There is no timeline concept in this domain --
  * only the human-authored Notes grid -- and the referral has to be visible where caseworkers already look,
  * so MVP reuses the grid rather than inventing a second history nobody reads. The note is a record of the
  * event, not the referral: it is written once and never revised, and the referral's own row is what a client
  * reads for the current state.
+ *
+ * <p><strong>There is one note per successful transition, and the earlier reasoning for having fewer is
+ * superseded.</strong> The first three plans wrote notes only where a column did not already carry the fact --
+ * raised, withdrawn, and a lapse, which erases the claim it is about -- on the grounds that a note duplicating
+ * {@code claimedBy} or the direction columns could later disagree with them. Business testing rejected that: a
+ * caseworker reading the Notes grid saw a referral leave and come back with nothing in between, because the
+ * referral's own row states only where it is <em>now</em> and the grid is the only place that says when each
+ * step happened. So {@link #claimed}, {@link #directionRecorded} and {@link #directionActioned} exist, and
+ * the duplication is accepted on the same terms as the lapse note's: the prose is history, the row is the
+ * current state, and nothing parses either. See {@code docs/plans/referrals-api-5-lifecycle-case-notes.md}.
  *
  * <p><strong>Composed here rather than in the service</strong>, for one reason worth the class: the notes
  * column is bounded at {@link NoteForm#MAX_NOTE_LENGTH} and the referral's own free text is not bounded by
@@ -105,19 +115,104 @@ public final class ReferralNotes {
      * <p>Said again rather than left to the reader to pair up with the earlier note: a case may carry several
      * referrals over its life, and a bare "referral withdrawn" in a grid of thirty notes does not say which.
      *
-     * <p>Takes the stored referral rather than an id, because the id is a uuid a caseworker cannot recognise
-     * and the raised date and reasons are what they can.
+     * <p>Takes the stored referral rather than an id, for the reason every composer below does -- see
+     * {@link #identifies}.
+     */
+    public static String withdrawn(Referral referral) {
+        return "Referral to the judiciary withdrawn. It was " + identifies(referral) + ".";
+    }
+
+    /**
+     * The note for a judge taking a referral out of the shared pool.
+     *
+     * <p>Says that the judiciary has it rather than naming the judge who claimed it. The note's
+     * {@code createdBy} is that judge -- {@code CurrentUser.noteAuthor()} is how it is written -- so naming
+     * them in the prose as well would put the same name in the grid twice, and the lapse note names its judge
+     * precisely because a lapse leaves no author to read it off.
+     */
+    public static String claimed(Referral referral) {
+        return "Referral " + identifies(referral) + ", claimed by the judiciary.";
+    }
+
+    /**
+     * The note for a judge's direction coming back: what they decided, and whether it goes in the Gazette.
+     *
+     * <p><strong>A summary, and deliberately not a copy.</strong> It does not quote
+     * {@code directionsText}, which {@link ReferralSchemas#MAX_DIRECTIONS_LENGTH} allows to be twice
+     * {@link NoteForm#MAX_NOTE_LENGTH} -- so copying it would make a valid direction fail the note it
+     * triggers and be rolled back, and truncating it would put an incomplete second version of a judicial
+     * direction on the timeline that reads as though it were the whole of it. The referral's own page shows
+     * the full text, so the note points at it instead.
+     *
+     * <p>The decision and the Gazette answer are quoted rather than summarised away, because those two are
+     * what a caseworker scanning the grid needs in order to know whether anything is waiting for them.
+     *
+     * <p>The Gazette answer is spelled out as Yes or No and never abbreviated to the presence of a word:
+     * publication puts the applicant's former and new names in a public notice, so "not published" and
+     * "nothing recorded" must not read alike. A referral whose column is somehow null therefore says so,
+     * rather than being read as No -- {@link #decision} takes the same line for the same reason. Neither is
+     * reachable through the direction transition, which always stores both.
+     */
+    public static String directionRecorded(Referral referral) {
+        return "Judicial direction recorded for referral " + identifies(referral) + "."
+            + " Decision: " + decision(referral) + "."
+            + " Publish to the London Gazette: " + gazette(referral) + "."
+            + " See the referral for the full direction.";
+    }
+
+    /**
+     * The note for the office acknowledging that a returned direction has been carried out.
+     *
+     * <p>The one lifecycle step that no column records at all after the fact: closing writes
+     * {@code state = Closed} and the case's {@code currentReferralState} back to null, so without this the
+     * timeline would show a direction arriving and then nothing, and "has anyone actioned this?" would have
+     * no answer on the case. It does not repeat the decision -- the direction note above is a few rows up in
+     * the same grid.
+     */
+    public static String directionActioned(Referral referral) {
+        return "Judicial direction for referral " + identifies(referral) + ", marked as actioned.";
+    }
+
+    /**
+     * Which referral this note is about, in terms a caseworker can recognise: when it was raised, and what
+     * for.
+     *
+     * <p>One helper for every composer that needs it, because the notes have to be pairable in the grid: a
+     * case may carry several referrals over its life, and a claim note that identified its referral
+     * differently from the direction note on the same referral would be two histories rather than one.
+     *
+     * <p><strong>Never the id.</strong> It is a uuid, and a caseworker cannot recognise one or match two of
+     * them by eye. The raised date and reasons are what they can. Nothing of the applicant's is quoted
+     * either: the note is already nested under their case, so their name in it would be a second copy of
+     * personal data with a second lifetime.
      *
      * <p>A referral with no reasons is a backfilled one -- the source store had no such field -- so it says
      * so rather than trailing off after an empty list.
+     *
+     * <p>Reads as a fragment ("raised on ...") rather than a sentence, so each composer decides what precedes
+     * it. That is what lets the withdrawal note keep the exact words it has always had.
      */
-    public static String withdrawn(Referral referral) {
+    private static String identifies(Referral referral) {
         String reasons = referral.getReasons().isEmpty()
             ? "no reasons recorded"
             : String.join(", ", referral.getReasons());
-        return "Referral to the judiciary withdrawn. It was raised on "
-            + DAY.format(referral.getCreatedOn())
-            + ", reasons: " + reasons + ".";
+        return "raised on " + DAY.format(referral.getCreatedOn()) + ", reasons: " + reasons;
+    }
+
+    /**
+     * The decision by name, or that it was never recorded -- see {@link #directionRecorded}.
+     */
+    private static String decision(Referral referral) {
+        return referral.getDecision() == null ? "not recorded" : referral.getDecision().name();
+    }
+
+    /** The Gazette answer as Yes or No, or that it was never recorded. */
+    private static String gazette(Referral referral) {
+        Boolean publish = referral.getPublishToGazette();
+        if (publish == null) {
+            return "not recorded";
+        }
+        return publish ? "Yes" : "No";
     }
 
     private static String names(CreateReferralInput dto) {
