@@ -32,6 +32,7 @@ import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -183,6 +184,42 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         // And the caseworker count is untouched by their arrival, asserted here as well as above: the judicial
         // routes are a new surface, so the number that describes the old one must not have moved.
         assertThat(CASEWORKER_PATHS).doesNotContainAnyElementsOf(JUDICIAL_PATHS);
+    }
+
+    /**
+     * Every documented path belongs to a list this class names -- so a route added outside both fails here.
+     *
+     * <p><strong>Added because the two counts above cannot see an addition.</strong> Each sums the operations of
+     * the paths its own list names, so a brand-new path is simply not counted: the caseworker total stays 33, the
+     * judicial total stays 5, both assertions pass, and an undocumented route reaches
+     * {@code deed-poll-admin}'s generated client without anything failing. Found while adding {@code mine},
+     * which had to be written into {@link #JUDICIAL_PATHS} by hand for the count to move at all.
+     *
+     * <p>{@code "/"} is Spring Boot's welcome route and the one legitimate path outside both surfaces. Adding a
+     * name to this set is a deliberate act: a new {@code /caseworker} or {@code /judicial} route belongs in the
+     * list for its own namespace, where the count then forces the number to be restated.
+     */
+    @DisplayName("Documents no path outside the caseworker and judicial surfaces")
+    @Test
+    void documentsNoUnlistedPath() throws Exception {
+        JsonNode paths = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                           .andExpect(status().isOk())
+                                           .andReturn()
+                                           .getResponse()
+                                           .getContentAsByteArray())
+            .get("paths");
+
+        List<String> documented = new ArrayList<>();
+        paths.fieldNames().forEachRemaining(documented::add);
+
+        List<String> known = new ArrayList<>(CASEWORKER_PATHS);
+        known.addAll(JUDICIAL_PATHS);
+        known.add("/");
+
+        assertThat(documented)
+            .describedAs("a documented path in neither surface -- add it to the list for its namespace, so that "
+                         + "namespace's operation count has to be restated with it")
+            .containsExactlyInAnyOrderElementsOf(known);
     }
 
     /**
