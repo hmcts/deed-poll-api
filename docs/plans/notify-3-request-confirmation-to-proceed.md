@@ -171,6 +171,34 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 `build/test-results/{test,integration}/*.xml`, and record it next to the final count in Task 3. Confirm rather
 than assume — notify-1 moved these figures and its task 7 moved them again.
 
+### Baseline and reconciliation, performed in the parent session on 2026-09-21
+
+This plan has no Task 0, so this stands in for one. Checked against `origin/master` at `227b714`.
+
+**Baseline:** `test` **2,379** and `integration` **10** — **2,389** in total, zero failures, `./gradlew build`
+green from cold. Compare against this, not against a figure quoted in another notify plan.
+
+**The migration is `V15`.** `V14__referral_owner_subjects.sql` is the highest on `master`, so the correction
+below resolves to `V15` — confirmed by looking, as it asks. Nothing between has taken it.
+
+**`exclusionGroup` does not exist anywhere in `src/main/java`**, so this plan introduces it rather than
+extending it.
+
+**V12's predicate, verbatim, as both places on `master` spell it today** — this is the thing the plan says must
+be carried through unchanged, and getting it wrong silently changes which rows the partial index covers:
+
+```sql
+-- V12__notification_failure_verdict.sql, the index being replaced
+CREATE UNIQUE INDEX "deedpoll_notification_referral_template_key"
+    ON "deedpoll_notification" ("referralId", "template")
+ WHERE "referralId" IS NOT NULL
+   AND ("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT');
+```
+
+`NotificationRepository.enqueue` repeats that target and predicate in its `ON CONFLICT` clause, and must go on
+matching the new `("referralId", "exclusionGroup")` index exactly — the two are one mechanism, and a mismatch
+makes the statement silently stop deduplicating rather than fail.
+
 **A worker or container startup timeout is an environment failure, not a code failure** — re-run before
 investigating.
 
