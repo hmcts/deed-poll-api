@@ -188,7 +188,7 @@ transaction boundaries. Regenerate/compare OpenAPI and record the current build/
 Stop if API follow-up 4 is not merged or if case notes have gained a generated/immutable discriminator this
 plan does not account for.
 
-- [ ] Current transitions, note behaviour, visibility and limits reconciled; baseline recorded; no files
+- [x] Current transitions, note behaviour, visibility and limits reconciled; baseline recorded; no files
       changed
 
 #### Reconciliation already performed, 2026-09-21 — read this rather than repeating it
@@ -215,6 +215,13 @@ timezone-aware tests, `OpenAPIWriteBodies` tests — and touched three referral 
 (`CaseworkerReferralControllerTest`, `JudicialReferralControllerTest`, `ReferralSecurityTest`) without touching
 `ReferralService`, `ReferralNotes` or any migration. That is why the baseline is 2,318 rather than api-4's
 2,314. Task 0 changes no files.
+
+**Re-verified at `b0039b7` before Task 1.** All five gate items still hold — three composers
+(`ReferralNotes:54`, `:94`, `:114`), three `createNote` sites (`:191`, `:267`, `:509`) with none in `claim`,
+`touch`, `decide` or `close`, both limits, both projections, and no discriminator on `DeedPollNote`. Baseline
+re-measured with `./gradlew build --rerun-tasks` rather than a cached result: green, `test` 2,310 +
+`integration` 8 = **2,318**, zero failures or errors, `OpenAPIPublisherTest` asserting 33 caseworker and 4
+judicial operations.
 
 ### Task 1: Define and test lifecycle note text
 
