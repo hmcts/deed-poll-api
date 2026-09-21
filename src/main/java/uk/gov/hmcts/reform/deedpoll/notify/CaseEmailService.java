@@ -2,8 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.notify;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
@@ -73,10 +72,9 @@ import java.util.stream.Collectors;
  * the drain is what talks to Notify, and it is called after this transaction commits -- see
  * {@link NotificationOutbox}, and {@code CaseworkerEmailController} for why the order is not an accident.
  */
+@Slf4j
 @Service
 public class CaseEmailService {
-
-    private static final Logger LOG = LoggerFactory.getLogger(CaseEmailService.class);
 
     /**
      * Why <em>Application Rejected</em> does not apply to a case, in words a caseworker can act on.
@@ -236,7 +234,7 @@ public class CaseEmailService {
             NotificationFailure verdict = NotificationFailure.classify(refused);
             // Logged in full here and summarised in the answer: the client's message contains Notify's response,
             // and this body is rendered by whatever is on the other end.
-            LOG.warn("Notify would not render {} for case {} ({}, status {})",
+            log.warn("Notify would not render {} for case {} ({}, status {})",
                      template.key(), deedPollId, verdict, refused.getHttpResult(), refused);
             throw new UpstreamFailureError("GOV.UK Notify could not render the " + template.key()
                 + " template (" + verdict + ", status " + refused.getHttpResult() + ")");
@@ -294,8 +292,8 @@ public class CaseEmailService {
         // Zero rows: the unique index refused it, which is the mechanism working rather than a failure. Logged
         // because a caseworker pressing send twice and a replica racing look identical from here, and the
         // frequency is worth knowing.
-        LOG.info("Case {} already owes {} for referral {}, so nothing was enqueued",
-                 deedPollId, template.key(), referralId);
+        log.info("Case {} already owes {} for referral {}, so nothing was enqueued",
+                 composed.deedPoll().getId(), template.key(), referralId);
         return notifications.findByDeedPollIdAndReferralIdAndTemplate(deedPollId, referralId, template.name())
             .map(SendReceipt::alreadyOwed)
             // Unreachable in practice: the insert was refused, so the row it collided with exists. A conflict
