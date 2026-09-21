@@ -171,6 +171,34 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 `build/test-results/{test,integration}/*.xml`, and record it next to the final count in Task 3. Confirm rather
 than assume — notify-1 moved these figures and its task 7 moved them again.
 
+### Baseline and reconciliation, performed in the parent session on 2026-09-21
+
+This plan has no Task 0, so this stands in for one. Checked against `origin/master` at `227b714`.
+
+**Baseline:** `test` **2,379** and `integration` **10** — **2,389** in total, zero failures, `./gradlew build`
+green from cold. Compare against this, not against a figure quoted in another notify plan.
+
+**The migration is `V15`.** `V14__referral_owner_subjects.sql` is the highest on `master`, so the correction
+below resolves to `V15` — confirmed by looking, as it asks. Nothing between has taken it.
+
+**`exclusionGroup` does not exist anywhere in `src/main/java`**, so this plan introduces it rather than
+extending it.
+
+**V12's predicate, verbatim, as both places on `master` spell it today** — this is the thing the plan says must
+be carried through unchanged, and getting it wrong silently changes which rows the partial index covers:
+
+```sql
+-- V12__notification_failure_verdict.sql, the index being replaced
+CREATE UNIQUE INDEX "deedpoll_notification_referral_template_key"
+    ON "deedpoll_notification" ("referralId", "template")
+ WHERE "referralId" IS NOT NULL
+   AND ("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT');
+```
+
+`NotificationRepository.enqueue` repeats that target and predicate in its `ON CONFLICT` clause, and must go on
+matching the new `("referralId", "exclusionGroup")` index exactly — the two are one mechanism, and a mismatch
+makes the statement silently stop deduplicating rather than fail.
+
 **A worker or container startup timeout is an environment failure, not a code failure** — re-run before
 investigating.
 
@@ -274,9 +302,34 @@ Read first: `EmailTemplate`, `ApplicationRejectedPersonalisation` and `EmailSlot
   `decisionDate` renders empty rather than absent; and **`directionsText` appears nowhere in the resolved map**
   even though the referral is in scope (decision 4).
 
-- [ ] The template resolves its own personalisation, the refund branch is shared with ③ rather than copied,
+- [x] The template resolves its own personalisation, the refund branch is shared with ③ rather than copied,
       `is_minor` covers all four `DeedPollType` members, `decision_date` is a formatted date, the judge's
       direction never leaks into a resolved value, and `./gradlew build` green
+
+#### Findings from Task 1 — 2026-09-21
+
+1. **`DeedPollType` has six members, not the four decision 6 names.** `DeedOfRelinquishment` and `Unknown` sit
+   beside the four, so the `switch` with no `default` had to answer for all six. Both take the **adult** wording,
+   with the reason stated on `ResolvedValues.isMinor`: addressing an applicant about their own deed is merely
+   impersonal if wrong, where the child wording refers an adult applicant to a child who does not exist. A null
+   `type` — the column is nullable — is handled before the `switch` and takes the same branch. This strengthens
+   flag 4: the taxonomy's "adult vs minor is chosen by `type`" gloss is two members further from the truth than
+   the flag says, and in notify-4 it picks *which template* rather than which sentence.
+
+2. **The extraction landed as `ResolvedValues`**, a package-private helper holding `appliedOnline` (moved from
+   ③ with its javadoc, which is the argument for the asymmetry), the new `isMinor` and `date`, and `text` —
+   which was a private copy in ③ and would have become a second one here. `ApplicationRejectedPersonalisationTest`
+   now calls `ResolvedValues.appliedOnline`.
+
+3. **Task 2's `cause()` and `reasonNotApplicable()` branches were written here, because the build could not be
+   green without them.** Adding the enum member breaks three `switch`es, and the validation commands run after
+   every task. They are implemented as decision 2 and correction 1 specify — newest `Rejected` referral first,
+   then `ReferralReason.NonPublication.name()` — with container-free tests for both directions, the
+   newest-refusal ordering, a reasons-less migrated referral and free-text non-matching. **Still open for Task 2:**
+   the `exclusionGroup` column and migration, the re-keyed unique index and `enqueue`'s conflict target, the
+   counterpart-already-sent availability check, the 409 on a counterpart row, and the container-backed
+   repository tests. `reasonNotApplicable` currently gives ④ one sentence (`NO_NON_PUBLICATION_REFUSAL`) covering
+   both halves of its condition; Task 2 splits it into the two the plan asks for.
 
 ### Task 2: When the email is offered, and when it is refused
 
@@ -309,9 +362,51 @@ Read first: `CaseEmailService.cause()`, `availability()` and `EmailAvailability`
   already has ③ answers `0` and leaves one row, the backfill gives every existing row the right group, and a
   template alone in its group still behaves exactly as it did before the re-keying.
 
-- [ ] ④ is offered exactly when a rejected non-publication referral exists and its counterpart has not been
+- [x] ④ is offered exactly when a rejected non-publication referral exists and its counterpart has not been
       sent, the index refuses the second email of a group rather than a service check doing it, existing rows
       are backfilled, a single-template group behaves as before, and `./gradlew build` green
+
+#### Findings from Task 2 — 2026-09-21
+
+1. **The migration is `V15__notification_exclusion_group.sql`**, confirmed by looking rather than assumed:
+   `V14__referral_owner_subjects.sql` is the highest committed, and nothing has taken `V15`. One column
+   (`"exclusionGroup" text NOT NULL DEFAULT 'REFERRAL_OUTCOME'`), one index dropped, one created. V12's predicate
+   is carried through verbatim and `NotificationRepository.enqueue` repeats the new target and that predicate.
+
+2. **The index is renamed, not replaced under the old name, and that reverses V12's choice on purpose.** V12 kept
+   `deedpoll_notification_referral_template_key` because only the predicate moved; here the *key* moves, so the
+   name becomes `deedpoll_notification_referral_exclusion_group_key` — an index named after a column it is no
+   longer keyed on is a name a reader has to check the definition to distrust. Nothing but
+   `NotificationRepositoryTest` names it: `ON CONFLICT` infers a partial index from its target and predicate, not
+   from its name.
+
+3. **`findByDeedPollIdAndReferralIdAndTemplate` is gone, replaced by `findBlocking`.** Correction 3 asked for the
+   group-scoped lookup and the template finder then had no caller — a repository method nothing uses is worse than
+   the diff. `findBlocking` is native so the blocking predicate is the same text as the index's and `enqueue`'s,
+   where all three can be held to each other, and the caller reads the template off the returned row to tell a
+   second click (200, `enqueued: false`) from the counterpart (409 naming it and its `createdOn`).
+
+4. **`reasonNotApplicable` now takes the newest refusal, which is what let ④'s sentence split in two.**
+   `NO_REFUSAL_TO_CONFIRM` (nothing refused at all) and `REFUSAL_NOT_ABOUT_NON_PUBLICATION` (something was, but
+   not this) replace notify-3 Task 1's single `NO_NON_PUBLICATION_REFUSAL`. `availability()` and `compose()` each
+   read the newest refusal once and pass it to both `cause` and the reason, so the two cannot disagree about which
+   referral they are describing.
+
+5. **The backfill is stated as the column default doing two jobs, because a test cannot create a pre-migration
+   row.** The container is migrated before any test runs, so "existing rows are backfilled" is proved as the thing
+   that backfilled them: an `INSERT` that does not name `"exclusionGroup"` — exactly what an application instance
+   predating V15 issues during a rolling deployment — gets `REFERRAL_OUTCOME`, and such a row then blocks the
+   counterpart.
+
+6. **A container-free test cannot state the `PERMANENT` exception on its own, and does not pretend to.** The
+   service keeps no second definition of "already sent": it asks `findBlocking`, and which rows that returns is
+   proved against PostgreSQL in `NotificationRepositoryTest`. What the container-free test states is the seam —
+   the question is asked by exclusion group for the referral `cause()` named, an own-template row does not hide a
+   template, and a counterpart row hides it with a sentence naming the email and its date.
+
+7. **Totals after this task:** `test` **2,436** and `integration` **10** — 2,446 against the 2,389 baseline, zero
+   failures, `./gradlew build` green. Still open for Task 3: the security assertions for ④, `invitesReply` and
+   `emailReplyToId`, the ArchUnit re-check and the OpenAPI refresh.
 
 ### Task 3: Security, the reply-to, and full validation
 
@@ -332,9 +427,53 @@ Read first: `CaseEmailService.cause()`, `availability()` and `EmailAvailability`
 - Refresh the OpenAPI output so notify-2 can see the new template without a change of its own, exactly as
   notify-1's contract reached it.
 
-- [ ] ④'s keys, recipient and case-scoping stated container-free, ④ reads unprovisioned without a reply-to
+- [x] ④'s keys, recipient and case-scoping stated container-free, ④ reads unprovisioned without a reply-to
       while ③ still reads provisioned, the ArchUnit rule passes untouched, the OpenAPI output is refreshed,
       and `./gradlew build` green from cold with both totals recorded
+
+#### Findings from Task 3 — 2026-09-21
+
+1. **A blank reply-to is dropped by the Notify client rather than refused, so the sender refuses it instead.**
+   Read off the 6.2.0 jar: the four-argument `sendEmail` passes `""` for `emailReplyToId`, and the overload they
+   both delegate to adds `email_reply_to_id` only when the value is non-null and non-empty. So an environment that
+   provisioned ④'s template UUID and forgot the inbox would have sent an email asking the applicant to reply from
+   the no-reply sender, successfully, with nothing anywhere saying so — an applicant who appears never to have
+   answered. `NotifyEmailSender` now fails such a row `PERMANENT` before any HTTP, which is what makes decision 9's
+   "fail loudly" true of the drain and not only of the Email tab.
+
+2. **`isProvisioned` takes the template and answers two questions.** `NotifyProperties.isProvisioned(String)` is
+   gone; the one caller passes the template, and the method asks for a real UUID always and for
+   `emailReplyToId` only when `invitesReply` is true. That is what keeps a missing inbox from disabling ③, which is
+   the property decision 10 asks for and the one a service-wide flag would have lost.
+
+3. **`application.yaml` gained ④'s template key as well as the reply-to.** `templateId` answers the placeholder for
+   an absent key, so the map entry is not needed to make the code work — but without it
+   `NOTIFY_TEMPLATE_REQUEST_CONFIRMATION_TO_PROCEED` would be an environment variable nothing reads, and notify-0
+   has no way to point ④ at a real template. `NotifyConfigurationTest` now asserts the committed map over
+   `EmailTemplate.values()` rather than naming one key, so a third template listed nowhere fails there.
+
+4. **The OpenAPI deliverable needed a customiser after all, and correction 7 is why it is a description.** The
+   published document named no template at all: `{template}` is a `String` path variable, so springdoc reflected it
+   undescribed, and neither key appeared anywhere in `/tmp/openapi-specs.json`. `OpenAPIEmailTemplates` describes
+   the token from `EmailTemplate` itself — the convention `OpenAPIQueryParameters` sets for the operator table — so
+   a third template appears in the document with no edit. **Deliberately prose and not an `enum`:** an enumerated
+   path token becomes a closed union in `deed-poll-admin`'s generated client, which would make a later template
+   break the clients that already had the route, and the `GET` is where a tab is meant to learn what it may send.
+   The caseworker count is asserted to be unchanged at 33 in the same test.
+
+5. **Nothing in `deed-poll-admin` is touched, and nothing needed to be.** `EmailTypeResponse` carries the template
+   as a key on a row rather than a field per template, so the second entry arrives in the existing `availability`
+   array; the OpenAPI test now states that shape as well as the count, which is the assertion that would fail if a
+   later template tried to widen the response instead.
+
+6. **The ArchUnit rule passed untouched.** `OpenAPIEmailTemplates` is outside the notify package and depends on
+   `EmailTemplate`, not on `NotificationClient`, so the one boundary still holds.
+
+7. **Totals after this task, from a cold `./gradlew clean build`:** `test` **2,444** and `integration` **11** —
+   2,455 against the 2,389 baseline, zero failures, checkstyle clean on five source sets. With
+   `INTEGRATION_TESTS_ENABLED=false`: **1,544**. `build.gradle`'s exclusion comment is re-measured to 900 of 2,444
+   across 31 classes; notify-3 added no container-backed class of its own — the 31st is
+   `ReferralLifecycleTimelineTest`, which arrived on `master` in between.
 
 ---
 

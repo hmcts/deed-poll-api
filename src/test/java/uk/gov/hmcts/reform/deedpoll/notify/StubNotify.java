@@ -48,6 +48,13 @@ public final class StubNotify {
     /** A template ID the stub will answer for: a real-looking UUID, so a test can assert one was sent. */
     public static final String TEMPLATE_ID = "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e55";
 
+    /**
+     * A reply-to address id the stub's properties carry, for the templates whose words invite a reply. A
+     * real-looking UUID and entirely invented -- Notify never sees it here, the assertion is that the send body
+     * carried it.
+     */
+    public static final String REPLY_TO_ID = "9b7c5d21-3f4e-4a6b-8c0d-1e2f3a4b5c66";
+
     /** The notification ID the stub returns from a send, unless a test asks for another. */
     public static final UUID NOTIFICATION_ID = UUID.fromString("6f0b9d3a-1e2c-4b5d-8a7f-3c4d5e6f7a88");
 
@@ -183,9 +190,20 @@ public final class StubNotify {
         return new NotifyConfiguration().notificationClient(properties());
     }
 
-    /** The properties a service under test should be configured with to reach this stub. */
+    /**
+     * The properties a service under test should be configured with to reach this stub.
+     *
+     * <p>Both templates point at {@link #TEMPLATE_ID}, because the stub answers any template id: what a test
+     * asserts about a send is the request body, and a second id would only be a second thing to keep in step.
+     * {@link #REPLY_TO_ID} is set, so a template that invites a reply is provisioned here -- the unconfigured
+     * case is its own assertion rather than the default this stub imposes on every test.
+     */
     public NotifyProperties properties() {
-        return new NotifyProperties(baseUrl(), apiKey(), Map.of("application-rejected", TEMPLATE_ID));
+        return new NotifyProperties(
+            baseUrl(),
+            apiKey(),
+            Map.of("application-rejected", TEMPLATE_ID, "request-confirmation-to-proceed", TEMPLATE_ID),
+            REPLY_TO_ID);
     }
 
     /** A 201 with a JSON body -- what the real Notify answers a send with, and what its client insists on. */

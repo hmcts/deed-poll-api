@@ -113,6 +113,7 @@ class NotificationOutboxConcurrencyTest extends AbstractPostgresContainerTest {
         Notification notification = new Notification();
         notification.setDeedPollId(deedPoll.getId());
         notification.setTemplate(EmailTemplate.APPLICATION_REJECTED.name());
+        notification.setExclusionGroup(EmailTemplate.APPLICATION_REJECTED.exclusionGroup().name());
         notification.setRecipient("applicant@example.com");
         notification.setPersonalisation(Map.of(EmailSlot.JUDGES_REASON.placeholder(), "No evidence of use"));
         notification.setNextAttemptAt(LocalDateTime.now().minusMinutes(1));

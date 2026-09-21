@@ -9,10 +9,8 @@ import java.util.stream.Collectors;
 /**
  * An email this service can send, and everything about it that is not the template's own words.
  *
- * <p>One member, because this plan ships one template. The other three in
- * {@code NOTIFY_TEMPLATE_TAXONOMY.md} §6 are later plans: <em>Request confirmation to proceed</em> needs the
- * discrimination question in §4 settled, and the two <em>forms for completion</em> emails are blocked on
- * document generation, which Notify cannot do.
+ * <p>Two members. The remaining two in {@code NOTIFY_TEMPLATE_TAXONOMY.md} §6 -- the <em>forms for
+ * completion</em> emails -- are a later plan, blocked on document generation, which Notify cannot do.
  *
  * <p><strong>The member name is what the outbox row stores; the {@link #key()} is what configuration and a
  * URL say.</strong> Those are two different things on purpose. A Notify template UUID differs per environment,
@@ -27,6 +25,17 @@ import java.util.stream.Collectors;
  * <p><strong>{@link #resolvedKeys()} and {@link #slots()} together are the template's whole personalisation.</strong>
  * The split is the rule of decision 12: the slots are client input and the resolved keys are not, so
  * {@link EmailSlots#parse} can refuse a request that tries to cross the line and say which key it was.
+ *
+ * <p><strong>{@link #exclusionGroup()} is a required argument, and that is the point of it.</strong> Two emails
+ * that contradict each other must not both reach one applicant, and the group is what the outbox's unique index
+ * is keyed on -- so a template added here cannot be written without somebody saying which emails it is an
+ * alternative to. See {@link EmailExclusionGroup}.
+ *
+ * <p><strong>{@link #invitesReply()} is a required argument for the same reason, and it is a property of the
+ * template rather than of the service.</strong> A template whose words ask the applicant to reply needs the
+ * monitored inbox configured as {@code notify.email-reply-to-id}, or Notify sends it from an address nobody
+ * reads -- so such a template is <em>unprovisioned</em> without one, exactly as any template is without a UUID.
+ * Asked per template so that a missing reply-to cannot disable an email that never invited one.
  */
 public enum EmailTemplate {
 
@@ -34,18 +43,55 @@ public enum EmailTemplate {
      * Enrolment refused: quotes the judge, then starts a refund. Template ③.
      *
      * <p>Referral-driven -- it is sent on a judge's direction -- which is why the outbox's partial unique index
-     * on {@code ("referralId", "template")} makes one of these per referral a database constraint. An applicant
-     * must not be told twice that their application was refused.
+     * on {@code ("referralId", "exclusionGroup")} makes one email of this group per referral a database
+     * constraint. An applicant must not be told twice that their application was refused, and must not be told
+     * it was refused and then asked whether to proceed with it.
+     *
+     * <p>Invites no reply: it tells the applicant a decision and starts a refund, and asks them for nothing. So
+     * it goes on sending from Notify's default sender however this service's reply-to is configured.
      */
     APPLICATION_REJECTED(
         "application-rejected",
         "Application rejected",
+        EmailExclusionGroup.REFERRAL_OUTCOME,
+        false,
         ApplicationRejectedPersonalisation.RESOLVED_KEYS,
+        List.of(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES),
+        List.of()),
+
+    /**
+     * A non-publication request refused, but enrolment may still go ahead: asks the applicant to confirm they
+     * still want the deed enrolled, or to say they do not and be refunded. Template ④.
+     *
+     * <p>Referral-driven like ③, and deliberately <em>not</em> derived from the decision: both are sent off a
+     * {@code Rejected} referral and they say opposite things about enrolment, so the caseworker chooses. Only a
+     * referral raised for {@code NonPublication} offers this one -- see {@link CaseEmailService} for why that is
+     * necessary without being sufficient.
+     *
+     * <p>Declared after ③ rather than before it because the order here is the order the Email tab lists
+     * templates in, and the one that refuses enrolment outright is the commoner of the two.
+     *
+     * <p>In ③'s exclusion group, because the two say opposite things about enrolment: one referral gets one of
+     * them, and which one is the caseworker's choice made once.
+     *
+     * <p><strong>Invites a reply, and that is the whole point of the email.</strong> Two of its paragraphs say
+     * "let us know by replying to this email", so Notify's default no-reply sender would lose the answer this
+     * email exists to collect. {@code notify.email-reply-to-id} is therefore required configuration for it, and
+     * it reads unprovisioned without one.
+     */
+    REQUEST_CONFIRMATION_TO_PROCEED(
+        "request-confirmation-to-proceed",
+        "Request confirmation to proceed",
+        EmailExclusionGroup.REFERRAL_OUTCOME,
+        true,
+        RequestConfirmationToProceedPersonalisation.RESOLVED_KEYS,
         List.of(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES),
         List.of());
 
     private final String key;
     private final String displayName;
+    private final EmailExclusionGroup exclusionGroup;
+    private final boolean invitesReply;
     private final List<String> resolvedKeys;
     private final List<EmailSlot> slots;
     private final List<String> documentKeys;
@@ -53,12 +99,16 @@ public enum EmailTemplate {
     EmailTemplate(
         String key,
         String displayName,
+        EmailExclusionGroup exclusionGroup,
+        boolean invitesReply,
         List<String> resolvedKeys,
         List<EmailSlot> slots,
         List<String> documentKeys
     ) {
         this.key = key;
         this.displayName = displayName;
+        this.exclusionGroup = exclusionGroup;
+        this.invitesReply = invitesReply;
         this.resolvedKeys = List.copyOf(resolvedKeys);
         this.slots = List.copyOf(slots);
         this.documentKeys = List.copyOf(documentKeys);
@@ -114,6 +164,32 @@ public enum EmailTemplate {
     /** The name a caseworker sees for this email type. */
     public String displayName() {
         return displayName;
+    }
+
+    /**
+     * The set of emails this one is an alternative to, of which a referral gets exactly one.
+     *
+     * <p>Written onto the outbox row by its member name and keyed on by the partial unique index, so the
+     * choice is settled by Postgres rather than by a check with a race in it. The row keeps the group it was
+     * written under -- a deliberate copy rather than a lookup, so re-grouping templates later cannot
+     * retrospectively make two already-sent emails conflict.
+     */
+    public EmailExclusionGroup exclusionGroup() {
+        return exclusionGroup;
+    }
+
+    /**
+     * Whether this email's own words ask the applicant to reply to it.
+     *
+     * <p><strong>What it decides is where the reply goes, and whether the email may be sent at all.</strong> A
+     * template that invites a reply is sent with {@code notify.email-reply-to-id} as its reply-to address, and is
+     * {@linkplain NotifyProperties#isProvisioned unprovisioned} without one -- a verified inbox nobody configured
+     * fails in exactly the way no inbox does, and silently, because Notify drops a blank reply-to and sends from
+     * no-reply instead. One that does not invite a reply is unaffected by the setting in either direction: it is
+     * sent through the client's four-argument overload, so configuring a reply-to for ④ cannot quietly change ③.
+     */
+    public boolean invitesReply() {
+        return invitesReply;
     }
 
     /** The personalisation keys resolved from the case; a client may not set any of these. */

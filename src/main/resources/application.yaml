@@ -151,12 +151,23 @@ notify:
   # `deed-poll` vault yet, which is why charts/deed-poll-api/values.yaml names no Notify secret -- a chart
   # naming a secret the vault does not hold fails to deploy. notify-0 adds both ends together.
   api-key: ${NOTIFY_API_KEY:}
+  # The reply-to address id for the emails whose words ask the applicant to reply -- today only
+  # request-confirmation-to-proceed, which asks whether they still want the deed enrolled. Not a secret: it
+  # identifies an address the recipient reads on the email itself, so it is an environment variable rather than a
+  # vault entry, and notify-0 supplies it with the template UUIDs. Unset, a template that invites a reply reports
+  # itself unprovisioned and the drain refuses to send it -- deliberately, because Notify drops a blank reply-to
+  # and sends from no-reply, which loses the answer and says nothing. See NotifyProperties.isProvisioned.
+  email-reply-to-id: ${NOTIFY_EMAIL_REPLY_TO_ID:}
   templates:
     # The Notify template UUID, which differs per environment and so is configuration rather than a constant
     # in Java. DEED_POLL_PLACEHOLDER is the same literal deedpoll.ccd.case-type-id uses, so one grep lists
     # every external identifier this service is still waiting on. With it set, Notify answers a preview with
     # 400 and a send with 403 -- both permanent, which is the correct answer to "this template does not exist".
     application-rejected: ${NOTIFY_TEMPLATE_APPLICATION_REJECTED:DEED_POLL_PLACEHOLDER}
+    # Listed for the same reason, so an environment can point it at a real template without a code change. Absent
+    # from this map the placeholder is what NotifyProperties.templateId answers anyway, but the environment
+    # variable would then be one nobody reads.
+    request-confirmation-to-proceed: ${NOTIFY_TEMPLATE_REQUEST_CONFIRMATION_TO_PROCEED:DEED_POLL_PLACEHOLDER}
 
 deedpoll:
   ccd:

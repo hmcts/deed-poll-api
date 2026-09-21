@@ -38,23 +38,50 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
     List<Notification> findByDeedPollIdOrderByCreatedOnDesc(String deedPollId);
 
     /**
-     * The row a send already wrote for this referral and template, if there is one.
+     * The row occupying the unique index for this referral and exclusion group, if there is one.
      *
-     * <p>Read only after {@link #enqueue} answered {@code 0}, to answer the caseworker with the id of the email
-     * that was already owed rather than with nothing. It is not a check performed before the insert: that is the
-     * race the partial unique index exists to settle, and a check-then-insert has a window this does not.
+     * <p>Read only after {@link #enqueue} answered {@code 0}, and by the availability check that greys the
+     * option out in advance. It is not a check performed before the insert: that is the race the partial unique
+     * index exists to settle, and a check-then-insert has a window this does not.
      *
-     * <p>Named by its case as well as by its referral, so it is scoped like every other finder here even though
-     * the referral id alone would identify the row. The caller has already resolved the referral through the
-     * case, so a mismatch is not reachable -- which is the point: it stays unreachable by construction rather
-     * than by the caller remembering.
+     * <p><strong>Keyed on the group and not the template, which is what replaced the template finder this once
+     * had.</strong> Since V15 a zero-row {@link #enqueue} has two different meanings: the caseworker clicked
+     * twice on the same email, or they are asking for the email that contradicts one this referral has already
+     * had. A finder keyed on the template cannot tell them apart -- it finds nothing at all in the second case --
+     * and the difference is a {@code 200} saying "already owed" against a {@code 409} naming the other email. So
+     * this asks the question the index actually answers, and the caller reads the template off the row.
+     *
+     * <p><strong>The predicate is V12's, repeated character for character, and that is the requirement rather
+     * than a preference.</strong> Availability and the refusal must both use the index's definition of a
+     * blocker: a {@code Failed} row with a {@code PERMANENT} verdict does not occupy the index -- Notify
+     * definitely sent nothing, and a replacement is deliberately permitted -- while a pending, sent, technical,
+     * exhausted-temporary or verdict-less failed row does. Native SQL so the predicate is the same text the
+     * migration and {@link #enqueue} carry, where a reader can hold the three to each other.
+     *
+     * <p>Case-scoped like every other finder here even though the referral id alone identifies the row, and
+     * {@code LIMIT 1} because the index permits at most one such row -- stated rather than assumed, since a
+     * permanently refused row may sit beside the live one.
+     *
+     * @param deedPollId the case the caller resolved the referral through
+     * @param referralId the referral whose slot is occupied
+     * @param exclusionGroup the {@code EmailExclusionGroup} member name
      */
-    Optional<Notification> findByDeedPollIdAndReferralIdAndTemplate(String deedPollId,
-                                                                   UUID referralId,
-                                                                   String template);
+    @Query(nativeQuery = true, value = """
+        SELECT *
+          FROM "deedpoll_notification"
+         WHERE "deedPollId" = :deedPollId
+           AND "referralId" = :referralId
+           AND "exclusionGroup" = :exclusionGroup
+           AND ("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT')
+         ORDER BY "createdOn" DESC
+         LIMIT 1
+        """)
+    Optional<Notification> findBlocking(@Param("deedPollId") String deedPollId,
+                                        @Param("referralId") UUID referralId,
+                                        @Param("exclusionGroup") String exclusionGroup);
 
     /**
-     * Enqueues one owed email, unless this referral has already had this template.
+     * Enqueues one owed email, unless this referral has already had an email of this exclusion group.
      *
      * <p><strong>{@code ON CONFLICT ... DO NOTHING} rather than a caught exception, and that is a correctness
      * choice rather than a stylistic one.</strong> Idempotency here is the partial unique index, so the second
@@ -70,6 +97,12 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
      * explicit permanent refusal leaves the slot, while an older row with no verdict remains blocking. Without
      * the whole predicate the statement does not compile against this schema at all.
      *
+     * <p><strong>The target is {@code ("referralId", "exclusionGroup")} since V15, not the template.</strong>
+     * Two emails sent off one refused referral say opposite things about enrolment, so a referral gets one of
+     * them; the group is the key that says so. This clause and the index are one mechanism, and a target that
+     * did not match one Postgres actually has makes this statement silently stop deduplicating rather than
+     * fail -- so it is re-stated here in full rather than paraphrased.
+     *
      * <p>Native SQL for the reason {@link #claimNextDue} is: this <em>is</em> the statement, and the
      * {@code ON CONFLICT} clause has no JPA spelling. Identifiers are quoted because they are mixed case.
      * {@code 'Pending'} and {@code 0} are literals rather than parameters because a newly enqueued row is always
@@ -79,22 +112,26 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
      *
      * @param id the row id, which is also the {@code reference} the send will carry to Notify
      * @param deedPollId the case the email is about
-     * @param referralId the referral that caused it, which with {@code template} is the idempotency key
+     * @param referralId the referral that caused it, which with {@code exclusionGroup} is the idempotency key
      * @param template the {@code EmailTemplate} member name, never the Notify UUID
+     * @param exclusionGroup the {@code EmailExclusionGroup} member name, bound explicitly rather than left to
+     *     the column's default, so a later template in a group of its own is written as itself
      * @param recipient the address resolved at send, frozen so a later edit cannot redirect an email already owed
      * @param personalisation the resolved values and the caseworker's slots, as JSON text
      * @param now the instant to stamp, and when the row becomes claimable -- immediately
      * @param createdBy the caseworker who sent it, who authored part of the content
-     * @return 1 if this statement enqueued the row, 0 if this referral had already had this template
+     * @return 1 if this statement enqueued the row, 0 if this referral had already had an email of this group
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(nativeQuery = true, value = """
         INSERT INTO "deedpoll_notification" (
-                    "id", "deedPollId", "referralId", "template", "recipient", "personalisation",
-                    "state", "attempts", "nextAttemptAt", "createdBy", "createdOn", "modifiedOn", "modifiedBy")
-             VALUES (:id, :deedPollId, :referralId, :template, :recipient, CAST(:personalisation AS jsonb),
-                    'Pending', 0, :now, :createdBy, :now, :now, :createdBy)
-        ON CONFLICT ("referralId", "template")
+                    "id", "deedPollId", "referralId", "template", "exclusionGroup", "recipient",
+                    "personalisation", "state", "attempts", "nextAttemptAt", "createdBy", "createdOn",
+                    "modifiedOn", "modifiedBy")
+             VALUES (:id, :deedPollId, :referralId, :template, :exclusionGroup, :recipient,
+                    CAST(:personalisation AS jsonb), 'Pending', 0, :now, :createdBy, :now,
+                    :now, :createdBy)
+        ON CONFLICT ("referralId", "exclusionGroup")
         WHERE "referralId" IS NOT NULL
           AND ("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT')
         DO NOTHING
@@ -103,6 +140,7 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
                 @Param("deedPollId") String deedPollId,
                 @Param("referralId") UUID referralId,
                 @Param("template") String template,
+                @Param("exclusionGroup") String exclusionGroup,
                 @Param("recipient") String recipient,
                 @Param("personalisation") String personalisation,
                 @Param("now") LocalDateTime now,

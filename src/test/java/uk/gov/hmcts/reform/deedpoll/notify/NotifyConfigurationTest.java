@@ -6,7 +6,8 @@ import org.springframework.boot.test.context.ConfigDataApplicationContextInitial
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import uk.gov.service.notify.NotificationClient;
 
-import java.util.Map;
+import java.util.Arrays;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -71,9 +72,17 @@ class NotifyConfigurationTest {
                 // A committed placeholder that happened to work somewhere is the failure worth designing out,
                 // the same reason idam.s2s-auth.totp-secret has no default.
                 assertThat(properties.apiKey()).isEmpty();
-                assertThat(properties.templates())
-                    .containsExactly(Map.entry("application-rejected", "DEED_POLL_PLACEHOLDER"));
-                assertThat(properties.isProvisioned("application-rejected")).isFalse();
+                // Every template this service sends is listed, and every one of them is the placeholder: the map
+                // is what an environment overrides, so a template missing from it is an environment variable
+                // nobody reads. One grep for the literal lists both.
+                assertThat(properties.templates()).containsExactlyInAnyOrderEntriesOf(
+                    Arrays.stream(EmailTemplate.values()).collect(Collectors.toMap(
+                        EmailTemplate::key, template -> "DEED_POLL_PLACEHOLDER")));
+                // And no reply-to, which is the other half of what notify-0 supplies. So the email whose words
+                // ask the applicant to reply is unprovisioned twice over, and says so in the Email tab.
+                assertThat(properties.emailReplyToId()).isEmpty();
+                assertThat(Arrays.stream(EmailTemplate.values()))
+                    .noneMatch(properties::isProvisioned);
             });
     }
 }

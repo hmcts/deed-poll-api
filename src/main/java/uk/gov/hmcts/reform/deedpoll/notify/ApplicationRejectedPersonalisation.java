@@ -1,7 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.notify;
 
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
-import uk.gov.hmcts.reform.deedpoll.entity.enums.PostCounter;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -31,7 +30,9 @@ import java.util.Map;
  * @param onlineApplicationReference the reference the applicant quoted when applying online
  * @param oldForename the name being changed from, for the "Regarding..." line
  * @param oldSurname the surname being changed from
- * @param appliedOnline which refund paragraph the template renders
+ * @param appliedOnline which refund paragraph the template renders, from
+ *     {@link ResolvedValues#appliedOnline} -- shared with <em>Request confirmation to proceed</em>, which
+ *     offers the same refund, so the two emails cannot drift into disagreeing about who gets one automatically
  * @param judgesReason the judge's reason for refusal, from the caseworker's slot
  * @param additionalNotes anything the caseworker added, empty when they added nothing
  */
@@ -69,28 +70,13 @@ public record ApplicationRejectedPersonalisation(
         return new ApplicationRejectedPersonalisation(
             // displayReference, never the `referencenumber` integer: the serial is an internal component of
             // the rendered reference and is not what the applicant was ever shown.
-            text(deedPoll.getDisplayReference()),
-            text(deedPoll.getOnlineApplicationReference()),
-            text(deedPoll.getOldForename()),
-            text(deedPoll.getOldSurname()),
-            appliedOnline(deedPoll.getPostCounter()),
-            text(slots.get(EmailSlot.JUDGES_REASON)),
-            text(slots.get(EmailSlot.ADDITIONAL_NOTES)));
-    }
-
-    /**
-     * Which refund branch the template renders, from how the application reached the office.
-     *
-     * <p>{@link PostCounter#Online} is the only value that means the applicant paid online, so it is the only
-     * one that gets the "we will refund the account you paid from" paragraph. {@link PostCounter#Counter},
-     * {@link PostCounter#Post}, {@link PostCounter#Unknown} and an unset channel all get the paper paragraph,
-     * <strong>and that asymmetry is the safe direction rather than an oversight</strong>: the paper paragraph
-     * asks the applicant how they paid and where to send the refund, which recovers from a wrong guess, whereas
-     * promising an automatic refund to a card nobody paid with leaves an applicant waiting for money that never
-     * arrives.
-     */
-    static boolean appliedOnline(PostCounter postCounter) {
-        return postCounter == PostCounter.Online;
+            ResolvedValues.text(deedPoll.getDisplayReference()),
+            ResolvedValues.text(deedPoll.getOnlineApplicationReference()),
+            ResolvedValues.text(deedPoll.getOldForename()),
+            ResolvedValues.text(deedPoll.getOldSurname()),
+            ResolvedValues.appliedOnline(deedPoll.getPostCounter()),
+            ResolvedValues.text(slots.get(EmailSlot.JUDGES_REASON)),
+            ResolvedValues.text(slots.get(EmailSlot.ADDITIONAL_NOTES)));
     }
 
     /**
@@ -116,10 +102,5 @@ public record ApplicationRejectedPersonalisation(
         personalisation.put(EmailSlot.JUDGES_REASON.placeholder(), judgesReason);
         personalisation.put(EmailSlot.ADDITIONAL_NOTES.placeholder(), additionalNotes);
         return personalisation;
-    }
-
-    /** A nullable column as a value Notify accepts: the text, or nothing at all. */
-    private static String text(String value) {
-        return value == null ? "" : value;
     }
 }

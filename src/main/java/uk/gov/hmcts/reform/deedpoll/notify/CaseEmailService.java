@@ -11,6 +11,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.IncompleteDataError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
@@ -61,7 +62,8 @@ import java.util.stream.Collectors;
  *
  * <p><strong>The four answers a send can give, and why each is the status it is.</strong> 404 for a case that
  * does not exist. 409 when the case is in no state to send this email -- nothing about the request is wrong and
- * it would succeed unchanged once a Master has refused the application. 422 when the case has no applicant email
+ * it would succeed unchanged once a Master has refused the application, or it would have succeeded had the
+ * email that contradicts it not already been asked for. 422 when the case has no applicant email
  * address, which is a fact about the record that no retry will change (decision 7, and
  * {@link IncompleteDataError} has the argument). 400 for a slot payload the schema refuses, with every offending
  * field named at once. The recipient is checked <em>before</em> the payload, deliberately: a caseworker whose
@@ -85,6 +87,28 @@ public class CaseEmailService {
      */
     static final String NO_REFUSAL = "This case has no referral that a Master has refused, so there is no "
         + "refusal to tell the applicant about";
+
+    /**
+     * Why <em>Request confirmation to proceed</em> does not apply to a case that has had nothing refused.
+     *
+     * <p>The first of that email's two conditions, and its own sentence rather than half of a combined one:
+     * a caseworker can act on the difference between "nobody has decided this yet" and "what was decided was
+     * not about publication", and the second would send them looking for a decision that exists.
+     */
+    static final String NO_REFUSAL_TO_CONFIRM = "This case has no referral that a Master has refused, so there "
+        + "is no refused request to ask the applicant to confirm";
+
+    /**
+     * Why <em>Request confirmation to proceed</em> does not apply to a case whose refusal was about something
+     * else.
+     *
+     * <p>The second condition: the newest refused referral must have been raised for
+     * {@link ReferralReason#NonPublication}. A refusal on any other reason cannot be a refusal of a
+     * non-publication request, so there is nothing to ask the applicant to confirm -- and the newest refusal is
+     * the only one either email may speak for, so an older non-publication refusal does not revive this.
+     */
+    static final String REFUSAL_NOT_ABOUT_NON_PUBLICATION = "This case's most recent refusal was not raised for "
+        + "a non-publication request, so there is no refused request to ask the applicant about";
 
     private final DeedPollRepository deedPolls;
     private final ReferralRepository referrals;
@@ -248,10 +272,16 @@ public class CaseEmailService {
      * later edit to the case cannot redirect an email already owed, and "what was this applicant told" stays
      * answerable from the row even though part of the content is text the caseworker wrote and may have edited.
      *
-     * <p><strong>A second send for the same referral is a no-op that answers with the first row.</strong> The
+     * <p><strong>A second send of the same email is a no-op that answers with the first row.</strong> The
      * insert is {@code ON CONFLICT DO NOTHING} on the partial unique index, so a double-click or two replicas
      * racing cannot tell an applicant twice that their application was refused -- and the caseworker is not shown
      * a failure for a request that was merely redundant.
+     *
+     * <p><strong>A send of the email that contradicts one already asked for is a 409 naming it.</strong> The key
+     * is the template's exclusion group, so a referral gets one email of the group; the second one is refused by
+     * the same {@code DO NOTHING} clause, which is what keeps the caseworker's transaction usable instead of
+     * handing them a {@code DataIntegrityViolationException}. Which of the two happened is read off the blocking
+     * row rather than guessed.
      *
      * <p>{@code templateVersion} is left null: this row was enqueued without asking Notify to render anything, so
      * there is no version to record and inventing one would claim knowledge of the wording. The sender records
@@ -260,7 +290,8 @@ public class CaseEmailService {
      * @param caller the caseworker sending it, who becomes {@code createdBy} -- not audit noise here, because
      *     they authored part of what the applicant reads
      * @throws NotFoundError if there is no such case
-     * @throws ConflictError if the case is in no state to send this email
+     * @throws ConflictError if the case is in no state to send this email, or the email that contradicts this one
+     *     has already been asked for on the same referral
      * @throws IncompleteDataError if the case has no applicant email address
      * @throws uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError if the slots are not acceptable
      */
@@ -280,6 +311,7 @@ public class CaseEmailService {
             deedPollId,
             referralId,
             template.name(),
+            template.exclusionGroup().name(),
             recipient,
             asJson(composed.personalisation()),
             AuditClock.now(),
@@ -289,33 +321,103 @@ public class CaseEmailService {
             return SendReceipt.enqueued(id, recipient);
         }
 
-        // Zero rows: the unique index refused it, which is the mechanism working rather than a failure. Logged
-        // because a caseworker pressing send twice and a replica racing look identical from here, and the
-        // frequency is worth knowing.
-        log.info("Case {} already owes {} for referral {}, so nothing was enqueued",
-                 composed.deedPoll().getId(), template.key(), referralId);
-        return notifications.findByDeedPollIdAndReferralIdAndTemplate(deedPollId, referralId, template.name())
-            .map(SendReceipt::alreadyOwed)
-            // Unreachable in practice: the insert was refused, so the row it collided with exists. A conflict
-            // with a row that then could not be read would mean the collision was with a row of another case,
-            // which the partial index cannot produce -- so this says so rather than answering with a null id.
+        // Zero rows: the unique index refused it, which is the mechanism working rather than a failure. Since the
+        // key is the exclusion group, that has two meanings and they get two different answers, so the row it
+        // collided with has to be read before either can be given.
+        Notification blocking = notifications
+            .findBlocking(deedPollId, referralId, template.exclusionGroup().name())
+            // Unreachable in practice: the insert was refused, so the row it collided with exists and satisfies
+            // the same predicate this read applies. A conflict with a row that then could not be read would mean
+            // the collision was with another case's row, which the partial index cannot produce -- so this says
+            // so rather than answering with a null id.
             .orElseThrow(() -> new IllegalStateException(
                 "Enqueueing " + template.key() + " for referral " + referralId + " of case " + deedPollId
                     + " was refused by the unique index, but no such row is readable"));
+
+        if (!template.name().equals(blocking.getTemplate())) {
+            // The other email of the group. A 409 rather than a duplicate, because sending this one would tell
+            // the applicant the opposite of what they have already been told -- and because nothing the
+            // caseworker typed is wrong, so there is no field to correct.
+            log.info("Case {} already owes {} for referral {}, so {} was refused",
+                     deedPollId, blocking.getTemplate(), referralId, template.key());
+            throw new ConflictError(alreadyRequested(blocking));
+        }
+
+        // The same email again: a caseworker pressing send twice, or a replica racing. Logged because those look
+        // identical from here and the frequency is worth knowing.
+        log.info("Case {} already owes {} for referral {}, so nothing was enqueued",
+                 deedPollId, template.key(), referralId);
+        return SendReceipt.alreadyOwed(blocking);
     }
 
     /**
      * One template's answer for one case.
      *
      * <p>{@code provisioned} is asked of configuration rather than of the case, so it is the same answer for
-     * every case in this environment -- and it is on each row rather than on the response as a whole because a
-     * later template may be provisioned while another is not.
+     * every case in this environment -- and it is on each row rather than on the response as a whole because one
+     * template may be provisioned while another is not. That is not hypothetical: a template that invites a reply
+     * needs the monitored inbox as well as a UUID, so ④ can read unprovisioned in an environment where ③ does
+     * not. See {@link NotifyProperties#isProvisioned}.
+     *
+     * <p><strong>Two reasons a template does not apply, and the second is a courtesy rather than the
+     * enforcement.</strong> Either the case has no referral this email may speak for, or it has one that has
+     * already had the email this one contradicts -- and the unique index is what actually refuses the second
+     * case. Reporting it here is so the Email tab can grey the option out rather than let a caseworker compose
+     * an email that will be refused on submit, which is a bad way to find out.
      */
     private EmailAvailability availability(EmailTemplate template, String deedPollId) {
-        boolean provisioned = properties.isProvisioned(template.key());
-        return cause(template, deedPollId).isPresent()
-            ? EmailAvailability.applicable(template, provisioned)
-            : EmailAvailability.unavailable(template, reasonNotApplicable(template), provisioned);
+        boolean provisioned = properties.isProvisioned(template);
+        Optional<Referral> newestRefusal = newestRefusal(deedPollId);
+        Optional<Referral> cause = cause(template, newestRefusal);
+        if (cause.isEmpty()) {
+            return EmailAvailability.unavailable(
+                template, reasonNotApplicable(template, newestRefusal), provisioned);
+        }
+        return counterpart(deedPollId, cause.get(), template)
+            .map(blocking -> EmailAvailability.unavailable(template, alreadyRequested(blocking), provisioned))
+            .orElseGet(() -> EmailAvailability.applicable(template, provisioned));
+    }
+
+    /**
+     * The row that has taken this referral's slot for some <em>other</em> email of this template's exclusion
+     * group, or empty if nothing has.
+     *
+     * <p><strong>Blocking is the index's definition of it, read through the statement that repeats the index's
+     * predicate.</strong> A {@code Failed} row with a {@code PERMANENT} verdict does not occupy the index --
+     * Notify definitely sent nothing, and notify-1 deliberately permits a replacement -- so it must not hide
+     * either template. Everything else does block, including a verdict-less failure written by an older
+     * instance, because any of those may already have reached Notify.
+     *
+     * <p>A row for <em>this</em> template is not a counterpart and is not reported here: a second send of the
+     * same email is the idempotent no-op {@link #send} answers with the original row, not something to hide the
+     * template over.
+     */
+    private Optional<Notification> counterpart(String deedPollId, Referral cause, EmailTemplate template) {
+        return notifications
+            .findBlocking(deedPollId, cause.getId(), template.exclusionGroup().name())
+            .filter(blocking -> !template.name().equals(blocking.getTemplate()));
+    }
+
+    /**
+     * The sentence that says another email of this group has already been asked for, and when.
+     *
+     * <p><strong>"Requested", not "delivered", deliberately.</strong> The blocking row may be {@code Pending},
+     * {@code Sent}, or a {@code Failed} row whose outcome is uncertain -- all this service knows is that the
+     * email was asked for and recorded, so that is what it says.
+     *
+     * <p>The stored member name is turned back into a display name where it still names a template, and left as
+     * it stands where it does not: a template renamed after rows were written must still produce a readable
+     * sentence rather than nothing at all. The date is formatted as {@link ResolvedValues#date}, which is the
+     * format an applicant sees -- a caseworker reading this is reading about an email an applicant has.
+     */
+    private static String alreadyRequested(Notification blocking) {
+        String email = EmailTemplate.byName(blocking.getTemplate())
+            .map(EmailTemplate::displayName)
+            .orElse(blocking.getTemplate());
+        return "The " + email + " email was already requested for this referral on "
+            + ResolvedValues.date(blocking.getCreatedOn())
+            + ", and one referral gets one of these emails: the two would tell the applicant opposite things "
+            + "about enrolment";
     }
 
     /**
@@ -327,19 +429,63 @@ public class CaseEmailService {
      * <p>Newest first, because the case-scoped finder is ordered that way and a case referred twice has been
      * refused on whichever referral was most recent -- an older refusal is history, and quoting it would tell the
      * applicant about a decision that has since been superseded.
+     *
+     * <p><strong>Both referral-driven templates start from the same referral -- the newest refused one -- and
+     * only then ask whether it is the kind this template is about.</strong> The tempting shape for ④ is "the
+     * newest refused non-publication referral", and it is wrong in a way that is hard to see: a case refused on
+     * non-publication and then referred again and refused for something else would revive the older outcome that
+     * ③'s rule has already treated as superseded. Filtering after the {@code findFirst} rather than before it
+     * also guarantees that when both templates apply they name the same {@code referralId}, which is what lets
+     * one database key make them mutually exclusive.
+     *
+     * <p>The newest refusal is a parameter rather than read here, so one caller reads it once and then asks both
+     * what it entitles the case to and, if it does not, which of the two sentences to say.
      */
-    private Optional<Referral> cause(EmailTemplate template, String deedPollId) {
+    private static Optional<Referral> cause(EmailTemplate template, Optional<Referral> newestRefusal) {
         return switch (template) {
-            case APPLICATION_REJECTED -> referrals.findByDeedPollIdOrderByCreatedOnDesc(deedPollId).stream()
-                .filter(referral -> referral.getDecision() == MasterDecision.Rejected)
-                .findFirst();
+            case APPLICATION_REJECTED -> newestRefusal;
+            case REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal.filter(CaseEmailService::aboutNonPublication);
         };
     }
 
-    /** The sentence that says why a template does not apply, which is per template for the reason its text is. */
-    private String reasonNotApplicable(EmailTemplate template) {
+    /** The case's most recent refused referral, which is the only one either email may speak for. */
+    private Optional<Referral> newestRefusal(String deedPollId) {
+        return referrals.findByDeedPollIdOrderByCreatedOnDesc(deedPollId).stream()
+            .filter(referral -> referral.getDecision() == MasterDecision.Rejected)
+            .findFirst();
+    }
+
+    /**
+     * Whether this referral was raised for a request not to publish in The Gazette.
+     *
+     * <p>{@code reasons} holds {@link ReferralReason} member names as a JSON array, so the test is against
+     * {@link ReferralReason#NonPublication}{@code .name()} rather than against free text -- a referral whose
+     * notes happen to mention publication is not a non-publication request.
+     *
+     * <p><strong>Necessary for ④ without being sufficient to send it.</strong> Availability is derivable only in
+     * this direction: a refusal on no non-publication reason certainly is not about one, but a referral raised
+     * for several reasons gets one decision and one direction covering all of them, which cannot be decomposed
+     * into a per-reason outcome. So this offers ④ <em>alongside</em> ③ and leaves the choice to the caseworker,
+     * who is reading the direction in order to action it either way.
+     */
+    private static boolean aboutNonPublication(Referral referral) {
+        List<String> reasons = referral.getReasons();
+        return reasons != null && reasons.contains(ReferralReason.NonPublication.name());
+    }
+
+    /**
+     * The sentence that says why a template does not apply, which is per template for the reason its text is.
+     *
+     * <p>④ has two sentences because it has two conditions, and a caseworker can act on the difference: a case
+     * with no refusal at all is waiting on a judge, while a case whose newest refusal was about something else
+     * is one where this email is simply the wrong email. Told which, they do two different things.
+     */
+    private static String reasonNotApplicable(EmailTemplate template, Optional<Referral> newestRefusal) {
         return switch (template) {
             case APPLICATION_REJECTED -> NO_REFUSAL;
+            case REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal.isPresent()
+                ? REFUSAL_NOT_ABOUT_NON_PUBLICATION
+                : NO_REFUSAL_TO_CONFIRM;
         };
     }
 
@@ -352,16 +498,20 @@ public class CaseEmailService {
      */
     private Composed compose(String deedPollId, EmailTemplate template, Map<String, Object> slots) {
         DeedPoll deedPoll = requireCase(deedPollId);
-        Referral referral = cause(template, deedPollId)
-            .orElseThrow(() -> new ConflictError(reasonNotApplicable(template)));
+        Optional<Referral> newestRefusal = newestRefusal(deedPollId);
+        Referral referral = cause(template, newestRefusal)
+            .orElseThrow(() -> new ConflictError(reasonNotApplicable(template, newestRefusal)));
 
-        // The referral reaches the email only through this slot, pre-populated and editable. resolve() below is
-        // deliberately not given the referral: a second, un-edited copy of the judge's words in the same email
-        // would make "what was this applicant told" a question with two answers.
+        // The judge's words reach the email only through this slot, pre-populated and editable. ③'s resolve() is
+        // deliberately not given the referral at all, and ④'s is given it only for the decision date and
+        // documents that it never reads getDirectionsText() -- a second, un-edited copy of the direction in the
+        // same email would make "what was this applicant told" a question with two answers.
         Map<EmailSlot, String> accepted = EmailSlots.parse(template, slots, referral.getDirectionsText());
         Map<String, Object> personalisation = switch (template) {
             case APPLICATION_REJECTED ->
                 ApplicationRejectedPersonalisation.resolve(deedPoll, accepted).toMap();
+            case REQUEST_CONFIRMATION_TO_PROCEED ->
+                RequestConfirmationToProceedPersonalisation.resolve(deedPoll, referral, accepted).toMap();
         };
         return new Composed(deedPoll, referral, personalisation);
     }

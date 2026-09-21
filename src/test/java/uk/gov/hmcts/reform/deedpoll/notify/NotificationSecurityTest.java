@@ -21,6 +21,7 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailTypeResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SentEmailResponse;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
@@ -112,7 +113,9 @@ class NotificationSecurityTest {
             new NotifyProperties(
                 "https://notify.invalid",
                 "not-a-real-key",
-                Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1")),
+                Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1",
+                       EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), "template-2"),
+                "reply-to-1"),
             JSON);
     }
 
@@ -121,8 +124,8 @@ class NotificationSecurityTest {
     void sendsOnlyTheDeclaredKeysToTheApplicant() throws Exception {
         storedCase(CASE_ID);
         when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(refusedReferral()));
-        when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(), any(),
-                                   anyString())).thenReturn(1);
+        when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(), anyString(),
+                                   any(), anyString())).thenReturn(1);
 
         emails.send(
             CASE_ID,
@@ -137,6 +140,7 @@ class NotificationSecurityTest {
             eq(CASE_ID),
             eq(REFERRAL_ID),
             eq(EmailTemplate.APPLICATION_REJECTED.name()),
+            eq(EmailTemplate.APPLICATION_REJECTED.exclusionGroup().name()),
             recipient.capture(),
             personalisation.capture(),
             any(LocalDateTime.class),
@@ -150,6 +154,54 @@ class NotificationSecurityTest {
     }
 
     @Test
+    @DisplayName("the confirmation email sends its own keys and nothing else, to the applicant")
+    void theConfirmationEmailSendsOnlyItsOwnKeysToTheApplicant() throws Exception {
+        storedCase(CASE_ID);
+        when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID))
+            .thenReturn(List.of(refusedNonPublicationReferral()));
+        when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(), anyString(),
+                                   any(), anyString())).thenReturn(1);
+
+        emails.send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER);
+
+        var recipient = org.mockito.ArgumentCaptor.forClass(String.class);
+        var personalisation = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(notifications).enqueue(
+            any(),
+            eq(CASE_ID),
+            eq(REFERRAL_ID),
+            eq(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.name()),
+            eq(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.exclusionGroup().name()),
+            recipient.capture(),
+            personalisation.capture(),
+            any(LocalDateTime.class),
+            eq(CASEWORKER.name()));
+
+        Map<String, Object> sent = JSON.readValue(personalisation.getValue(), new TypeReference<>() {
+        });
+        assertThat(sent.keySet())
+            .containsExactlyInAnyOrderElementsOf(
+                EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.personalisationKeys());
+        // And exactly one key per component of the record that resolved them, so a component added without a key
+        // -- which would never reach the applicant -- fails here rather than rendering as a blank line.
+        assertThat(sent).hasSize(RequestConfirmationToProceedPersonalisation.class.getRecordComponents().length);
+
+        // The applicant, never the representative: this email asks the person whose name is changing whether they
+        // still want it enrolled, and a representative's address is not theirs to answer from.
+        assertThat(recipient.getValue()).isEqualTo(APPLICANT).isNotEqualTo(REPRESENTATIVE);
+
+        // The judge's words leave once, through the editable slot, and the referral's own field is not a second
+        // copy of them under another name -- decision 4, asserted where the payload is rather than in the record.
+        assertThat(sent).containsEntry(EmailSlot.JUDGES_REASON.placeholder(), DIRECTION);
+        // Every key is a snake_case Notify placeholder, so this reads as written rather than needing a fold.
+        assertThat(sent.keySet()).noneMatch(key -> key.contains("direction"));
+        assertThat(sent.entrySet())
+            .filteredOn(entry -> DIRECTION.equals(entry.getValue()))
+            .extracting(Map.Entry::getKey)
+            .containsExactly(EmailSlot.JUDGES_REASON.placeholder());
+    }
+
+    @Test
     @DisplayName("another case's refusal cannot make availability, preview or send cross the case boundary")
     void anotherCasesRefusalIsUnreachable() {
         storedCase(CASE_ID);
@@ -158,17 +210,26 @@ class NotificationSecurityTest {
         when(referrals.findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID))
             .thenReturn(List.of(refusedReferral()));
 
-        assertThat(emails.available(CASE_ID)).singleElement()
-            .satisfies(availability -> assertThat(availability.applicable()).isFalse());
-        assertThatThrownBy(() -> emails.preview(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of()))
-            .isInstanceOf(ConflictError.class);
-        assertThatThrownBy(() -> emails.send(
-            CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER))
-            .isInstanceOf(ConflictError.class);
+        // Every template, not merely the first: another case's refusal must be invisible to all of them, and a
+        // per-template rule is exactly where one of them could start reading outside its own case.
+        assertThat(emails.available(CASE_ID))
+            .hasSize(EmailTemplate.values().length)
+            .allSatisfy(availability ->
+                            assertThat(availability.applicable()).as("%s", availability.template()).isFalse());
+        // Both templates, for the same reason the availability loop covers both: each reaches its referral through
+        // its own rule, so each is a place a read could start naming a case the caller did not ask about.
+        for (EmailTemplate template : EmailTemplate.values()) {
+            assertThatThrownBy(() -> emails.preview(CASE_ID, template, Map.of()))
+                .as("%s cannot be previewed from another case's refusal", template)
+                .isInstanceOf(ConflictError.class);
+            assertThatThrownBy(() -> emails.send(CASE_ID, template, Map.of(), CASEWORKER))
+                .as("%s cannot be sent from another case's refusal", template)
+                .isInstanceOf(ConflictError.class);
+        }
 
         verify(referrals, never()).findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID);
         verify(notifications, never()).enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                               any(), anyString());
+                                               anyString(), any(), anyString());
     }
 
     @Test
@@ -286,6 +347,14 @@ class NotificationSecurityTest {
         referral.setId(REFERRAL_ID);
         referral.setDecision(MasterDecision.Rejected);
         referral.setDirectionsText(DIRECTION);
+        return referral;
+    }
+
+    /** The refusal the confirmation email is sent off: raised for a non-publication request, and decided. */
+    private static Referral refusedNonPublicationReferral() {
+        Referral referral = refusedReferral();
+        referral.setReasons(List.of(ReferralReason.NonPublication.name()));
+        referral.setDecisionDate(LocalDateTime.of(2026, 9, 18, 14, 30));
         return referral;
     }
 

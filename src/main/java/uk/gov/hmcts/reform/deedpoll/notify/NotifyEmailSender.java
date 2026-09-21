@@ -34,6 +34,13 @@ import java.util.Map;
  * caseworker never approved whenever the case had been edited in between, and would make "what was this applicant
  * told" a question about the state of the case at drain time.
  *
+ * <p><strong>A template that invites a reply is sent with a reply-to address, and is not sent without one.</strong>
+ * {@code notify.email-reply-to-id} is the monitored inbox; {@link EmailTemplate#invitesReply()} is which emails
+ * need it. The two overloads are kept apart deliberately -- the client drops a blank reply-to and sends from
+ * no-reply, so an email that asked the applicant to reply would lose the answer and nothing would say so. This
+ * refuses that send permanently instead, and {@link NotifyProperties#isProvisioned} is how the Email tab says so
+ * before a caseworker composes one.
+ *
  * <p><strong>Until notify-0 provisions the Notify service every send here fails, and fails permanently.</strong>
  * The API key is empty, so Notify answers 403 -- {@link NotificationFailure#PERMANENT} -- and the row is failed
  * with that on it rather than retried three hours into a backoff that cannot help. That is the designed answer to
@@ -83,6 +90,19 @@ public class NotifyEmailSender implements NotificationSender {
                 "no such email template: " + notification.getTemplate());
         }
 
+        String replyToId = properties.emailReplyToId();
+        if (template.invitesReply() && replyToId.isBlank()) {
+            // The email's own words ask the applicant to reply, and nothing has said where to. Notify would drop a
+            // blank reply-to and send from its no-reply sender, so the answer this email exists to collect would
+            // bounce -- which is a silent failure that looks like an applicant who never replied. Permanent
+            // because no retry configures anything, and the Email tab already reports it as unprovisioned.
+            log.error("Notification {} for case {} is {}, which invites a reply, but notify.email-reply-to-id is "
+                          + "not configured", notification.getId(), notification.getDeedPollId(), template.key());
+            return SendOutcome.failed(
+                NotificationFailure.PERMANENT,
+                "no reply-to address is configured, and the " + template.key() + " email asks for a reply");
+        }
+
         String templateId = template.templateId(properties);
         // The row id, which Notify keeps against the notification. Bare rather than prefixed: a reference that
         // needed unwrapping to be matched back to a row would defeat the point of storing it.
@@ -90,8 +110,11 @@ public class NotifyEmailSender implements NotificationSender {
         Map<String, Object> personalisation = notification.getPersonalisation();
 
         try {
-            SendEmailResponse accepted =
-                notify.sendEmail(templateId, notification.getRecipient(), personalisation, reference);
+            // Two overloads rather than one with a nullable argument, so adding a reply-to for ④ cannot change
+            // what ③ sends: the four-argument call is the one notify-1 shipped, byte for byte.
+            SendEmailResponse accepted = template.invitesReply()
+                ? notify.sendEmail(templateId, notification.getRecipient(), personalisation, reference, replyToId)
+                : notify.sendEmail(templateId, notification.getRecipient(), personalisation, reference);
             log.info("Notification {} for case {} accepted by Notify as {} (template {} version {})",
                      notification.getId(), notification.getDeedPollId(), accepted.getNotificationId(),
                      template.key(), accepted.getTemplateVersion());

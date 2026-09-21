@@ -21,6 +21,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class EmailTemplateTest {
 
+    /** A reply-to address id, invented: what matters about it here is only that it is configured. */
+    private static final String REPLY_TO = "9b7c5d21-3f4e-4a6b-8c0d-1e2f3a4b5c66";
+
     @Nested
     @DisplayName("naming")
     class Naming {
@@ -71,6 +74,71 @@ class EmailTemplateTest {
         @DisplayName("keys() lists what a refusal would have accepted")
         void keysListsEveryTemplate() {
             assertThat(EmailTemplate.keys()).contains(EmailTemplate.APPLICATION_REJECTED.key());
+            assertThat(EmailTemplate.keys()).contains(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key());
+        }
+
+        @Test
+        @DisplayName("the confirmation email's member name is the value an outbox row stores")
+        void confirmationMemberNameIsTheStoredValue() {
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.name())
+                .isEqualTo("REQUEST_CONFIRMATION_TO_PROCEED");
+        }
+
+        @Test
+        @DisplayName("the confirmation email's key is its configuration key and its URL token")
+        void confirmationKeyIsTheConfigurationKey() {
+            // notify.templates.request-confirmation-to-proceed, and
+            // /caseworker/cases/{caseId}/emails/request-confirmation-to-proceed. One string.
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key())
+                .isEqualTo("request-confirmation-to-proceed");
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.displayName())
+                .isEqualTo("Request confirmation to proceed");
+        }
+
+        @Test
+        @DisplayName("the rejection email is listed first, which is the order the Email tab shows them in")
+        void theRejectionEmailIsListedFirst() {
+            assertThat(EmailTemplate.values())
+                .startsWith(EmailTemplate.APPLICATION_REJECTED, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED);
+        }
+
+        @ParameterizedTest
+        @EnumSource(EmailTemplate.class)
+        @DisplayName("every template's member name round trips, which is how the drain reads an outbox row")
+        void everyMemberNameRoundTrips(EmailTemplate template) {
+            assertThat(EmailTemplate.byName(template.name())).contains(template);
+        }
+    }
+
+    @Nested
+    @DisplayName("mutual exclusion")
+    class ExclusionGroups {
+
+        @Test
+        @DisplayName("the two referral-driven emails share a group, which is what makes them exclusive")
+        void bothReferralEmailsShareAGroup() {
+            // Decision 3, as a fact about the enum: the group is the key V15's unique index is built on, so two
+            // templates sharing one means a referral gets one of them and Postgres decides which.
+            assertThat(EmailTemplate.APPLICATION_REJECTED.exclusionGroup())
+                .isEqualTo(EmailExclusionGroup.REFERRAL_OUTCOME)
+                .isEqualTo(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.exclusionGroup());
+        }
+
+        @Test
+        @DisplayName("the group's member name is the value an outbox row stores and the column's default")
+        void groupMemberNameIsTheStoredValue() {
+            // V15 adds "exclusionGroup" text NOT NULL DEFAULT 'REFERRAL_OUTCOME' and enqueue binds this name, so
+            // renaming the member is a data migration -- visible in a diff here rather than in production.
+            assertThat(EmailExclusionGroup.REFERRAL_OUTCOME.name()).isEqualTo("REFERRAL_OUTCOME");
+        }
+
+        @ParameterizedTest
+        @EnumSource(EmailTemplate.class)
+        @DisplayName("every template declares a group, because the column is NOT NULL and the argument required")
+        void everyTemplateDeclaresAGroup(EmailTemplate template) {
+            // A group is a required constructor argument rather than a table of pairs for exactly this reason: a
+            // template cannot be added without saying which emails it is an alternative to.
+            assertThat(template.exclusionGroup()).isNotNull();
         }
     }
 
@@ -99,6 +167,28 @@ class EmailTemplateTest {
                 "applied_online");
             assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("reference_number")).isTrue();
             assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("applied_online")).isTrue();
+        }
+
+        @Test
+        @DisplayName("the confirmation email resolves two more keys, and neither is a slot of the other template")
+        void theConfirmationEmailResolvesTwoMore() {
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.resolvedKeys()).containsExactly(
+                "reference_number", "online_application_reference", "old_forename", "old_surname",
+                "applied_online", "is_minor", "decision_date");
+            // The rejection email does not have them, so the two are not silently the same personalisation:
+            // a client sending is_minor to application-rejected is told it is not a field at all.
+            assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("is_minor")).isFalse();
+            assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("decision_date")).isFalse();
+        }
+
+        @Test
+        @DisplayName("both templates take the same two slots, which is decision 8 rather than a coincidence")
+        void bothTemplatesTakeTheSameSlots() {
+            // EmailSlot's requiredness holds for the whole proposed template set, so a second template needing
+            // the judge's reason and optional notes is the design being confirmed, not a new slot.
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.slots())
+                .containsExactly(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES);
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.documentKeys()).isEmpty();
         }
 
         @ParameterizedTest
@@ -137,7 +227,7 @@ class EmailTemplateTest {
     class TemplateId {
 
         private static NotifyProperties configured(Map<String, String> templates) {
-            return new NotifyProperties("https://notify.example", "", templates);
+            return new NotifyProperties("https://notify.example", "", templates, REPLY_TO);
         }
 
         @Test
@@ -147,7 +237,7 @@ class EmailTemplateTest {
 
             assertThat(EmailTemplate.APPLICATION_REJECTED.templateId(properties))
                 .isEqualTo(NotifyProperties.UNPROVISIONED_TEMPLATE_ID);
-            assertThat(properties.isProvisioned(EmailTemplate.APPLICATION_REJECTED.key())).isFalse();
+            assertThat(properties.isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isFalse();
         }
 
         @Test
@@ -157,7 +247,7 @@ class EmailTemplateTest {
             NotifyProperties properties = configured(Map.of("application-rejected", uuid));
 
             assertThat(EmailTemplate.APPLICATION_REJECTED.templateId(properties)).isEqualTo(uuid);
-            assertThat(properties.isProvisioned(EmailTemplate.APPLICATION_REJECTED.key())).isTrue();
+            assertThat(properties.isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isTrue();
         }
 
         @ParameterizedTest
@@ -167,6 +257,45 @@ class EmailTemplateTest {
             // Never null: an unconfigured template fails at Notify with a status the taxonomy classifies,
             // rather than with a NullPointerException somewhere further in.
             assertThat(Optional.ofNullable(template.templateId(configured(Map.of())))).isPresent();
+        }
+
+        @Test
+        @DisplayName("a template that invites a reply needs the reply-to as well as the id")
+        void anInvitedReplyIsPartOfBeingProvisioned() {
+            // Decision 10 as a fact about this pair: provisioning is asked per template because the two templates
+            // need different things of an environment. NotifyPropertiesTest states the rule itself.
+            String uuid = "2b0e6b6e-0000-4000-8000-0000000000aa";
+            Map<String, String> both = Map.of(
+                EmailTemplate.APPLICATION_REJECTED.key(), uuid,
+                EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), uuid);
+            NotifyProperties noReplyTo = new NotifyProperties("https://notify.example", "", both, "");
+
+            assertThat(noReplyTo.isProvisioned(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).isFalse();
+            assertThat(noReplyTo.isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isTrue();
+            assertThat(new NotifyProperties("https://notify.example", "", both, REPLY_TO)
+                           .isProvisioned(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("whether an email invites a reply")
+    class InvitesReply {
+
+        @Test
+        @DisplayName("the confirmation email does, because asking for one is what it is for")
+        void theConfirmationEmailInvitesAReply() {
+            // "If you still wish to enrol the deed poll then let us know by replying to this email." Sent from a
+            // no-reply address that sentence asks for something the applicant cannot give.
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.invitesReply()).isTrue();
+        }
+
+        @Test
+        @DisplayName("the rejection email does not, and must not start needing a reply-to")
+        void theRejectionEmailInvitesNone() {
+            // It states a decision and starts a refund; it asks the applicant for nothing. Asserted rather than
+            // left implicit because the tempting simplification is one flag for the service, which would make a
+            // reply-to configured for ④ silently change what ③ sends.
+            assertThat(EmailTemplate.APPLICATION_REJECTED.invitesReply()).isFalse();
         }
     }
 
