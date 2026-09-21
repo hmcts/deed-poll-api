@@ -448,7 +448,30 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 
 Record final unit/integration totals against Task 0.
 
-- [ ] Full build green; final test totals recorded
+- [x] Full build green; final test totals recorded
+
+#### What Task 5 measured, 2026-09-21
+
+`./gradlew clean build` from cold at `49af7fd`, all 25 tasks executed — no up-to-date task stood in for a run,
+which the first attempt showed it otherwise would, every task being `UP-TO-DATE` from Task 4's build.
+
+| | Task 0 baseline | Final | Delta |
+|---|---|---|---|
+| `test` | 2,328 | **2,379** | +51 |
+| `integration` | 8 | **9** | +1 |
+| total | 2,336 | **2,388** | **+52** |
+
+Zero failures, zero errors, zero skipped in both source sets; checkstyle green across all five
+(`main`, `test`, `integration`, `functional`, `smoke`). Counted from `build/test-results/*/*.xml` rather than
+read off the console, so the totals are the ones the runner recorded.
+
+The per-task progression reconciles: Task 1 +15 (2,351), Task 2 +20 (2,371), Task 3 +16 (2,387), Task 4 +1
+(2,388) — the single Task 4 addition being an integration test, which is why `integration` moved 8 → 9 and
+`test` did not move after Task 3.
+
+`Couldn't poll for events, error = 4` appeared once from Gradle's native file-watcher. It is this Docker
+configuration's inotify, not the build: the task graph completed and `BUILD SUCCESSFUL` followed. In the same
+family as the Ryuk note in `CLAUDE.md`.
 
 ## Out of scope
 
