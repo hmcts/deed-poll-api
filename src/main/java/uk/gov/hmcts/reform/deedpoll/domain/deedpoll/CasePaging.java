@@ -143,6 +143,27 @@ public record CasePaging(int page, int size) {
     }
 
     /**
+     * How many pages of this size a result set of {@code total} rows comes to, rounded up so that a partial
+     * last page is a page.
+     *
+     * <p>Here rather than in each result type, because the page count is arithmetic on the size this record
+     * already holds: a result type that derived it itself would be a second place a total and a page count
+     * could come to disagree, which is the property {@code CaseResults.of} and {@code ReferralPool.of} both
+     * exist to guarantee. {@code CaseResults} still derives its own, and should come here the next time the
+     * case list is opened; the judicial pages use this.
+     *
+     * <p>Zero pages for an empty result set rather than one, which is what a caller renders as "no results"
+     * instead of claiming a page that has no rows on it.
+     *
+     * <p>Long arithmetic: the intermediate would overflow an {@code int} for a total near
+     * {@link Integer#MAX_VALUE}, which is a result set this service will never have but not a reason to write
+     * it wrongly.
+     */
+    public int pagesOf(long total) {
+        return (int) ((total + size - 1) / size);
+    }
+
+    /**
      * One numeric parameter, defaulted when absent and collected as an error when it is not a number.
      *
      * <p>An unreadable value collects its own error and then reads as the default, so the range check below

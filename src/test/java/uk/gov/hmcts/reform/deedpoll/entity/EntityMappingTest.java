@@ -402,6 +402,11 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         assertThat(reloaded.getPublishToGazette()).isNull();
         assertThat(reloaded.getDecisionDate()).isNull();
         assertThat(reloaded.getDecidedBy()).isNull();
+        // And V14's two owner columns, for a stronger reason than the eight above: a NOT NULL or a default on
+        // either would have to invent an owner, and an invented owner is a person who may direct a referral and
+        // see the case behind it. Null is "nobody owns this", which is what every ownership check fails closed on.
+        assertThat(reloaded.getClaimedById()).isNull();
+        assertThat(reloaded.getDecidedById()).isNull();
 
         // And V9's column defaults to null rather than to a state, which is what makes "no active referral"
         // expressible at all. Null here even though the referral above is Open, because persisting a
@@ -437,6 +442,10 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         referral.setDeedPoll(deedPoll);
         referral.setState(ReferralState.Decided);
         referral.setClaimedBy("District Judge Example");
+        // V14's owner columns. Deliberately unlike the display names beside them, because that is the whole point
+        // of the pair: a subject is not a name, and a mapping that had crossed the two would read as correct if
+        // the fixture used the same value for both.
+        referral.setClaimedById("idam-subject-9f3");
         referral.setClaimedAt(LocalDateTime.of(2026, 4, 1, 9, 30));
         referral.setLastTouchedAt(LocalDateTime.of(2026, 4, 1, 11, 15));
         referral.setDecision(MasterDecision.Approved);
@@ -444,6 +453,7 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         referral.setPublishToGazette(true);
         referral.setDecisionDate(LocalDateTime.of(2026, 4, 1, 11, 15));
         referral.setDecidedBy("District Judge Example");
+        referral.setDecidedById("idam-subject-9f3");
         entityManager.persist(referral);
 
         entityManager.flush();
@@ -461,6 +471,11 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         // compares them case-insensitively, so only a statement that quotes the name and runs finds a
         // mis-cased mapping.
         assertThat(reloaded.getClaimedBy()).isEqualTo("District Judge Example");
+        // "claimedById" and "decidedById" are mixed case too, and they are the two columns where a mis-cased
+        // mapping would be a security failure rather than a missing field: an owner that did not persist reads
+        // back as null, and a null owner is a referral its own judge can no longer see or direct.
+        assertThat(reloaded.getClaimedById()).isEqualTo("idam-subject-9f3");
+        assertThat(reloaded.getDecidedById()).isEqualTo("idam-subject-9f3");
         assertThat(reloaded.getClaimedAt()).isEqualTo(LocalDateTime.of(2026, 4, 1, 9, 30));
         assertThat(reloaded.getLastTouchedAt())
             .as("the sweep's input, later than the claim because the judge kept working")

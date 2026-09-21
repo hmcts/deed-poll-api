@@ -17,7 +17,7 @@ See `docs/RESUME.md` for the current state and `docs/plans/` for the build plans
 
 ```
 api/caseworker/{controller,dto}   the caseworker HTTP surface — 30 operations
-api/judicial/{controller,dto}     the judicial surface — 4 operations, keyed on the referral, never on the case
+api/judicial/{controller,dto}     the judicial surface — 5 operations, keyed on the referral, never on the case
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
@@ -61,9 +61,13 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
 - **The judicial surface is scoped by visibility, not by the case.** A caseworker read names its parent
   (`/caseworker/cases/{id}/…`); a judicial URL carries a referral id and no case id at all, so
   `JudicialReferralService.visibleTo` stands where the parent id stands — the pool, plus this judge's own
-  `Claimed`/`Decided` referrals. Anything else is **404**, in the same words an unknown id gets; the only
-  403 is the `Role.JUDICIAL` gate. Its four operations must not reuse a caseworker DTO, and an ArchUnit
-  rule fails the build if one does.
+  `Claimed`/`Decided` referrals — which `GET /judicial/referrals/mine` is the list of. Anything else is **404**,
+  in the same words an unknown id gets; the only 403 is the `Role.JUDICIAL` gate. Its five operations must not
+  reuse a caseworker DTO, and an ArchUnit rule fails the build if one does.
+- **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
+  `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
+  only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback
+  to the name, or a namesake regains access exactly where identity is uncertain.
 - **A controller test must boot the whole context.** A `@WebMvcTest` slice does not get
   `SecurityConfiguration` — its include list covers `SecurityFilterChain` beans, and a
   `@Configuration` that merely *declares* one is not itself one — so a slice asserts Boot's defaults

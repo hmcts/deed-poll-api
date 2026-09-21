@@ -18,27 +18,33 @@ import java.util.stream.Collectors;
  * lets the same reduction serve a citizen session later.
  *
  * <p>{@link #name} is audit text ({@code createdBy} / {@code modifiedBy}), and {@link #userId} is not: it is
- * the token's subject, and it is what authorisation should turn on -- a saved query's permission turns on
- * whether the caller owns it, keyed on the subject for the reason set out below.
+ * the token's subject, and it is what authorisation turns on -- a saved query's permission turns on whether the
+ * caller owns it, and so does a referral's claim, both keyed on the subject for the reason set out below.
  *
- * <p><strong>There are two places that authorise on {@link #name} anyway, and they are the referral's claim.</strong>
- * {@code ReferralService.requireHeldBy} (who may direct a referral) and {@code JudicialReferralService.visibleTo}
- * (which referrals a judge may see at all) both compare this name against the referral's {@code claimedBy} /
- * {@code decidedBy} columns, because those columns hold a name and keying a claim on the subject is a migration
- * neither plan had. <strong>So a wrong name is not harmless here, and this paragraph used to say it was.</strong>
- * Two consequences, both recorded rather than hidden:
+ * <p><strong>Nothing authorises on {@link #name} any more, and the referral's claim was the last thing that
+ * did.</strong> {@code ReferralService.requireHeldBy} (who may direct a referral),
+ * {@code JudicialReferralService.visibleTo} (which referrals a judge may see at all) and its {@code heldBy}
+ * helper all compared this name against the referral's {@code claimedBy} / {@code decidedBy} columns, because
+ * those columns held a name and keying a claim on the subject was a migration neither referral plan had.
+ * {@code V14} is that migration: {@code claimedById} and {@code decidedById} hold the token's subject, all three
+ * sites compare it, and {@code claimedBy} / {@code decidedBy} survive as the attribution staff read. The two
+ * defects that went with it are recorded rather than deleted, because they are what those columns now exist to
+ * prevent:
  *
  * <ul>
- *   <li>two judges sharing a display name can see and direct each other's claimed referrals -- and on the
+ *   <li>two judges sharing a display name could see and direct each other's claimed referrals -- and on the
  *       judicial surface that means the application and its notes, since {@code visibleTo} is the only boundary
- *       in front of a finder by referral id;</li>
- *   <li>a judge whose IDAM display name changes stops being able to see their own claimed referral -- 404 to
- *       read, 409 to direct -- until the inactivity sweep releases it, which it will, because
- *       {@code releaseStaleClaim} matches on {@code lastTouchedAt} and never on the name.</li>
+ *       in front of a finder by referral id. A judge's personal work list keyed on a name would have enumerated
+ *       a namesake's referrals rather than needing one of their ids, which is why it waited for this;</li>
+ *   <li>a judge whose IDAM display name changed stopped being able to see their own claimed referral -- 404 to
+ *       read, 409 to direct -- until the inactivity sweep released it, which it did, because
+ *       {@code releaseStaleClaim} matches on {@code lastTouchedAt} and never on the owner.</li>
  * </ul>
  *
- * <p>Keying the claim on {@link #userId} is the fix and it is a migration, not a refactor. Until then, do not
- * add a third site: authorise on the subject.
+ * <p>So the rule is plain rather than conditional now: <strong>authorise on {@link #userId} through
+ * {@link #requireUserId()}, never on {@link #name}.</strong> In particular do not fall back to the name when an
+ * id is absent -- a pre-migration row has a null owner id and belongs to nobody, and a fallback would restore the
+ * collision precisely on the rows whose identity is uncertain.
  *
  * <p><strong>{@link #userId} is the one component the reference interface does not have</strong>, and the
  * divergence is deliberate. The reference resolved identity from {@code x-user-roles} / {@code x-user-name}
@@ -100,9 +106,10 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
      * The caller's stable id, refusing a caller who has none.
      *
      * <p>Every use of {@link #userId} goes through this rather than reading the component, because all of
-     * them are authorisation decisions about an owned resource: whose query this is, and whose selections
-     * these are. A null there would make both of those questions answer "the same anonymous everybody", so
-     * failing closed is the only safe reading and it belongs in one place rather than at each call site.
+     * them are authorisation decisions about an owned resource: whose query this is, whose selections these
+     * are, and -- since {@code V14} -- which referral a judge holds, may direct and sees on their own list. A
+     * null there would make all of those questions answer "the same anonymous everybody", so failing closed is
+     * the only safe reading and it belongs in one place rather than at each call site.
      *
      * <p>401 rather than 403: the caller has not been identified well enough to be refused for who they
      * are. In practice a validated IDAM token always carries a subject and {@code IdamUserInfoClient}

@@ -4,6 +4,18 @@
 > with a judge-owned `Claimed`/`Decided` collection. It also replaces display-name authorization with stable
 > IDAM-subject ownership before that collection can safely enumerate referrals.
 >
+> **Done, 2026-09-21, on branch `referrals-api-6`.** Two things this plan states throughout are now history
+> rather than fact, and are left in place because the reasoning is what the file is for:
+>
+> - **The judicial operation count is five, not four.** `GET /judicial/referrals/mine` is the fifth, and every
+>   instruction below to "state the judicial operation count (4)" was correct when it was run. The caseworker
+>   count is the number that has not moved — 30 in this plan's prose, 33 in `OpenAPIPublisherTest` since the
+>   Email tab. api-6 is the one referral follow-up that moves the contract, and it moved only the judicial half.
+> - **Flag 7's display-name defect is fixed, not merely recorded.** `V14` adds `claimedById`/`decidedById`, and
+>   `visibleTo`, its `heldBy` helper and `ReferralService.requireHeldBy` all compare the token subject. The
+>   migration flag 7 called for is done; it did not wait for idam-1, because no real judicial token exists yet
+>   and so no row needed backfilling.
+>
 > `../referrals-api-5-lifecycle-case-notes.md` adds claim and direction notes to the timeline this plan's
 > `JudicialReferralDetail.caseNotes` returns, so flag 6's accepted disclosure now extends to them: a judge
 > reading a lapsed referral out of the pool sees who claimed it and what was directed, on the same reasoning
@@ -447,3 +459,14 @@ redirect. None blocks the plan being *written*; some should be settled before it
    does, because `releaseStaleClaim` matches on `lastTouchedAt` and never on the name. **Keying the claim
    columns on the token subject is the actual fix and it is a migration** — worth scheduling alongside idam-1,
    since that is when real judicial identities first exist.
+
+   > **DONE, 2026-09-21 (`referrals-api-6` task 1), and it did not wait for idam-1.** `V14` adds nullable
+   > `claimedById` and `decidedById`; `claim` requires `CurrentUser.requireUserId()` and stores it, `decide`
+   > stores the director's subject, `releaseStaleClaim` clears `claimedById` with the rest of the active claim,
+   > and all three authorisation sites — `visibleTo`, its `heldBy` helper and `requireHeldBy` — compare the
+   > subject. `claimedBy`/`decidedBy` remain as the attribution staff read and authorise nothing; `CurrentUser`'s
+   > javadoc now says so. Nothing is backfilled and no row is guessed from a name: a pre-migration row has a null
+   > owner and belongs to nobody, which fails closed. It went ahead of idam-1 because that is exactly why it was
+   > safe — no judicial token has ever existed, so no live claim had to survive the change. The trigger was
+   > `referrals-api-6`'s personal list: keyed on a display name it would have *enumerated* a namesake's
+   > referrals, turning a collision that needed an id into one that needed only the same name.

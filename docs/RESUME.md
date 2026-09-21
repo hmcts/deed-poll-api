@@ -24,11 +24,11 @@ row; its failed history remains unchanged when the replacement is sent.
 
 | | |
 |---|---|
-| Flyway migrations | **13 on `master`** — V13 adds the rendered subject and plain-text body |
+| Flyway migrations | **13 on `master`** — V13 adds the rendered subject and plain-text body. **V14 on `referrals-api-6`**, adding the nullable referral owner subjects; notify-3 has been corrected to take V15 |
 | Caseworker endpoints | **33**, across eight controllers under `api/caseworker/controller/` |
-| Judicial endpoints | **4** on `/judicial/**` — the shared pool, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
+| Judicial endpoints | **4** on `master` and **5** on `referrals-api-6` — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,336** on `referrals-api-5` — `test` 2,328 + `integration` 8, measured after that plan's task 5, from a `master` baseline of **2,318** (`test` 2,310). `referrals-api-4` is 2,314 off an older `master` of 2,300; the two branches are not stacked, so the numbers are not cumulative |
+| Tests | **2,388** on `referrals-api-6` — `test` 2,379 + `integration` 9 — from a `master` baseline of **2,336** (`test` 2,328 + `integration` 8), which is also `referrals-api-5`'s figure as merged. `referrals-api-4` is 2,314 off an older `master` of 2,300; the branches are not stacked, so the numbers are not cumulative |
 | Docker-free CI | **1,424 unit tests**, measured with `INTEGRATION_TESTS_ENABLED=false` |
 | `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `master` after notify-5, on `referrals-api-4` after its task 3, and on `referrals-api-5` after its task 5 |
 
@@ -56,9 +56,18 @@ refused transition, a judicial `touch` and the backfill write none. The directio
 and the Gazette answer and never quotes `directionsText`, which may be twice a note's length. **No contract
 delta**: no migration, no DTO, no endpoint, 33 caseworker and 4 judicial operations unchanged — proven by
 regenerating the spec from `master` into a throwaway worktree and byte-diffing it, identical at 56,771 bytes.
-[`plans/referrals-api-6-judicial-my-referrals.md`](plans/referrals-api-6-judicial-my-referrals.md) adds the
-missing judge-owned `Claimed`/`Decided` worklist and migrates ownership checks from display names to stable
-IDAM subjects before that list can safely enumerate work.
+That 56,771 is now the baseline `referrals-api-6`'s delta was measured against: **57,495 bytes**, the difference
+being one path with one GET and one schema, with the rest of the document identical key for key.
+[`plans/referrals-api-6-judicial-my-referrals.md`](plans/referrals-api-6-judicial-my-referrals.md) is
+**complete on branch `referrals-api-6`, not yet merged**, and adds the missing judge-owned `Claimed`/`Decided`
+worklist — `GET /judicial/referrals/mine` — after migrating ownership from display names to stable IDAM subjects,
+which is what makes a personal list safe to publish at all: keyed on a name it would have enumerated a namesake's
+referrals instead of requiring one of their ids. `V14` adds nullable `claimedById`/`decidedById`, nothing is
+backfilled, and a pre-migration row with a null owner belongs to nobody — invisible and undirectable, which is the
+fail-closed rollout consequence rather than a gap to patch. **This is the one referral follow-up with a contract
+delta**: the judicial operation count is **4 → 5** with one new response schema, `JudicialMyReferralsResponse`,
+while `JudicialReferralSummary` is reused unchanged and the caseworker 33 does not move. Neither owner id is
+published anywhere.
 
 ## The Notify series: six api plans, and the order they should run in
 
@@ -158,9 +167,10 @@ What it does **not** give, and each of these is a real constraint on what a sess
    configured and unused. **Notify does not change this** — it is a direct HTTPS call with its own API
    key, not a CFT service behind S2S, which is precisely why the whole Notify series can proceed without
    the registration.
-2. **No judicial role.** `Role.JUDICIAL` gates the four `/judicial/**` operations and IDAM issues no such
-   role, so that surface cannot be exercised by a real token in any environment. Its tests are the only
-   proof it works.
+2. **No judicial role.** `Role.JUDICIAL` gates every `/judicial/**` operation — four on `master`, five on
+   `referrals-api-6` — and IDAM issues no such role, so that surface cannot be exercised by a real token in any
+   environment. Its tests are the only proof it works. That is also why `referrals-api-6`'s move to subject-keyed
+   ownership needed no backfill: no real judge has ever claimed anything.
 3. **No non-admin caseworker role.** `caseworker-deedpoll-admin` is still the only confirmed name. It
    gates one field plus the two deletes the business restricts — a note's and a witness's, both enforced
    in the domain. **Naming a second role is still inventing one**, and is the same mistake as inventing a
@@ -237,7 +247,7 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 | `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
 | `referrals-api-4-caseworker-completion.md` | **Complete on `referrals-api-4`, unmerged.** Withdrawal tightened to `Open`/`Claimed` via `ReferralState.canBeWithdrawn()`; no contract or migration change. Still must precede the admin caseworker-completion plan |
 | `referrals-api-5-lifecycle-case-notes.md` | **Complete on `referrals-api-5`, unmerged.** Claim, direction and closure each write one case note through `ReferralNotes`; no contract or migration change. Branched from `master`, not stacked on referral follow-up 4 |
-| `referrals-api-6-judicial-my-referrals.md` | **Planned.** Adds a judge-owned `Claimed`/`Decided` list after moving referral authorization from display names to stable IDAM subjects |
+| `referrals-api-6-judicial-my-referrals.md` | **Complete on `referrals-api-6`, unmerged.** `GET /judicial/referrals/mine`, with referral ownership moved from display names to stable IDAM subjects in `V14` first. The only referral follow-up with a contract delta — judicial 4 → 5, one new response schema, caseworker 33 unchanged |
 | `role-model-generalisation.md` | **Gated, and may not be needed.** A behaviour-preserving refactor of `boolean isAdmin` into capabilities. Gated on scope question Q0.1 and, preferably, on a first successful deployment — so that a failed deploy is unambiguously a deployment problem and not a 33-site refactor |
 | `role-based-access-findings.md` | Findings, not a plan. The measured inventory of what could be role-gated, so the business question is asked against a concrete list |
 | `role-based-access-questions-for-the-business.md` | **Resolved 2026-09-11**, never sent; the business's `.docx` answered it. Kept for the reasoning |
@@ -255,7 +265,9 @@ The concrete Task 3 contract is now `CaseEmailsResponse`: `availability` retains
 Writing plan 02 or 03 from guesses. Editing `src/test/resources/reference/` — it is a verbatim vendored
 copy of the specification and the conformance tests read it as ground truth, so if one looks wrong, stop
 and report. Editing a committed Flyway migration — **including `V11__notifications.sql`, which is
-committed as V11 and V12**; notify-3 and notify-4 each take the next free number and say so. Inventing
+committed as V11 and V12**; `referrals-api-6` has taken **V14**, so notify-3 takes V15 and notify-4 the next free
+number after that, and both say so. **Do not reserve a number and jump ahead of it**: Flyway runs with
+out-of-order disabled, so a V14 arriving after V15 has been applied fails every environment that applied V15. Inventing
 an IDAM role name, a case type or a jurisdiction ID. Inferring the state of a Jenkins build from the code,
 rather than asking for the log.
 

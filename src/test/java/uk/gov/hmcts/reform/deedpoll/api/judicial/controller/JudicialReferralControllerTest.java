@@ -83,8 +83,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p><strong>The judge is a token holder here, unlike everywhere else in the suite.</strong> IDAM does not issue
  * {@code Role.JUDICIAL} yet, so the stub is asked for a userinfo document carrying the claim value -- which is the
  * only way to assert that a judicial <em>request</em> is admitted end to end rather than that a
- * {@code CurrentUser} constructed in a test is. The judge's identity is their display name, because that is what
- * {@code claimedBy} holds, so the fixtures and the token have to agree on it.
+ * {@code CurrentUser} constructed in a test is. The judge's identity is the token's {@code sub}, because that is
+ * what {@code claimedById} holds, so the fixtures and the token have to agree on the subject and not merely on the
+ * display name -- and {@code IdamUserInfoClient} requires the token and the userinfo document to agree on it too.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -92,6 +93,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
     private static final String POOL = "/judicial/referrals";
+
+    /** The personal list, whose last segment is a literal and not a referral id. */
+    private static final String MINE = POOL + "/mine";
 
     /** createDeedPoll cannot allocate a reference number without a Date Received to derive the year from. */
     private static final String RECEIVED = "2026-07-01T00:00:00.000Z";
@@ -104,6 +108,31 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
     /** A second judge, who exists only to hold referrals this one must not see. */
     private static final String OTHER_JUDGE_NAME = "District Judge Okafor";
+
+    /**
+     * The subject on the token the requests carry: the stub's own, because its tokens and its userinfo have to
+     * agree on one and {@code IdamUserInfoClient} refuses the request if they do not.
+     */
+    private static final String JUDGE_SUBJECT = StubIdam.SUBJECT;
+
+    /** The second judge's subject, which is the only thing that distinguishes them from the first. */
+    private static final String OTHER_JUDGE_SUBJECT = "idam-judge-okafor";
+
+    /**
+     * A third judge who shares {@link #JUDGE_NAME}: a different person, and one the fixtures never hold anything
+     * for. They exist to be refused.
+     */
+    private static final String NAMESAKE_JUDGE_SUBJECT = "idam-judge-namesake";
+
+    /**
+     * The subject of whoever the current userinfo stub describes, so the token minted for a request agrees with
+     * it.
+     *
+     * <p>Mutable because a judge is switched mid-test -- which is the only way to ask whether a referral one judge
+     * holds is visible to another over real HTTP -- and because ownership is now keyed on the subject, so
+     * switching judges means switching subjects rather than only display names.
+     */
+    private static String tokenSubject = JUDGE_SUBJECT;
 
     private static final StubIdam IDAM = new StubIdam();
 
@@ -369,6 +398,351 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     }
 
     @Nested
+    @DisplayName("GET /judicial/referrals/mine")
+    class MyReferrals {
+
+        @Test
+        @DisplayName("returns this judge's claimed and decided referrals, with their own total")
+        void returnsThisJudgesOwnWork() throws Exception {
+            String holding = claimedBy(JUDGE_NAME);
+            String directed = directedBy(JUDGE_NAME);
+
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(2))
+                // Claimed first, because unfinished judicial work comes before a direction the office is actioning.
+                .andExpect(jsonPath("$.referrals[0].id").value(holding))
+                .andExpect(jsonPath("$.referrals[0].state").value(ReferralState.Claimed.name()))
+                .andExpect(jsonPath("$.referrals[1].id").value(directed))
+                .andExpect(jsonPath("$.referrals[1].state").value(ReferralState.Decided.name()))
+                // The state is on every row because both are here: a client that had to infer it from the endpoint
+                // would be inferring one answer for two kinds of row.
+                .andExpect(jsonPath("$.referrals[0].reasons[0]").value(ReferralReason.Minor.name()))
+                .andExpect(jsonPath("$.referrals[0].urgency").value(Urgency.Normal.name()))
+                .andExpect(jsonPath("$.referrals[0].createdOn").exists())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.size").value(JudicialReferralService.POOL_PAGE_SIZE))
+                .andExpect(jsonPath("$.totalPages").value(1));
+        }
+
+        @Test
+        @DisplayName("is an empty page and not a 404 for a judge holding nothing")
+        void isEmptyForAJudgeHoldingNothing() throws Exception {
+            raise(newCase(), Urgency.Normal);
+
+            // The collection always exists; what varies is whether the judge has anything in it. A 404 here would be
+            // a screen that could not tell "you have no work" from "this page has gone".
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0))
+                .andExpect(jsonPath("$.totalPages").value(0));
+        }
+
+        @Test
+        @DisplayName("leaves out the shared pool, the terminal states and the rows another judge owns")
+        void leavesOutEverythingThatIsNotThisJudgesOwnWork() throws Exception {
+            raise(newCase(), Urgency.Normal);
+            claimedBy(OTHER_JUDGE_NAME);
+            directedBy(OTHER_JUDGE_NAME);
+            moveTo(directedBy(JUDGE_NAME), ReferralState.Closed);
+            moveTo(claimedBy(JUDGE_NAME), ReferralState.Withdrawn);
+            String mine = claimedBy(JUDGE_NAME);
+
+            // Exactly what visibleTo admits in the two states a judge owns: Open belongs to the pool, Closed means the
+            // office has actioned the direction, Withdrawn means they pulled the referral back, and another judge's
+            // work is theirs. Six referrals stored and one on the list.
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(1))
+                .andExpect(jsonPath("$.referrals[0].id").value(mine))
+                .andExpect(jsonPath("$.total").value(1));
+            assertThat(referrals.count()).isEqualTo(6);
+        }
+
+        @Test
+        @DisplayName("leaves out a pre-migration row that names this judge but has no owner id")
+        void leavesOutANullOwnerRow() throws Exception {
+            String unowned = claimedBy(JUDGE_NAME);
+            String unownedDirection = directedBy(JUDGE_NAME);
+            disownAll();
+
+            // Neither row is readable on its own, which is what visibleTo already said about a null owner.
+            authorised(get(POOL + "/" + unowned)).andExpect(status().isNotFound());
+            authorised(get(POOL + "/" + unownedDirection)).andExpect(status().isNotFound());
+
+            // And neither is on the list, so the two agree. Fail closed, which is what V14 buys and the rollout
+            // depends on: the display name on these rows is this judge's, and it authorises nothing. A fallback to
+            // the name would put a namesake's outstanding work on this list precisely where identity is uncertain.
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0));
+        }
+
+        @Test
+        @DisplayName("gives a judge who merely shares the holder's display name their own empty list")
+        void leavesOutANamesakesWork() throws Exception {
+            claimedBy(JUDGE_NAME);
+            directedBy(JUDGE_NAME);
+            asJudge(JUDGE_NAME, NAMESAKE_JUDGE_SUBJECT);
+
+            // The disclosure this list would have been, asserted over real HTTP: keyed on the display name it would
+            // have handed a namesake another judge's whole outstanding work without their needing a single referral
+            // id. Keyed on the token's subject, they get their own list, which is empty.
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0));
+        }
+
+        @Test
+        @DisplayName("publishes no case data on a row, and no owner id either")
+        void publishesNoCaseDataOnARow() throws Exception {
+            String caseId = newCase();
+            named(caseId, "Robin");
+            administrative(caseId);
+            String referralId = raise(caseId, Urgency.Normal);
+            referralService.claim(caseId, referralId, judicial(JUDGE_NAME));
+
+            String body = authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(1))
+                // The same row the pool publishes and nothing more: this list is how a judge resumes work they have
+                // already been admitted to, not a case list that arrives with the application attached.
+                .andExpect(jsonPath("$.referrals[0].newForename").doesNotExist())
+                .andExpect(jsonPath("$.referrals[0].displayReference").doesNotExist())
+                .andExpect(jsonPath("$.referrals[0].application").doesNotExist())
+                .andExpect(jsonPath("$.referrals[0].deedPollId").doesNotExist())
+                .andExpect(jsonPath("$.referrals[0].caseNotes").doesNotExist())
+                .andExpect(jsonPath("$.referrals[0].directionsText").doesNotExist())
+                // And nothing of the ownership the membership rule is decided by: the subject is an identity IDAM
+                // issued, and a list is no reason to publish one.
+                .andExpect(jsonPath("$.referrals[0].claimedBy").doesNotExist())
+                .andExpect(jsonPath("$.referrals[0].claimedById").doesNotExist())
+                .andExpect(jsonPath("$.referrals[0].decidedById").doesNotExist())
+                .andExpect(jsonPath("$.referrals[0].lastTouchedAt").doesNotExist())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+            assertThat(body)
+                .doesNotContain(JUDGE_SUBJECT)
+                .doesNotContain("FEE-2026-1")
+                .doesNotContain("applicant@example.com")
+                .doesNotContain(caseId);
+        }
+
+        @Test
+        @DisplayName("orders claimed before decided, urgent before normal, then oldest first")
+        void ordersTheList() throws Exception {
+            // Backdated rather than trusting five inserts to land in different microseconds, and the ages run
+            // deliberately the wrong way round: the oldest referral of the five is a decided one, and it comes last.
+            String claimedUrgent = claimedBy(JUDGE_NAME, Urgency.Urgent);
+            backdate(claimedUrgent, LocalDateTime.of(2026, 8, 5, 9, 0));
+            String claimedNormalOlder = claimedBy(JUDGE_NAME, Urgency.Normal);
+            backdate(claimedNormalOlder, LocalDateTime.of(2026, 8, 3, 9, 0));
+            String claimedNormalNewer = claimedBy(JUDGE_NAME, Urgency.Normal);
+            backdate(claimedNormalNewer, LocalDateTime.of(2026, 8, 4, 9, 0));
+            String decidedUrgent = directedBy(JUDGE_NAME, Urgency.Urgent);
+            backdate(decidedUrgent, LocalDateTime.of(2026, 8, 2, 9, 0));
+            String decidedNormal = directedBy(JUDGE_NAME, Urgency.Normal);
+            backdate(decidedNormal, LocalDateTime.of(2026, 8, 1, 9, 0));
+
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals[0].id").value(claimedUrgent))
+                .andExpect(jsonPath("$.referrals[1].id").value(claimedNormalOlder))
+                .andExpect(jsonPath("$.referrals[2].id").value(claimedNormalNewer))
+                .andExpect(jsonPath("$.referrals[3].id").value(decidedUrgent))
+                .andExpect(jsonPath("$.referrals[4].id").value(decidedNormal));
+        }
+
+        @Test
+        @DisplayName("pages in the database, and says how much work there is on every page")
+        void pagesTheList() throws Exception {
+            for (int referral = 0; referral < 3; referral++) {
+                backdate(claimedBy(JUDGE_NAME), LocalDateTime.of(2026, 8, 1 + referral, 9, 0));
+            }
+            // Another judge's row, present so a page of two cannot be right by accident: the predicate is in the
+            // query, so their referral is not a row this paging had to skip.
+            claimedBy(OTHER_JUDGE_NAME);
+
+            authorised(get(MINE + "?page=2&size=2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(1))
+                .andExpect(jsonPath("$.page").value(2))
+                .andExpect(jsonPath("$.size").value(2))
+                .andExpect(jsonPath("$.total").value(3))
+                .andExpect(jsonPath("$.totalPages").value(2));
+
+            // A page past the end of a list that has been worked down is empty and not an error, as the pool's is.
+            authorised(get(MINE + "?page=9&size=2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(0))
+                .andExpect(jsonPath("$.total").value(3));
+        }
+
+        @Test
+        @DisplayName("400s a page it cannot read, naming the parameter")
+        void refusesAnUnreadablePage() throws Exception {
+            authorised(get(MINE + "?page=lots"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("page"));
+
+            authorised(get(MINE + "?size=none"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("size"));
+        }
+
+        @Test
+        @DisplayName("is dispatched by the literal segment, never as a referral id")
+        void isNotDispatchedAsAReferralId() throws Exception {
+            claimedBy(JUDGE_NAME);
+
+            // Decision 5: a literal path segment beats a template one, so "mine" is a collection rather than an id
+            // the detail read would have failed to parse. The envelope is the proof -- the other read answers with a
+            // referral document and has no `referrals` array to offer.
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals").isArray())
+                .andExpect(jsonPath("$.total").exists())
+                .andExpect(jsonPath("$.error").doesNotExist());
+
+            // And any other word in that position is still the detail read's 404, so the dispatch above is this
+            // mapping winning rather than the template having stopped matching anything.
+            authorised(get(POOL + "/theirs"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral theirs not found"));
+        }
+
+        @Test
+        @DisplayName("shows a referral from the moment it is claimed to the moment the office closes it")
+        void followsTheReferralThroughItsLifecycle() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, Urgency.Normal);
+
+            // Raised and unclaimed: the pool's, not this judge's.
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(0));
+
+            // Claimed over HTTP, which is the failure business testing reported: the claim took it out of the pool,
+            // and this is the list it arrives on.
+            authorised(post(POOL + "/" + referralId + "/claim")).andExpect(status().isOk());
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(1))
+                .andExpect(jsonPath("$.referrals[0].id").value(referralId))
+                .andExpect(jsonPath("$.referrals[0].state").value(ReferralState.Claimed.name()));
+
+            // Reading the papers refreshes the claim and must not duplicate or reorder the row.
+            authorised(get(POOL + "/" + referralId)).andExpect(status().isOk());
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(1))
+                .andExpect(jsonPath("$.referrals[0].id").value(referralId));
+
+            // Directed: still theirs, now as Decided, which is what lets them re-read their direction while the
+            // office actions it.
+            authorised(post(POOL + "/" + referralId + "/direction")
+                           .contentType(APPLICATION_JSON)
+                           .content("""
+                               {"decision": "Approved", "directionsText": "Granted", "publishToGazette": true}"""))
+                .andExpect(status().isOk());
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(1))
+                .andExpect(jsonPath("$.referrals[0].id").value(referralId))
+                .andExpect(jsonPath("$.referrals[0].state").value(ReferralState.Decided.name()));
+
+            // Closed by the office: the direction has been actioned and judicial involvement is over.
+            moveTo(referralId, ReferralState.Closed);
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0));
+        }
+
+        @Test
+        @DisplayName("drops a referral the office withdrew from under the judge holding it")
+        void dropsAWithdrawnReferral() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            moveTo(mine, ReferralState.Withdrawn);
+
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(0));
+        }
+
+        @Test
+        @DisplayName("sweeps first, so a lapsed claim leaves this list rather than waiting to be opened")
+        void sweepsBeforeItAnswers() throws Exception {
+            String lapsed = claimedBy(JUDGE_NAME);
+            String kept = claimedBy(JUDGE_NAME);
+            lapse(lapsed);
+
+            // Decision 3 end to end. Without the sweep the lapsed row would still be Claimed by this judge and
+            // therefore on this page, and opening it from here would call touch and revive a claim the expiry window
+            // had already ended -- so whether a claim expired would depend on which page somebody loaded first.
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(1))
+                .andExpect(jsonPath("$.referrals[0].id").value(kept));
+
+            Referral released = stored(lapsed);
+            assertThat(released.getState()).isEqualTo(ReferralState.Open);
+            assertThat(released.getClaimedById()).isNull();
+            // Back in the shared pool in the same request, and the lapse is on the timeline, because releasing a
+            // claim erases the fact it was about.
+            authorised(get(POOL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals[*].id", hasItem(lapsed)));
+            assertThat(notes.findAll())
+                .anySatisfy(note -> assertThat(note.getNote()).contains(JUDGE_NAME));
+        }
+
+        @Test
+        @DisplayName("401s without a token, and does not run the sweep on the way out")
+        void refusesAnUnauthenticatedCaller() throws Exception {
+            String referralId = claimedBy(JUDGE_NAME);
+            lapse(referralId);
+
+            mockMvc.perform(get(MINE)).andExpect(status().isUnauthorized());
+
+            // 401 before routing, so the mutating half of this read never happens: an anonymous caller must not be
+            // able to release a judge's claim by asking for a list they cannot see.
+            assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Claimed);
+        }
+
+        @Test
+        @DisplayName("403s a caseworker token naming the role, and sweeps nothing")
+        void refusesACaseworker() throws Exception {
+            String referralId = claimedBy(JUDGE_NAME);
+            lapse(referralId);
+            asCaseworker();
+
+            // 403 and not an empty list: a caseworker has no personal judicial work, and answering "you have none"
+            // would be a surface they had been admitted to. Their own worklists are the caseworker surface's.
+            authorised(get(MINE))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value(containsString(Role.JUDICIAL.claimValue())));
+
+            assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Claimed);
+        }
+
+        @Test
+        @DisplayName("403s an administrator token too, because judicial is not seniority")
+        void refusesAnAdministrator() throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+
+            authorised(get(MINE)).andExpect(status().isForbidden());
+        }
+    }
+
+    @Nested
     @DisplayName("GET /judicial/referrals/{referralId}")
     class ReadReferral {
 
@@ -491,6 +865,28 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             // Byte for byte apart from the id the caller themselves sent: one judge cannot learn that another
             // holds a case, and a referral id cannot be probed for by comparing refusals.
             assertThat(held).isEqualTo(never.replace(UNKNOWN_ID, theirs));
+        }
+
+        @Test
+        @DisplayName("404s a referral held by a judge of the same display name, over a real token")
+        void notFoundForANamesakeOfTheHolder() throws Exception {
+            String theirs = claimedBy(JUDGE_NAME);
+            String theirDirection = directedBy(JUDGE_NAME);
+            // The same display name, a different subject: a different person, and the token says so. This is the
+            // disclosure the ownership migration removes, asserted where a caller actually stands -- before it, the
+            // referral, the application behind it and its whole notes timeline came back with a 200.
+            asJudge(JUDGE_NAME, NAMESAKE_JUDGE_SUBJECT);
+
+            authorised(get(POOL + "/" + theirs))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + theirs + " not found"));
+            authorised(get(POOL + "/" + theirDirection))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + theirDirection + " not found"));
+
+            // And nothing of theirs moved: a refused read must not refresh somebody else's inactivity clock.
+            assertThat(stored(theirs).getClaimedBy()).isEqualTo(JUDGE_NAME);
+            assertThat(stored(theirs).getState()).isEqualTo(ReferralState.Claimed);
         }
 
         @Test
@@ -966,8 +1362,13 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
     /** A referral on a case of its own, claimed by the named judge through the api-2 transition. */
     private String claimedBy(String judge) {
+        return claimedBy(judge, Urgency.Normal);
+    }
+
+    /** The same, at a chosen urgency, for the orderings in which urgency is the key above age. */
+    private String claimedBy(String judge, Urgency urgency) {
         String caseId = newCase();
-        String referralId = raise(caseId, Urgency.Normal);
+        String referralId = raise(caseId, urgency);
         referralService.claim(caseId, referralId, judicial(judge));
         return referralId;
     }
@@ -979,8 +1380,13 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
      * {@code Referral.deedPoll} is lazy and a fixture outside a transaction has no session to resolve it in.
      */
     private String directedBy(String judge) {
+        return directedBy(judge, Urgency.Normal);
+    }
+
+    /** The same, at a chosen urgency. */
+    private String directedBy(String judge, Urgency urgency) {
         String caseId = newCase();
-        String referralId = raise(caseId, Urgency.Normal);
+        String referralId = raise(caseId, urgency);
         referralService.claim(caseId, referralId, judicial(judge));
         referralService.decide(
             caseId,
@@ -988,6 +1394,22 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             new DirectionInput(MasterDecision.Approved, Optional.of("Granted, publication as usual"), true),
             judicial(judge));
         return referralId;
+    }
+
+    /**
+     * Strips the owner subjects off every stored referral, leaving the display names behind.
+     *
+     * <p>The pre-migration row {@code V14} cannot backfill: a {@code Claimed} or {@code Decided} referral whose
+     * {@code claimedBy} names a judge and whose {@code claimedById} is null, because the claim was made before the
+     * column existed. There is no way to produce one through the transitions -- which is the point -- so it is
+     * written onto the row.
+     */
+    private void disownAll() {
+        referrals.findAll().forEach(referral -> {
+            referral.setClaimedById(null);
+            referral.setDecidedById(null);
+            referrals.saveAndFlush(referral);
+        });
     }
 
     /** A withdrawn referral on a case of its own, so the pool has something terminal to leave out. */
@@ -1001,11 +1423,18 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     /**
      * A judge as the domain sees one. Used only by the fixtures, which reach the transitions directly -- the
      * requests under test carry a real token instead.
+     *
+     * <p>The subject matters here, and it is the one thing the fixtures and the token have to agree on: a claim is
+     * owned by the subject it was made under, so a fixture claiming as a name alone would produce a referral the
+     * request under test does not own. The display name is carried too because it is what the response publishes.
      */
     private static CurrentUser judicial(String name) {
-        // The subject is the name because nothing about a referral turns on it: a claim is recorded under the
-        // display name, which is the one place this codebase authorises on a name rather than on a subject.
-        return CurrentUser.currentUser(List.of(Role.JUDICIAL), name, name);
+        return CurrentUser.currentUser(List.of(Role.JUDICIAL), name, subjectOf(name));
+    }
+
+    /** Which judge a fixture name means, as a subject. Two judges, two subjects, and never a name as an identity. */
+    private static String subjectOf(String name) {
+        return JUDGE_NAME.equals(name) ? JUDGE_SUBJECT : OTHER_JUDGE_SUBJECT;
     }
 
     private Referral stored(String referralId) {
@@ -1047,20 +1476,39 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         referrals.saveAndFlush(referral);
     }
 
-    /** The token the requests carry is a judge's. */
+    /** The token the requests carry is a judge's -- whichever of the two fixture judges is named. */
     private static void asJudge(String name) {
-        IDAM.stubUserInfo(StubIdam.SUBJECT, name, List.of(Role.JUDICIAL.claimValue()));
+        asJudge(name, subjectOf(name));
+    }
+
+    /**
+     * The token the requests carry is a judge's, under a subject the caller chooses.
+     *
+     * <p>The subject is separable from the name here because that separation is what the ownership migration is
+     * about: the same display name under a different subject is a different judge, and asserting that over real
+     * HTTP needs a token that says so.
+     */
+    private static void asJudge(String name, String subject) {
+        tokenSubject = subject;
+        IDAM.stubUserInfo(subject, name, List.of(Role.JUDICIAL.claimValue()));
     }
 
     /** The token the requests carry is an ordinary caseworker's, holding no role this surface asks about. */
     private static void asCaseworker() {
+        tokenSubject = StubIdam.SUBJECT;
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Ada Caseworker", List.of("caseworker-civil"));
     }
 
-    /** The request, carrying a valid forwarded access token. */
+    /**
+     * The request, carrying a valid forwarded access token for whoever the userinfo stub currently describes.
+     *
+     * <p>The subject is put on the token rather than left at the stub's default, because
+     * {@code IdamUserInfoClient} refuses a userinfo document whose {@code sub} disagrees with the token's -- so
+     * switching judges means minting a token for the judge being switched to.
+     */
     private ResultActions authorised(MockHttpServletRequestBuilder request) throws Exception {
         HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(IDAM.accessToken());
+        headers.setBearerAuth(IDAM.accessToken(claims -> claims.subject(tokenSubject)));
         return mockMvc.perform(request.headers(headers));
     }
 }

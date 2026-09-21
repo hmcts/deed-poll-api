@@ -30,7 +30,7 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 
 ## The API surface
 
-Thirty caseworker operations, plus four judicial ones on a namespace of their own (below).
+Thirty caseworker operations, plus five judicial ones on a namespace of their own (below).
 `/swagger-ui.html` is the authority; this table is the map.
 
 | Method | Path | What it does |
@@ -124,11 +124,11 @@ sweep writes one as the service account, because a lapsed claim erases the fact 
 surface.** Both are transitions on `ReferralService` — role-gated to `Role.JUDICIAL` — exposed on the judicial
 namespace below rather than bolted onto the caseworker one. A claim lapses after
 `deedpoll.referrals.claim-expiry` (two hours by default) of the holding judge's inactivity, taken back as a side
-effect of loading the judicial pool rather than by a scheduler.
+effect of loading either judicial list — the shared pool or the judge's own — rather than by a scheduler.
 
 ### The judicial surface
 
-**Four operations, on a namespace of their own.** They are *not* part of the thirty above: a judge is not a
+**Five operations, on a namespace of their own.** They are *not* part of the thirty above: a judge is not a
 caseworker with fewer permissions, and `/judicial/**` has its own controllers and its own DTOs so that a
 caseworker response — which carries every field a caseworker sees, the admin-only privacy fields included —
 cannot be reused for the judiciary by accident. An ArchUnit rule asserts the separation in bytecode.
@@ -136,12 +136,13 @@ cannot be reused for the judiciary by accident. An ArchUnit rule asserts the sep
 | Method | Path | What it does |
 |---|---|---|
 | GET | `/judicial/referrals` | The shared pool — the `Open` referrals waiting for a judge, urgent first then longest-waiting, paged ten at a time with the pool's total |
+| GET | `/judicial/referrals/mine` | This judge's own work — their `Claimed` referrals before their `Decided` ones, urgent first then longest-waiting, paged the same ten at a time |
 | GET | `/judicial/referrals/{referralId}` | One referral, a **narrow** view of its application, and the case's notes — read-only |
 | POST | `/judicial/referrals/{referralId}/claim` | Claim a pool referral — it becomes theirs and drops off every other judge's |
 | POST | `/judicial/referrals/{referralId}/direction` | Record a direction — `decision`, optional `directionsText`, and `publishToGazette` |
 
 Every route requires `Role.JUDICIAL`, which **IDAM does not issue yet**, enforced in the domain rather than by a
-route matcher — so the whole surface fails closed for every token in existence today. Four rules are the surface:
+route matcher — so the whole surface fails closed for every token in existence today. Five rules are the surface:
 
 - **Keyed on the referral, never on the case.** There is no `{caseId}` in a judicial URL, because a judge does
   not browse cases and must not be able to name one; the service resolves the case *from* the referral. That
@@ -152,13 +153,30 @@ route matcher — so the whole surface fails closed for every token in existence
   never existed gets, so no referral id is discoverable and one judge cannot learn another holds a case. The only
   403 here is the role gate. A referral they can see but not act on is a **409** — claiming one somebody got to
   first, directing one they no longer hold — because by then they are looking at it.
+- **Ownership is the token's IDAM subject, not a display name.** `claimedById` and `decidedById` are what the
+  claim, the direction, the visibility rule and the personal list all compare — so two judges sharing a display
+  name cannot reach each other's referrals, and a judge whose name changes keeps their own. The name columns
+  remain, as the attribution staff read; they authorise nothing. Neither id is published in any DTO, note or log,
+  and a pre-migration row whose owner id is null belongs to nobody: it is invisible and cannot be directed.
 - **Two writes and no more.** No editing case data, no notes, no raising or withdrawing referrals, and no
   closure: closing is the office's acknowledgement that the direction has been actioned. Both writes are the
   api-2 transitions, so nothing about a state change is decided on this surface.
-- **Two reads that write.** Loading the pool runs the inactivity sweep first, so a lapsed claim is released and
-  the referral is back in the pool in the same response that observed it; and opening a referral a judge *holds*
+- **Three reads, and every one of them writes.** Loading either list — the shared pool or a judge's own — runs the
+  inactivity sweep first, so a lapsed claim is released and the referral is back in the pool in the same response
+  that observed it, and off the holder's own list in the same request; and opening a referral a judge *holds*
   refreshes its inactivity clock, because a judge reading the papers is working the case. Opening a pool referral
-  they have not claimed touches nothing.
+  they have not claimed touches nothing. The personal list sweeps for the same reason the pool does: otherwise a
+  stale claim would sit in "My referrals" and opening it would revive ownership after the window had elapsed,
+  merely because nobody had loaded the pool first.
+
+**"My referrals" is the visibility rule's own list, not a history.** It holds exactly the referrals a judge may
+see because they own them — `Claimed` where they hold the claim, `Decided` where they gave the direction — so
+`Open` belongs to the pool instead, and `Withdrawn` and `Closed` drop off because the office has taken the work
+back or actioned it. The same predicate drives the list and the individual read, so a row it shows can never link
+to a 404. Whose list it is comes only from the token: there is no `?owner=` or `?claimedBy=`, because a list keyed
+on anything a caller sent would be the enumeration the 404s above exist to prevent. It carries referral fields
+only, exactly as a pool row does, and it exists because business testing found that claiming a referral took it
+off the only page that linked to it.
 
 The judicial application view is a **confirmed minimum** (Steve, 2026-09-17): the reference, the application
 type, the old and new names, and the referral's own reasons, notes and urgency. It excludes payment and fee
