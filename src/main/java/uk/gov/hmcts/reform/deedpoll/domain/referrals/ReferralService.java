@@ -452,6 +452,15 @@ public class ReferralService {
      * columns</strong>: those are the pre-migration snapshot, and syncing them would make the case say two
      * different things over time and re-introduce the one-referral-per-case model this feature replaced.
      *
+     * <p><strong>One case note, authored by the closing caseworker.</strong> The one lifecycle step no column
+     * records after the fact: this transition writes {@code Closed} and the case's
+     * {@code currentReferralState} back to null, so without the note the timeline would show a direction
+     * arriving and then nothing, and "has anyone actioned this?" would have no answer on the case. Written
+     * after the closure is stored and inside the same transaction, so a refused closure leaves no note saying
+     * the direction was actioned. The earlier reasoning -- that the row's own {@code Closed} said everything a
+     * note could -- is superseded by {@code docs/plans/referrals-api-5-lifecycle-case-notes.md}, which found
+     * that it says only where the referral is now and never when the office acted.
+     *
      * @throws NotFoundError if there is no such referral, or it belongs to another case
      * @throws ConflictError if the referral is not {@code Decided}
      */
@@ -470,6 +479,11 @@ public class ReferralService {
         referral.setModifiedOn(AuditClock.now());
 
         Referral saved = referrals.save(referral);
+        // The caseworker who actioned the direction, not the judge who gave it: decidedBy on the row still says
+        // who directed it, and this note's createdBy is who carried it out.
+        notes.createNote(deedPollId,
+                         new CreateNoteInput(ReferralNotes.directionActioned(saved)),
+                         caller.noteAuthor());
         // Closed is terminal, so this writes NULL and the case leaves the "returned -- action needed" queue.
         // Setting the column to Closed here is the specific mistake CurrentReferralState is written against: it
         // would leave every actioned case in that queue for good.

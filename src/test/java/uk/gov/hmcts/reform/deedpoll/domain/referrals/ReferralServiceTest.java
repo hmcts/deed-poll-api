@@ -1400,6 +1400,9 @@ class ReferralServiceTest {
 
             assertThat(referral.getState()).isEqualTo(ReferralState.Decided);
             verify(referrals, never()).save(any());
+            // And nothing on either case's timeline: a note written by a refused cross-case closure would put
+            // the actioning of one case's direction onto another case.
+            verifyNoInteractions(notes);
         }
 
         @Test
@@ -1409,18 +1412,64 @@ class ReferralServiceTest {
                 .isInstanceOf(NotFoundError.class);
 
             verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
+            verifyNoInteractions(notes);
         }
 
         @Test
-        @DisplayName("writes no case note")
-        void writesNoCaseNote() {
+        @DisplayName("writes one case note attributed to the closing caseworker, saying which referral it is")
+        void writesACaseNoteAttributedToTheClosingCaseworker() {
             stored(ReferralState.Decided);
 
             service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
 
-            // Closed is on the row, and the "returned -- action needed" queue keys off the state rather than off
-            // the timeline, so there is nothing a note would tell a reader the referral does not.
-            verifyNoInteractions(notes);
+            NoteWritten note = noteWritten();
+            // The caseworker who actioned it, not the judge who directed it: decidedBy on the row still says who
+            // directed it, and createdBy here says who carried it out.
+            assertThat(note.author().author()).isEqualTo("Ada Caseworker");
+            assertThat(note.deedPollId()).isEqualTo(CASE_ID);
+            assertThat(note.text()).isEqualTo(
+                "Judicial direction for referral raised on 1 September 2026, reasons: Minor, marked as actioned.");
+            // Pairable with the direction note a few rows above it in the same grid, by the raised date and
+            // reasons a caseworker can recognise rather than by a uuid they cannot.
+            assertThat(note.text()).doesNotContain(REFERRAL_ID.toString());
+        }
+
+        @Test
+        @DisplayName("acknowledges the direction without quoting it, however long the judge's text was")
+        void doesNotQuoteTheDirectionInTheNote() {
+            Referral referral = stored(ReferralState.Decided);
+            String longest = "x".repeat(ReferralSchemas.MAX_DIRECTIONS_LENGTH);
+            referral.setDecision(MasterDecision.Approved);
+            referral.setDirectionsText(longest);
+            referral.setPublishToGazette(true);
+            referral.setDecidedBy("District Judge Bell");
+
+            service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+
+            NoteWritten note = noteWritten();
+            // The closure note does not repeat the decision either -- the direction note is a few rows up -- so
+            // the longest possible direction still writes a note the validator accepts rather than rolling the
+            // closure back.
+            assertThat(note.text()).doesNotContain("xxx");
+            assertThat(NoteForm.validateNoteText(note.text())).isEmpty();
+            // And the direction the caseworker actioned is still there in full, which is the record of what
+            // they actioned.
+            assertThat(saved().getDirectionsText()).isEqualTo(longest);
+        }
+
+        @Test
+        @DisplayName("writes no second note for a closure it refused, so one actioning is one note")
+        void writesNoNoteForASecondClosure() {
+            stored(ReferralState.Decided);
+
+            service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);
+            // The closure took the referral to Closed, so the same click again is a conflict -- and a timeline
+            // saying the direction was actioned twice would read as two pieces of work.
+            assertThatThrownBy(() -> service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
+                .isInstanceOf(ConflictError.class);
+
+            assertThat(notesWritten()).singleElement()
+                .satisfies(note -> assertThat(note.text()).contains("marked as actioned"));
         }
 
         @Test

@@ -305,8 +305,33 @@ Update service and controller tests to prove:
 - repeated or invalid closure writes no note;
 - cross-case and unauthenticated attempts write nothing.
 
-- [ ] Closure writes one correctly attributed note without changing direction data; failure paths remain
+- [x] Closure writes one correctly attributed note without changing direction data; failure paths remain
       side-effect free; service/controller tests green
+
+`ReferralService.close` gained one `notes.createNote` carrying `ReferralNotes.directionActioned(saved)`, in the
+same position as the other three — after `referrals.save` and before the `currentReferralState` recompute, so
+the NULL write and the note are one transaction. Authored by `caller.noteAuthor()`, which is the closing
+caseworker: `decidedBy` on the row still says which judge directed it, and the note's `createdBy` says who
+carried it out. The javadoc paragraph explaining that the row's `Closed` said everything a note could is
+replaced by one naming this plan as what superseded it, for the reason the row does not: it says where the
+referral is now, never when the office acted, and closing is the one step that then puts the case's column
+back to null.
+
+`ReferralServiceTest`'s `writesNoCaseNote` is replaced by three: exact prose with no UUID and `Ada Caseworker`
+as the author; a 4,000-character stored `directionsText` proven absent from the note and still valid through
+`NoteForm.validateNoteText` while the column keeps it in full; and a second closure refused with one note on
+the timeline, so one actioning is one note. `verifyNoInteractions(notes)` was added to the cross-case 404 and
+the malformed-id 404 — the existing non-Decided parameterised refusal already had it.
+
+`CaseworkerReferralControllerTest`'s `writesNoCaseNote` likewise becomes `writesACaseNote`, counting **4**
+notes through a real database and a real token (raised, claimed, direction recorded, direction actioned) with
+`Another Caseworker` as `createdBy` while `decidedBy` stays the judge, plus a refused closure of an `Open`
+referral writing nothing and a cross-case 404 leaving the single note on the case that was really referred.
+The existing unauthenticated closure test now also asserts the note count, so the 401 is proven to happen
+before the transition rather than only before the state change.
+
+`./gradlew build` green — `test` **2,327** (2,323 + 4 net) + `integration` 8 = **2,335**, zero failures or
+errors, `OpenAPIPublisherTest` still asserting 33 caseworker and 4 judicial operations.
 
 ### Task 4: Prove the full timeline and contract stability
 
