@@ -390,7 +390,44 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 
 Record final unit/integration totals against Task 0.
 
-- [ ] Documentation current; full build green; final test totals recorded
+- [x] Documentation current; full build green; final test totals recorded
+
+`ReferralNotes` and `ReferralService`'s per-method Javadocs were already rewritten as tasks 1–3 went, so what was
+left was the documentation that talked about these notes from *outside* those two classes and still said the old
+thing. Four such places, all of them a statement a reader would have believed:
+
+- `CaseworkerReferralController` said "Closing writes no note", listing the caller as needed only for the audit
+  columns. It now says all three caseworker writes note, and why closure's two attributions differ — `decidedBy`
+  is the judge, the note's `createdBy` is who in the office actioned it.
+- `ReferralSchemas.MAX_DIRECTIONS_LENGTH` justified itself as *not* another validator's limit "because recording
+  a direction writes no case note that would have to quote it". The premise is now false and the conclusion is
+  still true, so the reasoning is inverted rather than deleted: 4,000 is twice the note limit **so that** the
+  note may not quote the text. That is decision 5 stated where someone tempted to raise the cap will read it.
+- `JudicialCaseNote` said there is "no judicial note author". There now is one: a judge's name is `createdBy` on
+  two of these notes. What remains true is narrower — no judicial *route* writes a note and no request body
+  carries note text — and that is what it says, because the original sentence would have read as a guarantee
+  that a judge's name never appears on the timeline.
+- The judicial `package-info` listed "no judicial note" among the boundary's absences; it now says no judicial
+  note *route*, with the same distinction.
+
+`ReferralService` also gained one class-level paragraph stating the invariant the five transitions now share —
+exactly one note per successful transition, `caller.noteAuthor()` as author, `NoteAuthor.NONE` only for the
+sweep, none for `touch`, a refusal or the backfill — because it was true of five methods and stated in each of
+them separately, which is how the next transition gets added without one.
+
+Two completed plans carried the old policy as a live statement rather than as history, and both now point here:
+api-3's flag 6 (its accepted judicial disclosure now extends to the claim and direction notes, on the same
+reasoning that had the lapse note name its former holder) and api-4's decision 5 and out-of-scope line, which
+deferred exactly this plan and are closed by it. api-1 and api-2 already carried the banner from `master`.
+`docs/RESUME.md` moves this plan from **Planned** to complete-and-unmerged, with the note that it branches from
+`master` rather than stacking on api-4, so its totals are not cumulative with that branch's.
+
+**Final totals, `./gradlew build` green from this task's changes** — `test` **2,328** + `integration` **8** =
+**2,336**, zero failures, zero errors, zero skipped. Against Task 0's baseline of `test` 2,310 + `integration`
+8 = **2,318**, this plan added **18** tests and no integration tests, which is what a plan that adds no route
+and no container-backed behaviour should add. `OpenAPIPublisherTest` passes its 6 tests still asserting 33
+caseworker and 4 judicial operations. Task 5 changed no test and no behaviour, so the total is unchanged from
+Task 4's — that identity is the evidence it was documentation only.
 
 ## Out of scope
 

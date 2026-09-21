@@ -110,6 +110,19 @@ import java.util.stream.Collectors;
  *       timer -- and it is deliberately out of scope.</li>
  * </ul>
  *
+ * <p><strong>Every successful transition writes exactly one case note, and nothing else writes one.</strong>
+ * Raise, withdraw, {@link #claim}, {@link #decide} and {@link #close} each call {@code notes.createNote} once,
+ * with prose from {@link ReferralNotes} and {@code caller.noteAuthor()} as the author -- the person who caused
+ * the transition, which on a claim or a direction is the judge. {@link #reclaimStaleClaims()} is the one
+ * exception to the authorship rule, not to the counting rule: it writes one note per released claim as
+ * {@link NoteAuthor#NONE}, because no person did it. Each note is created after the referral is saved and
+ * inside the same transaction, so there is no successful transition without its note and no note for one that
+ * was refused or rolled back. {@link #touch} writes none -- a read is not a transition -- and neither does the
+ * backfill migration, which does not revisit history. The first three referral plans deliberately noted only
+ * raise, withdraw and a lapse, on the grounds that a column already carried the rest;
+ * {@code docs/plans/referrals-api-5-lifecycle-case-notes.md} supersedes that, because a row states where a
+ * referral is <em>now</em> and the grid is the only place that says when each step happened.
+ *
  * <p><strong>Every transition also refreshes the case's denormalised {@code currentReferralState}</strong>, in
  * the transition's own transaction, so a case never persists with a referral in one state and its column naming
  * another. The rule and the reason it is a recompute rather than a push are on {@link CurrentReferralState};

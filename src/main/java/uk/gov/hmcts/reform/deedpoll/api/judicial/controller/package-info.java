@@ -32,8 +32,10 @@
  * Stated as a number here, unlike the caseworker package's deliberate refusal to keep a running total, because
  * four is not a tally of what has accumulated: it is decision 13's boundary, and a fifth route is a change to
  * that boundary rather than a route. In particular there is no judicial <em>closure</em> -- closing a referral is
- * the office's acknowledgement that the direction has been actioned -- no judicial note, no case list and no case
- * search. A judge cannot enumerate deed poll applications.
+ * the office's acknowledgement that the direction has been actioned -- no judicial <em>note</em> route, no case
+ * list and no case search. A judge cannot enumerate deed poll applications, and cannot compose note text: the
+ * claim and direction transitions write a note apiece under the judge's name, but {@code ReferralNotes} composes
+ * it and no request body carries any of it.
  *
  * <p>Neither write adds transition logic: both call a {@code ReferralService} transition, which owns the
  * {@code Open}-only rule, the holder-only rule and every column either stamps. So the 409s a judge can meet

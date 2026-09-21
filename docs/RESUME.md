@@ -28,9 +28,9 @@ row; its failed history remains unchanged when the replacement is sent.
 | Caseworker endpoints | **33**, across eight controllers under `api/caseworker/controller/` |
 | Judicial endpoints | **4** on `/judicial/**` — the shared pool, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,314** on `referrals-api-4` — `test` 2,306 + `integration` 8, measured after that plan's task 3. `master` is 2,300 (`test` 2,292), measured after notify-5 task 4 |
+| Tests | **2,336** on `referrals-api-5` — `test` 2,328 + `integration` 8, measured after that plan's task 5, from a `master` baseline of **2,318** (`test` 2,310). `referrals-api-4` is 2,314 off an older `master` of 2,300; the two branches are not stacked, so the numbers are not cumulative |
 | Docker-free CI | **1,424 unit tests**, measured with `INTEGRATION_TESTS_ENABLED=false` |
-| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `master` after notify-5, and on `referrals-api-4` after its task 3 |
+| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `master` after notify-5, on `referrals-api-4` after its task 3, and on `referrals-api-5` after its task 5 |
 
 Thirteen plans are in [`plans/completed/`](plans/completed/). The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
@@ -47,8 +47,15 @@ guard and `currentReferralState`, letting a case raise a second referral beside 
 delta**: no migration, no enum member, no DTO, 33 caseworker and 4 judicial operations unchanged, which
 `OpenAPIPublisherTest` passing untouched is the evidence for. Its companion admin plan adds the missing
 closure journey — the API half is already there.
-[`plans/referrals-api-5-lifecycle-case-notes.md`](plans/referrals-api-5-lifecycle-case-notes.md) then records
-claim, direction and closure in the existing case Notes timeline.
+[`plans/referrals-api-5-lifecycle-case-notes.md`](plans/referrals-api-5-lifecycle-case-notes.md) is
+**complete on branch `referrals-api-5`, not yet merged**, and records claim, direction and closure in the
+existing case Notes timeline: every successful transition now writes exactly one note, composed in
+`ReferralNotes` and authored by whoever caused it — the judge on a claim or a direction, the caseworker on a
+raise, a withdrawal or a closure, and the service account only on an inactivity lapse, which no person did. A
+refused transition, a judicial `touch` and the backfill write none. The direction note summarises the decision
+and the Gazette answer and never quotes `directionsText`, which may be twice a note's length. **No contract
+delta**: no migration, no DTO, no endpoint, 33 caseworker and 4 judicial operations unchanged — proven by
+regenerating the spec from `master` into a throwaway worktree and byte-diffing it, identical at 56,771 bytes.
 [`plans/referrals-api-6-judicial-my-referrals.md`](plans/referrals-api-6-judicial-my-referrals.md) adds the
 missing judge-owned `Claimed`/`Decided` worklist and migrates ownership checks from display names to stable
 IDAM subjects before that list can safely enumerate work.
@@ -229,7 +236,7 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 | `notify-6-chase-missing-documents.md` | **Drafted.** Assumes a provisioned template with required caseworker text; Task 0 verifies it |
 | `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
 | `referrals-api-4-caseworker-completion.md` | **Complete on `referrals-api-4`, unmerged.** Withdrawal tightened to `Open`/`Claimed` via `ReferralState.canBeWithdrawn()`; no contract or migration change. Still must precede the admin caseworker-completion plan |
-| `referrals-api-5-lifecycle-case-notes.md` | **Planned.** Adds claim, direction and closure notes after referral follow-up 4; no contract or migration change |
+| `referrals-api-5-lifecycle-case-notes.md` | **Complete on `referrals-api-5`, unmerged.** Claim, direction and closure each write one case note through `ReferralNotes`; no contract or migration change. Branched from `master`, not stacked on referral follow-up 4 |
 | `referrals-api-6-judicial-my-referrals.md` | **Planned.** Adds a judge-owned `Claimed`/`Decided` list after moving referral authorization from display names to stable IDAM subjects |
 | `role-model-generalisation.md` | **Gated, and may not be needed.** A behaviour-preserving refactor of `boolean isAdmin` into capabilities. Gated on scope question Q0.1 and, preferably, on a first successful deployment — so that a failed deploy is unambiguously a deployment problem and not a 33-site refactor |
 | `role-based-access-findings.md` | Findings, not a plan. The measured inventory of what could be role-gated, so the business question is asked against a concrete list |

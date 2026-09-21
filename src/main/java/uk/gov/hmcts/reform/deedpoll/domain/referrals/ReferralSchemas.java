@@ -71,8 +71,12 @@ public final class ReferralSchemas {
      * {@link #DIRECTIONS_TEXT}'s cap, the widest of the three.
      *
      * <p>The column is unbounded {@code text}, so this is not the database's limit either -- but unlike
-     * {@link #MAX_NOTES_LENGTH} it is not another validator's limit in disguise, because recording a direction
-     * writes no case note that would have to quote it. It is a bound for the sake of having one: an unbounded
+     * {@link #MAX_NOTES_LENGTH} it is not another validator's limit in disguise. Recording a direction does
+     * write a case note, and this number is twice what {@code NoteForm.MAX_NOTE_LENGTH} allows precisely so
+     * that note may not quote the text: {@link ReferralNotes#directionRecorded} summarises the decision and
+     * the Gazette answer and points at the referral for the rest, because a note quoting a direction this long
+     * would be refused half way through a write that had already stored it. It is a bound for the sake of
+     * having one: an unbounded
      * text field on a public route is a way of storing a megabyte through a form, and the direction on a deed
      * poll referral is a paragraph or two of what the judge requires.
      */
