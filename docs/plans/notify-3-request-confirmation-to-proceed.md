@@ -302,9 +302,34 @@ Read first: `EmailTemplate`, `ApplicationRejectedPersonalisation` and `EmailSlot
   `decisionDate` renders empty rather than absent; and **`directionsText` appears nowhere in the resolved map**
   even though the referral is in scope (decision 4).
 
-- [ ] The template resolves its own personalisation, the refund branch is shared with ③ rather than copied,
+- [x] The template resolves its own personalisation, the refund branch is shared with ③ rather than copied,
       `is_minor` covers all four `DeedPollType` members, `decision_date` is a formatted date, the judge's
       direction never leaks into a resolved value, and `./gradlew build` green
+
+#### Findings from Task 1 — 2026-09-21
+
+1. **`DeedPollType` has six members, not the four decision 6 names.** `DeedOfRelinquishment` and `Unknown` sit
+   beside the four, so the `switch` with no `default` had to answer for all six. Both take the **adult** wording,
+   with the reason stated on `ResolvedValues.isMinor`: addressing an applicant about their own deed is merely
+   impersonal if wrong, where the child wording refers an adult applicant to a child who does not exist. A null
+   `type` — the column is nullable — is handled before the `switch` and takes the same branch. This strengthens
+   flag 4: the taxonomy's "adult vs minor is chosen by `type`" gloss is two members further from the truth than
+   the flag says, and in notify-4 it picks *which template* rather than which sentence.
+
+2. **The extraction landed as `ResolvedValues`**, a package-private helper holding `appliedOnline` (moved from
+   ③ with its javadoc, which is the argument for the asymmetry), the new `isMinor` and `date`, and `text` —
+   which was a private copy in ③ and would have become a second one here. `ApplicationRejectedPersonalisationTest`
+   now calls `ResolvedValues.appliedOnline`.
+
+3. **Task 2's `cause()` and `reasonNotApplicable()` branches were written here, because the build could not be
+   green without them.** Adding the enum member breaks three `switch`es, and the validation commands run after
+   every task. They are implemented as decision 2 and correction 1 specify — newest `Rejected` referral first,
+   then `ReferralReason.NonPublication.name()` — with container-free tests for both directions, the
+   newest-refusal ordering, a reasons-less migrated referral and free-text non-matching. **Still open for Task 2:**
+   the `exclusionGroup` column and migration, the re-keyed unique index and `enqueue`'s conflict target, the
+   counterpart-already-sent availability check, the 409 on a counterpart row, and the container-backed
+   repository tests. `reasonNotApplicable` currently gives ④ one sentence (`NO_NON_PUBLICATION_REFUSAL`) covering
+   both halves of its condition; Task 2 splits it into the two the plan asks for.
 
 ### Task 2: When the email is offered, and when it is refused
 

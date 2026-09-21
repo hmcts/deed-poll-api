@@ -11,6 +11,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.IncompleteDataError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
@@ -85,6 +86,16 @@ public class CaseEmailService {
      */
     static final String NO_REFUSAL = "This case has no referral that a Master has refused, so there is no "
         + "refusal to tell the applicant about";
+
+    /**
+     * Why <em>Request confirmation to proceed</em> does not apply to a case.
+     *
+     * <p>Two conditions at once, because the email asks one question: the case's newest refused referral must
+     * exist and must have been raised for {@link ReferralReason#NonPublication}. A refusal on any other reason
+     * cannot be a refusal of a non-publication request, so there is nothing to ask the applicant to confirm.
+     */
+    static final String NO_NON_PUBLICATION_REFUSAL = "This case has no refused referral that was raised for a "
+        + "non-publication request, so there is no refused request to ask the applicant about";
 
     private final DeedPollRepository deedPolls;
     private final ReferralRepository referrals;
@@ -327,19 +338,53 @@ public class CaseEmailService {
      * <p>Newest first, because the case-scoped finder is ordered that way and a case referred twice has been
      * refused on whichever referral was most recent -- an older refusal is history, and quoting it would tell the
      * applicant about a decision that has since been superseded.
+     *
+     * <p><strong>Both referral-driven templates start from the same referral -- the newest refused one -- and
+     * only then ask whether it is the kind this template is about.</strong> The tempting shape for ④ is "the
+     * newest refused non-publication referral", and it is wrong in a way that is hard to see: a case refused on
+     * non-publication and then referred again and refused for something else would revive the older outcome that
+     * ③'s rule has already treated as superseded. Filtering after the {@code findFirst} rather than before it
+     * also guarantees that when both templates apply they name the same {@code referralId}, which is what lets
+     * one database key make them mutually exclusive.
      */
     private Optional<Referral> cause(EmailTemplate template, String deedPollId) {
         return switch (template) {
-            case APPLICATION_REJECTED -> referrals.findByDeedPollIdOrderByCreatedOnDesc(deedPollId).stream()
-                .filter(referral -> referral.getDecision() == MasterDecision.Rejected)
-                .findFirst();
+            case APPLICATION_REJECTED -> newestRefusal(deedPollId);
+            case REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal(deedPollId)
+                .filter(CaseEmailService::aboutNonPublication);
         };
+    }
+
+    /** The case's most recent refused referral, which is the only one either email may speak for. */
+    private Optional<Referral> newestRefusal(String deedPollId) {
+        return referrals.findByDeedPollIdOrderByCreatedOnDesc(deedPollId).stream()
+            .filter(referral -> referral.getDecision() == MasterDecision.Rejected)
+            .findFirst();
+    }
+
+    /**
+     * Whether this referral was raised for a request not to publish in The Gazette.
+     *
+     * <p>{@code reasons} holds {@link ReferralReason} member names as a JSON array, so the test is against
+     * {@link ReferralReason#NonPublication}{@code .name()} rather than against free text -- a referral whose
+     * notes happen to mention publication is not a non-publication request.
+     *
+     * <p><strong>Necessary for ④ without being sufficient to send it.</strong> Availability is derivable only in
+     * this direction: a refusal on no non-publication reason certainly is not about one, but a referral raised
+     * for several reasons gets one decision and one direction covering all of them, which cannot be decomposed
+     * into a per-reason outcome. So this offers ④ <em>alongside</em> ③ and leaves the choice to the caseworker,
+     * who is reading the direction in order to action it either way.
+     */
+    private static boolean aboutNonPublication(Referral referral) {
+        List<String> reasons = referral.getReasons();
+        return reasons != null && reasons.contains(ReferralReason.NonPublication.name());
     }
 
     /** The sentence that says why a template does not apply, which is per template for the reason its text is. */
     private String reasonNotApplicable(EmailTemplate template) {
         return switch (template) {
             case APPLICATION_REJECTED -> NO_REFUSAL;
+            case REQUEST_CONFIRMATION_TO_PROCEED -> NO_NON_PUBLICATION_REFUSAL;
         };
     }
 
@@ -355,13 +400,16 @@ public class CaseEmailService {
         Referral referral = cause(template, deedPollId)
             .orElseThrow(() -> new ConflictError(reasonNotApplicable(template)));
 
-        // The referral reaches the email only through this slot, pre-populated and editable. resolve() below is
-        // deliberately not given the referral: a second, un-edited copy of the judge's words in the same email
-        // would make "what was this applicant told" a question with two answers.
+        // The judge's words reach the email only through this slot, pre-populated and editable. ③'s resolve() is
+        // deliberately not given the referral at all, and ④'s is given it only for the decision date and
+        // documents that it never reads getDirectionsText() -- a second, un-edited copy of the direction in the
+        // same email would make "what was this applicant told" a question with two answers.
         Map<EmailSlot, String> accepted = EmailSlots.parse(template, slots, referral.getDirectionsText());
         Map<String, Object> personalisation = switch (template) {
             case APPLICATION_REJECTED ->
                 ApplicationRejectedPersonalisation.resolve(deedPoll, accepted).toMap();
+            case REQUEST_CONFIRMATION_TO_PROCEED ->
+                RequestConfirmationToProceedPersonalisation.resolve(deedPoll, referral, accepted).toMap();
         };
         return new Composed(deedPoll, referral, personalisation);
     }

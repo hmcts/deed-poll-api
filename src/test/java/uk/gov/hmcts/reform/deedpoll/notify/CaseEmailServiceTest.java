@@ -16,6 +16,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
@@ -33,6 +34,7 @@ import uk.gov.service.notify.NotificationClientException;
 import uk.gov.service.notify.TemplatePreview;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -112,11 +114,16 @@ class CaseEmailServiceTest {
             // Every template, not only the applicable ones: a shorter list would leave a caseworker asking
             // somebody why the refusal letter is missing.
             assertThat(available).hasSize(EmailTemplate.values().length);
-            assertThat(available).singleElement().satisfies(entry -> {
-                assertThat(entry.template()).isEqualTo(EmailTemplate.APPLICATION_REJECTED);
+            assertThat(entryFor(available, EmailTemplate.APPLICATION_REJECTED)).satisfies(entry -> {
                 assertThat(entry.applicable()).isFalse();
                 assertThat(entry.reason()).isEqualTo(CaseEmailService.NO_REFUSAL);
                 assertThat(entry.provisioned()).isTrue();
+            });
+            // A different sentence, because the two are different things to fix: one case has had nothing
+            // refused at all, and the other has had something refused that was not a non-publication request.
+            assertThat(entryFor(available, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).satisfies(entry -> {
+                assertThat(entry.applicable()).isFalse();
+                assertThat(entry.reason()).isEqualTo(CaseEmailService.NO_NON_PUBLICATION_REFUSAL);
             });
         }
 
@@ -126,10 +133,42 @@ class CaseEmailServiceTest {
             storedCase();
             refusedReferral();
 
-            assertThat(emails.available(CASE_ID)).singleElement().satisfies(entry -> {
-                assertThat(entry.applicable()).isTrue();
-                assertThat(entry.reason()).isNull();
-            });
+            assertThat(entryFor(emails.available(CASE_ID), EmailTemplate.APPLICATION_REJECTED))
+                .satisfies(entry -> {
+                    assertThat(entry.applicable()).isTrue();
+                    assertThat(entry.reason()).isNull();
+                });
+        }
+
+        @Test
+        @DisplayName("a refusal on other reasons does not offer the confirmation email")
+        void refusalOnOtherReasonsIsNotAboutNonPublication() {
+            // The rejection email applies to any refusal; the confirmation email only to one about a
+            // non-publication request, because that is the only refusal it can coherently ask about.
+            storedCase();
+            refusedReferralFor(ReferralReason.DeclarantRequirementsNotMet);
+
+            List<EmailAvailability> available = emails.available(CASE_ID);
+
+            assertThat(entryFor(available, EmailTemplate.APPLICATION_REJECTED).applicable()).isTrue();
+            assertThat(entryFor(available, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED))
+                .satisfies(entry -> {
+                    assertThat(entry.applicable()).isFalse();
+                    assertThat(entry.reason()).isEqualTo(CaseEmailService.NO_NON_PUBLICATION_REFUSAL);
+                });
+        }
+
+        @Test
+        @DisplayName("a refused non-publication referral offers both emails, because the caseworker chooses")
+        void nonPublicationRefusalOffersBoth() {
+            // Decision 1: MasterDecision is only Approved | Rejected, and a rejection means opposite things for
+            // the two templates. A multi-reason referral gets one decision and one direction covering all of
+            // them, which cannot be decomposed -- so both are offered and the caseworker picks.
+            storedCase();
+            refusedReferralFor(ReferralReason.NonPublication, ReferralReason.DeclarantRequirementsNotMet);
+
+            assertThat(emails.available(CASE_ID))
+                .allSatisfy(entry -> assertThat(entry.applicable()).as("%s", entry.template()).isTrue());
         }
 
         @Test
@@ -141,8 +180,51 @@ class CaseEmailServiceTest {
             when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID))
                 .thenReturn(List.of(referral(MasterDecision.Approved, "Approved. Publish in the Gazette.")));
 
-            assertThat(emails.available(CASE_ID)).singleElement()
-                .satisfies(entry -> assertThat(entry.applicable()).isFalse());
+            assertThat(emails.available(CASE_ID))
+                .allSatisfy(entry -> assertThat(entry.applicable()).as("%s", entry.template()).isFalse());
+        }
+
+        @Test
+        @DisplayName("reads the newest refusal and then asks what it was about, not the newest non-publication one")
+        void readsTheNewestRefusalRatherThanTheNewestNonPublicationOne() {
+            // Correction 1, and the failure it prevents: searching for the newest refused non-publication
+            // referral would revive an outcome the rejection email already treats as superseded, and would let
+            // the two emails speak for different referrals -- which is what makes them mutually exclusive.
+            storedCase();
+            Referral superseded = referral(MasterDecision.Rejected, DIRECTION);
+            superseded.setReasons(List.of(ReferralReason.NonPublication.name()));
+            Referral newest = referral(MasterDecision.Rejected, "Refused: the declarant is not eligible.");
+            newest.setReasons(List.of(ReferralReason.DeclarantRequirementsNotMet.name()));
+            when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID))
+                .thenReturn(List.of(newest, superseded));
+
+            assertThat(entryFor(emails.available(CASE_ID), EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)
+                           .applicable()).isFalse();
+        }
+
+        @Test
+        @DisplayName("a referral with no reasons recorded is not a non-publication refusal")
+        void referralWithNoReasonsIsNotANonPublicationRefusal() {
+            // Every migrated referral is in this state -- the power app recorded no reasons -- so this is the
+            // commonest shape in the data rather than an edge case.
+            storedCase();
+            refusedReferralFor();
+
+            assertThat(entryFor(emails.available(CASE_ID), EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)
+                           .applicable()).isFalse();
+        }
+
+        @Test
+        @DisplayName("the reason is matched as an enum member name, never as free text in the notes")
+        void theReasonIsMatchedAsAMemberName() {
+            storedCase();
+            Referral referral = referral(MasterDecision.Rejected, DIRECTION);
+            referral.setReasons(List.of("Non publication"));
+            referral.setNotes("The applicant asks for non publication in the Gazette.");
+            when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(referral));
+
+            assertThat(entryFor(emails.available(CASE_ID), EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)
+                           .applicable()).isFalse();
         }
 
         @Test
@@ -156,10 +238,11 @@ class CaseEmailServiceTest {
             storedCase();
             refusedReferral();
 
-            assertThat(unprovisioned.available(CASE_ID)).singleElement().satisfies(entry -> {
-                assertThat(entry.applicable()).isTrue();
-                assertThat(entry.provisioned()).isFalse();
-            });
+            assertThat(entryFor(unprovisioned.available(CASE_ID), EmailTemplate.APPLICATION_REJECTED))
+                .satisfies(entry -> {
+                    assertThat(entry.applicable()).isTrue();
+                    assertThat(entry.provisioned()).isFalse();
+                });
         }
 
         @Nested
@@ -237,8 +320,8 @@ class CaseEmailServiceTest {
 
                     CaseEmailOverview overview = emails.overview(CASE_ID);
 
-                    assertThat(overview.availability()).singleElement()
-                        .satisfies(entry -> assertThat(entry.applicable()).isTrue());
+                    assertThat(entryFor(overview.availability(), EmailTemplate.APPLICATION_REJECTED)
+                                   .applicable()).isTrue();
                     assertThat(overview.history()).singleElement()
                         .satisfies(entry -> assertThat(entry.id()).isEqualTo(sent.getId()));
                     assertThat(overview.slotDefaults()).singleElement().satisfies(defaults -> {
@@ -596,6 +679,26 @@ class CaseEmailServiceTest {
         Referral referral = referral(MasterDecision.Rejected, DIRECTION);
         when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(referral));
         return referral;
+    }
+
+    /** The same refusal, raised for the given reasons -- none of them, for a migrated referral. */
+    private Referral refusedReferralFor(ReferralReason... reasons) {
+        Referral referral = refusedReferral();
+        referral.setReasons(Arrays.stream(reasons).map(ReferralReason::name).toList());
+        return referral;
+    }
+
+    /**
+     * One template's row out of an availability answer.
+     *
+     * <p>By template rather than by position, because the list is every template in enum order and a test that
+     * read {@code get(0)} would quietly start asserting about a different email the next time one is added.
+     */
+    private static EmailAvailability entryFor(List<EmailAvailability> available, EmailTemplate template) {
+        return available.stream()
+            .filter(entry -> entry.template() == template)
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("No availability reported for " + template.key()));
     }
 
     /**

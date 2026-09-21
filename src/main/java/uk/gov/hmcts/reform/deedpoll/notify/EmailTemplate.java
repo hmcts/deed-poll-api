@@ -9,10 +9,8 @@ import java.util.stream.Collectors;
 /**
  * An email this service can send, and everything about it that is not the template's own words.
  *
- * <p>One member, because this plan ships one template. The other three in
- * {@code NOTIFY_TEMPLATE_TAXONOMY.md} §6 are later plans: <em>Request confirmation to proceed</em> needs the
- * discrimination question in §4 settled, and the two <em>forms for completion</em> emails are blocked on
- * document generation, which Notify cannot do.
+ * <p>Two members. The remaining two in {@code NOTIFY_TEMPLATE_TAXONOMY.md} §6 -- the <em>forms for
+ * completion</em> emails -- are a later plan, blocked on document generation, which Notify cannot do.
  *
  * <p><strong>The member name is what the outbox row stores; the {@link #key()} is what configuration and a
  * URL say.</strong> Those are two different things on purpose. A Notify template UUID differs per environment,
@@ -41,6 +39,25 @@ public enum EmailTemplate {
         "application-rejected",
         "Application rejected",
         ApplicationRejectedPersonalisation.RESOLVED_KEYS,
+        List.of(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES),
+        List.of()),
+
+    /**
+     * A non-publication request refused, but enrolment may still go ahead: asks the applicant to confirm they
+     * still want the deed enrolled, or to say they do not and be refunded. Template ④.
+     *
+     * <p>Referral-driven like ③, and deliberately <em>not</em> derived from the decision: both are sent off a
+     * {@code Rejected} referral and they say opposite things about enrolment, so the caseworker chooses. Only a
+     * referral raised for {@code NonPublication} offers this one -- see {@link CaseEmailService} for why that is
+     * necessary without being sufficient.
+     *
+     * <p>Declared after ③ rather than before it because the order here is the order the Email tab lists
+     * templates in, and the one that refuses enrolment outright is the commoner of the two.
+     */
+    REQUEST_CONFIRMATION_TO_PROCEED(
+        "request-confirmation-to-proceed",
+        "Request confirmation to proceed",
+        RequestConfirmationToProceedPersonalisation.RESOLVED_KEYS,
         List.of(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES),
         List.of());
 

@@ -158,8 +158,12 @@ class NotificationSecurityTest {
         when(referrals.findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID))
             .thenReturn(List.of(refusedReferral()));
 
-        assertThat(emails.available(CASE_ID)).singleElement()
-            .satisfies(availability -> assertThat(availability.applicable()).isFalse());
+        // Every template, not merely the first: another case's refusal must be invisible to all of them, and a
+        // per-template rule is exactly where one of them could start reading outside its own case.
+        assertThat(emails.available(CASE_ID))
+            .hasSize(EmailTemplate.values().length)
+            .allSatisfy(availability ->
+                            assertThat(availability.applicable()).as("%s", availability.template()).isFalse());
         assertThatThrownBy(() -> emails.preview(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of()))
             .isInstanceOf(ConflictError.class);
         assertThatThrownBy(() -> emails.send(

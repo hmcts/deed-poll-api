@@ -108,7 +108,7 @@ class ApplicationRejectedPersonalisationTest {
         void onlyOnlineIsOnline(PostCounter postCounter) {
             boolean expected = postCounter == PostCounter.Online;
 
-            assertThat(ApplicationRejectedPersonalisation.appliedOnline(postCounter))
+            assertThat(ResolvedValues.appliedOnline(postCounter))
                 .as("%s", postCounter).isEqualTo(expected);
             assertThat(ApplicationRejectedPersonalisation
                            .resolve(caseWith(postCounter), slots("Refused.", null)).appliedOnline())
@@ -120,15 +120,15 @@ class ApplicationRejectedPersonalisationTest {
         void everythingElseGetsThePaperText() {
             // Asymmetric on purpose: the paper paragraph asks the applicant how they paid, which recovers from
             // a wrong guess. Promising a refund to a card nobody paid with does not.
-            assertThat(ApplicationRejectedPersonalisation.appliedOnline(PostCounter.Counter)).isFalse();
-            assertThat(ApplicationRejectedPersonalisation.appliedOnline(PostCounter.Post)).isFalse();
-            assertThat(ApplicationRejectedPersonalisation.appliedOnline(PostCounter.Unknown)).isFalse();
+            assertThat(ResolvedValues.appliedOnline(PostCounter.Counter)).isFalse();
+            assertThat(ResolvedValues.appliedOnline(PostCounter.Post)).isFalse();
+            assertThat(ResolvedValues.appliedOnline(PostCounter.Unknown)).isFalse();
         }
 
         @Test
         @DisplayName("an unset channel is treated as paper rather than guessed at")
         void anUnsetChannelIsPaper() {
-            assertThat(ApplicationRejectedPersonalisation.appliedOnline(null)).isFalse();
+            assertThat(ResolvedValues.appliedOnline(null)).isFalse();
             assertThat(ApplicationRejectedPersonalisation.resolve(caseWith(null), slots("Refused.", null))
                            .appliedOnline()).isFalse();
         }

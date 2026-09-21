@@ -71,6 +71,39 @@ class EmailTemplateTest {
         @DisplayName("keys() lists what a refusal would have accepted")
         void keysListsEveryTemplate() {
             assertThat(EmailTemplate.keys()).contains(EmailTemplate.APPLICATION_REJECTED.key());
+            assertThat(EmailTemplate.keys()).contains(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key());
+        }
+
+        @Test
+        @DisplayName("the confirmation email's member name is the value an outbox row stores")
+        void confirmationMemberNameIsTheStoredValue() {
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.name())
+                .isEqualTo("REQUEST_CONFIRMATION_TO_PROCEED");
+        }
+
+        @Test
+        @DisplayName("the confirmation email's key is its configuration key and its URL token")
+        void confirmationKeyIsTheConfigurationKey() {
+            // notify.templates.request-confirmation-to-proceed, and
+            // /caseworker/cases/{caseId}/emails/request-confirmation-to-proceed. One string.
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key())
+                .isEqualTo("request-confirmation-to-proceed");
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.displayName())
+                .isEqualTo("Request confirmation to proceed");
+        }
+
+        @Test
+        @DisplayName("the rejection email is listed first, which is the order the Email tab shows them in")
+        void theRejectionEmailIsListedFirst() {
+            assertThat(EmailTemplate.values())
+                .startsWith(EmailTemplate.APPLICATION_REJECTED, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED);
+        }
+
+        @ParameterizedTest
+        @EnumSource(EmailTemplate.class)
+        @DisplayName("every template's member name round trips, which is how the drain reads an outbox row")
+        void everyMemberNameRoundTrips(EmailTemplate template) {
+            assertThat(EmailTemplate.byName(template.name())).contains(template);
         }
     }
 
@@ -99,6 +132,28 @@ class EmailTemplateTest {
                 "applied_online");
             assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("reference_number")).isTrue();
             assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("applied_online")).isTrue();
+        }
+
+        @Test
+        @DisplayName("the confirmation email resolves two more keys, and neither is a slot of the other template")
+        void theConfirmationEmailResolvesTwoMore() {
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.resolvedKeys()).containsExactly(
+                "reference_number", "online_application_reference", "old_forename", "old_surname",
+                "applied_online", "is_minor", "decision_date");
+            // The rejection email does not have them, so the two are not silently the same personalisation:
+            // a client sending is_minor to application-rejected is told it is not a field at all.
+            assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("is_minor")).isFalse();
+            assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("decision_date")).isFalse();
+        }
+
+        @Test
+        @DisplayName("both templates take the same two slots, which is decision 8 rather than a coincidence")
+        void bothTemplatesTakeTheSameSlots() {
+            // EmailSlot's requiredness holds for the whole proposed template set, so a second template needing
+            // the judge's reason and optional notes is the design being confirmed, not a new slot.
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.slots())
+                .containsExactly(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES);
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.documentKeys()).isEmpty();
         }
 
         @ParameterizedTest
