@@ -208,7 +208,7 @@ tests and OpenAPI assertions. Measure legacy active rows in each target environm
 Regenerate the current OpenAPI baseline and confirm the only planned additions are one judicial GET operation
 and one response schema.
 
-- [ ] Identity and rollout state reconciled; active legacy claims resolved safely; baselines recorded; no
+- [x] Identity and rollout state reconciled; active legacy claims resolved safely; baselines recorded; no
       files changed
 
 #### Reconciliation already performed, 2026-09-21 — read this rather than repeating it
@@ -221,6 +221,12 @@ Done in the parent session against `origin/master` at `7226fc9`.
 | 2. Ownership still authorises on display names | **Exactly three sites**, as `CurrentUser`'s own warning says: `JudicialReferralService:145-146` (`visibleTo`'s `Claimed`/`Decided` arms), `:359` (`heldBy`), `ReferralService:586` (`requireHeldBy`). `claimedBy` at `:326` and `decidedBy` at `:425` are attribution and stay |
 | 5. Judicial surface is four operations | Four mappings in `JudicialReferralController`; `OpenAPIPublisherTest` asserts 4 and 33 separately |
 | 6. Baseline | `test` 2,328 + `integration` 8 = **2,336**, zero failures, build green |
+
+Re-confirmed on this branch at `73aff11` before Task 1: the three name-based sites are unchanged
+(`JudicialReferralService.visibleTo` lines 145-146, `heldBy` line 359, `ReferralService.requireHeldBy` line 586),
+`JudicialReferralController` still declares four mappings, `OpenAPIPublisherTest` still asserts 4 judicial and 33
+caseworker operations separately, `V13` is still the highest migration so `V14` is free, and `./gradlew build` is
+green at `test` 2,328 + `integration` 8 = 2,336 with zero failures.
 
 **Gate items 3 and 4 are vacuous today, and that is a finding rather than a skip.** There are no legacy
 `Claimed` or `Decided` rows to count in any persistent environment, because **api has never been deployed to
