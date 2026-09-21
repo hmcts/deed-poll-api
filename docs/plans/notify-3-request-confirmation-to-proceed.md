@@ -189,7 +189,18 @@ lost.
    `ReferralReason.NonPublication.name()`, which also guarantees that ③ and ④ use the same `referralId` when
    both are offered and can therefore be made mutually exclusive by one database key.
 
-2. **The migration is V14 and must be safe during a rolling deployment.** V13 now exists on `master`.
+2. **The migration is ~~V14~~ the next free number, and must be safe during a rolling deployment.** V13 now
+   exists on `master`.
+
+   > **Corrected 2026-09-21:** `referrals-api-6-judicial-my-referrals.md` ran first and **takes `V14`** for its
+   > nullable `claimedById`/`decidedById` columns, so this plan takes the next free number after it — `V15`
+   > unless something else lands between. Check before writing it; do not assume.
+   >
+   > **Do not instead leave `V14` reserved and jump ahead.** Flyway runs with out-of-order disabled, so a `V14`
+   > appearing after `V15` has already been applied fails every environment that applied `V15` — a reserved gap
+   > is worse than a renumber. Nothing else in this plan changes: the column, its database default, the
+   > replacement index and V12's predicate are all unaffected by which number carries them.
+
    `exclusionGroup` is a non-null text column copied onto every row and mapped on `Notification`; the migration
    must give it a database default of `REFERRAL_OUTCOME` as it is added. `APPLICATION_REJECTED` is the only
    template an old application instance can enqueue, so that default both backfills every existing row correctly

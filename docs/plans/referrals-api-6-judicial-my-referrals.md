@@ -166,6 +166,37 @@ The list reuses `JudicialReferralSummary`: referral id, state, reasons, referral
 timestamp. It does not expose applicant names, display reference, case id, payment data, notes timeline or
 direction text. Those remain behind the existing visible referral detail read.
 
+## Validation Commands
+
+**These run after every task, so everything here must be green after every task — not only at the end.**
+
+```bash
+export TESTCONTAINERS_RYUK_DISABLED=true
+./gradlew build
+```
+
+`build` is compile + checkstyle across the source sets + `test` + `integration`, so `OpenAPIPublisherTest` and
+`NamespaceSeparationSecurityTest` both run. This plan is the one referral plan that **does** move the contract:
+the judicial count goes **4 → 5** and one response schema is added, so that test's judicial assertion has to be
+updated deliberately in the task that publishes the operation — and the **caseworker count must stay 33**.
+`ddl-auto: validate` means the new columns must match the migration or the context fails to start.
+
+**Baseline measured on this branch before Task 1, 2026-09-21** — `test` **2,328** and `integration` **8**,
+**2,336** in total, zero failures, `./gradlew build` green from cold at `7226fc9` (api-5 merged).
+
+**This plan is not stacked.** It branches from `master` after follow-ups 4 and 5, so withdrawal, closure and the
+lifecycle notes are all settled, as the gate requires.
+
+**A worker or container startup timeout is an environment failure, not a code failure** — re-run before
+investigating.
+
+### The migration number is **V14**, decided 2026-09-21
+
+`V13` is the highest on `master`. `notify-3` had also planned `V14`; it is unrun, so this plan takes `V14` and
+**notify-3 has been corrected in the same commit** to take the next free number instead. Reserving `V14` for
+notify-3 and jumping to `V15` here was rejected: Flyway runs with out-of-order disabled, so a `V14` arriving
+after `V15` had been applied would fail every environment that applied `V15`.
+
 ## Tasks
 
 ### Task 0: Reconcile identity, data and contract
@@ -179,6 +210,31 @@ and one response schema.
 
 - [ ] Identity and rollout state reconciled; active legacy claims resolved safely; baselines recorded; no
       files changed
+
+#### Reconciliation already performed, 2026-09-21 — read this rather than repeating it
+
+Done in the parent session against `origin/master` at `7226fc9`.
+
+| Gate item | Found |
+|---|---|
+| 1. `requireUserId()` is the stable-owner guard | `CurrentUser:114` — throws `UnauthorizedError` when the token carries no subject, so an unidentified caller cannot own a resource |
+| 2. Ownership still authorises on display names | **Exactly three sites**, as `CurrentUser`'s own warning says: `JudicialReferralService:145-146` (`visibleTo`'s `Claimed`/`Decided` arms), `:359` (`heldBy`), `ReferralService:586` (`requireHeldBy`). `claimedBy` at `:326` and `decidedBy` at `:425` are attribution and stay |
+| 5. Judicial surface is four operations | Four mappings in `JudicialReferralController`; `OpenAPIPublisherTest` asserts 4 and 33 separately |
+| 6. Baseline | `test` 2,328 + `integration` 8 = **2,336**, zero failures, build green |
+
+**Gate items 3 and 4 are vacuous today, and that is a finding rather than a skip.** There are no legacy
+`Claimed` or `Decided` rows to count in any persistent environment, because **api has never been deployed to
+one**: AAT has neither the `.internal` record (raised as `azure-platform-terraform#3161`) nor a
+`cnp-flux-config` HelmRelease, and the service's first successful deploy of any kind was an **ephemeral
+preview** on 2026-09-21. So no row anywhere has a display-name owner that cannot be migrated.
+
+**Keep the fail-closed rollout design anyway.** It stops being vacuous the first time api runs in AAT with a
+judge holding a claim, and by then this plan will be history. Do not simplify the null-owner handling on the
+grounds that no such row exists today — pre-migration rows with a null owner must still fail closed.
+
+**`CurrentUser` already anticipates this plan** and is worth reading before Task 1: it documents the
+display-name comparison as a known authorization defect, says the fix "is a migration, not a refactor", and
+instructs against adding a third name-based site. This plan is that migration.
 
 ### Task 1: Migrate referral ownership to stable subjects
 
