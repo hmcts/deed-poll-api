@@ -195,6 +195,8 @@ ext {
 }
 
 ext['snakeyaml.version'] = '2.0'
+ext['httpclient5.version'] = '5.6.4'
+ext['httpcore5.version'] = '5.4.3'
 
 dependencies {
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-web'
