@@ -189,6 +189,12 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * <p>Nulling {@code "lastTouchedAt"} is part of that, not tidiness -- it is what stops the predicate
      * matching the same row on the next sweep.
      *
+     * <p>{@code "claimedById"} is cleared alongside {@code "claimedBy"}, and it is the one of the two that
+     * matters: it is what every ownership check compares, so a released claim whose owner survived would leave
+     * the judge who abandoned the referral still able to direct it, and would keep it on their personal list
+     * after the pool had re-offered it. {@code "decidedById"} is never cleared here -- a direction is permanent,
+     * and this statement only ever touches rows that are still {@code Claimed}.
+     *
      * <p>Native SQL, and {@code {@literal @}Modifying}: this <em>is</em> the statement, so it is written
      * where a reader can check it against the rule rather than assembled by a translator. Identifiers are
      * quoted because they are mixed case, as {@code ReferenceCounterRepository} explains. {@code 'Open'}
@@ -210,6 +216,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
         UPDATE "deedpoll_referral"
            SET "state" = 'Open',
                "claimedBy" = null,
+               "claimedById" = null,
                "claimedAt" = null,
                "lastTouchedAt" = null,
                "modifiedOn" = :now,

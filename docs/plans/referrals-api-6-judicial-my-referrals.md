@@ -259,8 +259,29 @@ Keep display names and response shapes unchanged. Extend entity mapping, migrati
 same-display-name and changed-display-name tests. Prove a caller without a subject fails closed before a
 state change.
 
-- [ ] Stable subject owns claim/direction; display name is attribution only; unsafe legacy rows fail closed;
+- [x] Stable subject owns claim/direction; display name is attribution only; unsafe legacy rows fail closed;
       migration and focused tests green
+
+#### What Task 1 did, 2026-09-21
+
+`V14__referral_owner_subjects.sql` adds nullable `claimedById` and `decidedById` and nothing else; no index, for
+the reason V6 gives for the pool. Nothing is backfilled. `Referral` maps both, and the three name-based ownership
+sites now compare the subject: `ReferralService.requireHeldBy`, `JudicialReferralService.visibleTo` and its
+`heldBy` helper. `claim` requires `caller.requireUserId()` **before the sweep** — the first thing either claim path
+writes — and stores it; `decide` stores `decidedById`; `releaseStaleClaim` clears `claimedById` with the rest of the
+active-claim fields and never touches `decidedById`. The subject is resolved before `visibleTo`'s switch rather
+than inside its arms, as `SavedQueryPermissions.visibleTo` does, so an unidentified caller is refused even for the
+shared pool. Display names and every response shape are unchanged.
+
+Tests: namesake and renamed-judge cases in `ReferralServiceTest` (new `ClaimOwnership` nest), in
+`JudicialReferralServiceTest.VisibleTo`, in `JudicialSecurityTest.CrossJudgeIsolation`, and over real HTTP in
+`JudicialReferralControllerTest` — which now mints a token per judge, because ownership is keyed on the token's
+`sub` and `IdamUserInfoClient` requires the token and userinfo to agree on it. Null-owner rows are proved
+invisible and undirectable; a subject-less caller is proved to be refused before the sweep runs.
+
+`./gradlew build` green: `test` **2,343** + `integration` **8** = **2,351**, zero failures (baseline 2,336).
+
+`CurrentUser`'s "two places authorise on name" warning is deliberately **not** touched here — Task 4 owns it.
 
 ### Task 2: Add the personal-list query
 

@@ -123,27 +123,39 @@ public class JudicialReferralService {
      * referral id being probed for and stops one judge learning that another holds a case. The 403 on this
      * surface is the role gate above, which refuses a non-judicial token before any of this is asked.
      *
-     * <p><strong>The identity compared is the display name</strong>, because that is what {@code claimedBy} and
-     * {@code decidedBy} hold -- the claim is recorded under the name resolved from the judge's token, and
-     * {@code ReferralService.touch} and {@code decide} already authorise against the same column. It is one of the
-     * two places this codebase authorises on {@code CurrentUser.name()} rather than on the subject -- the other is
-     * {@code ReferralService.requireHeldBy}, which the transitions above go through -- and it is a consequence of
-     * the columns rather than a choice made here: keying a claim on the subject is a migration, which this plan
-     * does not have. The residual risks are recorded on {@link CurrentUser} rather than hidden: two judges sharing
-     * a display name see each other's claimed referrals, and a judge whose display name changes loses their own
-     * until the sweep releases it.
+     * <p><strong>The identity compared is the token's IDAM subject</strong> -- {@code claimedById} and
+     * {@code decidedById}, which {@code V14__referral_owner_subjects.sql} added for this. It used to be the
+     * display name in {@code claimedBy}/{@code decidedBy}, and that was the defect {@link CurrentUser} recorded:
+     * two judges sharing a display name saw and directed each other's referrals, and a judge whose display name
+     * changed lost their own. Those columns remain, as the attribution a caseworker reads; they authorise
+     * nothing, here or in {@code ReferralService.requireHeldBy}.
+     *
+     * <p><strong>A row with no owner is visible to nobody, and there is deliberately no fall back to the
+     * name.</strong> A claim made before that migration, and every referral V7 backfilled, has a null owner --
+     * comparing names on exactly those rows would keep the collision precisely where identity is least certain.
+     * So they fail closed: the inactivity sweep returns a lapsed one to the shared pool, where it is visible to
+     * every judge again, and a pre-migration direction stays visible and actionable to caseworkers, which is
+     * where a recorded direction is needed.
+     *
+     * <p>The subject is resolved before the switch rather than inside the {@code Claimed} and {@code Decided}
+     * arms, for the reason {@code SavedQueryPermissions.visibleTo} resolves it before its predicate: written as a
+     * comparison inside the arms, the guard would let an unidentified caller read the whole pool and refuse them
+     * only where the answer was already no.
      *
      * <p>A static method, so it is provable without a database or a Spring context and so no caller can be
      * tempted to answer the question itself.
+     *
+     * @throws uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError if the caller carries no stable subject
      */
     public static boolean visibleTo(Referral referral, CurrentUser caller) {
+        String owner = caller.requireUserId();
         return switch (referral.getState()) {
             case Open -> true;
-            // equals on the caller's name and not on the column's, so a null column is false rather than a
-            // NullPointerException: a Decided referral always has a decidedBy, and a backfilled Claimed one
-            // from V7 has no claimedBy at all.
-            case Claimed -> caller.name().equals(referral.getClaimedBy());
-            case Decided -> caller.name().equals(referral.getDecidedBy());
+            // equals on the caller's subject and not on the column's, so a null owner is false rather than a
+            // NullPointerException: that is the pre-migration row above, and it is the case this must answer
+            // rather than throw on.
+            case Claimed -> owner.equals(referral.getClaimedById());
+            case Decided -> owner.equals(referral.getDecidedById());
             case Closed, Withdrawn -> false;
         };
     }
@@ -269,12 +281,18 @@ public class JudicialReferralService {
      * @param caller the judge claiming it
      * @return the referral as this judge now holds it, with the application and notes the next screen renders
      * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError if the caller carries no stable subject, so
+     *     the claim it would make would have no owner
      * @throws NotFoundError if there is no such referral, or this caller may not see it
      * @throws ConflictError if the referral is not {@code Open}
      */
     @Transactional
     public JudicialReferralView claim(String referralId, CurrentUser caller) {
         caller.requireAnyRole(Role.JUDICIAL);
+        // Before the sweep, which is the first thing here that writes anything: a caller IDAM has not identified
+        // has nothing to own a claim with, and ReferralService.claim refuses them for that reason -- so asking
+        // here as well is what keeps them from releasing somebody else's lapsed claim on their way to a 401.
+        caller.requireUserId();
         // Before the resolve, for the reason the pool sweeps before it queries: a referral whose claim has just
         // lapsed belongs to the pool, and the visibility check has to be asked about the post-sweep row.
         referralService.reclaimStaleClaims();
@@ -351,12 +369,15 @@ public class JudicialReferralService {
      * Whether this caller is the judge currently holding this referral -- a claim of theirs to refresh.
      *
      * <p>Both halves, for the reason {@code ReferralService.requireHeldBy} asks both: the state says a claim
-     * exists and the name says whose. Compared against the caller's name rather than the column's, so a
-     * {@code Claimed} row with no holder -- which V7's backfill really produced -- is false rather than an
-     * exception.
+     * exists and {@code claimedById} says whose. The same subject that method compares, so the question asked
+     * before {@code touch} is called and the question {@code touch} itself enforces cannot disagree. Compared
+     * against the caller's subject rather than the column's, so a {@code Claimed} row with no owner -- which V7's
+     * backfill really produced, and which a claim made before the owner columns existed also is -- is false
+     * rather than an exception.
      */
     private static boolean heldBy(Referral referral, CurrentUser caller) {
-        return referral.getState() == ReferralState.Claimed && caller.name().equals(referral.getClaimedBy());
+        return referral.getState() == ReferralState.Claimed
+            && caller.requireUserId().equals(referral.getClaimedById());
     }
 
     /**

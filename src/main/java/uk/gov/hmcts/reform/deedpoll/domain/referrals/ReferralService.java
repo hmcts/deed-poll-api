@@ -5,6 +5,7 @@ import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
@@ -304,13 +305,25 @@ public class ReferralService {
      * {@code docs/plans/referrals-api-5-lifecycle-case-notes.md}, which supersede the earlier reasoning that a
      * claim needed no note because a column already carried it.
      *
-     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
-     * @throws NotFoundError  if there is no such referral, or it belongs to another case
-     * @throws ConflictError  if the referral is not {@code Open}
+     * <p><strong>The claim belongs to the caller's IDAM subject, and their display name is only written
+     * alongside it.</strong> {@code claimedById} is what every later ownership check reads -- {@link #touch},
+     * {@link #decide} and the judicial surface's visibility rule -- so a judge keeps their claim across an IDAM
+     * rename and cannot reach another judge's by sharing a display name. The subject is required before the
+     * sweep, which is the first thing here that writes anything: a caller IDAM has not identified cannot own a
+     * referral, so they must not be able to change one either.
+     *
+     * @throws ForbiddenError    if the caller does not hold {@link Role#JUDICIAL}
+     * @throws UnauthorizedError if the caller carries no stable subject, so the claim would have no owner
+     * @throws NotFoundError     if there is no such referral, or it belongs to another case
+     * @throws ConflictError     if the referral is not {@code Open}
      */
     @Transactional
     public Referral claim(String deedPollId, String id, CurrentUser caller) {
         caller.requireAnyRole(Role.JUDICIAL);
+        // Before the sweep as well as before the lookup, because the sweep writes: an unidentified caller has
+        // nothing to own the claim with, and refusing them here is what makes that a refusal before any state
+        // change rather than a null owner stored on a row.
+        final String owner = caller.requireUserId();
         // Before the lookup, not after: the referral this caller is asking for may be the stale one, and
         // reading it first would load the row that is about to change underneath.
         reclaimStaleClaims();
@@ -323,6 +336,9 @@ public class ReferralService {
 
         LocalDateTime now = AuditClock.now();
         referral.setState(ReferralState.Claimed);
+        // The subject owns it; the name is what a caseworker reading the case sees. Both are written here and
+        // only one of them is ever compared again.
+        referral.setClaimedById(owner);
         referral.setClaimedBy(caller.name());
         referral.setClaimedAt(now);
         // Stamped at the claim as well as at every later interaction, so a referral picked up and never
@@ -350,14 +366,15 @@ public class ReferralService {
      * morning on one set of papers without losing it. The judicial surface calls it; {@link #claim} stamps the
      * same column itself, because there is no claim to refresh until it has made one.
      *
-     * <p><strong>Only the judge holding it may touch it</strong>, and the check is by the name the claim was
-     * made under. A referral that has been withdrawn, decided, or taken back by the sweep is no longer held by
-     * anybody, so a judge who left the page open gets a conflict rather than silently reviving a claim the
-     * pool has already re-offered.
+     * <p><strong>Only the judge holding it may touch it</strong>, and the check is by the subject the claim was
+     * made under -- see {@link #requireHeldBy}. A referral that has been withdrawn, decided, or taken back by the
+     * sweep is no longer held by anybody, so a judge who left the page open gets a conflict rather than silently
+     * reviving a claim the pool has already re-offered.
      *
-     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
-     * @throws NotFoundError  if there is no such referral, or it belongs to another case
-     * @throws ConflictError  if the referral is not currently claimed by this caller
+     * @throws ForbiddenError    if the caller does not hold {@link Role#JUDICIAL}
+     * @throws UnauthorizedError if the caller carries no stable subject, so they can hold nothing
+     * @throws NotFoundError     if there is no such referral, or it belongs to another case
+     * @throws ConflictError     if the referral is not currently claimed by this caller
      */
     @Transactional
     public Referral touch(String deedPollId, String id, CurrentUser caller) {
@@ -378,14 +395,14 @@ public class ReferralService {
      * change is to be published in the London Gazette.
      *
      * <p><strong>Permitted only on a referral this caller currently holds</strong> -- state {@code Claimed} and
-     * {@code claimedBy} is them -- and that single check is what two other rules rely on rather than
+     * {@code claimedById} is their subject -- and that single check is what two other rules rely on rather than
      * implementing themselves:
      *
      * <ul>
      *   <li>A referral a caseworker withdrew is {@code Withdrawn}, so a judge who had it open and submits a
      *       direction afterwards gets a conflict rather than writing a direction onto a referral that was
      *       pulled back.</li>
-     *   <li>A referral the sweep took back is {@code Open} with no {@code claimedBy}, so the same is true of a
+     *   <li>A referral the sweep took back is {@code Open} with no {@code claimedById}, so the same is true of a
      *       judge whose claim lapsed while they were reading. The referral may by then be another judge's, and
      *       the two of them must not both be able to direct it.</li>
      * </ul>
@@ -394,6 +411,11 @@ public class ReferralService {
      * "Signed" attestation are the admin's, so what arrives here is one confirmed direction and it is recorded
      * atomically. {@code decisionDate} and {@code decidedBy} come from the clock and the token, never from the
      * payload -- see {@link DirectionInput}.
+     *
+     * <p><strong>The direction is signed by the same subject that owns the claim</strong>, because
+     * {@link #requireHeldBy} has already established the two are the same: {@code decidedById} is the caller's
+     * subject and {@code decidedBy} their display name, and it is {@code decidedById} the judicial surface reads
+     * when its author comes back to re-read the direction.
      *
      * <p>{@code lastTouchedAt} is refreshed even though the referral is leaving {@code Claimed} and the sweep
      * will never look at it again. It costs nothing and it keeps the column meaning "when a judge last did
@@ -405,9 +427,10 @@ public class ReferralService {
      * -- because {@code directionsText} may be twice as long as a note may be, so quoting it would make a valid
      * direction fail the note it triggers. {@link ReferralNotes#directionRecorded} owns that reasoning.
      *
-     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
-     * @throws NotFoundError  if there is no such referral, or it belongs to another case
-     * @throws ConflictError  if the referral is not currently claimed by this caller
+     * @throws ForbiddenError    if the caller does not hold {@link Role#JUDICIAL}
+     * @throws UnauthorizedError if the caller carries no stable subject, so they can hold nothing
+     * @throws NotFoundError     if there is no such referral, or it belongs to another case
+     * @throws ConflictError     if the referral is not currently claimed by this caller
      */
     @Transactional
     public Referral decide(String deedPollId, String id, DirectionInput direction, CurrentUser caller) {
@@ -421,7 +444,10 @@ public class ReferralService {
         referral.setPublishToGazette(direction.publishToGazette());
         referral.setDecisionDate(now);
         // The judge's own name from the token, so the record says who directed it rather than who last saved
-        // the row -- which the closing caseworker becomes a moment later.
+        // the row -- which the closing caseworker becomes a moment later. And their subject alongside it, which
+        // requireHeldBy has just established is the subject holding the claim: the name signs the direction and
+        // the subject is what lets its author read it back.
+        referral.setDecidedById(caller.requireUserId());
         referral.setDecidedBy(caller.name());
         referral.setLastTouchedAt(now);
         referral.setModifiedBy(caller.name());
@@ -577,13 +603,25 @@ public class ReferralService {
     /**
      * The referral, if this caller is the judge currently holding it.
      *
-     * <p>Both halves matter and neither is enough alone: the state says a claim exists, and the name says it
-     * is this caller's. Kept in one place because the direction transition asks the same question, and a
-     * second copy of it that drifted would let one judge write on another's referral.
+     * <p>Both halves matter and neither is enough alone: the state says a claim exists, and
+     * {@code claimedById} says whose it is. Kept in one place because the direction transition asks the same
+     * question, and a second copy of it that drifted would let one judge write on another's referral.
+     *
+     * <p><strong>The subject and not the display name</strong>, since
+     * {@code V14__referral_owner_subjects.sql}. Two judges can share a display name and one judge's can change,
+     * so comparing names let the first pair direct each other's referrals and locked the second out of their own.
+     * The caller goes through {@link CurrentUser#requireUserId()} rather than reading the component, for the
+     * reason {@code SavedQueryPermissions} does: a caller with no subject is refused outright instead of being
+     * compared against a null owner, which would make every unidentified caller the holder of every
+     * pre-migration claim at once. A claim made before that migration therefore has no owner and is held by
+     * nobody -- it fails closed, and the inactivity sweep returns it to the pool as it would any other.
+     *
+     * <p>The refusal still names the caller's <em>display name</em>, because it is read by a person and a
+     * subject would tell them nothing. It says the same thing it always did: this is not yours.
      */
     private static Referral requireHeldBy(Referral referral, String id, CurrentUser caller) {
         if (referral.getState() != ReferralState.Claimed
-            || !caller.name().equals(referral.getClaimedBy())) {
+            || !caller.requireUserId().equals(referral.getClaimedById())) {
             throw new ConflictError("Referral " + id + " is not claimed by " + caller.name()
                 + " -- it is " + referral.getState());
         }

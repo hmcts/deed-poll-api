@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 
@@ -111,13 +112,23 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
 
     /**
      * A referral held by a judge who last interacted with it at {@code lastTouchedAt}.
+     *
+     * <p>Both owner columns, as a real claim writes both: {@code claimedBy} is the display name the lapse note
+     * reads and {@code claimedById} is the subject the claim belongs to. The subject is derived from the name here
+     * only so that a fixture reads as one judge; nothing under test compares the two.
      */
     private Referral claimedReferral(DeedPoll parent, String judge, LocalDateTime lastTouchedAt) {
         Referral referral = persistedReferral(parent, ReferralState.Claimed, lastTouchedAt);
         referral.setClaimedBy(judge);
+        referral.setClaimedById(subjectOf(judge));
         referral.setClaimedAt(lastTouchedAt);
         referral.setLastTouchedAt(lastTouchedAt);
         return referral;
+    }
+
+    /** A stable-looking IDAM subject for a fixture judge, which is emphatically not their display name. */
+    private static String subjectOf(String judge) {
+        return "idam-" + judge.toLowerCase(Locale.UK).replace(' ', '-');
     }
 
     @Test
@@ -233,7 +244,7 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("releases a lapsed claim back to the pool in one statement, clearing all three claim columns")
+    @DisplayName("releases a lapsed claim back to the pool in one statement, clearing every claim column")
     void releasesALapsedClaimInOneStatement() {
         DeedPoll deedPoll = persistedCase();
         Referral lapsed = claimedReferral(deedPoll, "District Judge Bell", CUTOFF.minusHours(1));
@@ -245,6 +256,10 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         Referral reloaded = entityManager.find(Referral.class, lapsed.getId());
         assertThat(reloaded.getState()).isEqualTo(ReferralState.Open);
         assertThat(reloaded.getClaimedBy()).isNull();
+        // The owner, cleared by the same statement -- and this is the one of the four whose survival would be a
+        // security bug rather than stale data: the judge who abandoned the referral would still be able to direct
+        // it after the pool had re-offered it to everybody.
+        assertThat(reloaded.getClaimedById()).isNull();
         assertThat(reloaded.getClaimedAt()).isNull();
         // The column the predicate reads, nulled by the statement that read it -- which is what makes the
         // release happen once rather than on every sweep from here on.
@@ -283,6 +298,10 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         entityManager.clear();
         assertThat(entityManager.find(Referral.class, fresh.getId()).getClaimedBy())
             .isEqualTo("District Judge Bell");
+        // The owner survives too, which is what keeps the still-working judge able to direct it: a statement that
+        // cleared the owner without changing the state would take a referral off somebody who still holds it.
+        assertThat(entityManager.find(Referral.class, fresh.getId()).getClaimedById())
+            .isEqualTo(subjectOf("District Judge Bell"));
         assertThat(entityManager.find(Referral.class, decided.getId()).getState())
             .isEqualTo(ReferralState.Decided);
     }

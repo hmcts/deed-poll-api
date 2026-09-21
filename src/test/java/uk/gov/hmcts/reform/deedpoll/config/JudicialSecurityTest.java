@@ -88,6 +88,17 @@ class JudicialSecurityTest {
     private static final CurrentUser OTHER_JUDGE =
         CurrentUser.currentUser(List.of(Role.JUDICIAL), "District Judge Okafor", "judge-4");
 
+    /**
+     * A third judge who shares {@link #JUDGE}'s display name: a different person, indistinguishable by name.
+     *
+     * <p>The caller the ownership migration exists for, and the one this class is the right place to state: while
+     * visibility compared display names, a namesake was admitted to another judge's referral -- and on this
+     * surface that is the application and its whole notes timeline, because {@code visibleTo} is the only boundary
+     * in front of a finder by referral id.
+     */
+    private static final CurrentUser NAMESAKE_JUDGE =
+        CurrentUser.currentUser(List.of(Role.JUDICIAL), "District Judge Bell", "judge-9");
+
     /** An ordinary caseworker: authenticated and named, holding no role this surface asks about. */
     private static final CurrentUser CASEWORKER =
         CurrentUser.currentUser(List.of(), "Ada Caseworker", "caseworker-1");
@@ -197,9 +208,10 @@ class JudicialSecurityTest {
      *
      * <p>Through {@code findWithCaseById}, which is the only finder the judicial surface has: a judicial caller
      * has no case id to scope with, so the fixture mirrors that rather than a case-scoped read it cannot make.
-     * Both holder columns are set whatever the state, because the question asked below is what the <em>state</em>
-     * admits -- a withdrawn referral still naming the judge who had it is the row a rule reading the name first
-     * would leak.
+     * All four holder columns are set whatever the state, because the question asked below is what the
+     * <em>state</em> admits -- a withdrawn referral still naming the judge who had it is the row a rule reading
+     * the owner first would leak. The subjects are what the visibility rule compares and the names are the
+     * attribution beside them, so a fixture that set only the names would be a row no judge owns.
      */
     private Referral stored(ReferralState state, CurrentUser holder) {
         DeedPoll parent = new DeedPoll();
@@ -211,7 +223,9 @@ class JudicialSecurityTest {
         referral.setCreatedOn(LocalDateTime.of(2026, 5, 1, 9, 0));
         referral.setLastTouchedAt(LocalDateTime.of(2026, 5, 1, 9, 0));
         if (holder != null) {
+            referral.setClaimedById(holder.userId());
             referral.setClaimedBy(holder.name());
+            referral.setDecidedById(holder.userId());
             referral.setDecidedBy(holder.name());
         }
         when(referrals.findWithCaseById(REFERRAL_ID)).thenReturn(Optional.of(referral));
@@ -408,6 +422,29 @@ class JudicialSecurityTest {
             verifyNoTransition();
             assertThat(referral.getState()).isEqualTo(theirs);
             assertThat(referral.getClaimedBy()).isEqualTo(OTHER_JUDGE.name());
+            assertThat(referral.getClaimedById()).isEqualTo(OTHER_JUDGE.userId());
+            verify(referrals, never()).save(any());
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Claimed", "Decided"})
+        @DisplayName("is 404 to a different judge of the same display name, so isolation is per person")
+        void isNotFoundToANamesakeOfTheHolder(ReferralState theirs) {
+            Referral referral = stored(theirs, JUDGE);
+
+            // The whole of what the ownership migration bought, at the boundary that used to give it away: these
+            // two callers differ in nothing a referral row records except the subject, and that is now the only
+            // thing the visibility rule reads. It is the same 404 an unknown id gets, for the same reason.
+            for (Operation operation : referralOperations()) {
+                assertThatThrownBy(() -> operation.by(NAMESAKE_JUDGE))
+                    .as("%s refuses a judge who merely shares the holder's display name", operation.name())
+                    .isInstanceOf(NotFoundError.class)
+                    .hasMessage("Referral " + REFERRAL_ID + " not found");
+            }
+
+            verifyNoTransition();
+            assertThat(referral.getState()).isEqualTo(theirs);
+            assertThat(referral.getClaimedById()).isEqualTo(JUDGE.userId());
             verify(referrals, never()).save(any());
         }
 

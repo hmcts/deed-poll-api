@@ -16,6 +16,7 @@ import org.springframework.data.domain.Sort;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
@@ -70,6 +71,33 @@ class JudicialReferralServiceTest {
     /** A second judge, for every question that is about which of two judges a referral belongs to. */
     private static final CurrentUser OTHER_JUDGE =
         CurrentUser.currentUser(List.of(Role.JUDICIAL), "District Judge Okafor", "judge-4");
+
+    /**
+     * A third judge who shares {@link #JUDGE}'s display name: a different person on the same bench.
+     *
+     * <p>The shape the ownership migration exists for. While visibility compared display names these two were one
+     * person to it, so either could read the other's claimed referral -- and on this surface that means the
+     * application and its notes, because {@code visibleTo} is the only boundary in front of a finder by referral
+     * id.
+     */
+    private static final CurrentUser NAMESAKE_JUDGE =
+        CurrentUser.currentUser(List.of(Role.JUDICIAL), "District Judge Bell", "judge-9");
+
+    /**
+     * {@link #JUDGE} after IDAM renamed them: the same subject, a new display name.
+     */
+    private static final CurrentUser RENAMED_JUDGE =
+        CurrentUser.currentUser(List.of(Role.JUDICIAL), "Her Honour Judge Bell", "judge-3");
+
+    /**
+     * A judicial caller with no subject, so nothing they could own.
+     *
+     * <p>Not a token IDAM issues -- {@code IdamAccessTokenValidator} refuses one carrying no {@code sub} -- which
+     * is why it is constructed here rather than reached through a claims document. It is the fail-closed case the
+     * owner columns are nullable for.
+     */
+    private static final CurrentUser UNIDENTIFIED_JUDGE =
+        CurrentUser.currentUser(List.of(Role.JUDICIAL), "Nobody In Particular", null);
 
     /** An ordinary caseworker: authenticated and named, holding no role this service asks about. */
     private static final CurrentUser CASEWORKER =
@@ -154,8 +182,9 @@ class JudicialReferralServiceTest {
         @DisplayName("a claimed referral with no holder recorded is visible to nobody")
         void claimWithNoHolderIsVisibleToNobody() {
             // V7 backfilled referrals from the case's flat columns, which recorded no claim, so a Claimed row
-            // with a null claimedBy is a shape that really exists. Comparing the caller's name to the column
-            // rather than the other way round is what makes this false instead of an exception.
+            // with no owner is a shape that really exists -- as is a claim made before V14 added the owner
+            // columns. Comparing the caller's subject to the column rather than the other way round is what
+            // makes this false instead of an exception.
             Referral unheld = new Referral();
             unheld.setState(ReferralState.Claimed);
 
@@ -164,12 +193,71 @@ class JudicialReferralServiceTest {
         }
 
         @Test
+        @DisplayName("a claim whose owner is null is invisible even to the judge it names")
+        void claimWithANameButNoOwnerIsVisibleToNobody() {
+            // The pre-migration row in full: the display name is there and the subject is not. This is the one
+            // case where a fall back to the name would look helpful, and it is exactly the case where it would
+            // be wrong -- it is where two judges sharing a name are least distinguishable. So: fail closed, and
+            // let the sweep return the claim to the shared pool where anybody may take it.
+            Referral pretendClaim = referral(ReferralState.Claimed, JUDGE);
+            pretendClaim.setClaimedById(null);
+
+            assertThat(JudicialReferralService.visibleTo(pretendClaim, JUDGE)).isFalse();
+
+            Referral pretendDirection = referral(ReferralState.Decided, JUDGE);
+            pretendDirection.setDecidedById(null);
+
+            // And a direction recorded before the migration belongs to no judge's list, which is the
+            // fail-closed rollout consequence rather than a bug: the caseworker surface still shows it in full.
+            assertThat(JudicialReferralService.visibleTo(pretendDirection, JUDGE)).isFalse();
+        }
+
+        @Test
+        @DisplayName("a different judge sharing the holder's display name sees nothing of theirs")
+        void refusesANamesakeOfTheHolder() {
+            // The disclosure V14 removes, stated at the boundary that admits it: while this compared names,
+            // a namesake was handed the referral, the application behind it and its whole notes timeline.
+            for (ReferralState state : List.of(ReferralState.Claimed, ReferralState.Decided)) {
+                assertThat(JudicialReferralService.visibleTo(referral(state, JUDGE), NAMESAKE_JUDGE))
+                    .as("a %s referral of a judge who shares this caller's display name", state)
+                    .isFalse();
+            }
+        }
+
+        @Test
+        @DisplayName("the holder still sees their own referral after IDAM renames them")
+        void admitsTheHolderUnderANewDisplayName() {
+            // The bug that came with the disclosure: a judge who married or took a title used to get a 404 on
+            // their own claimed referral until the sweep released it.
+            for (ReferralState state : List.of(ReferralState.Claimed, ReferralState.Decided)) {
+                assertThat(JudicialReferralService.visibleTo(referral(state, JUDGE), RENAMED_JUDGE))
+                    .as("a %s referral of this caller, claimed under their previous display name", state)
+                    .isTrue();
+            }
+        }
+
+        @Test
+        @DisplayName("a caller with no subject is refused rather than compared, even for the shared pool")
+        void refusesACallerWithNoSubject() {
+            // Resolved before the switch rather than inside the Claimed and Decided arms, which is why the pool
+            // is in this assertion too: a guard that short-circuited past an unidentified caller on the one
+            // state where the answer is "yes to everybody" would be a rule that held by accident.
+            for (ReferralState state : ReferralState.values()) {
+                assertThatThrownBy(
+                    () -> JudicialReferralService.visibleTo(referral(state, JUDGE), UNIDENTIFIED_JUDGE))
+                    .as("visibility of a %s referral to a caller with no subject", state)
+                    .isInstanceOf(UnauthorizedError.class);
+            }
+        }
+
+        @Test
         @DisplayName("a decided referral is visible to whoever decided it, not to whoever claimed it")
         void decidedReferralFollowsTheDecidingJudge() {
             // The two columns are separate and this asks about the right one. They agree in practice -- only
             // the holder can decide -- but a referral claimed by one judge and decided by another is the shape
-            // a future hand-off would produce, and reading claimedBy here would then show it to the wrong one.
+            // a future hand-off would produce, and reading claimedById here would then show it to the wrong one.
             Referral handedOver = referral(ReferralState.Decided, JUDGE);
+            handedOver.setClaimedById(OTHER_JUDGE.userId());
             handedOver.setClaimedBy(OTHER_JUDGE.name());
 
             assertThat(JudicialReferralService.visibleTo(handedOver, JUDGE)).isTrue();
@@ -500,6 +588,22 @@ class JudicialReferralServiceTest {
         }
 
         @Test
+        @DisplayName("refuses a judge with no subject before sweeping, because a claim needs an owner")
+        void refusesACallerWithNoSubject() {
+            stored(ReferralState.Open, null);
+
+            // 401, and before the sweep: a caller IDAM has not identified has nothing to own the claim with, so
+            // they must not be able to release another judge's lapsed claim on their way to being refused. The
+            // transition refuses them too -- this is the same rule asked one step earlier, where the write is.
+            assertThatThrownBy(() -> service.claim(REFERRAL_ID.toString(), UNIDENTIFIED_JUDGE))
+                .isInstanceOf(UnauthorizedError.class);
+
+            verify(referralService, never()).reclaimStaleClaims();
+            verify(referralService, never()).claim(any(), any(), any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
         @DisplayName("sweeps before it resolves, so a claim that has just lapsed is claimable rather than a 404")
         void sweepsBeforeItResolves() {
             stored(ReferralState.Open, null);
@@ -707,16 +811,22 @@ class JudicialReferralServiceTest {
     /**
      * A referral in the given state, claimed and decided by the given judge where those columns apply.
      *
-     * <p>Both columns are set for every state rather than only the ones that would really carry them, because
-     * the question these tests ask is what the <em>state</em> admits: a {@code Withdrawn} referral that still
-     * names the judge who had it is exactly the row a visibility rule reading the name first would leak.
+     * <p>All four owner columns are set for every state rather than only the ones that would really carry them,
+     * because the question these tests ask is what the <em>state</em> admits: a {@code Withdrawn} referral that
+     * still names the judge who had it is exactly the row a visibility rule reading the owner first would leak.
+     *
+     * <p>The subjects and the display names both, as a real claim and a real direction write both -- so the two
+     * tests that matter are the ones where they disagree: a namesake of the holder, and the holder after a
+     * rename.
      */
     private static Referral referral(ReferralState state, CurrentUser holder) {
         Referral referral = new Referral();
         referral.setState(state);
         referral.setCreatedOn(LocalDateTime.of(2026, 5, 1, 9, 0));
         if (holder != null) {
+            referral.setClaimedById(holder.userId());
             referral.setClaimedBy(holder.name());
+            referral.setDecidedById(holder.userId());
             referral.setDecidedBy(holder.name());
         }
         return referral;

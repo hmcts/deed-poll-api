@@ -10,6 +10,7 @@ import org.mockito.ArgumentCaptor;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
@@ -96,6 +97,34 @@ class ReferralServiceTest {
     /** A second judge, for the questions that are about which of two judges holds a referral. */
     private static final CurrentUser OTHER_JUDGE =
         CurrentUser.currentUser(List.of(Role.JUDICIAL), "District Judge Okafor", "judge-4");
+
+    /**
+     * A third judge who happens to share {@link #JUDGE}'s display name -- a different person on the same bench.
+     *
+     * <p>The shape the ownership migration exists for: two judges with one display name between them. While the
+     * holder check compared names these two were indistinguishable to it, so either could direct the other's
+     * referral. Their subjects differ, which is the only thing that now separates them.
+     */
+    private static final CurrentUser NAMESAKE_JUDGE =
+        CurrentUser.currentUser(List.of(Role.JUDICIAL), "District Judge Bell", "judge-9");
+
+    /**
+     * {@link #JUDGE} after IDAM renamed them -- the same subject, a new display name.
+     *
+     * <p>The other half of the same defect, and the one that was a bug rather than a disclosure: a judge who
+     * married, took a title or had a typo corrected lost their own claim until the sweep released it.
+     */
+    private static final CurrentUser RENAMED_JUDGE =
+        CurrentUser.currentUser(List.of(Role.JUDICIAL), "Her Honour Judge Bell", "judge-3");
+
+    /**
+     * A judicial caller IDAM identified no further than the role: no subject, so nothing they could own.
+     *
+     * <p>Not a token IDAM issues -- {@code IdamAccessTokenValidator} refuses one with no {@code sub} -- which is
+     * why it is constructed here. It is the fail-closed case the owner columns are nullable for.
+     */
+    private static final CurrentUser UNIDENTIFIED_JUDGE =
+        CurrentUser.currentUser(List.of(Role.JUDICIAL), "Nobody In Particular", null);
 
     /** The configured window, long enough that the arithmetic in a test is unambiguous. */
     private static final Duration CLAIM_EXPIRY = Duration.ofHours(2);
@@ -220,10 +249,14 @@ class ReferralServiceTest {
 
     /**
      * A stored referral of {@link #CASE_ID} held by a judge, last touched {@code ago} before now.
+     *
+     * <p>Both owner columns, as a real claim writes both: the subject is what the holder check compares and the
+     * display name is the attribution beside it.
      */
     private Referral storedClaim(CurrentUser judge, Duration ago) {
         Referral referral = stored(ReferralState.Claimed);
         LocalDateTime touched = AuditClock.now().minus(ago);
+        referral.setClaimedById(judge.userId());
         referral.setClaimedBy(judge.name());
         referral.setClaimedAt(touched);
         referral.setLastTouchedAt(touched);
@@ -239,6 +272,7 @@ class ReferralServiceTest {
         referral.setId(id);
         referral.setDeedPoll(parent);
         referral.setState(ReferralState.Claimed);
+        referral.setClaimedById(judge.userId());
         referral.setClaimedBy(judge.name());
         referral.setClaimedAt(touched);
         referral.setLastTouchedAt(touched);
@@ -279,6 +313,10 @@ class ReferralServiceTest {
                 if (row.getId().equals(id) && lapsedBy(row, cutoff)) {
                     row.setState(ReferralState.Open);
                     row.setClaimedBy(null);
+                    // The column the holder check reads, cleared by the statement exactly as the SQL clears it:
+                    // a released claim whose owner survived would leave the judge who abandoned the referral
+                    // still able to direct it.
+                    row.setClaimedById(null);
                     row.setClaimedAt(null);
                     row.setLastTouchedAt(null);
                     row.setModifiedBy(call.getArgument(3));
@@ -783,6 +821,42 @@ class ReferralServiceTest {
         }
 
         @Test
+        @DisplayName("records the claim against the judge's IDAM subject, with their name beside it")
+        void recordsTheClaimAgainstTheSubject() {
+            stored(ReferralState.Open);
+
+            service.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            Referral written = saved();
+            // The column every later ownership check reads. The name is written too and is read by people:
+            // asserted together here because the point of the pair is that they are both present and only one
+            // of them decides anything.
+            assertThat(written.getClaimedById()).isEqualTo("judge-3");
+            assertThat(written.getClaimedBy()).isEqualTo("District Judge Bell");
+        }
+
+        @Test
+        @DisplayName("refuses a judicial caller with no subject, before the sweep or any other write")
+        void refusesACallerWithNoSubject() {
+            Referral referral = storedClaim(OTHER_JUDGE, CLAIM_EXPIRY.plusMinutes(1));
+            rowsInTheDatabase(referral);
+
+            // 401 rather than 403: they hold the role, and what they lack is an identity to own the claim with.
+            // A stored claim with a null owner would be a claim nobody could later prove was theirs -- and
+            // worse, one every other unidentified caller would match if the check ever fell back to a name.
+            assertThatThrownBy(() -> service.claim(CASE_ID, REFERRAL_ID.toString(), UNIDENTIFIED_JUDGE))
+                .isInstanceOf(UnauthorizedError.class);
+
+            // Refused before any state change at all, the sweep included: the other judge's lapsed claim is
+            // still there, so an unidentified caller cannot release one by being refused.
+            verify(referrals, never()).findStaleClaims(any(), any());
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+            assertThat(referral.getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(referral.getClaimedById()).isEqualTo("judge-4");
+        }
+
+        @Test
         @DisplayName("refuses a caseworker, who has no judicial role, and writes nothing")
         void refusesACaseworker() {
             stored(ReferralState.Open);
@@ -828,6 +902,7 @@ class ReferralServiceTest {
         void refusesAnythingThatIsNotOpen(ReferralState state) {
             Referral referral = stored(state);
             referral.setClaimedBy(state == ReferralState.Claimed ? OTHER_JUDGE.name() : null);
+            referral.setClaimedById(state == ReferralState.Claimed ? OTHER_JUDGE.userId() : null);
             // Touched a moment ago, so the sweep has no business releasing it.
             referral.setLastTouchedAt(AuditClock.now());
             rowsInTheDatabase(referral);
@@ -1051,6 +1126,125 @@ class ReferralServiceTest {
         }
     }
 
+    /**
+     * Who holds a claim, which is the one question the two judicial writes both turn on.
+     *
+     * <p>Every rule here is a rule about {@code claimedById} rather than about {@code claimedBy}, and each of them
+     * was the wrong answer while the check compared display names. They are stated over {@code touch} and
+     * {@code decide} together because {@code requireHeldBy} is one method both go through, so a rule proved
+     * against one of them and not the other would be proved against half of the surface it guards.
+     */
+    @Nested
+    @DisplayName("who holds a claim")
+    class ClaimOwnership {
+
+        /**
+         * The two transitions {@code requireHeldBy} stands in front of, so each rule is asserted over both.
+         */
+        private List<Runnable> writesOnAHeldReferral(CurrentUser caller) {
+            return List.of(
+                () -> service.touch(CASE_ID, REFERRAL_ID.toString(), caller),
+                () -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), caller));
+        }
+
+        @Test
+        @DisplayName("refuses a different judge who happens to share the holder's display name")
+        void refusesANamesakeOfTheHolder() {
+            Referral referral = storedClaim(JUDGE, Duration.ofMinutes(5));
+
+            // The disclosure the migration removes. These two callers are indistinguishable by name and are
+            // different people, so the old check let either of them refresh and direct the other's referral --
+            // on the judicial surface, where the claim is also the only thing standing in front of the case.
+            for (Runnable write : writesOnAHeldReferral(NAMESAKE_JUDGE)) {
+                assertThatThrownBy(write::run)
+                    .isInstanceOf(ConflictError.class)
+                    .hasMessageContaining("District Judge Bell");
+            }
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(referral.getDecision()).isNull();
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("admits the holder after IDAM renames them, because the subject is what was stored")
+        void admitsTheHolderUnderANewDisplayName() {
+            Referral written = storedClaim(JUDGE, Duration.ofMinutes(5));
+
+            // The other half, and the one that was a plain bug: a judge who married or took a title used to
+            // lose their own claim -- 409 to direct -- until the sweep released it to the pool.
+            assertThatCode(() -> service.touch(CASE_ID, REFERRAL_ID.toString(), RENAMED_JUDGE))
+                .doesNotThrowAnyException();
+            assertThatCode(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), RENAMED_JUDGE))
+                .doesNotThrowAnyException();
+
+            assertThat(written.getState()).isEqualTo(ReferralState.Decided);
+            // The direction is signed with the name they have now, which is the name the office will see on it,
+            // while the claim keeps the name it was made under. Neither is what admitted them.
+            assertThat(written.getDecidedBy()).isEqualTo("Her Honour Judge Bell");
+            assertThat(written.getClaimedBy()).isEqualTo("District Judge Bell");
+            assertThat(written.getDecidedById()).isEqualTo("judge-3");
+        }
+
+        @Test
+        @DisplayName("holds a claim with no owner to belong to nobody, rather than falling back to the name")
+        void refusesEverybodyAClaimWithNoOwner() {
+            // A claim made before V14, and the shape V7's backfill produced: the name may even still be there.
+            // Falling back to it would keep the collision on precisely the rows whose identity is least certain,
+            // so this fails closed -- and the inactivity sweep, which matches on lastTouchedAt and never on
+            // identity, is what returns it to the pool where any judge may claim it again.
+            Referral referral = storedClaim(JUDGE, Duration.ofMinutes(5));
+            referral.setClaimedById(null);
+
+            for (CurrentUser caller : List.of(JUDGE, NAMESAKE_JUDGE, OTHER_JUDGE)) {
+                for (Runnable write : writesOnAHeldReferral(caller)) {
+                    assertThatThrownBy(write::run)
+                        .as("a claim with no owner is not %s's", caller.name())
+                        .isInstanceOf(ConflictError.class);
+                }
+            }
+
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("refuses a judicial caller with no subject at all, and writes nothing")
+        void refusesACallerWithNoSubject() {
+            Referral referral = storedClaim(JUDGE, Duration.ofMinutes(5));
+
+            // 401 rather than the 409 a wrong holder gets: the caller has not been identified well enough to be
+            // told whose referral it is. Compared the other way round -- the column against the caller -- this
+            // would have been a NullPointerException or, worse, a match against a null owner.
+            for (Runnable write : writesOnAHeldReferral(UNIDENTIFIED_JUDGE)) {
+                assertThatThrownBy(write::run).isInstanceOf(UnauthorizedError.class);
+            }
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Claimed);
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("stops holding it once the sweep has released the claim, owner and all")
+        void stopsHoldingItOnceTheSweepHasReleasedIt() {
+            Referral lapsed = storedClaim(JUDGE, CLAIM_EXPIRY.plusMinutes(1));
+            rowsInTheDatabase(lapsed);
+
+            assertThat(service.reclaimStaleClaims()).isEqualTo(1);
+
+            // The owner is cleared with the rest of the active-claim fields, which is what stops the judge who
+            // abandoned it directing a referral the pool has re-offered to everybody.
+            assertThat(lapsed.getClaimedById()).isNull();
+            assertThat(lapsed.getClaimedBy()).isNull();
+            for (Runnable write : writesOnAHeldReferral(JUDGE)) {
+                assertThatThrownBy(write::run)
+                    .isInstanceOf(ConflictError.class)
+                    .hasMessageContaining(ReferralState.Open.name());
+            }
+        }
+    }
+
     @Nested
     @DisplayName("recording a direction")
     class Deciding {
@@ -1073,11 +1267,15 @@ class ReferralServiceTest {
             // From the token and the clock, never from the payload: a direction that could name its own author
             // would be a signature anybody could forge.
             assertThat(written.getDecidedBy()).isEqualTo("District Judge Bell");
+            // And their subject beside it, which is the half that decides anything: it is what lets them re-read
+            // their own direction while the office actions it, and what keeps every other judge out.
+            assertThat(written.getDecidedById()).isEqualTo("judge-3");
             assertThat(written.getModifiedBy()).isEqualTo("District Judge Bell");
             // The claim's own columns are left as they were: claimedAt is what answers "how long did the
             // judiciary have this", and rewriting it at the decision would erase the answer.
             assertThat(written.getClaimedAt()).isEqualTo(claimedAt);
             assertThat(written.getClaimedBy()).isEqualTo("District Judge Bell");
+            assertThat(written.getClaimedById()).isEqualTo("judge-3");
             // Refreshed even though the sweep will never look at this row again, so the column keeps meaning
             // "when a judge last did something with this".
             assertThat(written.getLastTouchedAt()).isBetween(before, AuditClock.now());

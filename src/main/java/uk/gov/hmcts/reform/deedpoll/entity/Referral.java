@@ -28,7 +28,8 @@ import java.util.UUID;
 
 /**
  * A referral of a case to the judiciary: {@code deedpoll_referral}, from {@code V6__referrals.sql},
- * with the claim and direction columns {@code V8__referral_claim_and_direction.sql} adds.
+ * with the claim and direction columns {@code V8__referral_claim_and_direction.sql} adds and the two owner
+ * subjects {@code V14__referral_owner_subjects.sql} adds.
  *
  * <p><strong>Not a port.</strong> Like {@link SavedQuery}, this has no model in
  * {@code reference/deed-poll.prisma}. The source store held one referral inline on the case,
@@ -108,9 +109,30 @@ public class Referral {
     /**
      * The judge holding this referral, as a display name resolved from their token at claim time.
      * Null on an {@code Open} referral and on every backfilled one -- the power app recorded no claim.
+     *
+     * <p><strong>Attribution, and nothing else.</strong> It is what a caseworker reads on the case and what a
+     * lapse note names, and it authorises nothing: {@link #claimedById} is who the claim belongs to. Until
+     * {@code V14__referral_owner_subjects.sql} this column was both, which is the defect that migration removes
+     * -- two judges sharing a display name could read and direct each other's referrals.
      */
     @Column(name = "claimedBy")
     private String claimedBy;
+
+    /**
+     * The IDAM subject of the judge holding this referral -- who the claim actually belongs to, from
+     * {@code V14__referral_owner_subjects.sql}.
+     *
+     * <p>Every ownership check on a referral compares this: {@code ReferralService.requireHeldBy},
+     * {@code JudicialReferralService.visibleTo} and its {@code heldBy} helper. A subject is stable where a
+     * display name is not, so a judge keeps their claim when IDAM renames them and cannot reach another judge's
+     * by happening to share a name.
+     *
+     * <p>Null on an {@code Open} referral, on every backfilled one, and on any claim made before that migration
+     * -- which is not backfilled, because a subject cannot be derived from a name. A null owner is nobody's, so
+     * it fails closed at every check above rather than falling back to the name.
+     */
+    @Column(name = "claimedById")
+    private String claimedById;
 
     @Column(name = "claimedAt")
     private LocalDateTime claimedAt;
@@ -149,9 +171,26 @@ public class Referral {
     @Column(name = "decisionDate")
     private LocalDateTime decisionDate;
 
-    /** The deciding judge's display name, resolved from their token when the direction was recorded. */
+    /**
+     * The deciding judge's display name, resolved from their token when the direction was recorded.
+     *
+     * <p>Attribution, like {@link #claimedBy}: it signs the direction for the office reading it, and
+     * {@link #decidedById} is what decides whether its author may re-read it.
+     */
     @Column(name = "decidedBy")
     private String decidedBy;
+
+    /**
+     * The IDAM subject of the judge who recorded the direction, from
+     * {@code V14__referral_owner_subjects.sql}.
+     *
+     * <p>What {@code JudicialReferralService.visibleTo} compares on a {@code Decided} referral, so a judge can
+     * re-read their own direction while the office actions it and no other judge can. Never cleared once set --
+     * a direction is a permanent act, unlike a claim -- and null on a direction recorded before that migration,
+     * which stays visible and actionable to caseworkers and belongs to no judge's personal list.
+     */
+    @Column(name = "decidedById")
+    private String decidedById;
 
     @Column(name = "createdOn", nullable = false)
     private LocalDateTime createdOn;

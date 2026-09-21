@@ -83,8 +83,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p><strong>The judge is a token holder here, unlike everywhere else in the suite.</strong> IDAM does not issue
  * {@code Role.JUDICIAL} yet, so the stub is asked for a userinfo document carrying the claim value -- which is the
  * only way to assert that a judicial <em>request</em> is admitted end to end rather than that a
- * {@code CurrentUser} constructed in a test is. The judge's identity is their display name, because that is what
- * {@code claimedBy} holds, so the fixtures and the token have to agree on it.
+ * {@code CurrentUser} constructed in a test is. The judge's identity is the token's {@code sub}, because that is
+ * what {@code claimedById} holds, so the fixtures and the token have to agree on the subject and not merely on the
+ * display name -- and {@code IdamUserInfoClient} requires the token and the userinfo document to agree on it too.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -104,6 +105,31 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
     /** A second judge, who exists only to hold referrals this one must not see. */
     private static final String OTHER_JUDGE_NAME = "District Judge Okafor";
+
+    /**
+     * The subject on the token the requests carry: the stub's own, because its tokens and its userinfo have to
+     * agree on one and {@code IdamUserInfoClient} refuses the request if they do not.
+     */
+    private static final String JUDGE_SUBJECT = StubIdam.SUBJECT;
+
+    /** The second judge's subject, which is the only thing that distinguishes them from the first. */
+    private static final String OTHER_JUDGE_SUBJECT = "idam-judge-okafor";
+
+    /**
+     * A third judge who shares {@link #JUDGE_NAME}: a different person, and one the fixtures never hold anything
+     * for. They exist to be refused.
+     */
+    private static final String NAMESAKE_JUDGE_SUBJECT = "idam-judge-namesake";
+
+    /**
+     * The subject of whoever the current userinfo stub describes, so the token minted for a request agrees with
+     * it.
+     *
+     * <p>Mutable because a judge is switched mid-test -- which is the only way to ask whether a referral one judge
+     * holds is visible to another over real HTTP -- and because ownership is now keyed on the subject, so
+     * switching judges means switching subjects rather than only display names.
+     */
+    private static String tokenSubject = JUDGE_SUBJECT;
 
     private static final StubIdam IDAM = new StubIdam();
 
@@ -491,6 +517,28 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             // Byte for byte apart from the id the caller themselves sent: one judge cannot learn that another
             // holds a case, and a referral id cannot be probed for by comparing refusals.
             assertThat(held).isEqualTo(never.replace(UNKNOWN_ID, theirs));
+        }
+
+        @Test
+        @DisplayName("404s a referral held by a judge of the same display name, over a real token")
+        void notFoundForANamesakeOfTheHolder() throws Exception {
+            String theirs = claimedBy(JUDGE_NAME);
+            String theirDirection = directedBy(JUDGE_NAME);
+            // The same display name, a different subject: a different person, and the token says so. This is the
+            // disclosure the ownership migration removes, asserted where a caller actually stands -- before it, the
+            // referral, the application behind it and its whole notes timeline came back with a 200.
+            asJudge(JUDGE_NAME, NAMESAKE_JUDGE_SUBJECT);
+
+            authorised(get(POOL + "/" + theirs))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + theirs + " not found"));
+            authorised(get(POOL + "/" + theirDirection))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + theirDirection + " not found"));
+
+            // And nothing of theirs moved: a refused read must not refresh somebody else's inactivity clock.
+            assertThat(stored(theirs).getClaimedBy()).isEqualTo(JUDGE_NAME);
+            assertThat(stored(theirs).getState()).isEqualTo(ReferralState.Claimed);
         }
 
         @Test
@@ -1001,11 +1049,18 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     /**
      * A judge as the domain sees one. Used only by the fixtures, which reach the transitions directly -- the
      * requests under test carry a real token instead.
+     *
+     * <p>The subject matters here, and it is the one thing the fixtures and the token have to agree on: a claim is
+     * owned by the subject it was made under, so a fixture claiming as a name alone would produce a referral the
+     * request under test does not own. The display name is carried too because it is what the response publishes.
      */
     private static CurrentUser judicial(String name) {
-        // The subject is the name because nothing about a referral turns on it: a claim is recorded under the
-        // display name, which is the one place this codebase authorises on a name rather than on a subject.
-        return CurrentUser.currentUser(List.of(Role.JUDICIAL), name, name);
+        return CurrentUser.currentUser(List.of(Role.JUDICIAL), name, subjectOf(name));
+    }
+
+    /** Which judge a fixture name means, as a subject. Two judges, two subjects, and never a name as an identity. */
+    private static String subjectOf(String name) {
+        return JUDGE_NAME.equals(name) ? JUDGE_SUBJECT : OTHER_JUDGE_SUBJECT;
     }
 
     private Referral stored(String referralId) {
@@ -1047,20 +1102,39 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         referrals.saveAndFlush(referral);
     }
 
-    /** The token the requests carry is a judge's. */
+    /** The token the requests carry is a judge's -- whichever of the two fixture judges is named. */
     private static void asJudge(String name) {
-        IDAM.stubUserInfo(StubIdam.SUBJECT, name, List.of(Role.JUDICIAL.claimValue()));
+        asJudge(name, subjectOf(name));
+    }
+
+    /**
+     * The token the requests carry is a judge's, under a subject the caller chooses.
+     *
+     * <p>The subject is separable from the name here because that separation is what the ownership migration is
+     * about: the same display name under a different subject is a different judge, and asserting that over real
+     * HTTP needs a token that says so.
+     */
+    private static void asJudge(String name, String subject) {
+        tokenSubject = subject;
+        IDAM.stubUserInfo(subject, name, List.of(Role.JUDICIAL.claimValue()));
     }
 
     /** The token the requests carry is an ordinary caseworker's, holding no role this surface asks about. */
     private static void asCaseworker() {
+        tokenSubject = StubIdam.SUBJECT;
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Ada Caseworker", List.of("caseworker-civil"));
     }
 
-    /** The request, carrying a valid forwarded access token. */
+    /**
+     * The request, carrying a valid forwarded access token for whoever the userinfo stub currently describes.
+     *
+     * <p>The subject is put on the token rather than left at the stub's default, because
+     * {@code IdamUserInfoClient} refuses a userinfo document whose {@code sub} disagrees with the token's -- so
+     * switching judges means minting a token for the judge being switched to.
+     */
     private ResultActions authorised(MockHttpServletRequestBuilder request) throws Exception {
         HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(IDAM.accessToken());
+        headers.setBearerAuth(IDAM.accessToken(claims -> claims.subject(tokenSubject)));
         return mockMvc.perform(request.headers(headers));
     }
 }

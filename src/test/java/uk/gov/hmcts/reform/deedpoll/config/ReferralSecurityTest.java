@@ -244,6 +244,7 @@ class ReferralSecurityTest {
         referral.setDirectionsText("Granted, publication as usual");
         referral.setPublishToGazette(true);
         referral.setDecisionDate(LocalDateTime.parse("2026-09-02T11:00:00"));
+        referral.setDecidedById(JUDGE.userId());
         referral.setDecidedBy(JUDGE.name());
         return referral;
     }
@@ -668,6 +669,8 @@ class ReferralSecurityTest {
                 .doesNotThrowAnyException();
             assertThat(referral.getState()).isEqualTo(ReferralState.Claimed);
             assertThat(referral.getClaimedBy()).isEqualTo(JUDGE.name());
+            // And the claim is owned by their subject, which is what the two transitions below then compare.
+            assertThat(referral.getClaimedById()).isEqualTo(JUDGE.userId());
 
             // And the rest of the surface follows, on the referral this judge now holds: the gate is about the
             // role, so a claimed referral is touchable and directable by its holder and by nobody else.
@@ -812,6 +815,8 @@ class ReferralSecurityTest {
             bothCasesExist();
             Referral referral = storedDecision();
             referral.setState(ReferralState.Claimed);
+            // Both, as a real claim writes both: the subject is what the holder check compares.
+            referral.setClaimedById(JUDGE.userId());
             referral.setClaimedBy(JUDGE.name());
             referral.setLastTouchedAt(LocalDateTime.parse("2026-09-02T10:00:00"));
 
