@@ -347,7 +347,34 @@ Verify both read projections:
 
 Regenerate OpenAPI and verify no path/schema/property/enum delta.
 
-- [ ] Full lifecycle timeline and both read projections proven; OpenAPI unchanged
+- [x] Full lifecycle timeline and both read projections proven; OpenAPI unchanged
+
+`ReferralLifecycleTimelineTest` is one journey in a class of its own, because the lifecycle crosses both surfaces:
+raising and closing are caseworker routes, claiming and directing are judicial ones, so neither existing
+controller test can walk it over HTTP — each holds one persona's token and reaches the other surface's
+transitions through the service. The journey re-stubs the userinfo document between steps, so the referring
+caseworker, the judge and the actioning caseworker are three real tokens rather than one: four notes all reading
+the same `createdBy` would otherwise pass. It asserts the four notes' **exact** prose in lifecycle order with
+their authors, the case's `currentReferralState` back to null, and the direction text present on the referral and
+absent from every note.
+
+**The plan's "newest-first" is true of two of the three read surfaces, and the third is not a bug.**
+`JudicialReferralDetail.caseNotes` and the notes grid (`GET /caseworker/cases/{id}/notes`) are newest first —
+both come off `NoteService.findNotes`. `CaseDetailResponse.notes` is **oldest** first, because it comes off the
+case's own `@OrderBy("createdOn ASC")` collection, reproducing the `orderBy: asc` the reference declares on each
+of the three includes. The journey therefore asserts each surface in the order it really answers, all three of
+them, rather than assuming one order for the caseworker side; a client rendering one with the other's assumption
+would show the lifecycle backwards. The judicial read is taken mid-journey, after the direction and before the
+closure, because a `Closed` referral is a 404 to the judge who directed it.
+
+The lapse/reclaim branch stays where Task 2 put it — `ReferralServiceTest`'s claimed → lapsed → claimed sequence
+with its three authors — rather than being forced into the journey, which would need a backdated claim.
+
+**OpenAPI proven unchanged by byte diff, not by argument.** `/tmp/openapi-specs.json` was generated on this
+branch, then regenerated from `master` (`df813c5`) in a throwaway worktree: **56,771 bytes, identical**. Only
+`ReferralNotes` and `ReferralService` differ from master under `src/main`, neither reachable from a DTO or
+controller signature. `./gradlew build` green — `test` **2,328** (2,327 + 1) + `integration` 8 = **2,336**, zero
+failures or errors, `OpenAPIPublisherTest` still asserting 33 caseworker and 4 judicial operations.
 
 ### Task 5: Documentation and full validation
 
