@@ -1,7 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.notify;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -57,11 +56,9 @@ import java.util.UUID;
  * deployment deliberately configured not to send -- the alternatives are failing rows that could have
  * been sent, or claiming them and throwing them away.
  */
+@Slf4j
 @Service
 public class NotificationOutbox {
-
-    private static final Logger LOG = LoggerFactory.getLogger(NotificationOutbox.class);
-
     /**
      * How many rows one drain takes.
      *
@@ -127,7 +124,7 @@ public class NotificationOutbox {
             // backoff is computed from. claimNextDue clears the session, so this is a fresh row.
             Optional<Notification> claimed = notifications.findById(id);
             if (claimed.isEmpty()) {
-                LOG.warn("Notification {} vanished between being claimed and being read", id);
+                log.warn("Notification {} vanished between being claimed and being read", id);
                 continue;
             }
             Notification row = claimed.get();
@@ -149,7 +146,7 @@ public class NotificationOutbox {
         try {
             return active.send(row);
         } catch (RuntimeException exception) {
-            LOG.error("Notification {} for case {} threw rather than reporting an outcome",
+            log.error("Notification {} for case {} threw rather than reporting an outcome",
                       row.getId(), row.getDeedPollId(), exception);
             return SendOutcome.failed(NotificationFailure.TECHNICAL,
                                       exception.getClass().getSimpleName() + ": " + exception.getMessage());
@@ -207,10 +204,10 @@ public class NotificationOutbox {
                                              : reason(failed));
                 }
                 if (failed.failure() == NotificationFailure.TECHNICAL) {
-                    LOG.error("Notification {} for case {} failed with an unclassified answer: {}",
+                    log.error("Notification {} for case {} failed with an unclassified answer: {}",
                               row.getId(), row.getDeedPollId(), row.getFailureReason());
                 } else {
-                    LOG.warn("Notification {} for case {} failed ({}, attempt {}): {}",
+                    log.warn("Notification {} for case {} failed ({}, attempt {}): {}",
                              row.getId(), row.getDeedPollId(), row.getState(), row.getAttempts(),
                              row.getFailureReason());
                 }

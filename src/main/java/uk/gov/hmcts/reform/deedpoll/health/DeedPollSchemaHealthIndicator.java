@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.health;
 
+import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.actuate.health.Health;
@@ -31,10 +32,9 @@ import java.util.List;
  * paged for "readiness DOWN" with no further detail is most of the diagnosis wasted, and which of the two
  * halves is missing decides whether the answer is "re-run the migration job" or "the database is gone".
  */
+@Slf4j
 @Component
 public class DeedPollSchemaHealthIndicator implements HealthIndicator {
-
-    private static final Logger LOG = LoggerFactory.getLogger(DeedPollSchemaHealthIndicator.class);
 
     private final DeedPollSchema schema;
 
@@ -52,7 +52,7 @@ public class DeedPollSchemaHealthIndicator implements HealthIndicator {
             // database being unreachable is somebody else's fault and a different fix. The exception is logged
             // rather than published, because a driver's message names hosts and databases and this endpoint
             // takes no credential.
-            LOG.error("Readiness: the deed-poll schema could not be read", e);
+            log.error("Readiness: the deed-poll schema could not be read", e);
             return Health.down()
                 .withDetail("error", "the deed-poll schema could not be read; the database did not answer")
                 .build();
@@ -62,7 +62,7 @@ public class DeedPollSchemaHealthIndicator implements HealthIndicator {
             return Health.up().withDetail("tables", DeedPollSchema.DEED_POLL_TABLES.size()).build();
         }
 
-        LOG.error("Readiness: the deed-poll schema is incomplete, missing: {}. Has the migration job run?",
+        log.error("Readiness: the deed-poll schema is incomplete, missing: {}. Has the migration job run?",
                   String.join(", ", missing));
         return Health.down()
             .withDetail("error", "the deed-poll schema is incomplete. Has the migration job run?")

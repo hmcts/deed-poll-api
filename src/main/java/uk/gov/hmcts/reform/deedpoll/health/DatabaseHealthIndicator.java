@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.health;
 
+import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.actuate.health.Health;
@@ -31,11 +32,9 @@ import org.springframework.stereotype.Component;
  * probe still answers DOWN, and whoever is paged still gets the driver's message -- from the pod's logs,
  * which do take a credential to read.
  */
+@Slf4j
 @Component("dbHealthIndicator")
 public class DatabaseHealthIndicator implements HealthIndicator {
-
-    private static final Logger LOG = LoggerFactory.getLogger(DatabaseHealthIndicator.class);
-
     /**
      * Postgres's validation query, which is what Boot's own indicator resolves to for this driver.
      */
@@ -53,7 +52,7 @@ public class DatabaseHealthIndicator implements HealthIndicator {
             jdbcTemplate.queryForObject(VALIDATION_QUERY, Integer.class);
             return Health.up().build();
         } catch (DataAccessException e) {
-            LOG.error("Readiness: the database did not answer", e);
+            log.error("Readiness: the database did not answer", e);
             return Health.down().withDetail("error", "the database did not answer").build();
         }
     }

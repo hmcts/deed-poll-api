@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.domain.documents;
 
+import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -47,11 +48,9 @@ import java.util.Optional;
  * <p>The service returns entities, not view models, exactly as the reference does. Formatting is
  * {@link DocumentsView}'s job, and the caseworker API maps to its own DTOs.
  */
+@Slf4j
 @Service
 public class DocumentService {
-
-    private static final Logger LOG = LoggerFactory.getLogger(DocumentService.class);
-
     /**
      * The direction an upload gets when the caller does not say: an applicant-supplied document.
      *
@@ -300,7 +299,7 @@ public class DocumentService {
             // metadata-only row needs no special case here.
             store.delete(storageKey);
         } catch (RuntimeException failed) {
-            LOG.error("Deleted document {} but could not remove its stored file (key {})", id, storageKey, failed);
+            log.error("Deleted document {} but could not remove its stored file (key {})", id, storageKey, failed);
         }
     }
 
@@ -330,7 +329,7 @@ public class DocumentService {
                 try {
                     store.delete(storageKey);
                 } catch (RuntimeException failed) {
-                    LOG.error("Upload rolled back but its stored file could not be removed (key {})",
+                    log.error("Upload rolled back but its stored file could not be removed (key {})",
                               storageKey, failed);
                 }
             }

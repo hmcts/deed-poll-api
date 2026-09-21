@@ -1,7 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
@@ -62,9 +61,8 @@ import java.util.regex.Pattern;
  * {@code safeParse} caller would inspect, and the ported tests assert the throw where the reference
  * asserts {@code success === false}.
  */
+@Slf4j
 public final class DeedPollSchemas {
-
-    private static final Logger LOG = LoggerFactory.getLogger(DeedPollSchemas.class);
 
     /**
      * An ISO 8601 calendar date, matching {@code z.iso.date()}.
@@ -218,7 +216,7 @@ public final class DeedPollSchemas {
                 // FieldRejected, so arriving here means a coercion itself is wrong rather than the value --
                 // but letting it escape would answer 500, lose the other fields' errors with it, and tell the
                 // caller nothing about which field was at fault. Logged so the coercion bug stays visible.
-                LOG.warn("Coercing field {} failed unexpectedly; reported as a field error", field, failed);
+                log.warn("Coercing field {} failed unexpectedly; reported as a field error", field, failed);
                 errors.add(new FieldError(field, field + " is not valid"));
             }
         });

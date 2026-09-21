@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.notify;
 
+import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -41,10 +42,9 @@ import java.util.Map;
  * an unprovisioned service, and {@code EmailAvailability.provisioned} is how the Email tab says so before a
  * caseworker presses send.
  */
+@Slf4j
 @Service
 public class NotifyEmailSender implements NotificationSender {
-
-    private static final Logger LOG = LoggerFactory.getLogger(NotifyEmailSender.class);
 
     private final NotificationClient notify;
     private final NotifyProperties properties;
@@ -78,7 +78,7 @@ public class NotifyEmailSender implements NotificationSender {
             // An EmailTemplate member renamed after this row was written -- the one thing the class javadoc on
             // Notification warns about. Permanent because no retry resolves a member that no longer exists, and
             // named loudly because the fix is a code change rather than an operational one.
-            LOG.error("Notification {} for case {} names template {}, which no EmailTemplate member matches",
+            log.error("Notification {} for case {} names template {}, which no EmailTemplate member matches",
                       notification.getId(), notification.getDeedPollId(), notification.getTemplate());
             return SendOutcome.failed(
                 NotificationFailure.PERMANENT,
@@ -94,7 +94,7 @@ public class NotifyEmailSender implements NotificationSender {
         try {
             SendEmailResponse accepted =
                 notify.sendEmail(templateId, notification.getRecipient(), personalisation, reference);
-            LOG.info("Notification {} for case {} accepted by Notify as {} (template {} version {})",
+            log.info("Notification {} for case {} accepted by Notify as {} (template {} version {})",
                      notification.getId(), notification.getDeedPollId(), accepted.getNotificationId(),
                      template.key(), accepted.getTemplateVersion());
             return SendOutcome.sent(
@@ -104,7 +104,7 @@ public class NotifyEmailSender implements NotificationSender {
                 accepted.getBody());
         } catch (NotificationClientException refused) {
             NotificationFailure verdict = NotificationFailure.classify(refused);
-            LOG.warn("Notify would not send notification {} for case {} ({}, status {})",
+            log.warn("Notify would not send notification {} for case {} ({}, status {})",
                      notification.getId(), notification.getDeedPollId(), verdict, refused.getHttpResult(),
                      refused);
             return SendOutcome.failed(verdict, "GOV.UK Notify refused the send with status "
