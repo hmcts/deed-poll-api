@@ -666,8 +666,10 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             // And the case row is untouched too, so the case stays in the "returned -- action needed" queue: a
             // direction must not drop off the office's worklist because somebody clicked withdraw.
             assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Decided);
-            // Only the note the create wrote: the refusal is a whole rolled-back transaction.
-            assertThat(notes.count()).isOne();
+            // Only the three the lifecycle wrote -- raised, claimed, direction recorded -- and no fourth saying
+            // the referral was withdrawn: the refusal is a whole rolled-back transaction.
+            assertThat(notes.count()).isEqualTo(3);
+            assertThat(notes.findAll()).noneSatisfy(note -> assertThat(note.getNote()).contains("withdrawn"));
         }
 
         @Test

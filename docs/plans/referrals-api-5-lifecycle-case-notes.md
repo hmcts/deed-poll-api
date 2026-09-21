@@ -270,8 +270,28 @@ Keep `touch` note-free and prove repeated reads/touches add nothing.
 Cover lapsed then re-claimed sequencing: the service-account lapse note remains, and the new successful claim
 adds a second human-authored claim note.
 
-- [ ] Claim and decide each write exactly one correctly attributed note; touch and refused transitions write
+- [x] Claim and decide each write exactly one correctly attributed note; touch and refused transitions write
       none; lapse/reclaim sequence covered; focused tests green
+
+`ReferralService.claim` and `.decide` each gained one `notes.createNote` after their `referrals.save` and before
+the `currentReferralState` recompute, authored by `caller.noteAuthor()` — the same position and the same
+transaction as the raised and withdrawn notes. The "No case note" javadoc paragraph on each is replaced rather
+than deleted, naming this plan as what superseded it.
+
+`ReferralServiceTest` replaces both `writesNoCaseNote` tests and adds four more: exact claim prose with no UUID,
+the claimed → lapsed → claimed sequence with its three authors (`Okafor`, `NoteAuthor.NONE`, `Bell`), a
+touch-twice test proving a read is not a transition, exact direction prose, a 4,000-character `directionsText`
+absent from the note and still valid through `NoteForm.validateNoteText`, and `verifyNoInteractions(notes)` on
+the refused claims and directions. A second helper, `notesWritten()`, exists because a claim whose own sweep
+released a lapsed claim writes two notes in one call and their order is the history.
+
+Two existing assertions moved because the new notes are real: `JudicialReferralControllerTest`'s claim response
+now carries **2** `caseNotes` and its direction test pins the judge as `createdBy` with `directionsText` absent
+from the note; `CaseworkerReferralControllerTest`'s refused withdrawal of a `Decided` referral now counts
+**3** notes (raised, claimed, direction) and asserts no fourth says "withdrawn".
+
+`./gradlew build` green — `test` **2,323** (2,319 + 6 new − 2 replaced) + `integration` 8 = **2,331**, zero
+failures or errors.
 
 ### Task 3: Write the direction-actioned note
 
