@@ -8,6 +8,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -40,9 +41,14 @@ class NotificationBackoffTest {
         // rate limit at a fixed interval is how a service stays rate-limited. Capped, so the doubling cannot
         // put an attempt a week away -- and the last row proves the cap holds however high the counter goes,
         // which is also what stops the shift overflowing.
-        assertThat(NotificationBackoff.nextAttemptAt(NOW, attempts))
+        var nextAttempt = NotificationBackoff.nextAttemptAt(NOW, attempts);
+
+        assertThat(nextAttempt)
             .isEqualTo(NOW.plusMinutes(expectedMinutes));
-        assertThat(Duration.between(NOW, NotificationBackoff.nextAttemptAt(NOW, attempts)))
+
+        assertThat(Duration.between(
+            NOW.atOffset(ZoneOffset.UTC),
+            nextAttempt.atOffset(ZoneOffset.UTC)))
             .isLessThanOrEqualTo(NotificationBackoff.MAX_RETRY);
     }
 
