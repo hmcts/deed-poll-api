@@ -25,13 +25,23 @@
  * including the two reads, because the pool and the judicial application view belong to the judicial persona
  * and a caseworker has their own richer surface.
  *
- * <p><strong>Four operations, on one controller, and the four are the whole judicial persona.</strong> Two reads
- * -- the shared pool ({@code GET /judicial/referrals}) and one referral with its narrow application view and the
- * case's notes ({@code GET /judicial/referrals/&#123;referralId&#125;}) -- and two writes, claiming a pool
+ * <p><strong>Five operations, on one controller, and the five are the whole judicial persona.</strong> Three reads
+ * -- the shared pool ({@code GET /judicial/referrals}), this judge's own outstanding work
+ * ({@code GET /judicial/referrals/mine}) and one referral with its narrow application view and the case's notes
+ * ({@code GET /judicial/referrals/&#123;referralId&#125;}) -- and two writes, claiming a pool
  * referral ({@code POST .../claim}) and recording a direction on one they hold ({@code POST .../direction}).
  * Stated as a number here, unlike the caseworker package's deliberate refusal to keep a running total, because
- * four is not a tally of what has accumulated: it is decision 13's boundary, and a fifth route is a change to
- * that boundary rather than a route. In particular there is no judicial <em>closure</em> -- closing a referral is
+ * five is not a tally of what has accumulated: it is decision 13's boundary, and a sixth route is a change to
+ * that boundary rather than a route.
+ *
+ * <p>The personal list was the boundary's missing half rather than an addition to it: {@code visibleTo} always
+ * admitted a judge's own {@code Claimed} and {@code Decided} referrals, and until there was a list of them a
+ * successful claim took the referral off the only page that linked to it. It is a literal segment and not an
+ * {@code ?owner=} parameter, so whose list it is comes from the token and cannot be typed -- a list keyed on
+ * anything a caller sent would be the enumeration this surface's 404s exist to prevent. Its rows are referral
+ * fields only, exactly as the pool's are.
+ *
+ * <p>In particular there is no judicial <em>closure</em> -- closing a referral is
  * the office's acknowledgement that the direction has been actioned -- no judicial <em>note</em> route, no case
  * list and no case search. A judge cannot enumerate deed poll applications, and cannot compose note text: the
  * claim and direction transitions write a note apiece under the judge's name, but {@code ReferralNotes} composes

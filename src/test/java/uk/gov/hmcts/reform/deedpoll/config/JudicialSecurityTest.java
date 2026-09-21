@@ -135,17 +135,19 @@ class JudicialSecurityTest {
     /**
      * How many judicial operations have a route today.
      *
-     * <p>{@link #operations()} is the service's surface, and it is one ahead of the controller's while {@code mine}
-     * is gated but unpublished -- the shape the transitions themselves were in before the judicial controller
-     * existed, and safe for the same reason: a gate on a surface nobody can reach refuses everybody. Written as a
-     * number rather than derived, so publishing the route is a deliberate edit of this line and not a count that
-     * quietly follows whatever the controller happens to declare.
+     * <p>{@link #operations()} is the service's surface, and the two now agree: {@code mine} was gated before it was
+     * published -- safe for the reason the transitions were before the judicial controller existed, because a gate on
+     * a surface nobody can reach refuses everybody -- and publishing its route moved this line. Written as a number
+     * rather than derived, so a handler arriving without a gated service method behind it fails here instead of
+     * following whatever the controller happens to declare.
      */
-    private static final int ROUTED_OPERATIONS = 4;
+    private static final int ROUTED_OPERATIONS = 5;
 
     /** Every judicial path, as a caller would type it: what the allowlist must not match. */
     private static final List<String> JUDICIAL_PATHS = List.of(
         "/judicial/referrals",
+        // A literal segment, so it is a path in its own right rather than one spelling of the referral id below.
+        "/judicial/referrals/mine",
         "/judicial/referrals/" + REFERRAL_ID,
         "/judicial/referrals/" + REFERRAL_ID + "/claim",
         "/judicial/referrals/" + REFERRAL_ID + "/direction");

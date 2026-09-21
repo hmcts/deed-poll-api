@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialDirectionRequest;
+import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialMyReferralsResponse;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialPoolResponse;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialReferralDetail;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
@@ -15,8 +16,14 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 
 /**
- * What a judge does, all four of it: read the shared pool, open a referral they may see, claim one, and direct
- * one they hold.
+ * What a judge does, all five of it: read the shared pool, read their own outstanding work, open a referral they may
+ * see, claim one, and direct one they hold.
+ *
+ * <p><strong>Three reads and two writes.</strong> The fifth operation is the personal list, and it completes the
+ * judicial boundary rather than widening it: visibility always admitted a judge's own {@code Claimed} and
+ * {@code Decided} referrals, and until there was a list of them a successful claim removed the referral from the
+ * only page that linked to it. Its membership is the same predicate as that visibility, so the list cannot offer a
+ * referral whose own link would answer 404.
  *
  * <p><strong>The two writes add no transition logic.</strong> Claiming and directing are {@code ReferralService}
  * transitions -- api-2's, with the {@code Open}-only guard, the holder-only guard and every column they stamp --
@@ -35,7 +42,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
  * {@code CaseDetailResponse} carries every field a caseworker sees and reuse would be a disclosure dressed as
  * deduplication.
  *
- * <p>No route here is annotated as requiring authentication, and all four do: {@code SecurityConfiguration}
+ * <p>No route here is annotated as requiring authentication, and all five do: {@code SecurityConfiguration}
  * authenticates {@code anyRequest()} that is not on a short infrastructure allowlist, so {@code /judicial/**} was
  * protected the moment it existed. An unauthenticated caller is a 401 before routing; a caseworker token is a 403
  * from the domain's role gate; a referral this judge may not see is a 404.
@@ -73,6 +80,42 @@ public class JudicialReferralController {
                                      @RequestParam(name = "size", required = false) String size) {
 
         return JudicialPoolResponse.of(judicial.pool(
+            CurrentUsers.required(),
+            CasePaging.parse(page, size, JudicialReferralService.POOL_PAGE_SIZE)));
+    }
+
+    /**
+     * My referrals: the ones this judge is holding and the directions the office has not yet actioned.
+     *
+     * <p><strong>A literal segment rather than a query parameter, and that is the security decision here.</strong>
+     * {@code ?owner=} or {@code ?claimedBy=} would make whose list this is something a caller types, and a judge who
+     * typed somebody else's would be enumerating another judge's work -- which is the disclosure the whole surface's
+     * 404s exist to prevent. Ownership comes from the token's subject and from nowhere else, so this handler takes
+     * no argument identifying a judge and there is none to forge.
+     *
+     * <p><strong>{@code /mine} wins over {@link #referral} rather than being parsed as a referral id.</strong> A
+     * literal path segment is more specific than a template one, so Spring routes it here and never to the detail
+     * read -- which would have answered 404 for an id that is not a UUID. The word is reserved by this mapping
+     * existing, and {@code JudicialReferralControllerTest} asserts the dispatch rather than trusting it.
+     *
+     * <p>A read that writes, for the pool's reason and a sharper one of its own: the domain runs the inactivity
+     * sweep first, so a claim that lapsed while this judge was away leaves this page in the response that observed
+     * it instead of sitting here to be opened -- which would touch it and revive a claim the expiry window had
+     * already ended. {@code JudicialReferralService#mine} has the full argument.
+     *
+     * <p>{@code page} and {@code size} bind and are parsed exactly as the pool's are, and default to the same
+     * {@link JudicialReferralService#POOL_PAGE_SIZE}: the same dashboard and the same screenful.
+     *
+     * <p>Two refusals, neither of them written here: a caller without {@code Role.JUDICIAL} is the domain's 403, and
+     * a judicial token carrying no subject is its 401 -- an unidentified caller owns nothing, so there is no list
+     * that is theirs. There is no 404, because the collection always exists; a judge holding nothing gets an empty
+     * page and a total of zero.
+     */
+    @GetMapping("/mine")
+    public JudicialMyReferralsResponse mine(@RequestParam(name = "page", required = false) String page,
+                                            @RequestParam(name = "size", required = false) String size) {
+
+        return JudicialMyReferralsResponse.of(judicial.mine(
             CurrentUsers.required(),
             CasePaging.parse(page, size, JudicialReferralService.POOL_PAGE_SIZE)));
     }

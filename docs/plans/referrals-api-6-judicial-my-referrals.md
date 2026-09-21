@@ -354,7 +354,39 @@ Controller and security tests prove:
 - `/mine` is not dispatched through `/{referralId}`;
 - no additional data is disclosed.
 
-- [ ] Fifth judicial operation implemented with exact membership and security; HTTP tests green
+- [x] Fifth judicial operation implemented with exact membership and security; HTTP tests green
+
+#### What Task 3 did, 2026-09-21
+
+`JudicialReferralController.mine` is `@GetMapping("/mine")` — a literal segment, so Spring's pattern comparator
+prefers it over `/{referralId}` and `mine` is never parsed as a referral UUID. It binds `page`/`size` as strings and
+reads them through `CasePaging.parse` with `POOL_PAGE_SIZE`, exactly as `pool` does, so an unreadable value is this
+service's 400 naming the parameter rather than Spring's type-mismatch answer.
+
+`JudicialMyReferralsResponse` is a new envelope with the pool's shape and `JudicialReferralSummary` rows, reused
+unchanged — that type already publishes `state` for this list, and a row here says which of a judge's referrals they
+are still holding and which they have directed. A separate envelope from `JudicialPoolResponse` for the reason
+`ReferralWorkload` is separate from `ReferralPool`: in the generated client the type is the documentation, and one
+type would put "pool" in the name of the pool's complement.
+
+Sixteen tests in a new `JudicialReferralControllerTest.MyReferrals` nest, over real HTTP with a real judicial token:
+membership (both owned states present, `Open`/`Closed`/`Withdrawn`/other-judge/null-owner absent, and a namesake of
+the holder getting their own empty list); the four-key order with the oldest of five referrals coming last because it
+is `Decided`; database paging with another judge's row present; the whole lifecycle in one test — claim → appears,
+read → no duplicate or reorder, direction → remains as `Decided`, close → gone — plus withdrawal separately; the
+sweep taking a lapsed claim off this page and returning it to the pool in the same request; 400 on both malformed
+paging parameters; 401 with the claim proved unswept; 403 for a caseworker and for an administrator; and the
+dispatch, asserted against `GET /judicial/referrals/theirs` still being the detail read's 404. No case data, no
+direction text and no owner subject on a row, asserted over the whole document as well as field by field.
+
+`JudicialSecurityTest.ROUTED_OPERATIONS` is now **5** and `/judicial/referrals/mine` is in its `JUDICIAL_PATHS`, so
+the service and controller surfaces agree again and the allowlist assertion covers the new path. The controller's
+class Javadoc and `api/judicial/controller/package-info.java` now describe five operations — they stated four as
+decision 13's boundary, so leaving them would have been a documented falsehood in the package being changed.
+`OpenAPIPublisherTest` is untouched and still green: its judicial count sums only over its own `JUDICIAL_PATHS`, and
+adding the path and the 4 → 5 assertion is Task 4's.
+
+`./gradlew build` green: `test` **2,379** + `integration` **8** = **2,387**, zero failures (Task 2: 2,371).
 
 ### Task 4: Publish the contract and update documentation
 
