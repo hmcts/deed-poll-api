@@ -400,7 +400,42 @@ Update `OpenAPIPublisherTest`:
 Update README/API inventory, package/Javadocs, `CurrentUser`'s resolved warning and the completed api-3 plan.
 Regenerate OpenAPI and verify the delta is exactly the new GET/schema plus the expected operation-count text.
 
-- [ ] Contract and documentation describe five judicial operations; no caseworker or existing schema drift
+- [x] Contract and documentation describe five judicial operations; no caseworker or existing schema drift
+
+#### What Task 4 did, 2026-09-21
+
+`OpenAPIPublisherTest` now lists `/judicial/referrals/mine` in `JUDICIAL_PATHS` and asserts **5** judicial
+operations, separately from the caseworker **33**, which is untouched. Two assertions were added beside the count,
+because a count alone would not have caught either mistake: `/judicial/referrals` still carries exactly one
+operation, so `mine` cannot have been published by widening the pool's entry, and `/judicial/referrals/mine`
+carries exactly a `get`.
+
+A new test, `documentsThePersonalReferralList`, pins the contract the admin client is generated from: the
+operation answers with `JudicialMyReferralsResponse` by name — a client generated against `JudicialPoolResponse`
+would compile and then call the pool's complement the pool — its five properties, `referrals` items pointing at
+`JudicialReferralSummary`, the two optional paging parameters, and the pool still answering with its own envelope.
+The row type is asserted to carry **exactly** the seven referral fields it carried as the pool's row and nothing
+else, and the two owner columns are searched for as text over the whole document, so a schema this test does not
+know about cannot publish a judge's subject either. Response media types are asserted as `*/*`, which is what
+springdoc publishes for a controller declaring no `produces` — the document as it is, not as one might prefer it.
+
+**The delta was measured, not asserted.** The spec was regenerated from `master` at `7226fc9` in a throwaway
+worktree and compared with this branch's: **one** new path (`/judicial/referrals/mine`, one GET), **one** new
+schema (`JudicialMyReferralsResponse`), and with those two deleted the two documents are identical — so
+`JudicialReferralSummary`, every caseworker path and every other schema are unchanged. 56,771 → 57,495 bytes.
+
+Documentation: `README.md` (five operations, the new table row, the personal list's membership rule and why it is
+not an `?owner=` parameter, ownership as the IDAM subject, and "two reads that write" corrected to three reads all
+of which do); `CLAUDE.md` (five operations, and a new rule that ownership is the subject and a null owner belongs
+to nobody); `docs/RESUME.md` (V14 and notify-3's V15, judicial 4 on `master` and 5 here, api-6 complete on branch
+with its contract delta, the IDAM judicial-role item, test totals 2,388, and the spec-size baseline);
+`CurrentUser`'s javadoc, whose "two places authorise on name" warning is now the record of a **fixed** defect and
+a plain instruction to authorise on the subject and never fall back to the name; and the completed
+`referrals-api-3` plan, where a dated note says the four it states throughout is now five and flag 7's migration
+is done — appended rather than rewritten, as this repo's plans require.
+
+`./gradlew build` green: `test` **2,379** + `integration` **9** = **2,388**, zero failures (Task 3: 2,387 — the
+new OpenAPI test is the one added test, and it is an integration one).
 
 ### Task 5: Full validation
 

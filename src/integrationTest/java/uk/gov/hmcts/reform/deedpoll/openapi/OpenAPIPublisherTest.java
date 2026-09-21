@@ -107,6 +107,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      */
     private static final List<String> JUDICIAL_PATHS = List.of(
         "/judicial/referrals",
+        "/judicial/referrals/mine",
         "/judicial/referrals/{referralId}",
         "/judicial/referrals/{referralId}/claim",
         "/judicial/referrals/{referralId}/direction"
@@ -139,17 +140,24 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * The four judicial operations, published and counted apart from the caseworker surface's thirty-three.
+     * The five judicial operations, published and counted apart from the caseworker surface's thirty-three.
      *
      * <p>Both halves for the reason the caseworker assertion gives: a count cannot tell a new verb on a known
      * path from a new path, and a path list cannot tell a route that was removed from one that never existed.
      *
-     * <p><strong>Four operations across four paths</strong> -- the pool and one referral each carry a {@code GET},
-     * and a referral's claim and its direction each carry a {@code POST}. There is no third write and no judicial
-     * closure: closing a referral is the office's acknowledgement that the direction has been actioned, so it
-     * lives on the caseworker surface and its absence here is the decision rather than an omission.
+     * <p><strong>Five operations across five paths</strong> -- the shared pool, this judge's own work and one
+     * referral each carry a {@code GET}, and a referral's claim and its direction each carry a {@code POST}.
+     * There is no third write and no judicial closure: closing a referral is the office's acknowledgement that
+     * the direction has been actioned, so it lives on the caseworker surface and its absence here is the decision
+     * rather than an omission.
+     *
+     * <p><strong>Four until {@code /judicial/referrals/mine} was published</strong>, and this is the one referral
+     * follow-up that moves the contract. The number is asserted here rather than only listed because
+     * {@code deed-poll-admin} generates its client from this document: an unpublished route is an unbuildable
+     * screen, and the personal list exists precisely because a judge who claimed a referral could not find it
+     * again.
      */
-    @DisplayName("Documents the four judicial operations, separately from the caseworker count")
+    @DisplayName("Documents the five judicial operations, separately from the caseworker count")
     @Test
     void documentsTheJudicialOperations() throws Exception {
         JsonNode paths = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -164,11 +172,84 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         long operations = JUDICIAL_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(4);
+        assertThat(operations).isEqualTo(5);
+
+        // The personal list is a path of its own and not a verb on the pool's, which is what a reader of the
+        // count above cannot see: `/judicial/referrals` still carries exactly one operation, so `mine` cannot
+        // have been documented by widening the pool's entry.
+        assertThat(paths.get("/judicial/referrals").size()).isEqualTo(1);
+        assertThat(paths.get("/judicial/referrals/mine").fieldNames()).toIterable().containsExactly("get");
 
         // And the caseworker count is untouched by their arrival, asserted here as well as above: the judicial
         // routes are a new surface, so the number that describes the old one must not have moved.
         assertThat(CASEWORKER_PATHS).doesNotContainAnyElementsOf(JUDICIAL_PATHS);
+    }
+
+    /**
+     * The personal list's envelope, and the row type it deliberately reuses.
+     *
+     * <p>Asserted rather than left to the operation count, because the count cannot tell a published route from a
+     * published <em>contract</em>: {@code deed-poll-admin} generates its client from this document, so the shape
+     * of {@code JudicialMyReferralsResponse} is the shape the judicial dashboard is written against.
+     *
+     * <p><strong>The row assertion is the security one.</strong> Ownership moved to the token's IDAM subject in
+     * this plan's first task, and {@code claimedById} / {@code decidedById} must not be published anywhere: a
+     * document that offered a judge's subject would put one in every generated client and every browser network
+     * log. {@code JudicialReferralSummary} is asserted to carry exactly the referral fields it carried when it was
+     * the pool's row type and nothing else -- no owner id, no case id, no applicant name and no direction text --
+     * so a field added to it in either direction fails here.
+     */
+    @DisplayName("Documents the personal list's envelope, with the pool's row type unchanged")
+    @Test
+    void documentsThePersonalReferralList() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                          .andExpect(status().isOk())
+                                          .andReturn()
+                                          .getResponse()
+                                          .getContentAsByteArray());
+
+        // The operation answers with the new envelope, named: a client generated against `JudicialPoolResponse`
+        // here would compile and then describe the pool's complement as the pool. Reached under `*/*`, which is
+        // what springdoc publishes for a controller that declares no `produces` -- asserted as the document spells
+        // it rather than as the media type the service actually sends.
+        assertThat(spec.at("/paths/~1judicial~1referrals~1mine/get/responses/200/content/*~1*/schema/$ref")
+                       .asText())
+            .isEqualTo("#/components/schemas/JudicialMyReferralsResponse");
+
+        JsonNode envelope = spec.at("/components/schemas/JudicialMyReferralsResponse/properties");
+        assertThat(envelope.fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("referrals", "page", "size", "total", "totalPages");
+        assertThat(envelope.at("/referrals/items/$ref").asText())
+            .isEqualTo("#/components/schemas/JudicialReferralSummary");
+
+        // Paging is described the same way the pool's is, from the same constant, so the two judicial lists
+        // cannot drift into disagreeing about what a page is.
+        Map<String, JsonNode> byName = new LinkedHashMap<>();
+        spec.at("/paths/~1judicial~1referrals~1mine/get/parameters")
+            .forEach(parameter -> byName.put(parameter.at("/name").asText(), parameter));
+        assertThat(byName.keySet()).containsExactlyInAnyOrder("page", "size");
+        byName.forEach((name, parameter) ->
+                           assertThat(parameter.at("/required").asBoolean())
+                               .as("%s is optional, as it is on the pool", name)
+                               .isFalse());
+
+        // The row type, unchanged and shared with the pool -- the referral speaking about itself, and no
+        // ownership, case or application field however this document might have acquired one.
+        JsonNode row = spec.at("/components/schemas/JudicialReferralSummary/properties");
+        assertThat(row.fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("id", "state", "reasons", "notes", "urgency", "urgencyReason", "createdOn");
+        assertThat(spec.at("/paths/~1judicial~1referrals/get/responses/200/content/*~1*/schema/$ref").asText())
+            .as("the pool still answers with its own envelope")
+            .isEqualTo("#/components/schemas/JudicialPoolResponse");
+
+        // And the subject columns are nowhere in the document at all, asserted over the whole of it rather than
+        // field by field: the two names are searched as text, so a schema this test does not know about cannot
+        // publish them either.
+        String published = spec.toString();
+        assertThat(published)
+            .as("no schema publishes a judge's IDAM subject")
+            .doesNotContain("claimedById")
+            .doesNotContain("decidedById");
     }
 
     @DisplayName("Documents the thirty-three caseworker operations and the token they need")
@@ -191,9 +272,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         // The last three are the Email tab's: the case's emails collection carries a GET saying which emails
         // apply, and one email type carries a POST to send it and a POST to preview it. Preview is a POST despite
         // being a read, because the caseworker's slot text is the input and a URL would log a judge's reason.
-        // The judge's own operations -- claiming a referral and recording a direction -- are deliberately not
-        // here: they are transitions on ReferralService with no route yet, and when they get one it is on a
-        // judicial surface rather than this one, so this count stays the caseworker count.
+        // The judge's own operations -- the pool, their own outstanding work, one referral, claiming it and
+        // recording a direction -- are deliberately not here: they are routed on the judicial surface rather than
+        // this one, so this count stays the caseworker count however that surface grows.
         // Both the paths and the count are asserted because neither alone is enough: a count could not tell a new
         // verb on a known path from a new path, and the path list could not tell a route that was removed from one
         // that never existed.
