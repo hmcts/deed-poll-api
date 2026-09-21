@@ -154,6 +154,29 @@ coordinate with them.
 The new note text must contain no data beyond the referral and direction fields already available on the
 judicial referral detail.
 
+## Validation Commands
+
+**These run after every task, so everything here must be green after every task — not only at the end.**
+
+```bash
+export TESTCONTAINERS_RYUK_DISABLED=true
+./gradlew build
+```
+
+`build` is compile + checkstyle across the source sets + `test` + `integration`, so `OpenAPIPublisherTest` runs
+here. That is decision 7's proof: this plan changes no contract, and a passing publisher test asserting **33
+caseworker and 4 judicial** operations is the evidence, not the claim.
+
+**Baseline measured on this branch before Task 1, 2026-09-21** — `test` **2,310** and `integration` **8**,
+**2,318** in total, zero failures, `./gradlew build` green from cold at `df813c5`. Re-measure at the end and
+compare; do not copy a total from an earlier referral plan, several of which quote 2,300 or 2,314.
+
+**This plan is not stacked.** It branches from `master` after api-4 merged, so the withdrawal rule is already
+`Open`/`Claimed` only and the transition set the gate names is fixed.
+
+**A worker or container startup timeout is an environment failure, not a code failure** — re-run before
+investigating.
+
 ## Tasks
 
 ### Task 0: Reconcile note and transition behaviour
@@ -167,6 +190,31 @@ plan does not account for.
 
 - [ ] Current transitions, note behaviour, visibility and limits reconciled; baseline recorded; no files
       changed
+
+#### Reconciliation already performed, 2026-09-21 — read this rather than repeating it
+
+Done in the parent session against `origin/master` at `df813c5`. All five gate items held.
+
+| Gate item | Found |
+|---|---|
+| `ReferralNotes` owns the three existing notes | Exactly three public composers: `raised`, `claimLapsed`, `withdrawn` |
+| `ReferralService` writes those three and no more | Three `notes.createNote` sites — raised `:191`, withdrawn `:267`, claim-lapse `:509`. Nothing in `claim`, `decide` or `close` |
+| Limits unchanged | `NoteForm.MAX_NOTE_LENGTH = 2000`, `ReferralSchemas.MAX_DIRECTIONS_LENGTH = 4000` — decision 5's whole reason |
+| Both read surfaces already carry the notes | `JudicialReferralDetail.caseNotes` is a `List<JudicialCaseNote>`; the caseworker detail carries `NoteResponse` |
+| Baseline | `test` 2,310 + `integration` 8 = **2,318**, zero failures, build green |
+
+**One risk checked that the plan does not mention, and it is clear.** Decision 3 has a *judge* author the claim
+and direction notes, while the judicial surface's only sanctioned write is the direction — so a role gate on
+note creation would have made both transitions fail for the very caller that performs them.
+`NoteService.createNote` has **no** role gate; the `caller.requireAnyRole(Role.DEEDPOLL_ADMIN)` in that class
+is on `removeNote`. `CurrentUser.noteAuthor()` is a plain `new NoteAuthor(name)`, so decision 3 is safe as
+written and needs no gate change.
+
+**Master moved under this plan.** PR #34 landed code-quality work — sonar fixes, an slf4j annotation,
+timezone-aware tests, `OpenAPIWriteBodies` tests — and touched three referral **test** files
+(`CaseworkerReferralControllerTest`, `JudicialReferralControllerTest`, `ReferralSecurityTest`) without touching
+`ReferralService`, `ReferralNotes` or any migration. That is why the baseline is 2,318 rather than api-4's
+2,314. Task 0 changes no files.
 
 ### Task 1: Define and test lifecycle note text
 
