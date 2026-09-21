@@ -158,19 +158,23 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
     private ReferenceCounterRepository referenceCounters;
 
     @BeforeEach
+    void setUp() {
+        clearTables();
+        IDAM.stubDefaults();
+        NOTIFY.stubDefaults();
+    }
+
     @AfterEach
-    void clearTables() {
+    void tearDown() {
+        clearTables();
+    }
+
+    private void clearTables() {
         notifications.deleteAll();
         referrals.deleteAll();
         notes.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
-    }
-
-    @BeforeEach
-    void resetStubs() {
-        IDAM.stubDefaults();
-        NOTIFY.stubDefaults();
     }
 
     @Nested
@@ -357,8 +361,8 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 .containsKey(ApplicationRejectedPersonalisation.ONLINE_APPLICATION_REFERENCE)
                 // Present even though the caseworker added nothing: Notify refuses a send whose personalisation
                 // omits a placeholder the template uses, so an absent key would be a permanent failure later.
-                .containsEntry(EmailSlot.ADDITIONAL_NOTES.placeholder(), "");
-            assertThat(personalisation).hasSize(EmailTemplate.APPLICATION_REJECTED.personalisationKeys().size());
+                .containsEntry(EmailSlot.ADDITIONAL_NOTES.placeholder(), "")
+                .hasSize(EmailTemplate.APPLICATION_REJECTED.personalisationKeys().size());
         }
 
         @Test

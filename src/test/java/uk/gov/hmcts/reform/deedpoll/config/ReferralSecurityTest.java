@@ -743,6 +743,7 @@ class ReferralSecurityTest {
 
             assertThat(paths)
                 .as("the judicial transitions are exposed by the judicial surface, not by this one")
+                .isNotEmpty()
                 .doesNotContain("claim", "touch", "decide", "direction");
         }
     }

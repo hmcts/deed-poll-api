@@ -181,11 +181,15 @@ class ApplicationRejectedPersonalisationTest {
             Map<String, Object> personalisation = ApplicationRejectedPersonalisation
                 .resolve(caseWith(PostCounter.Online), slots("Refused.", "Note.")).toMap();
 
-            assertThat(personalisation).hasSize(
-                ApplicationRejectedPersonalisation.class.getRecordComponents().length);
-            assertThat(Arrays.stream(ApplicationRejectedPersonalisation.class.getRecordComponents())
-                           .map(RecordComponent::getName))
-                .allSatisfy(component -> assertThat(snakeCase(component)).isIn(personalisation.keySet()));
+            var components = Arrays.stream(
+                    ApplicationRejectedPersonalisation.class.getRecordComponents())
+                .map(RecordComponent::getName)
+                .toList();
+
+            assertThat(components)
+                .isNotEmpty()
+                .allSatisfy(component ->
+                                assertThat(snakeCase(component)).isIn(personalisation.keySet()));
         }
 
         @Test

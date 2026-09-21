@@ -143,19 +143,22 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     private ReferenceCounterRepository referenceCounters;
 
     @BeforeEach
+    void setUp() {
+        clearTables();
+        IDAM.stubDefaults();
+        asJudge(JUDGE_NAME);
+    }
+
     @AfterEach
-    void clearTables() {
+    void tearDown() {
+        clearTables();
+    }
+
+    private void clearTables() {
         referrals.deleteAll();
         notes.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
-    }
-
-    /** A judicial token by default, so a test that is about something else does not have to say so. */
-    @BeforeEach
-    void resetIdam() {
-        IDAM.stubDefaults();
-        asJudge(JUDGE_NAME);
     }
 
     @Nested

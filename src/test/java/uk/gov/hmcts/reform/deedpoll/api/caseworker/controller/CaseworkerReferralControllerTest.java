@@ -141,17 +141,21 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
     private ReferenceCounterRepository referenceCounters;
 
     @BeforeEach
+    void setUp() {
+        clearTables();
+        IDAM.stubDefaults();
+    }
+
     @AfterEach
-    void clearTables() {
+    void tearDown() {
+        clearTables();
+    }
+
+    private void clearTables() {
         referrals.deleteAll();
         notes.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
-    }
-
-    @BeforeEach
-    void resetIdam() {
-        IDAM.stubDefaults();
     }
 
     @Nested
