@@ -20,6 +20,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
@@ -44,6 +45,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -58,7 +60,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * assertion to read the stored row back.
  *
  * <p><strong>What is here is what only a booted service can show</strong>, and deliberately not the rules
- * themselves. The reason validation, the one-live-referral guard and the withdraw-terminal guard are pinned in
+ * themselves. The reason validation, the one-live-referral guard and the withdrawable-state guard are pinned in
  * {@code ReferralSchemasTest} and {@code ReferralServiceTest}, which need no container and therefore run on the
  * Jenkins agent, where this class is excluded. This class asserts the routes are wired to those rules, which
  * status code each answer becomes, and that a referral is published as a DTO rather than as the entity.
@@ -364,6 +366,11 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             // The guard asks ReferralState.isTerminal() rather than naming Open, which is what makes the states
             // the directions plans add already covered. Asserted here because a route wired to a narrower guard
             // would pass every other test in this class.
+            //
+            // Derived from isTerminal() and deliberately NOT from canBeWithdrawn(): this is the one-live-referral
+            // rule, not the withdrawal rule, and Decided parts the two -- a decided referral may not be
+            // withdrawn and nonetheless still blocks a second one, because the case holds it until the direction
+            // has been actioned.
             for (ReferralState live : Arrays.stream(ReferralState.values())
                 .filter(state -> !state.isTerminal())
                 .toList()) {
@@ -592,7 +599,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("409s withdrawing a Closed referral, so the guard is terminal-ness and not Withdrawn")
+        @DisplayName("409s withdrawing a Closed referral, so the guard is not Withdrawn alone")
         void refusesWithdrawingAClosedReferral() throws Exception {
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
@@ -602,6 +609,87 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isConflict());
 
             assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Closed);
+        }
+
+        @Test
+        @DisplayName("withdraws a referral a judge is holding, and their late direction is then refused")
+        void withdrawsAReferralAJudgeIsHolding() throws Exception {
+            // Claimed is still withdrawable, and this is the route saying so: the office may need to correct or
+            // cancel a referral while the papers are out, and the judge has recorded nothing yet. The rule the
+            // next test states starts at the direction, not at the claim.
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            referralService.claim(caseId, referralId, judge());
+
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/withdrawal"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value(ReferralState.Withdrawn.name()))
+                // The claim survives on the row: the office pulled the referral back, which is not the same
+                // fact as the judge never having had it.
+                .andExpect(jsonPath("$.claimedBy").value(JUDGE_NAME));
+
+            assertThat(currentReferralState(caseId)).isNull();
+            // And the transition is what makes withdrawing a held referral safe rather than a race: the judge
+            // whose papers were open no longer holds a Claimed referral, so a direction arriving after the
+            // withdrawal is refused instead of landing on a referral the office had pulled back.
+            assertThatThrownBy(() -> referralService.decide(caseId, referralId, approval(), judge()))
+                .isInstanceOf(ConflictError.class);
+            assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Withdrawn);
+        }
+
+        @Test
+        @DisplayName("409s withdrawing a referral a judge has decided, naming what to do with it instead")
+        void refusesWithdrawingADecidedReferral() throws Exception {
+            // The rule this plan exists for, over the route business testing found it on. Reached through the
+            // real claim and direction rather than by writing Decided into the row, so the referral the route
+            // refuses carries an actual direction to be discarded.
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            decide(caseId, referralId, MasterDecision.Approved, "Approved. Publish in the Gazette.", true);
+
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/withdrawal"))
+                // 409 and not 403: nothing about the caller is wrong -- any caseworker may withdraw a referral,
+                // and this one may still close this referral -- it is the state that refuses.
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("Referral " + referralId + " is " + ReferralState.Decided
+                    + " -- a direction has been recorded on it and must be actioned and the referral closed,"
+                    + " rather than withdrawn"));
+
+            Referral refused = stored(referralId);
+            assertThat(refused.getState()).isEqualTo(ReferralState.Decided);
+            assertThat(refused.getDecision()).isEqualTo(MasterDecision.Approved);
+            assertThat(refused.getDirectionsText()).isEqualTo("Approved. Publish in the Gazette.");
+            // And the case row is untouched too, so the case stays in the "returned -- action needed" queue: a
+            // direction must not drop off the office's worklist because somebody clicked withdraw.
+            assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Decided);
+            // Only the note the create wrote: the refusal is a whole rolled-back transaction.
+            assertThat(notes.count()).isOne();
+        }
+
+        @Test
+        @DisplayName("leaves the referral it refused to withdraw closeable, which is the remaining move")
+        void leavesADecidedReferralCloseable() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            decide(caseId, referralId, MasterDecision.Rejected, "Refused. Write to the applicant.", false);
+
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/withdrawal"))
+                .andExpect(status().isConflict());
+
+            // The half that makes the refusal a redirection rather than a dead end, asserted after it so the
+            // refusal is shown not to have consumed the referral: what the office may not withdraw it may
+            // close, through the operation that already exists.
+            authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value(ReferralState.Closed.name()))
+                .andExpect(jsonPath("$.decision").value(MasterDecision.Rejected.name()))
+                .andExpect(jsonPath("$.directionsText").value("Refused. Write to the applicant."))
+                .andExpect(jsonPath("$.decidedBy").value(JUDGE_NAME));
+
+            // Closed is terminal, so the case has no referral in play again -- the same column value the
+            // withdrawal would have produced, now reached only once the direction has been actioned.
+            assertThat(currentReferralState(caseId)).isNull();
+            assertThat(stored(referralId).getDecision()).isEqualTo(MasterDecision.Rejected);
         }
 
         @Test
@@ -926,20 +1014,6 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             return referralId;
         }
 
-        /** The case's column as it stands committed, read in a session of its own. */
-        private ReferralState currentReferralState(String caseId) {
-            return deedPolls.findById(caseId).orElseThrow().getCurrentReferralState();
-        }
-
-        /** A direction that needs no comment, for the tests that are about the column and not the direction. */
-        private DirectionInput approval() {
-            return new DirectionInput(MasterDecision.Approved, Optional.of("Approved"), false);
-        }
-
-        private CurrentUser judge() {
-            return CurrentUser.currentUser(List.of(Role.JUDICIAL), JUDGE_NAME, "judge-1");
-        }
-
         private CurrentUser otherJudge() {
             return CurrentUser.currentUser(List.of(Role.JUDICIAL), "District Judge Okafor", "judge-2");
         }
@@ -1004,13 +1078,33 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                         String directionsText,
                         boolean publishToGazette) {
 
-        CurrentUser judge = CurrentUser.currentUser(List.of(Role.JUDICIAL), JUDGE_NAME, "judge-1");
-        referralService.claim(caseId, referralId, judge);
+        referralService.claim(caseId, referralId, judge());
         referralService.decide(
             caseId,
             referralId,
             new DirectionInput(decision, Optional.ofNullable(directionsText), publishToGazette),
-            judge);
+            judge());
+    }
+
+    /**
+     * The judge the fixtures claim and direct as, carrying the role IDAM does not issue yet.
+     *
+     * <p>Shared by the withdrawal tests and the column tests rather than built twice: both need a referral that
+     * reached {@code Claimed} or {@code Decided} through the real transitions, and the subject is the same judge
+     * each time so that a claim made in one call is recognised as this judge's in the next.
+     */
+    private static CurrentUser judge() {
+        return CurrentUser.currentUser(List.of(Role.JUDICIAL), JUDGE_NAME, "judge-1");
+    }
+
+    /** A direction that needs no comment, for the tests that are about a transition and not the direction. */
+    private static DirectionInput approval() {
+        return new DirectionInput(MasterDecision.Approved, Optional.of("Approved"), false);
+    }
+
+    /** The case's denormalised column as it stands committed, read in a session of its own. */
+    private ReferralState currentReferralState(String caseId) {
+        return deedPolls.findById(caseId).orElseThrow().getCurrentReferralState();
     }
 
     private Referral stored(String referralId) {

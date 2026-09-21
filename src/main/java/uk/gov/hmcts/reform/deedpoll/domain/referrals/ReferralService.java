@@ -45,25 +45,34 @@ import java.util.stream.Collectors;
  * <p><strong>The whole state machine lives here, and the judicial HTTP surface does not.</strong> Create enters
  * {@link ReferralState#Open}, {@link #claim} enters {@link ReferralState#Claimed}, {@link #decide} enters
  * {@link ReferralState#Decided}, {@link #close} enters {@link ReferralState#Closed}, and withdraw enters
- * {@link ReferralState#Withdrawn} from any of the three live ones. {@link #claim} and {@link #decide} have no
+ * {@link ReferralState#Withdrawn} from {@code Open} or {@code Claimed}. {@link #claim} and {@link #decide} have no
  * route in this service -- the judicial pool, the read-through and the endpoints that call them are the
  * judicial-surface plan's -- so they are exercised by tests holding a {@code CurrentUser} rather than a token.
  * Keeping each transition beside the columns it mutates is deliberate: one place owns how a referral changes
  * state, and a transition needs a role claim rather than a real judicial identity to be provable.
  *
- * <p>The two long-standing guards ask {@link ReferralState#isTerminal()} rather than naming states, so a
- * transition added later cannot leave one of them out of date:
+ * <p>The two long-standing guards each ask the enum a named question rather than listing states, so a
+ * transition added later cannot leave one of them out of date -- and <strong>they ask two different
+ * questions, which is the point</strong>:
  *
  * <ul>
- *   <li><strong>At most one live referral per case.</strong> A case may carry many over its lifetime, but
- *       raising a second while one is still in play would put two of the same case in the shared pool, so it
- *       is a {@link ConflictError}. A case whose referrals are all terminal may be referred again.</li>
- *   <li><strong>Withdraw is a transition, not a delete and not an edit.</strong> A withdrawn referral
- *       survives as {@code Withdrawn}, distinct from {@code Closed} -- closed means a direction was
- *       actioned -- and withdrawing an already-terminal one is a {@link ConflictError}. There is no in-place
- *       editing of an open referral: amending one is withdrawing it and raising another, which is why nothing
- *       here takes a patch.</li>
+ *   <li><strong>At most one live referral per case</strong>, asking {@link ReferralState#isTerminal()}. A case
+ *       may carry many over its lifetime, but raising a second while one is still in play would put two of the
+ *       same case in the shared pool, so it is a {@link ConflictError}. A case whose referrals are all terminal
+ *       may be referred again.</li>
+ *   <li><strong>Withdraw is a transition, not a delete and not an edit</strong>, asking
+ *       {@link ReferralState#canBeWithdrawn()}. A withdrawn referral survives as {@code Withdrawn}, distinct
+ *       from {@code Closed} -- closed means a direction was actioned -- and withdrawing anything that is not
+ *       {@code Open} or {@code Claimed} is a {@link ConflictError}. There is no in-place editing of an open
+ *       referral: amending one is withdrawing it and raising another, which is why nothing here takes a
+ *       patch.</li>
  * </ul>
+ *
+ * <p>{@code Decided} is the state where those two questions differ, and it is why there are two of them: a
+ * decided referral is non-terminal, so the case still holds it and may not raise a second, and yet it is not
+ * withdrawable, because a judge has recorded a direction that the office is obliged to action rather than
+ * discard. {@link #close} is the office's move on it. See {@link ReferralState#canBeWithdrawn()} for what
+ * narrowing {@code isTerminal()} instead would have broken.
  *
  * <p><strong>Nothing here writes the case's flat referral columns, closing included.</strong> No
  * {@code dateReferred}, no {@code masterName}, no {@code masterDecision}, no {@code referralNotes}: those stay
@@ -221,23 +230,29 @@ public class ReferralService {
      * means it never was, and a report that could not tell them apart would count abandoned referrals as
      * work done. The row survives, so the case's history still shows that it was raised.
      *
-     * <p>Guarded on {@link ReferralState#isTerminal()} rather than on {@code == Open}, which is what makes it
-     * right about {@code Claimed} and {@code Decided} without naming them: a referral a judge is holding is
-     * still withdrawable, one whose direction has come back but not been actioned still is, and one already
-     * finished is not. Withdrawing a claimed referral is also how a claim is voided -- the judge holding it is
-     * no longer holding a {@code Claimed} referral, so {@link #decide} refuses their late submission.
+     * <p>Guarded on {@link ReferralState#canBeWithdrawn()} rather than on {@code == Open} or on
+     * {@link ReferralState#isTerminal()}: a referral a judge is merely <em>holding</em> is still withdrawable,
+     * because the office may need to correct or cancel it while the papers are out and the transition safely
+     * voids the claim -- the judge is no longer holding a {@code Claimed} referral, so {@link #decide} refuses
+     * their late submission. <strong>One whose direction has come back is not withdrawable</strong>: the
+     * business rule starts when the judge records a direction, not when they claim the work, and the office's
+     * move on a {@code Decided} referral is {@link #close}.
+     *
+     * <p>The two refusals therefore say different things, and deliberately not in the same words. A
+     * {@code Closed} or {@code Withdrawn} referral is already finished; a {@code Decided} one is not finished
+     * at all, so calling it "already {@code Decided}" would read as though the caseworker were repeating
+     * themselves rather than being told that a direction is waiting for them.
      *
      * @throws NotFoundError if there is no such referral, or it belongs to another case
-     * @throws ConflictError if the referral is already closed or withdrawn
+     * @throws ConflictError if the referral is decided, closed or withdrawn
      */
     @Transactional
     public Referral withdrawReferral(String deedPollId, String id, CurrentUser caller) {
         Referral referral = findReferral(deedPollId, id);
-        if (referral.getState().isTerminal()) {
+        if (!referral.getState().canBeWithdrawn()) {
             // Not idempotent-and-silent: a second withdrawal is a caseworker acting on a stale screen, and
             // answering 204 would tell them their click did something it did not.
-            throw new ConflictError("Referral " + id + " is already " + referral.getState()
-                + " and cannot be withdrawn");
+            throw new ConflictError(refusedWithdrawal(id, referral.getState()));
         }
 
         referral.setState(ReferralState.Withdrawn);
@@ -410,10 +425,12 @@ public class ReferralService {
      * this replaces, whoever works the case actions the Master's reply.
      *
      * <p>Only a {@code Decided} referral can be closed, and every other state is a conflict rather than a
-     * silent success. This one guard is written against a single state rather than against
-     * {@link ReferralState#isTerminal()} -- unlike withdraw's -- and that is the point of it: closing an
-     * {@code Open} or {@code Claimed} referral would take it out of the pool with no direction on it, and
-     * closing a {@code Withdrawn} one would relabel a referral that was abandoned as one that was actioned.
+     * silent success. This one guard names a single state rather than asking the enum a question, because the
+     * question would have exactly one true answer: closing an {@code Open} or {@code Claimed} referral would
+     * take it out of the pool with no direction on it, and closing a {@code Withdrawn} one would relabel a
+     * referral that was abandoned as one that was actioned. It is the exact complement of withdrawal's
+     * {@link ReferralState#canBeWithdrawn()} over the live states -- between them, every live referral has one
+     * caseworker move and no live referral has both.
      *
      * <p>Close clears nothing and reverses nothing. The direction stays exactly as the judge recorded it, and
      * <strong>nothing is written back to the case's flat {@code masterDecision} and {@code masterDirections}
@@ -529,6 +546,23 @@ public class ReferralService {
                 + " -- it is " + referral.getState());
         }
         return referral;
+    }
+
+    /**
+     * Why a withdrawal was refused, in the words the state deserves.
+     *
+     * <p>Two sentences rather than one, because the two refusals are different facts and the caseworker's next
+     * action differs: a finished referral needs nothing doing, and a {@code Decided} one needs the direction
+     * actioning and then {@link #close}. Reusing the "already X" wording for a non-terminal state would tell a
+     * caseworker looking at a returned direction that they had already withdrawn it.
+     */
+    private static String refusedWithdrawal(String id, ReferralState state) {
+        if (state == ReferralState.Decided) {
+            return "Referral " + id + " is " + state
+                + " -- a direction has been recorded on it and must be actioned and the referral closed,"
+                + " rather than withdrawn";
+        }
+        return "Referral " + id + " is already " + state + " and cannot be withdrawn";
     }
 
     private DeedPoll requireCase(String deedPollId) {
