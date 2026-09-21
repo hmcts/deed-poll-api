@@ -173,6 +173,7 @@ Record final unit/integration totals and compare them with Task 0's baseline.
 
 - The admin tab consolidation, direction display and closure journey — the companion admin plan.
 - Case notes for claim, direction or closure — referral audit plan, recommendation 2.
-- A judge's “My referrals” list — recommendation 3.
+- A judge's “My referrals” list — recommendation 3, planned in
+  `referrals-api-6-judicial-my-referrals.md`.
 - Mapping a judicial decision to an application state or case date without an approved business rule.
 - Changing the judicial pool or visibility rules.

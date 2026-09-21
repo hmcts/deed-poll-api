@@ -1,5 +1,9 @@
 # Plan: referrals to the judiciary (3 of 3) — the judicial HTTP surface
 
+> **Follow-up:** `../referrals-api-6-judicial-my-referrals.md` completes this plan's intended list boundary
+> with a judge-owned `Claimed`/`Decided` collection. It also replaces display-name authorization with stable
+> IDAM-subject ownership before that collection can safely enumerate referrals.
+
 ## Overview
 
 **Third and last of the api plans** for the in-app judiciary-referral feature (seven plans total; see
@@ -361,8 +365,9 @@ been re-measured in place, as it asks its reader to do.
   check-your-answers). `deed-poll-admin` admin-3.
 - **New transition logic.** All of it is api-2's; this plan only exposes `claim`/`decide` and reads.
 - **A judicial "my decided referrals" history view** beyond what visibility already permits. Visibility
-  includes a judge's own `Decided` referrals, so the data is reachable; a dedicated history/list endpoint,
-  if wanted, is additive and not asked for.
+  includes a judge's own `Decided` referrals, so the data is reachable; a dedicated history/list endpoint was
+  additive and not asked for here. Business testing subsequently required the current `Claimed`/`Decided`
+  worklist in `../referrals-api-6-judicial-my-referrals.md`; permanent terminal history remains out of scope.
 - **A scheduled expiry sweep** and **sync-back to the legacy flat columns** — api-2's flagged follow-ups.
 
 ---

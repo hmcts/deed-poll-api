@@ -3,6 +3,9 @@
 > **Follow-up:** `../referrals-api-4-caseworker-completion.md` supersedes this plan's rule that every
 > non-terminal referral may be withdrawn. Business testing requires `Decided` to be actioned through
 > `Closed`; only `Open` and `Claimed` remain withdrawable.
+>
+> `../referrals-api-5-lifecycle-case-notes.md` extends this plan's raised/withdrawn notes across the complete
+> referral lifecycle.
 
 ## Overview
 

@@ -41,6 +41,11 @@ then the original referrals feature in four completed plans — create/withdraw,
 [`plans/referrals-api-4-caseworker-completion.md`](plans/referrals-api-4-caseworker-completion.md) prevents a
 `Decided` referral being withdrawn while preserving the existing `Decided → Closed` caseworker action. Its
 companion admin plan adds the missing closure journey.
+[`plans/referrals-api-5-lifecycle-case-notes.md`](plans/referrals-api-5-lifecycle-case-notes.md) then records
+claim, direction and closure in the existing case Notes timeline.
+[`plans/referrals-api-6-judicial-my-referrals.md`](plans/referrals-api-6-judicial-my-referrals.md) adds the
+missing judge-owned `Claimed`/`Decided` worklist and migrates ownership checks from display names to stable
+IDAM subjects before that list can safely enumerate work.
 
 ## The Notify series: six api plans, and the order they should run in
 
@@ -218,6 +223,8 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 | `notify-6-chase-missing-documents.md` | **Drafted.** Assumes a provisioned template with required caseworker text; Task 0 verifies it |
 | `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
 | `referrals-api-4-caseworker-completion.md` | **Planned.** Tightens withdrawal to `Open`/`Claimed`; no contract or migration change. Must precede the admin caseworker-completion plan |
+| `referrals-api-5-lifecycle-case-notes.md` | **Planned.** Adds claim, direction and closure notes after referral follow-up 4; no contract or migration change |
+| `referrals-api-6-judicial-my-referrals.md` | **Planned.** Adds a judge-owned `Claimed`/`Decided` list after moving referral authorization from display names to stable IDAM subjects |
 | `role-model-generalisation.md` | **Gated, and may not be needed.** A behaviour-preserving refactor of `boolean isAdmin` into capabilities. Gated on scope question Q0.1 and, preferably, on a first successful deployment — so that a failed deploy is unambiguously a deployment problem and not a 33-site refactor |
 | `role-based-access-findings.md` | Findings, not a plan. The measured inventory of what could be role-gated, so the business question is asked against a concrete list |
 | `role-based-access-questions-for-the-business.md` | **Resolved 2026-09-11**, never sent; the business's `.docx` answered it. Kept for the reasoning |
