@@ -78,7 +78,7 @@ public class Notification {
 
     /**
      * The referral that caused it, or null for a template that is not referral-driven. Half of the
-     * partial unique index that makes one {@code Application Rejected} per referral a constraint
+     * partial unique index that makes one email of an {@link #exclusionGroup} per referral a constraint
      * rather than a check.
      */
     @Column(name = "referralId")
@@ -89,6 +89,21 @@ public class Notification {
      */
     @Column(name = "template", nullable = false)
     private String template;
+
+    /**
+     * The {@code EmailExclusionGroup} member name -- the set of emails this referral gets exactly one of, and
+     * the other half of the partial unique index from V15.
+     *
+     * <p><strong>A copy of the template's group taken when the row was written, not a lookup.</strong> The
+     * index needs a column, and a row keeps the group it was written under, so re-grouping templates in a
+     * later release cannot retrospectively make two already-sent emails conflict.
+     *
+     * <p>A member name and not an id, like {@link #template} beside it and for the same reason. Written by
+     * {@code NotificationRepository.enqueue} from the enum; the column's {@code REFERRAL_OUTCOME} default is
+     * what lets an application instance that predates V15 go on inserting during a rolling deployment.
+     */
+    @Column(name = "exclusionGroup", nullable = false)
+    private String exclusionGroup;
 
     /**
      * What Notify rendered when the caseworker previewed it, so the stored content can be read back

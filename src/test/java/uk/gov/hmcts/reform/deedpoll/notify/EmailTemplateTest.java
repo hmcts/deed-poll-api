@@ -108,6 +108,38 @@ class EmailTemplateTest {
     }
 
     @Nested
+    @DisplayName("mutual exclusion")
+    class ExclusionGroups {
+
+        @Test
+        @DisplayName("the two referral-driven emails share a group, which is what makes them exclusive")
+        void bothReferralEmailsShareAGroup() {
+            // Decision 3, as a fact about the enum: the group is the key V15's unique index is built on, so two
+            // templates sharing one means a referral gets one of them and Postgres decides which.
+            assertThat(EmailTemplate.APPLICATION_REJECTED.exclusionGroup())
+                .isEqualTo(EmailExclusionGroup.REFERRAL_OUTCOME)
+                .isEqualTo(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.exclusionGroup());
+        }
+
+        @Test
+        @DisplayName("the group's member name is the value an outbox row stores and the column's default")
+        void groupMemberNameIsTheStoredValue() {
+            // V15 adds "exclusionGroup" text NOT NULL DEFAULT 'REFERRAL_OUTCOME' and enqueue binds this name, so
+            // renaming the member is a data migration -- visible in a diff here rather than in production.
+            assertThat(EmailExclusionGroup.REFERRAL_OUTCOME.name()).isEqualTo("REFERRAL_OUTCOME");
+        }
+
+        @ParameterizedTest
+        @EnumSource(EmailTemplate.class)
+        @DisplayName("every template declares a group, because the column is NOT NULL and the argument required")
+        void everyTemplateDeclaresAGroup(EmailTemplate template) {
+            // A group is a required constructor argument rather than a table of pairs for exactly this reason: a
+            // template cannot be added without saying which emails it is an alternative to.
+            assertThat(template.exclusionGroup()).isNotNull();
+        }
+    }
+
+    @Nested
     @DisplayName("what a client may and may not set")
     class ClientInput {
 

@@ -511,6 +511,7 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         notification.setDeedPollId(deedPoll.getId());
         notification.setReferralId(referral.getId());
         notification.setTemplate("APPLICATION_REJECTED");
+        notification.setExclusionGroup("REFERRAL_OUTCOME");
         notification.setTemplateVersion(7);
         notification.setRecipient("applicant@example.com");
         // A nested value and a non-string one, because jsonb is the point: a mapping that stringified the
@@ -548,6 +549,9 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         assertThat(reloaded.getTemplate())
             .as("the EmailTemplate member name, never the Notify UUID")
             .isEqualTo("APPLICATION_REJECTED");
+        assertThat(reloaded.getExclusionGroup())
+            .as("the EmailExclusionGroup member name, and the other half of V15's unique index")
+            .isEqualTo("REFERRAL_OUTCOME");
         assertThat(reloaded.getTemplateVersion()).isEqualTo(7);
         assertThat(reloaded.getRecipient()).isEqualTo("applicant@example.com");
         assertThat(reloaded.getAttempts()).isEqualTo(2);
@@ -572,6 +576,7 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         Notification notification = new Notification();
         notification.setDeedPollId(deedPoll.getId());
         notification.setTemplate("APPLICATION_REJECTED");
+        notification.setExclusionGroup("REFERRAL_OUTCOME");
         notification.setRecipient("applicant@example.com");
         notification.setCreatedBy("A Caseworker");
         entityManager.persist(notification);

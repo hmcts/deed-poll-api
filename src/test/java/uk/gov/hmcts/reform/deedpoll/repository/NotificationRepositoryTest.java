@@ -36,9 +36,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *       reason a second drain does not send a second rejection letter. This is the same assertion
  *       {@code ReferralRepositoryTest} makes about {@code releaseStaleClaim}, and the consequence here
  *       is worse, so it is made the same way: run the statement twice and read the second answer.</li>
- *   <li><strong>The unique index refuses a duplicate.</strong> Idempotency is a constraint rather than
- *       a check, so the thing to assert is the database refusing the second row, not application code
- *       declining to write it.</li>
+ *   <li><strong>The unique index refuses a duplicate, and since V15 it refuses the other email of the
+ *       same exclusion group too.</strong> Idempotency and mutual exclusion are both a constraint rather
+ *       than a check, so the thing to assert is the database refusing the second row, not application
+ *       code declining to write it -- and the column default that carries the backfill and a rolling
+ *       deployment is only ever executed here.</li>
  *   <li><strong>{@code jsonb} round trips and the enum column is a real enum.</strong>
  *       {@code EntityMappingTest} asserts the mapping; this asserts the finders read rows written
  *       through it.</li>
@@ -60,6 +62,23 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
     private static final String SERVICE_ACCOUNT = "# svc_HMCTS_LCPT_Dev";
 
     private static final String TEMPLATE = "APPLICATION_REJECTED";
+
+    /**
+     * The other email of {@link #GROUP}, which one referral may have instead of but never as well as.
+     */
+    private static final String COUNTERPART_TEMPLATE = "REQUEST_CONFIRMATION_TO_PROCEED";
+
+    /** The exclusion group both referral-driven templates share, and what V15's unique index is keyed on. */
+    private static final String GROUP = "REFERRAL_OUTCOME";
+
+    /**
+     * A group of one, standing in for a template that is nobody's alternative.
+     *
+     * <p>A literal rather than an {@code EmailExclusionGroup} member, because the claim is about the index
+     * rather than about today's enum: a template alone in its group must behave exactly as it did when the key
+     * was the template, and there is no such member to name yet.
+     */
+    private static final String LONE_GROUP = "FORMS_FOR_COMPLETION";
 
     private static final String RECIPIENT = "applicant@example.com";
 
@@ -105,6 +124,7 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         notification.setDeedPollId(parent.getId());
         notification.setReferralId(referral == null ? null : referral.getId());
         notification.setTemplate(TEMPLATE);
+        notification.setExclusionGroup(GROUP);
         notification.setRecipient("applicant@example.com");
         notification.setPersonalisation(Map.of("reference_number", "2026/000123"));
         notification.setNextAttemptAt(nextAttemptAt);
@@ -237,8 +257,10 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         owed(deedPoll, referral, NOW);
         assertThatThrownBy(entityManager::flush)
             .isInstanceOf(PersistenceException.class)
-            // Named, so the assertion is about this index and not about any duplicate key at all.
-            .hasStackTraceContaining("deedpoll_notification_referral_template_key");
+            // Named, so the assertion is about this index and not about any duplicate key at all. Renamed by
+            // V15 along with the key it is built on: an index called "..._template_key" that is keyed on the
+            // exclusion group would be a name a reader has to check the definition to distrust.
+            .hasStackTraceContaining("deedpoll_notification_referral_exclusion_group_key");
     }
 
     @Test
@@ -250,7 +272,7 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
 
         // The statement itself, against a real Postgres. Every other test of it mocks this repository, so
         // the jsonb cast, the literals and the ON CONFLICT clause are only ever executed here.
-        int enqueued = notifications.enqueue(id, deedPoll.getId(), referral.getId(), TEMPLATE,
+        int enqueued = notifications.enqueue(id, deedPoll.getId(), referral.getId(), TEMPLATE, GROUP,
                                              RECIPIENT, PERSONALISATION, NOW, "A Caseworker");
 
         assertThat(enqueued).isOne();
@@ -273,7 +295,7 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         // The caseworker's double click. ON CONFLICT DO NOTHING rather than a caught exception, so the
         // caller's transaction stays usable -- the second click is a no-op to log, not a failed request.
         int enqueued = notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(), TEMPLATE,
-                                             RECIPIENT, PERSONALISATION, NOW, "A Caseworker");
+                                             GROUP, RECIPIENT, PERSONALISATION, NOW, "A Caseworker");
 
         assertThat(enqueued).isZero();
         entityManager.clear();
@@ -292,7 +314,7 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         entityManager.flush();
         UUID replacementId = UUID.randomUUID();
 
-        int enqueued = notifications.enqueue(replacementId, deedPoll.getId(), referral.getId(), TEMPLATE,
+        int enqueued = notifications.enqueue(replacementId, deedPoll.getId(), referral.getId(), TEMPLATE, GROUP,
                                              RECIPIENT, PERSONALISATION, NOW.plusMinutes(1), "A Caseworker");
 
         assertThat(enqueued)
@@ -338,11 +360,132 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
             entityManager.flush();
 
             assertThat(notifications.enqueue(
-                UUID.randomUUID(), deedPoll.getId(), referral.getId(), TEMPLATE,
+                UUID.randomUUID(), deedPoll.getId(), referral.getId(), TEMPLATE, GROUP,
                 RECIPIENT, PERSONALISATION, NOW.plusMinutes(1), "A Caseworker"))
                 .as(fixture.reason())
                 .isZero();
         }
+    }
+
+    @Test
+    @DisplayName("enqueues nothing for the other email of the group, so the two cannot contradict each other")
+    void enqueuesNothingForTheCounterpartTemplate() {
+        DeedPoll deedPoll = persistedCase();
+        Referral referral = persistedReferral(deedPoll);
+        owed(deedPoll, referral, NOW);
+        entityManager.flush();
+
+        // Decision 3, as the fact about Postgres that the whole mechanism rests on. The old key --
+        // ("referralId", "template") -- would have permitted this row: one email telling the applicant that
+        // enrolment is refused and a second asking whether they still want the deed enrolled.
+        int enqueued = notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(),
+                                             COUNTERPART_TEMPLATE, GROUP, RECIPIENT, PERSONALISATION,
+                                             NOW.plusMinutes(1), "A Caseworker");
+
+        assertThat(enqueued).isZero();
+        entityManager.clear();
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId()))
+            .singleElement()
+            .satisfies(row -> assertThat(row.getTemplate()).isEqualTo(TEMPLATE));
+    }
+
+    @Test
+    @DisplayName("finds the row occupying the index, and never a permanently refused one")
+    void findsTheRowOccupyingTheIndex() {
+        DeedPoll deedPoll = persistedCase();
+        Referral referral = persistedReferral(deedPoll);
+        Notification refused = owed(deedPoll, referral, NOW);
+        refused.setState(NotificationState.Failed);
+        refused.setFailureVerdict(NotificationFailureVerdict.PERMANENT);
+        entityManager.flush();
+
+        // Availability and the 409 both ask this, so it has to answer with the index's own definition of a
+        // blocker rather than with "any row for this referral". A permanent refusal is Notify saying it sent
+        // nothing, and notify-1 deliberately allows a replacement -- so it must hide neither template.
+        assertThat(notifications.findBlocking(deedPoll.getId(), referral.getId(), GROUP)).isEmpty();
+
+        UUID replacementId = UUID.randomUUID();
+        assertThat(notifications.enqueue(replacementId, deedPoll.getId(), referral.getId(), COUNTERPART_TEMPLATE,
+                                         GROUP, RECIPIENT, PERSONALISATION, NOW.plusMinutes(1), "A Caseworker"))
+            .isOne();
+        entityManager.clear();
+
+        // And once a live row exists it is what the caller reads the template off, which is how a second click
+        // is told apart from a request for the email that contradicts it.
+        assertThat(notifications.findBlocking(deedPoll.getId(), referral.getId(), GROUP))
+            .get()
+            .satisfies(row -> {
+                assertThat(row.getId()).isEqualTo(replacementId);
+                assertThat(row.getTemplate()).isEqualTo(COUNTERPART_TEMPLATE);
+            });
+        // Case-scoped like every other finder here, and keyed on the group: another group's rows are not this
+        // group's business.
+        assertThat(notifications.findBlocking(deedPoll.getId(), referral.getId(), LONE_GROUP)).isEmpty();
+        assertThat(notifications.findBlocking(persistedCase().getId(), referral.getId(), GROUP)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a template alone in its group behaves exactly as it did before the re-keying")
+    void loneGroupBehavesAsBefore() {
+        DeedPoll deedPoll = persistedCase();
+        Referral referral = persistedReferral(deedPoll);
+        owed(deedPoll, referral, NOW);
+        entityManager.flush();
+
+        // A group of one makes ("referralId", "exclusionGroup") and the old ("referralId", "template") the same
+        // key, so widening the index generalises the existing rule rather than adding a second one beside it:
+        // an email in nobody else's group is unaffected by one that has already gone out.
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(), "A_LATER_TEMPLATE",
+                                         LONE_GROUP, RECIPIENT, PERSONALISATION, NOW, "A Caseworker"))
+            .as("another group's slot is free")
+            .isOne();
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(), "A_LATER_TEMPLATE",
+                                         LONE_GROUP, RECIPIENT, PERSONALISATION, NOW.plusMinutes(1),
+                                         "A Caseworker"))
+            .as("and then it is taken, once, exactly as the template key used to do it")
+            .isZero();
+
+        entityManager.clear();
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId())).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("a row written without naming the group gets REFERRAL_OUTCOME, which is V15's backfill")
+    void theColumnDefaultBackfillsAndCarriesAnOlderInstance() {
+        DeedPoll deedPoll = persistedCase();
+        Referral referral = persistedReferral(deedPoll);
+        UUID id = UUID.randomUUID();
+
+        // The same database default does two jobs in V15, and this is both of them: it gave every row that
+        // existed before the migration the group its template belongs to -- APPLICATION_REJECTED is the only
+        // template that has ever been enqueued -- and it keeps an application instance that predates V15 able
+        // to insert while old and new pods overlap. An INSERT that does not name the column is exactly what
+        // such an instance issues.
+        entityManager.createNativeQuery("""
+            INSERT INTO "deedpoll_notification" (
+                        "id", "deedPollId", "referralId", "template", "recipient", "personalisation",
+                        "state", "attempts", "nextAttemptAt", "createdBy", "createdOn", "modifiedOn")
+                 VALUES (:id, :deedPollId, :referralId, :template, :recipient, CAST(:personalisation AS jsonb),
+                        'Pending', 0, :now, :createdBy, :now, :now)
+            """)
+            .setParameter("id", id)
+            .setParameter("deedPollId", deedPoll.getId())
+            .setParameter("referralId", referral.getId())
+            .setParameter("template", TEMPLATE)
+            .setParameter("recipient", RECIPIENT)
+            .setParameter("personalisation", PERSONALISATION)
+            .setParameter("now", NOW)
+            .setParameter("createdBy", "An Older Instance")
+            .executeUpdate();
+        entityManager.clear();
+
+        assertThat(entityManager.find(Notification.class, id).getExclusionGroup()).isEqualTo(GROUP);
+        // And such a row occupies the slot, so the email it contradicts is refused even though the instance
+        // that wrote it had never heard of a group.
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(),
+                                         COUNTERPART_TEMPLATE, GROUP, RECIPIENT, PERSONALISATION,
+                                         NOW.plusMinutes(1), "A Caseworker"))
+            .isZero();
     }
 
     @Test

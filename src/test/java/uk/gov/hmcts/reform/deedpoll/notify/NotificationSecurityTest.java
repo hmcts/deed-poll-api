@@ -121,8 +121,8 @@ class NotificationSecurityTest {
     void sendsOnlyTheDeclaredKeysToTheApplicant() throws Exception {
         storedCase(CASE_ID);
         when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(refusedReferral()));
-        when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(), any(),
-                                   anyString())).thenReturn(1);
+        when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(), anyString(),
+                                   any(), anyString())).thenReturn(1);
 
         emails.send(
             CASE_ID,
@@ -137,6 +137,7 @@ class NotificationSecurityTest {
             eq(CASE_ID),
             eq(REFERRAL_ID),
             eq(EmailTemplate.APPLICATION_REJECTED.name()),
+            eq(EmailTemplate.APPLICATION_REJECTED.exclusionGroup().name()),
             recipient.capture(),
             personalisation.capture(),
             any(LocalDateTime.class),
@@ -172,7 +173,7 @@ class NotificationSecurityTest {
 
         verify(referrals, never()).findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID);
         verify(notifications, never()).enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                               any(), anyString());
+                                               anyString(), any(), anyString());
     }
 
     @Test

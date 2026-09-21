@@ -362,9 +362,51 @@ Read first: `CaseEmailService.cause()`, `availability()` and `EmailAvailability`
   already has ③ answers `0` and leaves one row, the backfill gives every existing row the right group, and a
   template alone in its group still behaves exactly as it did before the re-keying.
 
-- [ ] ④ is offered exactly when a rejected non-publication referral exists and its counterpart has not been
+- [x] ④ is offered exactly when a rejected non-publication referral exists and its counterpart has not been
       sent, the index refuses the second email of a group rather than a service check doing it, existing rows
       are backfilled, a single-template group behaves as before, and `./gradlew build` green
+
+#### Findings from Task 2 — 2026-09-21
+
+1. **The migration is `V15__notification_exclusion_group.sql`**, confirmed by looking rather than assumed:
+   `V14__referral_owner_subjects.sql` is the highest committed, and nothing has taken `V15`. One column
+   (`"exclusionGroup" text NOT NULL DEFAULT 'REFERRAL_OUTCOME'`), one index dropped, one created. V12's predicate
+   is carried through verbatim and `NotificationRepository.enqueue` repeats the new target and that predicate.
+
+2. **The index is renamed, not replaced under the old name, and that reverses V12's choice on purpose.** V12 kept
+   `deedpoll_notification_referral_template_key` because only the predicate moved; here the *key* moves, so the
+   name becomes `deedpoll_notification_referral_exclusion_group_key` — an index named after a column it is no
+   longer keyed on is a name a reader has to check the definition to distrust. Nothing but
+   `NotificationRepositoryTest` names it: `ON CONFLICT` infers a partial index from its target and predicate, not
+   from its name.
+
+3. **`findByDeedPollIdAndReferralIdAndTemplate` is gone, replaced by `findBlocking`.** Correction 3 asked for the
+   group-scoped lookup and the template finder then had no caller — a repository method nothing uses is worse than
+   the diff. `findBlocking` is native so the blocking predicate is the same text as the index's and `enqueue`'s,
+   where all three can be held to each other, and the caller reads the template off the returned row to tell a
+   second click (200, `enqueued: false`) from the counterpart (409 naming it and its `createdOn`).
+
+4. **`reasonNotApplicable` now takes the newest refusal, which is what let ④'s sentence split in two.**
+   `NO_REFUSAL_TO_CONFIRM` (nothing refused at all) and `REFUSAL_NOT_ABOUT_NON_PUBLICATION` (something was, but
+   not this) replace notify-3 Task 1's single `NO_NON_PUBLICATION_REFUSAL`. `availability()` and `compose()` each
+   read the newest refusal once and pass it to both `cause` and the reason, so the two cannot disagree about which
+   referral they are describing.
+
+5. **The backfill is stated as the column default doing two jobs, because a test cannot create a pre-migration
+   row.** The container is migrated before any test runs, so "existing rows are backfilled" is proved as the thing
+   that backfilled them: an `INSERT` that does not name `"exclusionGroup"` — exactly what an application instance
+   predating V15 issues during a rolling deployment — gets `REFERRAL_OUTCOME`, and such a row then blocks the
+   counterpart.
+
+6. **A container-free test cannot state the `PERMANENT` exception on its own, and does not pretend to.** The
+   service keeps no second definition of "already sent": it asks `findBlocking`, and which rows that returns is
+   proved against PostgreSQL in `NotificationRepositoryTest`. What the container-free test states is the seam —
+   the question is asked by exclusion group for the referral `cause()` named, an own-template row does not hide a
+   template, and a counterpart row hides it with a sentence naming the email and its date.
+
+7. **Totals after this task:** `test` **2,436** and `integration` **10** — 2,446 against the 2,389 baseline, zero
+   failures, `./gradlew build` green. Still open for Task 3: the security assertions for ④, `invitesReply` and
+   `emailReplyToId`, the ArchUnit re-check and the OpenAPI refresh.
 
 ### Task 3: Security, the reply-to, and full validation
 

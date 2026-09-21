@@ -25,6 +25,11 @@ import java.util.stream.Collectors;
  * <p><strong>{@link #resolvedKeys()} and {@link #slots()} together are the template's whole personalisation.</strong>
  * The split is the rule of decision 12: the slots are client input and the resolved keys are not, so
  * {@link EmailSlots#parse} can refuse a request that tries to cross the line and say which key it was.
+ *
+ * <p><strong>{@link #exclusionGroup()} is a required argument, and that is the point of it.</strong> Two emails
+ * that contradict each other must not both reach one applicant, and the group is what the outbox's unique index
+ * is keyed on -- so a template added here cannot be written without somebody saying which emails it is an
+ * alternative to. See {@link EmailExclusionGroup}.
  */
 public enum EmailTemplate {
 
@@ -32,12 +37,14 @@ public enum EmailTemplate {
      * Enrolment refused: quotes the judge, then starts a refund. Template ③.
      *
      * <p>Referral-driven -- it is sent on a judge's direction -- which is why the outbox's partial unique index
-     * on {@code ("referralId", "template")} makes one of these per referral a database constraint. An applicant
-     * must not be told twice that their application was refused.
+     * on {@code ("referralId", "exclusionGroup")} makes one email of this group per referral a database
+     * constraint. An applicant must not be told twice that their application was refused, and must not be told
+     * it was refused and then asked whether to proceed with it.
      */
     APPLICATION_REJECTED(
         "application-rejected",
         "Application rejected",
+        EmailExclusionGroup.REFERRAL_OUTCOME,
         ApplicationRejectedPersonalisation.RESOLVED_KEYS,
         List.of(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES),
         List.of()),
@@ -53,16 +60,21 @@ public enum EmailTemplate {
      *
      * <p>Declared after ③ rather than before it because the order here is the order the Email tab lists
      * templates in, and the one that refuses enrolment outright is the commoner of the two.
+     *
+     * <p>In ③'s exclusion group, because the two say opposite things about enrolment: one referral gets one of
+     * them, and which one is the caseworker's choice made once.
      */
     REQUEST_CONFIRMATION_TO_PROCEED(
         "request-confirmation-to-proceed",
         "Request confirmation to proceed",
+        EmailExclusionGroup.REFERRAL_OUTCOME,
         RequestConfirmationToProceedPersonalisation.RESOLVED_KEYS,
         List.of(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES),
         List.of());
 
     private final String key;
     private final String displayName;
+    private final EmailExclusionGroup exclusionGroup;
     private final List<String> resolvedKeys;
     private final List<EmailSlot> slots;
     private final List<String> documentKeys;
@@ -70,12 +82,14 @@ public enum EmailTemplate {
     EmailTemplate(
         String key,
         String displayName,
+        EmailExclusionGroup exclusionGroup,
         List<String> resolvedKeys,
         List<EmailSlot> slots,
         List<String> documentKeys
     ) {
         this.key = key;
         this.displayName = displayName;
+        this.exclusionGroup = exclusionGroup;
         this.resolvedKeys = List.copyOf(resolvedKeys);
         this.slots = List.copyOf(slots);
         this.documentKeys = List.copyOf(documentKeys);
@@ -131,6 +145,18 @@ public enum EmailTemplate {
     /** The name a caseworker sees for this email type. */
     public String displayName() {
         return displayName;
+    }
+
+    /**
+     * The set of emails this one is an alternative to, of which a referral gets exactly one.
+     *
+     * <p>Written onto the outbox row by its member name and keyed on by the partial unique index, so the
+     * choice is settled by Postgres rather than by a check with a race in it. The row keeps the group it was
+     * written under -- a deliberate copy rather than a lookup, so re-grouping templates later cannot
+     * retrospectively make two already-sent emails conflict.
+     */
+    public EmailExclusionGroup exclusionGroup() {
+        return exclusionGroup;
     }
 
     /** The personalisation keys resolved from the case; a client may not set any of these. */
