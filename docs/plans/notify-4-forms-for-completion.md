@@ -400,7 +400,7 @@ Read first: `CaseEmailService.cause()` and `availability()`, notify-3's decision
 
 ## Deliberately not in this plan
 
-**Case correspondence history — this is [`notify-5-case-correspondence-history.md`](notify-5-case-correspondence-history.md), now written, and it should run *before* this plan.** The question that
+**Case correspondence history — this is [`notify-5-case-correspondence-history.md`](completed/notify-5-case-correspondence-history.md), now written, and it should run *before* this plan.** The question that
 prompted it: *can a caseworker see what an applicant has received, including which documents and what any
 curated text said?* Today the answer is **no**, and notify-5's decision 1 is what changes it — the rendered
 subject and body come back free in `SendEmailResponse`, so they can be stored at send time with no extra
