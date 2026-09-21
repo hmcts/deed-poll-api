@@ -26,6 +26,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.notify.ApplicationRejectedPersonalisation;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailSlot;
+import uk.gov.hmcts.reform.deedpoll.notify.EmailTemplate;
 
 import java.io.OutputStream;
 import java.lang.reflect.Modifier;
@@ -340,6 +341,80 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         // The exception, and the only one: Azure's Always-On probe has no token.
         assertThat(spec.at("/paths/~1/get/security").isArray()).isTrue();
         assertThat(spec.at("/paths/~1/get/security").isEmpty()).isTrue();
+    }
+
+    /**
+     * Both emails, named on the token that names one -- and no new operation for the second of them.
+     *
+     * <p><strong>This is what a second template had to prove, and the two halves are opposite failures.</strong>
+     * {@code deed-poll-admin}'s Email tab was written to need no change when a template is added, which is only
+     * true if the document names the new template without moving the contract: a template that the document does
+     * not mention is one a client can only discover by being 404'd, and a template that arrived as a new path or a
+     * new verb would mean the tab had a route to add after all. So the keys are asserted to be there and the
+     * caseworker operation count is asserted to be exactly where notify-1 left it.
+     *
+     * <p>Read out of {@link EmailTemplate} rather than written here, for the reason the operator table and the
+     * sortable fields are: a third template appears in the document -- and in this assertion -- without anyone
+     * editing either file. {@link uk.gov.hmcts.reform.deedpoll.config.OpenAPIEmailTemplates} is what puts it there.
+     */
+    @DisplayName("Names both email templates on the token, and adds no operation for the second")
+    @Test
+    void documentsBothEmailTemplates() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                          .andExpect(status().isOk())
+                                          .andReturn()
+                                          .getResponse()
+                                          .getContentAsByteArray());
+
+        String send = "/paths/~1caseworker~1cases~1{id}~1emails~1{template}/post/parameters";
+        String preview = "/paths/~1caseworker~1cases~1{id}~1emails~1{template}~1preview/post/parameters";
+        for (String operation : List.of(send, preview)) {
+            JsonNode token = templateToken(spec.at(operation));
+            assertThat(token.isMissingNode()).as("%s declares the template token", operation).isFalse();
+            String description = token.at("/description").asText();
+            for (EmailTemplate template : EmailTemplate.values()) {
+                assertThat(description)
+                    .as("%s names the %s email", operation, template.key())
+                    .contains(template.key())
+                    .contains(template.displayName());
+            }
+            // A description and deliberately not an `enum`: an enumerated path token becomes a closed union in a
+            // generated client, so a fifth template would stop an old client calling the route it already had --
+            // and the GET that publishes availability is where a tab is meant to learn what it may send.
+            assertThat(token.at("/schema/enum").isMissingNode())
+                .as("%s leaves the token an open string, so a later template breaks no generated client",
+                    operation)
+                .isTrue();
+            assertThat(typesOf(token.at("/schema"))).contains("string");
+        }
+
+        // And the surface is unmoved: both emails travel through the operations that were already there, so the
+        // caseworker count is still the one the README and this class's other assertion state.
+        JsonNode paths = spec.get("paths");
+        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(33);
+        assertThat(paths.get("/caseworker/cases/{id}/emails/{template}").fieldNames()).toIterable()
+            .containsExactly("post");
+        assertThat(paths.get("/caseworker/cases/{id}/emails").fieldNames()).toIterable().containsExactly("get");
+
+        // The availability list is what carries the second entry at run time, and its row type is unchanged by the
+        // arrival of one: the template is a key on the row rather than a field per template, which is the property
+        // that let a second email ship with no change to the response shape.
+        assertThat(spec.at("/components/schemas/EmailTypeResponse/properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("template", "applicable", "reason", "provisioned", "slots");
+        assertThat(typesOf(spec.at("/components/schemas/EmailTypeResponse/properties/template")))
+            .contains("string");
+        assertThat(spec.at("/components/schemas/CaseEmailsResponse/properties/availability/type").asText())
+            .isEqualTo("array");
+    }
+
+    /**
+     * The {@code {template}} path token among an operation's parameters, or a missing node.
+     */
+    private static JsonNode templateToken(JsonNode parameters) {
+        return StreamSupport.stream(parameters.spliterator(), false)
+            .filter(parameter -> "template".equals(parameter.at("/name").asText()))
+            .findFirst()
+            .orElse(JSON.missingNode());
     }
 
     /**

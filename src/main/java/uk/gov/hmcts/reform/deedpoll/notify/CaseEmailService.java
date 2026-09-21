@@ -354,8 +354,10 @@ public class CaseEmailService {
      * One template's answer for one case.
      *
      * <p>{@code provisioned} is asked of configuration rather than of the case, so it is the same answer for
-     * every case in this environment -- and it is on each row rather than on the response as a whole because a
-     * later template may be provisioned while another is not.
+     * every case in this environment -- and it is on each row rather than on the response as a whole because one
+     * template may be provisioned while another is not. That is not hypothetical: a template that invites a reply
+     * needs the monitored inbox as well as a UUID, so ④ can read unprovisioned in an environment where ③ does
+     * not. See {@link NotifyProperties#isProvisioned}.
      *
      * <p><strong>Two reasons a template does not apply, and the second is a courtesy rather than the
      * enforcement.</strong> Either the case has no referral this email may speak for, or it has one that has
@@ -364,7 +366,7 @@ public class CaseEmailService {
      * an email that will be refused on submit, which is a bad way to find out.
      */
     private EmailAvailability availability(EmailTemplate template, String deedPollId) {
-        boolean provisioned = properties.isProvisioned(template.key());
+        boolean provisioned = properties.isProvisioned(template);
         Optional<Referral> newestRefusal = newestRefusal(deedPollId);
         Optional<Referral> cause = cause(template, newestRefusal);
         if (cause.isEmpty()) {

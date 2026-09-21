@@ -97,6 +97,47 @@ class NotifyEmailSenderTest {
     }
 
     @Test
+    @DisplayName("sends the reply-to address with the email that invites a reply, and only that one")
+    void sendsTheReplyToForTheEmailThatInvitesOne() {
+        sender.send(confirmationRow());
+        sender.send(notification());
+
+        assertThat(notify.emailRequests()).hasSize(2);
+        assertThat(replyToOf(0))
+            .as("the confirmation email asks the applicant to reply, so Notify is told where to")
+            .isEqualTo(StubNotify.REPLY_TO_ID);
+        // The other half of decision 10, and the reason the two client overloads are kept apart: configuring a
+        // reply-to for ④ must not change what ③ sends. The four-argument call carries no email_reply_to_id at all.
+        assertThat(replyToOf(1))
+            .as("the rejection email invites no reply, so it is sent exactly as it was before there was one")
+            .isEmpty();
+    }
+
+    @Test
+    @DisplayName("refuses to send an email that invites a reply when no reply-to is configured")
+    void refusesAnInvitedReplyWithNowhereToReplyTo() {
+        // Notify's client drops a blank reply-to and sends from its no-reply sender, so this would otherwise be a
+        // send that looks successful and loses the answer the email exists to collect -- an applicant who appears
+        // never to have replied. Permanent because no retry configures an inbox, and EmailAvailability.provisioned
+        // is how a caseworker is told before they compose one.
+        NotifyEmailSender noReplyTo = new NotifyEmailSender(
+            notify.client(),
+            new NotifyProperties(notify.baseUrl(), notify.apiKey(),
+                                 notify.properties().templates(), ""));
+
+        assertThat(noReplyTo.send(confirmationRow()))
+            .isEqualTo(SendOutcome.failed(
+                NotificationFailure.PERMANENT,
+                "no reply-to address is configured, and the request-confirmation-to-proceed email asks for a "
+                    + "reply"));
+        assertThat(notify.emailRequests()).as("and nothing was sent from no-reply").isEmpty();
+
+        // The email that invites no reply is unaffected: it needs no inbox and is sent as it always was.
+        assertThat(noReplyTo.send(notification())).isInstanceOf(SendOutcome.Sent.class);
+        assertThat(notify.emailRequests()).hasSize(1);
+    }
+
+    @Test
     @DisplayName("fails an obsolete template permanently without asking Notify")
     void refusesAnObsoleteTemplateWithoutHttp() {
         Notification row = notification();
@@ -107,6 +148,24 @@ class NotifyEmailSenderTest {
                 NotificationFailure.PERMANENT,
                 "no such email template: RENAMED_AFTER_ENQUEUE"));
         assertThat(notify.emailRequests()).isEmpty();
+    }
+
+    /** What Notify was told to set as the reply-to on the nth send, or empty if it was told nothing. */
+    private String replyToOf(int request) {
+        try {
+            return JSON.readTree(notify.emailRequests().get(request).getBodyAsString())
+                .path("email_reply_to_id")
+                .asText();
+        } catch (Exception unreadable) {
+            throw new AssertionError("StubNotify received unreadable JSON", unreadable);
+        }
+    }
+
+    /** The same row, for the template whose words ask the applicant to reply. */
+    private static Notification confirmationRow() {
+        Notification row = notification();
+        row.setTemplate(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.name());
+        return row;
     }
 
     private static Notification notification() {

@@ -29,9 +29,17 @@ import java.util.Map;
  * @param templates the Notify template UUID for each template this service sends, keyed by the configuration
  *     key an {@code EmailTemplate} member carries. Keyed rather than hard-coded because a Notify template UUID
  *     differs per environment, so it is configuration and never a constant in Java.
+ * @param emailReplyToId the Notify reply-to address id the monitored inbox is registered under, for the emails
+ *     that ask the applicant to reply. Empty until it is provisioned, and <strong>not a secret</strong> -- it is
+ *     an id for an address a recipient reads on the email anyway, so it is an environment variable rather than a
+ *     vault entry. One id rather than one per template: there is one office inbox, and a second would be a
+ *     second thing for somebody to monitor
  */
 @ConfigurationProperties(prefix = "notify")
-public record NotifyProperties(String apiUrl, String apiKey, Map<String, String> templates) {
+public record NotifyProperties(String apiUrl,
+                              String apiKey,
+                              Map<String, String> templates,
+                              String emailReplyToId) {
 
     /**
      * The value a template ID has until notify-0 provisions a real one. Deliberately the same literal as
@@ -39,12 +47,19 @@ public record NotifyProperties(String apiUrl, String apiKey, Map<String, String>
      */
     public static final String UNPROVISIONED_TEMPLATE_ID = "DEED_POLL_PLACEHOLDER";
 
-    public NotifyProperties(String apiUrl, String apiKey, Map<String, String> templates) {
-        // Trimmed because both arrive from a Helm environment map or a vault file, where a trailing newline
-        // is invisible -- and a key with one on the end is a key Notify refuses for no visible reason.
+    public NotifyProperties(String apiUrl,
+                           String apiKey,
+                           Map<String, String> templates,
+                           String emailReplyToId) {
+
+        // Trimmed because all three arrive from a Helm environment map or a vault file, where a trailing newline
+        // is invisible -- and a key with one on the end is a key Notify refuses for no visible reason. The
+        // reply-to id is trimmed for a worse version of the same reason: the client drops a blank one silently
+        // and sends from no-reply, so " " configured and nothing configured must mean the same thing here.
         this.apiUrl = apiUrl == null ? "" : apiUrl.trim();
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.templates = templates == null ? Map.of() : Map.copyOf(templates);
+        this.emailReplyToId = emailReplyToId == null ? "" : emailReplyToId.trim();
     }
 
     /**
@@ -60,12 +75,20 @@ public record NotifyProperties(String apiUrl, String apiKey, Map<String, String>
     }
 
     /**
-     * Whether {@code key} names a template Notify could actually render.
+     * Whether this environment has everything {@code template} needs to be sent.
      *
-     * <p>For the Email tab: a template whose ID is still the placeholder is one a caseworker must be told about
-     * rather than one whose preview mysteriously fails.
+     * <p>For the Email tab: a template this answers false for is one a caseworker must be told about rather than
+     * one whose preview mysteriously fails.
+     *
+     * <p><strong>Per template, and asking two questions rather than one.</strong> A real template UUID is
+     * necessary for any of them; a template that {@linkplain EmailTemplate#invitesReply() invites a reply} also
+     * needs {@link #emailReplyToId()}, because Notify would otherwise send an email asking for an answer from an
+     * address nobody reads -- and it would do it silently, since the client drops a blank reply-to rather than
+     * refusing the send. Asked of the template rather than answered for the service so that a missing reply-to
+     * says "this email cannot be sent yet" about the one email that needs it, and leaves the other alone.
      */
-    public boolean isProvisioned(String key) {
-        return !UNPROVISIONED_TEMPLATE_ID.equals(templateId(key));
+    public boolean isProvisioned(EmailTemplate template) {
+        return !UNPROVISIONED_TEMPLATE_ID.equals(templateId(template.key()))
+            && (!template.invitesReply() || !emailReplyToId.isBlank());
     }
 }

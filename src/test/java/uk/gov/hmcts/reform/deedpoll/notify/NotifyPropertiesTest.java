@@ -20,23 +20,30 @@ class NotifyPropertiesTest {
     @Test
     @DisplayName("unset values become empty rather than null, so nothing has to null-check configuration")
     void unsetValuesBecomeEmpty() {
-        NotifyProperties properties = new NotifyProperties(null, null, null);
+        NotifyProperties properties = new NotifyProperties(null, null, null, null);
 
         assertThat(properties.apiUrl()).isEmpty();
         assertThat(properties.apiKey()).isEmpty();
         assertThat(properties.templates()).isEmpty();
+        assertThat(properties.emailReplyToId()).isEmpty();
     }
 
     @Test
-    @DisplayName("trims the key and the URL, because a trailing newline in a vault file is invisible")
+    @DisplayName("trims the key, the URL and the reply-to, because a trailing newline in a vault file is invisible")
     void trimsTheKeyAndUrl() {
-        NotifyProperties properties =
-            new NotifyProperties(" https://api.notifications.service.gov.uk \n", "  a-key\n", Map.of());
+        NotifyProperties properties = new NotifyProperties(
+            " https://api.notifications.service.gov.uk \n", "  a-key\n", Map.of(), "  a-reply-to-id\n");
 
         // A key with a newline on the end is a key Notify refuses for no visible reason -- the JWT it signs is
         // valid and the service ID it names does not exist.
         assertThat(properties.apiKey()).isEqualTo("a-key");
         assertThat(properties.apiUrl()).isEqualTo("https://api.notifications.service.gov.uk");
+        // And a reply-to id with one on the end is worse than refused: Notify's client sends it as a value the
+        // API does not recognise, or -- if it is only whitespace -- drops it and sends from no-reply.
+        assertThat(properties.emailReplyToId()).isEqualTo("a-reply-to-id");
+        assertThat(new NotifyProperties("", "", Map.of(), "   ").emailReplyToId())
+            .as("whitespace configured and nothing configured are the same thing")
+            .isEmpty();
     }
 
     @Test
@@ -44,7 +51,7 @@ class NotifyPropertiesTest {
     void unconfiguredTemplateAnswersThePlaceholder() {
         // So a caller never has to ask whether a template is configured: the unconfigured case fails once, at
         // Notify, with a status the taxonomy already classifies, instead of as a NullPointerException further in.
-        assertThat(new NotifyProperties("", "", Map.of()).templateId("application-rejected"))
+        assertThat(new NotifyProperties("", "", Map.of(), "").templateId("application-rejected"))
             .isEqualTo(NotifyProperties.UNPROVISIONED_TEMPLATE_ID);
     }
 
@@ -60,18 +67,47 @@ class NotifyPropertiesTest {
     @DisplayName("a configured template is provisioned and a placeholder one is not")
     void reportsWhetherATemplateIsProvisioned() {
         NotifyProperties configured = new NotifyProperties("", "",
-            Map.of("application-rejected", "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e55"));
+            Map.of("application-rejected", "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e55"), "");
 
-        assertThat(configured.isProvisioned("application-rejected")).isTrue();
-        assertThat(configured.isProvisioned("request-confirmation")).isFalse();
-        assertThat(new NotifyProperties("", "", Map.of()).isProvisioned("application-rejected")).isFalse();
+        assertThat(configured.isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isTrue();
+        assertThat(configured.isProvisioned(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).isFalse();
+        assertThat(new NotifyProperties("", "", Map.of(), "")
+                       .isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isFalse();
+    }
+
+    @Test
+    @DisplayName("a template that invites a reply is unprovisioned without a reply-to, and the other is not")
+    void anInvitedReplyNeedsAnAddressToReplyTo() {
+        // Decisions 9 and 10. The confirmation email's own words say "let us know by replying to this email", so a
+        // send with no reply-to configured goes out from Notify's no-reply sender and the answer it asks for
+        // bounces -- invisibly, because the client drops a blank reply-to rather than refusing. So the Email tab is
+        // told it cannot be sent yet, in the same words and by the same flag as a missing template UUID.
+        String uuid = "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e55";
+        Map<String, String> both = Map.of(
+            EmailTemplate.APPLICATION_REJECTED.key(), uuid,
+            EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), uuid);
+
+        NotifyProperties noReplyTo = new NotifyProperties("", "", both, "");
+        assertThat(noReplyTo.isProvisioned(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).isFalse();
+        // And the other template is untouched by its absence, which is why this is asked per template: a missing
+        // inbox must not disable the email that never invited a reply.
+        assertThat(noReplyTo.isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isTrue();
+
+        NotifyProperties provisioned =
+            new NotifyProperties("", "", both, "9b7c5d21-3f4e-4a6b-8c0d-1e2f3a4b5c66");
+        assertThat(provisioned.isProvisioned(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).isTrue();
+        assertThat(provisioned.isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isTrue();
+
+        // A reply-to on its own provisions nothing: the template UUID is still necessary for either of them.
+        assertThat(new NotifyProperties("", "", Map.of(), "9b7c5d21-3f4e-4a6b-8c0d-1e2f3a4b5c66")
+                       .isProvisioned(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).isFalse();
     }
 
     @Test
     @DisplayName("the template map is copied, so nothing can repoint a template after startup")
     void templateMapIsCopied() {
         Map<String, String> mutable = new HashMap<>(Map.of("application-rejected", "the-real-one"));
-        NotifyProperties properties = new NotifyProperties("", "", mutable);
+        NotifyProperties properties = new NotifyProperties("", "", mutable, "");
 
         mutable.put("application-rejected", "somebody-elses-template");
 

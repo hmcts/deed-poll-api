@@ -30,6 +30,12 @@ import java.util.stream.Collectors;
  * that contradict each other must not both reach one applicant, and the group is what the outbox's unique index
  * is keyed on -- so a template added here cannot be written without somebody saying which emails it is an
  * alternative to. See {@link EmailExclusionGroup}.
+ *
+ * <p><strong>{@link #invitesReply()} is a required argument for the same reason, and it is a property of the
+ * template rather than of the service.</strong> A template whose words ask the applicant to reply needs the
+ * monitored inbox configured as {@code notify.email-reply-to-id}, or Notify sends it from an address nobody
+ * reads -- so such a template is <em>unprovisioned</em> without one, exactly as any template is without a UUID.
+ * Asked per template so that a missing reply-to cannot disable an email that never invited one.
  */
 public enum EmailTemplate {
 
@@ -40,11 +46,15 @@ public enum EmailTemplate {
      * on {@code ("referralId", "exclusionGroup")} makes one email of this group per referral a database
      * constraint. An applicant must not be told twice that their application was refused, and must not be told
      * it was refused and then asked whether to proceed with it.
+     *
+     * <p>Invites no reply: it tells the applicant a decision and starts a refund, and asks them for nothing. So
+     * it goes on sending from Notify's default sender however this service's reply-to is configured.
      */
     APPLICATION_REJECTED(
         "application-rejected",
         "Application rejected",
         EmailExclusionGroup.REFERRAL_OUTCOME,
+        false,
         ApplicationRejectedPersonalisation.RESOLVED_KEYS,
         List.of(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES),
         List.of()),
@@ -63,11 +73,17 @@ public enum EmailTemplate {
      *
      * <p>In ③'s exclusion group, because the two say opposite things about enrolment: one referral gets one of
      * them, and which one is the caseworker's choice made once.
+     *
+     * <p><strong>Invites a reply, and that is the whole point of the email.</strong> Two of its paragraphs say
+     * "let us know by replying to this email", so Notify's default no-reply sender would lose the answer this
+     * email exists to collect. {@code notify.email-reply-to-id} is therefore required configuration for it, and
+     * it reads unprovisioned without one.
      */
     REQUEST_CONFIRMATION_TO_PROCEED(
         "request-confirmation-to-proceed",
         "Request confirmation to proceed",
         EmailExclusionGroup.REFERRAL_OUTCOME,
+        true,
         RequestConfirmationToProceedPersonalisation.RESOLVED_KEYS,
         List.of(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES),
         List.of());
@@ -75,6 +91,7 @@ public enum EmailTemplate {
     private final String key;
     private final String displayName;
     private final EmailExclusionGroup exclusionGroup;
+    private final boolean invitesReply;
     private final List<String> resolvedKeys;
     private final List<EmailSlot> slots;
     private final List<String> documentKeys;
@@ -83,6 +100,7 @@ public enum EmailTemplate {
         String key,
         String displayName,
         EmailExclusionGroup exclusionGroup,
+        boolean invitesReply,
         List<String> resolvedKeys,
         List<EmailSlot> slots,
         List<String> documentKeys
@@ -90,6 +108,7 @@ public enum EmailTemplate {
         this.key = key;
         this.displayName = displayName;
         this.exclusionGroup = exclusionGroup;
+        this.invitesReply = invitesReply;
         this.resolvedKeys = List.copyOf(resolvedKeys);
         this.slots = List.copyOf(slots);
         this.documentKeys = List.copyOf(documentKeys);
@@ -157,6 +176,20 @@ public enum EmailTemplate {
      */
     public EmailExclusionGroup exclusionGroup() {
         return exclusionGroup;
+    }
+
+    /**
+     * Whether this email's own words ask the applicant to reply to it.
+     *
+     * <p><strong>What it decides is where the reply goes, and whether the email may be sent at all.</strong> A
+     * template that invites a reply is sent with {@code notify.email-reply-to-id} as its reply-to address, and is
+     * {@linkplain NotifyProperties#isProvisioned unprovisioned} without one -- a verified inbox nobody configured
+     * fails in exactly the way no inbox does, and silently, because Notify drops a blank reply-to and sends from
+     * no-reply instead. One that does not invite a reply is unaffected by the setting in either direction: it is
+     * sent through the client's four-argument overload, so configuring a reply-to for ④ cannot quietly change ③.
+     */
+    public boolean invitesReply() {
+        return invitesReply;
     }
 
     /** The personalisation keys resolved from the case; a client may not set any of these. */

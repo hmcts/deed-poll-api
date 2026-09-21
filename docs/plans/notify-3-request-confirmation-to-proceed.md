@@ -427,9 +427,53 @@ Read first: `CaseEmailService.cause()`, `availability()` and `EmailAvailability`
 - Refresh the OpenAPI output so notify-2 can see the new template without a change of its own, exactly as
   notify-1's contract reached it.
 
-- [ ] ④'s keys, recipient and case-scoping stated container-free, ④ reads unprovisioned without a reply-to
+- [x] ④'s keys, recipient and case-scoping stated container-free, ④ reads unprovisioned without a reply-to
       while ③ still reads provisioned, the ArchUnit rule passes untouched, the OpenAPI output is refreshed,
       and `./gradlew build` green from cold with both totals recorded
+
+#### Findings from Task 3 — 2026-09-21
+
+1. **A blank reply-to is dropped by the Notify client rather than refused, so the sender refuses it instead.**
+   Read off the 6.2.0 jar: the four-argument `sendEmail` passes `""` for `emailReplyToId`, and the overload they
+   both delegate to adds `email_reply_to_id` only when the value is non-null and non-empty. So an environment that
+   provisioned ④'s template UUID and forgot the inbox would have sent an email asking the applicant to reply from
+   the no-reply sender, successfully, with nothing anywhere saying so — an applicant who appears never to have
+   answered. `NotifyEmailSender` now fails such a row `PERMANENT` before any HTTP, which is what makes decision 9's
+   "fail loudly" true of the drain and not only of the Email tab.
+
+2. **`isProvisioned` takes the template and answers two questions.** `NotifyProperties.isProvisioned(String)` is
+   gone; the one caller passes the template, and the method asks for a real UUID always and for
+   `emailReplyToId` only when `invitesReply` is true. That is what keeps a missing inbox from disabling ③, which is
+   the property decision 10 asks for and the one a service-wide flag would have lost.
+
+3. **`application.yaml` gained ④'s template key as well as the reply-to.** `templateId` answers the placeholder for
+   an absent key, so the map entry is not needed to make the code work — but without it
+   `NOTIFY_TEMPLATE_REQUEST_CONFIRMATION_TO_PROCEED` would be an environment variable nothing reads, and notify-0
+   has no way to point ④ at a real template. `NotifyConfigurationTest` now asserts the committed map over
+   `EmailTemplate.values()` rather than naming one key, so a third template listed nowhere fails there.
+
+4. **The OpenAPI deliverable needed a customiser after all, and correction 7 is why it is a description.** The
+   published document named no template at all: `{template}` is a `String` path variable, so springdoc reflected it
+   undescribed, and neither key appeared anywhere in `/tmp/openapi-specs.json`. `OpenAPIEmailTemplates` describes
+   the token from `EmailTemplate` itself — the convention `OpenAPIQueryParameters` sets for the operator table — so
+   a third template appears in the document with no edit. **Deliberately prose and not an `enum`:** an enumerated
+   path token becomes a closed union in `deed-poll-admin`'s generated client, which would make a later template
+   break the clients that already had the route, and the `GET` is where a tab is meant to learn what it may send.
+   The caseworker count is asserted to be unchanged at 33 in the same test.
+
+5. **Nothing in `deed-poll-admin` is touched, and nothing needed to be.** `EmailTypeResponse` carries the template
+   as a key on a row rather than a field per template, so the second entry arrives in the existing `availability`
+   array; the OpenAPI test now states that shape as well as the count, which is the assertion that would fail if a
+   later template tried to widen the response instead.
+
+6. **The ArchUnit rule passed untouched.** `OpenAPIEmailTemplates` is outside the notify package and depends on
+   `EmailTemplate`, not on `NotificationClient`, so the one boundary still holds.
+
+7. **Totals after this task, from a cold `./gradlew clean build`:** `test` **2,444** and `integration` **11** —
+   2,455 against the 2,389 baseline, zero failures, checkstyle clean on five source sets. With
+   `INTEGRATION_TESTS_ENABLED=false`: **1,544**. `build.gradle`'s exclusion comment is re-measured to 900 of 2,444
+   across 31 classes; notify-3 added no container-backed class of its own — the 31st is
+   `ReferralLifecycleTimelineTest`, which arrived on `master` in between.
 
 ---
 

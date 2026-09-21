@@ -21,6 +21,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class EmailTemplateTest {
 
+    /** A reply-to address id, invented: what matters about it here is only that it is configured. */
+    private static final String REPLY_TO = "9b7c5d21-3f4e-4a6b-8c0d-1e2f3a4b5c66";
+
     @Nested
     @DisplayName("naming")
     class Naming {
@@ -224,7 +227,7 @@ class EmailTemplateTest {
     class TemplateId {
 
         private static NotifyProperties configured(Map<String, String> templates) {
-            return new NotifyProperties("https://notify.example", "", templates);
+            return new NotifyProperties("https://notify.example", "", templates, REPLY_TO);
         }
 
         @Test
@@ -234,7 +237,7 @@ class EmailTemplateTest {
 
             assertThat(EmailTemplate.APPLICATION_REJECTED.templateId(properties))
                 .isEqualTo(NotifyProperties.UNPROVISIONED_TEMPLATE_ID);
-            assertThat(properties.isProvisioned(EmailTemplate.APPLICATION_REJECTED.key())).isFalse();
+            assertThat(properties.isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isFalse();
         }
 
         @Test
@@ -244,7 +247,7 @@ class EmailTemplateTest {
             NotifyProperties properties = configured(Map.of("application-rejected", uuid));
 
             assertThat(EmailTemplate.APPLICATION_REJECTED.templateId(properties)).isEqualTo(uuid);
-            assertThat(properties.isProvisioned(EmailTemplate.APPLICATION_REJECTED.key())).isTrue();
+            assertThat(properties.isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isTrue();
         }
 
         @ParameterizedTest
@@ -254,6 +257,45 @@ class EmailTemplateTest {
             // Never null: an unconfigured template fails at Notify with a status the taxonomy classifies,
             // rather than with a NullPointerException somewhere further in.
             assertThat(Optional.ofNullable(template.templateId(configured(Map.of())))).isPresent();
+        }
+
+        @Test
+        @DisplayName("a template that invites a reply needs the reply-to as well as the id")
+        void anInvitedReplyIsPartOfBeingProvisioned() {
+            // Decision 10 as a fact about this pair: provisioning is asked per template because the two templates
+            // need different things of an environment. NotifyPropertiesTest states the rule itself.
+            String uuid = "2b0e6b6e-0000-4000-8000-0000000000aa";
+            Map<String, String> both = Map.of(
+                EmailTemplate.APPLICATION_REJECTED.key(), uuid,
+                EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), uuid);
+            NotifyProperties noReplyTo = new NotifyProperties("https://notify.example", "", both, "");
+
+            assertThat(noReplyTo.isProvisioned(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).isFalse();
+            assertThat(noReplyTo.isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isTrue();
+            assertThat(new NotifyProperties("https://notify.example", "", both, REPLY_TO)
+                           .isProvisioned(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("whether an email invites a reply")
+    class InvitesReply {
+
+        @Test
+        @DisplayName("the confirmation email does, because asking for one is what it is for")
+        void theConfirmationEmailInvitesAReply() {
+            // "If you still wish to enrol the deed poll then let us know by replying to this email." Sent from a
+            // no-reply address that sentence asks for something the applicant cannot give.
+            assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.invitesReply()).isTrue();
+        }
+
+        @Test
+        @DisplayName("the rejection email does not, and must not start needing a reply-to")
+        void theRejectionEmailInvitesNone() {
+            // It states a decision and starts a refund; it asks the applicant for nothing. Asserted rather than
+            // left implicit because the tempting simplification is one flag for the service, which would make a
+            // reply-to configured for ④ silently change what ③ sends.
+            assertThat(EmailTemplate.APPLICATION_REJECTED.invitesReply()).isFalse();
         }
     }
 

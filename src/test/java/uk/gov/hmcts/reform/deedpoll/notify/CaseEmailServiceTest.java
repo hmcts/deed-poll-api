@@ -95,7 +95,7 @@ class CaseEmailServiceTest {
         // A provisioned template, so nothing here turns on the placeholder. The unprovisioned case is a Notify
         // refusal, which is asserted in its own test below.
         NotifyProperties properties = new NotifyProperties(
-            "https://notify.invalid", "key", Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1"));
+            "https://notify.invalid", "key", Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1"), "");
         emails = new CaseEmailService(
             deedPolls, referrals, notifications, documents, notify, properties, new ObjectMapper());
     }
@@ -305,7 +305,7 @@ class CaseEmailServiceTest {
             // the drain and a preview is a 502. NotifyProperties.isProvisioned exists for this sentence.
             CaseEmailService unprovisioned = new CaseEmailService(
                 deedPolls, referrals, notifications, documents, notify,
-                new NotifyProperties("https://notify.invalid", "", Map.of()), new ObjectMapper());
+                new NotifyProperties("https://notify.invalid", "", Map.of(), ""), new ObjectMapper());
             storedCase();
             refusedReferral();
 
@@ -314,6 +314,37 @@ class CaseEmailServiceTest {
                     assertThat(entry.applicable()).isTrue();
                     assertThat(entry.provisioned()).isFalse();
                 });
+        }
+
+        @Test
+        @DisplayName("says only the email that invites a reply is unprovisioned when there is no reply-to")
+        void reportsProvisioningPerTemplate() {
+            // Decisions 9 and 10 as the Email tab sees them: both templates have a real UUID and neither has an
+            // inbox to reply to, so the email whose words ask for a reply cannot be sent and the one that asks for
+            // nothing can. One flag for the service would have disabled both -- and an applicant would then be told
+            // their application was refused by nothing at all, over a setting that email never needed.
+            String uuid = "2b0e6b6e-0000-4000-8000-0000000000aa";
+            CaseEmailService noReplyTo = new CaseEmailService(
+                deedPolls, referrals, notifications, documents, notify,
+                new NotifyProperties("https://notify.invalid", "key", Map.of(
+                    EmailTemplate.APPLICATION_REJECTED.key(), uuid,
+                    EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), uuid), ""),
+                new ObjectMapper());
+            storedCase();
+            refusedReferralFor(ReferralReason.NonPublication);
+
+            List<EmailAvailability> available = noReplyTo.available(CASE_ID);
+
+            assertThat(entryFor(available, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).satisfies(entry -> {
+                // Applicable and unprovisioned: the case is in the right state and the environment is not ready,
+                // which are separate axes and neither implies the other.
+                assertThat(entry.applicable()).isTrue();
+                assertThat(entry.provisioned()).isFalse();
+            });
+            assertThat(entryFor(available, EmailTemplate.APPLICATION_REJECTED)).satisfies(entry -> {
+                assertThat(entry.applicable()).isTrue();
+                assertThat(entry.provisioned()).isTrue();
+            });
         }
 
         @Nested
