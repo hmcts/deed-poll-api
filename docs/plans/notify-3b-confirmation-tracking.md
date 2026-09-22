@@ -177,9 +177,51 @@ Read first: notify-3's Task 2, and `ReferralService`'s existing write operations
   note reaching the referral; and that the recorded author is the caseworker rather than the service account.
   Container-backed: the send and the stamp commit together, and neither survives the other's rollback.
 
-- [ ] Sending ④ starts the clock in the same transaction as the outbox row, both outcomes record with their
+- [x] Sending ④ starts the clock in the same transaction as the outbox row, both outcomes record with their
       author and note, recording twice and recording unasked are each refused by name, and `./gradlew build`
       green
+
+**Task 2 notes.**
+
+- **The stamp lives in `CaseEmailService.send`**, not in a listener and not on the drain. One `AuditClock.now()`
+  is read for the row and the stamp, so the outbox row's `createdOn` and `confirmationRequestedAt` are the same
+  instant rather than two readings that could straddle a tick — asserted both ways round
+  (`CaseEmailServiceTest`, and over HTTP against the committed row).
+- **`startConfirmationClock` is an exhaustive switch over `EmailTemplate`, not an `if`.** A third template has to
+  say whether it starts a clock instead of silently inheriting ④'s answer. ③ starts none, and that is asserted:
+  it tells the applicant a decision and asks nothing, so a case recorded as waiting for a reply to it would wait
+  for ever.
+- **Only a fresh enqueue stamps.** A second send writes no row (the unique index refuses it) and must not move a
+  clock already running, or a double-click would reset the wait a caseworker is being reminded of. A replacement
+  after a terminally failed send *does* re-stamp, which is right: the applicant has been asked again.
+- **The note is a case note, not an append to `Referral.notes`.** That column is the caseworker's text from when
+  the referral was raised, and appending would rewrite what went to the judiciary and break the cap
+  `MAX_NOTES_LENGTH` exists for. `ReferralNotes.confirmationRecorded` composes it, `MAX_CONFIRMATION_NOTE_LENGTH`
+  (1,000, the same number and for the same reason as the referral's) keeps the worst case inside
+  `NoteForm.MAX_NOTE_LENGTH`, and `ReferralNotesTest` pins that arithmetic for both outcomes.
+- **The two 409s are checked already-recorded first.** Only their order needed deciding: an outcome cannot exist
+  without a request date through any path this service has, so the order matters only for a row repaired by hand,
+  and the more specific fact wins. Both refusals compose without throwing on a null date, because a refusal that
+  failed while explaining itself would answer 500 for the state it exists to explain.
+- **`Withdrawn` is spelled out in the note.** It is also a `ReferralState` — the office pulling a referral back —
+  and here it is the *applicant* withdrawing with a refund behind it, so a grid entry reading only "Withdrawn"
+  would be read as the other event.
+- **Recording is ungated on `ReferralState`**, and that is deliberate rather than an omission: a caseworker may
+  close or withdraw the referral before the reply arrives, and the applicant still answered a question the office
+  asked. Parameterized over every state.
+- **Two files this plan did not name had to move for the build to stay green**, both because the route is new:
+  `OpenAPIWriteBodies` gains `RecordConfirmationRequest` (a keyed body springdoc otherwise publishes as `{}`, which
+  `OpenAPIPublisherTest.documentsEveryKeyedWriteBody` scans the classpath for), and `OpenAPIPublisherTest`'s
+  caseworker path list and operation count go from 33 to 34. Task 4 re-verifies the published output.
+- **Totals after this task:** `test` **2,510** across 319 classes (`+49` tests on Task 1's 2,461/314; the 5 new
+  "classes" are `@Nested` groups), `integration` unchanged at 11 across 3, `./gradlew build` green. **No new
+  container-backed top-level class** — the 12 new container-backed tests are nested inside
+  `CaseworkerReferralControllerTest` and `CaseworkerEmailControllerTest`, which already carry `requires-docker` by
+  inheritance — so `build.gradle`'s excluded-count comment is left for Task 4 to re-measure.
+- `CaseworkerEmailControllerTest` now registers ④'s template id **and** `notify.email-reply-to-id`: without a
+  reply-to the sender refuses ④ permanently, so the clock could only have been asserted through a send that never
+  reached the stub. The terminal-failure case is asserted too — the stamp survives it, which is decision 4's named
+  consequence and notify-1's flag 8.
 
 ### Task 3: Making a waiting case impossible to forget
 

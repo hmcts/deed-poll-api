@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CreateReferralRequest;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.RecordConfirmationRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.ReferralResponse;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
@@ -18,7 +19,8 @@ import java.util.List;
 /**
  * Referrals of a case to the judiciary: the caseworker's half of the loop.
  *
- * <p>List, raise, read, withdraw and close. <strong>Claiming a referral and recording a direction are the
+ * <p>List, raise, read, withdraw, close, and record the applicant's answer to the confirmation email.
+ * <strong>Claiming a referral and recording a direction are the
  * judge's half, and they are transitions on {@code ReferralService} with no route here</strong> -- the judicial
  * pool, the read-through to a case's papers and the endpoints that call those transitions are the
  * judicial-surface plan's, on their own {@code /judicial/**} surface rather than bolted onto this one. Closing
@@ -31,21 +33,25 @@ import java.util.List;
  * read or withdrawn through the wrong parent, and {@code ReferralRepository} has no finder by referral id alone
  * for exactly that reason.
  *
- * <p><strong>Withdrawal and closure are sub-resources, not a {@code DELETE} or a {@code PATCH}.</strong> A
- * withdrawn referral survives as {@code Withdrawn} -- distinct from {@code Closed}, which means a direction was
- * actioned -- so there is nothing to delete; and there is no in-place editing of a referral in MVP, so there is
- * no patch for a state to be smuggled through. Amending a referral is withdrawing it and raising another, which
- * is why the create is the only route here that takes a body.
+ * <p><strong>Withdrawal, closure and the confirmation are sub-resources, not a {@code DELETE} or a
+ * {@code PATCH}.</strong> A withdrawn referral survives as {@code Withdrawn} -- distinct from {@code Closed},
+ * which means a direction was actioned -- so there is nothing to delete; and there is no in-place editing of a
+ * referral in MVP, so there is no patch for a state to be smuggled through. Amending a referral is withdrawing it
+ * and raising another, which is why the create and the confirmation are the only routes here that take a body --
+ * and the confirmation takes one because the applicant's answer is the payload, not because a referral became
+ * editable.
  *
  * <p><strong>No role gate, deliberately.</strong> Any authenticated staff caller may raise, read, withdraw and
- * close a referral: there is no "may refer" permission and no "may close" one, because in the process this
- * replaces anybody who works a case can email a Master and action the reply. The judicial role is the one that
+ * close a referral, and record an applicant's confirmation: there is no "may refer" permission, no "may close" one
+ * and no "may record a reply" one, because in the process this replaces anybody who works a case can email a
+ * Master, action the reply, and read the applicant's answer out of the shared inbox. The judicial role is the one that
  * is different -- {@code Role.JUDICIAL}, which IDAM does not issue yet -- and it gates the two transitions that
  * are not on this surface at all rather than a check bolted on here. So unlike the note and witness deletes,
  * nothing below these handlers asks what the caller may do.
  *
- * <p><strong>The caller is passed to every write for authorship, not authorisation.</strong> All three writes
- * here -- raising, withdrawing and closing -- put a note onto the case timeline as the acting caseworker, and
+ * <p><strong>The caller is passed to every write for authorship, not authorisation.</strong> All four writes
+ * here -- raising, withdrawing, closing and recording a confirmation -- put a note onto the case timeline as the
+ * acting caseworker, and
  * there is no timeline concept in this domain beyond the notes grid, so the referral has to appear where
  * caseworkers already look. {@code ReferralService} takes the whole {@code CurrentUser} because it needs a name
  * for the audit columns and an author for that note, and on closure the two say different things: {@code
@@ -55,12 +61,13 @@ import java.util.List;
  * everything a note could, and business testing found it does not say <em>when</em> the office acted. The reads
  * take no caller: a referral's visibility is its parent's, which is in the path.
  *
- * <p>None of the three conflicts these routes can answer is stated here. The one-live-referral guard, the
- * withdraw-only-before-a-direction guard and the close-only-when-{@code Decided} guard are all in
- * {@code ReferralService}, which throws {@code ConflictError}, and {@code DomainErrorHandler} turns that into a
- * 409 -- so the rules hold for a caller that is not a route.
+ * <p>None of the five conflicts these routes can answer is stated here. The one-live-referral guard, the
+ * withdraw-only-before-a-direction guard, the close-only-when-{@code Decided} guard and the confirmation's two --
+ * no second answer, and no answer nobody asked for -- are all in {@code ReferralService}, which throws
+ * {@code ConflictError}, and {@code DomainErrorHandler} turns that into a 409 -- so the rules hold for a caller
+ * that is not a route.
  *
- * <p>None of these routes is annotated as requiring authentication, and all five do:
+ * <p>None of these routes is annotated as requiring authentication, and all six do:
  * {@code SecurityConfiguration} authenticates {@code anyRequest()} that is not on a short infrastructure
  * allowlist, so a route is protected by having been written rather than by having been remembered.
  */
@@ -173,5 +180,42 @@ public class CaseworkerReferralController {
                                   @PathVariable("referralId") String referralId) {
 
         return ReferralResponse.from(referrals.close(id, referralId, CurrentUsers.required()));
+    }
+
+    /**
+     * Records what the applicant answered when the office asked whether they still want the deed enrolled.
+     *
+     * <p>The reply to the <em>Request confirmation to proceed</em> email, which a caseworker reads out of the
+     * monitored inbox and records here: {@code Confirmed} if the applicant wants enrolment to go ahead knowing the
+     * change will be published, {@code Withdrawn} if they do not and want a refund.
+     *
+     * <p><strong>Its own operation rather than a case edit</strong>, and scoped by the case as every referral
+     * operation here is -- the answer is a fact about that referral's outcome, and a case carrying a second referral
+     * would make it ambiguous anywhere else. A referral of another case is the same 404 an unknown id is, through
+     * the case-scoped lookup.
+     *
+     * <p><strong>It does not move the case on, and that is deliberate.</strong> Recording {@code Confirmed} sets no
+     * date and clears none: the caseworker then does whatever the process requires through the case edit, audited as
+     * their action rather than as a side effect of this one. There is likewise no new case state for the wait --
+     * a case's state is derived from its date columns by a verbatim port -- so a client shows the wait alongside the
+     * state rather than inside it.
+     *
+     * <p>A sub-resource and a {@code POST}, like the withdrawal and the closure, and for the sharper version of
+     * their reason: <strong>it is idempotent by refusal</strong>. Recording an outcome twice answers 409 naming what
+     * is already stored and when, because the second caseworker needs to know the first already acted rather than
+     * silently overwriting them -- and recording an answer on a referral nobody asked to confirm is a 409 too, since
+     * that is a mis-click on the wrong case rather than a valid state. A {@code PATCH} carrying the column would
+     * make both of those a matter of who saved last.
+     *
+     * <p>200 with the referral carrying its four confirmation columns, so a client re-rendering the tab has the
+     * answer, its date and its author without a second read.
+     */
+    @PostMapping("/{referralId}/confirmation")
+    public ReferralResponse recordConfirmation(@PathVariable("id") String id,
+                                               @PathVariable("referralId") String referralId,
+                                               @RequestBody RecordConfirmationRequest request) {
+
+        return ReferralResponse.from(
+            referrals.recordConfirmation(id, referralId, request.toInput(), CurrentUsers.required()));
     }
 }

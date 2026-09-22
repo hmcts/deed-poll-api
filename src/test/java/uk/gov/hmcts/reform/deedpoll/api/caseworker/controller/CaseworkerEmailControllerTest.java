@@ -20,6 +20,8 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
@@ -37,6 +39,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.notify.ApplicationRejectedPersonalisation;
+import uk.gov.hmcts.reform.deedpoll.notify.CaseEmailService;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailSlot;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailTemplate;
 import uk.gov.hmcts.reform.deedpoll.notify.StubNotify;
@@ -102,6 +105,17 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
     /** The one email type this service has, as the URL and the configuration spell it. */
     private static final String REJECTED = EmailTemplate.APPLICATION_REJECTED.key();
 
+    /** The email that asks the applicant to confirm, which is the one that starts a clock on the referral. */
+    private static final String CONFIRMATION = EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key();
+
+    /**
+     * The monitored inbox ④ is sent from, invented here as every Notify id in this class is.
+     *
+     * <p>Configured at all because the sender refuses ④ permanently without one: the email's words ask for a reply,
+     * and Notify would drop a blank reply-to and send from no-reply, losing the answer the email exists to collect.
+     */
+    private static final String REPLY_TO_ID = "8a1c9b2e-0000-4000-8000-000000000042";
+
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private static final StubIdam IDAM = new StubIdam();
@@ -130,6 +144,11 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         // The template that DEED_POLL_PLACEHOLDER stands in for until notify-0 provisions one. Registered so a
         // preview can render; the unprovisioned case is asserted by making the stub refuse instead.
         registry.add("notify.templates.application-rejected", () -> StubNotify.TEMPLATE_ID);
+        // ④ as well, with the monitored inbox it needs: its own words ask the applicant to reply, so the sender
+        // refuses it permanently without a reply-to. Registered so that the confirmation clock can be asserted
+        // through a send that really reaches the stub rather than one that fails before it.
+        registry.add("notify.templates.request-confirmation-to-proceed", () -> StubNotify.TEMPLATE_ID);
+        registry.add("notify.email-reply-to-id", () -> REPLY_TO_ID);
     }
 
     @Autowired
@@ -150,6 +169,18 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
     /** Only to reach a refused referral, which needs the judicial transitions and they have no route here. */
     @Autowired
     private ReferralService referralService;
+
+    /**
+     * Only to assert that the outbox row and the confirmation stamp are one transaction.
+     *
+     * <p>Called directly, because over HTTP the transaction always commits and the claim is about what happens when
+     * it does not -- see {@code SendEmail.ConfirmationClock.neitherSurvivesARollback}.
+     */
+    @Autowired
+    private CaseEmailService emails;
+
+    @Autowired
+    private PlatformTransactionManager transactions;
 
     @Autowired
     private DeedPollNoteRepository notes;
@@ -675,6 +706,83 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
 
             assertThat(notifications.count()).isZero();
         }
+
+        @Nested
+        @DisplayName("the confirmation clock")
+        class ConfirmationClock {
+
+            @Test
+            @DisplayName("commits the stamp with the outbox row, both carrying the same instant")
+            void commitsTheStampWithTheRow() throws Exception {
+                String caseId = confirmationCase();
+
+                authorised(post(confirmationSendOf(caseId)), "{}")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.enqueued").value(true));
+
+                Notification row = notifications.findAll().getFirst();
+                assertThat(row.getTemplate())
+                    .isEqualTo(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.name());
+                assertThat(row.getState()).isEqualTo(NotificationState.Sent);
+                // Committed, and with the row's own instant: the stamp is written in the transaction that owes the
+                // email rather than when Notify accepts it, so a case's process state does not depend on a delivery
+                // outcome that may still be retrying.
+                assertThat(storedReferral(caseId).getConfirmationRequestedAt()).isEqualTo(row.getCreatedOn());
+                // And nothing else about the wait: the answer is outstanding, which is what a waiting case is.
+                assertThat(storedReferral(caseId).getConfirmationOutcome()).isNull();
+            }
+
+            @Test
+            @DisplayName("neither the row nor the stamp survives the other's rollback")
+            void neitherSurvivesARollback() {
+                // One transaction, asserted rather than assumed. Called on the service inside a transaction this
+                // test rolls back, because over HTTP the transaction always commits -- and what decision 4 claims
+                // is that there is no state in which an applicant is owed the email and the case is not recorded as
+                // waiting, or the reverse.
+                String caseId = confirmationCase();
+
+                new TransactionTemplate(transactions).execute(status -> {
+                    emails.send(caseId, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), caseworker());
+                    status.setRollbackOnly();
+                    return null;
+                });
+
+                assertThat(notifications.count()).isZero();
+                assertThat(storedReferral(caseId).getConfirmationRequestedAt()).isNull();
+            }
+
+            @Test
+            @DisplayName("a refused send leaves no clock running, so no case waits for an email nobody owes")
+            void refusedSendLeavesNoClockRunning() throws Exception {
+                // The counterpart refusal: ③ has already been asked for on this referral, and the two say opposite
+                // things about enrolment, so ④ is a 409. A stamp written before the insert was refused would put a
+                // case in the waiting list for an email this service never owed anybody.
+                String caseId = confirmationCase();
+                authorised(post(sendOf(caseId)), "{}").andExpect(status().isOk());
+
+                authorised(post(confirmationSendOf(caseId)), "{}").andExpect(status().isConflict());
+
+                assertThat(notifications.count()).isOne();
+                assertThat(storedReferral(caseId).getConfirmationRequestedAt()).isNull();
+            }
+
+            @Test
+            @DisplayName("keeps the clock running when Notify refuses the send terminally -- notify-1's flag 8")
+            void keepsTheClockRunningWhenTheSendFailsTerminally() throws Exception {
+                // Decision 4's named consequence, pinned rather than left as prose: the stamp belongs to the
+                // enqueue, so a send that then fails permanently leaves the case waiting for a reply to an email
+                // nobody received. That is the trade the outbox's design makes, and it is what notify-1's flag 8 is
+                // about -- the two should be closed together.
+                NOTIFY.stubSendStatus(400);
+                String caseId = confirmationCase();
+
+                authorised(post(confirmationSendOf(caseId)), "{}").andExpect(status().isOk());
+
+                assertThat(notifications.findAll()).singleElement().satisfies(row ->
+                    assertThat(row.getState()).isEqualTo(NotificationState.Failed));
+                assertThat(storedReferral(caseId).getConfirmationRequestedAt()).isNotNull();
+            }
+        }
     }
 
     /** The personalisation Notify was asked to render, read off the stub's recorded request. */
@@ -692,6 +800,32 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
 
     private String sendOf(String caseId) {
         return "/caseworker/cases/" + caseId + "/emails/" + REJECTED;
+    }
+
+    private String confirmationSendOf(String caseId) {
+        return "/caseworker/cases/" + caseId + "/emails/" + CONFIRMATION;
+    }
+
+    /**
+     * A case whose refused referral was raised for a non-publication request, which is the only shape ④ applies to.
+     *
+     * <p>{@link #refusedCase()} is refused for {@code Other}, so it offers ③ and not ④ -- which is the distinction
+     * {@code CaseEmailServiceTest} pins and the reason this needs its own fixture rather than a flag on that one.
+     */
+    private String confirmationCase() {
+        String caseId = newCase();
+        decide(caseId, raise(caseId, ReferralReason.NonPublication), MasterDecision.Rejected, DIRECTION);
+        return caseId;
+    }
+
+    /** The case's one referral, as it stands committed and read in a session of its own. */
+    private Referral storedReferral(String caseId) {
+        return referrals.findByDeedPollIdOrderByCreatedOnDesc(caseId).getFirst();
+    }
+
+    /** The caseworker the fixtures act as, matching the display name the stub token carries. */
+    private static CurrentUser caseworker() {
+        return CurrentUser.currentUser(List.of(), "A Caseworker", "caseworker-1");
     }
 
     /**
@@ -728,12 +862,16 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
     }
 
     private String raise(String caseId) {
-        CurrentUser caseworker = CurrentUser.currentUser(List.of(), "A Caseworker", "caseworker-1");
+        return raise(caseId, ReferralReason.Other);
+    }
+
+    /** The same referral, raised for one named reason -- which is what decides whether ④ applies to the case. */
+    private String raise(String caseId, ReferralReason reason) {
         Referral referral = referralService.createReferral(
             caseId,
-            new CreateReferralInput(List.of(ReferralReason.Other), Optional.of("Needs a Master"),
+            new CreateReferralInput(List.of(reason), Optional.of("Needs a Master"),
                                     Urgency.Normal, Optional.empty()),
-            caseworker);
+            caseworker());
         return referral.getId().toString();
     }
 

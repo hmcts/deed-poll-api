@@ -676,6 +676,103 @@ class CaseEmailServiceTest {
             // failed caseworker request rather than a row that is tried again.
             verifyNoInteractions(notify);
         }
+
+        @Nested
+        @DisplayName("the confirmation clock")
+        class ConfirmationClock {
+
+            @Test
+            @DisplayName("stamps the referral with the outbox row's own instant when the confirmation email is owed")
+            void stampsTheReferral() {
+                storedCase();
+                Referral referral = refusedReferralFor(ReferralReason.NonPublication);
+                enqueueSucceeds();
+
+                emails.send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER);
+
+                // The same instant the row was written with, not a second reading of the clock: two calls could
+                // straddle a tick and leave the row and the referral disagreeing about when the applicant was
+                // asked.
+                assertThat(referral.getConfirmationRequestedAt()).isEqualTo(enqueuedAt());
+                // Nothing else about the wait is decided by the send: the answer is outstanding, which is what
+                // makes this one of the referrals the waiting list holds.
+                assertThat(referral.getConfirmationOutcome()).isNull();
+                assertThat(referral.getConfirmationReceivedAt()).isNull();
+                assertThat(referral.getConfirmationRecordedBy()).isNull();
+                // The caseworker into both audit columns, because the row did change and moving modifiedOn alone
+                // would attribute their send to the judge who last wrote it.
+                assertThat(referral.getModifiedBy()).isEqualTo("A Caseworker");
+                assertThat(referral.getModifiedOn()).isEqualTo(enqueuedAt());
+                verify(referrals).save(referral);
+            }
+
+            @Test
+            @DisplayName("starts no clock for the rejection email, which asks the applicant for nothing")
+            void startsNoClockForTheRejectionEmail() {
+                storedCase();
+                Referral referral = refusedReferral();
+                enqueueSucceeds();
+
+                emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER);
+
+                // ③ tells the applicant a decision and starts a refund. A case recorded as waiting for a reply to
+                // it would sit in the waiting list for ever, because no reply is coming.
+                assertThat(referral.getConfirmationRequestedAt()).isNull();
+                verify(referrals, never()).save(any());
+            }
+
+            @Test
+            @DisplayName("does not move a clock already running when a second send writes no row")
+            void doesNotMoveTheClockOnASecondSend() {
+                storedCase();
+                Referral referral = refusedReferralFor(ReferralReason.NonPublication);
+                LocalDateTime asked = LocalDateTime.of(2026, 5, 3, 9, 30);
+                referral.setConfirmationRequestedAt(asked);
+                when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
+                                           anyString(), any(), anyString())).thenReturn(0);
+                Notification existing =
+                    blocking(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, LocalDateTime.of(2026, 5, 3, 9, 30));
+
+                assertThat(emails
+                               .send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER)
+                               .id())
+                    .isEqualTo(existing.getId());
+
+                // A caseworker double-clicking must not reset the wait they are being reminded of: no row was
+                // written, so no clock starts.
+                assertThat(referral.getConfirmationRequestedAt()).isEqualTo(asked);
+                verify(referrals, never()).save(any());
+            }
+
+            @Test
+            @DisplayName("starts no clock when the send was refused, so no case waits for an email nobody owes")
+            void startsNoClockWhenTheSendWasRefused() {
+                // The recipient refusal, which happens before the row is written. A stamp before that check would
+                // put a case in the waiting list for an email this service never owed anybody.
+                storedCase().setApplicantEmail("  ");
+                Referral referral = refusedReferralFor(ReferralReason.NonPublication);
+
+                assertThatThrownBy(() -> emails.send(
+                    CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER))
+                    .isInstanceOf(IncompleteDataError.class);
+
+                assertThat(referral.getConfirmationRequestedAt()).isNull();
+                verify(referrals, never()).save(any());
+            }
+
+            private void enqueueSucceeds() {
+                when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
+                                           anyString(), any(), anyString())).thenReturn(1);
+            }
+
+            /** The instant the outbox row was written with, read off the statement the service called. */
+            private LocalDateTime enqueuedAt() {
+                ArgumentCaptor<LocalDateTime> now = ArgumentCaptor.forClass(LocalDateTime.class);
+                verify(notifications).enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
+                                              anyString(), now.capture(), anyString());
+                return now.getValue();
+            }
+        }
     }
 
     @Nested

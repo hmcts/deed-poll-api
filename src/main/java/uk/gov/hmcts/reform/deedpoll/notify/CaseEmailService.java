@@ -25,6 +25,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.service.notify.NotificationClient;
 import uk.gov.service.notify.NotificationClientException;
 
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -70,7 +71,9 @@ import java.util.stream.Collectors;
  * case has no address cannot fix that by editing what they typed, so making them correct a payload first would
  * be two refusals where one was useful.
  *
- * <p><strong>Nothing here sends.</strong> A send resolves, enqueues in the caller's transaction, and returns;
+ * <p><strong>Nothing here sends.</strong> A send resolves, enqueues in the caller's transaction -- stamping the
+ * referral's {@code confirmationRequestedAt} in that same transaction where the email is the one that asks the
+ * applicant to reply, which is the only thing a send writes outside the outbox -- and returns;
  * the drain is what talks to Notify, and it is called after this transaction commits -- see
  * {@link NotificationOutbox}, and {@code CaseworkerEmailController} for why the order is not an accident.
  */
@@ -287,6 +290,10 @@ public class CaseEmailService {
      * there is no version to record and inventing one would claim knowledge of the wording. The sender records
      * the version Notify reports when it accepts the send.
      *
+     * <p><strong>Sending ④ also starts the clock on the reply it asks for</strong>, in this transaction and with
+     * the row's own instant -- see {@link #startConfirmationClock}. That is the one thing a send does to anything
+     * other than the outbox, and it is why the two commit or roll back together.
+     *
      * @param caller the caseworker sending it, who becomes {@code createdBy} -- not audit noise here, because
      *     they authored part of what the applicant reads
      * @throws NotFoundError if there is no such case
@@ -305,6 +312,9 @@ public class CaseEmailService {
         String recipient = requireRecipient(composed.deedPoll());
         UUID referralId = composed.referral().getId();
         UUID id = UUID.randomUUID();
+        // One instant for the row and for the clock the next paragraph starts, read once: two calls could
+        // straddle a tick and make the outbox row and the referral disagree about when the applicant was asked.
+        LocalDateTime now = AuditClock.now();
 
         int enqueued = notifications.enqueue(
             id,
@@ -314,10 +324,11 @@ public class CaseEmailService {
             template.exclusionGroup().name(),
             recipient,
             asJson(composed.personalisation()),
-            AuditClock.now(),
+            now,
             caller.name());
 
         if (enqueued == 1) {
+            startConfirmationClock(template, composed.referral(), now, caller);
             return SendReceipt.enqueued(id, recipient);
         }
 
@@ -348,6 +359,47 @@ public class CaseEmailService {
         log.info("Case {} already owes {} for referral {}, so nothing was enqueued",
                  deedPollId, template.key(), referralId);
         return SendReceipt.alreadyOwed(blocking);
+    }
+
+    /**
+     * Starts the clock on the confirmation this send asks for, where the send is the email that asks for one.
+     *
+     * <p><strong>Here rather than on delivery, and in the caller's transaction rather than the drain's.</strong>
+     * The outbox's whole design is that the row is written inside the caseworker's transaction, and hanging a
+     * case's process state off an asynchronous outcome that may still be retrying would make "is this case waiting
+     * for a reply?" unanswerable for as long as the retries last. So the stamp commits with the row: either the
+     * applicant is owed the email and the case is recorded as waiting, or neither happened.
+     *
+     * <p><strong>The consequence is real and named rather than hidden:</strong> if the send then fails terminally,
+     * the case sits in the waiting list expecting a reply to an email nobody received. That is notify-1's flag 8
+     * and is not fixed here; the two should be closed together.
+     *
+     * <p>Only on a fresh enqueue. A second send of the same email writes no row -- the unique index refuses it --
+     * and must not move a clock that is already running, or a caseworker double-clicking would reset the wait they
+     * are being reminded of. A replacement after a terminal failure <em>does</em> re-stamp, which is correct: the
+     * applicant has been asked again, so the wait starts from the asking.
+     *
+     * <p>An exhaustive switch rather than an {@code if}, so a template added to the enum has to say whether it
+     * starts a clock instead of silently inheriting this one's answer.
+     */
+    private void startConfirmationClock(EmailTemplate template,
+                                        Referral referral,
+                                        LocalDateTime now,
+                                        CurrentUser caller) {
+        switch (template) {
+            case REQUEST_CONFIRMATION_TO_PROCEED -> {
+                referral.setConfirmationRequestedAt(now);
+                // The caseworker into both audit columns, not just the timestamp: the row did change, and moving
+                // modifiedOn while modifiedBy still named the judge who directed it would attribute this to them.
+                referral.setModifiedBy(caller.name());
+                referral.setModifiedOn(now);
+                referrals.save(referral);
+            }
+            // Tells the applicant a decision and starts a refund. It asks them for nothing, so there is nothing
+            // to wait for and no clock to start.
+            case APPLICATION_REJECTED -> {
+            }
+        }
     }
 
     /**

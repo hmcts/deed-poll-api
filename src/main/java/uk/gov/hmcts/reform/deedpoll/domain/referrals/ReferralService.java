@@ -20,6 +20,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.StaleClaim;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -30,8 +31,9 @@ import java.util.stream.Collectors;
 
 /**
  * Referrals of a case to the judiciary: raising one, reading them, pulling one back, closing a returned one,
- * and the judicial transitions -- claiming one out of the shared pool, recording a direction on one, and the
- * inactivity sweep that gives a forgotten claim back to it.
+ * recording what the applicant answered when the office asked them whether to proceed, and the judicial
+ * transitions -- claiming one out of the shared pool, recording a direction on one, and the inactivity sweep that
+ * gives a forgotten claim back to it.
  *
  * <p><strong>Not a port.</strong> There is nothing for this in {@code src/test/resources/reference} -- the
  * source store held a referral inline on the case, one per case, latest-wins, and those columns are still on
@@ -111,15 +113,19 @@ import java.util.stream.Collectors;
  *       timer -- and it is deliberately out of scope.</li>
  * </ul>
  *
- * <p><strong>Every successful transition writes exactly one case note, and nothing else writes one.</strong>
- * Raise, withdraw, {@link #claim}, {@link #decide} and {@link #close} each call {@code notes.createNote} once,
+ * <p><strong>Every successful transition writes exactly one case note, and the only write here that is not a
+ * transition writes one too.</strong>
+ * Raise, withdraw, {@link #claim}, {@link #decide}, {@link #close} and {@link #recordConfirmation} each call
+ * {@code notes.createNote} once,
  * with prose from {@link ReferralNotes} and {@code caller.noteAuthor()} as the author -- the person who caused
  * the transition, which on a claim or a direction is the judge. {@link #reclaimStaleClaims()} is the one
  * exception to the authorship rule, not to the counting rule: it writes one note per released claim as
  * {@link NoteAuthor#NONE}, because no person did it. Each note is created after the referral is saved and
  * inside the same transaction, so there is no successful transition without its note and no note for one that
  * was refused or rolled back. {@link #touch} writes none -- a read is not a transition -- and neither does the
- * backfill migration, which does not revisit history. The first three referral plans deliberately noted only
+ * backfill migration, which does not revisit history. {@link #recordConfirmation} writes one although it moves no
+ * state, because the applicant's answer is an event on the case and the grid is the only place it would appear.
+ * The first three referral plans deliberately noted only
  * raise, withdraw and a lapse, on the grounds that a column already carried the rest;
  * {@code docs/plans/referrals-api-5-lifecycle-case-notes.md} supersedes that, because a row states where a
  * referral is <em>now</em> and the grid is the only place that says when each step happened.
@@ -129,7 +135,10 @@ import java.util.stream.Collectors;
  * another. The rule and the reason it is a recompute rather than a push are on {@link CurrentReferralState};
  * {@link #reclaimStaleClaims()} does it set-based because it is the one site that moves many referrals at once.
  * {@link #touch} does not do it, and that is not an omission: it moves {@code lastTouchedAt} and never
- * {@code state}, so there is nothing for the column to have changed to.
+ * {@code state}, so there is nothing for the column to have changed to. {@link #recordConfirmation} does not
+ * either, for the same reason -- and there is deliberately no ninth case state for "awaiting confirmation": a
+ * case's state is derived from its date columns by a verbatim port whose member order is the Dynamics option-set
+ * integers, so the wait is recorded on the referral and surfaced alongside the state rather than inside it.
  *
  * <p>The service returns entities, not view models, as {@code NoteService} does. Mapping to DTOs is the
  * controller's job.
@@ -147,6 +156,12 @@ public class ReferralService {
     private static final Set<ReferralState> LIVE_STATES = Arrays.stream(ReferralState.values())
         .filter(state -> !state.isTerminal())
         .collect(Collectors.toUnmodifiableSet());
+
+    /**
+     * Dates in a refusal a caseworker reads, so the day rather than the instant -- the same format
+     * {@link ReferralNotes} writes into the timeline they are reading it beside.
+     */
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMMM yyyy");
 
     private final DeedPollRepository deedPolls;
     private final ReferralRepository referrals;
@@ -531,6 +546,73 @@ public class ReferralService {
     }
 
     /**
+     * Records what the applicant answered when they were asked whether they still want the deed enrolled.
+     *
+     * <p>The other half of the exchange {@code REQUEST_CONFIRMATION_TO_PROCEED} starts: the send stamps
+     * {@code confirmationRequestedAt} in the transaction that owes the email, and this writes the answer, when it
+     * was recorded and who recorded it. <strong>Not a state transition</strong> -- the referral stays exactly where
+     * it was, which is why nothing here touches {@code state} and why this is the one write in this service that
+     * does not recompute the case's {@code currentReferralState}: there is nothing for that column to have changed
+     * to.
+     *
+     * <p><strong>It does not move the case on either, and that is a decision rather than an omission.</strong>
+     * {@code Confirmed} records that the applicant wants to proceed; it does not set {@code dateEnroled}, clear
+     * {@code dateReturned} or otherwise reach into the date cascade, which is derived from those columns by a
+     * verbatim port. The caseworker then does whatever the process requires through the ordinary case edit, audited
+     * as their action rather than as a side effect of this one.
+     *
+     * <p><strong>Two refusals, each about a different mistake, and neither of them silent.</strong> An outcome
+     * already recorded is a {@link ConflictError} naming it and when, because the second caseworker needs to know
+     * the first already acted rather than quietly overwriting them -- there is no last-write-wins here and no
+     * idempotent second success. A referral that was never asked to confirm is also a {@link ConflictError}:
+     * recording an answer nobody asked for is a mis-click on the wrong case rather than a valid state, and
+     * {@code confirmationRequestedAt} being null is what says so. The already-recorded check comes first because it
+     * is the more specific fact; an outcome cannot exist without a request date through any path this service has.
+     *
+     * <p><strong>No role gate</strong>, exactly as raising, withdrawing and closing have none: in the process this
+     * replaces, whoever works the case reads the applicant's reply out of the shared inbox.
+     *
+     * <p>One case note, authored by the recording caseworker, written after the referral is saved and inside the
+     * same transaction -- so a refused recording leaves no note claiming an answer arrived, and the author is the
+     * person who read the reply rather than the service account. {@code confirmationRecordedBy} carries the same
+     * name on the row; there is no subject column beside it, because nothing compares it.
+     *
+     * @throws NotFoundError if there is no such referral, or it belongs to another case
+     * @throws ConflictError if an outcome is already recorded, or the applicant was never asked to confirm
+     */
+    @Transactional
+    public Referral recordConfirmation(String deedPollId, String id, ConfirmationInput input, CurrentUser caller) {
+        Referral referral = findReferral(deedPollId, id);
+        if (referral.getConfirmationOutcome() != null) {
+            throw new ConflictError(alreadyConfirmed(id, referral));
+        }
+        if (referral.getConfirmationRequestedAt() == null) {
+            throw new ConflictError("Referral " + id + " has not been asked to confirm whether the applicant"
+                + " wants to proceed, so there is no answer to record");
+        }
+
+        LocalDateTime now = AuditClock.now();
+        referral.setConfirmationOutcome(input.outcome());
+        // When the caseworker recorded it, from the clock -- never when the applicant replied, which nothing here
+        // knows.
+        referral.setConfirmationReceivedAt(now);
+        // From the token, never from the payload: an author a body could name is one anybody could forge.
+        referral.setConfirmationRecordedBy(caller.name());
+        referral.setModifiedBy(caller.name());
+        // Stamped rather than left to @PreUpdate, for the reason withdraw's and close's are: Hibernate fires
+        // @PreUpdate only when its dirty check finds a changed property.
+        referral.setModifiedOn(now);
+
+        Referral saved = referrals.save(referral);
+        // Composed from the saved referral rather than from the input, so the note reads the outcome as it was
+        // stored -- and written inside this transaction, so a rolled-back recording leaves no note announcing one.
+        notes.createNote(deedPollId,
+                         new CreateNoteInput(ReferralNotes.confirmationRecorded(saved, input.note())),
+                         caller.noteAuthor());
+        return saved;
+    }
+
+    /**
      * Gives every lapsed claim back to the shared pool, and says on each case's timeline that it happened.
      *
      * <p><strong>Read the class javadoc before changing this.</strong> That a read mutates, that there is no
@@ -643,6 +725,29 @@ public class ReferralService {
                 + " rather than withdrawn";
         }
         return "Referral " + id + " is already " + state + " and cannot be withdrawn";
+    }
+
+    /**
+     * Why a second recording was refused: what is already on the referral, and when it was recorded.
+     *
+     * <p>Named and dated rather than a bare "already recorded", because the caseworker being refused has read the
+     * applicant's reply and may be looking at a different answer from the one stored -- and their next action
+     * depends on which. A date with no outcome, or an outcome with no date, would each leave them to go and read
+     * the row themselves.
+     *
+     * <p>Who recorded it is deliberately not quoted. The two of them work the same cases and the referral carries
+     * {@code confirmationRecordedBy} for anybody who needs it; naming a colleague in a refusal turns a correction
+     * into an accusation.
+     */
+    private static String alreadyConfirmed(String id, Referral referral) {
+        LocalDateTime recorded = referral.getConfirmationReceivedAt();
+        // The date is written with the outcome, so a row holding one without the other is not reachable through
+        // this service -- and a refusal that threw while composing itself would answer 500 for a state it is
+        // supposed to explain, so the null says so instead.
+        String when = recorded == null ? "a date that was not recorded" : DAY.format(recorded);
+        return "Referral " + id + " already has a confirmation outcome of " + referral.getConfirmationOutcome()
+            + ", recorded on " + when
+            + ". Recording a second answer would overwrite it, so it is refused";
     }
 
     private DeedPoll requireCase(String deedPollId) {

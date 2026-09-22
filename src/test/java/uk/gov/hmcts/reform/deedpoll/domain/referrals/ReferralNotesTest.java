@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
@@ -36,6 +37,23 @@ class ReferralNotesTest {
         Referral referral = new Referral();
         referral.setReasons(reasons);
         referral.setCreatedOn(createdOn);
+        return referral;
+    }
+
+    /**
+     * A referral the office has asked to confirm, with the answer recorded on it.
+     *
+     * @param requested when the confirmation email was owed, or null for a row that somehow carries an answer
+     *     with no request behind it
+     */
+    private static Referral asked(List<String> reasons,
+                                  LocalDateTime createdOn,
+                                  LocalDateTime requested,
+                                  ConfirmationOutcome outcome) {
+
+        Referral referral = referral(reasons, createdOn);
+        referral.setConfirmationRequestedAt(requested);
+        referral.setConfirmationOutcome(outcome);
         return referral;
     }
 
@@ -261,6 +279,68 @@ class ReferralNotesTest {
                     .isLessThanOrEqualTo(NoteForm.MAX_NOTE_LENGTH);
                 assertThat(NoteForm.validateNoteText(text)).as(text).isEmpty();
             }
+        }
+    }
+
+    @Test
+    @DisplayName("a confirmation note says which referral, when the applicant was asked, and what they said")
+    void confirmationNoteSaysWhatTheApplicantSaid() {
+        Referral referral = asked(
+            List.of("NonPublication"), LocalDateTime.parse("2026-05-03T09:30:00"),
+            LocalDateTime.parse("2026-05-10T11:00:00"), ConfirmationOutcome.Confirmed);
+
+        assertThat(ReferralNotes.confirmationRecorded(referral, Optional.of("Replied by email.")))
+            .isEqualTo("Applicant's confirmation recorded for referral raised on 3 May 2026,"
+                + " reasons: NonPublication. Asked on 10 May 2026."
+                + " Answer: Confirmed -- the applicant wants the deed enrolled, knowing it will be published in"
+                + " the London Gazette."
+                + "\nNotes: Replied by email.");
+    }
+
+    @Test
+    @DisplayName("a withdrawal by the applicant is spelled out, so it does not read as a withdrawn referral")
+    void applicantWithdrawalIsSpelledOut() {
+        // Withdrawn is also a referral state -- the office pulling a referral back -- and this is the applicant
+        // withdrawing their application with a refund behind it. A grid entry saying only "Withdrawn" would be
+        // read as the other event.
+        Referral referral = asked(
+            List.of("NonPublication"), LocalDateTime.parse("2026-05-03T09:30:00"),
+            LocalDateTime.parse("2026-05-10T11:00:00"), ConfirmationOutcome.Withdrawn);
+
+        assertThat(ReferralNotes.confirmationRecorded(referral, Optional.empty()))
+            .endsWith("Answer: Withdrawn -- the applicant does not want to proceed and asks for a refund.")
+            .doesNotContain("\nNotes:");
+    }
+
+    @Test
+    @DisplayName("a confirmation on a referral with no request date says so rather than inventing one")
+    void confirmationWithNoRequestDateSaysSo() {
+        // Not reachable through the service, which refuses an answer nobody asked for -- but the composer must
+        // not throw on a row repaired by hand, because the note shares the recording's transaction.
+        Referral referral = asked(
+            List.of("NonPublication"), LocalDateTime.parse("2026-05-03T09:30:00"), null,
+            ConfirmationOutcome.Confirmed);
+
+        assertThat(ReferralNotes.confirmationRecorded(referral, Optional.empty()))
+            .contains("Asked on a date that was not recorded.");
+    }
+
+    @Test
+    @DisplayName("the longest possible confirmation still composes a note the notes column accepts")
+    void theLongestPossibleConfirmationStillFits() {
+        // The claim MAX_CONFIRMATION_NOTE_LENGTH exists for: the caseworker's text is bounded by the schema and
+        // the notes column is bounded by the database, so the two have to agree or an accepted note would be
+        // refused half way through a write that had already recorded the outcome.
+        for (ConfirmationOutcome outcome : ConfirmationOutcome.values()) {
+            Referral referral = asked(
+                EVERY_REASON, LocalDateTime.parse("2026-05-03T09:30:00"),
+                LocalDateTime.parse("2026-05-10T11:00:00"), outcome);
+
+            String text = ReferralNotes.confirmationRecorded(
+                referral, Optional.of("c".repeat(ReferralSchemas.MAX_CONFIRMATION_NOTE_LENGTH)));
+
+            assertThat(text.length()).as("%s", outcome).isLessThanOrEqualTo(NoteForm.MAX_NOTE_LENGTH);
+            assertThat(NoteForm.validateNoteText(text)).as("%s", outcome).isEmpty();
         }
     }
 

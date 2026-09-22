@@ -20,6 +20,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
@@ -31,6 +32,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -1891,6 +1893,212 @@ class ReferralServiceTest {
     }
 
     private record RefreshAsked(Collection<String> deedPollIds, Collection<ReferralState> liveStates) {
+    }
+
+    @Nested
+    @DisplayName("recording the applicant's confirmation")
+    class RecordingAConfirmation {
+
+        /** When the confirmation email was owed, which is what the recording requires to have happened. */
+        private static final LocalDateTime ASKED = LocalDateTime.parse("2026-05-03T09:30:00");
+
+        @Test
+        @DisplayName("records the outcome, the clock and the caller, and leaves the referral where it was")
+        void recordsTheOutcome() {
+            final Referral asked = askedToConfirm(ReferralState.Decided);
+            LocalDateTime before = AuditClock.now();
+
+            service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation("Confirmed", "Replied by email"), CASEWORKER);
+
+            Referral written = saved();
+            assertThat(written.getConfirmationOutcome()).isEqualTo(ConfirmationOutcome.Confirmed);
+            // From the clock rather than from the payload, and it is when the caseworker recorded the answer --
+            // nothing here knows when the applicant sent it.
+            assertThat(written.getConfirmationReceivedAt()).isBetween(before, AuditClock.now());
+            // From the token: an author a body could name is one anybody could forge.
+            assertThat(written.getConfirmationRecordedBy()).isEqualTo("Ada Caseworker");
+            assertThat(written.getModifiedBy()).isEqualTo("Ada Caseworker");
+            assertThat(written.getModifiedOn()).isBetween(before, AuditClock.now());
+            // Not a transition: the referral stays exactly where it was, and the request date is not moved by the
+            // answer arriving.
+            assertThat(written.getState()).isEqualTo(ReferralState.Decided);
+            assertThat(written.getConfirmationRequestedAt()).isEqualTo(ASKED);
+            assertThat(asked).isSameAs(written);
+        }
+
+        @ParameterizedTest
+        @EnumSource(ConfirmationOutcome.class)
+        @DisplayName("records either answer, so neither is unreachable through the service")
+        void recordsEitherAnswer(ConfirmationOutcome outcome) {
+            askedToConfirm(ReferralState.Decided);
+
+            service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation(outcome.name(), null), CASEWORKER);
+
+            assertThat(saved().getConfirmationOutcome()).isEqualTo(outcome);
+        }
+
+        @Test
+        @DisplayName("writes a case note attributed to the caller, carrying their own words")
+        void writesACaseNoteAttributedToTheCaller() {
+            askedToConfirm(ReferralState.Decided);
+
+            service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(),
+                confirmation("Withdrawn", "Wants the refund paid to the same card"), CASEWORKER);
+
+            NoteWritten note = noteWritten();
+            // The caseworker who read the reply, not the service account: a person did this, and the note's
+            // createdBy is where their name lands.
+            assertThat(note.author().author())
+                .isEqualTo("Ada Caseworker")
+                .isNotEqualTo(CurrentUser.SERVICE_ACCOUNT_NAME);
+            assertThat(note.deedPollId()).isEqualTo(CASE_ID);
+            assertThat(note.text())
+                .contains("Applicant's confirmation recorded")
+                .contains("3 May 2026")
+                .contains(ConfirmationOutcome.Withdrawn.name())
+                .contains("Wants the refund paid to the same card");
+        }
+
+        @Test
+        @DisplayName("writes a note the notes validator would accept, for the longest note the schema allows")
+        void writesANoteTheNotesValidatorWouldAccept() {
+            askedToConfirm(ReferralState.Decided);
+
+            service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(),
+                confirmation("Confirmed", "c".repeat(ReferralSchemas.MAX_CONFIRMATION_NOTE_LENGTH)), CASEWORKER);
+
+            // The two caps have to agree: the note shares this transaction, so one the validator refused would
+            // roll back the outcome it was written about.
+            assertThat(NoteForm.validateNoteText(noteWritten().text())).isEmpty();
+        }
+
+        @Test
+        @DisplayName("409s a second recording, naming what is stored and when, and writes nothing")
+        void refusesASecondRecording() {
+            Referral already = askedToConfirm(ReferralState.Decided);
+            already.setConfirmationOutcome(ConfirmationOutcome.Confirmed);
+            already.setConfirmationReceivedAt(LocalDateTime.parse("2026-05-10T11:00:00"));
+            already.setConfirmationRecordedBy("Bo Caseworker");
+
+            assertThatThrownBy(() -> service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation("Withdrawn", null), CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                // Named and dated, because the caseworker being refused may be holding a different answer and
+                // their next action depends on which is stored.
+                .hasMessageContaining(ConfirmationOutcome.Confirmed.name())
+                .hasMessageContaining("10 May 2026")
+                // And not naming the colleague who recorded it: the row carries that, and a refusal that names
+                // them turns a correction into an accusation.
+                .hasMessageNotContaining("Bo Caseworker");
+
+            // The refusal alone would also pass against an implementation that overwrote and then threw, which is
+            // the failure this guard exists to prevent.
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+            assertThat(already.getConfirmationOutcome()).isEqualTo(ConfirmationOutcome.Confirmed);
+        }
+
+        @Test
+        @DisplayName("409s an answer nobody asked for, in different words, and writes nothing")
+        void refusesAnAnswerNobodyAskedFor() {
+            // A referral that was never sent the confirmation email: recording an answer on it is a mis-click on
+            // the wrong case rather than a valid state, and a null confirmationRequestedAt is what says so.
+            stored(ReferralState.Decided);
+
+            assertThatThrownBy(() -> service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation("Confirmed", null), CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining("has not been asked to confirm")
+                // Its own sentence: being told an answer is already recorded and being told nobody asked are two
+                // different facts with two different next actions.
+                .hasMessageNotContaining("already has a confirmation outcome");
+
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("404s a referral of another case, and one that does not exist")
+        void refusesAReferralItCannotSee() {
+            askedToConfirm(ReferralState.Decided);
+
+            // Through the case-scoped lookup, which is the whole of the scoping rule: the repository has no
+            // finder by referral id alone, so a cross-case write is not expressible rather than merely refused.
+            assertThatThrownBy(() -> service.recordConfirmation(
+                OTHER_CASE_ID, REFERRAL_ID.toString(), confirmation("Confirmed", null), CASEWORKER))
+                .isInstanceOf(NotFoundError.class);
+            assertThatThrownBy(() -> service.recordConfirmation(
+                CASE_ID, UNKNOWN_ID.toString(), confirmation("Confirmed", null), CASEWORKER))
+                .isInstanceOf(NotFoundError.class);
+
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("does not recompute the case's current referral state, because no state moved")
+        void doesNotRecomputeTheCaseColumn() {
+            askedToConfirm(ReferralState.Decided);
+
+            service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation("Confirmed", null), CASEWORKER);
+
+            // The one write in this service that is not a transition. There is also deliberately no ninth case
+            // state for the wait: the derived state is a verbatim port whose member order is a Dataverse option
+            // set, so the wait lives on the referral and is surfaced beside the state.
+            verify(deedPolls, never()).writeCurrentReferralState(anyString(), any());
+        }
+
+        @ParameterizedTest
+        @EnumSource(ReferralState.class)
+        @DisplayName("records an answer whatever state the referral is in, because the answer is not a transition")
+        void recordsAnAnswerInAnyState(ReferralState state) {
+            // Deliberately ungated on the state. A caseworker may close the referral before the applicant replies,
+            // or withdraw it, and the reply still has to be recordable -- the applicant answered a question the
+            // office asked, and refusing it would leave the case waiting for ever.
+            askedToConfirm(state);
+
+            assertThatCode(() -> service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation("Confirmed", null), CASEWORKER))
+                .doesNotThrowAnyException();
+
+            assertThat(saved().getState()).isEqualTo(state);
+        }
+
+        @Test
+        @DisplayName("takes any authenticated caller, because there is no may-record permission")
+        void takesAnyAuthenticatedCaller() {
+            // No role gate, exactly as raising, withdrawing and closing have none: whoever works the case reads
+            // the applicant's reply out of the shared inbox.
+            askedToConfirm(ReferralState.Decided);
+
+            assertThatCode(() -> service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation("Confirmed", null), ADMIN))
+                .doesNotThrowAnyException();
+
+            assertThat(saved().getConfirmationRecordedBy()).isEqualTo("An Admin");
+        }
+
+        /**
+         * A referral of {@code CASE_ID} the office has asked to confirm, with no answer on it yet.
+         */
+        private Referral askedToConfirm(ReferralState state) {
+            Referral referral = stored(state);
+            referral.setConfirmationRequestedAt(ASKED);
+            return referral;
+        }
+
+        /** A confirmation as the schema would have produced it, so no test builds a shape the API could not. */
+        private static ConfirmationInput confirmation(String outcome, String note) {
+            Map<String, Object> raw = new LinkedHashMap<>();
+            raw.put("outcome", outcome);
+            raw.put("note", note);
+            return ReferralSchemas.parseConfirmation(raw);
+        }
     }
 
     @Nested

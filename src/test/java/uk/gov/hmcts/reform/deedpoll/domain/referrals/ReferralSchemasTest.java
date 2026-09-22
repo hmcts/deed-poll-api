@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
@@ -18,7 +19,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Validating a submitted referral, and a submitted direction on one.
+ * Validating a submitted referral, a submitted direction on one, and the applicant's answer to the confirmation
+ * email as a caseworker records it.
  *
  * <p>No reference test to port -- referrals are new behaviour rather than something the source store had.
  *
@@ -509,6 +511,134 @@ class ReferralSchemasTest {
 
             assertThat(recorded).isEqualTo(
                 new DirectionInput(MasterDecision.Approved, Optional.empty(), true));
+        }
+    }
+
+    @Nested
+    @DisplayName("the applicant's confirmation")
+    class Confirmation {
+
+        private static ConfirmationInput confirmation(Map<String, Object> raw) {
+            return ReferralSchemas.parseConfirmation(raw);
+        }
+
+        @Test
+        @DisplayName("accepts an outcome and a note, as the enum member rather than the wire string")
+        void acceptsAnOutcomeAndANote() {
+            assertThat(confirmation(payload("outcome", "Confirmed", "note", " Phoned to confirm. ")))
+                .isEqualTo(new ConfirmationInput(
+                    ConfirmationOutcome.Confirmed, Optional.of("Phoned to confirm.")));
+        }
+
+        @Test
+        @DisplayName("accepts both outcomes, so neither answer is unreachable")
+        void acceptsBothOutcomes() {
+            for (ConfirmationOutcome outcome : ConfirmationOutcome.values()) {
+                assertThat(confirmation(payload("outcome", outcome.name())).outcome()).isEqualTo(outcome);
+            }
+        }
+
+        @Test
+        @DisplayName("requires an outcome, and says the same for absent and explicitly null")
+        void requiresAnOutcome() {
+            // No default in either direction: Confirmed and Withdrawn mean opposite things -- enrol it, or refund
+            // it -- so a default would record an answer on the applicant's behalf.
+            for (Map<String, Object> raw : List.of(payload(), payload("outcome", null))) {
+                assertThat(errorsFrom(() -> confirmation(raw)))
+                    .extracting(FieldError::field)
+                    .containsExactly("outcome");
+            }
+        }
+
+        @Test
+        @DisplayName("names both acceptable values in the refusal, so a client need not hold the enum")
+        void namesBothAcceptableValues() {
+            assertThat(errorsFrom(() -> confirmation(payload())).getFirst().message())
+                .contains(ConfirmationOutcome.Confirmed.name())
+                .contains(ConfirmationOutcome.Withdrawn.name());
+        }
+
+        @Test
+        @DisplayName("refuses an outcome it does not know, quoting what was sent")
+        void refusesAnUnknownOutcome() {
+            assertThat(errorsFrom(() -> confirmation(payload("outcome", "Maybe"))).getFirst().message())
+                .contains("'Maybe'");
+        }
+
+        @Test
+        @DisplayName("matches the outcome exactly, because the name is also the stored enum label")
+        void matchesTheOutcomeExactly() {
+            // The column is the "ConfirmationOutcome" Postgres type those names spell, so accepting "confirmed"
+            // here would send Postgres a label it does not have.
+            assertThat(errorsFrom(() -> confirmation(payload("outcome", "confirmed"))))
+                .extracting(FieldError::field)
+                .containsExactly("outcome");
+        }
+
+        @Test
+        @DisplayName("refuses an outcome that is not text rather than reading it as one")
+        void refusesAnOutcomeThatIsNotText() {
+            assertThat(errorsFrom(() -> confirmation(payload("outcome", 1))))
+                .contains(new FieldError("outcome", "outcome must be text"));
+        }
+
+        @Test
+        @DisplayName("does not require a note, and reads a blank one as none")
+        void doesNotRequireANote() {
+            assertThat(confirmation(payload("outcome", "Withdrawn")).note()).isEmpty();
+            assertThat(confirmation(payload("outcome", "Withdrawn", "note", "   ")).note()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("caps the note, because the case note it is quoted in is bounded")
+        void capsTheNote() {
+            assertThat(errorsFrom(() -> confirmation(payload(
+                "outcome", "Confirmed",
+                "note", repeated(ReferralSchemas.MAX_CONFIRMATION_NOTE_LENGTH + 1)))))
+                .contains(new FieldError("note", "note must be "
+                    + ReferralSchemas.MAX_CONFIRMATION_NOTE_LENGTH + " characters or fewer"));
+        }
+
+        @Test
+        @DisplayName("accepts the longest note the cap allows")
+        void acceptsTheLongestNote() {
+            assertThat(confirmation(payload(
+                "outcome", "Confirmed",
+                "note", repeated(ReferralSchemas.MAX_CONFIRMATION_NOTE_LENGTH))).note())
+                .isPresent();
+        }
+
+        @Test
+        @DisplayName("reports every failure at once rather than one per round trip")
+        void reportsEveryFailureAtOnce() {
+            assertThat(errorsFrom(() -> confirmation(payload("note", 7))))
+                .extracting(FieldError::field)
+                .containsExactlyInAnyOrder("outcome", "note");
+        }
+
+        @Test
+        @DisplayName("carries its own summary message, distinct from the create's and the direction's")
+        void carriesItsOwnSummaryMessage() {
+            assertThatThrownBy(() -> confirmation(payload()))
+                .isInstanceOf(InvalidInputError.class)
+                .hasMessage("Confirmation is not valid");
+        }
+
+        @Test
+        @DisplayName("strips what the caller may not set: the author, the date and the case's own dates")
+        void stripsWhatTheCallerMayNotSet() {
+            // Structural rather than a check: ConfirmationInput has nowhere to put any of these, so a body cannot
+            // backdate a reply, sign it as somebody else, or reach into the date cascade.
+            ConfirmationInput recorded = confirmation(payload(
+                "outcome", "Confirmed",
+                "confirmationRecordedBy", "Somebody Else",
+                "confirmationReceivedAt", "2020-01-01T00:00:00",
+                "confirmationRequestedAt", "2020-01-01T00:00:00",
+                "dateEnroled", "2020-01-01T00:00:00",
+                "state", "Closed"));
+
+            assertThat(recorded).isEqualTo(
+                new ConfirmationInput(ConfirmationOutcome.Confirmed, Optional.empty()));
         }
     }
 }

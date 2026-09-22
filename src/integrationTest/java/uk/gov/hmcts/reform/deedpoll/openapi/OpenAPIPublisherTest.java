@@ -70,7 +70,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     /**
      * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
      * added afterwards, the saved-query routes after those, the referral routes after those, the closure the
-     * referral state machine added and the three email routes the Notify send path added last. Listed rather than
+     * referral state machine added, the three email routes the Notify send path added, and the referral's
+     * confirmation sub-resource that records the applicant's answer to the email ④ sends. Listed rather than
      * counted, because a count agrees with a spec that documents the right number of the wrong things.
      */
     private static final List<String> CASEWORKER_PATHS = List.of(
@@ -91,6 +92,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/cases/{id}/referrals/{referralId}",
         "/caseworker/cases/{id}/referrals/{referralId}/withdrawal",
         "/caseworker/cases/{id}/referrals/{referralId}/closure",
+        "/caseworker/cases/{id}/referrals/{referralId}/confirmation",
         "/caseworker/cases/{id}/emails",
         "/caseworker/cases/{id}/emails/{template}",
         "/caseworker/cases/{id}/emails/{template}/preview"
@@ -142,7 +144,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * The five judicial operations, published and counted apart from the caseworker surface's thirty-three.
+     * The five judicial operations, published and counted apart from the caseworker surface's thirty-four.
      *
      * <p>Both halves for the reason the caseworker assertion gives: a count cannot tell a new verb on a known
      * path from a new path, and a path list cannot tell a route that was removed from one that never existed.
@@ -290,7 +292,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .doesNotContain("decidedById");
     }
 
-    @DisplayName("Documents the thirty-three caseworker operations and the token they need")
+    @DisplayName("Documents the thirty-four caseworker operations and the token they need")
     @Test
     void documentsTheCaseworkerOperations() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -300,14 +302,16 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Thirty-three operations across twenty paths: `/caseworker/cases`, the notes and witnesses collections,
+        // Thirty-four operations across twenty-one paths: `/caseworker/cases`, the notes and witnesses collections,
         // the saved-query collection and the referrals collection each carry a GET and a POST, the case carries a
         // GET and a PATCH, the note, the witness and the saved query each carry a GET, a PATCH and a DELETE, a
-        // saved query's selection carries a PUT and a DELETE, one referral carries a GET, and its withdrawal and
-        // its closure each carry a POST -- the note's delete since 2026-09-08, the witness's since the
-        // Administrator gate landed, the saved query's since the library did and the selection's with it, the
-        // four referral routes with the referrals feature and the closure with the referral state machine.
-        // The last three are the Email tab's: the case's emails collection carries a GET saying which emails
+        // saved query's selection carries a PUT and a DELETE, one referral carries a GET, and its withdrawal, its
+        // closure and its confirmation each carry a POST -- the note's delete since 2026-09-08, the witness's since
+        // the Administrator gate landed, the saved query's since the library did and the selection's with it, the
+        // four referral routes with the referrals feature, the closure with the referral state machine, and the
+        // confirmation with the tracking of the reply the ④ email asks for: recording an answer is its own
+        // operation rather than a case edit, and it is idempotent by refusal rather than by PATCH.
+        // Three of them are the Email tab's: the case's emails collection carries a GET saying which emails
         // apply, and one email type carries a POST to send it and a POST to preview it. Preview is a POST despite
         // being a read, because the caseworker's slot text is the input and a URL would log a judge's reason.
         // The judge's own operations -- the pool, their own outstanding work, one referral, claiming it and
@@ -319,7 +323,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(33);
+        assertThat(operations).isEqualTo(34);
 
         JsonNode emailResponse = spec.at("/components/schemas/CaseEmailsResponse/properties");
         assertThat(emailResponse.fieldNames()).toIterable()
@@ -388,10 +392,12 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             assertThat(typesOf(token.at("/schema"))).contains("string");
         }
 
-        // And the surface is unmoved: both emails travel through the operations that were already there, so the
-        // caseworker count is still the one the README and this class's other assertion state.
+        // And the email surface is unmoved: both emails travel through the operations that were already there, so
+        // neither of them added one. The count is the whole caseworker surface, which the confirmation
+        // sub-resource did move -- that route is not an email route, and the assertions below are what say the two
+        // email paths still carry one operation each.
         JsonNode paths = spec.get("paths");
-        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(33);
+        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(34);
         assertThat(paths.get("/caseworker/cases/{id}/emails/{template}").fieldNames()).toIterable()
             .containsExactly("post");
         assertThat(paths.get("/caseworker/cases/{id}/emails").fieldNames()).toIterable().containsExactly("get");
