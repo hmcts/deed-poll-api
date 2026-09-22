@@ -89,6 +89,10 @@ public class CaseworkerSavedQueryController {
      *
      * <p>Saving is not selecting: the new query is in the library and in nobody's list, including its owner's.
      * A client that wants both makes both calls, which is the same shape as adding somebody else's query.
+     *
+     * <p><strong>403 when a body sets {@code shared} and the caller is not an Administrator.</strong> Saving a
+     * query for yourself is every caseworker's right; publishing one to the library is not. Stated here rather
+     * than gated here -- the rule is the service's, like every other rule about who may do what.
      */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -117,6 +121,11 @@ public class CaseworkerSavedQueryController {
      * <p>A saved query is a live reference rather than a copy, so an edit here is visible to everyone who has
      * selected it. That is the point: a shared definition that each subscriber owns a diverging copy of is the
      * spreadsheet this service replaces.
+     *
+     * <p><strong>403 when a body sets {@code shared} true and the caller is not an Administrator</strong> --
+     * but not when it clears the flag, which anyone who may amend the query may do. A caller who may not see
+     * the query at all still gets the 404 first, so the refusal never confirms that an id names something
+     * publishable.
      */
     @PatchMapping("/{id}")
     public SavedQueryResponse update(@PathVariable("id") String id,

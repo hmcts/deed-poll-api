@@ -157,6 +157,73 @@ class SavedQueryPermissionsTest {
         }
     }
 
+    @Nested
+    @DisplayName("who can publish a saved query")
+    class Publishing {
+
+        @Test
+        @DisplayName("an Administrator may")
+        void anAdministratorMay() {
+            assertThat(SavedQueryPermissions.publishableBy(ADMIN)).isTrue();
+            assertThat(SavedQueryPermissions.publishableBy(OWNER_WHO_IS_ADMIN)).isTrue();
+        }
+
+        @Test
+        @DisplayName("a caseworker with no roles may not, which is the Basic User and the ordinary case")
+        void caseworkerWithNoRolesMayNot() {
+            assertThat(SavedQueryPermissions.publishableBy(NO_ROLES)).isFalse();
+            // The owner of the query is no more entitled to publish it than anybody else: this is the one
+            // permission here that ownership does not buy.
+            assertThat(SavedQueryPermissions.publishableBy(OWNER)).isFalse();
+        }
+
+        @Test
+        @DisplayName("holding some other role is not holding the admin one")
+        void holdingAnotherRoleIsNotHoldingTheAdminOne() {
+            // `isAdmin` is derived from the role list rather than passed, so this cannot pass by accident -- but
+            // it is the cell a reasonable reading gets wrong, judicial being the more privileged-sounding role.
+            CurrentUser judge = CurrentUser.currentUser(List.of(Role.JUDICIAL), "A Judge", "judge-5");
+
+            assertThat(SavedQueryPermissions.publishableBy(judge)).isFalse();
+        }
+
+        @Test
+        @DisplayName("a caller with no subject is refused rather than asked about its roles")
+        void callerWithNoSubjectIsRefused() {
+            // Ordered the same way as the other two predicates, and for the same reason: an unidentified caller
+            // must not reach a question about privileges at all. An admin-shaped token with no `sub` would
+            // otherwise publish.
+            CurrentUser unidentified = CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "No Subject", null);
+
+            assertThatThrownBy(() -> SavedQueryPermissions.publishableBy(unidentified))
+                .isInstanceOf(UnauthorizedError.class);
+        }
+
+        @Test
+        @DisplayName("the refusal is a ForbiddenError naming the rule rather than the caller")
+        void theRefusalNamesTheRule() {
+            assertThatThrownBy(() -> SavedQueryPermissions.requirePublishableBy(NO_ROLES))
+                .isInstanceOf(ForbiddenError.class)
+                .hasMessage(SavedQueryPermissions.NOT_PUBLISHABLE);
+        }
+
+        @Test
+        @DisplayName("and it is silent for an Administrator")
+        void itIsSilentForAnAdministrator() {
+            assertThatCode(() -> SavedQueryPermissions.requirePublishableBy(ADMIN)).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("it asks about the caller only, so the query's own state cannot widen it")
+        void itAsksAboutTheCallerOnly() {
+            // The signature takes no query, which is the structural half of decision 4 -- there is no row whose
+            // `shared` or `ownerId` could make a non-Administrator publishable. Stated as a test because the
+            // obvious "improvement" is to pass the query in for symmetry with the other two.
+            assertThat(SavedQueryPermissions.publishableBy(OWNER)).isFalse();
+            assertThat(SavedQueryPermissions.publishableBy(ADMIN)).isTrue();
+        }
+    }
+
     /**
      * A query owned by {@link #OWNER}, shared or not.
      */

@@ -54,6 +54,16 @@ import java.util.stream.Collectors;
  *   <li><strong>Visible, unshared, and the caller is an administrator but not the owner</strong> cannot arise.
  *       Such a query is not visible to them at all, so it is the 404 case -- the visibility rule is what keeps
  *       the administrator override away from private queries, and there is no second check to write.</li>
+ *   <li><strong>Asking to publish without being an administrator</strong> -- {@code shared: true} on a create,
+ *       or a patch that would leave it true -- is a {@link ForbiddenError}, and it is a question about the
+ *       <em>caller</em> rather than about the query: saving one for yourself is every caseworker's right and
+ *       publishing one to the library is an administrator's. Refused before anything is written, so no
+ *       half-published row survives a refusal. <strong>Clearing the flag is not gated</strong>: an
+ *       administrator who publishes a query and later loses the role still owns it, and withdrawing it from the
+ *       library is de-escalation. See {@link SavedQueryPermissions#publishableBy}.</li>
+ *   <li><strong>Asking to publish somebody else's unshared query</strong> is the 404 case and not the publish
+ *       refusal, because {@link #editable} answers first. A 403 there would confirm the id names something
+ *       publishable.</li>
  * </ul>
  *
  * <p><strong>A live reference, not a copy.</strong> Subscribers read the owner's edits, so an edit here changes
@@ -112,6 +122,13 @@ public class SavedQueryService {
      */
     @Transactional
     public SavedQueryView createSavedQuery(CreateSavedQueryInput dto, CurrentUser caller) {
+        // Before anything is built, so a refusal cannot leave a half-written row. Only asked when the body
+        // actually requests publication: saving an unpublished query is every caseworker's right, and checking
+        // the role unconditionally would refuse the common case to guard the rare one.
+        if (dto.shared()) {
+            SavedQueryPermissions.requirePublishableBy(caller);
+        }
+
         SavedQuery query = new SavedQuery();
         query.setName(dto.name());
         query.setDescription(dto.description().orElse(null));
@@ -151,6 +168,16 @@ public class SavedQueryService {
     @Transactional
     public SavedQueryView updateSavedQuery(String id, UpdateSavedQueryInput dto, CurrentUser caller) {
         SavedQuery query = editable(id, caller);
+
+        // **Only a patch that would leave the query published is gated**, which is narrower than "names
+        // `shared`" and deliberately so. Clearing the flag is de-escalation, and an Administrator who published
+        // a query and later lost the role still owns it -- gating the clear would strand it in the library with
+        // only another Administrator able to withdraw it. After `editable` for the reason the whole method is
+        // ordered that way: a caller who may not touch this query at all gets the 404 or the 403 it already
+        // earns, rather than a refusal that confirms the query exists and is publishable.
+        if (Boolean.TRUE.equals(dto.shared().value())) {
+            SavedQueryPermissions.requirePublishableBy(caller);
+        }
 
         dto.name().ifPresent(query::setName);
         dto.description().ifPresent(query::setDescription);

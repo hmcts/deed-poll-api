@@ -5,7 +5,12 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.SavedQuery;
 
 /**
- * Who may see, and who may change, a saved query. Two predicates and nothing else.
+ * Who may see, who may change, and who may publish a saved query. Three predicates and nothing else.
+ *
+ * <p><strong>The three are orthogonal and must not be folded together.</strong> Visibility and editability are
+ * properties of a caller <em>and a row</em>; publishing is a property of the caller alone, which is why
+ * {@link #publishableBy} takes no query. An Administrator may edit somebody else's shared query and may publish
+ * their own, and those are different rules with different reasons.
  *
  * <p><strong>Separate from {@link SavedQueryService} on purpose, and the reason is about which tests run.</strong>
  * Every other service in this repo is tested against a real database, because each is a port whose reference
@@ -23,6 +28,9 @@ public final class SavedQueryPermissions {
 
     /** The refusal an ineligible editor gets, in one place because two operations raise it. */
     static final String NOT_YOURS = "Only the owner may change a saved query, or an Administrator if it is shared";
+
+    /** The refusal a caller who may not publish gets. Names the rule, not the caller. */
+    static final String NOT_PUBLISHABLE = "Only an Administrator may publish a saved query to the library";
 
     private SavedQueryPermissions() {
     }
@@ -59,6 +67,46 @@ public final class SavedQueryPermissions {
     public static boolean editableBy(SavedQuery query, CurrentUser caller) {
         String userId = caller.requireUserId();
         return userId.equals(query.getOwnerId()) || (caller.isAdmin() && query.isShared());
+    }
+
+    /**
+     * Whether this caller may publish a saved query to the library: an Administrator, and nobody else.
+     *
+     * <p><strong>A property of the caller, not of the query</strong>, which is what makes this a third predicate
+     * rather than a clause in either of the other two. Saving a query for yourself is every caseworker's;
+     * publishing one, where every caseworker can find it and add it to their own list, is an Administrator's.
+     * The rule came from the product owner on 2026-09-22 and is <em>not</em> in the Power App permission matrix
+     * -- saved queries are new behaviour with no reference model, so there is nothing there to reconcile it
+     * against. See the plan.
+     *
+     * <p>Takes the caller through {@link CurrentUser#requireUserId()} like the other two, so an unidentified
+     * caller is refused here as well rather than being asked about its roles. The check is ordered that way
+     * deliberately: a caller with no subject has no business publishing regardless of what a token claims.
+     *
+     * <p><strong>Unpublishing is not gated, and that is deliberate.</strong> This answers only "may they set
+     * {@code shared} true"; {@link SavedQueryService#updateSavedQuery} does not consult it for a patch clearing
+     * the flag. An Administrator who publishes a query and later loses the role still owns it, and withdrawing
+     * it from the library is de-escalation -- gating that would freeze a published query in the library with
+     * nobody able to remove it but a different Administrator.
+     */
+    public static boolean publishableBy(CurrentUser caller) {
+        caller.requireUserId();
+
+        return caller.isAdmin();
+    }
+
+    /**
+     * Refuses a caller who may not publish.
+     *
+     * <p>403 rather than 400: it is a permission and not a malformed field. Raised by the write paths before
+     * anything is persisted, so a refusal never leaves a half-published query.
+     *
+     * @throws ForbiddenError if the caller is not an Administrator
+     */
+    public static void requirePublishableBy(CurrentUser caller) {
+        if (!publishableBy(caller)) {
+            throw new ForbiddenError(NOT_PUBLISHABLE);
+        }
     }
 
     /**
