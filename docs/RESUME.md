@@ -32,10 +32,15 @@ row; its failed history remains unchanged when the replacement is sent.
 | Docker-free CI | **1,424 unit tests**, measured with `INTEGRATION_TESTS_ENABLED=false` |
 | `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `master` after notify-5, on `referrals-api-4` after its task 3, and on `referrals-api-5` after its task 5 |
 
-Thirteen plans are in [`plans/completed/`](plans/completed/). The arc since plan 01: the domain gaps
+**Eighteen** plans are in [`plans/completed/`](plans/completed/). The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
 then the original referrals feature in four completed plans — create/withdraw, claim/direction/close,
 `currentReferralState`, and the judicial surface — plus two CI plans and the ACR migration.
+
+Five more landed on 2026-09-21: the three referral follow-ups business testing asked for —
+caseworker completion, lifecycle case notes and the judge's own worklist (PRs #33, #35, #36) — and
+**notify-1 and notify-5, which were merged in PRs #29 and #30 but never filed**, so `plans/` overstated
+what was outstanding until they were moved here.
 
 **The original referrals backend is merged, and business testing reopened one rule, which is now closed.**
 [`plans/referrals-api-4-caseworker-completion.md`](plans/referrals-api-4-caseworker-completion.md) is
@@ -239,9 +244,7 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 
 | File | State |
 |---|---|
-| `notify-1-email-plumbing.md` | **Complete and merged.** All seven tasks landed in PR #29 |
-| `notify-5-case-correspondence-history.md` | **Complete and merged.** All four tasks landed in PR #30 |
-| `notify-3-request-confirmation-to-proceed.md` | **Reviewed and ready.** Its 2026-09-20 corrections govern V14, referral selection and exclusion conflicts |
+| `notify-3-request-confirmation-to-proceed.md` | **Reviewed and ready.** Its 2026-09-20 corrections govern referral selection and exclusion conflicts. **Its migration is no longer `V14`** — `referrals-api-6` took that; it takes the next free number, and the plan carries the correction |
 | `notify-3b-confirmation-tracking.md` | Ready, but flag 1 wants a business answer on `signatureRequestedDate` |
 | `notify-6-chase-missing-documents.md` | **Drafted.** Assumes a provisioned template with required caseworker text; Task 0 verifies it |
 | `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
