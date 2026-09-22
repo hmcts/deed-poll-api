@@ -118,53 +118,191 @@ Notes so no task rediscovers them:
 
 ### Task 0: Reconcile before changing anything
 
-- [ ] Confirm the four rows of "The gap, measured" still read as stated, by file and line
-- [ ] Confirm `CaseworkerSavedQueryControllerTest`'s `OWNER`/`OTHER`/`ADMIN` fixtures and which the create
+- [x] Confirm the four rows of "The gap, measured" still read as stated, by file and line
+- [x] Confirm `CaseworkerSavedQueryControllerTest`'s `OWNER`/`OTHER`/`ADMIN` fixtures and which the create
       happy path uses
-- [ ] Confirm no test asserts a non-admin *may* publish anywhere other than that one
-- [ ] Record anything that has moved, in this file, before writing code
+- [x] Confirm no test asserts a non-admin *may* publish anywhere other than that one
+- [x] Record anything that has moved, in this file, before writing code
+- [x] Task 0 complete
+
+#### What Task 0 found, 2026-09-22 — read this before Task 2
+
+Reconciled on `master`, clean. **All four rows of "The gap, measured" are exactly as written**, at the lines
+stated: `SavedQueryService.java:118` and `:157`, `SavedQuerySchemas.java:121`, `SavedQueryPermissions.java:61`.
+The fixtures are as described — `OWNER` and `OTHER` hold `List.of("caseworker-civil")` and no admin role,
+`ADMIN` holds `Role.DEEDPOLL_ADMIN.claimValue()` — and `savesTheWholeView` (line 322) posts as `OWNER`.
+
+**One finding, and it changes Task 2's scope from "one test" to "one test and a fixture".**
+
+The plan said a single test pins the defect. Over HTTP that is true — `"shared":true` appears in exactly one
+request body in the whole suite. But `CaseworkerSavedQueryControllerTest` also has a fixture helper:
+
+```java
+private String save(Caller owner, String name, boolean shared) {          // line 914
+    CreateSavedQueryInput input = new CreateSavedQueryInput(name, Optional.empty(), shared, SavedQueryDefinition.NONE);
+    return savedQueryService.createSavedQuery(input, owner.currentUser()).query().getId().toString();
+}
+```
+
+It goes **through the service**, and there are **35 `save(…, true)` calls — 34 as `OWNER`, one as `OTHER`**,
+neither of whom is an Administrator. Gating `createSavedQuery` makes every one of them throw, which would take
+most of the file's visibility, selection and permission coverage with it.
+
+**The fixture must publish through the repository instead, and that is not a workaround.** After the gate, the
+only way to reach "published" *through the service* is as an Administrator — and an Administrator who creates
+a query owns it, so the service can no longer construct the state these tests need: **a published query owned
+by somebody who is not currently an Administrator.** That state is legitimate and reachable in production —
+an Administrator publishes a query and later loses the role, keeping ownership; it is the exact case
+`deed-poll-admin`'s Task 1 had to handle. So a fixture that sets the column directly is modelling a real state
+the service is not the only route to, which is what a fixture is for.
+
+**`SavedQuerySecurityTest` is unaffected, and this was checked rather than assumed.** Its three service calls
+are all outside the gate: `:171` creates with `shared=false`, and `:183` and `:299` both pass
+`UpdateSavedQueryInput.EMPTY`, which presents no `shared` at all. That is decision 3 earning its keep — a gate
+written as "refuse any patch naming `shared`" would have been fine here too, but one written as "refuse any
+patch from a non-Administrator" would have broken both.
+
+**`EntityMappingTest.java:249`** calls `setShared(true)` on the entity directly. That is a persistence
+round-trip, not a permission path. Unaffected.
 
 ### Task 1: Add the predicate and its refusal
 
-- [ ] `SavedQueryPermissions.publishableBy(CurrentUser)` → `caller.isAdmin()`, resolving the caller through
+- [x] `SavedQueryPermissions.publishableBy(CurrentUser)` → `caller.isAdmin()`, resolving the caller through
       `requireUserId()` first for the reason the other two do — an unidentified caller must be refused, not
       compared
-- [ ] `requirePublishableBy(CurrentUser)` throwing `ForbiddenError` with a message beside `NOT_YOURS`, naming
+- [x] `requirePublishableBy(CurrentUser)` throwing `ForbiddenError` with a message beside `NOT_YOURS`, naming
       the rule rather than the caller: *"Only an Administrator may publish a saved query to the library"*
-- [ ] `SavedQueryPermissionsTest`: an Administrator may publish; a caseworker may not; a caller with no
+- [x] `SavedQueryPermissionsTest`: an Administrator may publish; a caseworker may not; a caller with no
       subject is refused rather than compared; **holding the judicial role is not holding the admin one**
-- [ ] Mark completed
+- [x] Task 1 complete
+
+#### What Task 1 did, 2026-09-22
+
+`publishableBy(CurrentUser)` and `requirePublishableBy` are in `SavedQueryPermissions`, with `NOT_PUBLISHABLE`
+beside `NOT_YOURS`. **The signature takes no query**, which is the structural half of decision 4: there is no
+row whose `shared` or `ownerId` could make a non-Administrator publishable, so the obvious "improvement" of
+passing a query in for symmetry with the other two is not available. A test states that.
+
+`requireUserId()` is called before `isAdmin()` for the reason the other two predicates do it — an
+**admin-shaped token with no `sub` must be refused rather than asked about its privileges**. Tested with a
+`CurrentUser` holding `DEEDPOLL_ADMIN` and a null subject, which is a stronger case than the file's existing
+`ANONYMOUS`-based test (that caller holds no roles, so it would pass either way).
+
+The class docblock changed from "Two predicates and nothing else" to three, and now says why the three are
+orthogonal — visibility and editability are properties of a caller *and a row*, publishing of the caller alone.
+
+**Publishing block: 7 tests. `SavedQueryPermissionsTest` totals 19, 0 failures, 0 skipped.**
 
 ### Task 2: Gate create and patch
 
-- [ ] `createSavedQuery`: refuse before writing anything when `dto.shared()` and the caller is not an
+- [x] `createSavedQuery`: refuse before writing anything when `dto.shared()` and the caller is not an
       Administrator
-- [ ] `updateSavedQuery`: refuse when the patch presents `shared` as `true` and the caller is not an
+- [x] `updateSavedQuery`: refuse when the patch presents `shared` as `true` and the caller is not an
       Administrator. A patch presenting it as `false` is untouched (decision 3)
-- [ ] **Change** `savesTheWholeView` to post as `ADMIN`, since its body publishes. Do not add a second
+- [x] **Change** `savesTheWholeView` to post as `ADMIN`, since its body publishes. Do not add a second
       happy path beside it
-- [ ] Add over HTTP: a caseworker creating with `shared:true` → 403 **and nothing persisted**; a caseworker
+- [x] Add over HTTP: a caseworker creating with `shared:true` → 403 **and nothing persisted**; a caseworker
       creating without it → 201 unpublished; an Administrator creating with it → 201 published; a caseworker
       patching their own to `shared:true` → 403 and the stored row unchanged; a caseworker patching their own
       to `shared:false` → 200; an Administrator patching to `shared:true` → 200
-- [ ] Confirm the refusal is the service's: a `403` must be reachable without going through the controller
-- [ ] Mark completed
+- [x] Confirm the refusal is the service's: a `403` must be reachable without going through the controller
+- [x] **Added, not in the original list:** the fixture helper publishes through the repository — Task 0's finding
+- [x] Task 2 complete
+
+#### What Task 2 did, 2026-09-22
+
+Both gates are in the service, never the controller, as decision 2 requires. The create asks only when the
+body requests publication, so the common case is never refused to guard the rare one. The patch reads
+`Boolean.TRUE.equals(dto.shared().value())` — absent, cleared and explicitly-false all fall through, which is
+decision 3 expressed in one line.
+
+**The patch gate is placed *after* `editable`**, and the order is load-bearing: a caller naming somebody else's
+unpublished query gets the 404 it already earned rather than a 403 that would confirm the id names something
+publishable. There is a test for that ordering.
+
+**Task 0's fixture finding, resolved.** `save(Caller, String, boolean)` now creates unpublished **through the
+service** — preserving the original docblock's point that a fixture cannot have an owner no token would
+supply — and then publishes **through the repository** when asked. All 35 `save(…, true)` fixtures pass. The
+docblock explains that this is not a way around the gate: after it, the service cannot construct "a published
+query owned by somebody who is not currently an Administrator", and that state is legitimate and reachable.
+
+**Two tests beyond the list**, each pinning a decision somebody could reasonably undo:
+
+- *"is refused rather than quietly given an unpublished query"* — decision 2's rejected alternative, stated as
+  a test because a later reader could think the lenient version kinder.
+- *"a caller who cannot see the query gets 404 rather than the publish refusal"* — the ordering above.
+
+An existing test already proved de-escalation is open — `theOwnerAmendsIt` patches `shared:false` as a
+non-Administrator — but it does so incidentally inside a broader assertion, so the rule now has a test of its
+own too.
+
+**148 tests across `*SavedQuery*`, 0 failures, 0 skipped** — up 14 from the 134 baseline: 7 in the predicate,
+3 in create, 4 in patch.
 
 ### Task 3: Say so where the rules are already written down
 
-- [ ] `SavedQueryService`'s class docblock lists the permission outcomes as prose — add the publish rule to
+- [x] `SavedQueryService`'s class docblock lists the permission outcomes as prose — add the publish rule to
       that list, since it is the file a reader is sent to
-- [ ] `SavedQueryPermissions`' class docblock says "Two predicates and nothing else". It is now three
-- [ ] `SavedQuery.shared`'s field comment ("Published to the library, which makes it findable") should say
+- [x] `SavedQueryPermissions`' class docblock says "Two predicates and nothing else". It is now three
+- [x] `SavedQuery.shared`'s field comment ("Published to the library, which makes it findable") should say
       who may set it
-- [ ] Check whether `docs/` or the mock-facing notes in `deed-poll-admin` state the old rule anywhere
-- [ ] Mark completed
+- [x] Check whether `docs/` or the mock-facing notes in `deed-poll-admin` state the old rule anywhere
+- [x] Task 3 complete
+
+#### What Task 3 did, 2026-09-22
+
+Five places, not the three listed. The service docblock's outcome list gained **two** entries rather than one —
+the publish refusal, and the fact that *"asking to publish somebody else's unshared query"* is the 404 case
+because `editable` answers first, which is the cell a reader would otherwise have to derive. The predicate's
+class docblock went from two predicates to three and now says why they are orthogonal. `SavedQuery.shared`'s
+comment names who may set it and records that a fixture or a migration writing the column directly is *not*
+going through the rule, deliberately.
+
+**Two the checklist did not name, found by grepping rather than assumed:**
+
+- **`README.md`'s route table**, which is the document a consumer reads. Both the `POST` and `PATCH` rows
+  described the old rule; both now state the gate, and `PATCH`'s says that clearing the flag does not need an
+  Administrator — the asymmetry is the part a client would otherwise get wrong.
+- **Both controller javadocs.** They document each operation's status codes in prose, and a 403 that no route
+  comment mentions is a 403 a client discovers at runtime.
+
+`deed-poll-admin` needed nothing: its mock is deliberately role-blind, which its own plan 14 records and which
+this rule does not change.
 
 ### Task 4: Full validation
 
-- [ ] Run every command above, and record the counts in this file rather than asserting green
-- [ ] Confirm the total rose by the number of tests added and that `skipped` is still 0
-- [ ] Mark completed
+- [x] Run every command above, and record the counts in this file rather than asserting green
+- [x] Confirm the total rose by the number of tests added and that `skipped` is still 0
+- [x] Task 4 complete
+
+#### What Task 4 measured, 2026-09-22
+
+| Command | Result |
+|---|---|
+| `./gradlew test --tests "*SavedQuery*"` | **EXIT 0** — **148 tests**, 0 failures, 0 errors, **0 skipped** |
+| `./gradlew test --tests "*Security*"` | **EXIT 0** — **101 tests**, 0 failures, 0 skipped |
+| `./gradlew build` | **EXIT 0** — unit **2,458 tests across 314 files**, integration **11**, 0 failures, 0 skipped |
+
+**The `*SavedQuery*` total reconciles exactly: 134 → 148, a rise of 14** — 7 in the predicate, 3 in create, 4 in
+patch. All 35 repository-published fixtures pass, which is what confirms Task 0's fix.
+
+**Three measurement traps hit while doing this, each worth the next task's time:**
+
+1. **A second `gradle test` run wipes `build/test-results/`.** Measuring `*SavedQuery*` and then `*Security*`
+   and reading the directory once gave 13 SavedQuery tests — an artefact, not a regression. Measure immediately
+   after each run.
+2. **`BUILD SUCCESSFUL` with no result file at all.** The first targeted run was `UP-TO-DATE` and ran nothing,
+   which looks identical to a pass. Use `--rerun-tasks` when the count is the point.
+3. **`--tests "*SavedQuery*"` also runs one method in `DeedPollServiceTest`**, so a whole-directory count reads
+   149 where the filename-filtered count reads 148. The 148 is the apples-to-apples figure against the
+   baseline; the difference is method-name matching, not a new test.
+
+**`./gradlew build` failed once, on `checkstyleTest`, and the cause is a naming rule worth knowing:** method
+names must match `^[a-z][a-z0-9][a-zA-Z0-9_]*$`, so a **single-letter first word followed by a capital** is
+rejected — `aCaseworkerMayNotPublish` fails, `anAdministratorMay` passes. Four of my test names broke it and
+were renamed to the file's existing style (`caseworkerWithNoRolesMayNot`, matching `callerWithNoRolesMayNot`).
+Checkstyle reports these as `severity="warning"` yet fails the task, so a "4 warnings" line in the output is a
+build failure rather than advice.
 
 ## Out of scope
 

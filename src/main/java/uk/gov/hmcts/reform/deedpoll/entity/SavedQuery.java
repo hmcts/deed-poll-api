@@ -55,7 +55,16 @@ public class SavedQuery {
     @Column(name = "description")
     private String description;
 
-    /** Published to the library, which makes it findable -- not present in anyone else's list. */
+    /**
+     * Published to the library, which makes it findable -- not present in anyone else's list.
+     *
+     * <p><strong>Only an Administrator may set this true</strong>, on a create or a patch; clearing it is open
+     * to anyone who may amend the query. The rule is
+     * {@code SavedQueryPermissions.publishableBy} and it is enforced in {@code SavedQueryService}, not here --
+     * a fixture or a migration setting the column directly is not going through it, which is deliberate:
+     * "published, owned by somebody who is not currently an Administrator" is a legitimate state that the
+     * service can no longer produce.
+     */
     @Column(name = "shared", nullable = false)
     private boolean shared;
 

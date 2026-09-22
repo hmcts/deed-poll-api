@@ -320,7 +320,10 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
         @Test
         @DisplayName("saves the whole view and answers 201 with it")
         void savesTheWholeView() throws Exception {
-            as(OWNER, post("/caseworker/saved-queries"), """
+            // As the Administrator, because this body publishes and only an Administrator may. Changed rather
+            // than duplicated: an unpublished create is covered by `defaultsToUnshared` below, and a second
+            // happy path differing only in caller would drift from this one.
+            as(ADMIN, post("/caseworker/saved-queries"), """
                 {"name":"Adults received in June","description":"For the June audit","shared":true,\
                 "filter":"received","conditions":["type:is:Adult","dateReceived:after:2026-06-01"],\
                 "sortField":"dateReceived","sortDirection":"asc","searchTerm":"Smith"}""")
@@ -375,6 +378,37 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
         @DisplayName("defaults to unshared, so publishing is a decision rather than an accident")
         void defaultsToUnshared() throws Exception {
             as(OWNER, post("/caseworker/saved-queries"), "{\"name\":\"Ops\"}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.shared").value(false));
+        }
+
+        @Test
+        @DisplayName("a caseworker asking to publish is refused with 403, and nothing is written")
+        void caseworkerMayNotPublish() throws Exception {
+            as(OWNER, post("/caseworker/saved-queries"), "{\"name\":\"Ops\",\"shared\":true}")
+                .andExpect(status().isForbidden());
+
+            // The refusal comes before the write, not after it. A 403 that had already saved an unpublished
+            // copy would be the worst of both answers, and the status code alone cannot tell the two apart --
+            // the same property `SavedQuerySecurityTest` asserts for the amend and delete refusals.
+            assertThat(savedQueries.findAll()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("and is refused rather than quietly given an unpublished query")
+        void caseworkerIsRefusedRatherThanDowngraded() throws Exception {
+            // The alternative considered and rejected: accept the request, ignore the flag, answer 201 with
+            // `shared: false`. That tells the caller they published something they did not, and no client can
+            // detect it. Stated as a test because it is a change somebody could make believing it kinder.
+            as(OWNER, post("/caseworker/saved-queries"), "{\"name\":\"Ops\",\"shared\":true}")
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.shared").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("an explicit shared:false from a caseworker is not a refusal, because it asks for nothing")
+        void anExplicitFalseIsNotRefused() throws Exception {
+            as(OWNER, post("/caseworker/saved-queries"), "{\"name\":\"Ops\",\"shared\":false}")
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.shared").value(false));
         }
@@ -484,6 +518,63 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
             assertThat(saved.getName()).isEqualTo("Ops, revised");
             assertThat(saved.getConditions()).containsExactly("type:is:Adult");
             assertThat(saved.isShared()).isFalse();
+        }
+
+        @Test
+        @DisplayName("the owner may unpublish their own without being an Administrator, because that is de-escalation")
+        void theOwnerMayUnpublishWithoutBeingAnAdministrator() throws Exception {
+            // The state this protects is reachable: an Administrator publishes a query and later loses the role,
+            // keeping ownership. Gating the clear would strand it in the library with only another Administrator
+            // able to withdraw it. `theOwnerAmendsIt` above happens to cover the same ground; this states it as
+            // the rule rather than leaving it incidental to a broader assertion.
+            String id = save(OWNER, "Ops", true);
+
+            as(OWNER, patch("/caseworker/saved-queries/" + id), "{\"shared\":false}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.shared").value(false));
+
+            assertThat(stored(id).isShared()).isFalse();
+        }
+
+        @Test
+        @DisplayName("the owner may not publish their own, and the stored query is untouched")
+        void theOwnerMayNotPublishTheirOwn() throws Exception {
+            String id = save(OWNER, "Ops", false);
+
+            as(OWNER, patch("/caseworker/saved-queries/" + id), "{\"name\":\"Ops, renamed\",\"shared\":true}")
+                .andExpect(status().isForbidden());
+
+            // Neither half of the patch landed. A refusal that had applied the name and dropped the flag would
+            // be a partial write, which is worse than either answer.
+            SavedQuery saved = stored(id);
+            assertThat(saved.isShared()).isFalse();
+            assertThat(saved.getName()).isEqualTo("Ops");
+        }
+
+        @Test
+        @DisplayName("an Administrator may publish an existing query")
+        void anAdministratorMayPublishAnExistingQuery() throws Exception {
+            String id = save(ADMIN, "Ops", false);
+
+            as(ADMIN, patch("/caseworker/saved-queries/" + id), "{\"shared\":true}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.shared").value(true));
+
+            assertThat(stored(id).isShared()).isTrue();
+        }
+
+        @Test
+        @DisplayName("a caller who cannot see the query gets 404 rather than the publish refusal")
+        void invisibilityAnswersBeforeThePublishGate() throws Exception {
+            // Ordering: `editable` runs first, so a caller naming somebody else's unshared query is told it does
+            // not exist rather than being refused for not being an Administrator. A 403 here would confirm the id
+            // names something publishable, which is exactly what the 404-for-everything rule exists to prevent.
+            String id = save(OWNER, "Ops", false);
+
+            as(OTHER, patch("/caseworker/saved-queries/" + id), "{\"shared\":true}")
+                .andExpect(status().isNotFound());
+
+            assertThat(stored(id).isShared()).isFalse();
         }
 
         @Test
@@ -906,15 +997,34 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * A saved query stored through the domain.
+     * A saved query stored through the domain, published afterwards through the repository if asked.
      *
-     * <p>Through the service rather than the repository, so a fixture cannot be a shape the API could not have
-     * produced -- in particular it cannot have an owner no token would supply.
+     * <p><strong>Created through the service rather than the repository</strong>, so a fixture cannot be a shape
+     * the API could not have produced -- in particular it cannot have an owner no token would supply. That is
+     * unchanged, and the create is still the caller's.
+     *
+     * <p><strong>But the publishing is the repository's, and that is not a way around the gate.</strong> Only an
+     * Administrator may publish, and an Administrator who creates a query owns it -- so the service can no
+     * longer produce the state most of this file needs: <em>a published query owned by somebody who is not
+     * currently an Administrator</em>. That state is legitimate and reachable, because an Administrator who
+     * publishes a query and later loses the role keeps owning it. Going through the service with
+     * {@code shared = true} as {@link #OWNER} would now raise {@code ForbiddenError} in 34 fixtures and take
+     * this file's visibility, selection and editability coverage with it.
+     *
+     * <p>The gate itself is tested where a caller asks for it over HTTP, not here -- see the create and patch
+     * blocks.
      */
     private String save(Caller owner, String name, boolean shared) {
         CreateSavedQueryInput input = new CreateSavedQueryInput(
-            name, Optional.empty(), shared, SavedQueryDefinition.NONE);
-        return savedQueryService.createSavedQuery(input, owner.currentUser()).query().getId().toString();
+            name, Optional.empty(), false, SavedQueryDefinition.NONE);
+        SavedQuery created = savedQueryService.createSavedQuery(input, owner.currentUser()).query();
+
+        if (shared) {
+            created.setShared(true);
+            savedQueries.save(created);
+        }
+
+        return created.getId().toString();
     }
 
     private SavedQuery stored(String id) {

@@ -54,9 +54,9 @@ Thirty caseworker operations, plus five judicial ones on a namespace of their ow
 | POST | `/caseworker/cases/{id}/documents` | Upload a file (multipart) and record its document row |
 | GET | `/caseworker/cases/{id}/documents/{documentId}/file` | Stream a document's stored file back |
 | GET | `/caseworker/saved-queries` | The shared library plus the caller's own, each flagged `selected` and `editable` |
-| POST | `/caseworker/saved-queries` | Save a query — `name` required, unshared unless `shared` says otherwise |
+| POST | `/caseworker/saved-queries` | Save a query — `name` required, unshared unless `shared` says otherwise, and **only an Administrator may set `shared`** (403 otherwise) |
 | GET | `/caseworker/saved-queries/{id}` | One saved query, if it is shared or theirs |
-| PATCH | `/caseworker/saved-queries/{id}` | Amend one — the owner, or an **Administrator** if it is shared |
+| PATCH | `/caseworker/saved-queries/{id}` | Amend one — the owner, or an **Administrator** if it is shared. Setting `shared` true needs an Administrator; clearing it does not |
 | DELETE | `/caseworker/saved-queries/{id}` | Delete one — same rule, 204, and its subscribers' selections cascade |
 | PUT | `/caseworker/saved-queries/{id}/selection` | Add it to the caller's own list — 204, idempotent, no edit rights needed |
 | DELETE | `/caseworker/saved-queries/{id}/selection` | Remove it from the caller's own list — 204 whether or not it was in it |
