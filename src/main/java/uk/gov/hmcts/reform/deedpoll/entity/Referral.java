@@ -17,6 +17,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
@@ -28,8 +29,9 @@ import java.util.UUID;
 
 /**
  * A referral of a case to the judiciary: {@code deedpoll_referral}, from {@code V6__referrals.sql},
- * with the claim and direction columns {@code V8__referral_claim_and_direction.sql} adds and the two owner
- * subjects {@code V14__referral_owner_subjects.sql} adds.
+ * with the claim and direction columns {@code V8__referral_claim_and_direction.sql} adds, the two owner
+ * subjects {@code V14__referral_owner_subjects.sql} adds, and the confirmation columns
+ * {@code V16__referral_confirmation.sql} adds.
  *
  * <p><strong>Not a port.</strong> Like {@link SavedQuery}, this has no model in
  * {@code reference/deed-poll.prisma}. The source store held one referral inline on the case,
@@ -191,6 +193,57 @@ public class Referral {
      */
     @Column(name = "decidedById")
     private String decidedById;
+
+    /**
+     * When the applicant was asked to confirm whether they still want the deed enrolled, from
+     * {@code V16__referral_confirmation.sql}.
+     *
+     * <p>Stamped as the caseworker sends {@code REQUEST_CONFIRMATION_TO_PROCEED}, in the same transaction
+     * as the outbox row and not when Notify accepts it -- so a case's process state does not depend on an
+     * asynchronous delivery outcome that may still be retrying.
+     *
+     * <p>Null on every referral that was never asked, which is every referral that predates the feature.
+     * Null is also what makes recording an answer nobody asked for refusable rather than silently valid.
+     */
+    @Column(name = "confirmationRequestedAt")
+    private LocalDateTime confirmationRequestedAt;
+
+    /**
+     * The applicant's answer, once a caseworker has read their reply and recorded it. A real Postgres enum
+     * type, so it needs {@link SqlTypes#NAMED_ENUM} like {@code state}, {@code urgency} and
+     * {@code decision}; without it Hibernate sends the value as an integer ordinal.
+     *
+     * <p>Null means outstanding, and that is the only thing null here means -- which is what lets the
+     * waiting list be a {@code WHERE} clause over this and {@link #confirmationRequestedAt} rather than a
+     * sweep. Recording an outcome twice is refused rather than overwritten: the second caseworker needs to
+     * know the first already acted.
+     *
+     * <p>Neither outcome moves the case on by itself. See {@link ConfirmationOutcome}.
+     */
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Column(name = "confirmationOutcome")
+    private ConfirmationOutcome confirmationOutcome;
+
+    /**
+     * When the caseworker recorded the answer, from the clock.
+     *
+     * <p>Not when the applicant sent their reply: nothing here knows that, and a column claiming to would
+     * write a guess down as a fact.
+     */
+    @Column(name = "confirmationReceivedAt")
+    private LocalDateTime confirmationReceivedAt;
+
+    /**
+     * The caseworker who recorded the answer, as a display name resolved from their token, never
+     * client-supplied.
+     *
+     * <p>Attribution only, and unlike {@link #claimedBy}/{@link #decidedBy} it has no matching subject
+     * column: nothing compares it. Recording an outcome is a caseworker act on a case the caller can
+     * already read, so no ownership check turns on who did it.
+     */
+    @Column(name = "confirmationRecordedBy")
+    private String confirmationRecordedBy;
 
     @Column(name = "createdOn", nullable = false)
     private LocalDateTime createdOn;

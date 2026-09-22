@@ -129,8 +129,36 @@ investigating.
 - Tests, container-backed: the enum round trips, the columns persist and read back, and an existing referral
   with all four null is still readable.
 
-- [ ] The migration applies cleanly on the next free number with the number recorded, Hibernate validates
+- [x] The migration applies cleanly on the next free number with the number recorded, Hibernate validates
       against it, the enum round trips, and `./gradlew build` green
+
+**Task 1 notes.**
+
+- **The number is `V16`** — `V16__referral_confirmation.sql`. `V15__notification_exclusion_group.sql` was
+  the highest committed when this task started, confirmed by listing `src/main/resources/db/migration`
+  rather than assumed. Nothing is left reserved: Flyway runs with out-of-order disabled.
+- **Baseline, measured on this branch before any change here:** `test` 2,458 tests across 314 classes,
+  `integration` 11 tests across 3 classes, `./gradlew build` green. After this task: `test` **2,461** across
+  314 classes (`+3`), `integration` unchanged at 11.
+- **No new container-backed class**, so `build.gradle`'s exclusion comment is not re-measured here — the
+  three new tests extend `EntityMappingTest`, which already carries the `requires-docker` tag by
+  inheritance. Task 4 re-measures the totals.
+- `confirmationRecordedBy` is `text` with **no matching subject column**, unlike V14's
+  `claimedById`/`decidedById`. Nothing compares it: recording an outcome is a caseworker act on a case the
+  caller can already read, so no ownership check turns on who did it and a subject would be an identifier
+  stored for nobody to use. Decision 2's four columns, exactly four.
+- `SchemaConformanceTest` needed no edit and that is not an omission: it is forward-only against
+  `reference/deed-poll.prisma`, and `deedpoll_referral` has no reference model at all (V6 says so). Its
+  coverage of these columns is that it runs Flyway end to end against a throwaway Postgres, so V16 applying
+  cleanly in sequence is asserted there. `ddl-auto: validate` in `EntityMappingTest` is what holds the
+  entity to the table.
+- The partial index is asserted directly (`awaitingConfirmationIndexIsPartial`) because `ddl-auto: validate`
+  does not look at indexes at all — an index created on the wrong column, or without the
+  `WHERE "confirmationOutcome" IS NULL` predicate, would be silent in every other test.
+- The enum round trip is parameterized over `ConfirmationOutcome.values()` rather than written as a
+  `@TestFactory` like the reference-enum factory beside it: a dynamic test's executable runs after the
+  factory method returns, which is outside the class's `@Transactional` boundary, so it would have no
+  transaction to persist in.
 
 ### Task 2: Starting the clock, and recording the answer
 
