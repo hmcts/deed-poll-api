@@ -107,7 +107,7 @@ public final class CaseSpecifications {
     /** The filter's criterion and each condition, as the flat list of parts they are ANDed as. */
     private static List<Specification<DeedPoll>> narrowing(ListFilters.ListFilter filter, CaseQuery query) {
         List<Specification<DeedPoll>> parts = new ArrayList<>();
-        filter.where().map(CaseSpecifications::inState).ifPresent(parts::add);
+        filter.where().map(CaseSpecifications::criterion).ifPresent(parts::add);
         query.conditions().stream().map(CaseSpecifications::satisfying).forEach(parts::add);
         return parts;
     }
@@ -119,7 +119,7 @@ public final class CaseSpecifications {
     }
 
     /**
-     * One filter tab's state criterion.
+     * One filter tab's criterion.
      *
      * <p><strong>A case with no state counts as open</strong>, which is why {@code NotIn} is a three-part
      * predicate and not {@code not(state in (…))}. SQL evaluates a bare {@code NOT IN} to NULL rather
@@ -127,13 +127,25 @@ public final class CaseSpecifications {
      * defaulting it. {@code DeedPollRepository.findOpenOrderByCreatedOnDesc} carries the full reasoning
      * and is the pinned statement of it; this reproduces it, and
      * {@code CaseSpecificationsTest} asserts the two agree.
+     *
+     * <p><strong>{@code AwaitingConfirmation} is a column test and not a join</strong>, which is the whole
+     * reason {@code deedpoll_deedpoll."awaitingConfirmationSince"} exists: the criterion "some referral of this
+     * case was asked to confirm and has not answered" lives on the referral table, and reaching it from here
+     * would be a correlated subquery this class has no shape for -- or a join that multiplies a case by its
+     * referrals and makes the page disagree with its own count. The column is the answer copied onto the case
+     * and recomputed from truth at each write; {@code V17__case_awaiting_confirmation.sql} argues it.
      */
-    public static Specification<DeedPoll> inState(ListFilters.StateWhere where) {
+    public static Specification<DeedPoll> criterion(ListFilters.FilterWhere where) {
         return switch (where) {
             case ListFilters.In in -> (root, query, cb) -> root.get("state").in(in.states());
             case ListFilters.NotIn notIn -> (root, query, cb) -> cb.or(
                 cb.isNull(root.get("state")),
                 cb.not(root.get("state").in(notIn.states())));
+            // No ordering here, deliberately: "longest wait first" is the tab's default sort
+            // (ListFilters.LONGEST_WAIT_FIRST), so a caller who names `sort` still gets the order they asked
+            // for, and a specification that ordered would be ignored by the paged query in any case.
+            case ListFilters.AwaitingConfirmation ignored ->
+                (root, query, cb) -> cb.isNotNull(root.get("awaitingConfirmationSince"));
         };
     }
 

@@ -29,6 +29,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
@@ -85,6 +86,9 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
 
     /** The smallest acceptable create body: one reason, and nothing that makes another field required. */
     private static final String ONE_REASON = "{\"reasons\":[\"Minor\"]}";
+
+    /** When the confirmation fixtures asked the applicant to confirm -- the instant the wait runs from. */
+    private static final LocalDateTime ASKED = LocalDateTime.of(2026, 5, 3, 9, 30);
 
     /**
      * The judge the fixtures claim and direct as.
@@ -1130,6 +1134,67 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                 assertThat(referral.getConfirmationReceivedAt()).isNotNull();
                 assertThat(referral.getConfirmationRecordedBy()).isEqualTo("A Caseworker");
             });
+            // And the case leaves the waiting list, in the same transaction: the answer arriving is the only thing
+            // that takes it off, so a recording that committed without this would leave the case there for good.
+            assertThat(storedCase(caseId).getAwaitingConfirmationSince()).isNull();
+        }
+
+        @Test
+        @DisplayName("a refused recording leaves the case in the waiting list, still waiting since the ask")
+        void refusedRecordingLeavesTheCaseWaiting() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            asked(referralId);
+            authorised(post(confirmationOf(caseId, referralId)), "{\"outcome\":\"Confirmed\"}")
+                .andExpect(status().isOk());
+            assertThat(storedCase(caseId).getAwaitingConfirmationSince()).isNull();
+
+            // A second recording is refused, and the refusal must not put the case back into the waiting list: the
+            // answer is in, and a caseworker being reminded to chase a case that has already answered is the same
+            // wrong-way-round failure as never being reminded at all.
+            authorised(post(confirmationOf(caseId, referralId)), "{\"outcome\":\"Withdrawn\"}")
+                .andExpect(status().isConflict());
+
+            assertThat(storedCase(caseId).getAwaitingConfirmationSince()).isNull();
+        }
+
+        @Test
+        @DisplayName("recording on a referral nobody asked leaves a waiting case waiting")
+        void recordingUnaskedLeavesAWaitingCaseWaiting() throws Exception {
+            // One case, two referrals: the first was asked and then closed, the second never asked. Recording
+            // against the second is refused, and the case is still waiting since the first -- which is the answer a
+            // recompute gives and a push of "null, I just recorded something" would not.
+            String caseId = newCase();
+            String askedReferralId = raise(caseId, ONE_REASON);
+            asked(askedReferralId);
+            moveTo(askedReferralId, ReferralState.Closed);
+            String neverAsked = raise(caseId, ONE_REASON);
+
+            authorised(post(confirmationOf(caseId, neverAsked)), "{\"outcome\":\"Confirmed\"}")
+                .andExpect(status().isConflict());
+
+            assertThat(storedCase(caseId).getAwaitingConfirmationSince()).isEqualTo(ASKED);
+        }
+
+        @Test
+        @DisplayName("answering one of two outstanding asks leaves the case waiting since the earlier one")
+        void answeringOneOfTwoLeavesTheEarlierWait() throws Exception {
+            // Reachable because recording is ungated on referral state: a referral can be asked and then closed,
+            // and a second raised and asked. The case has waited since the FIRST ask, so answering the second must
+            // leave the column at the first date rather than clearing it -- the case really is still waiting.
+            String caseId = newCase();
+            String first = raise(caseId, ONE_REASON);
+            asked(first);
+            moveTo(first, ReferralState.Closed);
+            String second = raise(caseId, ONE_REASON);
+            Referral secondReferral = stored(second);
+            secondReferral.setConfirmationRequestedAt(ASKED.plusDays(40));
+            referrals.saveAndFlush(secondReferral);
+
+            authorised(post(confirmationOf(caseId, second)), "{\"outcome\":\"Confirmed\"}")
+                .andExpect(status().isOk());
+
+            assertThat(storedCase(caseId).getAwaitingConfirmationSince()).isEqualTo(ASKED);
         }
 
         @Test
@@ -1255,10 +1320,27 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
          * {@code CaseworkerEmailControllerTest}'s, and reaching it here would make these tests depend on Notify
          * configuration to assert a rule about recording an answer.
          */
+        /**
+         * The referral asked to confirm, and the case recorded as waiting -- both, because that is what the send
+         * commits.
+         *
+         * <p>Standing in for {@code POST /caseworker/cases/{id}/emails/…}, which needs a Notify stub;
+         * {@code CaseworkerEmailControllerTest} drives the real send. Writing both halves is what makes the
+         * assertions below about the case leaving the waiting list mean anything: a fixture that set only the
+         * referral would let a recording that forgot the case's column pass.
+         */
         private void asked(String referralId) {
             Referral referral = stored(referralId);
-            referral.setConfirmationRequestedAt(LocalDateTime.of(2026, 5, 3, 9, 30));
+            referral.setConfirmationRequestedAt(ASKED);
             referrals.saveAndFlush(referral);
+            DeedPoll parent = deedPolls.findById(referral.getDeedPoll().getId()).orElseThrow();
+            parent.setAwaitingConfirmationSince(ASKED);
+            deedPolls.saveAndFlush(parent);
+        }
+
+        /** The case as it stands committed. */
+        private DeedPoll storedCase(String caseId) {
+            return deedPolls.findById(caseId).orElseThrow();
         }
     }
 

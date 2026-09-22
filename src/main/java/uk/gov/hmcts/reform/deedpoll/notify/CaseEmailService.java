@@ -12,6 +12,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
@@ -121,6 +122,16 @@ public class CaseEmailService {
     private final NotifyProperties properties;
 
     /**
+     * Only to bring the case's {@code awaitingConfirmationSince} into step when ④ starts the clock -- see
+     * {@link #startConfirmationClock}.
+     *
+     * <p>The service and not the two repositories it would take, so there is one implementation of the
+     * recompute rather than a copy of it here: {@code ReferralService.refreshAwaitingConfirmation} says why it
+     * is public. No cycle -- nothing in the referral service knows this package exists.
+     */
+    private final ReferralService referralService;
+
+    /**
      * Only to write the {@code personalisation} column, which {@link NotificationRepository#enqueue} takes as
      * JSON text because its statement is native.
      */
@@ -132,6 +143,7 @@ public class CaseEmailService {
                            DeedPollSupportingDocumentRepository documents,
                            NotificationClient notify,
                            NotifyProperties properties,
+                           ReferralService referralService,
                            ObjectMapper json) {
 
         this.deedPolls = deedPolls;
@@ -140,6 +152,7 @@ public class CaseEmailService {
         this.documents = documents;
         this.notify = notify;
         this.properties = properties;
+        this.referralService = referralService;
         this.json = json;
     }
 
@@ -328,7 +341,7 @@ public class CaseEmailService {
             caller.name());
 
         if (enqueued == 1) {
-            startConfirmationClock(template, composed.referral(), now, caller);
+            startConfirmationClock(template, deedPollId, composed.referral(), now, caller);
             return SendReceipt.enqueued(id, recipient);
         }
 
@@ -379,10 +392,17 @@ public class CaseEmailService {
      * are being reminded of. A replacement after a terminal failure <em>does</em> re-stamp, which is correct: the
      * applicant has been asked again, so the wait starts from the asking.
      *
+     * <p><strong>Two rows, one transaction:</strong> the referral's stamp, and the case's
+     * {@code awaitingConfirmationSince} -- the read-model the caseworker waiting list filters, sorts and counts
+     * days from. The second is recomputed from the referral table rather than set to {@code now}, because the
+     * case's column is the earliest outstanding request on it; {@code ReferralService.refreshAwaitingConfirmation}
+     * is the one implementation of that rule.
+     *
      * <p>An exhaustive switch rather than an {@code if}, so a template added to the enum has to say whether it
      * starts a clock instead of silently inheriting this one's answer.
      */
     private void startConfirmationClock(EmailTemplate template,
+                                        String deedPollId,
                                         Referral referral,
                                         LocalDateTime now,
                                         CurrentUser caller) {
@@ -394,6 +414,13 @@ public class CaseEmailService {
                 referral.setModifiedBy(caller.name());
                 referral.setModifiedOn(now);
                 referrals.save(referral);
+                // And the case's read-model of the same fact, in this transaction, so the case reaches the
+                // waiting list with the email it is waiting on. A recompute from the referral table rather than
+                // a copy of `now`: the case's column is the EARLIEST outstanding request on it, which this
+                // method cannot know and ConfirmationWait can.
+                // The case id the outbox row was written with, not one navigated off the referral: the two are
+                // the same case, and asking the row's own id keeps the read-model and the row talking about it.
+                referralService.refreshAwaitingConfirmation(deedPollId);
             }
             // Tells the applicant a decision and starts a refund. It asks them for nothing, so there is nothing
             // to wait for and no clock to start.

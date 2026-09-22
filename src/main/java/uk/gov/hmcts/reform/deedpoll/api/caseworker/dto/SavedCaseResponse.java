@@ -36,7 +36,7 @@ import java.util.List;
  * and response types per operation, and the reason is that a shared type drifts towards being whatever every
  * caller needed; that reason does not reach here, because a create and a patch return the same thing -- the
  * stored case -- and the reference returns byte-for-byte the same shape from both. Two identical
- * seventy-seven-component records would be a duplication with no reader and two places to update a column in.
+ * seventy-eight-component records would be a duplication with no reader and two places to update a column in.
  * The request types are separate, because those really do differ in what they mean by an absent field.
  *
  * <p>Enum names, offset-free date-times and the derived day counts all follow
@@ -44,7 +44,7 @@ import java.util.List;
  * same case in two different wire formats.
  *
  * <p>Written out field by field for the reason {@link DeedPollFields} is: a field is published by being listed.
- * {@code SavedCaseResponseFieldsTest} covers the hazard that buys -- a canonical constructor of seventy-seven
+ * {@code SavedCaseResponseFieldsTest} covers the hazard that buys -- a canonical constructor of seventy-eight
  * positional arguments, thirty-five of them {@code String} -- and also pins this field set against
  * {@code CaseDetailResponse}'s, so the two cannot silently diverge by more than the children.
  */
@@ -142,6 +142,13 @@ public record SavedCaseResponse(
     // 400s there unless the property is here. On the real api queryability comes from DeedPollFields
     // and is independent of any DTO; the mock is what admin develops against.
     ReferralState currentReferralState,
+
+    // --- Awaiting the applicant's confirmation, denormalised ---
+    // Published here for the reason above: the write response and the read response publish the same case, and
+    // a field that appeared on one and vanished on the other is a field a client cannot rely on. A caller
+    // cannot set it -- DeedPollFields has no writer for it -- so a save answers whatever the referral table
+    // last made it, which is the point: it is a read-model, not an input.
+    LocalDateTime awaitingConfirmationSince,
 
     // --- Return / refund ---
     String returnReason,
@@ -248,6 +255,8 @@ public record SavedCaseResponse(
             record.isPublishToLondonGazette(),
 
             record.getCurrentReferralState(),
+
+            record.getAwaitingConfirmationSince(),
 
             record.getReturnReason(),
             record.getRefundAmount(),

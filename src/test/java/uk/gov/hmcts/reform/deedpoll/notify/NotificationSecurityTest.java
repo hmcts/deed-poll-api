@@ -22,6 +22,7 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SentEmailResponse;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
@@ -116,6 +117,7 @@ class NotificationSecurityTest {
                 Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1",
                        EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), "template-2"),
                 "reply-to-1"),
+            mock(ReferralService.class),
             JSON);
     }
 

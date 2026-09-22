@@ -104,6 +104,12 @@ public class CaseworkerReadController {
      * value that is not a key and falls back to "all", which is exactly what the paragraph above describes
      * and is pinned behaviour.
      *
+     * <p><strong>The order a request does not name comes from the filter it asked for.</strong> Newest first for
+     * every tab but one: "awaiting confirmation" is asked for longest wait first, because a waiting list in
+     * creation order buries the case at risk of being forgotten. A {@code sort} the caller does name still wins,
+     * for the reason {@link CaseSort#parse(String, CaseSort)} records -- a tab that forced its order would make
+     * its own column headers unclickable.
+     *
      * <p><strong>{@code q} is a parameter on this operation and not a search endpoint of its own.</strong> A
      * search has to be bookmarkable and survive the back button, which is the same reason the filter and the
      * conditions are parameters. It ANDs with both -- {@code ?filter=open&where=type:is:Adult&q=Smith} means
@@ -143,7 +149,8 @@ public class CaseworkerReadController {
             resolved,
             CaseQuery.parse(parameters.get("where")),
             CaseSearch.parse(single("q", parameters.get("q"))),
-            CaseSort.parse(single("sort", parameters.get("sort"))),
+            CaseSort.parse(single("sort", parameters.get("sort")),
+                           resolved.defaultSort().orElse(CaseSort.NEWEST_FIRST)),
             CasePaging.parse(single("page", parameters.get("page")), single("size", parameters.get("size"))));
         CaseListResponse response = CaseListResponse.of(resolved, results);
         outbox.drain();

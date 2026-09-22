@@ -12,6 +12,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -23,7 +24,7 @@ import java.util.Optional;
  * reference's {@code findDeedPolls} sorts by {@code createdOn} descending and the list page depends on
  * it -- newest first is how a caseworker finds the case they just logged.
  *
- * <p>The two state finders are the shapes {@code ListFilters.StateWhere} has, and no others: adding a
+ * <p>The three filter finders are the shapes {@code ListFilters.FilterWhere} has, and no others: adding a
  * finder here for a filter that does not exist is how a repository grows methods with no consumer.
  *
  * <p><strong>{@link JpaSpecificationExecutor} is for the field-level case query, and nothing else.</strong>
@@ -108,6 +109,22 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
     List<DeedPoll> findOpenOrderByCreatedOnDesc(@Param("states") Collection<DeedPollState> states);
 
     /**
+     * The cases waiting for an applicant's confirmation, longest wait first -- the "awaiting confirmation"
+     * filter.
+     *
+     * <p>Ordered by the column rather than by {@code createdOn} like the three finders above, because the whole
+     * point of this tab is which case has waited longest: a list of waiting cases in creation order would put a
+     * case asked yesterday above one asked in May. The specification path states the same criterion and the
+     * same order, and {@code CaseSpecificationsTest} pins the two together.
+     *
+     * <p>A derived query rather than a written one, and safely so where {@code findOpenOrderByCreatedOnDesc}
+     * could not be: {@code IS NOT NULL} is not the {@code NOT IN} that evaluates to NULL for a NULL column, so
+     * there is no third case to spell out. It is also exactly the predicate
+     * {@code V17__case_awaiting_confirmation.sql}'s partial index is built on.
+     */
+    List<DeedPoll> findByAwaitingConfirmationSinceIsNotNullOrderByAwaitingConfirmationSinceAsc();
+
+    /**
      * Writes one case's denormalised current referral state -- the recompute's second half.
      *
      * <p><strong>A statement over the one column, not {@code save} on the loaded case.</strong> This entity has
@@ -132,6 +149,28 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
     @Modifying(flushAutomatically = true)
     @Query("update DeedPoll d set d.currentReferralState = :state where d.id = :id")
     int writeCurrentReferralState(@Param("id") String id, @Param("state") ReferralState state);
+
+    /**
+     * Writes one case's denormalised "awaiting confirmation since" -- the other recompute's second half.
+     *
+     * <p>A single-column statement rather than {@code save} on the loaded case, for the reason
+     * {@link #writeCurrentReferralState} gives in full: this entity has no dirty-column tracking, so a save
+     * writes every column back, and neither the send that starts the clock nor the recording that answers it
+     * holds a lock on the case row. A statement over one column cannot lose a concurrent write to another.
+     *
+     * <p>{@code null} is a value this is asked to write and not a no-op: it is what a case reads once the
+     * answer is recorded, and writing it is how the case leaves the waiting list.
+     *
+     * <p>The persistence context is deliberately not cleared, as above: no flow reads this column back in the
+     * transaction that writes it, and clearing would detach the entities the caller is still mapping from.
+     *
+     * @param id    the case
+     * @param since when its longest outstanding wait began, or null when it is waiting for nothing
+     * @return 1 if the case exists, 0 if it does not
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("update DeedPoll d set d.awaitingConfirmationSince = :since where d.id = :id")
+    int writeAwaitingConfirmationSince(@Param("id") String id, @Param("since") LocalDateTime since);
 
     /**
      * Recomputes the current referral state of many cases at once, from the referral table.

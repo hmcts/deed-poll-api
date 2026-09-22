@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -43,7 +44,10 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRep
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollWitnessRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -263,6 +267,96 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.filter").value("all"))
                 .andExpect(jsonPath("$.cases.length()").value(2));
+        }
+
+        @Test
+        @DisplayName("the awaiting-confirmation filter is the waiting cases, longest wait first, with the days")
+        void theAwaitingConfirmationFilterIsTheWaitingCases() throws Exception {
+            // A case asked in March and one asked in May, plus one that is waiting for nothing. The two waiting
+            // ones are backdated in the OPPOSITE order to their stamps, so a list that fell back to newest-first
+            // would return them the other way round and this would fail rather than pass by coincidence.
+            DeedPoll longest = backdated(
+                awaiting(Map.of("newForename", "Asked in March"), LocalDateTime.of(2026, 3, 1, 9, 0)),
+                LocalDateTime.parse("2026-08-01T09:00:00"));
+            DeedPoll recent = backdated(
+                awaiting(Map.of("newForename", "Asked in May"), LocalDateTime.of(2026, 5, 1, 9, 0)),
+                LocalDateTime.parse("2026-06-01T09:00:00"));
+            newCase(Map.of("newForename", "Waiting for nothing"));
+
+            JsonNode rows = mapper.readTree(
+                authorised(get("/caseworker/cases").param("filter", "awaitingConfirmation"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.filter").value("awaitingConfirmation"))
+                    // The case nobody asked is not waiting, and neither is a case that has answered.
+                    .andExpect(jsonPath("$.cases.length()").value(2))
+                    .andExpect(jsonPath("$.cases[0].id").value(longest.getId()))
+                    .andExpect(jsonPath("$.cases[1].id").value(recent.getId()))
+                    .andReturn().getResponse().getContentAsString()).at("/cases");
+
+            // The row says how long, so a caseworker does not have to work it out against today's date. Counted
+            // from the stamp: the difference between the two rows is exactly the sixty-one days between 1 March
+            // and 1 May whatever day the test runs, which a count from createdOn or dateReceived would not give.
+            int longestDays = rows.get(0).at("/daysAwaitingConfirmation").asInt();
+            int recentDays = rows.get(1).at("/daysAwaitingConfirmation").asInt();
+            assertThat(longestDays - recentDays).isEqualTo(61);
+            assertThat(longestDays).isEqualTo(daysSince(LocalDateTime.of(2026, 3, 1, 9, 0)));
+        }
+
+        @Test
+        @DisplayName("a case whose answer has been recorded drops out of the waiting list")
+        void anAnsweredCaseDropsOutOfTheWaitingList() throws Exception {
+            DeedPoll waiting = awaiting(Map.of("newForename", "Still waiting"),
+                                        LocalDateTime.of(2026, 3, 1, 9, 0));
+
+            authorised(get("/caseworker/cases").param("filter", "awaitingConfirmation"))
+                .andExpect(jsonPath("$.cases.length()").value(1));
+
+            // What recording an outcome does to the case: the read-model goes null, which is the only thing that
+            // takes a case off this list. CaseworkerReferralControllerTest drives the real recording.
+            waiting.setAwaitingConfirmationSince(null);
+            deedPolls.save(waiting);
+
+            authorised(get("/caseworker/cases").param("filter", "awaitingConfirmation"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0));
+            // And it is still a case, findable under every other tab: the answer arriving is not the case closing.
+            authorised(get("/caseworker/cases"))
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.cases[0].daysAwaitingConfirmation").value(nullValue()));
+        }
+
+        @Test
+        @DisplayName("a sort the caller names beats the waiting list's own order")
+        void namedSortBeatsTheWaitingListsOrder() throws Exception {
+            // The default is the tab's, not a fixed order: a caseworker who clicked a column header asked a
+            // question this service can answer, and a tab that overrode them would make its headers unclickable.
+            awaiting(Map.of("newForename", "Zoe"), LocalDateTime.of(2026, 3, 1, 9, 0));
+            awaiting(Map.of("newForename", "Ada"), LocalDateTime.of(2026, 5, 1, 9, 0));
+
+            authorised(get("/caseworker/cases")
+                           .param("filter", "awaitingConfirmation")
+                           .param("sort", "newForename:asc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(2))
+                .andExpect(jsonPath("$.cases[0].newForename").value("Ada"))
+                .andExpect(jsonPath("$.cases[1].newForename").value("Zoe"));
+        }
+
+        @Test
+        @DisplayName("the waiting-list criterion ANDs with a condition rather than replacing it")
+        void theWaitingCriterionAndsWithACondition() throws Exception {
+            awaiting(Map.of("newForename", "Adult", "type", DeedPollType.Adult),
+                     LocalDateTime.of(2026, 3, 1, 9, 0));
+            awaiting(Map.of("newForename", "Minor", "type", DeedPollType.Minor),
+                     LocalDateTime.of(2026, 4, 1, 9, 0));
+
+            authorised(get("/caseworker/cases")
+                           .param("filter", "awaitingConfirmation")
+                           .param("where", "type:is:Minor"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases.length()").value(1))
+                .andExpect(jsonPath("$.cases[0].newForename").value("Minor"));
         }
 
         @Test
@@ -1271,6 +1365,26 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
             DeedPollFields.write(record, String.valueOf(fields[i]), fields[i + 1]);
         }
         return deedPolls.save(record);
+    }
+
+    /**
+     * A stored case waiting for the applicant's confirmation since the given instant.
+     *
+     * <p>The column is set with the entity's own setter, which is the only way: it is a read-model of the referral
+     * table and {@link DeedPollFields} deliberately has no writer for it, so a caller could not put a case into the
+     * waiting list even by patching. What is under test here is the list; the send that really stamps it is
+     * {@code CaseworkerEmailControllerTest}'s and the recording that clears it is
+     * {@code CaseworkerReferralControllerTest}'s.
+     */
+    private DeedPoll awaiting(Map<String, Object> values, LocalDateTime since) {
+        DeedPoll record = newCase(values);
+        record.setAwaitingConfirmationSince(since);
+        return deedPolls.save(record);
+    }
+
+    /** Whole calendar days from then until now in UTC -- the count the row publishes, computed the same way. */
+    private static int daysSince(LocalDateTime since) {
+        return (int) ChronoUnit.DAYS.between(since.toLocalDate(), LocalDate.now(ZoneOffset.UTC));
     }
 
     /**

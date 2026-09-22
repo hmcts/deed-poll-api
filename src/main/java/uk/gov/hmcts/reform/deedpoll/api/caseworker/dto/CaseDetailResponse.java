@@ -48,7 +48,7 @@ import java.util.List;
  *
  * <p>The mapping is written out one field at a time rather than derived by reflection from
  * {@link DeedPollFields}, for the reason that registry itself is written out: a field is published by being
- * listed. The hazard that buys -- a canonical constructor with eighty positional arguments, where two
+ * listed. The hazard that buys -- a canonical constructor with eighty-one positional arguments, where two
  * transposed {@code String}s compile silently -- is covered by a test that populates every field with a
  * distinct value and compares the response against the record field by field.
  */
@@ -145,6 +145,15 @@ public record CaseDetailResponse(
     // rather than only on the list row because the two case responses publish the same case, and a field
     // that appeared on a list and vanished on the detail read would be a field a client cannot rely on.
     ReferralState currentReferralState,
+
+    // --- Awaiting the applicant's confirmation, denormalised ---
+    // When the longest outstanding request for the applicant's confirmation was sent, or null when the case is
+    // waiting for nothing. Beside the derived state and never inside it: a client shows "Returned -- awaiting
+    // confirmation since 3 May" from the two fields together, because there is no ninth DeedPollState and
+    // deliberately so (V16, V17). A date here where the list row carries a day count: the row answers "how
+    // long", this answers "since when", and a date can be rendered in Welsh or compared by a client that wants
+    // its own arithmetic.
+    LocalDateTime awaitingConfirmationSince,
 
     // --- Return / refund ---
     String returnReason,
@@ -255,6 +264,8 @@ public record CaseDetailResponse(
             record.isPublishToLondonGazette(),
 
             record.getCurrentReferralState(),
+
+            record.getAwaitingConfirmationSince(),
 
             record.getReturnReason(),
             record.getRefundAmount(),

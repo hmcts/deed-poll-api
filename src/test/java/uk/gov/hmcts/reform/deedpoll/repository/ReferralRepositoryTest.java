@@ -14,6 +14,7 @@ import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
@@ -381,6 +382,43 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(referrals.findStatesByDeedPollId(otherCase.getId()))
             .containsExactly(ReferralState.Open);
         assertThat(referrals.findStatesByDeedPollId(neverReferred.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("reads one case's outstanding confirmation requests, and neither the answered nor another case's")
+    void readsTheOutstandingConfirmationRequestsOfOneCase() {
+        LocalDateTime asked = LocalDateTime.of(2026, 5, 3, 9, 30);
+        DeedPoll deedPoll = persistedCase();
+        // Outstanding: asked, no answer. The case has waited since this.
+        Referral waiting = persistedReferral(deedPoll, ReferralState.Closed, LocalDateTime.of(2026, 5, 3, 9, 0));
+        waiting.setConfirmationRequestedAt(asked);
+        // Answered, so no longer outstanding -- this is what takes a case out of the waiting list.
+        Referral answered = persistedReferral(deedPoll, ReferralState.Open, LocalDateTime.of(2026, 6, 1, 9, 0));
+        answered.setConfirmationRequestedAt(asked.plusDays(10));
+        answered.setConfirmationOutcome(ConfirmationOutcome.Confirmed);
+        // Never asked, which is every referral that predates the confirmation columns.
+        persistedReferral(deedPoll, ReferralState.Open, LocalDateTime.of(2026, 7, 1, 9, 0));
+
+        DeedPoll otherCase = persistedCase();
+        Referral otherWaiting =
+            persistedReferral(otherCase, ReferralState.Open, LocalDateTime.of(2026, 5, 1, 9, 0));
+        otherWaiting.setConfirmationRequestedAt(asked.minusDays(30));
+
+        final DeedPoll neverReferred = persistedCase();
+        entityManager.flush();
+        entityManager.clear();
+
+        // Pre-filtered in SQL rather than in Java, which is what makes V16's partial index reachable and is the
+        // WHERE clause the plan says the wait is. The referral's own state is deliberately not part of it: a
+        // caseworker may close a referral before the reply arrives, and the applicant still answered a question
+        // the office asked -- hence the waiting row here being Closed.
+        assertThat(referrals.findOutstandingConfirmationRequestsByDeedPollId(deedPoll.getId()))
+            .containsExactly(asked);
+        // Scoped, like every other finder here: a recompute that read across cases would put one case into the
+        // waiting list on the strength of another's unanswered email.
+        assertThat(referrals.findOutstandingConfirmationRequestsByDeedPollId(otherCase.getId()))
+            .containsExactly(asked.minusDays(30));
+        assertThat(referrals.findOutstandingConfirmationRequestsByDeedPollId(neverReferred.getId())).isEmpty();
     }
 
     @Test

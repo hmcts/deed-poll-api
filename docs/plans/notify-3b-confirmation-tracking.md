@@ -236,8 +236,54 @@ Read first: notify-3's Task 2, and `ReferralService`'s existing write operations
   1. Container-backed: the filter returns only outstanding referrals' cases, ordered longest-waiting first,
   and a case whose outcome has been recorded drops out.
 
-- [ ] The list filters and sorts by how long a case has waited, the row says how many days, the case read
+- [x] The list filters and sorts by how long a case has waited, the row says how many days, the case read
       surfaces the wait beside the state without changing it, and `./gradlew build` green
+
+**Task 3 notes.**
+
+- **This task needed a migration the plan did not name: `V17__case_awaiting_confirmation.sql`**, one nullable
+  `"awaitingConfirmationSince"` column on `deedpoll_deedpoll` plus a partial index on the rows that are waiting.
+  V16 was the highest committed when this started, confirmed by listing `src/main/resources/db/migration`.
+  **Why a column at all, when decision 7 says the wait is a `WHERE` clause:** it still is — the clause just has
+  to be askable of the *case* table. `V9__current_referral_state.sql` settled this exact question for
+  `currentReferralState` and its argument holds unchanged: the case list filters through `root.get(name)` on one
+  entity, orders through a Spring Data `Sort` over a root property, and maps each row from the case the page
+  returned. A correlated subquery cannot carry the `ORDER BY` a paged query needs, a join multiplies a case by
+  its referrals and makes the page disagree with its own count, and reading each row's referrals lazily is one
+  query per row. So the referral's answer is copied onto the case.
+- **Kept in step by a recompute from truth, never a push.** `ConfirmationWait.earliestOutstanding` (container-free,
+  in `domain/referrals`) is the rule; `ReferralService.refreshAwaitingConfirmation` pairs it with
+  `ReferralRepository.findOutstandingConfirmationRequestsByDeedPollId` and
+  `DeedPollRepository.writeAwaitingConfirmationSince`. Both writes call it: `CaseEmailService.send` when ④ starts
+  the clock, `recordConfirmation` when the answer ends it. That method is **public** — the only reason — because
+  the two sites are in two packages and the alternative was the same three lines copied into `notify`, which is
+  how a read-model and its truth drift. **Earliest, not latest:** a referral can be asked and then closed and a
+  second asked (recording is ungated on referral state), and the case has waited since the first — asserted over
+  HTTP in `CaseworkerReferralControllerTest`, where answering the second leaves the column at the first date.
+- **The filter is a sixth `ListFilter`, appended.** `StateWhere` is now `FilterWhere` and permits a third shape,
+  `AwaitingConfirmation` — the one tab whose criterion is not about `state` at all — so `CaseSpecifications.inState`
+  became `criterion`. The ported five keys stay in front of it, and `ListFiltersTest`'s ported key assertion says
+  so rather than being loosened.
+- **The sort is the tab's default, not an override.** `ListFilter` gains `Optional<CaseSort> defaultSort` (with a
+  three-arg constructor so the ported five are untouched) and `CaseSort.parse(String, CaseSort)` takes the
+  fallback. A caller who names `sort` still wins: a tab that forced its order would make its own column headers
+  unclickable. `ListFilters.LONGEST_WAIT_FIRST` is ascending on the stamp, which is descending in days waited.
+- **Four files this plan did not name had to change, all because a new case column has to be declared:**
+  `DeedPollFields` gains a reader (readable, never writable — `CaseSort.sortableFields()` admits only names that
+  are readable, and `CaseDetailResponseFieldsTest` requires the detail DTO to publish exactly the readable set);
+  `CaseDetailResponse` and `SavedCaseResponse` gain `awaitingConfirmationSince`; and the shared test fixture
+  `CaseResponseFields` gains it to its unwritable set, which is now nine rather than eight. It is deliberately
+  **not** queryable — not a `FormFields` field — because the tab is how it is asked about.
+- **The row publishes `daysAwaitingConfirmation`, not the date**, and the case read publishes the date, not the
+  count: the row answers "how long", the case answers "since when". The count is **not** in `ComputedFields`,
+  which is a port of the reference's own derived pair; it is computed in `CaseSummaryResponse` from one reading of
+  the clock per page, so two rows cannot straddle a midnight and disagree.
+- **Totals after this task:** `test` **2,537** across 322 classes (`+27` on Task 2's 2,510/319), `integration`
+  unchanged at 11 across 3, `./gradlew build` green. The one new top-level test class, `ConfirmationWaitTest`, is
+  **container-free**, so `build.gradle`'s excluded-count comment is unchanged; every new container-backed test is
+  nested in a class that already carries `requires-docker`.
+- `OpenAPIQueryParameters` now says in the `sort` description that the default depends on the filter. Nothing
+  else about the published contract moved: no route, no operation count.
 
 ### Task 4: Security, scoping and full validation
 

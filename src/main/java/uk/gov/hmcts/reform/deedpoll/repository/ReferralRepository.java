@@ -204,6 +204,36 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
     List<ReferralState> findStatesByDeedPollId(@Param("deedPollId") String deedPollId);
 
     /**
+     * When each still-unanswered confirmation on one case was asked for -- the input to the case's
+     * denormalised {@code awaitingConfirmationSince}.
+     *
+     * <p>A projection of the dates for the reason the state finder above is one: {@code ConfirmationWait}
+     * needs nothing else off the row, and the recompute runs at both sites that can change the answer.
+     *
+     * <p><strong>Pre-filtered here, where the state finder deliberately is not.</strong> The two halves of
+     * "outstanding" are properties of the row rather than a rule anybody could get wrong -- a referral nobody
+     * asked has a null request date, and one whose answer is recorded has an outcome -- so the predicate is
+     * the {@code WHERE} clause decision 7 says it is, and it is the same predicate {@code V16}'s partial index
+     * is built on. That is why this is not "every request date, filtered in Java": the index is only reachable
+     * from a query that states it.
+     *
+     * <p>Scoped to its case like every other finder here, so one case's recompute cannot read another's
+     * referrals.
+     *
+     * @param deedPollId the parent case
+     * @return the request date of each outstanding confirmation, in no particular order, empty when the case
+     *     is waiting for nothing
+     */
+    @Query("""
+        select r.confirmationRequestedAt
+          from Referral r
+         where r.deedPoll.id = :deedPollId
+           and r.confirmationRequestedAt is not null
+           and r.confirmationOutcome is null
+        """)
+    List<LocalDateTime> findOutstandingConfirmationRequestsByDeedPollId(@Param("deedPollId") String deedPollId);
+
+    /**
      * The claimed referrals nobody has touched since {@code cutoff} -- the sweep's candidates.
      *
      * <p><strong>Not scoped to a case, and it is the one finder that is not.</strong> The rule stated at the

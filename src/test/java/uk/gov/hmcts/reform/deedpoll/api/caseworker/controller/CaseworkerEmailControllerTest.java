@@ -49,6 +49,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -730,6 +731,29 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 assertThat(storedReferral(caseId).getConfirmationRequestedAt()).isEqualTo(row.getCreatedOn());
                 // And nothing else about the wait: the answer is outstanding, which is what a waiting case is.
                 assertThat(storedReferral(caseId).getConfirmationOutcome()).isNull();
+                // And the case's own read-model with it, in the same transaction: the case reaches the caseworker
+                // waiting list with the email it is waiting on, rather than one drain later or not at all.
+                assertThat(deedPolls.findById(caseId).orElseThrow().getAwaitingConfirmationSince())
+                    .isEqualTo(row.getCreatedOn());
+            }
+
+            @Test
+            @DisplayName("a second send moves neither clock, so a double-click does not reset the wait")
+            void secondSendMovesNeitherClock() throws Exception {
+                // The unique index refuses the second row, and a stamp written regardless would restart the wait a
+                // caseworker is being reminded of -- putting the case back at the bottom of its own list.
+                String caseId = confirmationCase();
+                authorised(post(confirmationSendOf(caseId)), "{}").andExpect(status().isOk());
+                LocalDateTime firstAsk = storedReferral(caseId).getConfirmationRequestedAt();
+
+                authorised(post(confirmationSendOf(caseId)), "{}")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.enqueued").value(false));
+
+                assertThat(notifications.count()).isOne();
+                assertThat(storedReferral(caseId).getConfirmationRequestedAt()).isEqualTo(firstAsk);
+                assertThat(deedPolls.findById(caseId).orElseThrow().getAwaitingConfirmationSince())
+                    .isEqualTo(firstAsk);
             }
 
             @Test
@@ -749,6 +773,9 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
 
                 assertThat(notifications.count()).isZero();
                 assertThat(storedReferral(caseId).getConfirmationRequestedAt()).isNull();
+                // The case's read-model rolls back with them: a waiting list holding a case for an email that was
+                // never owed would send a caseworker looking for a reply that was never asked for.
+                assertThat(deedPolls.findById(caseId).orElseThrow().getAwaitingConfirmationSince()).isNull();
             }
 
             @Test
@@ -764,6 +791,7 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
 
                 assertThat(notifications.count()).isOne();
                 assertThat(storedReferral(caseId).getConfirmationRequestedAt()).isNull();
+                assertThat(deedPolls.findById(caseId).orElseThrow().getAwaitingConfirmationSince()).isNull();
             }
 
             @Test

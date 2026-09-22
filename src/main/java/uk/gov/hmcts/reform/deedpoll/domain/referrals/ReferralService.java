@@ -140,6 +140,11 @@ import java.util.stream.Collectors;
  * case's state is derived from its date columns by a verbatim port whose member order is the Dynamics option-set
  * integers, so the wait is recorded on the referral and surfaced alongside the state rather than inside it.
  *
+ * <p><strong>{@link #recordConfirmation} refreshes the other denormalised column instead</strong> --
+ * {@code awaitingConfirmationSince}, which is how a case leaves the waiting list -- through
+ * {@link #refreshAwaitingConfirmation}, on the same recompute-from-truth terms and in the same transaction. That
+ * one is public rather than private because the write that starts the wait is the email send, in another package.
+ *
  * <p>The service returns entities, not view models, as {@code NoteService} does. Mapping to DTOs is the
  * controller's job.
  */
@@ -555,6 +560,11 @@ public class ReferralService {
      * does not recompute the case's {@code currentReferralState}: there is nothing for that column to have changed
      * to.
      *
+     * <p>It does recompute the case's {@code awaitingConfirmationSince}, in this transaction, because that column
+     * is the answer to "is this case still waiting?" and this is the write that makes it no. A recording that
+     * committed without it would leave the case in the waiting list for good, which is the one failure the list
+     * exists to prevent.
+     *
      * <p><strong>It does not move the case on either, and that is a decision rather than an omission.</strong>
      * {@code Confirmed} records that the applicant wants to proceed; it does not set {@code dateEnroled}, clear
      * {@code dateReturned} or otherwise reach into the date cascade, which is derived from those columns by a
@@ -609,6 +619,10 @@ public class ReferralService {
         notes.createNote(deedPollId,
                          new CreateNoteInput(ReferralNotes.confirmationRecorded(saved, input.note())),
                          caller.noteAuthor());
+        // The case leaves the waiting list here, and by recompute rather than by writing null: the answer is
+        // "nothing on this case is still outstanding", which the referral table knows and this method only
+        // believes. See refreshAwaitingConfirmation.
+        refreshAwaitingConfirmation(deedPollId);
         return saved;
     }
 
@@ -680,6 +694,30 @@ public class ReferralService {
         deedPolls.writeCurrentReferralState(
             deedPollId,
             CurrentReferralState.of(referrals.findStatesByDeedPollId(deedPollId)).orElse(null));
+    }
+
+    /**
+     * Recomputes one case's denormalised {@code awaitingConfirmationSince} from the referral table.
+     *
+     * <p>Two sites change the answer and both call this in their own transaction: {@link #recordConfirmation},
+     * where the answer arriving ends the wait, and {@code CaseEmailService.send}, where sending ④ starts one.
+     * <strong>Public for that second caller and for no other reason</strong> -- the recompute is one rule with
+     * one implementation, and the alternative was the same three lines written out in the notify package, which
+     * is exactly how a read-model and its truth drift apart.
+     *
+     * <p>A recompute rather than a push of what the caller just did, for the reason
+     * {@link ConfirmationWait} gives in full: "this case is waiting for nothing now" is a fact about every
+     * referral of the case, and a site that wrote its own stamp or its own null would be wrong the moment a case
+     * carried a second waiting referral.
+     *
+     * @param deedPollId the case whose column to bring into step
+     */
+    @Transactional
+    public void refreshAwaitingConfirmation(String deedPollId) {
+        deedPolls.writeAwaitingConfirmationSince(
+            deedPollId,
+            ConfirmationWait.earliestOutstanding(
+                referrals.findOutstandingConfirmationRequestsByDeedPollId(deedPollId)).orElse(null));
     }
 
     /**

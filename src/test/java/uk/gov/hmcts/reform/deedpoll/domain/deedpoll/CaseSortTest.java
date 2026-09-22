@@ -35,6 +35,20 @@ class CaseSortTest {
         assertThat(CaseSort.NEWEST_FIRST.direction().isDescending()).isTrue();
     }
 
+    @Test
+    @DisplayName("reads no parameter as the fallback the caller supplies, and a named one in preference to it")
+    void readsNoParameterAsTheSuppliedFallback() {
+        // What lets a filter tab carry its own order: the "awaiting confirmation" list is useless newest-first, so
+        // the controller passes that tab's default. A caller who names `sort` still wins -- a tab that forced its
+        // order would make its own column headers unclickable.
+        assertThat(CaseSort.parse(null, ListFilters.LONGEST_WAIT_FIRST))
+            .isEqualTo(ListFilters.LONGEST_WAIT_FIRST);
+        assertThat(CaseSort.parse("  ", ListFilters.LONGEST_WAIT_FIRST))
+            .isEqualTo(ListFilters.LONGEST_WAIT_FIRST);
+        assertThat(CaseSort.parse("newSurname:desc", ListFilters.LONGEST_WAIT_FIRST))
+            .isEqualTo(new CaseSort("newSurname", CaseSort.Direction.DESCENDING));
+    }
+
     @Nested
     @DisplayName("parsing")
     class Parsing {
@@ -176,11 +190,14 @@ class CaseSortTest {
     class Sortable {
 
         @Test
-        @DisplayName("is every single-valued stored form field, plus the audit columns")
+        @DisplayName("is every single-valued stored form field, plus the process and audit columns")
         void isEverySingleValuedStoredFieldPlusAudit() {
             assertThat(CaseSort.sortableFields())
                 .contains("newSurname", "dateReceived", "type", "state", "referencenumber", "refundAmount",
-                    "inPerson", "createdOn", "modifiedOn", "createdBy", "modifiedBy")
+                    "inPerson", "createdOn", "modifiedOn", "createdBy", "modifiedBy",
+                    // Sortable without being on a form: it is the order the "awaiting confirmation" tab is asked
+                    // for, so a name the parser refused would be an order this service could not express itself.
+                    "awaitingConfirmationSince")
                 .doesNotContain("iShall", "iHaveSubscribed", "andAlsoMyOld",
                     "daysReceivedToEnroled", "daysReceivedToReturned")
                 // Not offered by any list header, and displayReference sorts as text rather than as the

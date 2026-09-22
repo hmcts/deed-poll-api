@@ -186,6 +186,57 @@ class DeedPollRepositoryTest extends AbstractPostgresContainerTest {
             .isEqualTo(ReferralState.Claimed);
     }
 
+    @Test
+    @DisplayName("writes one case's awaiting-confirmation stamp, and writes null as a value rather than skipping it")
+    void writesOneCasesAwaitingConfirmationSince() {
+        LocalDateTime asked = LocalDateTime.of(2026, 5, 3, 9, 30);
+        DeedPoll waiting = persisted(DeedPollState.Returned, LocalDateTime.of(2026, 1, 11, 10, 0));
+        final DeedPoll untouched = persisted(DeedPollState.Returned, LocalDateTime.of(2026, 1, 11, 10, 0));
+        entityManager.flush();
+
+        assertThat(deedPolls.writeAwaitingConfirmationSince(waiting.getId(), asked)).isEqualTo(1);
+        entityManager.clear();
+
+        assertThat(entityManager.find(DeedPoll.class, waiting.getId()).getAwaitingConfirmationSince())
+            .isEqualTo(asked);
+        // One case, addressed by id: a statement that dropped its WHERE would put every case in the service into
+        // the waiting list at once.
+        assertThat(entityManager.find(DeedPoll.class, untouched.getId()).getAwaitingConfirmationSince()).isNull();
+
+        // Back to null, which is the value recording the answer has to write. A statement that treated null as
+        // "nothing to do" would leave the case in the waiting list for good -- the one failure the list exists to
+        // prevent.
+        assertThat(deedPolls.writeAwaitingConfirmationSince(waiting.getId(), null)).isEqualTo(1);
+        entityManager.clear();
+        assertThat(entityManager.find(DeedPoll.class, waiting.getId()).getAwaitingConfirmationSince()).isNull();
+    }
+
+    @Test
+    @DisplayName("the waiting list is the cases with a stamp, longest wait first, and never the answered ones")
+    void findsTheWaitingCasesLongestWaitFirst() {
+        DeedPoll longest = waiting(LocalDateTime.of(2026, 3, 1, 9, 0));
+        DeedPoll middle = waiting(LocalDateTime.of(2026, 4, 1, 9, 0));
+        DeedPoll shortest = waiting(LocalDateTime.of(2026, 5, 1, 9, 0));
+        // Answered, or never asked: both read as null, and neither is waiting for anything.
+        DeedPoll answered = persisted(DeedPollState.Returned, LocalDateTime.of(2026, 1, 2, 10, 0));
+        entityManager.flush();
+
+        List<DeedPoll> found = deedPolls.findByAwaitingConfirmationSinceIsNotNullOrderByAwaitingConfirmationSinceAsc();
+
+        // Ascending on the stamp, which is the longest wait first: a list in creation order would bury the case at
+        // risk of being forgotten, and that is the whole reason for the order being in the finder's name.
+        assertThat(found).extracting(DeedPoll::getId)
+            .containsSubsequence(longest.getId(), middle.getId(), shortest.getId())
+            .doesNotContain(answered.getId());
+    }
+
+    /** A case waiting for the applicant's confirmation since the given instant. */
+    private DeedPoll waiting(LocalDateTime since) {
+        DeedPoll deedPoll = persisted(DeedPollState.Returned, LocalDateTime.of(2026, 1, 2, 10, 0));
+        deedPoll.setAwaitingConfirmationSince(since);
+        return deedPoll;
+    }
+
     /** A case holding one referral per given state, so a recompute has a history to read past. */
     private DeedPoll caseWithReferrals(ReferralState... states) {
         DeedPoll deedPoll = persisted(DeedPollState.Received, LocalDateTime.of(2026, 1, 12, 10, 0));

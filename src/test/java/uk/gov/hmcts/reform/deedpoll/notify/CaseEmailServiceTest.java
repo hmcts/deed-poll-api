@@ -17,6 +17,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
@@ -83,6 +84,14 @@ class CaseEmailServiceTest {
     private NotificationRepository notifications;
     private DeedPollSupportingDocumentRepository documents;
     private NotificationClient notify;
+
+    /**
+     * Mocked because what this class asserts about it is that the send asks it to bring the case's waiting-list
+     * column into step -- the recompute itself has no database here to run against, and
+     * {@code DeedPollRepositoryTest} is where the rule meets a real one.
+     */
+    private ReferralService referralService;
+
     private CaseEmailService emails;
 
     @BeforeEach
@@ -96,8 +105,10 @@ class CaseEmailServiceTest {
         // refusal, which is asserted in its own test below.
         NotifyProperties properties = new NotifyProperties(
             "https://notify.invalid", "key", Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1"), "");
+        referralService = mock(ReferralService.class);
         emails = new CaseEmailService(
-            deedPolls, referrals, notifications, documents, notify, properties, new ObjectMapper());
+            deedPolls, referrals, notifications, documents, notify, properties, referralService,
+            new ObjectMapper());
     }
 
     @Nested
@@ -305,7 +316,8 @@ class CaseEmailServiceTest {
             // the drain and a preview is a 502. NotifyProperties.isProvisioned exists for this sentence.
             CaseEmailService unprovisioned = new CaseEmailService(
                 deedPolls, referrals, notifications, documents, notify,
-                new NotifyProperties("https://notify.invalid", "", Map.of(), ""), new ObjectMapper());
+                new NotifyProperties("https://notify.invalid", "", Map.of(), ""), referralService,
+                new ObjectMapper());
             storedCase();
             refusedReferral();
 
@@ -329,6 +341,7 @@ class CaseEmailServiceTest {
                 new NotifyProperties("https://notify.invalid", "key", Map.of(
                     EmailTemplate.APPLICATION_REJECTED.key(), uuid,
                     EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), uuid), ""),
+                referralService,
                 new ObjectMapper());
             storedCase();
             refusedReferralFor(ReferralReason.NonPublication);

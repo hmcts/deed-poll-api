@@ -13,6 +13,7 @@ import org.springframework.context.annotation.Configuration;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
 
 import java.math.BigDecimal;
@@ -138,11 +139,22 @@ public class OpenAPIQueryParameters {
             .collect(Collectors.joining(", "));
     }
 
+    /**
+     * {@code sort}, whose default depends on the {@code filter} and is described as doing so.
+     *
+     * <p>Newest first for every tab but {@code awaitingConfirmation}, which is asked for longest wait first
+     * because a waiting list in creation order buries the case at risk of being forgotten. Worth stating rather
+     * than leaving a consumer to discover: a client that assumed one default and rendered an unsorted-looking
+     * column header would be describing the wrong order to a caseworker.
+     */
     private Parameter sort() {
         return queryParameter("sort", new StringSchema(),
             "An order, as `field:" + CaseSort.Direction.wireTokens().replace(", ", "|") + "`. The direction may "
                 + "be omitted and defaults to ascending. Sortable fields are the columns the list shows: "
-                + String.join(", ", CaseSort.sortableFields()) + ". Defaults to newest first.");
+                + String.join(", ", CaseSort.sortableFields()) + ". Defaults to newest first, except on the "
+                + "`awaitingConfirmation` filter, which defaults to `"
+                + ListFilters.LONGEST_WAIT_FIRST.field() + ":"
+                + ListFilters.LONGEST_WAIT_FIRST.direction().wire() + "` -- longest wait first.");
     }
 
     private Parameter page() {
