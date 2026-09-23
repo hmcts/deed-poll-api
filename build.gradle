@@ -84,15 +84,20 @@ tasks.withType(Test).configureEach {
 
 test {
   useJUnitPlatform {
-    // The CNP VM agent has no Docker daemon. 31 src/test classes need Testcontainers -- 30 inherit
+    // The CNP VM agent has no Docker daemon. 32 src/test classes need Testcontainers -- 31 inherit
     // the tag from AbstractPostgresContainerTest, SchemaConformanceTest carries it directly -- and
-    // they account for 936 of the 2,563 tests (measured, 2026-09-23 after notify-3b's second review pass,
-    // leaving 1,627 Docker-free tests -- that pass added four more, all container-free: the refusal of a
-    // second confirmation email once the applicant has answered, stated on both the availability and the
-    // send path, and the judicial timeline's reach over the confirmation note;
-    // it was 936 of 2,559 leaving 1,623 after the first pass. notify-3b added no container-backed class: its confirmation
-    // columns, the recording's refusals, the days-waiting arithmetic and the whole of its security and
-    // scoping statement are container-free by design, and its container-backed assertions are nested in
+    // they account for 946 of the 2,576 tests (measured, 2026-09-23 after notify-3b's third review pass,
+    // leaving 1,630 Docker-free tests. That pass added the 32nd class, ConfirmationConcurrencyTest:
+    // notify-3b's earlier passes added none, so this figure is the one the plan asked to be re-measured
+    // if the work ever did -- it proves the recording's idempotency-by-refusal and the referral lock's
+    // refresh against two real transactions, which no fake can stand in for, so it cannot be made
+    // container-free the way the rest of this plan's assertions were;
+    // it was 936 of 2,563 across 31 classes leaving 1,627 after the second pass, which added four
+    // container-free tests: the refusal of a second confirmation email once the applicant has answered,
+    // stated on both the availability and the send path, and the judicial timeline's reach over the
+    // confirmation note; it was 936 of 2,559 leaving 1,623 after the first pass, whose confirmation
+    // columns, recording refusals, days-waiting arithmetic and whole security and scoping statement are
+    // container-free by design, with their container-backed assertions nested in
     // CaseworkerReferralControllerTest and CaseworkerEmailControllerTest, which already carry the tag;
     // it was 935 of 2,554 after task 4, before the review added four container-free tests and the
     // pg_indexes assertion for V17's case-side index to EntityMappingTest);
@@ -113,7 +118,7 @@ test {
     // conditional claim is proved exclusive against a real Postgres; it was 831 of 2,218 across 28
     // classes after task 3, 821 of 2,098 across 27 after the judicial-surface plan, 773 of 1,975 across
     // 26 after the currentReferralState plan, 741 of 1,813 after the referrals plan, 701 of 1,688
-    // across 23 before it, and 609 of 1,488 across 22 on 2026-09-15. Excluding them keeps the other 1,627
+    // across 23 before it, and 609 of 1,488 across 22 on 2026-09-15. Excluding them keeps the other 1,630
     // running in CI -- the judicial role gate, the visibility rule, the notification outbox's whole
     // state machine and the email operations' own rules among them, each stated container-free for
     // that reason -- instead of losing the whole suite to a static initialiser.
