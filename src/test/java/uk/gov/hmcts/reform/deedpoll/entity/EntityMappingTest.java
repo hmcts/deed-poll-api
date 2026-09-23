@@ -7,12 +7,15 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
@@ -407,6 +410,19 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         // see the case behind it. Null is "nobody owns this", which is what every ownership check fails closed on.
         assertThat(reloaded.getClaimedById()).isNull();
         assertThat(reloaded.getDecidedById()).isNull();
+        // And V16's four confirmation columns, which is the shape of EVERY referral that predates that
+        // migration: none of them was ever asked to confirm anything, so a NOT NULL or a default on any of
+        // them would have had to invent both a request date and an applicant's answer for all of them.
+        // Asserted as a readability test as much as a mapping one -- a referral written before V16 must
+        // still load, and this is one.
+        assertThat(reloaded.getConfirmationRequestedAt())
+            .as("never asked, which is what makes recording an answer refusable rather than valid")
+            .isNull();
+        assertThat(reloaded.getConfirmationOutcome())
+            .as("null is outstanding, and the only thing null here means")
+            .isNull();
+        assertThat(reloaded.getConfirmationReceivedAt()).isNull();
+        assertThat(reloaded.getConfirmationRecordedBy()).isNull();
 
         // And V9's column defaults to null rather than to a state, which is what makes "no active referral"
         // expressible at all. Null here even though the referral above is Open, because persisting a
@@ -491,6 +507,105 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         DeedPoll reloadedCase = entityManager.find(DeedPoll.class, deedPoll.getId());
         assertThat(reloadedCase.getMasterDecision()).isEqualTo(MasterDecision.Rejected);
         assertThat(reloadedCase.isPublishToLondonGazette()).isFalse();
+    }
+
+    /**
+     * Parameterized rather than a {@code @TestFactory} like the enum-member factory above: a dynamic test's
+     * executable runs after the factory method has returned, which is outside the class's
+     * {@code @Transactional} boundary, so it would have no transaction to persist in.
+     */
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(ConfirmationOutcome.class)
+    @DisplayName("every ConfirmationOutcome round trips through V16's native enum column")
+    void everyConfirmationOutcomeRoundTrips(ConfirmationOutcome outcome) {
+        DeedPoll deedPoll = new DeedPoll();
+        deedPoll.setDateReceived(LocalDateTime.of(2026, 1, 7, 10, 0));
+        // The state a case that got ④ is actually in: Returned, which the cascade derives from this date.
+        // Set so that the assertion at the end of this test has something to be untouched.
+        deedPoll.setDateReturned(LocalDateTime.of(2026, 5, 3, 14, 0));
+        entityManager.persist(deedPoll);
+
+        Referral referral = new Referral();
+        referral.setDeedPoll(deedPoll);
+        referral.setState(ReferralState.Decided);
+        referral.setDecision(MasterDecision.Rejected);
+        referral.setPublishToGazette(true);
+        referral.setConfirmationRequestedAt(LocalDateTime.of(2026, 5, 3, 14, 5));
+        referral.setConfirmationOutcome(outcome);
+        referral.setConfirmationReceivedAt(LocalDateTime.of(2026, 6, 15, 9, 45));
+        referral.setConfirmationRecordedBy("A Caseworker");
+        entityManager.persist(referral);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        Referral reloaded = entityManager.find(Referral.class, referral.getId());
+        // The fifth native enum column in this schema. Without @JdbcTypeCode(NAMED_ENUM) Hibernate sends an
+        // integer ordinal and Postgres refuses it, so this assertion is what proves the annotation is there
+        // -- and it is made for BOTH members, because a mapping that stored the ordinal of the first member
+        // could otherwise pass by accident.
+        assertThat(reloaded.getConfirmationOutcome()).isEqualTo(outcome);
+        // All four column names are mixed case, which is validation's blind spot: Hibernate compares them
+        // case-insensitively, so only a statement that quotes the name and runs finds a mis-cased mapping.
+        assertThat(reloaded.getConfirmationRequestedAt())
+            .as("when the clock started, stamped with the outbox row rather than on delivery")
+            .isEqualTo(LocalDateTime.of(2026, 5, 3, 14, 5));
+        assertThat(reloaded.getConfirmationReceivedAt())
+            .as("when the caseworker recorded it, not when the applicant replied")
+            .isEqualTo(LocalDateTime.of(2026, 6, 15, 9, 45));
+        assertThat(reloaded.getConfirmationRecordedBy())
+            .as("attribution, with no matching subject column because nothing compares it")
+            .isEqualTo("A Caseworker");
+
+        // V16 adds columns and touches nothing on the case. Recording an outcome does not reach into the
+        // date cascade -- there is no ninth DeedPollState and no new branch in deriveState -- so a confirmed
+        // case is still Returned until a caseworker edits it, which is decision 6.
+        assertThat(entityManager.find(DeedPoll.class, deedPoll.getId()).getDateReturned())
+            .as("the date the cascade derives the state from, unmoved by the answer")
+            .isEqualTo(LocalDateTime.of(2026, 5, 3, 14, 0));
+    }
+
+    @Test
+    @DisplayName("the referral index covers exactly the referrals still waiting for an answer, and no others")
+    void awaitingConfirmationIndexIsPartial() {
+        // The whole of decision 7 is that "overdue" is a WHERE clause rather than a sweep, and this index is
+        // what makes that clause cheap. Asserted rather than assumed because ddl-auto: validate does not
+        // look at indexes at all, so a migration that created it on the wrong column -- or without the
+        // predicate, indexing the answered rows nobody queries -- would be silent in every other test.
+        String definition = indexDefinition("deedpoll_referral_awaiting_confirmation_idx");
+
+        assertThat(definition).contains("\"confirmationRequestedAt\"");
+        // BOTH halves of "outstanding", which is V18's correction of V16: a B-tree stores NULL keys, so the
+        // outcome predicate alone admitted every referral nobody ever asked -- which is almost the whole table,
+        // and none of them rows this index can return. A predicate that lost either half again would be silent
+        // everywhere else.
+        assertThat(definition)
+            .as("partial, so the index holds only the rows a caseworker can still act on")
+            .contains("WHERE ((\"confirmationOutcome\" IS NULL) AND (\"confirmationRequestedAt\" IS NOT NULL))");
+    }
+
+    @Test
+    @DisplayName("V17's case index covers exactly the cases still waiting, in the order the tab reads them")
+    void awaitingConfirmationCaseIndexIsPartial() {
+        // The case side of the same fact, asserted for the same reason as the referral side: this is the index
+        // the awaitingConfirmation tab's filter and its longest-wait-first ordering both rest on, and an index
+        // created on the wrong column or without the predicate degrades the tab to a scan and a sort with
+        // nothing failing.
+        String definition = indexDefinition("deedpoll_deedpoll_awaiting_confirmation_idx");
+
+        assertThat(definition).contains("\"awaitingConfirmationSince\"");
+        assertThat(definition)
+            .as("partial, so the index holds only the cases the waiting list shows")
+            .contains("WHERE (\"awaitingConfirmationSince\" IS NOT NULL)");
+    }
+
+    /** One index's definition as Postgres reports it -- the only way to see a predicate validate never reads. */
+    private String indexDefinition(String name) {
+        return entityManager
+            .createNativeQuery("SELECT indexdef FROM pg_indexes WHERE indexname = :name")
+            .setParameter("name", name)
+            .getSingleResult()
+            .toString();
     }
 
     @Test

@@ -11,6 +11,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -68,6 +69,26 @@ class CaseSummaryResponseTest {
 
         assertThat(CaseSummaryResponse.from(record).currentReferralState())
             .as("null is the answer for the great majority of cases, and is distinct from any live state")
+            .isNull();
+    }
+
+    @Test
+    @DisplayName("a waiting case says how many days, counted from the stamp rather than from the case's own dates")
+    void waitingCaseSaysHowManyDays() {
+        DeedPoll record = referredCase();
+        record.setAwaitingConfirmationSince(LocalDateTime.now(ZoneOffset.UTC).minusDays(43));
+
+        // The figure a caseworker reads off the row. Computed against the clock, so the assertion is relative to
+        // it -- ConfirmationWaitTest pins the arithmetic itself against a fixed pair of instants, including that
+        // the day of the ask reads as 0.
+        assertThat(CaseSummaryResponse.from(record).daysAwaitingConfirmation()).isEqualTo(43);
+    }
+
+    @Test
+    @DisplayName("a case waiting for nothing says null rather than 0, which would read as asked today")
+    void caseWaitingForNothingSaysNull() {
+        assertThat(CaseSummaryResponse.from(referredCase()).daysAwaitingConfirmation())
+            .as("0 is a real answer -- asked today -- so the absence has to be distinguishable from it")
             .isNull();
     }
 

@@ -19,10 +19,12 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.notify.ApplicationRejectedPersonalisation;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailSlot;
@@ -37,6 +39,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.StreamSupport;
 
@@ -70,7 +73,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     /**
      * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
      * added afterwards, the saved-query routes after those, the referral routes after those, the closure the
-     * referral state machine added and the three email routes the Notify send path added last. Listed rather than
+     * referral state machine added, the three email routes the Notify send path added, and the referral's
+     * confirmation sub-resource that records the applicant's answer to the email ④ sends. Listed rather than
      * counted, because a count agrees with a spec that documents the right number of the wrong things.
      */
     private static final List<String> CASEWORKER_PATHS = List.of(
@@ -91,6 +95,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/cases/{id}/referrals/{referralId}",
         "/caseworker/cases/{id}/referrals/{referralId}/withdrawal",
         "/caseworker/cases/{id}/referrals/{referralId}/closure",
+        "/caseworker/cases/{id}/referrals/{referralId}/confirmation",
         "/caseworker/cases/{id}/emails",
         "/caseworker/cases/{id}/emails/{template}",
         "/caseworker/cases/{id}/emails/{template}/preview"
@@ -142,7 +147,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * The five judicial operations, published and counted apart from the caseworker surface's thirty-three.
+     * The five judicial operations, published and counted apart from the caseworker surface's thirty-four.
      *
      * <p>Both halves for the reason the caseworker assertion gives: a count cannot tell a new verb on a known
      * path from a new path, and a path list cannot tell a route that was removed from one that never existed.
@@ -290,7 +295,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .doesNotContain("decidedById");
     }
 
-    @DisplayName("Documents the thirty-three caseworker operations and the token they need")
+    @DisplayName("Documents the thirty-four caseworker operations and the token they need")
     @Test
     void documentsTheCaseworkerOperations() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -300,14 +305,16 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Thirty-three operations across twenty paths: `/caseworker/cases`, the notes and witnesses collections,
+        // Thirty-four operations across twenty-one paths: `/caseworker/cases`, the notes and witnesses collections,
         // the saved-query collection and the referrals collection each carry a GET and a POST, the case carries a
         // GET and a PATCH, the note, the witness and the saved query each carry a GET, a PATCH and a DELETE, a
-        // saved query's selection carries a PUT and a DELETE, one referral carries a GET, and its withdrawal and
-        // its closure each carry a POST -- the note's delete since 2026-09-08, the witness's since the
-        // Administrator gate landed, the saved query's since the library did and the selection's with it, the
-        // four referral routes with the referrals feature and the closure with the referral state machine.
-        // The last three are the Email tab's: the case's emails collection carries a GET saying which emails
+        // saved query's selection carries a PUT and a DELETE, one referral carries a GET, and its withdrawal, its
+        // closure and its confirmation each carry a POST -- the note's delete since 2026-09-08, the witness's since
+        // the Administrator gate landed, the saved query's since the library did and the selection's with it, the
+        // four referral routes with the referrals feature, the closure with the referral state machine, and the
+        // confirmation with the tracking of the reply the ④ email asks for: recording an answer is its own
+        // operation rather than a case edit, and it is idempotent by refusal rather than by PATCH.
+        // Three of them are the Email tab's: the case's emails collection carries a GET saying which emails
         // apply, and one email type carries a POST to send it and a POST to preview it. Preview is a POST despite
         // being a read, because the caseworker's slot text is the input and a URL would log a judge's reason.
         // The judge's own operations -- the pool, their own outstanding work, one referral, claiming it and
@@ -319,7 +326,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(33);
+        assertThat(operations).isEqualTo(34);
 
         JsonNode emailResponse = spec.at("/components/schemas/CaseEmailsResponse/properties");
         assertThat(emailResponse.fieldNames()).toIterable()
@@ -388,10 +395,12 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             assertThat(typesOf(token.at("/schema"))).contains("string");
         }
 
-        // And the surface is unmoved: both emails travel through the operations that were already there, so the
-        // caseworker count is still the one the README and this class's other assertion state.
+        // And the email surface is unmoved: both emails travel through the operations that were already there, so
+        // neither of them added one. The count is the whole caseworker surface, which the confirmation
+        // sub-resource did move -- that route is not an email route, and the assertions below are what say the two
+        // email paths still carry one operation each.
         JsonNode paths = spec.get("paths");
-        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(33);
+        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(34);
         assertThat(paths.get("/caseworker/cases/{id}/emails/{template}").fieldNames()).toIterable()
             .containsExactly("post");
         assertThat(paths.get("/caseworker/cases/{id}/emails").fieldNames()).toIterable().containsExactly("get");
@@ -710,6 +719,132 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         CaseSearch.NAME_FIELDS
             .forEach(field -> assertThat(search).as("the document lists %s as searched", field).contains(field));
         assertThat(search).contains("not fuzzy");
+
+        // And the tab keys, which springdoc reflects as a bare optional string: the keys are a list in the domain
+        // rather than an enum, so a consumer had no way to learn them from this document at all. deed-poll-admin
+        // renders the tab bar from here, which is what makes the waiting list's own key discoverable rather than
+        // something to be read out of this repository. Keys and labels both, from ListFilters rather than
+        // restated, so a sixth tab is published without this assertion or the customiser being edited.
+        String filter = byName.get("filter").at("/description").asText();
+        ListFilters.filterTabs().forEach(tab -> assertThat(filter)
+            .as("the document lists the %s tab", tab.key())
+            .contains(tab.key())
+            .contains(tab.label()));
+        assertThat(filter)
+            .as("and says an unrecognised key falls back rather than being refused")
+            .contains(ListFilters.LIST_FILTERS.get(0).key());
+    }
+
+    /**
+     * The confirmation sub-resource's whole contract: its body, its answer, and the two fields the wait adds to
+     * the case list and the case read.
+     *
+     * <p><strong>Published because a screen is built against it.</strong> Recording the applicant's answer to the
+     * ④ email and showing which cases are still waiting is a {@code deed-poll-admin} screen, and that repository
+     * generates its client from this document -- so an unpublished field is a screen that cannot be written, and a
+     * field published under the wrong name is one written against a call that 400s.
+     *
+     * <p><strong>The negative halves are the security ones.</strong> {@code confirmationRecordedBy} and
+     * {@code confirmationReceivedAt} come from the token and the clock, so the <em>request</em> body must not
+     * offer them -- a document that did would have clients sending an author the service strips, which is an
+     * attribution a caller believes it set. And the wait is a caseworker field: no judicial schema may carry it,
+     * asserted over the whole document as text rather than schema by schema, so a type this test does not know
+     * about cannot publish one either.
+     */
+    @DisplayName("Documents the confirmation body, its answer, and the wait on the list and the case")
+    @Test
+    void documentsTheConfirmationContract() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                          .andExpect(status().isOk())
+                                          .andReturn()
+                                          .getResponse()
+                                          .getContentAsByteArray());
+
+        // The route answers with the referral, which is what lets a client re-render the tab from the response
+        // rather than reading the referral again.
+        assertThat(spec.at("/paths/~1caseworker~1cases~1{id}~1referrals~1{referralId}~1confirmation"
+                               + "/post/responses/200/content/*~1*/schema/$ref").asText())
+            .isEqualTo("#/components/schemas/ReferralResponse");
+
+        // The body: the outcome vocabulary from the enum that validates it and the column it is stored in, so the
+        // document cannot offer a label Postgres lacks; the note's cap from the schema that enforces it.
+        String confirmation = "/components/schemas/RecordConfirmationRequest/properties/";
+        List<String> publishedOutcomes = StreamSupport
+            .stream(spec.at(confirmation + "outcome/enum").spliterator(), false)
+            .map(JsonNode::asText)
+            .toList();
+        assertThat(publishedOutcomes)
+            .containsExactlyElementsOf(Arrays.stream(ConfirmationOutcome.values()).map(Enum::name).toList());
+        assertThat(spec.at(confirmation + "note/maxLength").asInt())
+            .isEqualTo(ReferralSchemas.MAX_CONFIRMATION_NOTE_LENGTH);
+
+        // The outcome is required and the note is not: the answer is the fact, and a required field whose usual
+        // value is empty is one every caller fills in without reading.
+        assertThat(StreamSupport
+                       .stream(spec.at("/components/schemas/RecordConfirmationRequest/required").spliterator(),
+                               false)
+                       .map(JsonNode::asText)
+                       .toList())
+            .containsExactly("outcome");
+
+        // Two fields the body does not offer, and one it never could. The author and the received date are the
+        // token's and the clock's, and the document says they are ignored rather than refused -- which is what
+        // `additionalProperties: true` next to it means, and why publishing `false` here would describe an API
+        // that 400s the body a tidy-minded client sends.
+        assertThat(spec.at(confirmation + "confirmationRecordedBy").isMissingNode())
+            .as("the body cannot name an author")
+            .isTrue();
+        assertThat(spec.at(confirmation + "confirmationReceivedAt").isMissingNode())
+            .as("the body cannot backdate a reply")
+            .isTrue();
+        assertThat(spec.at("/components/schemas/RecordConfirmationRequest/additionalProperties").asBoolean(false))
+            .as("an unknown key is stripped, as it is on every other keyed body")
+            .isTrue();
+        String bodyDescription = spec.at("/components/schemas/RecordConfirmationRequest/description").asText();
+        assertThat(bodyDescription).contains("confirmationRecordedBy").contains("token").contains("409");
+
+        // The answer: all four columns, because they are what the referrals tab renders -- the date it was asked,
+        // what came back, when it was recorded and by whom.
+        JsonNode referral = spec.at("/components/schemas/ReferralResponse/properties");
+        assertThat(referral.fieldNames()).toIterable()
+            .contains("confirmationRequestedAt", "confirmationOutcome", "confirmationReceivedAt",
+                      "confirmationRecordedBy");
+
+        // The row says how long and the case says since when, which is the split the two DTOs keep: a day count
+        // on the case read would be a number that was true when it was serialised.
+        assertThat(spec.at("/components/schemas/CaseSummaryResponse/properties/daysAwaitingConfirmation")
+                       .isObject())
+            .as("the list row carries the days waited")
+            .isTrue();
+        assertThat(spec.at("/components/schemas/CaseSummaryResponse/properties/awaitingConfirmationSince")
+                       .isMissingNode())
+            .as("and not the date, which is the case read's")
+            .isTrue();
+        // A day count on the row, a date on the case, and both typed: a client that read "43" as a date, or the
+        // date as a count, would render a waiting list nobody could act on.
+        assertThat(typesOf(spec.at("/components/schemas/CaseSummaryResponse/properties/daysAwaitingConfirmation")))
+            .contains("integer");
+        for (String caseSchema : List.of("CaseDetailResponse", "SavedCaseResponse")) {
+            JsonNode since = spec.at("/components/schemas/" + caseSchema + "/properties/awaitingConfirmationSince");
+            assertThat(since.isObject())
+                .as("%s publishes the wait beside the state", caseSchema)
+                .isTrue();
+            assertThat(since.at("/format").asText())
+                .as("%s publishes it as a date-time, as it does every other case date", caseSchema)
+                .isEqualTo("date-time");
+        }
+
+        // And no judicial schema publishes any of it, asserted over the whole document: a judge decided the
+        // non-publication request and has no part in what the applicant then chose.
+        for (String judicial : List.of("JudicialReferralSummary", "JudicialReferralDetail", "JudicialCaseView")) {
+            JsonNode properties = spec.at("/components/schemas/" + judicial + "/properties");
+            assertThat(properties.isObject()).as("%s is published at all", judicial).isTrue();
+            List<String> names = new ArrayList<>();
+            properties.fieldNames().forEachRemaining(names::add);
+            assertThat(names)
+                .as("%s publishes nothing about the applicant's confirmation", judicial)
+                .noneMatch(name -> name.toLowerCase(Locale.ROOT).contains("confirmation"));
+        }
     }
 
     /**

@@ -14,7 +14,12 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Ports every test block in {@code reference/ts/deed-poll/list-filters.test.ts}.
+ * Ports every test block in {@code reference/ts/deed-poll/list-filters.test.ts}, and covers the one tab that is
+ * not in the reference.
+ *
+ * <p>{@code awaitingConfirmation} is this service's own: the reference has no confirmation exchange to wait for.
+ * It is appended to the ported five rather than inserted among them, which is what the key-order assertion below
+ * says -- the list is the render order, so the tab bar a caseworker knows keeps its shape.
  */
 class ListFiltersTest {
 
@@ -45,10 +50,55 @@ class ListFiltersTest {
     }
 
     @Test
-    @DisplayName("covers every terminal state with its own filter")
+    @DisplayName("covers every terminal state with its own filter, and keeps the ported five in front")
     void coversEveryTerminalStateWithItsOwnFilter() {
+        // The reference's five, in the reference's order, then this service's own. Appended rather than inserted
+        // because the order is the render order: a tab bar a caseworker knows keeps the shape it had, and a
+        // bookmarked ?filter= keeps meaning what it meant.
         assertThat(ListFilters.LIST_FILTERS).extracting(ListFilters.ListFilter::key)
-            .containsExactly("all", "open", "received", "enroled", "returned");
+            .containsExactly("all", "open", "received", "enroled", "returned", "awaitingConfirmation");
+    }
+
+    @Nested
+    @DisplayName("the awaiting-confirmation tab")
+    class AwaitingConfirmationTab {
+
+        @Test
+        @DisplayName("is a criterion about the wait and not about the case's state")
+        void isACriterionAboutTheWait() {
+            // Deliberately not a state: a case waiting for a reply is in whatever state its dates make it,
+            // ordinarily Returned, and there is no ninth DeedPollState for the wait. Asserted as the shape rather
+            // than described, so a "simplification" into an In or a NotIn fails here.
+            assertThat(awaiting().where()).contains(new ListFilters.AwaitingConfirmation());
+        }
+
+        @Test
+        @DisplayName("asks for the longest wait first, which no other tab does")
+        void asksForTheLongestWaitFirst() {
+            assertThat(awaiting().defaultSort()).contains(ListFilters.LONGEST_WAIT_FIRST);
+            assertThat(ListFilters.LONGEST_WAIT_FIRST.field()).isEqualTo("awaitingConfirmationSince");
+            // Ascending on the stamp is descending in days waited: the case at the top is the one at risk of
+            // being forgotten, which is the whole reason this tab exists.
+            assertThat(ListFilters.LONGEST_WAIT_FIRST.direction()).isEqualTo(CaseSort.Direction.ASCENDING);
+
+            assertThat(ListFilters.LIST_FILTERS)
+                .filteredOn(filter -> !"awaitingConfirmation".equals(filter.key()))
+                .allSatisfy(filter -> assertThat(filter.defaultSort())
+                    .as("%s leaves the newest-first default alone", filter.key())
+                    .isEmpty());
+        }
+
+        @Test
+        @DisplayName("is resolvable by key like any other tab, so a URL can ask for it")
+        void isResolvableByKey() {
+            assertThat(ListFilters.filterFor("awaitingConfirmation").key()).isEqualTo("awaitingConfirmation");
+            assertThat(ListFilters.filterTabs()).extracting(ListFilters.FilterTab::key)
+                .contains("awaitingConfirmation");
+        }
+
+        private ListFilters.ListFilter awaiting() {
+            return ListFilters.filterFor("awaitingConfirmation");
+        }
     }
 
     @Nested

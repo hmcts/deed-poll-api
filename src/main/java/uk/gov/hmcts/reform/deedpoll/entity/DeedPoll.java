@@ -358,6 +358,19 @@ public class DeedPoll {
     @Column(name = "currentReferralState")
     private ReferralState currentReferralState;
 
+    // --- Awaiting the applicant's confirmation, denormalised ---
+    // The other read-model of "deedpoll_referral", and maintained the same way: the earliest
+    // "confirmationRequestedAt" among this case's referrals whose "confirmationOutcome" is still null, or
+    // null when nothing on the case is waiting for a reply. Recomputed from the referral table by the send
+    // that asks for the confirmation and by the recording that answers it -- see ConfirmationWait, which
+    // holds the rule, and V17__case_awaiting_confirmation.sql for why the answer is copied here rather
+    // than joined for.
+    //
+    // NOT a case state and never derived into one: the state cascade reads the date columns above and only
+    // those. The list surfaces this beside the state, never inside it.
+    @Column(name = "awaitingConfirmationSince")
+    private LocalDateTime awaitingConfirmationSince;
+
     // --- Return / refund ---
     @Column(name = "returnReason")
     private String returnReason;

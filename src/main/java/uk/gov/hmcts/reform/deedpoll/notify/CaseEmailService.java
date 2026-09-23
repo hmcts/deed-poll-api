@@ -12,6 +12,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
@@ -25,6 +26,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.service.notify.NotificationClient;
 import uk.gov.service.notify.NotificationClientException;
 
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -70,7 +72,9 @@ import java.util.stream.Collectors;
  * case has no address cannot fix that by editing what they typed, so making them correct a payload first would
  * be two refusals where one was useful.
  *
- * <p><strong>Nothing here sends.</strong> A send resolves, enqueues in the caller's transaction, and returns;
+ * <p><strong>Nothing here sends.</strong> A send resolves, enqueues in the caller's transaction -- stamping the
+ * referral's {@code confirmationRequestedAt} in that same transaction where the email is the one that asks the
+ * applicant to reply, which is the only thing a send writes outside the outbox -- and returns;
  * the drain is what talks to Notify, and it is called after this transaction commits -- see
  * {@link NotificationOutbox}, and {@code CaseworkerEmailController} for why the order is not an accident.
  */
@@ -91,7 +95,7 @@ public class CaseEmailService {
     /**
      * Why <em>Request confirmation to proceed</em> does not apply to a case that has had nothing refused.
      *
-     * <p>The first of that email's two conditions, and its own sentence rather than half of a combined one:
+     * <p>The first of that email's three conditions, and its own sentence rather than half of a combined one:
      * a caseworker can act on the difference between "nobody has decided this yet" and "what was decided was
      * not about publication", and the second would send them looking for a decision that exists.
      */
@@ -110,12 +114,37 @@ public class CaseEmailService {
     static final String REFUSAL_NOT_ABOUT_NON_PUBLICATION = "This case's most recent refusal was not raised for "
         + "a non-publication request, so there is no refused request to ask the applicant about";
 
+    /**
+     * Why <em>Request confirmation to proceed</em> does not apply to a case whose applicant has already answered.
+     *
+     * <p>The third condition, and the one that is about the exchange rather than about the refusal: once an
+     * outcome is recorded there is nothing left to ask, and asking anyway would put the case in a state nothing
+     * could correct. {@link #awaitingAnAnswer} has that argument.
+     *
+     * <p>It says the answer is recorded without saying what it was. A caseworker who needs that reads the
+     * referrals tab or the case's timeline, both of which name it; repeating it in an availability response would
+     * publish the applicant's decision on a screen that is asking a different question.
+     */
+    static final String CONFIRMATION_ALREADY_ANSWERED = "The applicant has already answered the confirmation for "
+        + "this case's most recent refusal, so there is nothing left to ask them: see the referral for what they "
+        + "said";
+
     private final DeedPollRepository deedPolls;
     private final ReferralRepository referrals;
     private final NotificationRepository notifications;
     private final DeedPollSupportingDocumentRepository documents;
     private final NotificationClient notify;
     private final NotifyProperties properties;
+
+    /**
+     * Only to bring the case's {@code awaitingConfirmationSince} into step when ④ starts the clock -- see
+     * {@link #startConfirmationClock}.
+     *
+     * <p>The service and not the two repositories it would take, so there is one implementation of the
+     * recompute rather than a copy of it here: {@code ReferralService.refreshAwaitingConfirmation} says why it
+     * is public. No cycle -- nothing in the referral service knows this package exists.
+     */
+    private final ReferralService referralService;
 
     /**
      * Only to write the {@code personalisation} column, which {@link NotificationRepository#enqueue} takes as
@@ -129,6 +158,7 @@ public class CaseEmailService {
                            DeedPollSupportingDocumentRepository documents,
                            NotificationClient notify,
                            NotifyProperties properties,
+                           ReferralService referralService,
                            ObjectMapper json) {
 
         this.deedPolls = deedPolls;
@@ -137,6 +167,7 @@ public class CaseEmailService {
         this.documents = documents;
         this.notify = notify;
         this.properties = properties;
+        this.referralService = referralService;
         this.json = json;
     }
 
@@ -287,11 +318,15 @@ public class CaseEmailService {
      * there is no version to record and inventing one would claim knowledge of the wording. The sender records
      * the version Notify reports when it accepts the send.
      *
+     * <p><strong>Sending ④ also starts the clock on the reply it asks for</strong>, in this transaction and with
+     * the row's own instant -- see {@link #startConfirmationClock}. That is the one thing a send does to anything
+     * other than the outbox, and it is why the two commit or roll back together.
+     *
      * @param caller the caseworker sending it, who becomes {@code createdBy} -- not audit noise here, because
      *     they authored part of what the applicant reads
      * @throws NotFoundError if there is no such case
-     * @throws ConflictError if the case is in no state to send this email, or the email that contradicts this one
-     *     has already been asked for on the same referral
+     * @throws ConflictError if the case is in no state to send this email, the email that contradicts this one
+     *     has already been asked for on the same referral, or the applicant answered ④ while it was being sent
      * @throws IncompleteDataError if the case has no applicant email address
      * @throws uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError if the slots are not acceptable
      */
@@ -305,6 +340,9 @@ public class CaseEmailService {
         String recipient = requireRecipient(composed.deedPoll());
         UUID referralId = composed.referral().getId();
         UUID id = UUID.randomUUID();
+        // One instant for the row and for the clock the next paragraph starts, read once: two calls could
+        // straddle a tick and make the outbox row and the referral disagree about when the applicant was asked.
+        LocalDateTime now = AuditClock.now();
 
         int enqueued = notifications.enqueue(
             id,
@@ -314,10 +352,11 @@ public class CaseEmailService {
             template.exclusionGroup().name(),
             recipient,
             asJson(composed.personalisation()),
-            AuditClock.now(),
+            now,
             caller.name());
 
         if (enqueued == 1) {
+            startConfirmationClock(template, deedPollId, referralId, now, caller);
             return SendReceipt.enqueued(id, recipient);
         }
 
@@ -351,6 +390,101 @@ public class CaseEmailService {
     }
 
     /**
+     * Starts the clock on the confirmation this send asks for, where the send is the email that asks for one.
+     *
+     * <p><strong>Here rather than on delivery, and in the caller's transaction rather than the drain's.</strong>
+     * The outbox's whole design is that the row is written inside the caseworker's transaction, and hanging a
+     * case's process state off an asynchronous outcome that may still be retrying would make "is this case waiting
+     * for a reply?" unanswerable for as long as the retries last. So the stamp commits with the row: either the
+     * applicant is owed the email and the case is recorded as waiting, or neither happened.
+     *
+     * <p><strong>The consequence is real and named rather than hidden:</strong> if the send then fails terminally,
+     * the case sits in the waiting list expecting a reply to an email nobody received. That is notify-1's flag 8
+     * and is not fixed here; the two should be closed together.
+     *
+     * <p>Only on a fresh enqueue. A second send of the same email writes no row -- the unique index refuses it --
+     * and must not move a clock that is already running, or a caseworker double-clicking would reset the wait they
+     * are being reminded of. A replacement after a terminal failure <em>does</em> re-stamp, which is correct: the
+     * applicant has been asked again, so the wait starts from the asking.
+     *
+     * <p><strong>The re-stamp is conditional on there being no answer yet, and the condition is in the statement
+     * rather than here.</strong> {@link #awaitingAnAnswer} already takes ④ off both the availability list and the
+     * send path once the applicant has answered, but that check and this write are two steps of one transaction:
+     * on a replacement send after a terminal failure -- the only path that reaches a second enqueue -- an answer
+     * recorded in between would be overwritten back to NULL, erasing the applicant's reply and restarting a wait
+     * they have already ended. {@link ReferralRepository#startConfirmationClockByIdAndDeedPollId} refuses that by
+     * its own {@code WHERE} clause and answers 0.
+     *
+     * <p><strong>Answering 0 refuses the send, and in the same words the check that let it through would have
+     * used.</strong> Not a stamp quietly skipped: the applicant has answered, so {@link #awaitingAnAnswer}'s rule
+     * is that they must not be asked again, and the only difference between this caller and one who clicked a
+     * second later is which side of the answer they landed on -- so they get the same
+     * {@link #CONFIRMATION_ALREADY_ANSWERED} 409. Raising it rolls the outbox row back with everything else, which
+     * is the point: nothing has been sent yet, the drain reads committed rows only, and letting the row stand would
+     * have an applicant who has already replied receive a fresh request to reply. Zero rows cannot mean anything
+     * else here -- the case is in the statement's {@code WHERE} and is the case the outbox row was just written
+     * for, and that row's own foreign key holds the referral in place -- so there is no second reading of it to
+     * distinguish.
+     *
+     * <p><strong>A statement over the three columns, never {@code save} on the referral this send composed
+     * from.</strong> {@code notifications.enqueue} clears the persistence context, so that referral is detached by
+     * the time the clock starts and a {@code save} on it would be a {@code merge} -- Hibernate re-reading the row
+     * and writing every column back from the pre-enqueue snapshot, discarding whatever another transaction
+     * committed on that referral in the meantime. The statement takes the referral's id rather than the entity so
+     * that the detached copy is not reachable from here at all.
+     *
+     * <p><strong>Two rows, one transaction:</strong> the referral's stamp, and the case's
+     * {@code awaitingConfirmationSince} -- the read-model the caseworker waiting list filters, sorts and counts
+     * days from. The second is recomputed from the referral table rather than set to {@code now}, because the
+     * case's column is the earliest outstanding request on it; {@code ReferralService.refreshAwaitingConfirmation}
+     * is the one implementation of that rule.
+     *
+     * <p><strong>The decision is a switch <em>expression</em> and not a switch statement over the same enum</strong>,
+     * because only the expression is checked for exhaustiveness: a switch <em>statement</em> whose selector is an
+     * enum and whose labels are all enum constants is not an "enhanced" switch (JLS 14.11.2), so javac lets it fall
+     * through every arm in silence. A third template that asks the applicant for a reply would then start no clock
+     * and never reach the waiting list -- the one failure this whole feature exists to prevent -- with nothing
+     * failing the build. As an expression it does not compile until the new member says which it is.
+     */
+    private void startConfirmationClock(EmailTemplate template,
+                                        String deedPollId,
+                                        UUID referralId,
+                                        LocalDateTime now,
+                                        CurrentUser caller) {
+        if (!startsConfirmationClock(template)) {
+            return;
+        }
+        // Three columns, conditionally: the stamp, and the caseworker into both audit columns because the row did
+        // change and moving modifiedOn while modifiedBy still named the judge who directed it would attribute this
+        // to them. Scoped to the case the outbox row was written for, as every referral write here is.
+        if (referrals.startConfirmationClockByIdAndDeedPollId(referralId, deedPollId, now, caller.name()) == 0) {
+            // The answer arrived between this send being allowed and this statement running, so the applicant is
+            // being asked something they have already answered. Refused rather than stamped-or-not: throwing takes
+            // the outbox row with it, and nothing has left for Notify because the drain reads committed rows only.
+            log.info("Referral {} of case {} was answered while {} was being sent, so the send was refused",
+                     referralId, deedPollId, template.key());
+            throw new ConflictError(CONFIRMATION_ALREADY_ANSWERED);
+        }
+        // And the case's read-model of the same fact, in this transaction, so the case reaches the
+        // waiting list with the email it is waiting on. A recompute from the referral table rather than
+        // a copy of `now`: the case's column is the EARLIEST outstanding request on it, which this
+        // method cannot know and ConfirmationWait can.
+        // The case id the outbox row was written with, not one navigated off the referral: the two are
+        // the same case, and asking the row's own id keeps the read-model and the row talking about it.
+        referralService.refreshAwaitingConfirmation(deedPollId);
+    }
+
+    /** Whether this email asks the applicant for a reply the case then waits on. */
+    private static boolean startsConfirmationClock(EmailTemplate template) {
+        return switch (template) {
+            case REQUEST_CONFIRMATION_TO_PROCEED -> true;
+            // Tells the applicant a decision and starts a refund. It asks them for nothing, so there is nothing
+            // to wait for and no clock to start.
+            case APPLICATION_REJECTED -> false;
+        };
+    }
+
+    /**
      * One template's answer for one case.
      *
      * <p>{@code provisioned} is asked of configuration rather than of the case, so it is the same answer for
@@ -364,6 +498,11 @@ public class CaseEmailService {
      * already had the email this one contradicts -- and the unique index is what actually refuses the second
      * case. Reporting it here is so the Email tab can grey the option out rather than let a caseworker compose
      * an email that will be refused on submit, which is a bad way to find out.
+     *
+     * <p>The first reason is the enforcement as well as the report, and one of its conditions is only enforceable
+     * here: an applicant who has already answered ④ has no database key standing between them and a second copy
+     * of it, because the index is keyed on the outbox row and the row that asked has long since been drained.
+     * {@link #awaitingAnAnswer} is what refuses that, on this path and on the send's through {@link #cause}.
      */
     private EmailAvailability availability(EmailTemplate template, String deedPollId) {
         boolean provisioned = properties.isProvisioned(template);
@@ -438,13 +577,15 @@ public class CaseEmailService {
      * also guarantees that when both templates apply they name the same {@code referralId}, which is what lets
      * one database key make them mutually exclusive.
      *
-     * <p>The newest refusal is a parameter rather than read here, so one caller reads it once and then asks both
-     * what it entitles the case to and, if it does not, which of the two sentences to say.
+     * <p>The newest refusal is a parameter rather than read here, so one caller reads it once and then asks
+     * which of its sentences to say when it entitles the case to nothing.
      */
     private static Optional<Referral> cause(EmailTemplate template, Optional<Referral> newestRefusal) {
         return switch (template) {
             case APPLICATION_REJECTED -> newestRefusal;
-            case REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal.filter(CaseEmailService::aboutNonPublication);
+            case REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal
+                .filter(CaseEmailService::aboutNonPublication)
+                .filter(CaseEmailService::awaitingAnAnswer);
         };
     }
 
@@ -474,19 +615,77 @@ public class CaseEmailService {
     }
 
     /**
+     * Whether this referral is still one the applicant could be asked to confirm, which it is not once their
+     * answer is recorded.
+     *
+     * <p><strong>Asking again and having an answer have to be mutually exclusive, and this is where they are
+     * made so.</strong> {@code ReferralService.recordConfirmation} refuses a second answer and there is no route
+     * that clears the first, so a second ④ could never lead to a recordable reply. Worse, it would ask an applicant
+     * who has already replied to reply again, which is the office looking as though it had not read what they sent.
+     *
+     * <p><strong>This check and the clock's statement enforce the same rule at two moments, because one moment is
+     * not enough.</strong> Here it is decided on a read; in {@link #startConfirmationClock} it is re-decided by the
+     * {@code WHERE} clause of the statement that stamps the referral, which is what catches an answer recorded in
+     * between -- the send is then refused there too, in the words this file's {@link #CONFIRMATION_ALREADY_ANSWERED}
+     * gives, and the outbox row rolls back with it. So a caseworker gets the same 409 whichever side of the
+     * applicant's answer their click landed on.
+     *
+     * <p><strong>Reachable rather than theoretical, which is why it is refused here rather than noted.</strong>
+     * The V15 index stops a second ④ only while the first row still occupies the exclusion group; a row that
+     * failed {@code PERMANENT}ly does not -- notify-1 deliberately permits a replacement -- and that is the state
+     * of every ④ in an environment where the template is not yet provisioned. So the sequence is: ④ sent, case
+     * waits, send fails terminally, the caseworker chases the applicant by phone and records the answer, and ④ is
+     * then offered again.
+     *
+     * <p>Refusing the send rather than clearing the answer, because the answer is the office's record of what the
+     * applicant said: a re-ask that silently discarded it would lose a decision about a refund. A case that
+     * genuinely has to ask again needs a referral it can ask on, which is what raising one does.
+     *
+     * <p><strong>The constraint is deliberately one-directional: a recorded answer does not withhold ③.</strong>
+     * Both templates share the {@code REFERRAL_OUTCOME} exclusion group, so the same {@code PERMANENT}-failure gap
+     * that reaches this check also leaves ③ available once an answer is recorded -- including a {@code Confirmed}
+     * one. That is not an oversight. A rejection invites no reply, so an
+     * answer the applicant has already given says nothing about whether they may still be told a decision; and the
+     * refusal ④ speaks for may have covered other {@link ReferralReason}s than publication, which one decision and
+     * one direction cannot be decomposed into -- so an applicant who confirmed they want to proceed may still have
+     * to be told enrolment was refused on a ground confirming had no bearing on. Which of the two emails fits is
+     * the caseworker's judgement on every non-publication refusal, answered and unanswered alike; see
+     * {@link #aboutNonPublication}. {@code CaseEmailServiceTest.answeredConfirmationIsNotOfferedAgain} pins it, so
+     * withholding ③ on an answer would be a decision about the process rather than a tightening of this rule.
+     */
+    private static boolean awaitingAnAnswer(Referral referral) {
+        return referral.getConfirmationOutcome() == null;
+    }
+
+    /**
      * The sentence that says why a template does not apply, which is per template for the reason its text is.
      *
-     * <p>④ has two sentences because it has two conditions, and a caseworker can act on the difference: a case
-     * with no refusal at all is waiting on a judge, while a case whose newest refusal was about something else
-     * is one where this email is simply the wrong email. Told which, they do two different things.
+     * <p>④ has three sentences because it has three conditions, and a caseworker can act on the difference: a
+     * case with no refusal at all is waiting on a judge, a case whose newest refusal was about something else is
+     * one where this email is simply the wrong email, and a case whose applicant has already answered needs
+     * nothing sent at all. Told which, they do three different things.
+     *
+     * <p>The order repeats {@link #cause}'s filters, so the sentence names the first condition that failed rather
+     * than the last one tested.
      */
     private static String reasonNotApplicable(EmailTemplate template, Optional<Referral> newestRefusal) {
         return switch (template) {
             case APPLICATION_REJECTED -> NO_REFUSAL;
-            case REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal.isPresent()
-                ? REFUSAL_NOT_ABOUT_NON_PUBLICATION
-                : NO_REFUSAL_TO_CONFIRM;
+            case REQUEST_CONFIRMATION_TO_PROCEED -> reasonNoConfirmationToAskFor(newestRefusal);
         };
+    }
+
+    /**
+     * Which of ④'s three conditions failed, in the order {@link #cause} tests them.
+     */
+    private static String reasonNoConfirmationToAskFor(Optional<Referral> newestRefusal) {
+        if (newestRefusal.isEmpty()) {
+            return NO_REFUSAL_TO_CONFIRM;
+        }
+        if (!aboutNonPublication(newestRefusal.get())) {
+            return REFUSAL_NOT_ABOUT_NON_PUBLICATION;
+        }
+        return CONFIRMATION_ALREADY_ANSWERED;
     }
 
     /**

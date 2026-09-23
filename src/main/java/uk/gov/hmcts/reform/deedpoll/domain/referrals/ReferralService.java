@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.domain.referrals;
 
+import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
@@ -20,9 +21,11 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.StaleClaim;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -30,8 +33,9 @@ import java.util.stream.Collectors;
 
 /**
  * Referrals of a case to the judiciary: raising one, reading them, pulling one back, closing a returned one,
- * and the judicial transitions -- claiming one out of the shared pool, recording a direction on one, and the
- * inactivity sweep that gives a forgotten claim back to it.
+ * recording what the applicant answered when the office asked them whether to proceed, and the judicial
+ * transitions -- claiming one out of the shared pool, recording a direction on one, and the inactivity sweep that
+ * gives a forgotten claim back to it.
  *
  * <p><strong>Not a port.</strong> There is nothing for this in {@code src/test/resources/reference} -- the
  * source store held a referral inline on the case, one per case, latest-wins, and those columns are still on
@@ -42,6 +46,16 @@ import java.util.stream.Collectors;
  * same reason: {@link ReferralRepository} has no finder by referral id alone, so a cross-case read or write
  * is not expressible rather than merely refused. The parent's existence is checked on the reads too, so a
  * mistyped case id is a 404 rather than an empty list that says the case has no referrals.
+ *
+ * <p><strong>Every operation that writes a referral reads it under a row lock, and every operation that only
+ * displays one does not.</strong> Two things make that the rule rather than a precaution -- a {@code save} here
+ * writes the whole row, because this entity has no dirty-column tracking, and every guard below is a
+ * read-check-write -- and {@link #findReferralForUpdate} carries both arguments. The confirmation columns are what
+ * made it necessary: they are written by the two operations that are ungated on {@code state}, so they are the
+ * ones a transition that read a moment too early would silently write back to null. <strong>The lock is half of
+ * that rule and the row being re-read under it is the other half</strong>, because a JPA query hands back an
+ * instance already loaded in the transaction and throws the locked row away -- which
+ * {@link #findReferralForUpdate} is also where the answer to lives.
  *
  * <p><strong>The whole state machine lives here, and the judicial HTTP surface does not.</strong> Create enters
  * {@link ReferralState#Open}, {@link #claim} enters {@link ReferralState#Claimed}, {@link #decide} enters
@@ -111,15 +125,19 @@ import java.util.stream.Collectors;
  *       timer -- and it is deliberately out of scope.</li>
  * </ul>
  *
- * <p><strong>Every successful transition writes exactly one case note, and nothing else writes one.</strong>
- * Raise, withdraw, {@link #claim}, {@link #decide} and {@link #close} each call {@code notes.createNote} once,
+ * <p><strong>Every successful transition writes exactly one case note, and the only write here that is not a
+ * transition writes one too.</strong>
+ * Raise, withdraw, {@link #claim}, {@link #decide}, {@link #close} and {@link #recordConfirmation} each call
+ * {@code notes.createNote} once,
  * with prose from {@link ReferralNotes} and {@code caller.noteAuthor()} as the author -- the person who caused
  * the transition, which on a claim or a direction is the judge. {@link #reclaimStaleClaims()} is the one
  * exception to the authorship rule, not to the counting rule: it writes one note per released claim as
  * {@link NoteAuthor#NONE}, because no person did it. Each note is created after the referral is saved and
  * inside the same transaction, so there is no successful transition without its note and no note for one that
  * was refused or rolled back. {@link #touch} writes none -- a read is not a transition -- and neither does the
- * backfill migration, which does not revisit history. The first three referral plans deliberately noted only
+ * backfill migration, which does not revisit history. {@link #recordConfirmation} writes one although it moves no
+ * state, because the applicant's answer is an event on the case and the grid is the only place it would appear.
+ * The first three referral plans deliberately noted only
  * raise, withdraw and a lapse, on the grounds that a column already carried the rest;
  * {@code docs/plans/referrals-api-5-lifecycle-case-notes.md} supersedes that, because a row states where a
  * referral is <em>now</em> and the grid is the only place that says when each step happened.
@@ -129,7 +147,15 @@ import java.util.stream.Collectors;
  * another. The rule and the reason it is a recompute rather than a push are on {@link CurrentReferralState};
  * {@link #reclaimStaleClaims()} does it set-based because it is the one site that moves many referrals at once.
  * {@link #touch} does not do it, and that is not an omission: it moves {@code lastTouchedAt} and never
- * {@code state}, so there is nothing for the column to have changed to.
+ * {@code state}, so there is nothing for the column to have changed to. {@link #recordConfirmation} does not
+ * either, for the same reason -- and there is deliberately no ninth case state for "awaiting confirmation": a
+ * case's state is derived from its date columns by a verbatim port whose member order is the Dynamics option-set
+ * integers, so the wait is recorded on the referral and surfaced alongside the state rather than inside it.
+ *
+ * <p><strong>{@link #recordConfirmation} refreshes the other denormalised column instead</strong> --
+ * {@code awaitingConfirmationSince}, which is how a case leaves the waiting list -- through
+ * {@link #refreshAwaitingConfirmation}, on the same recompute-from-truth terms and in the same transaction. That
+ * one is public rather than private because the write that starts the wait is the email send, in another package.
  *
  * <p>The service returns entities, not view models, as {@code NoteService} does. Mapping to DTOs is the
  * controller's job.
@@ -148,19 +174,38 @@ public class ReferralService {
         .filter(state -> !state.isTerminal())
         .collect(Collectors.toUnmodifiableSet());
 
+    /**
+     * Dates in a refusal a caseworker reads, so the day rather than the instant -- the same format
+     * {@link ReferralNotes} writes into the timeline they are reading it beside.
+     *
+     * <p>{@link Locale#UK} rather than the default, for the reason {@code ResolvedValues} pins its own: {@code
+     * MMMM} names the month in {@code Locale.getDefault(FORMAT)}, so an image whose default locale is not
+     * English would put a French or German month into an English refusal sentence -- and into the case notes
+     * beside it -- with nothing failing to say so.
+     */
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK);
+
     private final DeedPollRepository deedPolls;
     private final ReferralRepository referrals;
     private final NoteService notes;
     private final ReferralProperties properties;
 
+    /**
+     * For one thing only: bringing a referral loaded earlier in the transaction up to the row the lock now
+     * protects -- see {@link #findReferralForUpdate}. Nothing here queries, writes or flushes through it.
+     */
+    private final EntityManager entityManager;
+
     public ReferralService(DeedPollRepository deedPolls,
                            ReferralRepository referrals,
                            NoteService notes,
-                           ReferralProperties properties) {
+                           ReferralProperties properties,
+                           EntityManager entityManager) {
         this.deedPolls = deedPolls;
         this.referrals = referrals;
         this.notes = notes;
         this.properties = properties;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -238,6 +283,72 @@ public class ReferralService {
     }
 
     /**
+     * The same lookup as {@link #findReferral}, with the row locked for the rest of the transaction.
+     *
+     * <p><strong>Every operation here that writes the referral reads it through this one; the reads read it
+     * through {@link #findReferral}.</strong> Two independent reasons converge on that rule, and either alone
+     * would be enough:
+     *
+     * <ul>
+     *   <li><strong>A save writes the whole row.</strong> Hibernate has no dirty-column tracking on
+     *       {@link Referral} -- the fact {@link DeedPollRepository#writeCurrentReferralState} is written around
+     *       -- so a transition that read the row unlocked and then saved it would write every column back as it
+     *       read them, discarding whatever another transaction committed on that row in between. The confirmation
+     *       columns are the ones most exposed to it, because they are written by the two operations that are
+     *       ungated on {@code state} and so can run beside any transition: a {@link #close} or a
+     *       {@link #withdrawReferral} that read before {@link #recordConfirmation} committed would put
+     *       {@code confirmationOutcome} back to null, leaving a case note announcing an answer the row no longer
+     *       holds and a recompute that has already taken the case off the waiting list; one that read before
+     *       {@code CaseEmailService.send} committed would undo the stamp, leaving the applicant an email the
+     *       referral denies was ever sent and the answer to it refused as never asked for.</li>
+     *   <li><strong>Every guard here is a read-check-write.</strong> {@link #recordConfirmation} promises to
+     *       refuse a second answer, {@link #close} to refuse anything but {@code Decided},
+     *       {@link #withdrawReferral} to refuse what cannot be withdrawn, {@link #claim} to refuse what is not
+     *       {@code Open} and {@link #requireHeldBy} to refuse a referral the caller does not hold. A decision
+     *       taken on an unlocked read is a decision about a row that may have moved before it is written.
+     *       Reading under the lock makes each guard and its write one indivisible step, and the second
+     *       transaction re-reads the committed row when the lock is released -- so its guard is built on the
+     *       first write rather than around it, which is
+     *       {@link DeedPollRepository#findByIdForUpdate}'s argument for the patch path applied here.</li>
+     * </ul>
+     *
+     * <p>{@link ReferralRepository#findByIdAndDeedPollIdForUpdate} carries the SQL-level reasoning: why the
+     * lookup must not join the case table, and why the shared read must not take this lock instead. It is read
+     * <strong>before</strong> anything writes the case, which keeps the one lock order every write path here
+     * uses -- referral first, case last -- that
+     * {@link DeedPollRepository#lockForConfirmationRecompute} explains.
+     *
+     * <p><strong>The lock is not enough on its own, which is what the {@code refresh} below is for.</strong> A JPA
+     * query returns the instance already in the persistence context when there is one, and <em>discards the row it
+     * just read</em> -- it upgrades the recorded lock mode and nothing else. So a caller that has already loaded
+     * this referral in this transaction gets its own earlier snapshot back, and the two halves above both fail on
+     * it: the guard decides on the pre-lock row, and the save writes every column back from it, which is exactly
+     * the overwrite the lock was taken to prevent. <strong>{@code JudicialReferralService} is that caller and the
+     * only one</strong> -- {@code visible()} loads the referral and its case to answer the visibility question a
+     * judicial URL needs before {@link #claim}, {@link #touch} or {@link #decide} is reached -- so without this the
+     * judicial surface is the one route on which the lock is decoration. {@code ConfirmationConcurrencyTest} holds
+     * that schedule: it fails on the stamp with the {@code refresh} removed, and on nothing else.
+     *
+     * <p>{@code refresh} rather than detaching the earlier copy, so the transition mutates the <em>same</em>
+     * instance the caller is holding and a judicial response cannot render a row that has moved underneath it. It
+     * costs one {@code SELECT} on the write paths and none on the reads, and it cannot fail on a deleted row: this
+     * transaction holds the lock by the time it runs, so nothing can remove the row the finder just returned.
+     *
+     * <p>Refuses in the same words for the same reasons -- an id nothing was stored under, an id that is not a
+     * UUID, and a referral of another case are one 404 -- so locking changes when the row is read and nothing
+     * about what the caller is told.
+     */
+    private Referral findReferralForUpdate(String deedPollId, String id) {
+        Referral locked = identifier(id)
+            .flatMap(referralId -> referrals.findByIdAndDeedPollIdForUpdate(referralId, deedPollId))
+            .orElseThrow(() -> new NotFoundError("Referral " + id + " not found"));
+        // Read the paragraph above before removing this: the row is locked from here, and this is what makes the
+        // loaded copy of it say what the locked row says.
+        entityManager.refresh(locked);
+        return locked;
+    }
+
+    /**
      * Withdraws a referral: the caseworker pulling it back before it is actioned.
      *
      * <p>Terminal, and deliberately not {@code Closed} -- closed means a direction was actioned, withdrawn
@@ -262,7 +373,7 @@ public class ReferralService {
      */
     @Transactional
     public Referral withdrawReferral(String deedPollId, String id, CurrentUser caller) {
-        Referral referral = findReferral(deedPollId, id);
+        Referral referral = findReferralForUpdate(deedPollId, id);
         if (!referral.getState().canBeWithdrawn()) {
             // Not idempotent-and-silent: a second withdrawal is a caseworker acting on a stale screen, and
             // answering 204 would tell them their click did something it did not.
@@ -328,7 +439,7 @@ public class ReferralService {
         // reading it first would load the row that is about to change underneath.
         reclaimStaleClaims();
 
-        Referral referral = findReferral(deedPollId, id);
+        Referral referral = findReferralForUpdate(deedPollId, id);
         if (referral.getState() != ReferralState.Open) {
             throw new ConflictError("Referral " + id + " is " + referral.getState()
                 + " and can only be claimed while it is " + ReferralState.Open);
@@ -379,7 +490,7 @@ public class ReferralService {
     @Transactional
     public Referral touch(String deedPollId, String id, CurrentUser caller) {
         caller.requireAnyRole(Role.JUDICIAL);
-        Referral referral = requireHeldBy(findReferral(deedPollId, id), id, caller);
+        Referral referral = requireHeldBy(findReferralForUpdate(deedPollId, id), id, caller);
 
         LocalDateTime now = AuditClock.now();
         referral.setLastTouchedAt(now);
@@ -435,7 +546,7 @@ public class ReferralService {
     @Transactional
     public Referral decide(String deedPollId, String id, DirectionInput direction, CurrentUser caller) {
         caller.requireAnyRole(Role.JUDICIAL);
-        Referral referral = requireHeldBy(findReferral(deedPollId, id), id, caller);
+        Referral referral = requireHeldBy(findReferralForUpdate(deedPollId, id), id, caller);
 
         LocalDateTime now = AuditClock.now();
         referral.setState(ReferralState.Decided);
@@ -505,7 +616,7 @@ public class ReferralService {
      */
     @Transactional
     public Referral close(String deedPollId, String id, CurrentUser caller) {
-        Referral referral = findReferral(deedPollId, id);
+        Referral referral = findReferralForUpdate(deedPollId, id);
         if (referral.getState() != ReferralState.Decided) {
             throw new ConflictError("Referral " + id + " is " + referral.getState()
                 + " and can only be closed once it is " + ReferralState.Decided);
@@ -527,6 +638,93 @@ public class ReferralService {
         // Setting the column to Closed here is the specific mistake CurrentReferralState is written against: it
         // would leave every actioned case in that queue for good.
         refreshCurrentReferralState(deedPollId);
+        return saved;
+    }
+
+    /**
+     * Records what the applicant answered when they were asked whether they still want the deed enrolled.
+     *
+     * <p>The other half of the exchange {@code REQUEST_CONFIRMATION_TO_PROCEED} starts: the send stamps
+     * {@code confirmationRequestedAt} in the transaction that owes the email, and this writes the answer, when it
+     * was recorded and who recorded it. <strong>Not a state transition</strong> -- the referral stays exactly where
+     * it was, which is why nothing here touches {@code state} and why this is the one write in this service that
+     * does not recompute the case's {@code currentReferralState}: there is nothing for that column to have changed
+     * to.
+     *
+     * <p>It does recompute the case's {@code awaitingConfirmationSince}, in this transaction, because that column
+     * is the answer to "is this case still waiting?" and this is the write that makes it no. A recording that
+     * committed without it would leave the case in the waiting list for good, which is the one failure the list
+     * exists to prevent.
+     *
+     * <p><strong>It does not move the case on either, and that is a decision rather than an omission.</strong>
+     * {@code Confirmed} records that the applicant wants to proceed; it does not set {@code dateEnroled}, clear
+     * {@code dateReturned} or otherwise reach into the date cascade, which is derived from those columns by a
+     * verbatim port. The caseworker then does whatever the process requires through the ordinary case edit, audited
+     * as their action rather than as a side effect of this one.
+     *
+     * <p><strong>Two refusals, each about a different mistake, and neither of them silent.</strong> An outcome
+     * already recorded is a {@link ConflictError} naming it and when, because the second caseworker needs to know
+     * the first already acted rather than quietly overwriting them -- there is no last-write-wins here and no
+     * idempotent second success. A referral that was never asked to confirm is also a {@link ConflictError}:
+     * recording an answer nobody asked for is a mis-click on the wrong case rather than a valid state, and
+     * {@code confirmationRequestedAt} being null is what says so. The already-recorded check comes first because it
+     * is the more specific fact; an outcome cannot exist without a request date through any path this service has.
+     *
+     * <p><strong>Both refusals are read under a row lock</strong> --
+     * {@link ReferralRepository#findByIdAndDeedPollIdForUpdate} -- because a refusal decided on an unlocked read is
+     * a read-check-write: two caseworkers recording at the same moment would both see no outcome, both pass, and
+     * the second write would overwrite the first answer while both case notes survived. "Idempotent by refusal"
+     * only means anything if the second caller is refused rather than served last. It is the same lock every write
+     * here takes and for the second of the two reasons {@link #findReferralForUpdate} gives as well: a transition
+     * that read this row before the answer committed would put the outcome back to null when it saved, because a
+     * save writes every column. The lock is on the referral row
+     * and on nothing else: the case's own lock is taken at the tail by {@link #refreshAwaitingConfirmation}, which
+     * says why it is weaker than this one and why its position in the transaction carries no weight.
+     *
+     * <p><strong>No role gate</strong>, exactly as raising, withdrawing and closing have none: in the process this
+     * replaces, whoever works the case reads the applicant's reply out of the shared inbox.
+     *
+     * <p>One case note, authored by the recording caseworker, written after the referral is saved and inside the
+     * same transaction -- so a refused recording leaves no note claiming an answer arrived, and the author is the
+     * person who read the reply rather than the service account. {@code confirmationRecordedBy} carries the same
+     * name on the row; there is no subject column beside it, because nothing compares it.
+     *
+     * @throws NotFoundError if there is no such referral, or it belongs to another case
+     * @throws ConflictError if an outcome is already recorded, or the applicant was never asked to confirm
+     */
+    @Transactional
+    public Referral recordConfirmation(String deedPollId, String id, ConfirmationInput input, CurrentUser caller) {
+        Referral referral = findReferralForUpdate(deedPollId, id);
+        if (referral.getConfirmationOutcome() != null) {
+            throw new ConflictError(alreadyConfirmed(id, referral));
+        }
+        if (referral.getConfirmationRequestedAt() == null) {
+            throw new ConflictError("Referral " + id + " has not been asked to confirm whether the applicant"
+                + " wants to proceed, so there is no answer to record");
+        }
+
+        LocalDateTime now = AuditClock.now();
+        referral.setConfirmationOutcome(input.outcome());
+        // When the caseworker recorded it, from the clock -- never when the applicant replied, which nothing here
+        // knows.
+        referral.setConfirmationReceivedAt(now);
+        // From the token, never from the payload: an author a body could name is one anybody could forge.
+        referral.setConfirmationRecordedBy(caller.name());
+        referral.setModifiedBy(caller.name());
+        // Stamped rather than left to @PreUpdate, for the reason withdraw's and close's are: Hibernate fires
+        // @PreUpdate only when its dirty check finds a changed property.
+        referral.setModifiedOn(now);
+
+        Referral saved = referrals.save(referral);
+        // Composed from the saved referral rather than from the input, so the note reads the outcome as it was
+        // stored -- and written inside this transaction, so a rolled-back recording leaves no note announcing one.
+        notes.createNote(deedPollId,
+                         new CreateNoteInput(ReferralNotes.confirmationRecorded(saved, input.note())),
+                         caller.noteAuthor());
+        // The case leaves the waiting list here, and by recompute rather than by writing null: the answer is
+        // "nothing on this case is still outstanding", which the referral table knows and this method only
+        // believes. See refreshAwaitingConfirmation.
+        refreshAwaitingConfirmation(deedPollId);
         return saved;
     }
 
@@ -601,6 +799,61 @@ public class ReferralService {
     }
 
     /**
+     * Recomputes one case's denormalised {@code awaitingConfirmationSince} from the referral table.
+     *
+     * <p>Two sites change the answer and both call this in their own transaction: {@link #recordConfirmation},
+     * where the answer arriving ends the wait, and {@code CaseEmailService.send}, where sending ④ starts one.
+     * <strong>Public for that second caller and for no other reason</strong> -- the recompute is one rule with
+     * one implementation, and the alternative was the same three lines written out in the notify package, which
+     * is exactly how a read-model and its truth drift apart.
+     *
+     * <p>A recompute rather than a push of what the caller just did, for the reason
+     * {@link ConfirmationWait} gives in full: "this case is waiting for nothing now" is a fact about every
+     * referral of the case, and a site that wrote its own stamp or its own null would be wrong the moment a case
+     * carried a second waiting referral.
+     *
+     * <p><strong>The case row is locked before the referral table is read, and that is what makes the recompute
+     * right when two answers arrive at once.</strong> A case really can hold more than one outstanding request --
+     * {@link ConfirmationWait} says why, and recording is ungated on referral state -- so two recordings on one
+     * case are two transactions writing two different referral rows and then this one column. Without the lock
+     * each reads the outstanding set before the other commits, each still sees the other referral as unanswered,
+     * and whichever writes last leaves {@code awaitingConfirmationSince} pointing at a referral that has been
+     * answered. Nothing would ever repair it: these two sites are the only writers, and there is no third answer
+     * coming, so the case would sit in the waiting list for good -- the exact failure the list exists to prevent.
+     * Taking the lock first serialises the pair, and the second transaction's read then sees the first's answer
+     * <em>and</em> its own pending one, so it writes NULL.
+     *
+     * <p><strong>{@code FOR NO KEY UPDATE}, and deliberately not the patch path's {@code FOR UPDATE}</strong> --
+     * the difference between queueing and aborting. Both callers arrive here having already inserted a row that
+     * references the case -- a case note here, an outbox row in the notify package -- and a foreign key is
+     * enforced with a {@code KEY SHARE} lock on the parent, the one strength {@code FOR UPDATE} conflicts with. Two
+     * recordings, or a send and a recording, would each hold that key-share and each wait for the other to release
+     * it, and Postgres would abort one. {@link DeedPollRepository#lockForConfirmationRecompute} carries the full
+     * argument.
+     *
+     * <p>The lock is still taken <strong>after</strong> the caller has written its referral row and before this
+     * reads the table, which is the one order every write path here uses -- referral first, case last -- and the
+     * reason {@link ReferralRepository#findByIdAndDeedPollIdForUpdate} must not join the case table. A case lock
+     * hoisted in front of a referral write would be a second lock order on the same pair of rows, which deadlocks
+     * whatever strength it asks for.
+     *
+     * <p>The loaded row is not read and not written through: {@code writeAwaitingConfirmationSince} is still a
+     * statement over one column, for the reason its own javadoc gives.
+     *
+     * @param deedPollId the case whose column to bring into step
+     */
+    @Transactional
+    public void refreshAwaitingConfirmation(String deedPollId) {
+        // For the lock alone: the row it returns is not read, and a case that has gone answers 0 below exactly as
+        // it did before.
+        deedPolls.lockForConfirmationRecompute(deedPollId);
+        deedPolls.writeAwaitingConfirmationSince(
+            deedPollId,
+            ConfirmationWait.earliestOutstanding(
+                referrals.findOutstandingConfirmationRequestsByDeedPollId(deedPollId)).orElse(null));
+    }
+
+    /**
      * The referral, if this caller is the judge currently holding it.
      *
      * <p>Both halves matter and neither is enough alone: the state says a claim exists, and
@@ -643,6 +896,29 @@ public class ReferralService {
                 + " rather than withdrawn";
         }
         return "Referral " + id + " is already " + state + " and cannot be withdrawn";
+    }
+
+    /**
+     * Why a second recording was refused: what is already on the referral, and when it was recorded.
+     *
+     * <p>Named and dated rather than a bare "already recorded", because the caseworker being refused has read the
+     * applicant's reply and may be looking at a different answer from the one stored -- and their next action
+     * depends on which. A date with no outcome, or an outcome with no date, would each leave them to go and read
+     * the row themselves.
+     *
+     * <p>Who recorded it is deliberately not quoted. The two of them work the same cases and the referral carries
+     * {@code confirmationRecordedBy} for anybody who needs it; naming a colleague in a refusal turns a correction
+     * into an accusation.
+     */
+    private static String alreadyConfirmed(String id, Referral referral) {
+        LocalDateTime recorded = referral.getConfirmationReceivedAt();
+        // The date is written with the outcome, so a row holding one without the other is not reachable through
+        // this service -- and a refusal that threw while composing itself would answer 500 for a state it is
+        // supposed to explain, so the null says so instead.
+        String when = recorded == null ? "a date that was not recorded" : DAY.format(recorded);
+        return "Referral " + id + " already has a confirmation outcome of " + referral.getConfirmationOutcome()
+            + ", recorded on " + when
+            + ". Recording a second answer would overwrite it, so it is refused";
     }
 
     private DeedPoll requireCase(String deedPollId) {

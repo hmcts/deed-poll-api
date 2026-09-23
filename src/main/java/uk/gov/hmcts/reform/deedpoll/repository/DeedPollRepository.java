@@ -12,6 +12,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -23,7 +24,7 @@ import java.util.Optional;
  * reference's {@code findDeedPolls} sorts by {@code createdOn} descending and the list page depends on
  * it -- newest first is how a caseworker finds the case they just logged.
  *
- * <p>The two state finders are the shapes {@code ListFilters.StateWhere} has, and no others: adding a
+ * <p>The three filter finders are the shapes {@code ListFilters.FilterWhere} has, and no others: adding a
  * finder here for a filter that does not exist is how a repository grows methods with no consumer.
  *
  * <p><strong>{@link JpaSpecificationExecutor} is for the field-level case query, and nothing else.</strong>
@@ -66,10 +67,64 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
      * into a 409 the caller has to retry. There is no {@code If-Match} in this API for a caller to retry
      * against, and a caseworker's save being rejected because a colleague saved first is a worse outcome
      * than the two saves being applied in order.
+     *
+     * <p><strong>Only the patch path may take this lock, and the recompute beside it deliberately does not.</strong>
+     * {@code ReferralService.refreshAwaitingConfirmation} needs a case-wide mutual exclusion too, and takes it
+     * through {@link #lockForConfirmationRecompute} instead -- {@code FOR NO KEY UPDATE} rather than
+     * {@code FOR UPDATE}, because by the time it runs its own transaction has already inserted a row that
+     * references the case. That javadoc carries the reasoning; the short version is that {@code FOR UPDATE} is the
+     * one row-lock strength a foreign-key {@code KEY SHARE} conflicts with, so taking it here would turn two
+     * ordinary flows into a deadlock. A patch writes no child row, so it is free to take the stronger one.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select d from DeedPoll d where d.id = :id")
     Optional<DeedPoll> findByIdForUpdate(@Param("id") String id);
+
+    /**
+     * Locks one case for the {@code awaitingConfirmationSince} recompute -- {@code SELECT … FOR NO KEY UPDATE}.
+     *
+     * <p><strong>Why the recompute needs a lock at all.</strong> It is a read-modify-write:
+     * {@code ReferralService.refreshAwaitingConfirmation} asks the referral table which of the case's requests are
+     * still outstanding and writes the earliest onto the case. Two answers arriving on one case's two outstanding
+     * requests at the same moment each read the referrals before the other committed, so each still sees the
+     * other's referral as unanswered and the last writer leaves the case in the waiting list with nothing
+     * outstanding on it. Nothing repairs that: the two sites are the column's only writers and no third answer is
+     * coming. Taking the lock before the read serialises the pair, and the second transaction's read -- a fresh
+     * statement snapshot, once the first has committed and released it -- then sees both answers and writes NULL.
+     *
+     * <p><strong>Why {@code FOR NO KEY UPDATE} and not {@link #findByIdForUpdate}'s {@code FOR UPDATE}, which is
+     * the whole point of this method existing.</strong> Both writers of the column reach the recompute having
+     * already inserted a row that references the case in the same transaction -- a case note for
+     * {@code recordConfirmation}, an outbox row for {@code CaseEmailService.send} -- and Postgres takes a
+     * {@code FOR KEY SHARE} lock on the parent row to enforce each of those foreign keys. {@code FOR KEY SHARE}
+     * conflicts with exactly one requested strength, {@code FOR UPDATE}. So two such transactions asking for
+     * {@code FOR UPDATE} on one case each wait for the other's key-share to be released and Postgres aborts one of
+     * them, and a send blocked behind a recording's referral lock while holding the case's key-share deadlocks
+     * with that recording in the same way. {@code FOR NO KEY UPDATE} conflicts with itself -- which is all the
+     * mutual exclusion the recompute needs -- and with nothing a foreign key takes, so the pair queues instead.
+     *
+     * <p>The strength is what makes it deadlock-free, not the position -- but the position still has to be the
+     * one it is. <strong>Every write path here writes its referral row first and touches the case last</strong>
+     * (a transition's {@link #writeCurrentReferralState} included), so a case lock hoisted in front of a referral
+     * write would be a second lock order on the same pair of rows, and two orders on one pair is a deadlock
+     * whatever the strengths are. Taken at the tail, as both callers take it, there is one order.
+     *
+     * <p>The row is returned only so there is something to select; no caller reads it, and
+     * {@link #writeAwaitingConfirmationSince} is still a statement over one column. A case that has since gone
+     * answers empty, and the write behind it answers 0, exactly as they did before any lock was taken.
+     *
+     * <p>Native SQL because no JPA lock mode maps to {@code FOR NO KEY UPDATE}: Hibernate renders
+     * {@code PESSIMISTIC_WRITE} as {@code FOR UPDATE} and {@code PESSIMISTIC_READ} as {@code FOR SHARE}, and
+     * {@code FOR SHARE} conflicts with the plain {@code UPDATE} the recompute finishes with. Quoted mixed-case
+     * identifiers for the reason every native statement here has them.
+     *
+     * @param id the case to lock
+     * @return the case's id, or empty if there is no such case
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT "id" FROM "deedpoll_deedpoll" WHERE "id" = :id FOR NO KEY UPDATE
+        """)
+    Optional<String> lockForConfirmationRecompute(@Param("id") String id);
 
     /**
      * One case with its documents and each document's type, in a single query.
@@ -108,14 +163,36 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
     List<DeedPoll> findOpenOrderByCreatedOnDesc(@Param("states") Collection<DeedPollState> states);
 
     /**
+     * The cases waiting for an applicant's confirmation, longest wait first -- the "awaiting confirmation"
+     * filter.
+     *
+     * <p>Ordered by the column rather than by {@code createdOn} like the three finders above, because the whole
+     * point of this tab is which case has waited longest: a list of waiting cases in creation order would put a
+     * case asked yesterday above one asked in May. The specification path states the same criterion and the
+     * same order, and {@code CaseSpecificationsTest} pins the two together.
+     *
+     * <p>A derived query rather than a written one, and safely so where {@code findOpenOrderByCreatedOnDesc}
+     * could not be: {@code IS NOT NULL} is not the {@code NOT IN} that evaluates to NULL for a NULL column, so
+     * there is no third case to spell out. It is also exactly the predicate
+     * {@code V17__case_awaiting_confirmation.sql}'s partial index is built on.
+     */
+    List<DeedPoll> findByAwaitingConfirmationSinceIsNotNullOrderByAwaitingConfirmationSinceAsc();
+
+    /**
      * Writes one case's denormalised current referral state -- the recompute's second half.
      *
      * <p><strong>A statement over the one column, not {@code save} on the loaded case.</strong> This entity has
      * no dirty-column tracking, so a save writes every column back, and a referral transition holds no lock on
      * the case row: it would read the case, then write all of it a moment later, discarding whatever a
      * concurrent patch committed in between -- the lost update {@link #findByIdForUpdate} exists to prevent for
-     * the patch path. A single-column {@code UPDATE} cannot lose a write to any other column, so the referral
-     * flows need no lock on the case at all.
+     * the patch path. A single-column {@code UPDATE} cannot lose a write to any other column, so a transition
+     * needs no lock on the case to keep a patch's columns safe from it.
+     *
+     * <p><strong>Nor does this recompute need one against itself</strong>, where
+     * {@link #writeAwaitingConfirmationSince}'s does: a case may hold only one non-terminal referral, so two
+     * transitions of one case are two writes to the same referral row and the row settles their order. Two
+     * <em>confirmations</em> of one case are writes to two different rows, which is why that column's recompute is
+     * the one that reads under a lock.
      *
      * <p>{@code null} is a value this is asked to write and not a no-op: it is what a case whose last live
      * referral has just been closed or withdrawn must read.
@@ -132,6 +209,30 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
     @Modifying(flushAutomatically = true)
     @Query("update DeedPoll d set d.currentReferralState = :state where d.id = :id")
     int writeCurrentReferralState(@Param("id") String id, @Param("state") ReferralState state);
+
+    /**
+     * Writes one case's denormalised "awaiting confirmation since" -- the other recompute's second half.
+     *
+     * <p>A single-column statement rather than {@code save} on the loaded case, for the reason
+     * {@link #writeCurrentReferralState} gives in full: this entity has no dirty-column tracking, so a save
+     * writes every column back, and a statement over one column cannot lose a concurrent write to another.
+     * The caller does hold {@link #lockForConfirmationRecompute}'s lock on the case row by the time it gets here,
+     * and that is about a different problem -- two recomputes of <em>this</em> column racing each other, which no
+     * single-column statement can settle because what races is the read each of them computes from.
+     *
+     * <p>{@code null} is a value this is asked to write and not a no-op: it is what a case reads once the
+     * answer is recorded, and writing it is how the case leaves the waiting list.
+     *
+     * <p>The persistence context is deliberately not cleared, as above: no flow reads this column back in the
+     * transaction that writes it, and clearing would detach the entities the caller is still mapping from.
+     *
+     * @param id    the case
+     * @param since when its longest outstanding wait began, or null when it is waiting for nothing
+     * @return 1 if the case exists, 0 if it does not
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("update DeedPoll d set d.awaitingConfirmationSince = :since where d.id = :id")
+    int writeAwaitingConfirmationSince(@Param("id") String id, @Param("since") LocalDateTime since);
 
     /**
      * Recomputes the current referral state of many cases at once, from the referral table.

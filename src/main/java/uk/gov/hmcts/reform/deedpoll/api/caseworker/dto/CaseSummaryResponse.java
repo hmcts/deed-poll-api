@@ -1,6 +1,8 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.dto;
 
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollWithComputed;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ConfirmationWait;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
@@ -38,8 +40,16 @@ import java.util.List;
  * Relinquishment" for the enum member, GOV.UK dates -- but formatting is the rendering service's job and it
  * has that same view model; a formatted date over the wire cannot be sorted, compared or re-rendered in Welsh.
  *
- * <p>{@link DeedPollWithComputed#computed()} is deliberately dropped: the derived day counts are a detail-page
- * and reporting concern, and the list shows neither.
+ * <p><strong>{@code daysAwaitingConfirmation} is the third, and it is a number rather than a date on purpose.
+ * </strong> The waiting list exists so that a case asked to confirm and never answered is impossible to forget,
+ * which means the row has to say "43 days" without a caseworker doing arithmetic against today's date. It is
+ * null for every case that is waiting for nothing, which is nearly all of them. The date it is computed from is
+ * published on the case read rather than here -- the row answers "how long", the case answers "since when".
+ *
+ * <p>{@link DeedPollWithComputed#computed()} is deliberately dropped: the ported day counts are a detail-page
+ * and reporting concern, and the list shows neither. {@code daysAwaitingConfirmation} is not one of them and is
+ * not in {@code ComputedFields} either -- that record is a port of the reference's own derived pair, and this
+ * count is this service's, derived from a column the reference schema does not have.
  *
  * @param id the case id, which is what a row links to
  * @param displayReference the rendered reference, or null for a seeded or imported case that has none
@@ -51,6 +61,8 @@ import java.util.List;
  * @param newSurname the applicant's new surname, which the search matches on and the list therefore shows
  * @param currentReferralState the state of the case's one live referral, or null when it has none -- the column
  *     the "Returned -- action needed" queue filters on, so a row in that queue can say why it is there
+ * @param daysAwaitingConfirmation how many whole days the case has been waiting for the applicant's
+ *     confirmation, or null when it is waiting for nothing -- 0 on the day the email was sent, never 1
  */
 public record CaseSummaryResponse(
     String id,
@@ -61,10 +73,22 @@ public record CaseSummaryResponse(
     DeedPollState state,
     String newForename,
     String newSurname,
-    ReferralState currentReferralState) {
+    ReferralState currentReferralState,
+    Integer daysAwaitingConfirmation) {
 
-    /** One case as a list row. */
+    /** One case as a list row, counting any wait as at this moment. */
     public static CaseSummaryResponse from(DeedPoll record) {
+        return from(record, AuditClock.now());
+    }
+
+    /**
+     * One case as a list row, as at a given instant.
+     *
+     * <p>The instant is passed in rather than read here so that a page of rows is counted from one reading of
+     * the clock: two rows counted a tick apart either side of midnight would report waits a day different for
+     * cases asked at the same moment.
+     */
+    private static CaseSummaryResponse from(DeedPoll record, LocalDateTime now) {
         return new CaseSummaryResponse(
             record.getId(),
             record.getDisplayReference(),
@@ -74,11 +98,13 @@ public record CaseSummaryResponse(
             record.getState(),
             record.getNewForename(),
             record.getNewSurname(),
-            record.getCurrentReferralState());
+            record.getCurrentReferralState(),
+            ConfirmationWait.daysWaiting(record.getAwaitingConfirmationSince(), now));
     }
 
-    /** The list, preserving the order the domain returned it in -- which is newest first. */
+    /** The list, preserving the order the domain returned it in. */
     public static List<CaseSummaryResponse> from(List<DeedPollWithComputed> cases) {
-        return cases.stream().map(found -> from(found.deedPoll())).toList();
+        LocalDateTime now = AuditClock.now();
+        return cases.stream().map(found -> from(found.deedPoll(), now)).toList();
     }
 }

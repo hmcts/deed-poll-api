@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,7 +29,9 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
@@ -52,7 +55,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The five caseworker referral endpoints, over HTTP, against a real database and a stub IDAM.
+ * The six caseworker referral endpoints, over HTTP, against a real database and a stub IDAM.
  *
  * <p>The whole context rather than a {@code @WebMvcTest} slice, and not {@code @Transactional}, for the reasons
  * {@code CaseworkerNoteControllerTest} records: a slice does not get {@code SecurityConfiguration}, so it would
@@ -83,6 +86,9 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
 
     /** The smallest acceptable create body: one reason, and nothing that makes another field required. */
     private static final String ONE_REASON = "{\"reasons\":[\"Minor\"]}";
+
+    /** When the confirmation fixtures asked the applicant to confirm -- the instant the wait runs from. */
+    private static final LocalDateTime ASKED = LocalDateTime.of(2026, 5, 3, 9, 30);
 
     /**
      * The judge the fixtures claim and direct as.
@@ -210,6 +216,23 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Decided);
             // And the timeline is only what raising it wrote: the 401 happens before the transition, so nothing
             // says a direction was actioned by a caller the service never saw.
+            assertThat(notes.count()).isOne();
+        }
+
+        @Test
+        @DisplayName("refuses to record a confirmation, and no answer is stored")
+        void refusesAConfirmation() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+
+            // The route is protected by having been written rather than by having been annotated, which is exactly
+            // why every new route gets one of these.
+            mockMvc.perform(post(confirmationOf(caseId, referralId))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"outcome\":\"Confirmed\"}"))
+                .andExpect(status().isUnauthorized());
+
+            assertThat(stored(referralId).getConfirmationOutcome()).isNull();
             assertThat(notes.count()).isOne();
         }
     }
@@ -1081,6 +1104,241 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             referral.setLastTouchedAt(referral.getClaimedAt().minusHours(9));
             referrals.saveAndFlush(referral);
         }
+    }
+
+    @Nested
+    @DisplayName("POST /caseworker/cases/{id}/referrals/{referralId}/confirmation")
+    class RecordConfirmation {
+
+        @Test
+        @DisplayName("records the answer, publishes the four columns and answers 200")
+        void recordsTheAnswer() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            asked(referralId);
+
+            authorised(post(confirmationOf(caseId, referralId)),
+                "{\"outcome\":\"Confirmed\",\"note\":\"Replied by email\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(referralId))
+                .andExpect(jsonPath("$.confirmationOutcome").value(ConfirmationOutcome.Confirmed.name()))
+                .andExpect(jsonPath("$.confirmationRequestedAt").exists())
+                .andExpect(jsonPath("$.confirmationReceivedAt").exists())
+                // From the token, never from the body.
+                .andExpect(jsonPath("$.confirmationRecordedBy").value("A Caseworker"))
+                // Not a transition: the referral is where it was, which is why there is no new state to publish.
+                .andExpect(jsonPath("$.state").value(ReferralState.Open.name()));
+
+            assertThat(stored(referralId)).satisfies(referral -> {
+                assertThat(referral.getConfirmationOutcome()).isEqualTo(ConfirmationOutcome.Confirmed);
+                assertThat(referral.getConfirmationReceivedAt()).isNotNull();
+                assertThat(referral.getConfirmationRecordedBy()).isEqualTo("A Caseworker");
+            });
+            // And the case leaves the waiting list, in the same transaction: the answer arriving is the only thing
+            // that takes it off, so a recording that committed without this would leave the case there for good.
+            assertThat(storedCase(caseId).getAwaitingConfirmationSince()).isNull();
+        }
+
+        @Test
+        @DisplayName("a refused recording leaves the case in the waiting list, still waiting since the ask")
+        void refusedRecordingLeavesTheCaseWaiting() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            asked(referralId);
+            authorised(post(confirmationOf(caseId, referralId)), "{\"outcome\":\"Confirmed\"}")
+                .andExpect(status().isOk());
+            assertThat(storedCase(caseId).getAwaitingConfirmationSince()).isNull();
+
+            // A second recording is refused, and the refusal must not put the case back into the waiting list: the
+            // answer is in, and a caseworker being reminded to chase a case that has already answered is the same
+            // wrong-way-round failure as never being reminded at all.
+            authorised(post(confirmationOf(caseId, referralId)), "{\"outcome\":\"Withdrawn\"}")
+                .andExpect(status().isConflict());
+
+            assertThat(storedCase(caseId).getAwaitingConfirmationSince()).isNull();
+        }
+
+        @Test
+        @DisplayName("recording on a referral nobody asked leaves a waiting case waiting")
+        void recordingUnaskedLeavesAWaitingCaseWaiting() throws Exception {
+            // One case, two referrals: the first was asked and then closed, the second never asked. Recording
+            // against the second is refused, and the case is still waiting since the first -- which is the answer a
+            // recompute gives and a push of "null, I just recorded something" would not.
+            String caseId = newCase();
+            String askedReferralId = raise(caseId, ONE_REASON);
+            asked(askedReferralId);
+            moveTo(askedReferralId, ReferralState.Closed);
+            String neverAsked = raise(caseId, ONE_REASON);
+
+            authorised(post(confirmationOf(caseId, neverAsked)), "{\"outcome\":\"Confirmed\"}")
+                .andExpect(status().isConflict());
+
+            assertThat(storedCase(caseId).getAwaitingConfirmationSince()).isEqualTo(ASKED);
+        }
+
+        @Test
+        @DisplayName("answering one of two outstanding asks leaves the case waiting since the earlier one")
+        void answeringOneOfTwoLeavesTheEarlierWait() throws Exception {
+            // Reachable because recording is ungated on referral state: a referral can be asked and then closed,
+            // and a second raised and asked. The case has waited since the FIRST ask, so answering the second must
+            // leave the column at the first date rather than clearing it -- the case really is still waiting.
+            String caseId = newCase();
+            String first = raise(caseId, ONE_REASON);
+            asked(first);
+            moveTo(first, ReferralState.Closed);
+            String second = raise(caseId, ONE_REASON);
+            Referral secondReferral = stored(second);
+            secondReferral.setConfirmationRequestedAt(ASKED.plusDays(40));
+            referrals.saveAndFlush(secondReferral);
+
+            authorised(post(confirmationOf(caseId, second)), "{\"outcome\":\"Confirmed\"}")
+                .andExpect(status().isOk());
+
+            assertThat(storedCase(caseId).getAwaitingConfirmationSince()).isEqualTo(ASKED);
+        }
+
+        @Test
+        @DisplayName("records a withdrawal, and the timeline says what the applicant asked for")
+        void recordsAWithdrawal() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            asked(referralId);
+
+            authorised(post(confirmationOf(caseId, referralId)),
+                "{\"outcome\":\"Withdrawn\",\"note\":\"Refund to the same card\"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.confirmationOutcome").value(ConfirmationOutcome.Withdrawn.name()));
+
+            // Two notes: the referral being raised, and the answer coming back. The second is attributed to the
+            // caseworker who read the reply rather than to the service account.
+            assertThat(notes.findAll()).hasSize(2);
+            assertThat(notes.findAll())
+                .anySatisfy(note -> {
+                    assertThat(note.getNote())
+                        .contains("Applicant's confirmation recorded")
+                        .contains(ConfirmationOutcome.Withdrawn.name())
+                        .contains("Refund to the same card");
+                    assertThat(note.getCreatedBy()).isEqualTo("A Caseworker");
+                });
+        }
+
+        @Test
+        @DisplayName("409s a second recording, naming what is stored, and leaves the first answer alone")
+        void refusesASecondRecording() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            asked(referralId);
+            authorised(post(confirmationOf(caseId, referralId)), "{\"outcome\":\"Confirmed\"}")
+                .andExpect(status().isOk());
+
+            authorised(post(confirmationOf(caseId, referralId)), "{\"outcome\":\"Withdrawn\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(
+                    Matchers.containsString(ConfirmationOutcome.Confirmed.name())));
+
+            // Idempotent by refusal rather than last-write-wins: the second caseworker is told the first already
+            // acted, and the stored answer is still the first one.
+            assertThat(stored(referralId).getConfirmationOutcome()).isEqualTo(ConfirmationOutcome.Confirmed);
+            assertThat(notes.count()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("409s an answer on a referral nobody asked to confirm, and writes nothing")
+        void refusesAnAnswerNobodyAskedFor() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+
+            authorised(post(confirmationOf(caseId, referralId)), "{\"outcome\":\"Confirmed\"}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(Matchers.containsString("has not been asked to confirm")));
+
+            assertThat(stored(referralId).getConfirmationOutcome()).isNull();
+            // Only the note raising the referral: a timeline saying an applicant answered when nobody asked is
+            // worse than silence.
+            assertThat(notes.count()).isOne();
+        }
+
+        @Test
+        @DisplayName("404s a referral addressed through the wrong case, and the row does not move")
+        void refusesAReferralOfAnotherCase() throws Exception {
+            String caseId = newCase();
+            String otherCaseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            asked(referralId);
+
+            authorised(post(confirmationOf(otherCaseId, referralId)), "{\"outcome\":\"Confirmed\"}")
+                .andExpect(status().isNotFound());
+
+            // Both halves: not reachable through the wrong parent, and the row that was addressed is unchanged.
+            assertThat(stored(referralId).getConfirmationOutcome()).isNull();
+        }
+
+        @Test
+        @DisplayName("400s a body with no outcome, naming the field, and writes nothing")
+        void refusesABodyWithNoOutcome() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            asked(referralId);
+
+            authorised(post(confirmationOf(caseId, referralId)), "{\"note\":\"They replied\"}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("outcome"));
+
+            assertThat(stored(referralId).getConfirmationOutcome()).isNull();
+        }
+
+        @Test
+        @DisplayName("400s an outcome the enum does not name, rather than storing a label Postgres lacks")
+        void refusesAnUnknownOutcome() throws Exception {
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            asked(referralId);
+
+            authorised(post(confirmationOf(caseId, referralId)), "{\"outcome\":\"confirmed\"}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("outcome"));
+        }
+
+        @Test
+        @DisplayName("records for a caller holding no roles, because there is no may-record permission")
+        void recordsForACallerHoldingNoRoles() throws Exception {
+            // The default stub token carries no role this service asks about, so this is the ordinary caseworker
+            // path -- asserted rather than assumed, because the absence of a gate is a decision: whoever works the
+            // case reads the applicant's reply out of the shared inbox.
+            String caseId = newCase();
+            String referralId = raise(caseId, ONE_REASON);
+            asked(referralId);
+
+            authorised(post(confirmationOf(caseId, referralId)), "{\"outcome\":\"Confirmed\"}")
+                .andExpect(status().isOk());
+        }
+
+        /**
+         * The referral asked to confirm, and the case recorded as waiting -- both, because that is what the send
+         * commits.
+         *
+         * <p>Standing in for {@code POST /caseworker/cases/{id}/emails/…}, which needs a Notify stub;
+         * {@code CaseworkerEmailControllerTest} drives the real send. Writing both halves is what makes the
+         * assertions below about the case leaving the waiting list mean anything: a fixture that set only the
+         * referral would let a recording that forgot the case's column pass.
+         */
+        private void asked(String referralId) {
+            Referral referral = stored(referralId);
+            referral.setConfirmationRequestedAt(ASKED);
+            referrals.saveAndFlush(referral);
+            DeedPoll parent = deedPolls.findById(referral.getDeedPoll().getId()).orElseThrow();
+            parent.setAwaitingConfirmationSince(ASKED);
+            deedPolls.saveAndFlush(parent);
+        }
+
+        /** The case as it stands committed. */
+        private DeedPoll storedCase(String caseId) {
+            return deedPolls.findById(caseId).orElseThrow();
+        }
+    }
+
+    private static String confirmationOf(String caseId, String referralId) {
+        return "/caseworker/cases/" + caseId + "/referrals/" + referralId + "/confirmation";
     }
 
     /** A stored case with a Date Received, which is all reference-number allocation needs. */

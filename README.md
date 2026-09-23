@@ -19,7 +19,8 @@ contains:
  * common plugins and libraries
  * [HMCTS Java plugin](https://github.com/hmcts/gradle-java-plugin)
  * docker setup
- * automatically publishes API documentation to [hmcts/cnp-api-docs](https://github.com/hmcts/cnp-api-docs)
+ * OpenAPI documentation (the template's publish to [hmcts/cnp-api-docs](https://github.com/hmcts/cnp-api-docs)
+   is not wired up here — see "The OpenAPI document" below)
  * code quality tools already set up
  * MIT license and contribution information
  * Helm chart using chart-java.
@@ -30,12 +31,13 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 
 ## The API surface
 
-Thirty caseworker operations, plus five judicial ones on a namespace of their own (below).
-`/swagger-ui.html` is the authority; this table is the map.
+Thirty-four caseworker operations across twenty-one paths, plus five judicial ones on a namespace of their
+own (below). `/swagger-ui.html` is the authority; this table is the map — and `OpenAPIPublisherTest` asserts
+both counts, so a route added without a row here is a count that stops agreeing with the spec.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/caseworker/cases` | The case list — a `filter` key, `where` conditions, a `q` search term, `sort`, `page` and `size` |
+| GET | `/caseworker/cases` | The case list — a `filter` key (one of six tabs), `where` conditions, a `q` search term, `sort`, `page` and `size`. The default order is newest first on every tab but `awaitingConfirmation`, which defaults to longest wait first |
 | GET | `/caseworker/cases/field-rules` | Show / hide / mandate rules for a `type`, `migrated` and `publishToGazette` |
 | GET | `/caseworker/cases/{id}` | One case **with** its notes, witnesses and documents — one call, not four |
 | GET | `/caseworker/document-types` | Every supporting-document type, with its applicability arrays |
@@ -65,6 +67,10 @@ Thirty caseworker operations, plus five judicial ones on a namespace of their ow
 | GET | `/caseworker/cases/{id}/referrals/{referralId}` | One referral |
 | POST | `/caseworker/cases/{id}/referrals/{referralId}/withdrawal` | Withdraw one — a transition to `Withdrawn`, and **409** if it is already terminal |
 | POST | `/caseworker/cases/{id}/referrals/{referralId}/closure` | Close one whose direction has been actioned — a transition to `Closed`, and **409** unless it is `Decided` |
+| POST | `/caseworker/cases/{id}/referrals/{referralId}/confirmation` | Record the applicant's answer to the *Request confirmation to proceed* email — `outcome` (`Confirmed` or `Withdrawn`) and an optional `note`. **409** if an answer is already stored (naming it and its date) and **409** if nobody asked this referral to confirm |
+| GET | `/caseworker/cases/{id}/emails` | The Email tab in one call — which templates apply and why not, what has already been sent, and the slot defaults |
+| POST | `/caseworker/cases/{id}/emails/{template}/preview` | What Notify would render for this case and these slots — writes nothing |
+| POST | `/caseworker/cases/{id}/emails/{template}` | Enqueue one — an outbox row inside the caseworker's transaction, idempotent on a second send, **409** for the email of the group that contradicts one already asked for |
 
 There are deliberately **no** case deletes, no document-type writes and no `validate` endpoint. The domain
 implements and tests them; nothing consumes them, and the sibling prototype's mistake was building an API
@@ -92,11 +98,11 @@ Sharing is a **library, not a push**: publishing a query makes it findable, and 
 found queries appear in their own navigation. Sharing with a *named* colleague is deliberately absent — this
 service has no user directory, and a query is already a URL, so pushing one at somebody is a link in Slack.
 
-The five referral routes were the twenty-sixth to thirtieth, and they replace a process that ran on email
+The six referral routes replace a process that ran on email
 and a Teams channel: caseworkers batched ten referrals to a Master twice a day and polled a shared mailbox for
 the returned direction. A referral is a **row of its own**, not a field on the case — the ported `dateReferred`
 / `masterName` / `masterDecision` block on `deedpoll_deedpoll` held one referral per case, latest-wins, and it
-stays as the historical snapshot while a case may now carry many referrals over its lifetime. Four rules are
+stays as the historical snapshot while a case may now carry many referrals over its lifetime. Five rules are
 worth knowing before calling them:
 
 - **At most one live referral per case.** A second while one is still `Open`, `Claimed` or `Decided` is a
@@ -110,15 +116,36 @@ worth knowing before calling them:
   closing a `Withdrawn` one would relabel an abandoned referral as an actioned one. Closing clears nothing and
   writes nothing back to the case's flat `masterDecision` / `masterDirections` columns: those stay the
   pre-migration snapshot, and the live direction is on the referral.
-- **No role gate anywhere below these routes.** Any authenticated staff caller may raise, read, withdraw and
-  close: in the process this replaces, anybody who works a case can email a Master and action the reply. The
+- **The applicant's confirmation is recorded once and never overwritten.** A second answer is a **409** naming
+  what is stored and its date; an answer on a referral nobody asked to confirm is a **409** in different words.
+  Recording one moves no case date and adds no case state — the wait is surfaced beside the derived state, never
+  inside it — so the caseworker then does whatever the process requires through the ordinary case edit.
+  The other end of that rule is on the Email tab: once an answer is stored, *Request confirmation to proceed* is
+  no longer offered for that referral and sending it is a **409**. Asking again would re-start a clock that
+  nothing reads — the waiting list counts only referrals with no answer yet — so the applicant would have been
+  chased with the case absent from the list of cases waiting, and the new reply could never be recorded.
+- **No role gate anywhere below these routes.** Any authenticated staff caller may raise, read, withdraw, close
+  and record a confirmation: in the process this replaces, anybody who works a case can email a Master and action
+  the reply, and anybody can read the applicant's reply out of the shared inbox. The
   judicial role is the one that is different — `Role.JUDICIAL`, which IDAM does not issue yet — and it gates
   the two transitions that are not on this surface.
 
-Raising and withdrawing each write a **case note** attributed to the acting caseworker, because there is no
-timeline concept in this domain beyond the notes grid and the referral has to appear where caseworkers already
-look. Claiming and deciding write none — both are legible from the referral's own row — and the inactivity
-sweep writes one as the service account, because a lapsed claim erases the fact it is about.
+**Every successful referral transition writes exactly one case note**, attributed to whoever caused it, because
+there is no timeline concept in this domain beyond the notes grid and the referral has to appear where
+caseworkers already look: raise, withdraw and close to the caseworker, claim and direction to the judge, and
+the inactivity sweep's to the service account, because a lapsed claim erases the fact it is about. Recording the
+applicant's confirmation writes one too, although it moves no state — the answer is an event, and the grid is
+the only place it would appear.
+
+**A sixth case-list tab, `awaitingConfirmation`.** Where a judge has refused a request not to publish, the office
+emails the applicant to ask whether they still want the deed enrolled; until the reply is recorded the case is
+waiting, and this tab is the list of them. It is the one tab whose criterion is **not a case state** — a waiting
+case is in whatever state its dates make it, ordinarily `Returned` — and the one that carries **a default order of
+its own**, longest wait first, because a waiting list in creation order buries the case most at risk of being
+forgotten. A `sort` the caller names still wins. Each row carries `daysAwaitingConfirmation`, which reads 0 on the
+day the email went out, and the case read carries `awaitingConfirmationSince`. That column is a **read-model**
+recomputed from the referral table by the send and by the recording; it is readable and not writable, so no patch
+can put a case into the waiting list or take it out without an answer.
 
 **Claiming a referral and recording a direction are the judge's half of the loop, and they have no route on this
 surface.** Both are transitions on `ReferralService` — role-gated to `Role.JUDICIAL` — exposed on the judicial
@@ -239,8 +266,8 @@ so that an unconfigured environment refuses every token** rather than trusting a
 
 Roles come from `/o/userinfo`, not from the token — an IDAM access token carries no roles at all — and
 the lookup is deliberately uncached, so a role removed in IDAM is gone from the next request. The one
-role modelled is `caseworker-deedpoll-admin`, and it gates three things: whether `privacy` is editable,
-deleting a note, and deleting a witness.
+role modelled is `caseworker-deedpoll-admin`, and it gates four things: whether `privacy` is editable,
+deleting a note, deleting a witness, and publishing or amending a *shared* saved query.
 
 > **No route is gated as a route.** Every authenticated principal reaches the whole caseworker surface,
 > because the only role name confirmed with IDAM is the admin one and gating everything on it would lock
@@ -480,9 +507,14 @@ yet wired. Naming the two paths is part of the outstanding deployment onboarding
 Published at `/v3/api-docs`, and browsable at `/swagger-ui.html`. `springdoc.packagesToScan` covers
 `…deedpoll.api`, so a controller is documented by being in the package it belongs in rather than by
 somebody remembering to add it. `OpenAPIPublisherTest` writes the document to
-`/tmp/openapi-specs.json`, which is where the HMCTS Jenkins library reads it to publish to
-[`hmcts/cnp-api-docs`](https://github.com/hmcts/cnp-api-docs), and asserts that it actually
-describes the caseworker surface rather than merely being served.
+`/tmp/openapi-specs.json` and asserts that it actually describes the caseworker and judicial surfaces —
+both operation counts and every path — rather than merely being served.
+
+**Nothing currently consumes that file.** `Jenkinsfile_CNP` has no publishing step and sets
+`INTEGRATION_TESTS_ENABLED = "false"`, which drops the `integration` source set from `check`, so the
+document is produced only by a local `./gradlew integration`. Restoring the publish to
+[`hmcts/cnp-api-docs`](https://github.com/hmcts/cnp-api-docs) is an accepted outstanding gap — see
+`docs/RESUME.md`.
 
 ### Alternative script to run application
 

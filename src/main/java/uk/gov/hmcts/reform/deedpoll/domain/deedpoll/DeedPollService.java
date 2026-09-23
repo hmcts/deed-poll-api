@@ -451,11 +451,20 @@ public class DeedPollService {
         return Sort.by(direction, sort.field()).and(Sort.by(Sort.Direction.ASC, TIEBREAK));
     }
 
-    /** The cases one state criterion admits, newest first. */
-    private List<DeedPoll> casesMatching(ListFilters.StateWhere where) {
+    /**
+     * The cases one filter criterion admits, newest first -- except the waiting list, which comes back in its
+     * own order.
+     *
+     * <p>The unpaged path, kept for the callers that predate paging. "Newest first" is the wrong answer for the
+     * waiting list for the reason {@link ListFilters#LONGEST_WAIT_FIRST} gives, and the named finder says so in
+     * its own name rather than leaving the order to whoever calls this.
+     */
+    private List<DeedPoll> casesMatching(ListFilters.FilterWhere where) {
         return switch (where) {
             case ListFilters.In in -> deedPolls.findByStateInOrderByCreatedOnDesc(in.states());
             case ListFilters.NotIn notIn -> deedPolls.findOpenOrderByCreatedOnDesc(notIn.states());
+            case ListFilters.AwaitingConfirmation ignored ->
+                deedPolls.findByAwaitingConfirmationSinceIsNotNullOrderByAwaitingConfirmationSinceAsc();
         };
     }
 

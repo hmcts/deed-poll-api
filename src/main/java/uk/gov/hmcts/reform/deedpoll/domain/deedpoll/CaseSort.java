@@ -36,7 +36,10 @@ import java.util.stream.Collectors;
  *   <li>The four audit columns are sortable and NOT queryable, because {@link FormFields} does not
  *       describe them -- they are not on the form. {@code createdOn} has to be sortable whatever else is:
  *       it is the default, so refusing to let a caller name it would make "oldest first" the one order
- *       that cannot be asked for.</li>
+ *       that cannot be asked for. {@code awaitingConfirmationSince} is sortable on the same footing and for
+ *       the same reason: it is the order the "awaiting confirmation" tab is asked for
+ *       ({@link ListFilters#LONGEST_WAIT_FIRST}), so a name the parser refused would be an order this
+ *       service could not express itself.</li>
  * </ul>
  *
  * <p>Every sortable name is a stored column this service published, so the name that reaches a query is
@@ -126,8 +129,24 @@ public record CaseSort(String field, Direction direction) {
      * @throws InvalidInputError addressed to {@code sort}, naming what is wrong with it
      */
     public static CaseSort parse(String sort) {
+        return parse(sort, NEWEST_FIRST);
+    }
+
+    /**
+     * The same, with the order to fall back to when the request named none.
+     *
+     * <p>For the filter tab that has an order of its own: the "awaiting confirmation" list is useless in
+     * creation order, so {@link ListFilters.ListFilter#defaultSort()} stands in for {@link #NEWEST_FIRST} there.
+     *
+     * <p><strong>A caller who names {@code sort} still wins, and that is the point of a fallback rather than an
+     * override.</strong> A tab that forced its order would make its column headers unclickable, and a caseworker
+     * who sorted the waiting list by surname asked a question this service can answer.
+     *
+     * @param whenAbsent the order for a request that named none
+     */
+    public static CaseSort parse(String sort, CaseSort whenAbsent) {
         if (sort == null || sort.isBlank()) {
-            return NEWEST_FIRST;
+            return whenAbsent;
         }
         int colon = sort.indexOf(':');
         String name = (colon < 0 ? sort : sort.substring(0, colon)).trim();
@@ -137,7 +156,8 @@ public record CaseSort(String field, Direction direction) {
     }
 
     /**
-     * Every field the list may be sorted by: the single-valued form fields, plus the audit columns.
+     * Every field the list may be sorted by: the single-valued form fields, then the stored process columns,
+     * then the audit columns.
      *
      * <p>Published because the query-builder UI needs exactly this list to populate a sort control, and
      * because a set computed from the registries cannot drift from what {@link #parse} accepts. Note it is
@@ -217,6 +237,20 @@ public record CaseSort(String field, Direction direction) {
         private static final List<String> AUDIT_FIELDS =
             List.of("createdOn", "modifiedOn", "createdBy", "modifiedBy");
 
+        /**
+         * The stored process columns that are sortable without being form fields.
+         *
+         * <p>One so far: {@code awaitingConfirmationSince}, which is a read-model of the referral table rather
+         * than anything a caseworker types, so {@link FormFields} does not describe it and it is not queryable.
+         * It has to be sortable because it is the order the "awaiting confirmation" tab is asked for, and that
+         * order goes through {@link CaseSort} like any other.
+         *
+         * <p>Added ahead of {@link #AUDIT_FIELDS} rather than after, so the published iteration order still ends
+         * with the audit four -- the tail {@code CaseSortTest} pins because this set feeds the OpenAPI
+         * description that {@code deed-poll-admin} vendors.
+         */
+        private static final List<String> PROCESS_FIELDS = List.of("awaitingConfirmationSince");
+
         private static final Set<String> NAMES = names();
 
         private Sortable() {
@@ -231,6 +265,7 @@ public record CaseSort(String field, Direction direction) {
                     names.add(name);
                 }
             });
+            names.addAll(PROCESS_FIELDS);
             names.addAll(AUDIT_FIELDS);
             return Collections.unmodifiableSet(names);
         }

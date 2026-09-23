@@ -2,13 +2,18 @@ package uk.gov.hmcts.reform.deedpoll.domain.referrals;
 
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Locale;
+import java.util.Optional;
 
 /**
  * The text of the case notes a referral writes as it moves through its lifecycle: raised, claimed, directed,
- * actioned, withdrawn, and taken back from a judge who stopped working on it.
+ * actioned, withdrawn, taken back from a judge who stopped working on it, and -- where the office asked the
+ * applicant whether to proceed after a refused non-publication request -- the answer that came back.
  *
  * <p><strong>Why a referral writes a note at all.</strong> There is no timeline concept in this domain --
  * only the human-authored Notes grid -- and the referral has to be visible where caseworkers already look,
@@ -40,8 +45,15 @@ import java.time.format.DateTimeFormatter;
  */
 public final class ReferralNotes {
 
-    /** Dates read by a caseworker in a grid, so the day rather than the instant. */
-    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMMM yyyy");
+    /**
+     * Dates read by a caseworker in a grid, so the day rather than the instant.
+     *
+     * <p>{@link Locale#UK} rather than the default, for the reason {@code ResolvedValues} pins its own:
+     * {@code MMMM} names the month in {@code Locale.getDefault(FORMAT)}, so on an image whose default locale
+     * is not English every note this class writes would carry a month named in that language, stored for good
+     * on a timeline nothing re-renders.
+     */
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK);
 
     /**
      * How much of a judge's display name a lapse note will quote.
@@ -174,6 +186,54 @@ public final class ReferralNotes {
     }
 
     /**
+     * The note for the applicant's answer to the confirmation email, and what the caseworker said about it.
+     *
+     * <p><strong>A case note rather than an edit to the referral's own {@code notes} column.</strong> That column
+     * is the caseworker's text from when the referral was raised -- the explanation {@code Other} requires and the
+     * general referral note -- and appending to it would rewrite what was sent to the judiciary and break the cap
+     * {@link ReferralSchemas#MAX_NOTES_LENGTH} exists to keep. The answer is an event, so it goes where every
+     * other referral event goes.
+     *
+     * <p>It names when the applicant was asked as well as what they said, because the wait is the point: the whole
+     * feature exists so that a case waiting for this reply is not forgotten, and the grid is where a caseworker
+     * reads how long the round trip took. A referral somehow carrying an answer but no request date says so rather
+     * than inventing one -- unreachable through the service, which refuses an answer nobody asked for, and the
+     * same line {@link #decision} takes for the same reason.
+     *
+     * <p>The outcome is spelled out rather than named alone, because {@code Withdrawn} is a word this domain
+     * already uses for a referral the office pulled back: here it is the <em>applicant</em> withdrawing their
+     * application, which is a different event with a refund behind it, and a grid entry reading only "Withdrawn"
+     * would be read as the other one.
+     *
+     * <p><strong>This note reaches the judiciary, and the caseworker's own words with it.</strong> It is on the
+     * case's timeline, and {@code JudicialReferralDetail} returns that timeline to any judge who may see a
+     * referral on the case -- which, for the referral this note is about, is the judge who refused the
+     * non-publication request. So the outcome and the free text below are legible to them, exactly as
+     * {@link #claimLapsed}'s name is. That is the same decision rather than an oversight: the judge refused
+     * publication on the applicant's stated wishes, so whether the applicant then went ahead, withdrew or asked
+     * for a refund is the result of their own direction, and a judge who directed a case is entitled to read what
+     * became of it. The confirmation <em>columns</em> are a different matter and are not published on that surface
+     * -- see {@code ConfirmationSecurityTest}'s disclosure rules, which are about fields and say so.
+     *
+     * <p>The consequence for the caseworker's text is worth stating rather than discovering: it is office prose
+     * about the applicant's reply that a judge may read, so it is not the place for anything the office would not
+     * put in front of one. If that ever becomes intolerable the fix is to stop writing it here, not to filter the
+     * timeline -- the note model carries no discriminator a projection could exclude one kind of note by.
+     *
+     * @param referral the referral as it was stored, carrying the outcome and the request date
+     * @param note what the caseworker wrote about the reply, absent where they wrote nothing
+     */
+    public static String confirmationRecorded(Referral referral, Optional<String> note) {
+        StringBuilder text = new StringBuilder("Applicant's confirmation recorded for referral ");
+        text.append(identifies(referral)).append(". Asked on ").append(asked(referral));
+        text.append(". Answer: ").append(outcome(referral)).append('.');
+        // The caseworker's own text on its own line with no full stop added, for the reason the raised note's is:
+        // it is prose they wrote, and one that already ended in a stop would read as "Friday..".
+        note.ifPresent(written -> text.append("\nNotes: ").append(written));
+        return text.toString();
+    }
+
+    /**
      * Which referral this note is about, in terms a caseworker can recognise: when it was raised, and what
      * for.
      *
@@ -204,6 +264,32 @@ public final class ReferralNotes {
      */
     private static String decision(Referral referral) {
         return referral.getDecision() == null ? "not recorded" : referral.getDecision().name();
+    }
+
+    /**
+     * The answer in the words a caseworker needs, or that it was never recorded.
+     *
+     * <p>An exhaustive switch rather than the member name alone: a third outcome must make this fail to compile,
+     * because a grid entry saying only what the enum calls it is exactly what this method exists to avoid.
+     */
+    private static String outcome(Referral referral) {
+        ConfirmationOutcome answer = referral.getConfirmationOutcome();
+        if (answer == null) {
+            return "not recorded";
+        }
+        return switch (answer) {
+            case Confirmed -> answer.name() + " -- the applicant wants the deed enrolled, knowing it will be "
+                + "published in the London Gazette";
+            case Withdrawn -> answer.name() + " -- the applicant does not want to proceed and asks for a refund";
+        };
+    }
+
+    /**
+     * When the applicant was asked, or that the request was never recorded -- see {@link #confirmationRecorded}.
+     */
+    private static String asked(Referral referral) {
+        LocalDateTime requested = referral.getConfirmationRequestedAt();
+        return requested == null ? "a date that was not recorded" : DAY.format(requested);
     }
 
     /** The Gazette answer as Yes or No, or that it was never recorded. */

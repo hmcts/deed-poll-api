@@ -1,20 +1,21 @@
 # Resume state — where the next session picks up
 
-Rewritten **2026-09-20**. **Read this before restarting the loop.**
+Rewritten **2026-09-20**; figures and plan states refreshed **2026-09-23** during notify-3b's review. The
+narrative below still needs a proper rewrite — it was written before notify-3 merged. **Read this before
+restarting the loop.**
 
-The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1 and
-notify-5 are merged on `master`. notify-5's four tasks capture the exact subject and plain-text body, provide
+The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1, notify-5
+and notify-3 are merged on `master`. notify-5's four tasks capture the exact subject and plain-text body, provide
 the case-scoped correspondence read, return availability, history and slot defaults from the existing Email-tab
-GET, and pin the public wording and cross-case security boundary. notify-3 has been reviewed against that
-merged implementation and its dated correction section is part of the plan, not optional commentary.
+GET, and pin the public wording and cross-case security boundary. notify-3 sends the confirmation email itself,
+with one referral-outcome email per referral enforced by the database.
 
 ## Where the Notify work actually is — read this before anything else
 
-The implementation is on `master`:
-
 | Where | What is there |
 |---|---|
-| `master` / `origin/master` | notify-1 and notify-5 complete and merged in PRs #29 and #30 |
+| `master` / `origin/master` | notify-1, notify-5 and notify-3 complete and merged in PRs #29, #30 and #38 |
+| `notify-3b` | complete, filed in `plans/completed/`, **unmerged** — the confirmation's request stamp, the recorded answer, and the `awaitingConfirmation` case-list tab |
 
 V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 adds the
 nullable rendered subject and plain-text body. Only a definite permanent refusal permits a replacement
@@ -24,15 +25,16 @@ row; its failed history remains unchanged when the replacement is sent.
 
 | | |
 |---|---|
-| Flyway migrations | **13 on `master`** — V13 adds the rendered subject and plain-text body. **V14 on `referrals-api-6`**, adding the nullable referral owner subjects; notify-3 has been corrected to take V15 |
-| Caseworker endpoints | **33**, across eight controllers under `api/caseworker/controller/` |
-| Judicial endpoints | **4** on `master` and **5** on `referrals-api-6` — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
+| Flyway migrations | **15 on `master`** — V14 adds the nullable referral owner subjects, V15 the notification exclusion group. **V16, V17 and V18 on `notify-3b`**: the referral's four confirmation columns, the case's `awaitingConfirmationSince` read-model, and the correction to V16's partial index |
+| Caseworker endpoints | **34 across 21 paths** on `notify-3b` (33 on `master`), over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures |
+| Judicial endpoints | **5**, `referrals-api-6` having merged — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,388** on `referrals-api-6` — `test` 2,379 + `integration` 9 — from a `master` baseline of **2,336** (`test` 2,328 + `integration` 8), which is also `referrals-api-5`'s figure as merged. `referrals-api-4` is 2,314 off an older `master` of 2,300; the branches are not stacked, so the numbers are not cumulative |
-| Docker-free CI | **1,424 unit tests**, measured with `INTEGRATION_TESTS_ENABLED=false` |
-| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `master` after notify-5, on `referrals-api-4` after its task 3, and on `referrals-api-5` after its task 5 |
+| Tests | **2,575** on `notify-3b` — `test` 2,563 + `integration` 12 (measured 2026-09-23). The branches are not stacked, so figures from one are never cumulative with another's |
+| Docker-free CI | **1,627 unit tests**, measured with `INTEGRATION_TESTS_ENABLED=false`; the other 936 are in 31 container-backed classes. `build.gradle` carries the history and instructs the next plan to re-measure |
+| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `notify-3b` after its review (2026-09-23), and on `master` after notify-5 |
 
-**Eighteen** plans are in [`plans/completed/`](plans/completed/). The arc since plan 01: the domain gaps
+**Twenty-one** plans are in [`plans/completed/`](plans/completed/) — the three added since this section was
+last rewritten are the saved-query publishing gate, notify-3 and notify-3b. The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
 then the original referrals feature in four completed plans — create/withdraw, claim/direction/close,
 `currentReferralState`, and the judicial surface — plus two CI plans and the ACR migration.
@@ -82,8 +84,8 @@ they were written, **not** the order to build them:
 ```
 notify-1  the send path                     COMPLETE
 notify-5  what was sent, and when            case correspondence history   COMPLETE
-notify-3  request confirmation to proceed    three exclusive templates
-notify-3b track the applicant's reply
+notify-3  request confirmation to proceed    three exclusive templates     COMPLETE (PR #38, merged)
+notify-3b track the applicant's reply                                      COMPLETE (filed, unmerged)
 notify-6  chase missing documents             case-driven, repeatable
 notify-4  generate the deed forms            needs a spike first
 ```
@@ -139,9 +141,9 @@ nothing in this repo can confirm the external half. Re-check rather than quote.
 - **The ACR migration is done** — `hmctspublic` → `hmctsprod` in `Dockerfile`, `Chart.yaml` and
   `values.yaml`. That nagger was what failed master build #3.
 - **CI runs without Docker.** `INTEGRATION_TESTS_ENABLED=false` (set by `Jenkinsfile_CNP`) drops
-  `integration` from `check` and excludes the `requires-docker` tag from `test`. After notify-1 that is
-  **1,415 of 2,282** unit tests running in CI, with 867 in 30 container-backed classes.
-  `build.gradle:87-103` carries the full history and instructs the next plan to re-measure it.
+  `integration` from `check` and excludes the `requires-docker` tag from `test`. On `notify-3b` that is
+  **1,627 of 2,563** unit tests running in CI, with 936 in 31 container-backed classes.
+  `build.gradle:85-121` carries the full history and instructs the next plan to re-measure it.
 - **The chart is wired for workload identity** — `useWorkloadIdentity: true`, `saEnabled: true`, reading
   the shared `deed-poll-{env}` vault for `app-insights-connection-string` and the four `postgres-*`
   secrets. The matching identity, federated credential and service-account annotation are
@@ -177,7 +179,8 @@ What it does **not** give, and each of these is a real constraint on what a sess
    environment. Its tests are the only proof it works. That is also why `referrals-api-6`'s move to subject-keyed
    ownership needed no backfill: no real judge has ever claimed anything.
 3. **No non-admin caseworker role.** `caseworker-deedpoll-admin` is still the only confirmed name. It
-   gates one field plus the two deletes the business restricts — a note's and a witness's, both enforced
+   gates one field, the two deletes the business restricts — a note's and a witness's — and publishing or
+   amending a shared saved query, all enforced
    in the domain. **Naming a second role is still inventing one**, and is the same mistake as inventing a
    case type.
 4. **`IDAM_API_ISSUER_URL` and `IDAM_API_AUDIENCES` are still unset by the chart**, and both default to
@@ -244,33 +247,35 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 
 | File | State |
 |---|---|
-| `notify-3-request-confirmation-to-proceed.md` | **Reviewed and ready.** Its 2026-09-20 corrections govern referral selection and exclusion conflicts. **Its migration is no longer `V14`** — `referrals-api-6` took that; it takes the next free number, and the plan carries the correction |
-| `notify-3b-confirmation-tracking.md` | Ready, but flag 1 wants a business answer on `signatureRequestedDate` |
 | `notify-6-chase-missing-documents.md` | **Drafted.** Assumes a provisioned template with required caseworker text; Task 0 verifies it |
 | `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
-| `referrals-api-4-caseworker-completion.md` | **Complete on `referrals-api-4`, unmerged.** Withdrawal tightened to `Open`/`Claimed` via `ReferralState.canBeWithdrawn()`; no contract or migration change. Still must precede the admin caseworker-completion plan |
-| `referrals-api-5-lifecycle-case-notes.md` | **Complete on `referrals-api-5`, unmerged.** Claim, direction and closure each write one case note through `ReferralNotes`; no contract or migration change. Branched from `master`, not stacked on referral follow-up 4 |
-| `referrals-api-6-judicial-my-referrals.md` | **Complete on `referrals-api-6`, unmerged.** `GET /judicial/referrals/mine`, with referral ownership moved from display names to stable IDAM subjects in `V14` first. The only referral follow-up with a contract delta — judicial 4 → 5, one new response schema, caseworker 33 unchanged |
 | `role-model-generalisation.md` | **Gated, and may not be needed.** A behaviour-preserving refactor of `boolean isAdmin` into capabilities. Gated on scope question Q0.1 and, preferably, on a first successful deployment — so that a failed deploy is unambiguously a deployment problem and not a 33-site refactor |
 | `role-based-access-findings.md` | Findings, not a plan. The measured inventory of what could be role-gated, so the business question is asked against a concrete list |
 | `role-based-access-questions-for-the-business.md` | **Resolved 2026-09-11**, never sent; the business's `.docx` answered it. Kept for the reasoning |
 | `scope-gap-questions.md` | **Q0.1 answered 2026-09-12** — functional parity with the Power App is the minimum. Now the evidenced gap analysis, with verification commands per row. Six parity gaps still have no plan |
 
+Three files in `plans/` have no row above and need one from whoever knows their state:
+`deed-poll-api-01-foundation.md`, `fees-and-pay-1-ways-to-pay-card.md`, and
+`jenkins-pipeline-cutover.md` — the last is described as complete in the deployment section above but has
+never been moved into `completed/`.
+
 There is also a follow-on owed to **`deed-poll-admin`**: notify-2's decision 8 is `[PROVISIONAL]` and its
 decision 11 defers case correspondence history to "a later plan… it is api's data to serve". notify-5 is
 that data; once it lands, notify-2 can be amended and both resolved. notify-5's flag 5 records it.
 The concrete Task 3 contract is now `CaseEmailsResponse`: `availability` retains the existing
-`EmailTypeResponse` entries, with `history` and `slotDefaults` alongside it. The operation count remains
-33; admin should refresh its generated client from the published spec rather than hand-writing this shape.
+`EmailTypeResponse` entries, with `history` and `slotDefaults` alongside it. Admin should refresh its
+generated client from the published spec rather than hand-writing this shape — the caseworker operation
+count is now **34**, notify-3b having added the confirmation route.
 
 ## Do not let a session drift into
 
 Writing plan 02 or 03 from guesses. Editing `src/test/resources/reference/` — it is a verbatim vendored
 copy of the specification and the conformance tests read it as ground truth, so if one looks wrong, stop
 and report. Editing a committed Flyway migration — **including `V11__notifications.sql`, which is
-committed as V11 and V12**; `referrals-api-6` has taken **V14**, so notify-3 takes V15 and notify-4 the next free
-number after that, and both say so. **Do not reserve a number and jump ahead of it**: Flyway runs with
-out-of-order disabled, so a V14 arriving after V15 has been applied fails every environment that applied V15. Inventing
+committed as V11 and V12**; **`V18` is the highest committed** (`notify-3b` took V16, V17 and V18), so the next
+plan takes V19 — confirmed by listing `src/main/resources/db/migration` rather than by a number a plan named in
+advance. **Do not reserve a number and jump ahead of it**: Flyway runs with
+out-of-order disabled, so a V18 arriving after V19 has been applied fails every environment that applied V19. Inventing
 an IDAM role name, a case type or a jurisdiction ID. Inferring the state of a Jenkins build from the code,
 rather than asking for the log.
 

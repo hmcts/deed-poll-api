@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.dto;
 
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
@@ -20,6 +21,12 @@ import java.util.List;
  * referral and not a second copy of the case that would then have two versions of the truth. The referrals tab
  * has the case detail already; the judicial read surface, which does not, is a later plan and gets its own
  * view rather than widening this one.
+ *
+ * <p><strong>The confirmation columns are published, all four of them.</strong> They are what the referrals tab
+ * shows after the office has asked the applicant whether to proceed: the date is how long the case has been
+ * waiting, the outcome is the answer or its absence, and the last two are who recorded it and when. They are
+ * caseworker fields only -- the judicial surface has its own view types and none of them carries these, because
+ * the exchange is between the office and the applicant and says nothing about the judge's direction.
  *
  * <p><strong>The claim and the direction are published; {@code lastTouchedAt} is not.</strong> A caseworker
  * needs both: {@code claimedBy} and {@code claimedAt} are what answers "has the judiciary picked this up, and
@@ -63,6 +70,14 @@ import java.util.List;
  * @param decisionDate when the direction was recorded, or null
  * @param decidedBy the judge who recorded it, which is not necessarily {@code modifiedBy} -- the caseworker who
  *     closes the referral afterwards becomes that
+ * @param confirmationRequestedAt when the applicant was asked whether they still want the deed enrolled, or null
+ *     -- which is every referral that was never asked. Stamped as the confirmation email is owed, in the same
+ *     transaction as the outbox row, so it is when the office asked rather than when Notify accepted
+ * @param confirmationOutcome what the applicant answered, or null while the reply is outstanding. Null is the
+ *     whole of "still waiting", which is why there is no member for it
+ * @param confirmationReceivedAt when a caseworker recorded that answer, or null. Not when the applicant sent it:
+ *     nothing here knows that
+ * @param confirmationRecordedBy the caseworker who recorded it, from their token and never client-supplied
  * @param createdBy the caseworker who raised it, or the service account for a migrated one
  * @param modifiedBy whoever last moved it -- the caseworker who withdrew or closed it, the judge who claimed or
  *     decided it, or the service account where the inactivity sweep took a claim back
@@ -84,6 +99,10 @@ public record ReferralResponse(
     Boolean publishToGazette,
     LocalDateTime decisionDate,
     String decidedBy,
+    LocalDateTime confirmationRequestedAt,
+    ConfirmationOutcome confirmationOutcome,
+    LocalDateTime confirmationReceivedAt,
+    String confirmationRecordedBy,
     String createdBy,
     String modifiedBy,
     LocalDateTime createdOn,
@@ -106,6 +125,10 @@ public record ReferralResponse(
             referral.getPublishToGazette(),
             referral.getDecisionDate(),
             referral.getDecidedBy(),
+            referral.getConfirmationRequestedAt(),
+            referral.getConfirmationOutcome(),
+            referral.getConfirmationReceivedAt(),
+            referral.getConfirmationRecordedBy(),
             referral.getCreatedBy(),
             referral.getModifiedBy(),
             referral.getCreatedOn(),

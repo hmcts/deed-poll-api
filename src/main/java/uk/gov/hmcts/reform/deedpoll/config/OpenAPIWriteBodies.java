@@ -25,6 +25,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQuerySchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
@@ -36,19 +37,19 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Describes the thirteen write bodies that springdoc cannot describe by reflection.
+ * Describes the fourteen write bodies that springdoc cannot describe by reflection.
  *
  * <p><strong>Why any of this is needed.</strong> Every write payload in this service binds as a keyed map rather
  * than as declared components, because a patch turns on the difference between an omitted field and an explicit
  * null and a record of nullable components cannot express that -- the argument is in {@code KeyedRequestBody}.
- * The consequence is that the twelve JSON write bodies are classes with no fields, so springdoc reflects over them
- * and publishes {@code CreateCaseRequest: {}}. The upload is worse: it takes a
+ * The consequence is that the thirteen JSON write bodies are classes with no fields, so springdoc reflects over
+ * them and publishes {@code CreateCaseRequest: {}}. The upload is worse: it takes a
  * {@code MultipartHttpServletRequest}, which springdoc does not recognise as a body at all, so that operation is
  * published with no request body whatsoever.
  *
  * <p>That matters because of what the document is for. It is published to {@code hmcts/cnp-api-docs} for
  * consumers to generate clients from, and a consumer cannot tell an empty schema from a body that takes no
- * fields. They would get twelve request types with no properties and an upload they cannot call, with nothing in
+ * fields. They would get thirteen request types with no properties and an upload they cannot call, with nothing in
  * the document hinting that anything is missing -- which is the failure {@code OpenAPIPublisherTest} was written
  * to prevent for the paths, reaching the bodies instead. A published document that is silently empty is worse
  * than no document, because a consumer trusts it.
@@ -57,7 +58,8 @@ import java.util.Set;
  * {@link DeedPollSchemas#writeBodyFields()}, which is the table that validates them; the note limit comes from
  * {@link NoteForm#MAX_NOTE_LENGTH}; the witness caps come from {@link WitnessSchemas}; the referral's caps and
  * reason vocabulary come from {@link ReferralSchemas} and {@link ReferralReason}; the judicial direction's cap
- * and decision vocabulary from {@link ReferralSchemas} and {@link MasterDecision}; the upload's direction
+ * and decision vocabulary from {@link ReferralSchemas} and {@link MasterDecision}; the confirmation's cap and
+ * outcome vocabulary from {@link ReferralSchemas} and {@link ConfirmationOutcome}; the upload's direction
  * values come from {@link DocumentDirection}; the email slots and their caps from {@link EmailSlot}. A field
  * added to the schema therefore appears in the document without anyone editing this file, which is the only way
  * a description of sixty-seven fields stays true.
@@ -77,6 +79,14 @@ public class OpenAPIWriteBodies {
     /** The referral create body. There is no update sibling: amending a referral is raising another. */
     private static final String CREATE_REFERRAL = "CreateReferralRequest";
 
+    /**
+     * The confirmation body -- the applicant's answer to the email that asks whether to proceed.
+     *
+     * <p>A referral body rather than an email one, although the email is what asks the question: the answer is a
+     * fact about that referral's outcome, so it is recorded on the referral's own sub-resource.
+     */
+    private static final String RECORD_CONFIRMATION = "RecordConfirmationRequest";
+
     /** The judicial direction body -- the only payload the judicial surface accepts. */
     private static final String JUDICIAL_DIRECTION = "JudicialDirectionRequest";
 
@@ -91,6 +101,9 @@ public class OpenAPIWriteBodies {
 
     /** The referral's reasons array, named once because it is the create body's only required field. */
     private static final String REASONS_FIELD = "reasons";
+
+    /** The applicant's answer, named once because it is the confirmation body's only required field. */
+    private static final String OUTCOME_FIELD = "outcome";
 
     /** The saved-query name, named once because it is the create body's only required field. */
     private static final String NAME_FIELD = "name";
@@ -114,6 +127,7 @@ public class OpenAPIWriteBodies {
             describeWitnessBodies(openApi);
             describeSavedQueryBodies(openApi);
             describeReferralBody(openApi);
+            describeConfirmationBody(openApi);
             describeDirectionBody(openApi);
             describeEmailBodies(openApi);
             describeUploadBody(openApi);
@@ -420,6 +434,53 @@ public class OpenAPIWriteBodies {
             + "later transition -- so state, migrated and any assignee are ignored rather than refused, as any "
             + "unknown key is. A case may hold many referrals over its lifetime but only one that is not "
             + "closed or withdrawn, so a second live referral is a 409 rather than a 400.");
+    }
+
+    /**
+     * The confirmation body: what the applicant answered, and what the caseworker wants the case to say about it.
+     *
+     * <p>The vocabulary is {@link ConfirmationOutcome}'s and the cap is
+     * {@link ReferralSchemas#MAX_CONFIRMATION_NOTE_LENGTH}, so both reach the document from what enforces them.
+     *
+     * <p><strong>{@code outcome} is declared required and enumerated, and both halves matter to a consumer.</strong>
+     * The two answers mean opposite things -- enrol the deed knowing it will be published, or refund it -- so there
+     * is no default and a client that could omit it would be recording an answer on the applicant's behalf. There is
+     * deliberately no member for "no reply yet": silence is the absence of an outcome, which is a null column and is
+     * what the waiting list is.
+     *
+     * <p>Nothing here can name the referral, the case, the author, the date the reply arrived, or any of the case's
+     * own dates. The first two are the path, the next two are the token and the clock, and the last is a separate act
+     * by the caseworker -- recording an answer moves no case date. Those keys are stripped as any unknown one is, and
+     * {@code RecordConfirmationRequest} says why each absence is a rule.
+     */
+    private void describeConfirmationBody(OpenAPI openApi) {
+        Schema<?> confirmation = schema(openApi, RECORD_CONFIRMATION);
+        if (confirmation == null) {
+            return;
+        }
+        confirmation.setType("object");
+        confirmation.setProperties(null);
+
+        StringSchema outcome = new StringSchema();
+        outcome.setDescription("What the applicant answered. Matched exactly, as the stored form is the wire form: "
+            + ConfirmationOutcome.Confirmed + " means they still want the deed enrolled knowing it will be "
+            + "published, and " + ConfirmationOutcome.Withdrawn + " that they do not and want a refund.");
+        Arrays.stream(ConfirmationOutcome.values()).map(Enum::name).forEach(outcome::addEnumItemObject);
+        confirmation.addProperty(OUTCOME_FIELD, outcome);
+        confirmation.addProperty(NOTE_FIELD, new StringSchema()
+            .maxLength(ReferralSchemas.MAX_CONFIRMATION_NOTE_LENGTH)
+            .description("What the caseworker wants the case timeline to say about the reply. Optional -- the "
+                + "outcome is the fact -- trimmed, and a whitespace-only value counts as none."));
+        confirmation.addRequiredItem(OUTCOME_FIELD);
+        confirmation.setAdditionalProperties(true);
+        confirmation.setDescription("The applicant's answer to the Request confirmation to proceed email, as the "
+            + "caseworker who read their reply records it. Recording it does not move the case on: no date is set "
+            + "or cleared, and the caseworker then does whatever the process requires through the ordinary case "
+            + "edit. Idempotent by refusal rather than last-write-wins -- a second answer is a 409 naming what is "
+            + "already recorded and when, and an answer on a referral that was never asked to confirm is a 409 "
+            + "too. The referral comes from the path, and the recording caseworker and the date come from the "
+            + "token and the clock, so confirmationRecordedBy and confirmationReceivedAt are ignored rather than "
+            + "refused, as any unknown key is.");
     }
 
     /** The referral's own urgency, which is the case's enum reused and may differ from the case's value. */

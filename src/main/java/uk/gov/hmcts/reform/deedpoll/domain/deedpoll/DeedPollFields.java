@@ -260,6 +260,13 @@ public final class DeedPollFields {
         // and the two case responses publish it, and because CaseQuery admits a name only if it is here.
         readers.put("currentReferralState", DeedPoll::getCurrentReferralState);
 
+        // The other read-model of the referral table, and unwritable for the same reason: a caller who could
+        // patch it could take a case out of the waiting list without anybody having answered, or put one in it
+        // that was never asked. Readable because it is a stored column, because both case responses publish it,
+        // and because CaseSort admits a name only if it is here -- it is the order the "awaiting confirmation"
+        // tab is asked for. Not on a form tab and therefore not queryable: the tab is how it is asked about.
+        readers.put("awaitingConfirmationSince", DeedPoll::getAwaitingConfirmationSince);
+
         // --- Return / refund ---
         readers.put("returnReason", DeedPoll::getReturnReason);
         readers.put("refundAmount", DeedPoll::getRefundAmount);

@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.referrals;
 
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
@@ -15,7 +16,8 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
- * Shape validation for the two referral payloads: a caseworker's create, and a judge's direction.
+ * Shape validation for the three referral payloads: a caseworker's create, a judge's direction, and the
+ * applicant's answer to the confirmation email as a caseworker records it.
  *
  * <p><strong>Not a port.</strong> Referrals are new behaviour, so like {@code SavedQuerySchemas} -- and
  * unlike {@code DeedPollSchemas}, {@code NoteSchemas} and {@code WitnessSchemas} -- there is no
@@ -23,8 +25,8 @@ import java.util.stream.Collectors;
  *
  * <p>There is no update parse, and that is the shape of the feature rather than a gap. A referral is not
  * edited in place: amending one is withdrawing it and raising another, and a direction is recorded once and
- * confirmed before it arrives, so the only writes that carry a body are the create and the direction.
- * Withdrawal and closure are sub-resources with no payload at all.
+ * confirmed before it arrives, so the only writes that carry a body are the create, the direction and the
+ * confirmation. Withdrawal and closure are sub-resources with no payload at all.
  *
  * <p><strong>Every refusal is reported at once</strong>, as {@code SavedQuerySchemas} reports them: a
  * payload with no reasons <em>and</em> an urgent referral that does not say why comes back naming both,
@@ -82,11 +84,26 @@ public final class ReferralSchemas {
      */
     public static final int MAX_DIRECTIONS_LENGTH = 4000;
 
+    /**
+     * {@link #NOTE}'s cap, the same number {@link #MAX_NOTES_LENGTH} is and for the same reason rather than by
+     * coincidence.
+     *
+     * <p>The column this text reaches is {@code deedpoll_notes}, which <em>is</em> bounded: recording a
+     * confirmation writes a case note that quotes the caseworker's words, so without a cap here a long enough
+     * note would be refused by the notes validator half way through a write that had already recorded the
+     * outcome. {@link ReferralNotes#confirmationRecorded} is where the two are held to agree, and
+     * {@code ReferralNotesTest} pins the worst case.
+     */
+    public static final int MAX_CONFIRMATION_NOTE_LENGTH = 1000;
+
     /** The summary every create refusal from this class carries; the per-field detail is in the errors. */
     private static final String INVALID_REFERRAL = "Referral is not valid";
 
     /** The summary every direction refusal carries, distinct because they are two different payloads. */
     private static final String INVALID_DIRECTION = "Direction is not valid";
+
+    /** The summary every confirmation refusal carries, distinct for the reason the direction's is. */
+    private static final String INVALID_CONFIRMATION = "Confirmation is not valid";
 
     private static final String REASONS = "reasons";
     private static final String NOTES = "notes";
@@ -95,6 +112,8 @@ public final class ReferralSchemas {
     private static final String DECISION = "decision";
     private static final String DIRECTIONS_TEXT = "directionsText";
     private static final String PUBLISH_TO_GAZETTE = "publishToGazette";
+    private static final String OUTCOME = "outcome";
+    private static final String NOTE = "note";
 
     private ReferralSchemas() {
     }
@@ -164,6 +183,65 @@ public final class ReferralSchemas {
         // than defaulting them is what makes that true: an absent required field is an error above, not a
         // value invented below.
         return new DirectionInput(decision.orElseThrow(), directionsText, publishToGazette.orElseThrow());
+    }
+
+    /**
+     * Validates the applicant's answer to the confirmation email.
+     *
+     * <p>{@link #OUTCOME} is required and has no default: the two answers mean opposite things -- one wants the
+     * deed enrolled knowing it will be published, the other wants a refund -- so defaulting either way would
+     * record an answer on the applicant's behalf. {@link #NOTE} is optional and bounded, because the outcome is
+     * the fact and the note is context.
+     *
+     * <p><strong>There is no field for when the reply arrived, who recorded it, or anything about the case's
+     * dates.</strong> Each is the clock, the token, or a separate act by the caseworker -- see
+     * {@link ConfirmationInput}.
+     *
+     * @throws InvalidInputError with one entry per offending field, every failure at once
+     */
+    public static ConfirmationInput parseConfirmation(Map<String, Object> raw) {
+        List<FieldError> errors = new ArrayList<>();
+
+        Optional<ConfirmationOutcome> outcome = outcome(raw, errors);
+        Optional<String> note = boundedText(raw, NOTE, MAX_CONFIRMATION_NOTE_LENGTH, errors);
+
+        refuseIfAny(INVALID_CONFIRMATION, errors);
+        // Present once nothing was refused, so the get cannot throw -- an absent required field is an error
+        // above rather than a value invented here.
+        return new ConfirmationInput(outcome.orElseThrow(), note);
+    }
+
+    /**
+     * The applicant's answer by name, required.
+     *
+     * <p>Matched exactly and against the member names, for the reason a decision and a referral reason are: the
+     * names are the wire form and the stored form at once, because the column is the {@code "ConfirmationOutcome"}
+     * Postgres type those names spell -- so accepting {@code "confirmed"} here would send Postgres a label it does
+     * not have.
+     *
+     * <p>Absent and explicitly null take the same message, as a decision's do: neither is an answer anybody could
+     * act on, and what the caller has to do about it is identical.
+     */
+    private static Optional<ConfirmationOutcome> outcome(Map<String, Object> raw, List<FieldError> errors) {
+        Object value = raw.get(OUTCOME);
+        if (value == null) {
+            errors.add(new FieldError(OUTCOME, OUTCOME + " is required to record a confirmation. One of "
+                + members(ConfirmationOutcome.values())));
+            return Optional.empty();
+        }
+        if (!(value instanceof String name)) {
+            errors.add(new FieldError(OUTCOME, OUTCOME + " must be text"));
+            return Optional.empty();
+        }
+        String trimmed = name.trim();
+        return Arrays.stream(ConfirmationOutcome.values())
+            .filter(candidate -> candidate.name().equals(trimmed))
+            .findFirst()
+            .or(() -> {
+                errors.add(new FieldError(OUTCOME, OUTCOME + " names no confirmation outcome: " + quoted(trimmed)
+                    + ". One of " + members(ConfirmationOutcome.values())));
+                return Optional.empty();
+            });
     }
 
     // --- the direction ---

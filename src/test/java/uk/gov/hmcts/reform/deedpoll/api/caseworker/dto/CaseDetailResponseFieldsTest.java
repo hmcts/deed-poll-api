@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       column added to the case therefore has to be published deliberately or omitted deliberately; neither
  *       can happen by not noticing. And a field that should not be on the caseworker surface cannot appear
  *       here without the test saying so, which is the disclosure direction.</li>
- *   <li><strong>Correspondence.</strong> The canonical constructor takes eighty positional arguments, of
+ *   <li><strong>Correspondence.</strong> The canonical constructor takes eighty-one positional arguments, of
  *       which thirty-five are {@code String}: two transposed by a careless edit compile silently and swap two
  *       fields on every response. So every field is populated with a value unique to it and the response is
  *       compared field by field.</li>
@@ -75,8 +75,8 @@ class CaseDetailResponseFieldsTest {
     }
 
     @Test
-    @DisplayName("the eight fields a caller cannot patch are exactly the ones the fixture sets directly")
-    void theUnwritableFieldsAreTheExpectedEight() {
+    @DisplayName("the nine fields a caller cannot patch are exactly the ones the fixture sets directly")
+    void theUnwritableFieldsAreTheExpectedNine() {
         // Pins the split the correspondence test relies on. Were a field to become writable, or another to
         // stop being, the fixture's setter branch would go stale and the coverage it claims would shrink
         // quietly.

@@ -22,6 +22,7 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SentEmailResponse;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
@@ -104,6 +105,10 @@ class NotificationSecurityTest {
         notifications = mock(NotificationRepository.class);
         documents = mock(DeedPollSupportingDocumentRepository.class);
         notify = mock(NotificationClient.class);
+        // The confirmation clock starting, which is what the statement answers on a referral nobody has answered.
+        // Left at the mock's default 0 it would say the applicant answered mid-send, and ④ is refused for that.
+        when(referrals.startConfirmationClockByIdAndDeedPollId(any(), anyString(), any(), anyString()))
+            .thenReturn(1);
         emails = new CaseEmailService(
             deedPolls,
             referrals,
@@ -116,6 +121,7 @@ class NotificationSecurityTest {
                 Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1",
                        EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), "template-2"),
                 "reply-to-1"),
+            mock(ReferralService.class),
             JSON);
     }
 

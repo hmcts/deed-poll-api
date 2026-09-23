@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.fail;
  * Populating a case so that every field of a response DTO carries a value no other field could have.
  *
  * <p>Shared by {@link CaseDetailResponseFieldsTest} and {@link SavedCaseResponseFieldsTest}, which ask the same
- * question of two records whose canonical constructors take eighty and seventy-seven positional arguments:
+ * question of two records whose canonical constructors take eighty-one and seventy-eight positional arguments:
  * two same-typed arguments transposed by a careless edit compile silently and swap two fields on every response.
  * One fixture rather than two copies, because a divergence between them would be a difference in how carefully
  * the two DTOs are checked, which is not a difference anybody means to make.
@@ -42,13 +42,14 @@ final class CaseResponseFields {
     /**
      * Set directly rather than through a patch: {@link DeedPollFields} deliberately cannot write them.
      *
-     * <p>The first seven are allocated or stamped by the service. {@code currentReferralState} is unwritable for
-     * a different reason -- it is a read-model of the referral table, so a caller able to patch it could tell the
-     * case list a case has a decided referral when it has none.
+     * <p>The first seven are allocated or stamped by the service. The last two are unwritable for a different
+     * reason -- each is a read-model of the referral table, so a caller able to patch one could tell the case list
+     * a case has a decided referral when it has none, or take a case out of the waiting list with nobody having
+     * answered.
      */
     static final Set<String> NOT_WRITABLE_BY_A_CALLER = Set.of(
         "id", "referencenumber", "displayReference", "createdOn", "modifiedOn", "createdBy", "modifiedBy",
-        "currentReferralState");
+        "currentReferralState", "awaitingConfirmationSince");
 
     private static final LocalDateTime BASE = LocalDateTime.parse("2026-01-01T09:00:00");
 
@@ -153,7 +154,7 @@ final class CaseResponseFields {
      * Puts the value on the entity the way the application would.
      *
      * <p>Through {@link DeedPollFields} wherever a caller could, so the coercion a real request goes through
-     * is exercised too, and by the setter only for the seven fields the registry deliberately does not expose.
+     * is exercised too, and by the setter only for the fields the registry deliberately does not expose.
      */
     private static void set(DeedPoll record, String name, Object value) {
         if (DeedPollFields.isWritable(name)) {
@@ -169,6 +170,7 @@ final class CaseResponseFields {
             case "createdBy" -> record.setCreatedBy((String) value);
             case "modifiedBy" -> record.setModifiedBy((String) value);
             case "currentReferralState" -> record.setCurrentReferralState((ReferralState) value);
+            case "awaitingConfirmationSince" -> record.setAwaitingConfirmationSince((LocalDateTime) value);
             default -> fail(name + " is neither writable through DeedPollFields nor set here");
         }
     }

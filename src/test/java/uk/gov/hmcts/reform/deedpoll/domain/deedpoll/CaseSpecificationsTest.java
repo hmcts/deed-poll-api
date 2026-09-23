@@ -97,6 +97,22 @@ class CaseSpecificationsTest extends AbstractPostgresContainerTest {
         return deedPoll;
     }
 
+    /**
+     * A persisted case that has been waiting for the applicant's confirmation since the given instant.
+     *
+     * <p>Set with the entity's own setter rather than through the field registry, which deliberately has no
+     * writer for this column: it is a read-model of the referral table, and a caller able to patch it could put a
+     * case into the waiting list that was never asked. What is under test here is the criterion, not how the
+     * column comes to hold a value -- {@code ReferralService.refreshAwaitingConfirmation} is what really writes
+     * it, and {@code DeedPollRepositoryTest} covers that.
+     */
+    private DeedPoll awaiting(LocalDateTime since) {
+        DeedPoll deedPoll = persisted("newForename", "Waiting");
+        deedPoll.setAwaitingConfirmationSince(since);
+        entityManager.flush();
+        return deedPoll;
+    }
+
     /** The ids of this test's own rows that the given conditions admit, under the "all" tab. */
     private List<String> matching(String... where) {
         return matching(ALL, where);
@@ -522,10 +538,10 @@ class CaseSpecificationsTest extends AbstractPostgresContainerTest {
         }
 
         @ParameterizedTest
-        @ValueSource(strings = {"all", "open", "received", "enroled", "returned"})
+        @ValueSource(strings = {"all", "open", "received", "enroled", "returned", "awaitingConfirmation"})
         @DisplayName("each tab's specification admits exactly what its named finder does")
         void agreesWithTheNamedFinders(String key) {
-            // The specification restates the state criterion the named finders encode, and the subtle half
+            // The specification restates the criterion the named finders encode, and the subtle half
             // of it is that a case with NO state counts as open -- a bare NOT IN evaluates to NULL for a
             // NULL state and drops the row. This pins the two statements of that rule together, so the
             // duplication cannot drift without failing.
@@ -534,6 +550,9 @@ class CaseSpecificationsTest extends AbstractPostgresContainerTest {
             persisted("state", DeedPollState.Returned);
             persisted("state", DeedPollState.AwaitingSignature);
             persisted("newForename", "No state at all");
+            // The waiting-list tab's criterion is not about state at all, so its row has to be a waiting one --
+            // otherwise both statements would agree on the empty set and agree about nothing.
+            awaiting(LocalDateTime.of(2026, 5, 3, 9, 0));
 
             ListFilters.ListFilter filter = ListFilters.filterFor(key);
             List<String> byFinder = namedFinderIds(filter);
@@ -549,10 +568,12 @@ class CaseSpecificationsTest extends AbstractPostgresContainerTest {
             return found.stream().map(DeedPoll::getId).filter(mine::contains).toList();
         }
 
-        private List<DeedPoll> byNamedFinder(ListFilters.StateWhere where) {
+        private List<DeedPoll> byNamedFinder(ListFilters.FilterWhere where) {
             return switch (where) {
                 case ListFilters.In in -> deedPolls.findByStateInOrderByCreatedOnDesc(in.states());
                 case ListFilters.NotIn notIn -> deedPolls.findOpenOrderByCreatedOnDesc(notIn.states());
+                case ListFilters.AwaitingConfirmation ignored ->
+                    deedPolls.findByAwaitingConfirmationSinceIsNotNullOrderByAwaitingConfirmationSinceAsc();
             };
         }
     }
@@ -755,7 +776,7 @@ class CaseSpecificationsTest extends AbstractPostgresContainerTest {
             DeedPoll active = persisted("state", DeedPollState.AwaitingSignature);
             persisted("state", DeedPollState.Enroled);
 
-            assertThat(deedPolls.findAll(CaseSpecifications.inState(new ListFilters.NotIn(FINISHED))).stream()
+            assertThat(deedPolls.findAll(CaseSpecifications.criterion(new ListFilters.NotIn(FINISHED))).stream()
                 .map(DeedPoll::getId)
                 .filter(mine::contains)
                 .toList())
