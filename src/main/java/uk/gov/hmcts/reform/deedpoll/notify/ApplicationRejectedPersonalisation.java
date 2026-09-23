@@ -63,9 +63,9 @@ public record ApplicationRejectedPersonalisation(
      * field could be set inconsistently with the first; a negation cannot. The two keys are one decision
      * expressed twice on the wire because Notify needs it that way, not two facts about the case.
      *
-     * <p>Confirmed against the authored template on 2026-09-23: Notify parsed both conditionals, and a test
-     * send with each branch rendered the right paragraph. What that did <em>not</em> confirm is the value's
-     * type — see {@link #toMap()}.
+     * <p>Confirmed end to end on 2026-09-23, and the value's type with it: a preview through the real Notify API
+     * rendered exactly one refund paragraph for a known {@code postCounter}, and the send that followed was
+     * delivered. See {@link #toMap()} for why the preview rather than the send is what settled the type.
      */
     public static final String APPLIED_ON_PAPER = "applied_on_paper";
 
@@ -115,14 +115,19 @@ public record ApplicationRejectedPersonalisation(
         personalisation.put(ONLINE_APPLICATION_REFERENCE, onlineApplicationReference);
         personalisation.put(OLD_FORENAME, oldForename);
         personalisation.put(OLD_SURNAME, oldSurname);
-        // A Boolean rather than "yes"/"no": Notify's conditional syntax reads a JSON boolean directly, and a
-        // string would make the branch depend on which words somebody chose.
+        // A Boolean rather than "yes"/"no", and **this is now measured rather than reasoned**: Notify's
+        // conditional syntax reads a JSON boolean directly. A string would make the branch depend on which words
+        // somebody chose.
         //
-        // **This is the one part of the template contract still unproven, and it fails silently.** The authored
-        // template was verified on 2026-09-23 by a test send from Notify's own UI, which takes yes/no — so both
-        // branches are known to render, but not from a JSON boolean. If Notify's API wants the strings, neither
-        // conditional fires on a real send: the applicant gets no refund paragraph at all and nothing errors.
-        // Settle it with one real send once notify-0 supplies an API key, before anything reaches an applicant.
+        // Verified 2026-09-23 against the real Notify API, not the UI: `generateTemplatePreview` was called
+        // through this service for a case with `postCounter = Online`, and the rendered body carried the online
+        // refund paragraph and **not** the paper bullet list. So `true`/`false` drive `((applied_online??…))` and
+        // `((applied_on_paper??…))` as intended. The end-to-end send that followed reached the recipient's inbox
+        // and stored a `providerNotificationId`.
+        //
+        // Worth knowing why that needed a *preview* to settle: Notify's own UI takes yes/no for a conditional, so
+        // a test send from the UI proves the template and says nothing about the value type the client sends. Had
+        // this been wrong it would have failed silently -- no refund paragraph at all, and no error.
         personalisation.put(APPLIED_ONLINE, appliedOnline);
         // Negated here so the two can never disagree -- see APPLIED_ON_PAPER.
         personalisation.put(APPLIED_ON_PAPER, !appliedOnline);

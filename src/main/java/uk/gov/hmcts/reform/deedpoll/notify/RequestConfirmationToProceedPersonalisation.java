@@ -126,8 +126,12 @@ public record RequestConfirmationToProceedPersonalisation(
         personalisation.put(OLD_FORENAME, oldForename);
         personalisation.put(OLD_SURNAME, oldSurname);
         // Booleans rather than "yes"/"no": Notify's conditional syntax reads a JSON boolean directly, and a
-        // string would make each branch depend on which words somebody chose. Unproven for a JSON boolean and
-        // silent if wrong -- see ApplicationRejectedPersonalisation.toMap, which carries the full note.
+        // string would make each branch depend on which words somebody chose. **Measured on ③ on 2026-09-23**,
+        // not merely reasoned -- see ApplicationRejectedPersonalisation.toMap, which carries the evidence.
+        //
+        // `isMinor` rides on the same finding, since it drives ④'s `[child's]` conditional the same way. It has
+        // had no template to verify against yet, so ④'s own authoring should check it renders rather than assume
+        // the ③ result transfers -- same value type, but a different template and a different placeholder.
         personalisation.put(APPLIED_ONLINE, appliedOnline);
         // Notify's conditional has no `else`, so the paper branch needs its own flag -- ③'s finding, applied
         // here because this template offers the same refund and carries the same two paragraphs. ④ is not
