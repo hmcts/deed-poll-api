@@ -1,21 +1,28 @@
 # Resume state — where the next session picks up
 
-Rewritten **2026-09-20**; figures and plan states refreshed **2026-09-23** during notify-3b's review. The
-narrative below still needs a proper rewrite — it was written before notify-3 merged. **Read this before
-restarting the loop.**
+Rewritten **2026-09-20**; figures and plan states refreshed **2026-09-23**, and **re-verified against `master`
+at `90784d0` late on 2026-09-23** after notify-3b merged. The narrative below still needs a proper rewrite — it
+was written before notify-3 merged. **Read this before restarting the loop.**
 
-The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1, notify-5
-and notify-3 are merged on `master`. notify-5's four tasks capture the exact subject and plain-text body, provide
-the case-scoped correspondence read, return availability, history and slot defaults from the existing Email-tab
-GET, and pin the public wording and cross-case security boundary. notify-3 sends the confirmation email itself,
-with one referral-outcome email per referral enforced by the database.
+The rule this file exists to serve: **it must describe today, or it actively misleads** — and it broke that rule
+within hours of its own refresh. The 09-23 pass was written *during* notify-3b's review and recorded the branch
+as unmerged; **notify-3b merged as PR #42 at 06:14 that same morning**, so every figure below that was
+attributed to a branch belongs to `master`. Corrected here rather than re-refreshed, because the failure mode is
+the point: a figure attributed to a branch goes stale the moment that branch merges, so **attribute to a commit,
+not a branch**.
+
+notify-1, notify-5, notify-3 and notify-3b are all merged on `master`. notify-5's four tasks capture the exact
+subject and plain-text body, provide the case-scoped correspondence read, return availability, history and slot
+defaults from the existing Email-tab GET, and pin the public wording and cross-case security boundary. notify-3
+sends the confirmation email itself, with one referral-outcome email per referral enforced by the database.
+notify-3b tracks the reply to it.
 
 ## Where the Notify work actually is — read this before anything else
 
 | Where | What is there |
 |---|---|
-| `master` / `origin/master` | notify-1, notify-5 and notify-3 complete and merged in PRs #29, #30 and #38 |
-| `notify-3b` | complete, filed in `plans/completed/`, **unmerged** — the confirmation's request stamp, the recorded answer, and the `awaitingConfirmation` case-list tab |
+| `master` / `origin/master` | notify-1, notify-5, notify-3 **and notify-3b** complete and merged, in PRs #29, #30, #38 and **#42** |
+| `email-case-notes` | **in progress — this is where the loop picks up.** See the section at the end of this file |
 
 V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 adds the
 nullable rendered subject and plain-text body. Only a definite permanent refusal permits a replacement
@@ -25,13 +32,13 @@ row; its failed history remains unchanged when the replacement is sent.
 
 | | |
 |---|---|
-| Flyway migrations | **15 on `master`** — V14 adds the nullable referral owner subjects, V15 the notification exclusion group. **V16, V17 and V18 on `notify-3b`**: the referral's four confirmation columns, the case's `awaitingConfirmationSince` read-model, and the correction to V16's partial index |
-| Caseworker endpoints | **34 across 21 paths** on `notify-3b` (33 on `master`), over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures |
+| Flyway migrations | **18 on `master`**, V18 the highest — V14 adds the nullable referral owner subjects, V15 the notification exclusion group, and **V16, V17 and V18 arrived with notify-3b**: the referral's four confirmation columns, the case's `awaitingConfirmationSince` read-model, and the correction to V16's partial index. So **the next migration is V19** |
+| Caseworker endpoints | **34 across 21 paths on `master`**, over eight controllers under `api/caseworker/controller/` — counted at `90784d0`, and matching `CLAUDE.md`. notify-3b's confirmation route is the 34th. (An earlier revision credited `OpenAPIPublisherTest` with asserting this figure; **no test of that name exists**, and no test on `master` hard-codes 33 or 34, so this count is maintained by hand and nothing fails if it drifts) |
 | Judicial endpoints | **5**, `referrals-api-6` having merged — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,575** on `notify-3b` — `test` 2,563 + `integration` 12 (measured 2026-09-23). The branches are not stacked, so figures from one are never cumulative with another's |
-| Docker-free CI | **1,627 unit tests**, measured with `INTEGRATION_TESTS_ENABLED=false`; the other 936 are in 31 container-backed classes. `build.gradle` carries the history and instructs the next plan to re-measure |
-| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `notify-3b` after its review (2026-09-23), and on `master` after notify-5 |
+| Tests | **2,592 on `master`** — `test` 2,580 across 327 classes + `integration` 12 across 3, 0 failures, 0 errors, 0 skipped. **Measured at `90784d0` on 2026-09-23**, and identical to the figures measured at `93fcd79`, so nothing drifted across the merge. Branches are not stacked, so figures from one are never cumulative with another's |
+| Docker-free CI | **1,627 unit tests** run, with 936 in 31 container-backed classes, measured with `INTEGRATION_TESTS_ENABLED=false`. **Both halves are now stale and the split is unmeasured:** they sum to 2,563, which was the pre-merge total, against 2,580 on `master`. Re-measure before quoting either. `build.gradle:85-121` carries the history and instructs the next plan to do exactly that |
+| `./gradlew build` | **green on `master` at `90784d0`, 2026-09-23**, with `TESTCONTAINERS_RYUK_DISABLED=true` exported — checkstyle clean on every source set. This is the baseline the `email-case-notes` plan compares against |
 
 **Twenty-one** plans are in [`plans/completed/`](plans/completed/) — the three added since this section was
 last rewritten are the saved-query publishing gate, notify-3 and notify-3b. The arc since plan 01: the domain gaps
@@ -85,7 +92,7 @@ they were written, **not** the order to build them:
 notify-1  the send path                     COMPLETE
 notify-5  what was sent, and when            case correspondence history   COMPLETE
 notify-3  request confirmation to proceed    three exclusive templates     COMPLETE (PR #38, merged)
-notify-3b track the applicant's reply                                      COMPLETE (filed, unmerged)
+notify-3b track the applicant's reply                                      COMPLETE (PR #42, merged)
 notify-6  chase missing documents             case-driven, repeatable
 notify-4  generate the deed forms            needs a spike first
 ```
@@ -141,9 +148,10 @@ nothing in this repo can confirm the external half. Re-check rather than quote.
 - **The ACR migration is done** — `hmctspublic` → `hmctsprod` in `Dockerfile`, `Chart.yaml` and
   `values.yaml`. That nagger was what failed master build #3.
 - **CI runs without Docker.** `INTEGRATION_TESTS_ENABLED=false` (set by `Jenkinsfile_CNP`) drops
-  `integration` from `check` and excludes the `requires-docker` tag from `test`. On `notify-3b` that is
-  **1,627 of 2,563** unit tests running in CI, with 936 in 31 container-backed classes.
-  `build.gradle:85-121` carries the full history and instructs the next plan to re-measure it.
+  `integration` from `check` and excludes the `requires-docker` tag from `test`. That was **1,627 of 2,563**
+  unit tests running in CI with 936 in 31 container-backed classes — **measured before notify-3b merged, so
+  both figures are stale against `master`'s 2,580 and the split needs re-measuring.**
+  `build.gradle:85-121` carries the full history and instructs the next plan to do it.
 - **The chart is wired for workload identity** — `useWorkloadIdentity: true`, `saEnabled: true`, reading
   the shared `deed-poll-{env}` vault for `app-insights-connection-string` and the four `postgres-*`
   secrets. The matching identity, federated credential and service-account annotation are
@@ -266,6 +274,39 @@ The concrete Task 3 contract is now `CaseEmailsResponse`: `availability` retains
 `EmailTypeResponse` entries, with `history` and `slotDefaults` alongside it. Admin should refresh its
 generated client from the published spec rather than hand-writing this shape — the caseworker operation
 count is now **34**, notify-3b having added the confirmation route.
+
+## Where the loop picks up — `email-case-notes`, Task 1 of 4 remaining
+
+A ralphex run on [`plans/email-case-notes.md`](plans/email-case-notes.md) started **2026-09-23 19:19:51** and
+died at **19:29:14** after 9m22s with `runner: task phase: claude execution: context canceled` — the operator's
+session ended and took ralphex's child with it. **That is not a failure in the work**, and nothing about the
+plan or the baseline is in doubt.
+
+| | |
+|---|---|
+| Branch | `email-case-notes`, one commit ahead of `master`, none behind. **Pushed**, so it is no longer only on one machine |
+| Task 0 | **done and committed** — `0c89993`, all four boxes ticked with findings. No production code: it is a reconciliation |
+| Task 1 | **lost, and must be redone from the plan.** ~2½ minutes of work |
+| Tasks 2–4 | not started |
+| Mode | `ralphex -t` (tasks-only). Run `-r` **separately** — nested review fan-out exhausts memory here |
+
+**Task 0's three findings are worth reading before Task 1**, because two are stronger than the plan assumed:
+
+1. `NoteService.createNote` is `@Transactional` with *default* propagation, so called from the drain it **joins**
+   the batch transaction rather than opening a second one — which is what decision 5 needs.
+2. `settle` is package-private and un-annotated, so it has **no transaction boundary of its own**. Decision 5's
+   "compose the note so it cannot be refused" is therefore the *whole* of the protection against the
+   duplicate-email hazard, not a belt-and-braces over some other guard.
+3. `Notification.createdBy` is `NOT NULL` in both the entity and V11, and no later migration alters it, so the
+   failure note always has an author and never needs a fallback.
+
+**Where Task 1 had got to, so it is not rediscovered:** it had written the `EmailNotes` class and run
+`./gradlew test --tests "*EmailNotesTest*" checkstyleMain checkstyleTest`. That run failed on **two checkstyle
+violations**, and both are the ones to expect rather than be surprised by — the method-name rule the plan's
+Validation Commands section already warns about (a single-letter first word followed by a capital is rejected),
+and an **overload-adjacency** violation in the main class, fixed by renaming the private composers so they are
+not overloads. The work was never committed or staged and its worktree is gone: `EmailNotes.java` exists in no
+tree and no dangling object holds it, so there is nothing to recover and no point looking.
 
 ## Do not let a session drift into
 
