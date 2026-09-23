@@ -157,12 +157,28 @@ Notes so no task rediscovers them:
 
 ### Task 0: Reconcile and measure the baseline
 
-- [x] Record the baseline counts from `./gradlew build` on this branch — done, see Validation Commands
-- [ ] Confirm `NoteService.createNote(String, CreateNoteInput, NoteAuthor)` still takes a plain `NoteAuthor` and
-      not a `CurrentUser` — it is what lets the drain author a note at all
-- [ ] Confirm `Notification.createdBy` is still non-nullable, since it is the failure note's author
-- [ ] Confirm `drain(int)` still wraps the whole loop in one `REQUIRES_NEW`, which is what decisions 4 and 5
-      rest on
+- [x] Record the baseline counts from `./gradlew build` on this branch — done, see Validation Commands.
+      **Re-measured 2026-09-23 at `90784d0`: `BUILD SUCCESSFUL`, 2,580 unit tests across 327 classes, 12
+      integration across 3, 0 failures, 0 errors, 0 skipped** — identical to the `93fcd79` figures, so the
+      numbers Task 4 compares against are the ones above and nothing has drifted.
+- [x] Confirm `NoteService.createNote(String, CreateNoteInput, NoteAuthor)` still takes a plain `NoteAuthor` and
+      not a `CurrentUser` — it is what lets the drain author a note at all. **Holds** (`NoteService:62`). It is
+      `@Transactional` with the default propagation, so called from `settle` it joins the drain's
+      `REQUIRES_NEW` rather than opening a second one — which is what decision 5 needs. `CurrentUser` appears
+      in that class only on `removeNote`, so the create path has no request dependency. `NoteAuthor` is a
+      one-field record over a name and maps a blank or null to the service account, so the drain can author
+      from a stored string with no resolution step.
+- [x] Confirm `Notification.createdBy` is still non-nullable, since it is the failure note's author. **Holds**
+      — `@Column(name = "createdBy", nullable = false, length = 200)` (`Notification:192`), matching
+      `V11__notifications.sql:102` (`varchar(200) NOT NULL`), and no later migration touching
+      `deedpoll_notification` (V12, V13, V15) alters it. So the failure note always has a name to attribute to
+      and never needs a fallback.
+- [x] Confirm `drain(int)` still wraps the whole loop in one `REQUIRES_NEW`, which is what decisions 4 and 5
+      rest on. **Holds** — the annotation is on the method (`NotificationOutbox:107`) and the
+      `findClaimable`/`claimNextDue`/`settle` loop is entirely inside it, so every row in a batch of up to
+      `DEFAULT_LIMIT` 5 commits or rolls back together. `settle` itself is package-private and un-annotated,
+      so it has no transaction of its own to escape into: decision 5's "composed so it cannot be refused" is
+      therefore the whole of the protection, and there is no second boundary quietly providing any.
 
 ### Task 1: `EmailNotes`, with the length arithmetic pinned across the whole enum
 
