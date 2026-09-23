@@ -164,9 +164,12 @@ class EmailTemplateTest {
         void resolvedKeysComeFromTheCase() {
             assertThat(EmailTemplate.APPLICATION_REJECTED.resolvedKeys()).containsExactly(
                 "reference_number", "online_application_reference", "old_forename", "old_surname",
-                "applied_online");
+                "applied_online", "applied_on_paper");
             assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("reference_number")).isTrue();
             assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("applied_online")).isTrue();
+            // Resolved, so a client is refused it like any other case-derived key. It exists because Notify's
+            // conditional has no `else` and the template needs two flags for two mutually exclusive paragraphs.
+            assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("applied_on_paper")).isTrue();
         }
 
         @Test
@@ -174,7 +177,7 @@ class EmailTemplateTest {
         void theConfirmationEmailResolvesTwoMore() {
             assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.resolvedKeys()).containsExactly(
                 "reference_number", "online_application_reference", "old_forename", "old_surname",
-                "applied_online", "is_minor", "decision_date");
+                "applied_online", "applied_on_paper", "is_minor", "decision_date");
             // The rejection email does not have them, so the two are not silently the same personalisation:
             // a client sending is_minor to application-rejected is told it is not a field at all.
             assertThat(EmailTemplate.APPLICATION_REJECTED.resolves("is_minor")).isFalse();

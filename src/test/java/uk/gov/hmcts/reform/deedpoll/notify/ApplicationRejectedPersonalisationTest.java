@@ -178,6 +178,11 @@ class ApplicationRejectedPersonalisationTest {
         void oneKeyPerRecordComponent() {
             // The assertion that makes the record enumerable: add a component and this fails, add a key and it
             // fails the other way, so nothing reaches an applicant -- or fails to -- unnoticed.
+            //
+            // **The second half of that claim was untrue until 2026-09-23.** This test asserted only that every
+            // component HAS a key, with no size check -- so `applied_on_paper` was added to the map and slipped
+            // through here, caught instead by the equivalent test on ④, which did check the size. The size
+            // assertions below are what make the comment above accurate.
             Map<String, Object> personalisation = ApplicationRejectedPersonalisation
                 .resolve(caseWith(PostCounter.Online), slots("Refused.", "Note.")).toMap();
 
@@ -190,6 +195,30 @@ class ApplicationRejectedPersonalisationTest {
                 .isNotEmpty()
                 .allSatisfy(component ->
                                 assertThat(snakeCase(component)).isIn(personalisation.keySet()));
+
+            // Exactly one key has no component, and it is the derived negation. It cannot BE a component: a
+            // second field could be set inconsistently with `appliedOnline`, where a negation cannot. Naming it
+            // here is what stops "one key may have no component" becoming a licence for the next one.
+            assertThat(personalisation)
+                .hasSize(components.size() + 1)
+                .containsKey(ApplicationRejectedPersonalisation.APPLIED_ON_PAPER);
+        }
+
+        @Test
+        @DisplayName("the paper flag is the exact inverse of the online one, so the two can never both render")
+        void thePaperFlagIsTheInverse() {
+            // Notify's conditional has no `else`, so the template runs two conditionals and the correctness of
+            // the pair is entirely this negation. Both true would print contradictory refund instructions; both
+            // false would print none at all and say nothing about why.
+            Map<String, Object> online = ApplicationRejectedPersonalisation
+                .resolve(caseWith(PostCounter.Online), slots("Refused.", "")).toMap();
+            Map<String, Object> paper = ApplicationRejectedPersonalisation
+                .resolve(caseWith(PostCounter.Post), slots("Refused.", "")).toMap();
+
+            assertThat(online).containsEntry(ApplicationRejectedPersonalisation.APPLIED_ONLINE, true)
+                .containsEntry(ApplicationRejectedPersonalisation.APPLIED_ON_PAPER, false);
+            assertThat(paper).containsEntry(ApplicationRejectedPersonalisation.APPLIED_ONLINE, false)
+                .containsEntry(ApplicationRejectedPersonalisation.APPLIED_ON_PAPER, true);
         }
 
         @Test

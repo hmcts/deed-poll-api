@@ -308,7 +308,16 @@ class RequestConfirmationToProceedPersonalisationTest {
             assertThat(components)
                 .isNotEmpty()
                 .allSatisfy(component -> assertThat(snakeCase(component)).isIn(personalisation.keySet()));
-            assertThat(personalisation).hasSameSizeAs(components);
+
+            // One key more than there are components, and it is the derived negation -- ③'s finding, applied
+            // here because this template carries the same two refund paragraphs. It cannot be a component: a
+            // second field could be set inconsistently with `appliedOnline`, where a negation cannot.
+            //
+            // This assertion is the one that caught `applied_on_paper` being added; ③'s equivalent had no size
+            // check and passed silently, which is now fixed there too.
+            assertThat(personalisation)
+                .hasSize(components.size() + 1)
+                .containsKey(RequestConfirmationToProceedPersonalisation.APPLIED_ON_PAPER);
         }
 
         @Test
