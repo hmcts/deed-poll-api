@@ -37,10 +37,27 @@ public final class ConfirmationWait {
      * When the longest outstanding wait on a case began, given every outstanding request date on it.
      *
      * <p>The earliest rather than the latest: a caseworker looking at the list is being reminded of the case
-     * that has waited longest, and the row's day count has to be that wait. A case cannot hold two waiting
-     * referrals today -- {@code ReferralService.createReferral} refuses a second live referral -- so this
-     * relies on that invariant no more than it has to: it answers a set of any size rather than asserting one,
-     * because a read-model repair is not the place to discover the write path is broken.
+     * that has waited longest, and the row's day count has to be that wait.
+     *
+     * <p><strong>A case really can hold more than one outstanding wait, so this is the rule and not a tie-break
+     * for a shape the service cannot produce.</strong> Said plainly because an earlier version of this javadoc
+     * claimed the opposite -- that {@code ReferralService.createReferral} refuses a second live referral, so a
+     * case cannot hold two -- and that is the premise somebody would replace this {@code min} with an
+     * {@code orElseThrow} on. It is false: {@code createReferral} refuses a second referral only while the first
+     * is <em>non-terminal</em>, and {@code close} clears neither confirmation column. So a referral closed while
+     * its {@code confirmationOutcome} is still null stays outstanding for ever, the case may then be referred and
+     * refused again, and the second referral may be asked in its turn -- which is the route
+     * {@code CaseEmailService.awaitingAnAnswer} points a caseworker at when they have to ask again.
+     *
+     * <p><strong>The consequence is that a superseded ask outlives the exchange that replaced it, and only the
+     * office can retire it.</strong> Nothing here can tell an abandoned request from a live one -- V16 has two
+     * outcome members and deliberately no {@code Superseded} -- so a case whose newest referral has been asked
+     * and answered stays in the waiting list, on the older referral's date, until a caseworker records an answer
+     * against that referral too. All four confirmation columns are published on {@code ReferralResponse}, so the
+     * referrals tab is where they see which referral is holding the case there. Retiring one automatically would
+     * be a decision about the process rather than a read-model repair, which is why this counts an older request
+     * rather than quietly dropping it. {@code V17__case_awaiting_confirmation.sql}'s comment still carries the
+     * old claim; it is a committed migration, so it is corrected here rather than edited there.
      *
      * <p>Nulls are dropped rather than trusted to sort: the caller's query excludes a referral that was never
      * asked, but a null reaching {@link Comparator#naturalOrder()} would throw at the one site whose job is to

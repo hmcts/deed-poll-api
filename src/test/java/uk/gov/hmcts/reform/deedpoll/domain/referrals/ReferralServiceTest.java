@@ -2089,9 +2089,11 @@ class ReferralServiceTest {
             LocalDateTime earlier = LocalDateTime.parse("2026-04-01T08:00:00");
             LocalDateTime later = LocalDateTime.parse("2026-06-20T16:45:00");
             // Given in the order that would be wrong if the recompute took the first or the newest rather than
-            // the earliest. A case cannot hold two waiting referrals today, but the read-model's rule answers a
-            // set of any size, and an implementation that wrote null regardless -- or wrote `later` -- would pass
-            // every other container-free test on this path.
+            // the earliest. Two outstanding waits on one case is reachable rather than hypothetical -- closing a
+            // referral clears neither confirmation column, so the case may be referred and asked again while the
+            // first ask is still unanswered; ConfirmationWait.earliestOutstanding has that route in full. An
+            // implementation that wrote null regardless -- or wrote `later` -- would pass every other
+            // container-free test on this path.
             when(referrals.findOutstandingConfirmationRequestsByDeedPollId(CASE_ID))
                 .thenReturn(List.of(later, earlier));
 
