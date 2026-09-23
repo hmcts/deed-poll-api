@@ -63,6 +63,27 @@ public record NotifyProperties(String apiUrl,
     }
 
     /**
+     * Everything but the API key, which is reported only as set or not.
+     *
+     * <p><strong>Overridden because a record's generated {@code toString()} prints every component, and one of
+     * these is a credential.</strong> Nothing logs this object today -- checked 2026-09-23 -- but that is a
+     * property of the current call sites rather than of the type, and it takes one
+     * {@code log.info("{}", properties)}, one {@code String.valueOf} in an exception message or one actuator
+     * endpoint to put a live Notify key into a log aggregator. Masking here makes it safe by construction
+     * instead of by everybody remembering.
+     *
+     * <p><strong>Set-or-not rather than omitted entirely</strong>, because "is the key configured" is the first
+     * question anyone debugging an unsent email asks, and answering it is the whole diagnostic value the field
+     * has. The length is deliberately not reported either: a Notify key embeds the service id and its length is
+     * structural, so a length narrows a guess where "set" does not.
+     */
+    @Override
+    public String toString() {
+        return "NotifyProperties[apiUrl=%s, apiKey=%s, templates=%s, emailReplyToId=%s]"
+            .formatted(apiUrl, apiKey.isEmpty() ? "<unset>" : "<set>", templates, emailReplyToId);
+    }
+
+    /**
      * The Notify template UUID configured under {@code key}, or the placeholder if the key is unset.
      *
      * <p>An absent key answers {@link #UNPROVISIONED_TEMPLATE_ID} rather than null, so a caller never has to

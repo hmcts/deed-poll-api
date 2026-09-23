@@ -113,4 +113,45 @@ class NotifyPropertiesTest {
 
         assertThat(properties.templateId("application-rejected")).isEqualTo("the-real-one");
     }
+
+    @Test
+    @DisplayName("toString never prints the API key, however it is reached")
+    void toStringNeverPrintsTheApiKey() {
+        String key = "team_and_guest_key-11111111-2222-3333-4444-555555555555-66666666-7777-8888-9999-aaaaaaaaaaaa";
+        NotifyProperties properties =
+            new NotifyProperties("https://api.notifications.service.gov.uk", key, Map.of("application-rejected",
+                                                                                        "a-template-uuid"), "");
+
+        // Asserted on the whole rendering and on the key's parts separately: a record's generated toString would
+        // have printed it, and the service id embedded in a Notify key is on its own worth not logging.
+        assertThat(properties.toString()).doesNotContain(key).doesNotContain("11111111-2222-3333");
+        // And through the routes that reach toString without naming it, which is how this leaks in practice.
+        assertThat(String.valueOf(properties)).doesNotContain(key);
+        assertThat("%s".formatted(properties)).doesNotContain(key);
+    }
+
+    @Test
+    @DisplayName("toString still says whether a key is configured, which is the question worth answering")
+    void toStringReportsWhetherTheKeyIsSet() {
+        // The diagnostic value the field has at all: "is the key configured" is the first question anyone
+        // debugging an unsent email asks. Masking it entirely would trade a real leak for a real blind spot.
+        assertThat(new NotifyProperties("", "a-key", Map.of(), "").toString()).contains("apiKey=<set>");
+        assertThat(new NotifyProperties("", "", Map.of(), "").toString()).contains("apiKey=<unset>");
+        // Blank is unset, because the constructor trims -- " " configured and nothing configured are the same
+        // state everywhere else in this class and must read the same here.
+        assertThat(new NotifyProperties("", "   ", Map.of(), "").toString()).contains("apiKey=<unset>");
+    }
+
+    @Test
+    @DisplayName("toString keeps the fields that are not secrets, so it stays useful")
+    void toStringKeepsTheNonSecrets() {
+        NotifyProperties properties = new NotifyProperties(
+            "https://api.notifications.service.gov.uk", "a-key",
+            Map.of("application-rejected", "a-template-uuid"), "a-reply-to-id");
+
+        assertThat(properties.toString())
+            .contains("https://api.notifications.service.gov.uk")
+            .contains("a-template-uuid")
+            .contains("a-reply-to-id");
+    }
 }
