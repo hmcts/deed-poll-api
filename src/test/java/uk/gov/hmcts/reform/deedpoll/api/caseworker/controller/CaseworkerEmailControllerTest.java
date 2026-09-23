@@ -896,6 +896,61 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
             }
 
             @Test
+            @DisplayName("writes a second note when Notify refuses the send terminally, naming the reason's tab")
+            void writesANoteWhenTheSendFailsTerminally() throws Exception {
+                // The other half of the feature, end to end and committed: the enqueue's note said the email was
+                // sent, and the drain's says it was not -- so a caseworker reading the grid finds out that nothing
+                // arrived rather than waiting on a reply to an email nobody received. Three notes for what looks
+                // like one email is the timeline being honest; see the plan's flag 1.
+                NOTIFY.stubSendStatus(400);
+                String caseId = refusedCase();
+
+                authorised(post(sendOf(caseId)), "{}").andExpect(status().isOk());
+
+                assertThat(notifications.findAll()).singleElement().satisfies(row ->
+                    assertThat(row.getState()).isEqualTo(NotificationState.Failed));
+                // Both of them: the send and its outcome, which is what makes the timeline honest rather than
+                // merely non-empty. Matched by text rather than by position, because the two are written in
+                // separate transactions and nothing here depends on how close together their stamps landed.
+                assertThat(emailNotes(caseId))
+                    .extracting(DeedPollNote::getNote)
+                    .containsExactlyInAnyOrder(EmailNotes.sent(EmailTemplate.APPLICATION_REJECTED),
+                                               EmailNotes.couldNotBeSent(EmailTemplate.APPLICATION_REJECTED));
+                assertThat(emailNotes(caseId))
+                    .filteredOn(note -> note.getNote()
+                        .equals(EmailNotes.couldNotBeSent(EmailTemplate.APPLICATION_REJECTED)))
+                    .singleElement()
+                    .satisfies(note -> {
+                        assertThat(note.getNote())
+                            .contains(EmailTemplate.APPLICATION_REJECTED.displayName())
+                            .contains("Emails tab")
+                            // Never Notify's own words: unbounded external text, written inside the drain's batch
+                            // transaction, where a note the validator refused would cost rows Notify had accepted.
+                            .doesNotContain("400")
+                            .doesNotContain(APPLICANT_EMAIL);
+                        // The caseworker who sent it, read off the row rather than the drain's service account, so
+                        // the send and its outcome read under one name.
+                        assertThat(note.getCreatedBy()).isEqualTo("A Caseworker");
+                    });
+            }
+
+            @Test
+            @DisplayName("writes no failure note while the send is still being retried")
+            void writesNoFailureNoteWhileTheSendIsStillOwed() throws Exception {
+                // A 500 leaves the row Pending and backed off, so the email may well go out on the next drain. A
+                // note now would say it failed, and notes are never revised.
+                NOTIFY.stubSendStatus(500);
+                String caseId = refusedCase();
+
+                authorised(post(sendOf(caseId)), "{}").andExpect(status().isOk());
+
+                assertThat(notifications.findAll()).singleElement().satisfies(row ->
+                    assertThat(row.getState()).isEqualTo(NotificationState.Pending));
+                assertThat(emailNotes(caseId)).singleElement().satisfies(note ->
+                    assertThat(note.getNote()).isEqualTo(EmailNotes.sent(EmailTemplate.APPLICATION_REJECTED)));
+            }
+
+            @Test
             @DisplayName("neither the note nor the outbox row survives the other's rollback")
             void theNoteCommitsWithTheRow() {
                 // Called on the service inside a transaction this test rolls back, because over HTTP the

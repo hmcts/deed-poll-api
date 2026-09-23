@@ -233,13 +233,30 @@ Notes so no task rediscovers them:
 
 ### Task 3: The terminal-failure note
 
-- [ ] Written in `NotificationOutbox.settle` on the transition into `Failed`, authored from
-      `Notification.createdBy`
-- [ ] Tests: a non-retryable failure writes one; an exhausted retryable failure writes one; **a transient
-      failure writes none**; a successful send writes none from the drain (Task 2 wrote it)
-- [ ] A test that the note write cannot roll the batch back — drive a batch where one row fails terminally and
-      another succeeds, and assert the successful row is still `Sent`
-- [ ] Mark completed
+- [x] Written in `NotificationOutbox.settle` on the transition into `Failed`, authored from
+      `Notification.createdBy`. The transition and not the state: `before` is read off the row before the switch
+      writes to it, so the trigger is the moment nothing more is coming rather than a row that happens to be
+      `Failed` — which also means a second settling of a terminal row adds no second note. A private `note(…)`
+      after `notifications.save(row)`, with `NoteService` as the third constructor argument (the service, not the
+      note repository, for the reason `CaseEmailService` holds it: one path, scoped to the parent case)
+- [x] Tests: a non-retryable failure writes one; an exhausted retryable failure writes one; **a transient
+      failure writes none**; a successful send writes none from the drain — `NotificationOutboxTest.CaseNote`,
+      container-free because CI has no Docker and this is the half CI must check. Plus
+      `saysNothingAboutTheProvidersReason`, which pins decision 5 at the call site with a 7,000-character reason:
+      the note carries neither Notify's words nor the recipient and stays inside `NoteForm.MAX_NOTE_LENGTH`, while
+      the row still holds all of it. `writesNoNoteForARowThatWasAlreadyFailed` pins what "transition" means, and
+      is noted as unreachable through `drain` since `claimNextDue` re-asserts `Pending`
+- [x] A test that the note write cannot roll the batch back — `notesOneFailureWithoutLosingTheRestOfTheBatch`
+      drives a two-row batch whose first row fails `PERMANENT`ly and whose second succeeds: the note is written
+      between them, the failing row is `Failed`, the successful row is still `Sent` and the drain still counts it,
+      and exactly one note is written for the batch
+- [x] Mark completed. Also over HTTP in `CaseworkerEmailControllerTest.SendEmail.CaseNote`, since the drain runs
+      after the send commits and `emailNotes(caseId)` already matched `couldNotBeSent`:
+      `writesANoteWhenTheSendFailsTerminally` (Notify answers 400 — the case ends with both notes, the failure one
+      authored by the caseworker and quoting neither the status nor the address) and
+      `writesNoFailureNoteWhileTheSendIsStillOwed` (Notify answers 500 — the row is `Pending` and the sent note is
+      the only one). **10 new tests** (8 container-free, 2 over HTTP), `./gradlew build` **BUILD SUCCESSFUL**,
+      checkstyle clean on every source set
 
 ### Task 4: Full validation
 
