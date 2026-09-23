@@ -260,9 +260,22 @@ Notes so no task rediscovers them:
 
 ### Task 4: Full validation
 
-- [ ] Run the command above and **record the counts here** rather than asserting green
-- [ ] Confirm the total rose by the number of tests added and that `skipped` is still 0
-- [ ] Mark completed
+- [x] Run the command above and **record the counts here** rather than asserting green. `./gradlew build
+      --rerun-tasks` (so no task is served from cache and the XML is this run's): **BUILD SUCCESSFUL in 5m 2s, 24
+      of 24 actionable tasks executed**, checkstyle clean on all five source sets (`main`, `test`, `integration`,
+      `functionalTest`, `smokeTest`). Counted from `build/test-results/` immediately afterwards: **2,609 unit
+      tests across 331 classes, 0 failures, 0 errors, 0 skipped**; **12 integration across 3, 0 failures, 0
+      errors, 0 skipped**. (Gradle logs one `NativeException: Couldn't poll for events` from its file watcher —
+      this Docker filesystem, not the build; it does not fail a task.)
+- [x] Confirm the total rose by the number of tests added and that `skipped` is still 0. **Both hold.** Unit
+      2,580 → 2,609 is **+29**, which is exactly Task 1's 8 + Task 2's 11 + Task 3's 10, and all 29 are in the
+      four new suites — `EmailNotesTest` 8, `CaseEmailServiceTest$Sending$CaseNote` 6,
+      `NotificationOutboxTest$CaseNote` 8, `CaseworkerEmailControllerTest$SendEmail$CaseNote` 7 (Task 2's five
+      plus Task 3's two, both tasks having put their HTTP tests in the one nested class). Classes 327 → 331 is
+      **+4**, the same four. `skipped` is **0** in every suite of both source sets, so nothing was quietly
+      excluded to reach green. Integration is unchanged at 12 across 3, as expected: the notes are written
+      through existing seams and the HTTP tests live in the `test` source set
+- [x] Mark completed
 
 ## Deliberately not in this plan
 
