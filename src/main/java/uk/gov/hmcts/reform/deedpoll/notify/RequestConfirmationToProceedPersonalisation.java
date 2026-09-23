@@ -61,6 +61,13 @@ public record RequestConfirmationToProceedPersonalisation(
     public static final String OLD_FORENAME = "old_forename";
     public static final String OLD_SURNAME = "old_surname";
     public static final String APPLIED_ONLINE = "applied_online";
+    /**
+     * The inverse of {@link #APPLIED_ONLINE}, because Notify's conditional has no {@code else}.
+     *
+     * <p>③'s finding, applied here because this template carries the same two refund paragraphs. Derived in
+     * {@link #toMap()} rather than taken as a component, so the two can never disagree.
+     */
+    public static final String APPLIED_ON_PAPER = "applied_on_paper";
     public static final String IS_MINOR = "is_minor";
     public static final String DECISION_DATE = "decision_date";
 
@@ -71,8 +78,8 @@ public record RequestConfirmationToProceedPersonalisation(
      * it is what {@link EmailSlots#parse} names a request back when the request tries to supply one of them.
      */
     public static final List<String> RESOLVED_KEYS = List.of(
-        REFERENCE_NUMBER, ONLINE_APPLICATION_REFERENCE, OLD_FORENAME, OLD_SURNAME, APPLIED_ONLINE, IS_MINOR,
-        DECISION_DATE);
+        REFERENCE_NUMBER, ONLINE_APPLICATION_REFERENCE, OLD_FORENAME, OLD_SURNAME, APPLIED_ONLINE,
+        APPLIED_ON_PAPER, IS_MINOR, DECISION_DATE);
 
     /**
      * Resolves the email's content from the case, the referral and the validated slots.
@@ -119,8 +126,13 @@ public record RequestConfirmationToProceedPersonalisation(
         personalisation.put(OLD_FORENAME, oldForename);
         personalisation.put(OLD_SURNAME, oldSurname);
         // Booleans rather than "yes"/"no": Notify's conditional syntax reads a JSON boolean directly, and a
-        // string would make each branch depend on which words somebody chose.
+        // string would make each branch depend on which words somebody chose. Unproven for a JSON boolean and
+        // silent if wrong -- see ApplicationRejectedPersonalisation.toMap, which carries the full note.
         personalisation.put(APPLIED_ONLINE, appliedOnline);
+        // Notify's conditional has no `else`, so the paper branch needs its own flag -- ③'s finding, applied
+        // here because this template offers the same refund and carries the same two paragraphs. ④ is not
+        // authored yet; doing it now is what stops the same defect being rediscovered when it is.
+        personalisation.put(APPLIED_ON_PAPER, !appliedOnline);
         personalisation.put(IS_MINOR, isMinor);
         personalisation.put(DECISION_DATE, decisionDate);
         personalisation.put(EmailSlot.JUDGES_REASON.placeholder(), judgesReason);

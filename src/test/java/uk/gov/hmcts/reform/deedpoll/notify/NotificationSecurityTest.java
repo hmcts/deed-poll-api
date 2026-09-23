@@ -190,7 +190,14 @@ class NotificationSecurityTest {
                 EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.personalisationKeys());
         // And exactly one key per component of the record that resolved them, so a component added without a key
         // -- which would never reach the applicant -- fails here rather than rendering as a blank line.
-        assertThat(sent).hasSize(RequestConfirmationToProceedPersonalisation.class.getRecordComponents().length);
+        //
+        // **Plus one**, and only one: `applied_on_paper` is derived from `appliedOnline` rather than being a
+        // component of its own, because Notify's conditional has no `else` and two mutually exclusive paragraphs
+        // need two flags. A negation cannot disagree with its source where a second field could. Asserted as
+        // `+ 1` rather than a literal so the rule stays legible if the record grows.
+        assertThat(sent)
+            .hasSize(RequestConfirmationToProceedPersonalisation.class.getRecordComponents().length + 1)
+            .containsKey(RequestConfirmationToProceedPersonalisation.APPLIED_ON_PAPER);
 
         // The applicant, never the representative: this email asks the person whose name is changing whether they
         // still want it enrolled, and a representative's address is not theirs to answer from.
