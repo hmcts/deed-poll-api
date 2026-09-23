@@ -29,8 +29,8 @@ row; its failed history remains unchanged when the replacement is sent.
 | Caseworker endpoints | **34 across 21 paths** on `notify-3b` (33 on `master`), over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures |
 | Judicial endpoints | **5**, `referrals-api-6` having merged — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,571** on `notify-3b` — `test` 2,559 + `integration` 12 (measured 2026-09-23). The branches are not stacked, so figures from one are never cumulative with another's |
-| Docker-free CI | **1,623 unit tests**, measured with `INTEGRATION_TESTS_ENABLED=false`; the other 936 are in 31 container-backed classes. `build.gradle` carries the history and instructs the next plan to re-measure |
+| Tests | **2,575** on `notify-3b` — `test` 2,563 + `integration` 12 (measured 2026-09-23). The branches are not stacked, so figures from one are never cumulative with another's |
+| Docker-free CI | **1,627 unit tests**, measured with `INTEGRATION_TESTS_ENABLED=false`; the other 936 are in 31 container-backed classes. `build.gradle` carries the history and instructs the next plan to re-measure |
 | `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `notify-3b` after its review (2026-09-23), and on `master` after notify-5 |
 
 **Twenty-one** plans are in [`plans/completed/`](plans/completed/) — the three added since this section was
@@ -142,8 +142,8 @@ nothing in this repo can confirm the external half. Re-check rather than quote.
   `values.yaml`. That nagger was what failed master build #3.
 - **CI runs without Docker.** `INTEGRATION_TESTS_ENABLED=false` (set by `Jenkinsfile_CNP`) drops
   `integration` from `check` and excludes the `requires-docker` tag from `test`. On `notify-3b` that is
-  **1,623 of 2,559** unit tests running in CI, with 936 in 31 container-backed classes.
-  `build.gradle:85-118` carries the full history and instructs the next plan to re-measure it.
+  **1,627 of 2,563** unit tests running in CI, with 936 in 31 container-backed classes.
+  `build.gradle:85-121` carries the full history and instructs the next plan to re-measure it.
 - **The chart is wired for workload identity** — `useWorkloadIdentity: true`, `saEnabled: true`, reading
   the shared `deed-poll-{env}` vault for `app-insights-connection-string` and the four `postgres-*`
   secrets. The matching identity, federated credential and service-account annotation are

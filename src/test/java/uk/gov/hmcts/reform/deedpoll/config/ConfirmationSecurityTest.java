@@ -19,6 +19,8 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseDetailResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseSummaryResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.ReferralResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SavedCaseResponse;
+import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialCaseNote;
+import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialReferralDetail;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
@@ -29,11 +31,14 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollFields;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ConfirmationInput;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralView;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralNotes;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
@@ -87,7 +92,9 @@ import static org.mockito.Mockito.when;
  *       clock, so a body cannot sign an answer as somebody else or backdate one.</li>
  *   <li><strong>Disclosure.</strong> The confirmation columns and the case's wait are caseworker fields: no
  *       judicial or citizen class sees them, and the caseworker DTOs that do publish them are named here so
- *       the rule cannot pass vacuously.</li>
+ *       the rule cannot pass vacuously. <strong>Fields, and only fields</strong> -- the note the recording writes
+ *       does reach the judge who refused the request, through the case timeline every judicial referral response
+ *       carries, and that is a decision rather than a gap in these rules. It is pinned below so it stays one.</li>
  *   <li><strong>The waiting list narrows, never widens.</strong> Its criterion is a not-null test on the
  *       case's own column with no join and no caller input, and the column is readable but unwritable -- a
  *       caller who could patch it could take a case out of the list nobody had answered.</li>
@@ -365,10 +372,12 @@ class ConfirmationSecurityTest {
         @Test
         @DisplayName("no judicial or citizen class depends on the confirmation types at all")
         void noOtherSurfaceDependsOnTheConfirmationTypes() {
-            // Wider than a field rule, and deliberately: the answer to "do you still want this published?" is
-            // correspondence between the office and the applicant. A judge decided the non-publication request
-            // and has no part in what the applicant then chose, and the citizen surface -- empty until a later
-            // plan -- must not inherit "any authenticated caller may record one", which is a rule about staff.
+            // Wider than a field rule, and deliberately: recording an answer is an office operation, so no
+            // judicial or citizen response should be able to name its types -- and the citizen surface, empty
+            // until a later plan, must not inherit "any authenticated caller may record one", which is a rule
+            // about staff. This is about the columns and the route, not about the fact: what the applicant chose
+            // does reach the deciding judge through the case timeline, which
+            // theConfirmationNoteReachesTheDecidingJudge below states.
             noClasses()
                 .that().resideInAnyPackage(JUDICIAL + "..", CITIZEN + "..")
                 .should().dependOnClassesThat().haveSimpleNameStartingWith("Confirmation")
@@ -415,6 +424,40 @@ class ConfirmationSecurityTest {
             assertThat(componentsOf(CaseSummaryResponse.class))
                 .contains("daysAwaitingConfirmation")
                 .doesNotContain(WAIT_COLUMN);
+        }
+
+        @Test
+        @DisplayName("the confirmation note does reach the deciding judge, through the case timeline")
+        void theConfirmationNoteReachesTheDecidingJudge() {
+            // The limit of the three rules above, stated rather than left for somebody to discover: they are
+            // field-shaped and the timeline is not a field of the confirmation's. A recording writes a case note,
+            // JudicialReferralDetail returns the case's notes to any judge who may see a referral on it, and
+            // visibility admits a judge's own Decided referral -- which is what the confirmation email is only
+            // ever sent about. So the outcome and the caseworker's words about the reply are legible to the judge
+            // who refused publication.
+            //
+            // Asserted positively and deliberately, the way ReferralNotes.claimLapsed's judge name is: the
+            // disclosure was weighed -- a judge who directed a case may read what became of it -- and a test that
+            // pins it is what makes the next person's removal of it a decision rather than a side effect. See
+            // ReferralNotes.confirmationRecorded.
+            Referral referral = asked();
+            referral.setConfirmationOutcome(ConfirmationOutcome.Withdrawn);
+            referral.setConfirmationReceivedAt(LocalDateTime.parse("2026-05-20T11:00:00"));
+
+            String text = ReferralNotes.confirmationRecorded(
+                referral, Optional.of("She rang the office and asked for the fee back."));
+            DeedPollNote note = new DeedPollNote();
+            note.setNote(text);
+            note.setCreatedBy("Ada Caseworker");
+            note.setCreatedOn(LocalDateTime.parse("2026-05-20T11:05:00"));
+
+            JudicialReferralDetail detail = JudicialReferralDetail.of(
+                new JudicialReferralView(referral, referral.getDeedPoll(), List.of(note)));
+
+            assertThat(detail.caseNotes()).extracting(JudicialCaseNote::note).containsExactly(text);
+            // Both halves, named, so a change to either composer is what fails here rather than the wrapper: the
+            // answer itself and the caseworker's free text alongside it.
+            assertThat(text).contains("Withdrawn", "She rang the office and asked for the fee back.");
         }
 
         private static List<String> componentsOf(Class<?> type) {

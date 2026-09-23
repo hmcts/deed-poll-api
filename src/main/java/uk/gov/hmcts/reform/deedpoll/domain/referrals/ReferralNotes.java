@@ -197,6 +197,21 @@ public final class ReferralNotes {
      * application, which is a different event with a refund behind it, and a grid entry reading only "Withdrawn"
      * would be read as the other one.
      *
+     * <p><strong>This note reaches the judiciary, and the caseworker's own words with it.</strong> It is on the
+     * case's timeline, and {@code JudicialReferralDetail} returns that timeline to any judge who may see a
+     * referral on the case -- which, for the referral this note is about, is the judge who refused the
+     * non-publication request. So the outcome and the free text below are legible to them, exactly as
+     * {@link #claimLapsed}'s name is. That is the same decision rather than an oversight: the judge refused
+     * publication on the applicant's stated wishes, so whether the applicant then went ahead, withdrew or asked
+     * for a refund is the result of their own direction, and a judge who directed a case is entitled to read what
+     * became of it. The confirmation <em>columns</em> are a different matter and are not published on that surface
+     * -- see {@code ConfirmationSecurityTest}'s disclosure rules, which are about fields and say so.
+     *
+     * <p>The consequence for the caseworker's text is worth stating rather than discovering: it is office prose
+     * about the applicant's reply that a judge may read, so it is not the place for anything the office would not
+     * put in front of one. If that ever becomes intolerable the fix is to stop writing it here, not to filter the
+     * timeline -- the note model carries no discriminator a projection could exclude one kind of note by.
+     *
      * @param referral the referral as it was stored, carrying the outcome and the request date
      * @param note what the caseworker wrote about the reply, absent where they wrote nothing
      */

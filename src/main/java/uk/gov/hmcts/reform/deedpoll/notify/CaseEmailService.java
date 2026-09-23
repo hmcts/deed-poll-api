@@ -95,7 +95,7 @@ public class CaseEmailService {
     /**
      * Why <em>Request confirmation to proceed</em> does not apply to a case that has had nothing refused.
      *
-     * <p>The first of that email's two conditions, and its own sentence rather than half of a combined one:
+     * <p>The first of that email's three conditions, and its own sentence rather than half of a combined one:
      * a caseworker can act on the difference between "nobody has decided this yet" and "what was decided was
      * not about publication", and the second would send them looking for a decision that exists.
      */
@@ -113,6 +113,21 @@ public class CaseEmailService {
      */
     static final String REFUSAL_NOT_ABOUT_NON_PUBLICATION = "This case's most recent refusal was not raised for "
         + "a non-publication request, so there is no refused request to ask the applicant about";
+
+    /**
+     * Why <em>Request confirmation to proceed</em> does not apply to a case whose applicant has already answered.
+     *
+     * <p>The third condition, and the one that is about the exchange rather than about the refusal: once an
+     * outcome is recorded there is nothing left to ask, and asking anyway would put the case in a state nothing
+     * could correct. {@link #awaitingAnAnswer} has that argument.
+     *
+     * <p>It says the answer is recorded without saying what it was. A caseworker who needs that reads the
+     * referrals tab or the case's timeline, both of which name it; repeating it in an availability response would
+     * publish the applicant's decision on a screen that is asking a different question.
+     */
+    static final String CONFIRMATION_ALREADY_ANSWERED = "The applicant has already answered the confirmation for "
+        + "this case's most recent refusal, so there is nothing left to ask them: see the referral for what they "
+        + "said";
 
     private final DeedPollRepository deedPolls;
     private final ReferralRepository referrals;
@@ -392,6 +407,13 @@ public class CaseEmailService {
      * are being reminded of. A replacement after a terminal failure <em>does</em> re-stamp, which is correct: the
      * applicant has been asked again, so the wait starts from the asking.
      *
+     * <p><strong>This re-stamp is unconditional because it cannot outlive an answer.</strong> It does not look at
+     * {@code confirmationOutcome}, and it must not have to: an answered referral is not sendable at all --
+     * {@link #awaitingAnAnswer} takes ④ off both the availability list and the send path -- so there is no
+     * enqueue for this method to be reached by. Were that filter removed, a re-stamp on an answered referral would
+     * set a request date that the recompute below deliberately ignores, and the case would be waiting for a reply
+     * while absent from the list of cases waiting for one.
+     *
      * <p><strong>Two rows, one transaction:</strong> the referral's stamp, and the case's
      * {@code awaitingConfirmationSince} -- the read-model the caseworker waiting list filters, sorts and counts
      * days from. The second is recomputed from the referral table rather than set to {@code now}, because the
@@ -452,6 +474,11 @@ public class CaseEmailService {
      * already had the email this one contradicts -- and the unique index is what actually refuses the second
      * case. Reporting it here is so the Email tab can grey the option out rather than let a caseworker compose
      * an email that will be refused on submit, which is a bad way to find out.
+     *
+     * <p>The first reason is the enforcement as well as the report, and one of its conditions is only enforceable
+     * here: an applicant who has already answered ④ has no database key standing between them and a second copy
+     * of it, because the index is keyed on the outbox row and the row that asked has long since been drained.
+     * {@link #awaitingAnAnswer} is what refuses that, on this path and on the send's through {@link #cause}.
      */
     private EmailAvailability availability(EmailTemplate template, String deedPollId) {
         boolean provisioned = properties.isProvisioned(template);
@@ -526,13 +553,15 @@ public class CaseEmailService {
      * also guarantees that when both templates apply they name the same {@code referralId}, which is what lets
      * one database key make them mutually exclusive.
      *
-     * <p>The newest refusal is a parameter rather than read here, so one caller reads it once and then asks both
-     * what it entitles the case to and, if it does not, which of the two sentences to say.
+     * <p>The newest refusal is a parameter rather than read here, so one caller reads it once and then asks
+     * which of its sentences to say when it entitles the case to nothing.
      */
     private static Optional<Referral> cause(EmailTemplate template, Optional<Referral> newestRefusal) {
         return switch (template) {
             case APPLICATION_REJECTED -> newestRefusal;
-            case REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal.filter(CaseEmailService::aboutNonPublication);
+            case REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal
+                .filter(CaseEmailService::aboutNonPublication)
+                .filter(CaseEmailService::awaitingAnAnswer);
         };
     }
 
@@ -562,19 +591,62 @@ public class CaseEmailService {
     }
 
     /**
+     * Whether this referral is still one the applicant could be asked to confirm, which it is not once their
+     * answer is recorded.
+     *
+     * <p><strong>Asking again and having an answer have to be mutually exclusive, and this is where they are
+     * made so.</strong> {@code ReferralService.recordConfirmation} refuses a second answer and there is no route
+     * that clears the first, so a second ④ could never lead to a recordable reply. Worse, it would leave the case
+     * in a state nothing could put right: {@link #startConfirmationClock} would re-stamp
+     * {@code confirmationRequestedAt}, while the recompute behind {@code awaitingConfirmationSince} counts only
+     * referrals whose outcome is null -- so the applicant would have been asked again with the case absent from
+     * the waiting list, the one failure this feature exists to prevent, and the row would carry a request date
+     * later than the answer it already holds.
+     *
+     * <p><strong>Reachable rather than theoretical, which is why it is refused here rather than noted.</strong>
+     * The V15 index stops a second ④ only while the first row still occupies the exclusion group; a row that
+     * failed {@code PERMANENT}ly does not -- notify-1 deliberately permits a replacement -- and that is the state
+     * of every ④ in an environment where the template is not yet provisioned. So the sequence is: ④ sent, case
+     * waits, send fails terminally, the caseworker chases the applicant by phone and records the answer, and ④ is
+     * then offered again.
+     *
+     * <p>Refusing the send rather than clearing the answer, because the answer is the office's record of what the
+     * applicant said: a re-ask that silently discarded it would lose a decision about a refund. A case that
+     * genuinely has to ask again needs a referral it can ask on, which is what raising one does.
+     */
+    private static boolean awaitingAnAnswer(Referral referral) {
+        return referral.getConfirmationOutcome() == null;
+    }
+
+    /**
      * The sentence that says why a template does not apply, which is per template for the reason its text is.
      *
-     * <p>④ has two sentences because it has two conditions, and a caseworker can act on the difference: a case
-     * with no refusal at all is waiting on a judge, while a case whose newest refusal was about something else
-     * is one where this email is simply the wrong email. Told which, they do two different things.
+     * <p>④ has three sentences because it has three conditions, and a caseworker can act on the difference: a
+     * case with no refusal at all is waiting on a judge, a case whose newest refusal was about something else is
+     * one where this email is simply the wrong email, and a case whose applicant has already answered needs
+     * nothing sent at all. Told which, they do three different things.
+     *
+     * <p>The order repeats {@link #cause}'s filters, so the sentence names the first condition that failed rather
+     * than the last one tested.
      */
     private static String reasonNotApplicable(EmailTemplate template, Optional<Referral> newestRefusal) {
         return switch (template) {
             case APPLICATION_REJECTED -> NO_REFUSAL;
-            case REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal.isPresent()
-                ? REFUSAL_NOT_ABOUT_NON_PUBLICATION
-                : NO_REFUSAL_TO_CONFIRM;
+            case REQUEST_CONFIRMATION_TO_PROCEED -> reasonNoConfirmationToAskFor(newestRefusal);
         };
+    }
+
+    /**
+     * Which of ④'s three conditions failed, in the order {@link #cause} tests them.
+     */
+    private static String reasonNoConfirmationToAskFor(Optional<Referral> newestRefusal) {
+        if (newestRefusal.isEmpty()) {
+            return NO_REFUSAL_TO_CONFIRM;
+        }
+        if (!aboutNonPublication(newestRefusal.get())) {
+            return REFUSAL_NOT_ABOUT_NON_PUBLICATION;
+        }
+        return CONFIRMATION_ALREADY_ANSWERED;
     }
 
     /**

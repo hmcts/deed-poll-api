@@ -120,6 +120,10 @@ worth knowing before calling them:
   what is stored and its date; an answer on a referral nobody asked to confirm is a **409** in different words.
   Recording one moves no case date and adds no case state — the wait is surfaced beside the derived state, never
   inside it — so the caseworker then does whatever the process requires through the ordinary case edit.
+  The other end of that rule is on the Email tab: once an answer is stored, *Request confirmation to proceed* is
+  no longer offered for that referral and sending it is a **409**. Asking again would re-start a clock that
+  nothing reads — the waiting list counts only referrals with no answer yet — so the applicant would have been
+  chased with the case absent from the list of cases waiting, and the new reply could never be recorded.
 - **No role gate anywhere below these routes.** Any authenticated staff caller may raise, read, withdraw, close
   and record a confirmation: in the process this replaces, anybody who works a case can email a Master and action
   the reply, and anybody can read the applicant's reply out of the shared inbox. The
