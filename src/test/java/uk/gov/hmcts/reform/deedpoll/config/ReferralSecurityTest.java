@@ -5,6 +5,7 @@ import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaMethodCall;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -200,7 +201,8 @@ class ReferralSecurityTest {
         referrals = mock(ReferralRepository.class);
         notes = mock(NoteService.class);
         service = new ReferralService(deedPolls, referrals, notes,
-                                      new ReferralProperties(Duration.ofHours(2)));
+                                      new ReferralProperties(Duration.ofHours(2)),
+                                      mock(EntityManager.class));
 
         when(referrals.save(any())).thenAnswer(call -> call.getArgument(0));
         when(referrals.findStaleClaims(any(), any())).thenReturn(List.of());
@@ -229,6 +231,9 @@ class ReferralSecurityTest {
         referral.setCreatedOn(LocalDateTime.parse("2026-09-01T09:30:00"));
         referral.setModifiedOn(LocalDateTime.parse("2026-09-01T09:30:00"));
         when(referrals.findByIdAndDeedPollId(REFERRAL_ID, CASE_ID)).thenReturn(Optional.of(referral));
+        // Through the locked lookup as well, because that is the one every write reads -- and only ever for this
+        // case's id, so a cross-case write is refused by the finder here exactly as it is by the SQL.
+        when(referrals.findByIdAndDeedPollIdForUpdate(REFERRAL_ID, CASE_ID)).thenReturn(Optional.of(referral));
         return referral;
     }
 
@@ -687,6 +692,9 @@ class ReferralSecurityTest {
             }
 
             verifyNoInteractions(deedPolls, notes);
+            // Through neither finder: the transitions write, so they read under the lock, and an assertion naming
+            // only the unlocked one would be about a call they never make.
+            verify(referrals, never()).findByIdAndDeedPollIdForUpdate(any(), anyString());
             verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
             verify(referrals, never()).findStaleClaims(any(), any());
             verify(referrals, never()).save(any());

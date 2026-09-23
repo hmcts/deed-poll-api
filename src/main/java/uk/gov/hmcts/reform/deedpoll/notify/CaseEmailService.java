@@ -325,8 +325,8 @@ public class CaseEmailService {
      * @param caller the caseworker sending it, who becomes {@code createdBy} -- not audit noise here, because
      *     they authored part of what the applicant reads
      * @throws NotFoundError if there is no such case
-     * @throws ConflictError if the case is in no state to send this email, or the email that contradicts this one
-     *     has already been asked for on the same referral
+     * @throws ConflictError if the case is in no state to send this email, the email that contradicts this one
+     *     has already been asked for on the same referral, or the applicant answered ④ while it was being sent
      * @throws IncompleteDataError if the case has no applicant email address
      * @throws uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError if the slots are not acceptable
      */
@@ -356,7 +356,7 @@ public class CaseEmailService {
             caller.name());
 
         if (enqueued == 1) {
-            startConfirmationClock(template, deedPollId, composed.referral(), now, caller);
+            startConfirmationClock(template, deedPollId, referralId, now, caller);
             return SendReceipt.enqueued(id, recipient);
         }
 
@@ -407,12 +407,31 @@ public class CaseEmailService {
      * are being reminded of. A replacement after a terminal failure <em>does</em> re-stamp, which is correct: the
      * applicant has been asked again, so the wait starts from the asking.
      *
-     * <p><strong>This re-stamp is unconditional because it cannot outlive an answer.</strong> It does not look at
-     * {@code confirmationOutcome}, and it must not have to: an answered referral is not sendable at all --
-     * {@link #awaitingAnAnswer} takes ④ off both the availability list and the send path -- so there is no
-     * enqueue for this method to be reached by. Were that filter removed, a re-stamp on an answered referral would
-     * set a request date that the recompute below deliberately ignores, and the case would be waiting for a reply
-     * while absent from the list of cases waiting for one.
+     * <p><strong>The re-stamp is conditional on there being no answer yet, and the condition is in the statement
+     * rather than here.</strong> {@link #awaitingAnAnswer} already takes ④ off both the availability list and the
+     * send path once the applicant has answered, but that check and this write are two steps of one transaction:
+     * on a replacement send after a terminal failure -- the only path that reaches a second enqueue -- an answer
+     * recorded in between would be overwritten back to NULL, erasing the applicant's reply and restarting a wait
+     * they have already ended. {@link ReferralRepository#startConfirmationClockByIdAndDeedPollId} refuses that by
+     * its own {@code WHERE} clause and answers 0.
+     *
+     * <p><strong>Answering 0 refuses the send, and in the same words the check that let it through would have
+     * used.</strong> Not a stamp quietly skipped: the applicant has answered, so {@link #awaitingAnAnswer}'s rule
+     * is that they must not be asked again, and the only difference between this caller and one who clicked a
+     * second later is which side of the answer they landed on -- so they get the same
+     * {@link #CONFIRMATION_ALREADY_ANSWERED} 409. Raising it rolls the outbox row back with everything else, which
+     * is the point: nothing has been sent yet, the drain reads committed rows only, and letting the row stand would
+     * have an applicant who has already replied receive a fresh request to reply. Zero rows cannot mean anything
+     * else here -- the case is in the statement's {@code WHERE} and is the case the outbox row was just written
+     * for, and that row's own foreign key holds the referral in place -- so there is no second reading of it to
+     * distinguish.
+     *
+     * <p><strong>A statement over the three columns, never {@code save} on the referral this send composed
+     * from.</strong> {@code notifications.enqueue} clears the persistence context, so that referral is detached by
+     * the time the clock starts and a {@code save} on it would be a {@code merge} -- Hibernate re-reading the row
+     * and writing every column back from the pre-enqueue snapshot, discarding whatever another transaction
+     * committed on that referral in the meantime. The statement takes the referral's id rather than the entity so
+     * that the detached copy is not reachable from here at all.
      *
      * <p><strong>Two rows, one transaction:</strong> the referral's stamp, and the case's
      * {@code awaitingConfirmationSince} -- the read-model the caseworker waiting list filters, sorts and counts
@@ -429,18 +448,23 @@ public class CaseEmailService {
      */
     private void startConfirmationClock(EmailTemplate template,
                                         String deedPollId,
-                                        Referral referral,
+                                        UUID referralId,
                                         LocalDateTime now,
                                         CurrentUser caller) {
         if (!startsConfirmationClock(template)) {
             return;
         }
-        referral.setConfirmationRequestedAt(now);
-        // The caseworker into both audit columns, not just the timestamp: the row did change, and moving
-        // modifiedOn while modifiedBy still named the judge who directed it would attribute this to them.
-        referral.setModifiedBy(caller.name());
-        referral.setModifiedOn(now);
-        referrals.save(referral);
+        // Three columns, conditionally: the stamp, and the caseworker into both audit columns because the row did
+        // change and moving modifiedOn while modifiedBy still named the judge who directed it would attribute this
+        // to them. Scoped to the case the outbox row was written for, as every referral write here is.
+        if (referrals.startConfirmationClockByIdAndDeedPollId(referralId, deedPollId, now, caller.name()) == 0) {
+            // The answer arrived between this send being allowed and this statement running, so the applicant is
+            // being asked something they have already answered. Refused rather than stamped-or-not: throwing takes
+            // the outbox row with it, and nothing has left for Notify because the drain reads committed rows only.
+            log.info("Referral {} of case {} was answered while {} was being sent, so the send was refused",
+                     referralId, deedPollId, template.key());
+            throw new ConflictError(CONFIRMATION_ALREADY_ANSWERED);
+        }
         // And the case's read-model of the same fact, in this transaction, so the case reaches the
         // waiting list with the email it is waiting on. A recompute from the referral table rather than
         // a copy of `now`: the case's column is the EARLIEST outstanding request on it, which this
@@ -596,12 +620,15 @@ public class CaseEmailService {
      *
      * <p><strong>Asking again and having an answer have to be mutually exclusive, and this is where they are
      * made so.</strong> {@code ReferralService.recordConfirmation} refuses a second answer and there is no route
-     * that clears the first, so a second ④ could never lead to a recordable reply. Worse, it would leave the case
-     * in a state nothing could put right: {@link #startConfirmationClock} would re-stamp
-     * {@code confirmationRequestedAt}, while the recompute behind {@code awaitingConfirmationSince} counts only
-     * referrals whose outcome is null -- so the applicant would have been asked again with the case absent from
-     * the waiting list, the one failure this feature exists to prevent, and the row would carry a request date
-     * later than the answer it already holds.
+     * that clears the first, so a second ④ could never lead to a recordable reply. Worse, it would ask an applicant
+     * who has already replied to reply again, which is the office looking as though it had not read what they sent.
+     *
+     * <p><strong>This check and the clock's statement enforce the same rule at two moments, because one moment is
+     * not enough.</strong> Here it is decided on a read; in {@link #startConfirmationClock} it is re-decided by the
+     * {@code WHERE} clause of the statement that stamps the referral, which is what catches an answer recorded in
+     * between -- the send is then refused there too, in the words this file's {@link #CONFIRMATION_ALREADY_ANSWERED}
+     * gives, and the outbox row rolls back with it. So a caseworker gets the same 409 whichever side of the
+     * applicant's answer their click landed on.
      *
      * <p><strong>Reachable rather than theoretical, which is why it is refused here rather than noted.</strong>
      * The V15 index stops a second ④ only while the first row still occupies the exclusion group; a row that

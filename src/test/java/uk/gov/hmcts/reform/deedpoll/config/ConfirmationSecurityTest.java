@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.config;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import jakarta.persistence.EntityManager;
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Path;
@@ -143,7 +144,8 @@ class ConfirmationSecurityTest {
         referrals = mock(ReferralRepository.class);
         notes = mock(NoteService.class);
         service = new ReferralService(deedPolls, referrals, notes,
-                                      new ReferralProperties(Duration.ofHours(2)));
+                                      new ReferralProperties(Duration.ofHours(2)),
+                                      mock(EntityManager.class));
 
         when(referrals.save(any())).thenAnswer(call -> call.getArgument(0));
     }
@@ -171,6 +173,10 @@ class ConfirmationSecurityTest {
         referral.setCreatedOn(LocalDateTime.parse("2026-05-01T09:30:00"));
         referral.setModifiedOn(LocalDateTime.parse("2026-05-01T09:30:00"));
         referral.setConfirmationRequestedAt(ASKED);
+        // The locked lookup, which is the one a recording reads: the scope is in it exactly as it is in the
+        // unlocked finder beside it, so a cross-case attempt is refused by the finder rather than by a guard after
+        // it. Both are stubbed because a caller reaching for either must find this row only through its own case.
+        when(referrals.findByIdAndDeedPollIdForUpdate(REFERRAL_ID, CASE_ID)).thenReturn(Optional.of(referral));
         when(referrals.findByIdAndDeedPollId(REFERRAL_ID, CASE_ID)).thenReturn(Optional.of(referral));
         return referral;
     }
@@ -213,6 +219,10 @@ class ConfirmationSecurityTest {
             // put one in it, on the strength of a referral that case does not own.
             verify(deedPolls, never()).writeAwaitingConfirmationSince(anyString(), any());
             verify(referrals, never()).findOutstandingConfirmationRequestsByDeedPollId(anyString());
+            // Not even the lock the recompute takes on the case row: a refusal that locked the case it was
+            // addressed at would hold up every other writer of a case this referral does not belong to.
+            verify(deedPolls, never()).lockForConfirmationRecompute(anyString());
+            verify(deedPolls, never()).findByIdForUpdate(anyString());
         }
 
         @Test
@@ -249,7 +259,9 @@ class ConfirmationSecurityTest {
 
             // The difference is invisible in the answer -- both are a 404 -- and it is the difference between a
             // scope and a check: a check is one forgotten comparison away from reading another case's referral.
-            verify(referrals).findByIdAndDeedPollId(REFERRAL_ID, CASE_ID);
+            // The lookup is the locked one because the refusal on an already-recorded answer has to be decided and
+            // acted on as one step; the scope travels with the lock rather than being dropped by it.
+            verify(referrals).findByIdAndDeedPollIdForUpdate(REFERRAL_ID, CASE_ID);
             verify(referrals, never()).findById(any());
             verify(referrals, never()).findWithCaseById(any());
         }

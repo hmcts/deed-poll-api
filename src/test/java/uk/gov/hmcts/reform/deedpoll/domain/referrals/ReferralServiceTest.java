@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.domain.referrals;
 
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -7,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
@@ -47,6 +49,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -186,9 +189,17 @@ class ReferralServiceTest {
         return written.getValue();
     }
 
-    /** The same mocks, wired to a service configured with a different inactivity window. */
+    /**
+     * The same mocks, wired to a service configured with a different inactivity window.
+     *
+     * <p>A mock {@code EntityManager}, whose {@code refresh} does nothing, which is the right answer here: the
+     * service takes one to bring a referral loaded earlier in the transaction up to the locked row, and there is
+     * no persistence context in a test whose repository is a mock. What that refresh is for needs two committed
+     * transactions to show, so it is proved in {@code ConfirmationConcurrencyTest} against a real database.
+     */
     private ReferralService serviceWithClaimExpiry(Duration window) {
-        return new ReferralService(deedPolls, referrals, notes, new ReferralProperties(window));
+        return new ReferralService(deedPolls, referrals, notes, new ReferralProperties(window),
+                                   mock(EntityManager.class));
     }
 
     /** The case exists, so the parent check passes. */
@@ -245,6 +256,11 @@ class ReferralServiceTest {
         referral.setCreatedOn(LocalDateTime.parse("2026-09-01T09:30:00"));
         referral.setModifiedOn(LocalDateTime.parse("2026-09-01T09:30:00"));
         when(referrals.findByIdAndDeedPollId(REFERRAL_ID, CASE_ID)).thenReturn(Optional.of(referral));
+        // The same row through the locked lookup, which is the one every write reads: the lock is what makes a
+        // guard a guard rather than a read-check-write and what stops a whole-row save undoing another
+        // transaction's columns, and both finders answer from the same store here because the difference between
+        // them is SQL that only ReferralRepositoryTest can assert.
+        when(referrals.findByIdAndDeedPollIdForUpdate(REFERRAL_ID, CASE_ID)).thenReturn(Optional.of(referral));
         rows.add(referral);
         return referral;
     }
@@ -281,6 +297,7 @@ class ReferralServiceTest {
         referral.setCreatedOn(touched);
         referral.setModifiedOn(touched);
         when(referrals.findByIdAndDeedPollId(id, deedPollId)).thenReturn(Optional.of(referral));
+        when(referrals.findByIdAndDeedPollIdForUpdate(id, deedPollId)).thenReturn(Optional.of(referral));
         rows.add(referral);
         return referral;
     }
@@ -893,7 +910,9 @@ class ReferralServiceTest {
                 .isInstanceOf(ForbiddenError.class);
 
             // A caller with no judicial role learns nothing about whether the referral exists, and the sweep
-            // is not run on their behalf either.
+            // is not run on their behalf either. Through neither finder: a claim reads under the lock, so naming
+            // only the unlocked one would be an assertion about a call this operation never makes.
+            verify(referrals, never()).findByIdAndDeedPollIdForUpdate(any(), anyString());
             verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
             verify(referrals, never()).findStaleClaims(any(), any());
         }
@@ -1342,6 +1361,9 @@ class ReferralServiceTest {
             assertThatThrownBy(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), CASEWORKER))
                 .isInstanceOf(ForbiddenError.class);
 
+            // Through neither finder, for the reason claim's counterpart names both: a direction reads under the
+            // lock, so the unlocked finder alone would be a call this operation never makes.
+            verify(referrals, never()).findByIdAndDeedPollIdForUpdate(any(), anyString());
             verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
         }
 
@@ -1611,6 +1633,9 @@ class ReferralServiceTest {
             assertThatThrownBy(() -> service.close(CASE_ID, "not-a-uuid", CASEWORKER))
                 .isInstanceOf(NotFoundError.class);
 
+            // Neither finder, and the locked one is the one this operation would have used: an id that is not a
+            // UUID is refused before the row is read, so no lock is taken on anything either.
+            verify(referrals, never()).findByIdAndDeedPollIdForUpdate(any(), anyString());
             verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
             verifyNoInteractions(notes);
         }
@@ -2137,6 +2162,46 @@ class ReferralServiceTest {
                 .doesNotThrowAnyException();
 
             assertThat(saved().getConfirmationRecordedBy()).isEqualTo("An Admin");
+        }
+
+        @Test
+        @DisplayName("reads the referral under a row lock, so a simultaneous second recording is refused")
+        void readsTheReferralUnderALock() {
+            askedToConfirm(ReferralState.Decided);
+
+            service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation("Confirmed", null), CASEWORKER);
+
+            // The guard reads a column another caseworker's request can be setting on the same row at this
+            // instant, so the read and the write have to be one step. Through the unlocked finder, two
+            // simultaneous recordings both see no outcome, both pass, and the second overwrites the first
+            // answer while both case notes survive -- a refusal this operation promises instead.
+            verify(referrals).findByIdAndDeedPollIdForUpdate(REFERRAL_ID, CASE_ID);
+            verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
+        }
+
+        @Test
+        @DisplayName("locks the case before asking which of its referrals are still outstanding")
+        void locksTheCaseBeforeRecomputingTheWait() {
+            askedToConfirm(ReferralState.Decided);
+            when(referrals.findOutstandingConfirmationRequestsByDeedPollId(CASE_ID)).thenReturn(List.of());
+
+            service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation("Confirmed", null), CASEWORKER);
+
+            // The order is the whole assertion. A case can hold two outstanding requests, so two answers arriving
+            // at once are two transactions writing two different referral rows and then this one column: reading
+            // the outstanding set before taking the case's lock lets each miss the other's answer and leaves the
+            // column pointing at a referral that has been answered, with no third answer coming to repair it.
+            InOrder order = inOrder(referrals, deedPolls);
+            order.verify(referrals).findByIdAndDeedPollIdForUpdate(REFERRAL_ID, CASE_ID);
+            order.verify(deedPolls).lockForConfirmationRecompute(CASE_ID);
+            order.verify(referrals).findOutstandingConfirmationRequestsByDeedPollId(CASE_ID);
+            order.verify(deedPolls).writeAwaitingConfirmationSince(CASE_ID, null);
+            // And through that lock rather than the patch path's: this transaction has already inserted a case note,
+            // so a FOR UPDATE on the case would be asking for the one strength the note's foreign key conflicts
+            // with -- see DeedPollRepository.lockForConfirmationRecompute.
+            verify(deedPolls, never()).findByIdForUpdate(anyString());
         }
 
         /**

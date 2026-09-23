@@ -63,6 +63,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * asks about and with which cutoff -- against a repository that applies the same predicate in Java, and only
  * a real Postgres can say that the conditional {@code UPDATE} refuses a row somebody touched in the meantime
  * and answers zero the second time it is run. That second answer is the whole multi-replica argument.
+ *
+ * <p>The confirmation clock is the other conditional statement and is here for that reason and one of its own:
+ * what it promises is as much about the columns it does <em>not</em> write as about the three it does. The send
+ * that starts the clock has had its persistence context cleared by the enqueue before it, so only a statement --
+ * rather than a save on the referral it composed from, which by then is detached -- can leave the rest of the row
+ * alone, and only a real table can show that it did.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Transactional
@@ -83,6 +89,9 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
     private static final LocalDateTime CUTOFF = NOW.minusHours(2);
 
     private static final String SERVICE_ACCOUNT = "# svc_HMCTS_LCPT_Dev";
+
+    /** The caseworker whose send starts a confirmation clock, and who lands in both audit columns when it does. */
+    private static final String CASEWORKER = "Ada Caseworker";
 
     /**
      * The order Postgres compares {@code uuid} in: sixteen bytes, unsigned.
@@ -419,6 +428,85 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(referrals.findOutstandingConfirmationRequestsByDeedPollId(otherCase.getId()))
             .containsExactly(asked.minusDays(30));
         assertThat(referrals.findOutstandingConfirmationRequestsByDeedPollId(neverReferred.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("starts the confirmation clock in one statement, over the three columns a send may move")
+    void startsTheConfirmationClockInOneStatement() {
+        DeedPoll deedPoll = persistedCase();
+        Referral referral = persistedReferral(deedPoll, ReferralState.Decided, LocalDateTime.of(2026, 5, 1, 9, 0));
+        referral.setClaimedBy("District Judge Bell");
+        referral.setNotes("The reasons the office gave the Master.");
+        entityManager.flush();
+
+        int stamped = referrals.startConfirmationClockByIdAndDeedPollId(
+            referral.getId(), deedPoll.getId(), NOW, CASEWORKER);
+
+        assertThat(stamped).isEqualTo(1);
+        Referral reloaded = entityManager.find(Referral.class, referral.getId());
+        assertThat(reloaded.getConfirmationRequestedAt()).isEqualTo(NOW);
+        assertThat(reloaded.getModifiedBy()).isEqualTo(CASEWORKER);
+        assertThat(reloaded.getModifiedOn()).isEqualTo(NOW);
+        // And nothing else on the row. This is the half that a save on the detached referral the email was
+        // composed from could not promise: a merge writes every column back from the snapshot it read before
+        // NotificationRepository.enqueue cleared the session, so a judge's claim or a caseworker's note committed
+        // in between would be silently restored to its old value.
+        assertThat(reloaded.getState()).isEqualTo(ReferralState.Decided);
+        assertThat(reloaded.getClaimedBy()).isEqualTo("District Judge Bell");
+        assertThat(reloaded.getNotes()).isEqualTo("The reasons the office gave the Master.");
+        assertThat(reloaded.getConfirmationOutcome()).isNull();
+    }
+
+    @Test
+    @DisplayName("starts no clock once the applicant has answered, or on a referral of another case")
+    void startsNoClockOnAnAnsweredReferralOrThroughAnotherCase() {
+        DeedPoll deedPoll = persistedCase();
+        LocalDateTime asked = LocalDateTime.of(2026, 5, 3, 9, 30);
+        Referral answered = persistedReferral(deedPoll, ReferralState.Decided, LocalDateTime.of(2026, 5, 1, 9, 0));
+        answered.setConfirmationRequestedAt(asked);
+        answered.setConfirmationOutcome(ConfirmationOutcome.Confirmed);
+        answered.setConfirmationReceivedAt(LocalDateTime.of(2026, 5, 20, 11, 0));
+        answered.setConfirmationRecordedBy("Bo Caseworker");
+        final Referral outstanding =
+            persistedReferral(deedPoll, ReferralState.Open, LocalDateTime.of(2026, 6, 1, 9, 0));
+        final DeedPoll otherCase = persistedCase();
+        entityManager.flush();
+
+        // The whole race this statement's predicate exists for, as a fact about the SQL: a replacement send after
+        // a terminal failure is allowed on the strength of a read taken before the answer committed, and the only
+        // thing that can refuse the write afterwards is the write itself.
+        assertThat(referrals.startConfirmationClockByIdAndDeedPollId(
+            answered.getId(), deedPoll.getId(), NOW, CASEWORKER))
+            .isZero();
+        entityManager.clear();
+        Referral reloaded = entityManager.find(Referral.class, answered.getId());
+        assertThat(reloaded.getConfirmationOutcome()).isEqualTo(ConfirmationOutcome.Confirmed);
+        assertThat(reloaded.getConfirmationRecordedBy()).isEqualTo("Bo Caseworker");
+        // Untouched rather than merely unanswered: a re-stamp would have moved the request date past the answer.
+        assertThat(reloaded.getConfirmationRequestedAt()).isEqualTo(asked);
+
+        // Scoped, like every write here: a send resolved on one case cannot stamp another case's referral.
+        assertThat(referrals.startConfirmationClockByIdAndDeedPollId(
+            outstanding.getId(), otherCase.getId(), NOW, CASEWORKER))
+            .isZero();
+        assertThat(entityManager.find(Referral.class, outstanding.getId()).getConfirmationRequestedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("locks a referral for a recording, and only through its own case")
+    void locksAReferralForARecordingOnlyThroughItsOwnCase() {
+        DeedPoll deedPoll = persistedCase();
+        Referral referral = persistedReferral(deedPoll, ReferralState.Decided, LocalDateTime.of(2026, 5, 1, 9, 0));
+        final DeedPoll otherCase = persistedCase();
+        entityManager.flush();
+        entityManager.clear();
+
+        // The lock itself is not observable from one transaction; what is, and what a recording depends on, is that
+        // the locked lookup carries the parent exactly as the unlocked one does. A FOR UPDATE read that dropped
+        // the scope would make the guard on an already-recorded answer readable across cases.
+        assertThat(referrals.findByIdAndDeedPollIdForUpdate(referral.getId(), deedPoll.getId())).isPresent();
+        assertThat(referrals.findByIdAndDeedPollIdForUpdate(referral.getId(), otherCase.getId())).isEmpty();
+        assertThat(referrals.findByIdAndDeedPollIdForUpdate(UUID.randomUUID(), deedPoll.getId())).isEmpty();
     }
 
     @Test

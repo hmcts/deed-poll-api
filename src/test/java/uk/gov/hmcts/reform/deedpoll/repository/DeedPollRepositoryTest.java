@@ -212,6 +212,21 @@ class DeedPollRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("locks one case for the recompute, and answers empty for a case that has gone")
+    void locksOneCaseForTheConfirmationRecompute() {
+        DeedPoll deedPoll = persisted(DeedPollState.Returned, LocalDateTime.of(2026, 1, 11, 10, 0));
+        entityManager.flush();
+
+        // Native SQL, so this is the only test that says it parses and binds at all -- and it is a lock statement,
+        // which no mock-backed test can be. What it locks with rather than that it locks is the part that matters
+        // and is asserted by ConfirmationConcurrencyTest, where two transactions that have each written a row
+        // referencing the case both get through it: FOR UPDATE here would have Postgres abort one of them.
+        assertThat(deedPolls.lockForConfirmationRecompute(deedPoll.getId())).contains(deedPoll.getId());
+        // No row, no lock, and no failure: the write behind it answers 0 for the same case, as it always did.
+        assertThat(deedPolls.lockForConfirmationRecompute("nosuchcase")).isEmpty();
+    }
+
+    @Test
     @DisplayName("the waiting list is the cases with a stamp, longest wait first, and never the answered ones")
     void findsTheWaitingCasesLongestWaitFirst() {
         DeedPoll longest = waiting(LocalDateTime.of(2026, 3, 1, 9, 0));

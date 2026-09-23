@@ -1,8 +1,10 @@
 package uk.gov.hmcts.reform.deedpoll.repository;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -65,6 +67,67 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
 
     /** One referral, only if it belongs to the given case. */
     Optional<Referral> findByIdAndDeedPollId(UUID id, String deedPollId);
+
+    /**
+     * One referral of one case, with its row locked for the rest of the caller's transaction --
+     * {@code SELECT … FOR UPDATE}.
+     *
+     * <p><strong>Why a write has to read under a lock.</strong>
+     * {@code ReferralService.recordConfirmation} refuses a second answer by reading
+     * {@code "confirmationOutcome"} and throwing when it is already set, and a plain read makes that a
+     * read-check-write: two caseworkers recording at the same moment both read NULL, both pass the guard, and
+     * the second {@code UPDATE} -- which waits for the first to commit and then writes the snapshot it took
+     * before that commit -- overwrites the first answer while both case notes survive. The operation is
+     * <em>idempotent by refusal</em> rather than last-write-wins, which is a promise only a lock or a
+     * conditional statement can keep. This is {@code DeedPollRepository.findByIdForUpdate}'s argument applied to
+     * the referral.
+     *
+     * <p><strong>Every write of a referral reads through here, not only that one, and the reason is the same
+     * argument's other half.</strong> Hibernate has no dirty-column tracking on {@code Referral}, so a
+     * {@code save} writes every column back as the transaction read it -- the fact
+     * {@link DeedPollRepository#writeCurrentReferralState} is written around. A state transition that read
+     * through {@link #findByIdAndDeedPollId} would therefore not merely decide its own guard on a stale row: it
+     * would write the whole row, undoing whatever another transaction had committed on it, and the columns
+     * exposed to that are the confirmation ones, because they are the only ones written by operations that are
+     * ungated on {@code "state"} and so run beside any transition. A close or a withdrawal that read a moment
+     * before a recording committed would put {@code "confirmationOutcome"} back to NULL and leave the note
+     * announcing an answer the row no longer holds; one that read before
+     * {@code CaseEmailService.send} committed would undo {@link #startConfirmationClockByIdAndDeedPollId}'s
+     * stamp, leaving the case waiting on a request the referral denies was ever made and the answer to it
+     * refused as never asked for. A narrower {@code SET} would stop the overwriting alone; the lock stops that
+     * <em>and</em> makes each guard decide on the committed row, which is why it is the lock rather than
+     * {@code @DynamicUpdate}.
+     *
+     * <p><strong>Scoped, and with no join, which is load-bearing twice over.</strong> The parent is in the
+     * lookup as it is in {@link #findByIdAndDeedPollId}, so a cross-case recording is a 404 from the finder
+     * rather than from a guard after it -- and {@code r.deedPoll.id} is the foreign key column on this table,
+     * which Hibernate reads without joining {@code deedpoll_deedpoll}. That matters because Postgres locks
+     * every table a {@code FOR UPDATE} query names: a join would take {@code FOR UPDATE} on the <em>case</em>
+     * row, which is the one lock strength a foreign key's {@code KEY SHARE} conflicts with -- and this
+     * transaction goes on to insert a case note. {@code DeedPollRepository.lockForConfirmationRecompute} has that
+     * argument in full; it is why the case-wide lock these flows do take is the weaker
+     * {@code FOR NO KEY UPDATE}, and why a {@code FOR UPDATE} on a case must not appear on this path by accident.
+     *
+     * <p><strong>This acquires the lock; it does not on its own guarantee the caller sees the locked row.</strong>
+     * A JPA query returns the instance already in the persistence context when there is one and discards the row it
+     * read, so a caller that loaded this referral earlier in the same transaction is served its own pre-lock
+     * snapshot -- which is the {@code save}-writes-every-column overwrite above, taken from under the lock rather
+     * than around it. {@code ReferralService.findReferralForUpdate} is where that is closed, and its javadoc names
+     * the caller it exists for; a second entry point to this query would have to do the same.
+     *
+     * <p>Not a {@code @Lock} on {@link #findByIdAndDeedPollId}: the reads go through that one -- the referrals
+     * tab, the case view, the email service's newest-refusal lookup -- and none of them may take a write lock on
+     * a row it only displays. The lock belongs to the operations that write, which is every one of them and no
+     * other.
+     *
+     * @param id the referral
+     * @param deedPollId the case it must belong to
+     * @return the referral, or empty if there is no such referral on that case
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select r from Referral r where r.id = :id and r.deedPoll.id = :deedPollId")
+    Optional<Referral> findByIdAndDeedPollIdForUpdate(@Param("id") UUID id,
+                                                      @Param("deedPollId") String deedPollId);
 
     /**
      * One page of the referrals in a given state, across every case -- the judicial pool.
@@ -316,4 +379,56 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
                           @Param("cutoff") LocalDateTime cutoff,
                           @Param("now") LocalDateTime now,
                           @Param("releasedBy") String releasedBy);
+
+    /**
+     * Starts the clock on one referral's confirmation, if nobody has answered it yet.
+     *
+     * <p><strong>A statement over three columns rather than {@code save} on the loaded referral, and that is
+     * about correctness rather than economy.</strong> The caller is {@code CaseEmailService.send}, whose previous
+     * step -- {@link NotificationRepository#enqueue} -- clears the persistence context, so the referral it
+     * composed the email from is <em>detached</em> by the time the clock is started. A {@code save} on a detached
+     * entity is a {@code merge}: Hibernate re-reads the row and copies the pre-clear snapshot over it, so the
+     * {@code UPDATE} writes every column as it was read before the enqueue. Anything another transaction
+     * committed on that referral in between -- a judge's {@code lastTouchedAt}, a caseworker's withdrawal, the
+     * applicant's answer -- is silently written back to its old value. This statement names the three columns the
+     * send is entitled to move and cannot lose a write to any other, which is {@code writeCurrentReferralState}'s
+     * argument on the case table applied here.
+     *
+     * <p><strong>{@code "confirmationOutcome" IS NULL} is a guard and not a tidy-up.</strong>
+     * {@code CaseEmailService} refuses ④ for a referral that has already been answered, but that check and this
+     * statement are two steps: an answer recorded in between them would otherwise be overwritten back to NULL by
+     * a re-stamp, erasing the applicant's reply and restarting a wait they have already ended. Answering 0 is how
+     * this says that happened, for the reason {@link #releaseStaleClaim} answers 0: a single {@code UPDATE}
+     * evaluating its own predicate is atomic, and no lock is needed for a rule the statement itself states. The
+     * caller turns that 0 into the same 409 its own check would have given, so the send -- and the outbox row it
+     * had already written -- is rolled back rather than an answered applicant being asked again.
+     *
+     * <p>The parent case is in the {@code WHERE} as it is in every finder here, so a send resolved on one case
+     * cannot stamp another case's referral even if it were handed the wrong id.
+     *
+     * <p>Native SQL and {@code {@literal @}Modifying} for {@link #releaseStaleClaim}'s reasons, quoted mixed-case
+     * identifiers included. {@code clearAutomatically} because a statement Hibernate did not route through the
+     * session leaves any loaded copy of the row stale -- here that is the detached one this exists to stop the
+     * caller writing through -- and {@code flushAutomatically} so a pending write cannot be lost behind it.
+     *
+     * @param id the referral that was asked
+     * @param deedPollId the case it belongs to, which is the case the outbox row was written for
+     * @param now the instant the applicant was asked, the same one the outbox row carries
+     * @param requestedBy the caseworker who sent it, into both audit columns
+     * @return 1 if this statement started the clock, 0 if the referral is not on that case or is already answered
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+        UPDATE "deedpoll_referral"
+           SET "confirmationRequestedAt" = :now,
+               "modifiedOn" = :now,
+               "modifiedBy" = :requestedBy
+         WHERE "id" = :id
+           AND "deedPollId" = :deedPollId
+           AND "confirmationOutcome" IS NULL
+        """)
+    int startConfirmationClockByIdAndDeedPollId(@Param("id") UUID id,
+                               @Param("deedPollId") String deedPollId,
+                               @Param("now") LocalDateTime now,
+                               @Param("requestedBy") String requestedBy);
 }

@@ -107,6 +107,10 @@ class CaseEmailServiceTest {
         NotifyProperties properties = new NotifyProperties(
             "https://notify.invalid", "key", Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1"), "");
         referralService = mock(ReferralService.class);
+        // The clock starting, which is what the statement answers on an unanswered referral. Stubbed here rather
+        // than per test so that the one test about the other answer -- 0, the applicant answered mid-send -- is the
+        // only one saying so.
+        when(referrals.startConfirmationClockByIdAndDeedPollId(any(), anyString(), any(), anyString())).thenReturn(1);
         emails = new CaseEmailService(
             deedPolls, referrals, notifications, documents, notify, properties, referralService,
             new ObjectMapper());
@@ -747,30 +751,58 @@ class CaseEmailServiceTest {
             @DisplayName("stamps the referral with the outbox row's own instant when the confirmation email is owed")
             void stampsTheReferral() {
                 storedCase();
-                Referral referral = refusedReferralFor(ReferralReason.NonPublication);
+                refusedReferralFor(ReferralReason.NonPublication);
                 enqueueSucceeds();
 
                 emails.send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER);
 
-                // The same instant the row was written with, not a second reading of the clock: two calls could
-                // straddle a tick and leave the row and the referral disagreeing about when the applicant was
-                // asked.
-                assertThat(referral.getConfirmationRequestedAt()).isEqualTo(enqueuedAt());
-                // Nothing else about the wait is decided by the send: the answer is outstanding, which is what
-                // makes this one of the referrals the waiting list holds.
-                assertThat(referral.getConfirmationOutcome()).isNull();
-                assertThat(referral.getConfirmationReceivedAt()).isNull();
-                assertThat(referral.getConfirmationRecordedBy()).isNull();
-                // The caseworker into both audit columns, because the row did change and moving modifiedOn alone
-                // would attribute their send to the judge who last wrote it.
-                assertThat(referral.getModifiedBy()).isEqualTo("A Caseworker");
-                assertThat(referral.getModifiedOn()).isEqualTo(enqueuedAt());
-                verify(referrals).save(referral);
+                // Read before the verification below rather than inside it, because it is a verification itself.
+                LocalDateTime enqueuedAt = enqueuedAt();
+                // One statement over the three columns the send is entitled to move, on the referral named by id
+                // and scoped to the case the outbox row was written for. The same instant the row was written
+                // with, not a second reading of the clock: two calls could straddle a tick and leave the row and
+                // the referral disagreeing about when the applicant was asked. The caseworker goes into both
+                // audit columns, because the row did change and moving modifiedOn alone would attribute their
+                // send to the judge who last wrote it.
+                verify(referrals)
+                    .startConfirmationClockByIdAndDeedPollId(REFERRAL_ID, CASE_ID, enqueuedAt, "A Caseworker");
+                // And never through the referral the email was composed from: enqueue clears the persistence
+                // context, so that entity is detached and a save on it would be a merge writing every column back
+                // from the pre-enqueue snapshot -- discarding a judge's touch, a caseworker's withdrawal or the
+                // applicant's answer if any of them committed in between.
+                verify(referrals, never()).save(any());
                 // And the case's read-model of the same fact, recomputed in this transaction for the case the
                 // outbox row names. Asserted here because it is the half that cannot be seen on the referral:
                 // without it the email goes out and the case never appears in the waiting list the feature
                 // exists to provide, and the only other proof of it is container-backed and excluded from CI.
                 verify(referralService).refreshAwaitingConfirmation(CASE_ID);
+            }
+
+            @Test
+            @DisplayName("refuses the send when the answer arrived while ④ was being sent, in the same words")
+            void refusesTheSendWhenTheAnswerArrivedMidSend() {
+                // The statement's own WHERE clause refusing it, which is the only thing that can: the send was
+                // allowed because the referral was unanswered when it was composed, and the answer committed
+                // between that check and this write. A re-stamp would put the request date back after the answer
+                // and restart a wait the applicant has already ended.
+                storedCase();
+                refusedReferralFor(ReferralReason.NonPublication);
+                enqueueSucceeds();
+                when(referrals.startConfirmationClockByIdAndDeedPollId(any(), anyString(), any(), anyString()))
+                    .thenReturn(0);
+
+                // The same 409 a caseworker who clicked a second later would have been given by awaitingAnAnswer:
+                // asking an applicant who has already replied to reply again is the thing that rule forbids, and
+                // which side of their answer the click landed on is not a difference they can see. Raising it takes
+                // the outbox row with it, which is why the email never goes.
+                assertThatThrownBy(() -> emails.send(
+                    CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER))
+                    .isInstanceOf(ConflictError.class)
+                    .hasMessage(CaseEmailService.CONFIRMATION_ALREADY_ANSWERED);
+
+                // And no recompute: the transaction is rolling back, and the answer's own transaction has already
+                // taken the case out of the waiting list.
+                verifyNoInteractions(referralService);
             }
 
             @Test
@@ -785,7 +817,8 @@ class CaseEmailServiceTest {
                 // ③ tells the applicant a decision and starts a refund. A case recorded as waiting for a reply to
                 // it would sit in the waiting list for ever, because no reply is coming.
                 assertThat(referral.getConfirmationRequestedAt()).isNull();
-                verify(referrals, never()).save(any());
+                verify(referrals, never()).startConfirmationClockByIdAndDeedPollId(
+                    any(), anyString(), any(), anyString());
                 // Not the case's column either: a recompute hoisted out of ④'s arm would put every rejected case
                 // into the waiting list, which the referral's own null stamp cannot show.
                 verifyNoInteractions(referralService);
@@ -811,7 +844,8 @@ class CaseEmailServiceTest {
                 // A caseworker double-clicking must not reset the wait they are being reminded of: no row was
                 // written, so no clock starts.
                 assertThat(referral.getConfirmationRequestedAt()).isEqualTo(asked);
-                verify(referrals, never()).save(any());
+                verify(referrals, never()).startConfirmationClockByIdAndDeedPollId(
+                    any(), anyString(), any(), anyString());
                 // And the case's column is left as it stands: a recompute here would be harmless today and wrong
                 // in principle, since nothing about the wait changed.
                 verifyNoInteractions(referralService);
@@ -830,7 +864,8 @@ class CaseEmailServiceTest {
                     .isInstanceOf(IncompleteDataError.class);
 
                 assertThat(referral.getConfirmationRequestedAt()).isNull();
-                verify(referrals, never()).save(any());
+                verify(referrals, never()).startConfirmationClockByIdAndDeedPollId(
+                    any(), anyString(), any(), anyString());
                 // Nor the case's column: a stamp before the recipient check would put a case in the waiting list
                 // for an email this service never owed anybody.
                 verifyNoInteractions(referralService);
@@ -861,7 +896,8 @@ class CaseEmailServiceTest {
                                                        anyString(), anyString(), any(), anyString());
                 assertThat(answered.getConfirmationRequestedAt()).isEqualTo(asked);
                 assertThat(answered.getConfirmationOutcome()).isEqualTo(ConfirmationOutcome.Withdrawn);
-                verify(referrals, never()).save(any());
+                verify(referrals, never()).startConfirmationClockByIdAndDeedPollId(
+                    any(), anyString(), any(), anyString());
                 verifyNoInteractions(referralService);
             }
 

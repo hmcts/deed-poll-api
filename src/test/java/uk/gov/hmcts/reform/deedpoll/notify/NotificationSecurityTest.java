@@ -105,6 +105,10 @@ class NotificationSecurityTest {
         notifications = mock(NotificationRepository.class);
         documents = mock(DeedPollSupportingDocumentRepository.class);
         notify = mock(NotificationClient.class);
+        // The confirmation clock starting, which is what the statement answers on a referral nobody has answered.
+        // Left at the mock's default 0 it would say the applicant answered mid-send, and ④ is refused for that.
+        when(referrals.startConfirmationClockByIdAndDeedPollId(any(), anyString(), any(), anyString()))
+            .thenReturn(1);
         emails = new CaseEmailService(
             deedPolls,
             referrals,
