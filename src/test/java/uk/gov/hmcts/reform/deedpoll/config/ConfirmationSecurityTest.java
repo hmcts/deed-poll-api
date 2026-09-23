@@ -32,6 +32,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.ConfirmationInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
@@ -284,7 +285,10 @@ class ConfirmationSecurityTest {
                 "confirmationReceivedAt", "2020-01-01T00:00:00",
                 "confirmationRequestedAt", "2020-01-01T00:00:00"));
 
-            final LocalDateTime before = LocalDateTime.now().minusSeconds(1);
+            // AuditClock and not LocalDateTime.now(): the column is stamped from the UTC clock, so a bare
+            // now() would read the JVM's default zone and put this fixture an hour AHEAD of the value under
+            // test on any machine where TZ is set east of UTC -- a red build in BST for a rule that is right.
+            final LocalDateTime before = AuditClock.now().minusSeconds(1);
             service.recordConfirmation(CASE_ID, REFERRAL_ID.toString(), input, CASEWORKER);
 
             assertThat(referral.getConfirmationRecordedBy()).isEqualTo("Ada Caseworker");

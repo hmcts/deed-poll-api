@@ -2070,6 +2070,60 @@ class ReferralServiceTest {
         }
 
         @Test
+        @DisplayName("takes the case out of the waiting list when its last outstanding request is answered")
+        void leavesTheWaitingList() {
+            askedToConfirm(ReferralState.Decided);
+            // What the referral table says once this answer is stored: nothing of this case is outstanding.
+            when(referrals.findOutstandingConfirmationRequestsByDeedPollId(CASE_ID)).thenReturn(List.of());
+
+            service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation("Confirmed", null), CASEWORKER);
+
+            verify(deedPolls).writeAwaitingConfirmationSince(CASE_ID, null);
+        }
+
+        @Test
+        @DisplayName("keeps the earlier wait when another request on the case is still outstanding")
+        void keepsAnEarlierOutstandingWait() {
+            askedToConfirm(ReferralState.Decided);
+            LocalDateTime earlier = LocalDateTime.parse("2026-04-01T08:00:00");
+            LocalDateTime later = LocalDateTime.parse("2026-06-20T16:45:00");
+            // Given in the order that would be wrong if the recompute took the first or the newest rather than
+            // the earliest. A case cannot hold two waiting referrals today, but the read-model's rule answers a
+            // set of any size, and an implementation that wrote null regardless -- or wrote `later` -- would pass
+            // every other container-free test on this path.
+            when(referrals.findOutstandingConfirmationRequestsByDeedPollId(CASE_ID))
+                .thenReturn(List.of(later, earlier));
+
+            service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation("Confirmed", null), CASEWORKER);
+
+            // The longest wait, because that is the case a caseworker reading the list is being reminded of --
+            // and not null, which would drop a case off the list with a question still unanswered on it.
+            verify(deedPolls).writeAwaitingConfirmationSince(CASE_ID, earlier);
+        }
+
+        @Test
+        @DisplayName("names a repaired row's missing date rather than throwing while composing the refusal")
+        void refusesASecondRecordingWithNoStoredDate() {
+            // Unreachable through this service -- the date is written with the outcome -- so this is the
+            // hand-repaired row the refusal has to survive: a message that threw composing itself would answer
+            // 500 for the state it exists to explain.
+            Referral already = askedToConfirm(ReferralState.Decided);
+            already.setConfirmationOutcome(ConfirmationOutcome.Withdrawn);
+            already.setConfirmationReceivedAt(null);
+
+            assertThatThrownBy(() -> service.recordConfirmation(
+                CASE_ID, REFERRAL_ID.toString(), confirmation("Confirmed", null), CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining(ConfirmationOutcome.Withdrawn.name())
+                .hasMessageContaining("a date that was not recorded");
+
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
         @DisplayName("takes any authenticated caller, because there is no may-record permission")
         void takesAnyAuthenticatedCaller() {
             // No role gate, exactly as raising, withdrawing and closing have none: whoever works the case reads

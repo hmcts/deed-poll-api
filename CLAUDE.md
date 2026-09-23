@@ -16,12 +16,14 @@ See `docs/RESUME.md` for the current state and `docs/plans/` for the build plans
 ## Layout
 
 ```
-api/caseworker/{controller,dto}   the caseworker HTTP surface — 30 operations
+api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations across 21 paths
 api/judicial/{controller,dto}     the judicial surface — 5 operations, keyed on the referral, never on the case
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
+domain/referrals                  referrals to the judiciary and the applicant's confirmation — NOT a port
 domain/auth                       CurrentUser, IdamClaims, Role — transport-independent
+notify/                           the GOV.UK Notify outbox: compose, enqueue, drain — NOT a port
 auth/                             IDAM resource-server wiring (transport)
 entity/, repository/              JPA over a Flyway-owned schema
 health/                          readiness that names the missing tables
@@ -68,6 +70,18 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
   only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback
   to the name, or a namesake regains access exactly where identity is uncertain.
+- **A case column that mirrors the referral table is recomputed from truth, never pushed.**
+  `currentReferralState` (V9) and `awaitingConfirmationSince` (V17) are read-models on `deedpoll_deedpoll`,
+  because the case list can only filter, sort and render columns of that one entity. Every write that could
+  change the answer calls the single recompute — `ReferralService.refreshCurrentReferralState` /
+  `refreshAwaitingConfirmation`, the second public only because `CaseEmailService.send` is in another package —
+  inside the same transaction. The rule itself lives in a class with no database in it (`CurrentReferralState`,
+  `ConfirmationWait`) so that CI, which has no Docker, runs it. **A new write path that skips the recompute
+  leaves the column wrong for ever and no existing test fails.**
+- **A new case column has to be declared in four places**, or the build fails somewhere that does not name the
+  cause: a reader in `DeedPollFields` (readable / writable / queryable are three separate decisions — `CaseSort`
+  admits only readable names and `CaseQuery` only queryable ones), both `CaseDetailResponse` and
+  `SavedCaseResponse`, and the shared `CaseResponseFields` test fixture.
 - **A controller test must boot the whole context.** A `@WebMvcTest` slice does not get
   `SecurityConfiguration` — its include list covers `SecurityFilterChain` beans, and a
   `@Configuration` that merely *declares* one is not itself one — so a slice asserts Boot's defaults

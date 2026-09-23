@@ -326,6 +326,20 @@ class ReferralNotesTest {
     }
 
     @Test
+    @DisplayName("a confirmation with no outcome on it says so rather than composing an empty answer")
+    void confirmationWithNoOutcomeSaysSo() {
+        // The other half of the same defence, and unreachable the same way -- the service writes the outcome
+        // before the note. A composer that dereferenced the missing member would throw inside the recording's
+        // transaction, so the row the note is about would roll back over a sentence.
+        Referral referral = asked(
+            List.of("NonPublication"), LocalDateTime.parse("2026-05-03T09:30:00"),
+            LocalDateTime.parse("2026-05-10T11:00:00"), null);
+
+        assertThat(ReferralNotes.confirmationRecorded(referral, Optional.empty()))
+            .endsWith("Answer: not recorded.");
+    }
+
+    @Test
     @DisplayName("the longest possible confirmation still composes a note the notes column accepts")
     void theLongestPossibleConfirmationStillFits() {
         // The claim MAX_CONFIRMATION_NOTE_LENGTH exists for: the caseworker's text is bounded by the schema and

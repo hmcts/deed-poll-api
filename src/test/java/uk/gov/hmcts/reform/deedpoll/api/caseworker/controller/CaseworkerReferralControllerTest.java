@@ -1314,13 +1314,6 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         /**
-         * Stamps the referral as having been asked to confirm, which is what the send does.
-         *
-         * <p>Written into the row rather than sent through the email surface: the send is
-         * {@code CaseworkerEmailControllerTest}'s, and reaching it here would make these tests depend on Notify
-         * configuration to assert a rule about recording an answer.
-         */
-        /**
          * The referral asked to confirm, and the case recorded as waiting -- both, because that is what the send
          * commits.
          *

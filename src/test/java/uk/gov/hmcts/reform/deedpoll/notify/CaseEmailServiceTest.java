@@ -717,6 +717,11 @@ class CaseEmailServiceTest {
                 assertThat(referral.getModifiedBy()).isEqualTo("A Caseworker");
                 assertThat(referral.getModifiedOn()).isEqualTo(enqueuedAt());
                 verify(referrals).save(referral);
+                // And the case's read-model of the same fact, recomputed in this transaction for the case the
+                // outbox row names. Asserted here because it is the half that cannot be seen on the referral:
+                // without it the email goes out and the case never appears in the waiting list the feature
+                // exists to provide, and the only other proof of it is container-backed and excluded from CI.
+                verify(referralService).refreshAwaitingConfirmation(CASE_ID);
             }
 
             @Test
@@ -732,6 +737,9 @@ class CaseEmailServiceTest {
                 // it would sit in the waiting list for ever, because no reply is coming.
                 assertThat(referral.getConfirmationRequestedAt()).isNull();
                 verify(referrals, never()).save(any());
+                // Not the case's column either: a recompute hoisted out of ④'s arm would put every rejected case
+                // into the waiting list, which the referral's own null stamp cannot show.
+                verifyNoInteractions(referralService);
             }
 
             @Test
@@ -755,6 +763,9 @@ class CaseEmailServiceTest {
                 // written, so no clock starts.
                 assertThat(referral.getConfirmationRequestedAt()).isEqualTo(asked);
                 verify(referrals, never()).save(any());
+                // And the case's column is left as it stands: a recompute here would be harmless today and wrong
+                // in principle, since nothing about the wait changed.
+                verifyNoInteractions(referralService);
             }
 
             @Test
@@ -771,6 +782,9 @@ class CaseEmailServiceTest {
 
                 assertThat(referral.getConfirmationRequestedAt()).isNull();
                 verify(referrals, never()).save(any());
+                // Nor the case's column: a stamp before the recipient check would put a case in the waiting list
+                // for an email this service never owed anybody.
+                verifyNoInteractions(referralService);
             }
 
             private void enqueueSucceeds() {

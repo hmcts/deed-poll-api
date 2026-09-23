@@ -566,21 +566,46 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("V16's partial index covers exactly the referrals still waiting for an answer")
+    @DisplayName("the referral index covers exactly the referrals still waiting for an answer, and no others")
     void awaitingConfirmationIndexIsPartial() {
         // The whole of decision 7 is that "overdue" is a WHERE clause rather than a sweep, and this index is
         // what makes that clause cheap. Asserted rather than assumed because ddl-auto: validate does not
         // look at indexes at all, so a migration that created it on the wrong column -- or without the
         // predicate, indexing the answered rows nobody queries -- would be silent in every other test.
-        Object definition = entityManager
-            .createNativeQuery("SELECT indexdef FROM pg_indexes WHERE indexname = :name")
-            .setParameter("name", "deedpoll_referral_awaiting_confirmation_idx")
-            .getSingleResult();
+        String definition = indexDefinition("deedpoll_referral_awaiting_confirmation_idx");
 
-        assertThat(definition.toString())
-            .contains("\"confirmationRequestedAt\"")
+        assertThat(definition).contains("\"confirmationRequestedAt\"");
+        // BOTH halves of "outstanding", which is V18's correction of V16: a B-tree stores NULL keys, so the
+        // outcome predicate alone admitted every referral nobody ever asked -- which is almost the whole table,
+        // and none of them rows this index can return. A predicate that lost either half again would be silent
+        // everywhere else.
+        assertThat(definition)
             .as("partial, so the index holds only the rows a caseworker can still act on")
-            .contains("WHERE (\"confirmationOutcome\" IS NULL)");
+            .contains("WHERE ((\"confirmationOutcome\" IS NULL) AND (\"confirmationRequestedAt\" IS NOT NULL))");
+    }
+
+    @Test
+    @DisplayName("V17's case index covers exactly the cases still waiting, in the order the tab reads them")
+    void awaitingConfirmationCaseIndexIsPartial() {
+        // The case side of the same fact, asserted for the same reason as the referral side: this is the index
+        // the awaitingConfirmation tab's filter and its longest-wait-first ordering both rest on, and an index
+        // created on the wrong column or without the predicate degrades the tab to a scan and a sort with
+        // nothing failing.
+        String definition = indexDefinition("deedpoll_deedpoll_awaiting_confirmation_idx");
+
+        assertThat(definition).contains("\"awaitingConfirmationSince\"");
+        assertThat(definition)
+            .as("partial, so the index holds only the cases the waiting list shows")
+            .contains("WHERE (\"awaitingConfirmationSince\" IS NOT NULL)");
+    }
+
+    /** One index's definition as Postgres reports it -- the only way to see a predicate validate never reads. */
+    private String indexDefinition(String name) {
+        return entityManager
+            .createNativeQuery("SELECT indexdef FROM pg_indexes WHERE indexname = :name")
+            .setParameter("name", name)
+            .getSingleResult()
+            .toString();
     }
 
     @Test

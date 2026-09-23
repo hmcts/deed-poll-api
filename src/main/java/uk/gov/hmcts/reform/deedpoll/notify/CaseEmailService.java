@@ -398,35 +398,44 @@ public class CaseEmailService {
      * case's column is the earliest outstanding request on it; {@code ReferralService.refreshAwaitingConfirmation}
      * is the one implementation of that rule.
      *
-     * <p>An exhaustive switch rather than an {@code if}, so a template added to the enum has to say whether it
-     * starts a clock instead of silently inheriting this one's answer.
+     * <p><strong>The decision is a switch <em>expression</em> and not a switch statement over the same enum</strong>,
+     * because only the expression is checked for exhaustiveness: a switch <em>statement</em> whose selector is an
+     * enum and whose labels are all enum constants is not an "enhanced" switch (JLS 14.11.2), so javac lets it fall
+     * through every arm in silence. A third template that asks the applicant for a reply would then start no clock
+     * and never reach the waiting list -- the one failure this whole feature exists to prevent -- with nothing
+     * failing the build. As an expression it does not compile until the new member says which it is.
      */
     private void startConfirmationClock(EmailTemplate template,
                                         String deedPollId,
                                         Referral referral,
                                         LocalDateTime now,
                                         CurrentUser caller) {
-        switch (template) {
-            case REQUEST_CONFIRMATION_TO_PROCEED -> {
-                referral.setConfirmationRequestedAt(now);
-                // The caseworker into both audit columns, not just the timestamp: the row did change, and moving
-                // modifiedOn while modifiedBy still named the judge who directed it would attribute this to them.
-                referral.setModifiedBy(caller.name());
-                referral.setModifiedOn(now);
-                referrals.save(referral);
-                // And the case's read-model of the same fact, in this transaction, so the case reaches the
-                // waiting list with the email it is waiting on. A recompute from the referral table rather than
-                // a copy of `now`: the case's column is the EARLIEST outstanding request on it, which this
-                // method cannot know and ConfirmationWait can.
-                // The case id the outbox row was written with, not one navigated off the referral: the two are
-                // the same case, and asking the row's own id keeps the read-model and the row talking about it.
-                referralService.refreshAwaitingConfirmation(deedPollId);
-            }
+        if (!startsConfirmationClock(template)) {
+            return;
+        }
+        referral.setConfirmationRequestedAt(now);
+        // The caseworker into both audit columns, not just the timestamp: the row did change, and moving
+        // modifiedOn while modifiedBy still named the judge who directed it would attribute this to them.
+        referral.setModifiedBy(caller.name());
+        referral.setModifiedOn(now);
+        referrals.save(referral);
+        // And the case's read-model of the same fact, in this transaction, so the case reaches the
+        // waiting list with the email it is waiting on. A recompute from the referral table rather than
+        // a copy of `now`: the case's column is the EARLIEST outstanding request on it, which this
+        // method cannot know and ConfirmationWait can.
+        // The case id the outbox row was written with, not one navigated off the referral: the two are
+        // the same case, and asking the row's own id keeps the read-model and the row talking about it.
+        referralService.refreshAwaitingConfirmation(deedPollId);
+    }
+
+    /** Whether this email asks the applicant for a reply the case then waits on. */
+    private static boolean startsConfirmationClock(EmailTemplate template) {
+        return switch (template) {
+            case REQUEST_CONFIRMATION_TO_PROCEED -> true;
             // Tells the applicant a decision and starts a refund. It asks them for nothing, so there is nothing
             // to wait for and no clock to start.
-            case APPLICATION_REJECTED -> {
-            }
-        }
+            case APPLICATION_REJECTED -> false;
+        };
     }
 
     /**
