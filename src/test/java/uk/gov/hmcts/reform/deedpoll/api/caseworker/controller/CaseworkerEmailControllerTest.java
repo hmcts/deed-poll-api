@@ -33,6 +33,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
@@ -40,6 +41,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.notify.ApplicationRejectedPersonalisation;
 import uk.gov.hmcts.reform.deedpoll.notify.CaseEmailService;
+import uk.gov.hmcts.reform.deedpoll.notify.EmailNotes;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailSlot;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailTemplate;
 import uk.gov.hmcts.reform.deedpoll.notify.StubNotify;
@@ -50,9 +52,13 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -81,7 +87,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * values and the failure taxonomy are pinned container-free in {@code EmailSlotsTest},
  * {@code ApplicationRejectedPersonalisationTest} and {@code NotificationFailureTest}, which run on the Jenkins
  * agent where this class is excluded. This class asserts the routes are wired to those rules, which status code
- * each answer becomes, that a preview writes nothing and that a send writes exactly one row.
+ * each answer becomes, that a preview writes nothing and that a send writes exactly one row and one case note.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -811,6 +817,120 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 assertThat(storedReferral(caseId).getConfirmationRequestedAt()).isNotNull();
             }
         }
+
+        @Nested
+        @DisplayName("the case note")
+        class CaseNote {
+
+            @Test
+            @DisplayName("writes one note naming the email and pointing at the tab, as the caseworker")
+            void writesOneNoteNamingTheEmailAndTheTab() throws Exception {
+                // The whole point of the feature, over HTTP and committed: a caseworker reading the Notes grid --
+                // the only timeline this domain has -- can see that the applicant was written to.
+                String caseId = refusedCase();
+                int before = notes.findByDeedPollIdOrderByCreatedOnDesc(caseId).size();
+
+                authorised(post(sendOf(caseId)), "{}").andExpect(status().isOk());
+
+                assertThat(emailNotes(caseId)).singleElement().satisfies(note -> {
+                    assertThat(note.getNote())
+                        .isEqualTo(EmailNotes.sent(EmailTemplate.APPLICATION_REJECTED))
+                        // Which email, and where the record of it is. Named in words rather than linked: admin
+                        // renders a note through govukTable's { text: … }, so markup would show as characters.
+                        .contains(EmailTemplate.APPLICATION_REJECTED.displayName())
+                        .contains("Emails tab")
+                        // Never the recipient, the content or the slots -- the tab holds those.
+                        .doesNotContain(APPLICANT_EMAIL)
+                        .doesNotContain(DIRECTION);
+                    // The caseworker who sent it, not the service account: a person chose to send, and on this
+                    // email they wrote part of what the applicant reads.
+                    assertThat(note.getCreatedBy()).isEqualTo("A Caseworker");
+                });
+                // One note for one send, counted against the grid as a whole so that a note written twice by two
+                // paths would fail here even if both wrote the same words.
+                assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(before + 1);
+            }
+
+            @Test
+            @DisplayName("writes one for the confirmation email too, naming that email")
+            void writesOneForTheConfirmationEmail() throws Exception {
+                // Both templates, because the composer is deliberately not per template and ④ is the one that also
+                // starts a clock -- so it is the send with the most going on in its transaction.
+                String caseId = confirmationCase();
+
+                authorised(post(confirmationSendOf(caseId)), "{}").andExpect(status().isOk());
+
+                assertThat(emailNotes(caseId)).singleElement().satisfies(note ->
+                    assertThat(note.getNote())
+                        .isEqualTo(EmailNotes.sent(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)));
+            }
+
+            @Test
+            @DisplayName("writes no note for a refused send, so no timeline claims an email nobody owes")
+            void writesNoNoteForARefusedSend() throws Exception {
+                // A 409 that still noted would be the worst of both answers: the grid would say the applicant had
+                // been written to and the Emails tab the note points at would have no row to show them.
+                String caseId = newCase();
+                int before = notes.findByDeedPollIdOrderByCreatedOnDesc(caseId).size();
+
+                authorised(post(sendOf(caseId)), "{}").andExpect(status().isConflict());
+
+                assertThat(emailNotes(caseId)).isEmpty();
+                assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(before);
+            }
+
+            @Test
+            @DisplayName("writes no second note when the same email is sent again")
+            void writesNoSecondNoteOnARepeatSend() throws Exception {
+                // The idempotent repeat: no row is written, so no note is either. A caseworker double-clicking must
+                // not leave a case reading as though the applicant had been written to twice.
+                String caseId = refusedCase();
+                authorised(post(sendOf(caseId)), "{}").andExpect(status().isOk());
+
+                authorised(post(sendOf(caseId)), "{}")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.enqueued").value(false));
+
+                assertThat(notifications.count()).isOne();
+                assertThat(emailNotes(caseId)).hasSize(1);
+            }
+
+            @Test
+            @DisplayName("neither the note nor the outbox row survives the other's rollback")
+            void theNoteCommitsWithTheRow() {
+                // Called on the service inside a transaction this test rolls back, because over HTTP the
+                // transaction always commits -- and decision 4's claim is that there is no email owed without its
+                // note and no note for a send that was rolled back.
+                String caseId = confirmationCase();
+
+                new TransactionTemplate(transactions).execute(status -> {
+                    emails.send(caseId, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), caseworker());
+                    status.setRollbackOnly();
+                    return null;
+                });
+
+                assertThat(notifications.count()).isZero();
+                assertThat(emailNotes(caseId)).isEmpty();
+            }
+        }
+    }
+
+    /**
+     * The notes on a case that an email wrote, which are the notes whose text {@link EmailNotes} composes.
+     *
+     * <p>Filtered rather than counted, because the fixtures raise, claim and decide a referral and each of those
+     * writes a note of its own -- so "the notes on this case" is never only the email's. Matched against the exact
+     * strings the composer produces for a known template rather than by looking for words in prose: the note is
+     * deliberately not a wire format, and a test that parsed it would be the thing decision 3 refuses to make
+     * {@code deed-poll-admin} do.
+     */
+    private List<DeedPollNote> emailNotes(String caseId) {
+        Set<String> written = Arrays.stream(EmailTemplate.values())
+            .flatMap(template -> Stream.of(EmailNotes.sent(template), EmailNotes.couldNotBeSent(template)))
+            .collect(Collectors.toSet());
+        return notes.findByDeedPollIdOrderByCreatedOnDesc(caseId).stream()
+            .filter(note -> written.contains(note.getNote()))
+            .toList();
     }
 
     /** The personalisation Notify was asked to render, read off the stub's recorded request. */

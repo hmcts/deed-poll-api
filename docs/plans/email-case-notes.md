@@ -205,12 +205,31 @@ Notes so no task rediscovers them:
 
 ### Task 2: The sent note
 
-- [ ] Written in `CaseEmailService.send` after the enqueue, inside the same transaction, authored by
-      `caller.noteAuthor()`
-- [ ] Over HTTP: a send writes exactly one note; the note names the template and the Emails tab; a **refused**
-      send writes none
-- [ ] An idempotent repeat send — which `send` answers with the original row — must **not** write a second note
-- [ ] Mark completed
+- [x] Written in `CaseEmailService.send` after the enqueue, inside the same transaction, authored by
+      `caller.noteAuthor()` — a private `note(…)` on the `enqueued == 1` branch, so nothing but a fresh enqueue can
+      reach it. Placed **after** `startConfirmationClock` rather than before it: all three writes commit or roll
+      back together either way, but both statements ahead of it are `clearAutomatically`, so a note saved first
+      would depend on their `flushAutomatically` to reach the database instead of on the ordering being right.
+      `NoteService` is injected as the ninth constructor argument (the service, not the note repository, so the
+      note goes through the one path that scopes it to its parent case)
+- [x] Over HTTP: a send writes exactly one note; the note names the template and the Emails tab; a **refused**
+      send writes none — `CaseworkerEmailControllerTest.SendEmail.CaseNote`, five tests. The note count is asserted
+      against the whole grid as well as the filtered one, so a second path writing the same words would fail it.
+      An `emailNotes(caseId)` helper matches the exact strings `EmailNotes` composes rather than looking for words
+      in prose — the fixtures raise, claim and decide a referral and each writes a note of its own, and a test that
+      parsed the prose would be the thing decision 3 refuses to make `deed-poll-admin` do. It also serves Task 3,
+      since it already matches `couldNotBeSent`. Two rollback/refusal shapes are pinned: the pre-enqueue refusal
+      (409, no note) and `theNoteCommitsWithTheRow`, which rolls a real transaction back and finds neither
+- [x] An idempotent repeat send — which `send` answers with the original row — must **not** write a second note —
+      `writesNoSecondNoteOnARepeatSend` over HTTP, and `writesNoNoteOnASecondSend` container-free
+- [x] Mark completed. The load-bearing half is **container-free** in `CaseEmailServiceTest.Sending.CaseNote`,
+      because CI has no Docker and excludes the controller test: `writesOneNotePerEmail` is an `@EnumSource` over
+      every template (the composer is deliberately not per template, so a new member must reach the timeline with
+      nobody remembering to extend a test), `repeatsNoneOfTheContent` asserts the note carries neither the
+      recipient, the slots, the case's own fields nor the direction, and the two refusal tests cover the one
+      refusal that happens *after* a successful enqueue — the confirmation clock's 409. `NotificationSecurityTest`
+      takes the new argument too. **11 new tests** (6 container-free, 5 over HTTP), `./gradlew build`
+      **BUILD SUCCESSFUL**, checkstyle clean
 
 ### Task 3: The terminal-failure note
 

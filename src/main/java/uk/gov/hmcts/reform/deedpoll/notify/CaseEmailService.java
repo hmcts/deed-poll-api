@@ -11,6 +11,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.IncompleteDataError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
@@ -74,7 +76,8 @@ import java.util.stream.Collectors;
  *
  * <p><strong>Nothing here sends.</strong> A send resolves, enqueues in the caller's transaction -- stamping the
  * referral's {@code confirmationRequestedAt} in that same transaction where the email is the one that asks the
- * applicant to reply, which is the only thing a send writes outside the outbox -- and returns;
+ * applicant to reply, and writing one case note so the email appears on the only timeline this domain has, which
+ * are the two things a send writes outside the outbox -- and returns;
  * the drain is what talks to Notify, and it is called after this transaction commits -- see
  * {@link NotificationOutbox}, and {@code CaseworkerEmailController} for why the order is not an accident.
  */
@@ -137,6 +140,16 @@ public class CaseEmailService {
     private final NotifyProperties properties;
 
     /**
+     * Only to put a marker on the case's timeline when an email is owed -- see {@link #send} and
+     * {@link EmailNotes}.
+     *
+     * <p>The service and not the note repository, so the note is written through the one path that scopes a note
+     * to its parent case and refuses a case that does not exist. {@code createNote} takes a {@code NoteAuthor}
+     * rather than a {@link CurrentUser}, which is what lets the drain author the failure note too.
+     */
+    private final NoteService notes;
+
+    /**
      * Only to bring the case's {@code awaitingConfirmationSince} into step when ④ starts the clock -- see
      * {@link #startConfirmationClock}.
      *
@@ -159,6 +172,7 @@ public class CaseEmailService {
                            NotificationClient notify,
                            NotifyProperties properties,
                            ReferralService referralService,
+                           NoteService notes,
                            ObjectMapper json) {
 
         this.deedPolls = deedPolls;
@@ -168,6 +182,7 @@ public class CaseEmailService {
         this.notify = notify;
         this.properties = properties;
         this.referralService = referralService;
+        this.notes = notes;
         this.json = json;
     }
 
@@ -319,8 +334,11 @@ public class CaseEmailService {
      * the version Notify reports when it accepts the send.
      *
      * <p><strong>Sending ④ also starts the clock on the reply it asks for</strong>, in this transaction and with
-     * the row's own instant -- see {@link #startConfirmationClock}. That is the one thing a send does to anything
-     * other than the outbox, and it is why the two commit or roll back together.
+     * the row's own instant -- see {@link #startConfirmationClock}.
+     *
+     * <p><strong>Every fresh enqueue also writes one case note</strong>, in this transaction and as the
+     * caseworker -- see {@link #note}. Those two are the whole of what a send does to anything other than the
+     * outbox, and doing them here is why they commit or roll back with the row.
      *
      * @param caller the caseworker sending it, who becomes {@code createdBy} -- not audit noise here, because
      *     they authored part of what the applicant reads
@@ -357,6 +375,7 @@ public class CaseEmailService {
 
         if (enqueued == 1) {
             startConfirmationClock(template, deedPollId, referralId, now, caller);
+            note(deedPollId, template, caller);
             return SendReceipt.enqueued(id, recipient);
         }
 
@@ -472,6 +491,34 @@ public class CaseEmailService {
         // The case id the outbox row was written with, not one navigated off the referral: the two are
         // the same case, and asking the row's own id keeps the read-model and the row talking about it.
         referralService.refreshAwaitingConfirmation(deedPollId);
+    }
+
+    /**
+     * Puts this email on the case's timeline, as the caseworker who sent it.
+     *
+     * <p><strong>Only on a fresh enqueue, and inside the send's own transaction.</strong> So
+     * {@code ReferralService}'s invariant transfers exactly: there is no email owed without its note, and no note
+     * for a send that was refused or rolled back. An idempotent second send writes no outbox row and must write no
+     * second note either -- the applicant is owed one email, so the timeline says it once, and a caseworker
+     * double-clicking would otherwise leave a case reading as though the applicant had been written to twice.
+     *
+     * <p><strong>Here rather than in the drain, and the reason is a duplicate-email hazard rather than
+     * taste.</strong> {@link NotificationOutbox#drain(int)} runs a whole batch inside one
+     * {@code REQUIRES_NEW}, so a note write that failed there would roll back state changes for rows Notify had
+     * already accepted and the next drain would send them again. This transaction holds one send, is the
+     * caseworker's own, and the controller drains only after it commits.
+     *
+     * <p><strong>Last of the three writes, after the outbox row and after the clock.</strong> Not for safety --
+     * all three commit or roll back together -- but because both statements before it are
+     * {@code clearAutomatically}, and a note saved before one of them would depend on
+     * {@code flushAutomatically} to reach the database rather than on the ordering being right.
+     *
+     * <p>{@code caller.noteAuthor()} rather than the service account: a person chose to send this, and on ③ and ④
+     * they wrote part of what the applicant reads. What the note says is {@link EmailNotes}' decision, including
+     * why it points at the Emails tab instead of repeating the content.
+     */
+    private void note(String deedPollId, EmailTemplate template, CurrentUser caller) {
+        notes.createNote(deedPollId, new CreateNoteInput(EmailNotes.sent(template)), caller.noteAuthor());
     }
 
     /** Whether this email asks the applicant for a reply the case then waits on. */
