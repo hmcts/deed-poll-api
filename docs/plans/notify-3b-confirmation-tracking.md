@@ -296,8 +296,68 @@ Read first: notify-3's Task 2, and `ReferralService`'s existing write operations
   `build.gradle`'s exclusion comment re-measured if this plan adds a container-backed class.
 - Refresh the OpenAPI output so `deed-poll-admin` can build its screen against a published contract.
 
-- [ ] Case-scoping and authorship proven rather than assumed, the OpenAPI output refreshed, and
+- [x] Case-scoping and authorship proven rather than assumed, the OpenAPI output refreshed, and
       `./gradlew build` green from cold with both totals recorded
+
+**Task 4 notes.**
+
+- **The whole statement is one new container-free class, `ConfirmationSecurityTest`** (17 tests, four `@Nested`
+  groups), beside `ReferralSecurityTest` and `SavedQuerySecurityTest` and for their reason: the HTTP versions of
+  these rules live in `CaseworkerReferralControllerTest`, which CI excludes for want of Docker, so the rules that
+  must not disappear with it are restated where CI runs them. Nothing here duplicates a rule for its own sake —
+  each is either new or is the CI-runnable half of one asserted over HTTP.
+- **The cross-case half that is genuinely new is the read model.** A recording now writes a column on the *case*
+  as well as the referral, so a cross-case attempt has a second row it must not reach: the refusal is asserted to
+  call neither `findOutstandingConfirmationRequestsByDeedPollId` nor `writeAwaitingConfirmationSince` on either
+  case, and a successful recording is asserted to name only the case in the path. A refused recording that had
+  recomputed the case it was *addressed at* would move a waiting list entry on the strength of a referral that
+  case does not own.
+- **A cross-case attempt on an already-answered referral is 404 and not 409**, and the message is asserted not to
+  carry the stored outcome or its author: the scope answers before the conflict, so a caller pointing another case
+  at the id learns the referral is not there rather than that somebody already answered it and when.
+- **Disclosure is asserted in three directions, and the third is what keeps the first two honest.** No judicial or
+  citizen class depends on any `Confirmation*` type (ArchUnit); no field declared in either package has a name
+  matching `(?i).*confirmation.*` — which is the rule a dependency check cannot make, because a `String` called
+  `confirmationRecordedBy` names no type this service owns; and the caseworker DTOs that *do* publish the columns
+  are named, so a pair of rules reading "nobody publishes this" cannot stay green for a service that publishes it
+  nowhere. The regex is asserted to match the three real field names before the rule that uses it, because a
+  pattern matching nothing would pass whatever a judicial DTO grew.
+- **The waiting list is proven to narrow rather than widen, four ways**: its criterion is one `isNotNull` on one
+  column of the case root with *no other interaction* with the root or the query — asserted through a mocked
+  criteria API, so a join (which would multiply a case by its referrals) or a correlated subquery (which would
+  read referrals the page's case does not own) fails here; the unpaged named finder takes no argument at all, so
+  nothing a caller sends chooses which cases come back; the recompute's read carries the parent case id and
+  projects `LocalDateTime`, never a `Referral`; and the column is readable but **not** writable and **not**
+  queryable, since a caller who could patch it could leave the waiting list without anybody having answered.
+- **One main-source change, and it is the OpenAPI one the plan asked for.** `filter` was the one list parameter
+  springdoc reflected correctly and therefore the one `OpenAPIQueryParameters` left alone — correct as a type and
+  silent as a contract, because the tab keys are a list in the domain rather than an enum. So the published
+  document named `awaitingConfirmation` only in the `sort` description, and `deed-poll-admin` could not have
+  discovered the tab it is meant to render. `describeFilter` now sets that parameter's description from
+  `ListFilters.filterTabs()` — described in place rather than added, because a second parameter of the same name
+  would publish it twice — and as prose rather than an `enum`, because an unrecognised key falls back to `all`
+  rather than being refused and a validating client that rejected one would refuse a request the service answers.
+- **`OpenAPIPublisherTest` gains `documentsTheConfirmationContract`** (the 12th integration test): the route
+  answers `ReferralResponse`; the body publishes the outcome vocabulary from `ConfirmationOutcome`, the note's cap
+  from `ReferralSchemas`, `outcome` as its only requirement, and `additionalProperties: true`; the body publishes
+  **no** `confirmationRecordedBy` or `confirmationReceivedAt`, because a document that offered them would have
+  clients sending an attribution the service strips; the answer publishes all four columns; the row publishes
+  `daysAwaitingConfirmation` as an integer and the case read publishes `awaitingConfirmationSince` as a
+  `date-time`, neither carrying the other's; and no judicial schema publishes anything matching "confirmation".
+  The filter assertion is in `documentsTheCaseListQueryParameters` beside the operator, sort and search ones, and
+  reads keys *and* labels out of `ListFilters` so a sixth tab is published without either file being edited.
+- **No route, operation count or schema name moved**, so the caseworker surface is still 34 operations across 21
+  paths and the judicial surface still 5 — both asserted, unchanged, on this task's run. The published spec is
+  regenerated by `./gradlew integration` writing `/tmp/openapi-specs.json`, which is the pipeline's own contract.
+- **Full validation, from cold** (`./gradlew clean build`, then `./gradlew build`; `TESTCONTAINERS_RYUK_DISABLED=true`):
+  green, checkstyle clean on all five source sets. `test` **2,554** tests across 326 classes — `+17` on Task 3's
+  2,537/322, the 4 new "classes" being this class's `@Nested` groups — and `integration` **12** across 3 (`+1`).
+  Against this plan's baseline of 2,458/11: **+96 tests** and **+1 integration test** across the four tasks.
+- **`INTEGRATION_TESTS_ENABLED=false`: 1,619 tests run**, so 935 of the 2,554 are container-backed. `build.gradle`'s
+  exclusion comment is re-measured to that pair even though this plan **added no container-backed class** — 31
+  classes need Docker, exactly as before (30 by inheritance from `AbstractPostgresContainerTest`, plus
+  `SchemaConformanceTest`) — because the comment's figures are a measurement and a stale one invites the next
+  reader to trust it rather than re-measure.
 
 ---
 

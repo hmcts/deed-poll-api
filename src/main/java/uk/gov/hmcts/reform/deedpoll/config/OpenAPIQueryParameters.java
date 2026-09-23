@@ -43,9 +43,12 @@ import java.util.stream.Collectors;
  * <p><strong>Generated from the domain's own tables, not restated here</strong> -- the convention
  * {@link OpenAPIWriteBodies} sets. The operator names and their arities come from {@link QueryOperator}, the
  * searched name columns from {@link CaseSearch}, the sortable fields and direction tokens from
- * {@link CaseSort}, and the page defaults and cap from
+ * {@link CaseSort}, the filter keys and labels from {@link ListFilters}, and the page defaults and cap from
  * {@link CasePaging}. An operator added to the enum therefore appears in the document without anyone editing
  * this file.
+ *
+ * <p>The sixth parameter, {@code filter}, is reflected correctly and described in place rather than replaced --
+ * see {@link #describeFilter}, which is what publishes the tab keys a consumer builds its tab bar from.
  */
 @Configuration
 public class OpenAPIQueryParameters {
@@ -59,6 +62,12 @@ public class OpenAPIQueryParameters {
      */
     private static final String REFLECTED_PARAMETER = "parameters";
     private static final String REFLECTED_SCHEMA = "MultiValueMapStringString";
+
+    /**
+     * The one parameter springdoc reflects correctly, and the one this class describes in place rather than
+     * replacing: adding a second {@code filter} would publish the same parameter twice.
+     */
+    private static final String FILTER_PARAMETER = "filter";
 
     @Bean
     public OpenApiCustomizer queryParameterCustomizer() {
@@ -79,18 +88,58 @@ public class OpenAPIQueryParameters {
     }
 
     /**
-     * Drops the invented parameter and adds the five real ones, leaving {@code filter} as springdoc found it --
-     * that one binds as a declared {@code String} and is described correctly already.
+     * Drops the invented parameter, adds the five real ones, and describes the {@code filter} springdoc already
+     * found -- that one binds as a declared {@code String}, so it is reflected correctly and says nothing.
      */
     private void replaceReflectedParameter(Operation list) {
         if (list.getParameters() != null) {
             list.getParameters().removeIf(parameter -> REFLECTED_PARAMETER.equals(parameter.getName()));
         }
+        describeFilter(list);
         list.addParametersItem(where());
         list.addParametersItem(search());
         list.addParametersItem(sort());
         list.addParametersItem(page());
         list.addParametersItem(size());
+    }
+
+    /**
+     * {@code filter}, the tab bar: the keys a caller may send, read out of {@link ListFilters}.
+     *
+     * <p><strong>Described rather than added</strong>, unlike the five below: springdoc reflects this one from a
+     * declared {@code @RequestParam} and a second parameter of the same name would publish it twice. What
+     * reflection cannot supply is the vocabulary -- the keys are a list in the domain, not an enum -- so a
+     * consumer generating a client got a bare optional string and had to learn the tabs from somewhere else.
+     * {@code deed-poll-admin} renders the tab bar from this, which is the whole reason it matters that
+     * {@code awaitingConfirmation} is discoverable here rather than only in this repository's source.
+     *
+     * <p>Read out of {@link ListFilters#filterTabs()} rather than restated, so a sixth tab appears in the
+     * document without anyone editing this file -- and a {@code description} rather than an {@code enum} for the
+     * reason the {@code template} path token is left open: an unrecognised key falls back to the first tab
+     * instead of being refused, so a validating client that rejected one would refuse a request the service
+     * answers.
+     */
+    private void describeFilter(Operation list) {
+        if (list.getParameters() == null) {
+            return;
+        }
+        list.getParameters().stream()
+            .filter(parameter -> FILTER_PARAMETER.equals(parameter.getName()))
+            .forEach(parameter -> parameter.setDescription(
+                "Which tab of the case list to return: " + tabs() + ". An unrecognised or repeated value falls "
+                    + "back to `" + ListFilters.LIST_FILTERS.get(0).key() + "` rather than being refused, "
+                    + "because the key comes from a URL a caseworker may have bookmarked -- the response echoes "
+                    + "the key that was actually applied, so the fallback is observable. ANDs with `q` and every "
+                    + "`where` condition. `awaitingConfirmation` is the cases still waiting for an applicant's "
+                    + "reply to the Request confirmation to proceed email, and each row on it carries "
+                    + "`daysAwaitingConfirmation`."));
+    }
+
+    /** The tab keys and their labels, in render order, so the document lists them as the tab bar does. */
+    private String tabs() {
+        return ListFilters.filterTabs().stream()
+            .map(tab -> "`" + tab.key() + "` (" + tab.label() + ")")
+            .collect(Collectors.joining(", "));
     }
 
     /**
