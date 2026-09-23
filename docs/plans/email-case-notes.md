@@ -182,13 +182,26 @@ Notes so no task rediscovers them:
 
 ### Task 1: `EmailNotes`, with the length arithmetic pinned across the whole enum
 
-- [ ] A class beside `ReferralNotes` in spirit: prose only, no service, no branching on template
-- [ ] **The length test iterates `EmailTemplate.values()`**, asserting both notes fit
+- [x] A class beside `ReferralNotes` in spirit: prose only, no service, no branching on template —
+      `notify/EmailNotes.java`, in the `notify` package because `EmailTemplate` is what it composes from and
+      both call sites are there. Four public methods, two pairs of overloads: `sent`/`couldNotBeSent` take an
+      `EmailTemplate` where the caller holds one (the enqueue, Task 2) and a stored name where it holds only a
+      string (the drain, Task 3), and the two are pinned to compose identically for every member. A stored name
+      is truncated at 200 for the reason `ReferralNotes.claimLapsed` truncates a judge's: `template` is
+      unbounded `text`, and the failure note is written where a refusal costs rows Notify has accepted
+- [x] **The length test iterates `EmailTemplate.values()`**, asserting both notes fit
       `NoteForm.MAX_NOTE_LENGTH` for *every* member. `ReferralNotesTest` pins its worst case against one shape;
       this must hold across a set that is still growing, so a future template with a verbose display name fails
-      a test rather than having its note refused mid-drain
-- [ ] A test that an unresolvable stored name still composes a note, using the raw name (decision 8)
-- [ ] Mark completed
+      a test rather than having its note refused mid-drain — `bothNotesFitTheNotesColumnForEveryTemplate`, plus
+      `everyTemplatesNotesAreTheSameTwoSentences` pinning the exact prose per member (which is also what proves
+      decision 9: no template mentions its documents) and `pathologicalStoredNameStillComposesAnAcceptableNote`
+      for a 5,000-character stored name
+- [x] A test that an unresolvable stored name still composes a note, using the raw name (decision 8) —
+      `unresolvableStoredNameStillComposesANote`, which asserts `byName` is empty for the name first so the
+      premise cannot rot; `missingStoredNameStillReadsAsANote` covers the unreachable null/blank row
+- [x] Mark completed. `./gradlew checkstyleMain checkstyleTest test --tests "*EmailNotes*" --rerun-tasks`:
+      **8 tests, 0 failures, 0 errors, 0 skipped**, checkstyle clean. Nothing calls `EmailNotes` yet — Tasks 2
+      and 3 wire it in
 
 ### Task 2: The sent note
 
