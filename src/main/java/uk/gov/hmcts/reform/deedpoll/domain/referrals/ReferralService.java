@@ -24,6 +24,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -165,8 +166,13 @@ public class ReferralService {
     /**
      * Dates in a refusal a caseworker reads, so the day rather than the instant -- the same format
      * {@link ReferralNotes} writes into the timeline they are reading it beside.
+     *
+     * <p>{@link Locale#UK} rather than the default, for the reason {@code ResolvedValues} pins its own: {@code
+     * MMMM} names the month in {@code Locale.getDefault(FORMAT)}, so an image whose default locale is not
+     * English would put a French or German month into an English refusal sentence -- and into the case notes
+     * beside it -- with nothing failing to say so.
      */
-    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMMM yyyy");
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK);
 
     private final DeedPollRepository deedPolls;
     private final ReferralRepository referrals;

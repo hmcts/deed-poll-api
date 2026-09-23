@@ -7,6 +7,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -44,8 +45,15 @@ import java.util.Optional;
  */
 public final class ReferralNotes {
 
-    /** Dates read by a caseworker in a grid, so the day rather than the instant. */
-    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMMM yyyy");
+    /**
+     * Dates read by a caseworker in a grid, so the day rather than the instant.
+     *
+     * <p>{@link Locale#UK} rather than the default, for the reason {@code ResolvedValues} pins its own:
+     * {@code MMMM} names the month in {@code Locale.getDefault(FORMAT)}, so on an image whose default locale
+     * is not English every note this class writes would carry a month named in that language, stored for good
+     * on a timeline nothing re-renders.
+     */
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK);
 
     /**
      * How much of a judge's display name a lapse note will quote.

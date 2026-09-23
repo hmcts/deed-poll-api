@@ -613,6 +613,18 @@ public class CaseEmailService {
      * <p>Refusing the send rather than clearing the answer, because the answer is the office's record of what the
      * applicant said: a re-ask that silently discarded it would lose a decision about a refund. A case that
      * genuinely has to ask again needs a referral it can ask on, which is what raising one does.
+     *
+     * <p><strong>The constraint is deliberately one-directional: a recorded answer does not withhold ③.</strong>
+     * Both templates share the {@code REFERRAL_OUTCOME} exclusion group, so the same {@code PERMANENT}-failure gap
+     * that reaches this check also leaves ③ available once an answer is recorded -- including a {@code Confirmed}
+     * one. That is not an oversight. A rejection invites no reply, so an
+     * answer the applicant has already given says nothing about whether they may still be told a decision; and the
+     * refusal ④ speaks for may have covered other {@link ReferralReason}s than publication, which one decision and
+     * one direction cannot be decomposed into -- so an applicant who confirmed they want to proceed may still have
+     * to be told enrolment was refused on a ground confirming had no bearing on. Which of the two emails fits is
+     * the caseworker's judgement on every non-publication refusal, answered and unanswered alike; see
+     * {@link #aboutNonPublication}. {@code CaseEmailServiceTest.answeredConfirmationIsNotOfferedAgain} pins it, so
+     * withholding ③ on an answer would be a decision about the process rather than a tightening of this rule.
      */
     private static boolean awaitingAnAnswer(Referral referral) {
         return referral.getConfirmationOutcome() == null;
