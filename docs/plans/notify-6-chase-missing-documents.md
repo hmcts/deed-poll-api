@@ -135,9 +135,9 @@ Additional constraints:
 
 ---
 
-## Validation commands
+## Validation Commands
 
-Run after every task:
+**These run after every task, so everything here must be green after every task — not only at the end.**
 
 ```bash
 export TESTCONTAINERS_RYUK_DISABLED=true
@@ -145,8 +145,30 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 ```
 
 Measure `test`, `integration` and `INTEGRATION_TESTS_ENABLED=false` baselines before Task 1, then record final
-totals in Task 4. A container startup timeout is an environment failure and should be retried before code is
-changed.
+totals in Task 4. **A worker or container startup timeout is an environment failure, not a code failure** —
+re-run before investigating.
+
+Notes so no task rediscovers them:
+
+- **Measure, do not read the exit code.** A run with zero tests selected also exits 0, and a second
+  `gradle test` **wipes `build/test-results/`** — so count from the XML immediately after each run, and use
+  `--rerun-tasks` when the count is the point. A `BUILD SUCCESSFUL` with no result file means the task was
+  `UP-TO-DATE` and ran nothing.
+- A `--tests` filter matches **method** names as well as class names, so filter result files by class name for
+  an apples-to-apples figure.
+- **`@Nested` inner classes each get their own result file**, which is why a class count and a file count differ.
+- **`checkstyleTest` fails the build on `severity="warning"`**, so a "violations by severity: [warning: n]" line
+  is a failure rather than advice. The rule that bites is the method-name pattern `^[a-z][a-z0-9][a-zA-Z0-9_]*$`:
+  a single-letter first word followed by a capital is rejected, so `aCaseworkerMaySend…` fails where
+  `anApplicantIsChased…` passes.
+- `python3` is **not** installed in this devcontainer; `node` is.
+- The `integration` source set needs Docker and is **excluded in CI** (`Jenkinsfile_CNP` sets
+  `INTEGRATION_TESTS_ENABLED=false`), so a test that only ever runs there is not protecting the pipeline.
+
+**The heading above was `## Validation commands`, lowercase, until 2026-09-24.** Every plan this repo has
+actually executed uses `## Validation Commands`, and a gate that is not recognised is no gate at all — a task can
+then commit red and the run walks forward with nothing warning anybody. Corrected before the first run rather
+than discovered during it.
 
 ---
 
