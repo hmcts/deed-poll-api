@@ -117,8 +117,10 @@ public class NotificationOutbox {
     /**
      * Takes up to {@code limit} owed and due notifications, sends each, and records the outcome.
      *
-     * <p>Each row is independent: one that fails does not stop the rest, and one that throws is recorded
-     * as {@link NotificationFailure#TECHNICAL} rather than being allowed to roll the batch back.
+     * <p>Each row is independent: one that fails does not stop the rest, and a <em>sender</em> that throws is
+     * recorded as {@link NotificationFailure#TECHNICAL} rather than being allowed to roll the batch back. The
+     * case note a terminal failure writes is deliberately <em>not</em> guarded that way -- see {@link #note} --
+     * so it is composed to be unrefusable instead.
      *
      * <p>Every row in the batch is judged against one {@code now}, the same instant the candidates were
      * found with -- a freshly computed one per row could claim a row against a dueness it did not

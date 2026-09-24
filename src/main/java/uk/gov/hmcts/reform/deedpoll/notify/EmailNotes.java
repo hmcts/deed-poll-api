@@ -85,20 +85,6 @@ public final class EmailNotes {
     }
 
     /**
-     * The note for a sent email named by the string an outbox row stores.
-     *
-     * <p>The overload the drain has to use, since a row carries the member name and not the member. A name
-     * that no longer resolves is used as the display name as it stands -- which is how the Email tab beside
-     * this note already degrades, so the two read consistently. The case is reachable rather than theoretical:
-     * a member renamed after rows were written is exactly what {@code EmailTemplate.byName} answers empty for,
-     * and the sender reports it as a permanent failure naming the row -- so the unresolvable case and the
-     * failure-note case coincide.
-     */
-    public static String sent(String storedTemplateName) {
-        return sentNote(displayName(storedTemplateName));
-    }
-
-    /**
      * The note for an email that has terminally failed: not retryable, or retryable and out of attempts.
      *
      * <p>Says nothing about why. The provider's reason is unbounded external text that would put the length
@@ -109,9 +95,18 @@ public final class EmailNotes {
     }
 
     /**
-     * The note for a terminally failed email named by the string an outbox row stores -- see
-     * {@link #sent(String)} for why the drain reads a name rather than a member, and
-     * {@link #couldNotBeSent(EmailTemplate)} for why the failure itself is not quoted.
+     * The note for a terminally failed email named by the string an outbox row stores.
+     *
+     * <p>The one overload keyed on a stored name, and the drain has to use it because a row carries the member
+     * name and not the member. There is deliberately no sent-note twin: the sent note is written at enqueue by
+     * the caller that holds the member, so nothing reaches a sent note from a row.
+     *
+     * <p>A name that no longer resolves is used as the display name as it stands -- which is how the Email tab
+     * beside this note already degrades, so the two read consistently. The case is reachable rather than
+     * theoretical: a member renamed after rows were written is exactly what {@code EmailTemplate.byName} answers
+     * empty for, and the sender reports it as a permanent failure naming the row -- so the unresolvable case and
+     * the failure-note case coincide. See {@link #couldNotBeSent(EmailTemplate)} for why the failure itself is
+     * not quoted.
      */
     public static String couldNotBeSent(String storedTemplateName) {
         return couldNotBeSentNote(displayName(storedTemplateName));

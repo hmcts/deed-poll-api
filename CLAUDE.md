@@ -43,6 +43,18 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
 - **No live calls to CCD, CDAM, IDAM or payments in any test.** WireMock only (`StubIdam`); there are
   no credentials.
 - **No secrets.** Everything by environment variable, with a non-working default.
+- **A case note written from the outbox drain must be impossible to refuse.** `NotificationOutbox.drain` runs a
+  whole batch in one `REQUIRES_NEW`, and the note the transition into `Failed` writes is not guarded — so a note
+  the notes column or validator rejects rolls back rows Notify has *already accepted*, and the next drain emails
+  those applicants again. `EmailNotes` therefore composes from fixed prose plus a name bounded at 200, never from
+  `failureReason` or any other external text, and `EmailNotesTest` pins both notes under `NoteForm.MAX_NOTE_LENGTH`
+  for *every* `EmailTemplate` member, so a new template with a verbose `displayName()` fails a test instead of
+  failing mid-drain. The sent note is in `CaseEmailService.send`'s own transaction for the same reason, not in the
+  drain. `NotificationOutboxTest.oneRefusedNoteTakesTheBatchWithIt` is what keeps that cost visible.
+- **Every email event puts exactly one marker on the Notes grid** — one on a fresh enqueue, one on the transition
+  *into* `NotificationState.Failed` (the transition, not a `PERMANENT` verdict, which would miss the
+  exhausted-retry route), and none for a transient failure or an idempotent repeat send. A new send or settle path
+  that skips the note leaves the case's only timeline silent and no existing test fails.
 
 ## Conventions worth knowing before writing code
 

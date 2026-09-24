@@ -1,11 +1,11 @@
 # Resume state — where the next session picks up
 
-Rewritten **2026-09-20**; figures and plan states refreshed **2026-09-23** during notify-3b's review. The
-narrative below still needs a proper rewrite — it was written before notify-3 merged. **Read this before
+Rewritten **2026-09-20**; figures and plan states refreshed **2026-09-24** during the email-case-notes review.
+The narrative below still needs a proper rewrite — it was written before notify-3 merged. **Read this before
 restarting the loop.**
 
-The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1, notify-5
-and notify-3 are merged on `master`. notify-5's four tasks capture the exact subject and plain-text body, provide
+The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1, notify-5,
+notify-3 and notify-3b are merged on `master`. notify-5's four tasks capture the exact subject and plain-text body, provide
 the case-scoped correspondence read, return availability, history and slot defaults from the existing Email-tab
 GET, and pin the public wording and cross-case security boundary. notify-3 sends the confirmation email itself,
 with one referral-outcome email per referral enforced by the database.
@@ -14,8 +14,8 @@ with one referral-outcome email per referral enforced by the database.
 
 | Where | What is there |
 |---|---|
-| `master` / `origin/master` | notify-1, notify-5 and notify-3 complete and merged in PRs #29, #30 and #38 |
-| `notify-3b` | complete, filed in `plans/completed/`, **unmerged** — the confirmation's request stamp, the recorded answer, and the `awaitingConfirmation` case-list tab |
+| `master` / `origin/master` | notify-1, notify-5, notify-3 and **notify-3b** complete and merged in PRs #29, #30, #38 and #42, plus three small Notify fixes in #43, #44 and #45 — `applied_on_paper`, the measured JSON boolean, and never printing the API key |
+| `email-case-notes` | complete, filed in `plans/completed/`, **unmerged** — one case note when an email is enqueued and one when it terminally fails. **No contract delta**: no migration, no DTO field and no endpoint, so every count below except the test figures is the same as `master`'s |
 
 V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 adds the
 nullable rendered subject and plain-text body. Only a definite permanent refusal permits a replacement
@@ -25,16 +25,16 @@ row; its failed history remains unchanged when the replacement is sent.
 
 | | |
 |---|---|
-| Flyway migrations | **15 on `master`** — V14 adds the nullable referral owner subjects, V15 the notification exclusion group. **V16, V17 and V18 on `notify-3b`**: the referral's four confirmation columns, the case's `awaitingConfirmationSince` read-model, and the correction to V16's partial index |
-| Caseworker endpoints | **34 across 21 paths** on `notify-3b` (33 on `master`), over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures |
+| Flyway migrations | **18 on `master`**, notify-3b having merged — V14 adds the nullable referral owner subjects, V15 the notification exclusion group, V16 the referral's four confirmation columns, V17 the case's `awaitingConfirmationSince` read-model and V18 the correction to V16's partial index. `email-case-notes` adds none |
+| Caseworker endpoints | **34 across 21 paths** on `master`, over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures |
 | Judicial endpoints | **5**, `referrals-api-6` having merged — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,575** on `notify-3b` — `test` 2,563 + `integration` 12 (measured 2026-09-23). The branches are not stacked, so figures from one are never cumulative with another's |
-| Docker-free CI | **1,627 unit tests**, measured with `INTEGRATION_TESTS_ENABLED=false`; the other 936 are in 31 container-backed classes. `build.gradle` carries the history and instructs the next plan to re-measure |
-| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `notify-3b` after its review (2026-09-23), and on `master` after notify-5 |
+| Tests | **2,622** on `email-case-notes` — `test` 2,610 across 331 classes + `integration` 12 across 3, 0 failures and 0 skipped (measured 2026-09-24 from `build/test-results/` after `./gradlew build --rerun-tasks`). `master` read 2,580 + 12 when this branch started. The branches are not stacked, so figures from one are never cumulative with another's |
+| Docker-free CI | **1,657 unit tests** on `email-case-notes`, measured with `INTEGRATION_TESTS_ENABLED=false`; the other 953 are in 32 container-backed classes, which this branch added none to. `build.gradle` carries the history and instructs the next plan to re-measure |
+| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `email-case-notes` after its review (2026-09-24), and on `master` after notify-3b |
 
-**Twenty-one** plans are in [`plans/completed/`](plans/completed/) — the three added since this section was
-last rewritten are the saved-query publishing gate, notify-3 and notify-3b. The arc since plan 01: the domain gaps
+**Twenty-two** plans are in [`plans/completed/`](plans/completed/) — the four added since this section was
+last rewritten are the saved-query publishing gate, notify-3, notify-3b and the email case notes. The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
 then the original referrals feature in four completed plans — create/withdraw, claim/direction/close,
 `currentReferralState`, and the judicial surface — plus two CI plans and the ACR migration.
@@ -85,7 +85,7 @@ they were written, **not** the order to build them:
 notify-1  the send path                     COMPLETE
 notify-5  what was sent, and when            case correspondence history   COMPLETE
 notify-3  request confirmation to proceed    three exclusive templates     COMPLETE (PR #38, merged)
-notify-3b track the applicant's reply                                      COMPLETE (filed, unmerged)
+notify-3b track the applicant's reply                                      COMPLETE (PR #42, merged)
 notify-6  chase missing documents             case-driven, repeatable
 notify-4  generate the deed forms            needs a spike first
 ```
@@ -141,9 +141,9 @@ nothing in this repo can confirm the external half. Re-check rather than quote.
 - **The ACR migration is done** — `hmctspublic` → `hmctsprod` in `Dockerfile`, `Chart.yaml` and
   `values.yaml`. That nagger was what failed master build #3.
 - **CI runs without Docker.** `INTEGRATION_TESTS_ENABLED=false` (set by `Jenkinsfile_CNP`) drops
-  `integration` from `check` and excludes the `requires-docker` tag from `test`. On `notify-3b` that is
-  **1,627 of 2,563** unit tests running in CI, with 936 in 31 container-backed classes.
-  `build.gradle:85-121` carries the full history and instructs the next plan to re-measure it.
+  `integration` from `check` and excludes the `requires-docker` tag from `test`. On `email-case-notes` that is
+  **1,657 of 2,610** unit tests running in CI, with 953 in 32 container-backed classes.
+  `build.gradle` carries the full history and instructs the next plan to re-measure it.
 - **The chart is wired for workload identity** — `useWorkloadIdentity: true`, `saEnabled: true`, reading
   the shared `deed-poll-{env}` vault for `app-insights-connection-string` and the four `postgres-*`
   secrets. The matching identity, federated credential and service-account annotation are

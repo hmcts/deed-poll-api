@@ -40,6 +40,15 @@ exactly the varying part and the only one. **There are two templates today and f
 notify-6, ①② with notify-4 — so a design that switched on the template would need editing three more times and
 would be a case somebody forgets. This one gets them for free.
 
+**Correction, 2026-09-24 (review), appended rather than rewritten.** The signatures above were never built, and
+Task 1's record of "four public methods, two pairs of overloads" no longer describes the code either. What ships
+is **three** methods: `sent(EmailTemplate)` for the enqueue, which holds the member; `couldNotBeSent(String)` for
+the drain, which holds only what the row stores; and `couldNotBeSent(EmailTemplate)`, which the outbox and
+controller tests use to state the expected note. `sent(String)` was built for "the drain" and the drain never
+writes a sent note — decision 4 puts that one at enqueue — so it had no caller and its docblock claimed one; the
+review deleted it. The prose and the no-branching-on-template rule are unchanged, and the degrade of an
+unresolvable stored name (decision 8) is still exercised, through the string overload that is actually reachable.
+
 ### 2. "Sent", with the pointer disclaiming delivery
 
 The note is written at **enqueue** (decision 4), so at the instant it is written the email has been accepted by
@@ -276,6 +285,13 @@ Notes so no task rediscovers them:
       excluded to reach green. Integration is unchanged at 12 across 3, as expected: the notes are written
       through existing seams and the HTTP tests live in the `test` source set
 - [x] Mark completed
+- [x] **Re-measured 2026-09-24 after the review pass**, which deleted the uncalled `EmailNotes.sent(String)` and
+      added `NotificationOutboxTest.oneRefusedNoteTakesTheBatchWithIt` — the test that drives decision 5's hazard
+      instead of arguing it. `./gradlew build --rerun-tasks`: **BUILD SUCCESSFUL**, checkstyle clean on all five
+      source sets, **2,610 unit tests across 331 classes and 12 integration across 3, 0 failures, 0 errors, 0
+      skipped** — +1 on Task 4's figure, which is the added test. Docker-free, measured separately with
+      `INTEGRATION_TESTS_ENABLED=false`: **1,657 of the 2,610**, no container-backed class added. `build.gradle`
+      and `docs/RESUME.md` carry both figures
 
 ## Deliberately not in this plan
 

@@ -67,12 +67,9 @@ class EmailNotesTest {
     @Test
     @DisplayName("the stored name composes the same note the template does, for every template")
     void storedNameComposesTheSameNoteTheTemplateDoes() {
-        // The drain reads a member name off the row and the enqueue holds the member itself, so the two
-        // overloads have to agree or the same email would read differently depending on which note it was.
+        // The drain reads a member name off the row and the enqueue holds the member itself, so a failure note
+        // and the sent note beside it have to name the email identically or one send would read as two.
         for (EmailTemplate template : EmailTemplate.values()) {
-            assertThat(EmailNotes.sent(template.name()))
-                .as("%s", template)
-                .isEqualTo(EmailNotes.sent(template));
             assertThat(EmailNotes.couldNotBeSent(template.name()))
                 .as("%s", template)
                 .isEqualTo(EmailNotes.couldNotBeSent(template));
@@ -89,34 +86,35 @@ class EmailNotesTest {
         String renamed = "FORMS_FOR_COMPLETION_APPLICANT";
         assertThat(EmailTemplate.byName(renamed)).isEmpty();
 
-        assertThat(EmailNotes.sent(renamed))
-            .isEqualTo(renamed + " email sent. See the Emails tab for its delivery status.");
         assertThat(EmailNotes.couldNotBeSent(renamed))
             .isEqualTo(renamed + " email could not be sent. See the Emails tab for the reason.");
     }
 
     @Test
-    @DisplayName("a pathological stored name still composes a note the notes column accepts")
+    @DisplayName("a pathological stored name is cut to 200 characters, and the prose still follows it")
     void pathologicalStoredNameStillComposesAnAcceptableNote() {
         // template is unbounded `text` in the database and the notes column is not. Nothing writes a name like
         // this today -- the value comes from the enum -- but "not reachable" is the wrong standard for a note
         // written inside the drain's batch transaction, where a refusal costs rows Notify has accepted.
-        for (String text : List.of(EmailNotes.sent("T".repeat(5000)),
-                                   EmailNotes.couldNotBeSent("T".repeat(5000)))) {
-            assertThat(text.length()).isLessThanOrEqualTo(NoteForm.MAX_NOTE_LENGTH);
-            assertThat(NoteForm.validateNoteText(text)).isEmpty();
-        }
+        //
+        // The whole composed note is asserted rather than only its length, so the truncation bound itself is
+        // pinned: a note that merely fitted the column would also pass if the 200 became 1,900 or if the cut
+        // took the sentence with it, and the margin this note relies on would shrink with nothing failing.
+        String note = EmailNotes.couldNotBeSent("T".repeat(5000));
+
+        assertThat(note)
+            .isEqualTo("T".repeat(200) + " email could not be sent. See the Emails tab for the reason.");
+        assertThat(note.length()).isLessThanOrEqualTo(NoteForm.MAX_NOTE_LENGTH);
+        assertThat(NoteForm.validateNoteText(note)).isEmpty();
     }
 
     @Test
     @DisplayName("a missing stored name still reads as a note rather than as an empty one")
     void missingStoredNameStillReadsAsANote() {
         // Unreachable -- the column is NOT NULL -- but a composer that interpolated the stored value would put
-        // the word "null", or nothing at all, onto a timeline that is never revised.
+        // the word "null", or nothing at all, onto a timeline that is never revised. The null case is also what
+        // stops `displayName` throwing where a throw would cost rows Notify has accepted.
         for (String noName : Arrays.asList(null, "", "   ")) {
-            assertThat(EmailNotes.sent(noName))
-                .as("a row storing %s", noName == null ? "null" : "blank")
-                .isEqualTo("Unrecognised email sent. See the Emails tab for its delivery status.");
             assertThat(EmailNotes.couldNotBeSent(noName))
                 .as("a row storing %s", noName == null ? "null" : "blank")
                 .isEqualTo("Unrecognised email could not be sent. See the Emails tab for the reason.");

@@ -398,3 +398,9 @@ Read first: notify-3's Task 2, and `ReferralService`'s existing write operations
 4. **The clock can start on an email that never arrived.** Decision 4 explains the trade. Until notify-1's
    flag 8 is resolved, a terminally failed ④ leaves a case sitting in the waiting list with nobody able to see
    why no reply is coming. The two flags should be closed together.
+
+   **Correction, 2026-09-24 (`email-case-notes`, appended not rewritten):** the *visibility* half is closed. A
+   terminally failed email now writes a case note, so the timeline says why no reply is coming. What remains is
+   the business half — the clock is not stopped and the case stays on the `awaitingConfirmation` list — which is
+   a decision about what should then happen rather than something the timeline can fix. See
+   [`email-case-notes.md`](email-case-notes.md), flag 2.
