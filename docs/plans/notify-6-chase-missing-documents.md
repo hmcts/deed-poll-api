@@ -176,6 +176,32 @@ than discovered during it.
 
 ### Task 0: Verify the provisioned template contract
 
+> **The template now exists and has already been read back out of Notify — 2026-09-24. This task is therefore a
+> recording task, not an investigation, and it must not send anything.**
+>
+> | | |
+> |---|---|
+> | Template UUID | **`a67e7dd1-0f8c-4366-a1de-ca5fbc24ec98`**, version 1, non-prod service. The value `NOTIFY_TEMPLATE_CHASE_MISSING_DOCUMENTS` takes — configuration, not a secret, and per-service |
+> | Reply-to id | **`aabceef1-63e4-4414-9554-a24b0be967d7`** for `KBDEEDSPOLL@justice.gov.uk`, registered and verified. `NOTIFY_EMAIL_REPLY_TO_ID`, **one value for the whole service** — so it serves ④ as well |
+> | Placeholders | **Exactly the five this task expects**, confirmed character-for-character |
+> | `documents_required` | Required — it sits unconditionally in the body with no `((…??…))` around it, so Notify refuses a send that omits it |
+> | Wording | Unchanged from the drafted content, `King's Bench Division` sign-off included |
+>
+> **So nothing in this plan needs amending** — the bullet about amending before Task 1 has been discharged rather
+> than skipped.
+>
+> **The evidence, and where the prose lives:** read via `GET /v2/template/{id}` against
+> `api.notifications.service.gov.uk` with the non-prod key. Subject, body, the five-placeholder contract and the
+> sign-off decisions are in the sibling repo at
+> `../deed-poll-admin/.business_context/notify-templates/chase-missing-documents.md`, which is the authored
+> source — ⑤ was the only one of the six templates with **no supplied `.docx`**. The two ids are also in
+> `../local-notes/deed-poll-api/notify-nonprod.env` for a local run.
+>
+> **Two cautions.** The **reply-to id is recorded on Steve's word, not verified** — Notify publishes no read-only
+> API for reply-to addresses — so do not claim it as read-back evidence. And **`charts/deed-poll-api` sets neither
+> id**, so AAT will still report ⑤ unprovisioned after this plan: that is a separate chart change and explicitly
+> not this plan's job.
+
 - Record the real template UUID configuration key and confirm the template placeholder list is exactly:
   `reference_number`, `online_application_reference`, `old_forename`, `old_surname`,
   `documents_required`.
