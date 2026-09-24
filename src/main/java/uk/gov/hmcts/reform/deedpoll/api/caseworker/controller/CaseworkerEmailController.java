@@ -126,6 +126,10 @@ public class CaseworkerEmailController {
      * returned rather than within it -- see {@link #outbox}. A drain with nothing to do is cheap and a failure in
      * one cannot undo the enqueue, because they are separate transactions.
      *
+     * <p>A case note is written in the send's own transaction, so the email appears on the Notes grid -- the only
+     * timeline this domain has -- rather than only in the Emails tab. Nothing about it is the client's to supply
+     * or suppress, and the response does not mention it.
+     *
      * <p>422 for a case with no applicant email address, naming the column: the caseworker has chosen to send, so
      * silently skipping would leave them believing an applicant had been told something. 409 when no Master has
      * refused the application -- nothing about the request is wrong and it would succeed unchanged once one has.

@@ -22,6 +22,7 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SentEmailResponse;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
@@ -122,6 +123,10 @@ class NotificationSecurityTest {
                        EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), "template-2"),
                 "reply-to-1"),
             mock(ReferralService.class),
+            // Mocked: this class is about what leaves the service, and a note is written through the one path
+            // that scopes it to its parent case. What the note may say is pinned in EmailNotesTest and
+            // CaseEmailServiceTest.
+            mock(NoteService.class),
             JSON);
     }
 

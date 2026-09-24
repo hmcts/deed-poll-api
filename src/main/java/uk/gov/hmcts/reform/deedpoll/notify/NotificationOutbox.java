@@ -6,6 +6,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationFailureVerdict;
@@ -49,6 +52,13 @@ import java.util.UUID;
  * rather than skipping it -- acceptable while the limit is a handful of rows, and it is still correct:
  * the blocked statement re-evaluates its predicate once the lock is released and takes nothing.
  *
+ * <p><strong>The one thing a drain writes outside the outbox is a case note, and only for a terminal
+ * failure.</strong> The Notes grid is the only timeline this domain has, so an email that is never going to arrive
+ * has to be visible where caseworkers already look -- and the note for the <em>send</em> was written by
+ * {@link CaseEmailService} in the caseworker's own transaction, precisely so that the batch transaction described
+ * above is not where it lives. {@link #note} is why the one note that has to be written here cannot roll a batch
+ * back.
+ *
  * <p><strong>Notify is reached only through {@link NotificationSender}, and a context may have no
  * implementation.</strong> {@link NotifyEmailSender} is the one this service ships, so an ordinary context
  * sends; a context without that bean claims nothing and leaves every row {@code Pending}, which is what
@@ -76,9 +86,22 @@ public class NotificationOutbox {
      */
     private final Optional<NotificationSender> sender;
 
-    public NotificationOutbox(NotificationRepository notifications, Optional<NotificationSender> sender) {
+    /**
+     * Only to put a marker on the case's timeline when an email fails terminally -- see {@link #note} and
+     * {@link EmailNotes}.
+     *
+     * <p>The service and not the note repository, for the reason {@link CaseEmailService} holds it: the note goes
+     * through the one path that scopes it to its parent case. {@code createNote} takes a {@link NoteAuthor} rather
+     * than a {@link CurrentUser}, which is what lets a drain with no request behind it author one at all.
+     */
+    private final NoteService notes;
+
+    public NotificationOutbox(NotificationRepository notifications,
+                              Optional<NotificationSender> sender,
+                              NoteService notes) {
         this.notifications = notifications;
         this.sender = sender;
+        this.notes = notes;
     }
 
     /**
@@ -94,8 +117,10 @@ public class NotificationOutbox {
     /**
      * Takes up to {@code limit} owed and due notifications, sends each, and records the outcome.
      *
-     * <p>Each row is independent: one that fails does not stop the rest, and one that throws is recorded
-     * as {@link NotificationFailure#TECHNICAL} rather than being allowed to roll the batch back.
+     * <p>Each row is independent: one that fails does not stop the rest, and a <em>sender</em> that throws is
+     * recorded as {@link NotificationFailure#TECHNICAL} rather than being allowed to roll the batch back. The
+     * case note a terminal failure writes is deliberately <em>not</em> guarded that way -- see {@link #note} --
+     * so it is composed to be unrefusable instead.
      *
      * <p>Every row in the batch is judged against one {@code now}, the same instant the candidates were
      * found with -- a freshly computed one per row could claim a row against a dueness it did not
@@ -165,12 +190,20 @@ public class NotificationOutbox {
      * a retryable failure that has run out of attempts is a row that was worth trying and stopped being.
      * A caseworker reading the Email tab needs to tell them apart, so {@code failureReason} says which.
      *
+     * <p><strong>A row that reaches {@code Failed} also gets a case note</strong> -- see {@link #note}, which is
+     * where the "transition into {@code Failed}" this method detects is argued.
+     *
      * @param row     the claimed row, with its attempt already counted
      * @param outcome what came back
      * @param now     the instant to stamp and to measure the backoff from
      * @return true if Notify accepted the send
      */
     boolean settle(Notification row, SendOutcome outcome, LocalDateTime now) {
+        // Read before the switch writes to the row, because the note below is owed to the transition rather than to
+        // the state: it is the moment nothing more is coming that a timeline records, and a row settled twice into
+        // the same terminal state is one email, so it is one note.
+        // Final so that the switch below cannot be read as re-reading it, which is the whole point of taking it here.
+        final NotificationState before = row.getState();
         boolean accepted = false;
         switch (outcome) {
             case SendOutcome.Sent success -> {
@@ -216,7 +249,45 @@ public class NotificationOutbox {
         row.setModifiedBy(CurrentUser.SERVICE_ACCOUNT_NAME);
         row.setModifiedOn(now);
         notifications.save(row);
+        if (before != NotificationState.Failed && row.getState() == NotificationState.Failed) {
+            note(row);
+        }
         return accepted;
+    }
+
+    /**
+     * Puts a terminally failed email on the case's timeline, attributed to whoever asked for it.
+     *
+     * <p><strong>On the transition into {@code Failed}, not on a {@code PERMANENT} verdict.</strong> A row reaches
+     * {@code Failed} by two routes -- a failure that is not retryable, and a retryable one that has run out of
+     * attempts -- and {@code failureVerdict} is written on every failure including the ones still being retried. So
+     * keying on the verdict would miss the exhausted case, which is the more insidious of the two: it looked
+     * recoverable, then was not, and nothing is coming back to it. A transient failure gets no note at all, because
+     * one per retry would bury the timeline in attempts that succeeded a minute later.
+     *
+     * <p><strong>Composed so that it cannot be refused, which is the whole of the protection here.</strong> This
+     * runs inside {@link #drain(int)}'s single {@code REQUIRES_NEW}, which covers up to {@link #DEFAULT_LIMIT} rows
+     * -- so a note the notes validator rejected would roll back state changes for rows Notify had <em>already
+     * accepted</em>, and the next drain would send those emails again. {@link EmailNotes} therefore composes from
+     * fixed prose and a bounded name, and the provider's {@code failureReason} is deliberately not among the
+     * ingredients: it is unbounded external text and would put the length bound beyond proof. What is left is the
+     * database, which fails the batch either way, so the invariant is the strong one -- no terminal failure without
+     * its note, and no note without a terminal failure.
+     *
+     * <p><strong>Not in its own transaction, deliberately.</strong> A {@code REQUIRES_NEW} here would survive the
+     * batch rolling back, leaving a "could not be sent" note against a row that returned to {@code Pending} and may
+     * yet succeed -- and notes are never revised.
+     *
+     * <p><strong>Authored from {@code Notification.createdBy}, so the pair reads as one story.</strong> That column
+     * is {@code NOT NULL} and holds the caseworker who sent the email, which is the same name on the note the
+     * enqueue wrote -- so a grid shows their send and its outcome under one name rather than handing the failure to
+     * a service account nobody can ask about. {@link NoteAuthor} maps a blank to the service account anyway, so
+     * there is no fallback to write here.
+     */
+    private void note(Notification row) {
+        notes.createNote(row.getDeedPollId(),
+                         new CreateNoteInput(EmailNotes.couldNotBeSent(row.getTemplate())),
+                         new NoteAuthor(row.getCreatedBy()));
     }
 
     /** The verdict and what Notify said, which is what a human reading the Email tab needs. */

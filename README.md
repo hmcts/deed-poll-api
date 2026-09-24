@@ -70,7 +70,7 @@ both counts, so a route added without a row here is a count that stops agreeing 
 | POST | `/caseworker/cases/{id}/referrals/{referralId}/confirmation` | Record the applicant's answer to the *Request confirmation to proceed* email — `outcome` (`Confirmed` or `Withdrawn`) and an optional `note`. **409** if an answer is already stored (naming it and its date) and **409** if nobody asked this referral to confirm |
 | GET | `/caseworker/cases/{id}/emails` | The Email tab in one call — which templates apply and why not, what has already been sent, and the slot defaults |
 | POST | `/caseworker/cases/{id}/emails/{template}/preview` | What Notify would render for this case and these slots — writes nothing |
-| POST | `/caseworker/cases/{id}/emails/{template}` | Enqueue one — an outbox row inside the caseworker's transaction, idempotent on a second send, **409** for the email of the group that contradicts one already asked for |
+| POST | `/caseworker/cases/{id}/emails/{template}` | Enqueue one — an outbox row and a case note inside the caseworker's transaction, idempotent on a second send, **409** for the email of the group that contradicts one already asked for |
 
 There are deliberately **no** case deletes, no document-type writes and no `validate` endpoint. The domain
 implements and tests them; nothing consumes them, and the sibling prototype's mistake was building an API
@@ -136,6 +136,19 @@ caseworkers already look: raise, withdraw and close to the caseworker, claim and
 the inactivity sweep's to the service account, because a lapsed claim erases the fact it is about. Recording the
 applicant's confirmation writes one too, although it moves no state — the answer is an event, and the grid is
 the only place it would appear.
+
+**An email writes case notes on the same reasoning, and they are markers rather than the record.** Enqueuing one
+writes *"&lt;Name&gt; email sent. See the Emails tab for its delivery status."* in the caseworker's own transaction, so
+a refused or rolled-back send leaves none and an idempotent repeat send writes no second one. An email that
+**terminally** fails — Notify refused it, or it was retryable and ran out of attempts — writes a second note
+pointing at the tab for the reason; a transient failure that will be retried writes nothing, because a note per
+attempt would bury the timeline. The Emails tab holds the content, recipient, personalisation, state and the
+provider's reason, and the note deliberately repeats none of them: it names the tab in prose rather than linking
+to it, because note text is escaped when rendered and nothing may parse it. The failure note is attributed to the
+caseworker who sent the email rather than to the service account that drained it, so the send and its outcome read
+as one story — which also means a note can appear on a case during somebody else's request, since the drain runs
+after whichever send commits. A replacement send after a terminal failure therefore leaves three notes for what a
+caseworker thinks of as one email; that is the timeline being honest, and notes are never revised.
 
 **A sixth case-list tab, `awaitingConfirmation`.** Where a judge has refused a request not to publish, the office
 emails the applicant to ask whether they still want the deed enrolled; until the reply is recorded the case is

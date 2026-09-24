@@ -86,8 +86,15 @@ test {
   useJUnitPlatform {
     // The CNP VM agent has no Docker daemon. 32 src/test classes need Testcontainers -- 31 inherit
     // the tag from AbstractPostgresContainerTest, SchemaConformanceTest carries it directly -- and
-    // they account for 946 of the 2,576 tests (measured, 2026-09-23 after notify-3b's third review pass,
-    // leaving 1,630 Docker-free tests. That pass added the 32nd class, ConfirmationConcurrencyTest:
+    // they account for 953 of the 2,610 tests (measured, 2026-09-24 after the email case notes and their
+    // review pass, leaving 1,657 Docker-free tests. That work added no container-backed class: of its 30
+    // tests, 23 are container-free -- EmailNotesTest, CaseEmailServiceTest$Sending$CaseNote and
+    // NotificationOutboxTest$CaseNote, which is where the rule that a note the notes service refuses rolls
+    // back rows Notify has already accepted is stated -- and 7 are nested in CaseworkerEmailControllerTest,
+    // which already carries the tag. The preceding total was measured as 2,576 on notify-3b and read 2,580
+    // by the time this branch started, the four between being the Notify API-key and boolean fixes;
+    // it was 946 of 2,576 across the same 32 classes leaving 1,630 after notify-3b's third review pass,
+    // which added the 32nd class, ConfirmationConcurrencyTest:
     // notify-3b's earlier passes added none, so this figure is the one the plan asked to be re-measured
     // if the work ever did -- it proves the recording's idempotency-by-refusal and the referral lock's
     // refresh against two real transactions, which no fake can stand in for, so it cannot be made
@@ -118,12 +125,13 @@ test {
     // conditional claim is proved exclusive against a real Postgres; it was 831 of 2,218 across 28
     // classes after task 3, 821 of 2,098 across 27 after the judicial-surface plan, 773 of 1,975 across
     // 26 after the currentReferralState plan, 741 of 1,813 after the referrals plan, 701 of 1,688
-    // across 23 before it, and 609 of 1,488 across 22 on 2026-09-15. Excluding them keeps the other 1,630
+    // across 23 before it, and 609 of 1,488 across 22 on 2026-09-15. Excluding them keeps the other 1,657
     // running in CI -- the judicial role gate, the visibility rule, the notification outbox's whole
-    // state machine and the email operations' own rules among them, each stated container-free for
-    // that reason -- instead of losing the whole suite to a static initialiser.
+    // state machine, the case notes an email writes and the email operations' own rules among them, each
+    // stated container-free for that reason -- instead of losing the whole suite to a static initialiser.
     // Re-measure rather than trusting these figures: they move whenever a container-backed class is
-    // added. Unset means exclude nothing, so a local run is unchanged.
+    // added, and the total moves whenever anything is. Unset means exclude nothing, so a local run is
+    // unchanged.
     // STOPGAP: delete this when a Docker-capable agent exists.
     if (!integrationTestsEnabled) {
       excludeTags 'requires-docker'

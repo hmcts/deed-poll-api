@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
@@ -16,6 +17,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
@@ -93,6 +96,13 @@ class CaseEmailServiceTest {
      */
     private ReferralService referralService;
 
+    /**
+     * Mocked so that "a send writes exactly one note, and a refused send writes none" is assertable without a
+     * database -- the note's own text is pinned in {@code EmailNotesTest} and the row it becomes in
+     * {@code CaseworkerEmailControllerTest}.
+     */
+    private NoteService caseNotes;
+
     private CaseEmailService emails;
 
     @BeforeEach
@@ -102,6 +112,7 @@ class CaseEmailServiceTest {
         notifications = mock(NotificationRepository.class);
         documents = mock(DeedPollSupportingDocumentRepository.class);
         notify = mock(NotificationClient.class);
+        caseNotes = mock(NoteService.class);
         // A provisioned template, so nothing here turns on the placeholder. The unprovisioned case is a Notify
         // refusal, which is asserted in its own test below.
         NotifyProperties properties = new NotifyProperties(
@@ -112,7 +123,7 @@ class CaseEmailServiceTest {
         // only one saying so.
         when(referrals.startConfirmationClockByIdAndDeedPollId(any(), anyString(), any(), anyString())).thenReturn(1);
         emails = new CaseEmailService(
-            deedPolls, referrals, notifications, documents, notify, properties, referralService,
+            deedPolls, referrals, notifications, documents, notify, properties, referralService, caseNotes,
             new ObjectMapper());
     }
 
@@ -369,7 +380,7 @@ class CaseEmailServiceTest {
             // the drain and a preview is a 502. NotifyProperties.isProvisioned exists for this sentence.
             CaseEmailService unprovisioned = new CaseEmailService(
                 deedPolls, referrals, notifications, documents, notify,
-                new NotifyProperties("https://notify.invalid", "", Map.of(), ""), referralService,
+                new NotifyProperties("https://notify.invalid", "", Map.of(), ""), referralService, caseNotes,
                 new ObjectMapper());
             storedCase();
             refusedReferral();
@@ -395,6 +406,7 @@ class CaseEmailServiceTest {
                     EmailTemplate.APPLICATION_REJECTED.key(), uuid,
                     EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), uuid), ""),
                 referralService,
+                caseNotes,
                 new ObjectMapper());
             storedCase();
             refusedReferralFor(ReferralReason.NonPublication);
@@ -912,6 +924,115 @@ class CaseEmailServiceTest {
                 verify(notifications).enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
                                               anyString(), now.capture(), anyString());
                 return now.getValue();
+            }
+        }
+
+        @Nested
+        @DisplayName("the case note")
+        class CaseNote {
+
+            @ParameterizedTest
+            @EnumSource(EmailTemplate.class)
+            @DisplayName("writes one note per template, naming the email and the tab, as the caseworker")
+            void writesOneNotePerEmail(EmailTemplate template) {
+                // Every template rather than one, because the composer is deliberately not per template: a member
+                // added to the enum must reach the timeline without anybody remembering to extend this. The
+                // non-publication refusal is the one fixture both templates apply to.
+                storedCase();
+                refusedReferralFor(ReferralReason.NonPublication);
+                enqueueSucceeds();
+
+                emails.send(CASE_ID, template, Map.of(), CASEWORKER);
+
+                // Scoped to the case the outbox row was written for, and authored by the person who chose to
+                // send -- on ③ and ④ they wrote part of what the applicant reads, so the service account would be
+                // wrong as well as unhelpful.
+                verify(caseNotes).createNote(
+                    CASE_ID, new CreateNoteInput(EmailNotes.sent(template)), CASEWORKER.noteAuthor());
+                // Once, not once per something: an applicant owed one email gets one line on the timeline.
+                verify(caseNotes, times(1)).createNote(anyString(), any(), any());
+            }
+
+            @Test
+            @DisplayName("writes no second note when the unique index refused the insert")
+            void writesNoNoteOnASecondSend() {
+                // The idempotent repeat, which answers with the original row. A note written anyway would leave a
+                // case reading as though the applicant had been written to twice by a caseworker who clicked once
+                // and then clicked again -- and notes are never revised.
+                storedCase();
+                refusedReferral();
+                when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
+                                           anyString(), any(), anyString())).thenReturn(0);
+                blocking(EmailTemplate.APPLICATION_REJECTED, LocalDateTime.of(2026, 6, 3, 9, 30));
+
+                assertThat(emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER).enqueued())
+                    .isFalse();
+
+                verifyNoInteractions(caseNotes);
+            }
+
+            @Test
+            @DisplayName("writes no note for a send refused before the outbox row")
+            void writesNoNoteForASendRefusedBeforeTheRow() {
+                // A note claiming an email was sent is worse than no note at all: the Emails tab has no row to
+                // contradict it, the pointer sends the reader to a tab that says nothing, and notes are never
+                // revised. The blank recipient rather than the missing refusal, because it is the refusal that
+                // happens latest of the pre-enqueue three.
+                storedCase().setApplicantEmail("  ");
+                refusedReferral();
+
+                assertThatThrownBy(() -> emails.send(
+                    CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER))
+                    .isInstanceOf(IncompleteDataError.class);
+
+                verifyNoInteractions(caseNotes);
+            }
+
+            @Test
+            @DisplayName("writes no note for a send refused after the row, because the note is in its transaction")
+            void writesNoNoteForASendRefusedAfterTheRow() {
+                // The one refusal that happens after a successful enqueue: the applicant answered while ④ was being
+                // sent, and the clock's statement refuses it. The row rolls back, so the note must not survive --
+                // which it cannot, because it is written in the same transaction and after the statement that
+                // throws.
+                storedCase();
+                refusedReferralFor(ReferralReason.NonPublication);
+                enqueueSucceeds();
+                when(referrals.startConfirmationClockByIdAndDeedPollId(any(), anyString(), any(), anyString()))
+                    .thenReturn(0);
+
+                assertThatThrownBy(() -> emails.send(
+                    CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER))
+                    .isInstanceOf(ConflictError.class)
+                    .hasMessage(CaseEmailService.CONFIRMATION_ALREADY_ANSWERED);
+
+                verifyNoInteractions(caseNotes);
+            }
+
+            @Test
+            @DisplayName("says nothing about the recipient, the content or the slots the caseworker typed")
+            void repeatsNoneOfTheContent() {
+                // The note is the marker and the Emails tab is the record. A note repeating any of this would put a
+                // second copy of personal data on a timeline nothing re-renders and nobody revises.
+                storedCase();
+                refusedReferral();
+                enqueueSucceeds();
+
+                emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED,
+                            Map.of("additional_notes", "Ring the office on 0300 123 4567."), CASEWORKER);
+
+                ArgumentCaptor<CreateNoteInput> note = ArgumentCaptor.forClass(CreateNoteInput.class);
+                verify(caseNotes).createNote(anyString(), note.capture(), any());
+                assertThat(note.getValue().note())
+                    .doesNotContain(RECIPIENT)
+                    .doesNotContain("0300 123 4567")
+                    .doesNotContain("Okonjo")
+                    .doesNotContain(DIRECTION);
+            }
+
+            private void enqueueSucceeds() {
+                when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
+                                           anyString(), any(), anyString())).thenReturn(1);
             }
         }
     }

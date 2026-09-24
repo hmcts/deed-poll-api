@@ -9,7 +9,12 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationFailureVerdict;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
@@ -22,8 +27,11 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -36,7 +44,8 @@ import static org.mockito.Mockito.when;
  *
  * <p>Container-free because CI excludes the {@code requires-docker} classes, so a rule stated only in a
  * container-backed test is a rule CI does not check -- and every rule here is about what the outbox does
- * with a verdict rather than about SQL. The SQL half is
+ * with a verdict rather than about SQL -- including which verdicts put a note on the case's timeline, which is a
+ * rule about the transition and not about the database it is written to. The SQL half is
  * {@code NotificationRepositoryTest}: that the claim is exclusive, that the unique index refuses a
  * duplicate, and that {@code jsonb} round trips are claims only a real Postgres can settle.
  *
@@ -54,11 +63,14 @@ class NotificationOutboxTest {
 
     private NotificationSender sender;
 
+    private NoteService notes;
+
     @BeforeEach
     void setUp() {
         notifications = mock(NotificationRepository.class);
         sender = mock(NotificationSender.class);
-        outbox = new NotificationOutbox(notifications, Optional.of(sender));
+        notes = mock(NoteService.class);
+        outbox = new NotificationOutbox(notifications, Optional.of(sender), notes);
         when(notifications.save(any(Notification.class))).thenAnswer(call -> call.getArgument(0));
     }
 
@@ -188,6 +200,170 @@ class NotificationOutboxTest {
     }
 
     @Nested
+    @DisplayName("the case note for a terminal failure")
+    class CaseNote {
+
+        @ParameterizedTest
+        @EnumSource(value = NotificationFailure.class, names = {"PERMANENT", "TECHNICAL"})
+        @DisplayName("writes one note for a failure that is not retryable, naming the email and the tab")
+        void writesOneNoteForAnUnretryableFailure(NotificationFailure failure) {
+            Notification row = claimed(1);
+
+            outbox.settle(row, SendOutcome.failed(failure, "400 bad template"), NOW);
+
+            // Scoped to the row's own case, and attributed to the caseworker who sent it rather than to the service
+            // account that drained it -- so the grid shows their send and its outcome under one name. The composer
+            // is the same one the enqueue's note came from, so the pair reads as one story.
+            verify(notes).createNote(
+                "a-case",
+                new CreateNoteInput(EmailNotes.couldNotBeSent(EmailTemplate.APPLICATION_REJECTED)),
+                new NoteAuthor("A Caseworker"));
+            verify(notes, times(1)).createNote(anyString(), any(), any());
+        }
+
+        @Test
+        @DisplayName("writes one when a retryable failure has run out of attempts")
+        void writesOneWhenARetryableFailureIsExhausted() {
+            // The route keying on failureVerdict == PERMANENT would miss, and the more insidious of the two: it
+            // looked recoverable, then was not, and nothing is coming back to it.
+            Notification row = claimed(NotificationBackoff.MAX_ATTEMPTS);
+
+            outbox.settle(row, SendOutcome.failed(NotificationFailure.TEMPORARY, "500"), NOW);
+
+            assertThat(row.getState()).isEqualTo(NotificationState.Failed);
+            assertThat(row.getFailureVerdict()).isEqualTo(NotificationFailureVerdict.TEMPORARY);
+            verify(notes).createNote(
+                "a-case",
+                new CreateNoteInput(EmailNotes.couldNotBeSent(EmailTemplate.APPLICATION_REJECTED)),
+                new NoteAuthor("A Caseworker"));
+        }
+
+        @Test
+        @DisplayName("writes none for a transient failure, because the next drain may well send it")
+        void writesNoNoteForATransientFailure() {
+            // A note per retry would bury the timeline in attempts that succeeded a minute later, and notes are
+            // never revised -- so a case that went out on its second attempt would read for ever as one that failed.
+            Notification row = claimed(2);
+
+            outbox.settle(row, SendOutcome.failed(NotificationFailure.TEMPORARY, "429 rate limited"), NOW);
+
+            assertThat(row.getState()).isEqualTo(NotificationState.Pending);
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("writes none for an accepted send, because the enqueue already wrote that one")
+        void writesNoNoteForAnAcceptedSend() {
+            outbox.settle(claimed(1), SendOutcome.sent(UUID.randomUUID()), NOW);
+
+            // CaseEmailService.send wrote the "sent" note in the caseworker's own transaction. A second one here
+            // would say the same thing twice, once per drain that happened to take the row.
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("writes none for a row that was already Failed, because the note is owed to the transition")
+        void writesNoNoteForARowThatWasAlreadyFailed() {
+            // Unreachable through drain -- claimNextDue re-asserts Pending, so a Failed row is never handed to
+            // settle -- and asserted anyway, because it is what the word "transition" means here. settle is
+            // package-private and this is the shape a second settling would have.
+            Notification row = claimed(1);
+            row.setState(NotificationState.Failed);
+
+            outbox.settle(row, SendOutcome.failed(NotificationFailure.PERMANENT, "400 bad template"), NOW);
+
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("says nothing about why, and stays inside the notes column's bound")
+        void saysNothingAboutTheProvidersReason() {
+            // The reason is unbounded text from outside this service, so quoting it would put the length bound
+            // beyond proof -- and this note is written inside the batch transaction, where a refusal costs rows
+            // Notify has already accepted. The tab holds the reason and the verdict; that is what the pointer is
+            // for. EmailNotesTest pins the arithmetic across the whole enum; this pins it at the call site.
+            Notification row = claimed(1);
+            String verbose = "Notify said: " + "detail ".repeat(1_000);
+
+            outbox.settle(row, SendOutcome.failed(NotificationFailure.PERMANENT, verbose), NOW);
+
+            ArgumentCaptor<CreateNoteInput> written = ArgumentCaptor.forClass(CreateNoteInput.class);
+            verify(notes).createNote(anyString(), written.capture(), any());
+            assertThat(written.getValue().note())
+                .doesNotContain("Notify said")
+                .doesNotContain("detail")
+                .doesNotContain(row.getRecipient())
+                .hasSizeLessThanOrEqualTo(NoteForm.MAX_NOTE_LENGTH);
+            // And the row still carries all of it, so nothing is lost by the note not saying it.
+            assertThat(row.getFailureReason()).contains(verbose);
+        }
+
+        @Test
+        @DisplayName("notes one row's failure without disturbing the rows Notify accepted")
+        void notesOneFailureWithoutLosingTheRestOfTheBatch() {
+            // One failing row in a batch gets its note and the row beside it is untouched: the failing row is
+            // first, so the note is written before the second row is claimed and sent, and one terminal failure
+            // is one note rather than one per row. What happens when the note itself is refused -- the hazard
+            // decision 5 is about -- is oneRefusedNoteTakesTheBatchWithIt below; this test only shows that
+            // writing one does not disturb the rest.
+            Notification failing = claimed(1);
+            Notification succeeding = claimed(1);
+            when(notifications.findClaimable(eq(NotificationState.Pending), any(), any(Pageable.class)))
+                .thenReturn(List.of(failing.getId(), succeeding.getId()));
+            when(notifications.claimNextDue(any(), any(), any(), any())).thenReturn(1);
+            when(notifications.findById(failing.getId())).thenReturn(Optional.of(failing));
+            when(notifications.findById(succeeding.getId())).thenReturn(Optional.of(succeeding));
+            when(sender.send(failing))
+                .thenReturn(SendOutcome.failed(NotificationFailure.PERMANENT, "400 bad template"));
+            when(sender.send(succeeding)).thenReturn(SendOutcome.sent(UUID.randomUUID()));
+
+            assertThat(outbox.drain(5)).isEqualTo(1);
+
+            assertThat(failing.getState()).isEqualTo(NotificationState.Failed);
+            assertThat(succeeding.getState())
+                .as("the row Notify took is still taken, and the drain still counted it")
+                .isEqualTo(NotificationState.Sent);
+            // One note for one terminal failure, not one per row of the batch.
+            verify(notes, times(1)).createNote(anyString(), any(), any());
+        }
+
+        @Test
+        @DisplayName("a note the notes service refuses takes the batch with it, which is why it cannot be refused")
+        void oneRefusedNoteTakesTheBatchWithIt() {
+            // The hazard decision 5 is about, driven rather than argued, and the reason EmailNotes exists as a
+            // class of its own. The note write is not guarded -- deliberately: catching here would leave a
+            // terminal failure with nothing on the timeline, which is the one thing nothing comes back to fix --
+            // so a refusal escapes settle, escapes drain's loop and rolls back the single REQUIRES_NEW that
+            // covers rows Notify has *already accepted*, and the next drain sends those emails again.
+            //
+            // So the protection is entirely in the composing: fixed prose plus a bounded name, and never the
+            // provider's reason. This test is what makes that premise load-bearing rather than argued in a
+            // docblock -- if a future ingredient could be refused, this is the cost.
+            Notification failing = claimed(1);
+            Notification accepted = claimed(1);
+            when(notifications.findClaimable(eq(NotificationState.Pending), any(), any(Pageable.class)))
+                .thenReturn(List.of(accepted.getId(), failing.getId()));
+            when(notifications.claimNextDue(any(), any(), any(), any())).thenReturn(1);
+            when(notifications.findById(accepted.getId())).thenReturn(Optional.of(accepted));
+            when(notifications.findById(failing.getId())).thenReturn(Optional.of(failing));
+            when(sender.send(accepted)).thenReturn(SendOutcome.sent(UUID.randomUUID()));
+            when(sender.send(failing))
+                .thenReturn(SendOutcome.failed(NotificationFailure.PERMANENT, "400 bad template"));
+            doThrow(new NotFoundError("Case a-case not found"))
+                .when(notes).createNote(anyString(), any(), any());
+
+            assertThatThrownBy(() -> outbox.drain(5))
+                .as("nothing swallows it, so the transaction the batch runs in is the one that pays")
+                .isInstanceOf(NotFoundError.class);
+
+            // The row Notify took was already Sent in this session, and it is precisely that write the rollback
+            // would discard -- leaving a row Notify has accepted looking Pending to the next drain.
+            assertThat(accepted.getState()).isEqualTo(NotificationState.Sent);
+            verify(notifications).save(accepted);
+        }
+    }
+
+    @Nested
     @DisplayName("draining")
     class Draining {
 
@@ -290,7 +466,7 @@ class NotificationOutboxTest {
         @DisplayName("does nothing at all when there is no sender, leaving every row owed")
         void doesNothingWhenThereIsNoSender() {
             NotificationRepository untouched = mock(NotificationRepository.class);
-            NotificationOutbox unwired = new NotificationOutbox(untouched, Optional.empty());
+            NotificationOutbox unwired = new NotificationOutbox(untouched, Optional.empty(), notes);
 
             assertThat(unwired.drain(5)).isZero();
 
