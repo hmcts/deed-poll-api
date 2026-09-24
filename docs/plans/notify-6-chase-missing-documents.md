@@ -148,6 +148,32 @@ Measure `test`, `integration` and `INTEGRATION_TESTS_ENABLED=false` baselines be
 totals in Task 4. **A worker or container startup timeout is an environment failure, not a code failure** —
 re-run before investigating.
 
+**Baseline measured 2026-09-24 during Task 0, on `notify-6-chase-missing-documents` at `30bac2e`** — before any
+code in this plan, from `build --rerun-tasks` so nothing was `UP-TO-DATE`, counted off
+`build/test-results/*/TEST-*.xml` immediately after each run:
+
+| Run | `test` | `integration` | Wall clock |
+|---|---|---|---|
+| `./gradlew build` (Docker) | **2610**, 0 failures / 0 errors / 0 skipped, 331 result files | **12**, all green | 4m 10s, 24 of 24 tasks executed |
+| `INTEGRATION_TESTS_ENABLED=false ./gradlew build` (what CI runs) | **1657**, all green | **not run at all** | 1m 7s, 23 tasks |
+
+**The 953-test gap is the number to hold on to, and `build.gradle:136` is why:** Docker-free, `test` does
+`excludeTags 'requires-docker'`, and `tasks.check.dependsOn(integration)` is only wired up when the flag is on
+(`build.gradle:182`). So CI runs neither the 953 container-backed unit tests nor the 12 integration ones — which
+is the concrete reason Task 2's container-backed migration proofs need container-free companions, and the reason
+the two runs differ by a task count as well as a test count.
+
+**A trap the "measure, do not read the exit code" note does not quite cover.** After the Docker-free run,
+`build/test-results/integration/` still held the previous run's 12 result files even though the task never ran.
+Stale files are not marked stale — so a count taken there proves nothing about the run that just finished.
+Delete the directory or compare the task list, rather than trusting the XML's presence.
+
+**One unreproduced red, recorded rather than quietly dropped.** The first Docker-free `build --rerun-tasks`
+reported `BUILD FAILED` after 4m; an immediately-following identical invocation passed in 1m 7s. The failure
+detail was lost to a `tail -8` on the captured output, so the cause is genuinely unknown — noted here because
+"it passed on the retry" is the correct action under the environment-failure rule above but not evidence that
+nothing is wrong. If a Docker-free run fails again, capture the whole log before re-running.
+
 Notes so no task rediscovers them:
 
 - **Measure, do not read the exit code.** A run with zero tests selected also exits 0, and a second
@@ -213,7 +239,49 @@ than discovered during it.
 - If any placeholder or reply behavior differs, amend the plan before Task 1 rather than translating between
   two contracts in code.
 
-- [ ] the provisioned template, placeholder names, required slot and reply-to behavior are recorded from
+#### Recorded 2026-09-24 — the evidence, and what each line of it rests on
+
+No email was sent and no source file was changed. Each row below was read out of a file, not recalled, and the
+last column says whether it is Notify's own answer or somebody's statement — because the two are not the same
+strength of evidence and Task 4 has to be able to tell them apart.
+
+| Fact | Value | Read from | Strength |
+|---|---|---|---|
+| Template UUID | `a67e7dd1-0f8c-4366-a1de-ca5fbc24ec98`, version 1, type `email`, non-prod service | the read-back table in `../deed-poll-admin/.business_context/notify-templates/chase-missing-documents.md` §"Authored 2026-09-24", and the same value in `../local-notes/deed-poll-api/notify-nonprod.env` | **Notify**, via `GET /v2/template/{id}` |
+| Placeholders | exactly `documents_required`, `old_forename`, `old_surname`, `online_application_reference`, `reference_number` — no sixth, none missing | same read-back table; the authoring contract table in §"exactly five placeholders" lists the identical five | **Notify** |
+| `documents_required` requiredness | required — it sits unconditionally in the body with no `((…??…))` wrapper, so Notify refuses a send that omits it | the template body quoted in that file, line-for-line with the read-back | **Notify** |
+| Reply invitation | "If anything above is unclear, or you have already sent these to us, **reply to this email** and we will help." — and the body also names `KBDEEDSPOLL@justice.gov.uk` in prose, so documents can arrive from another account or a forward | the quoted body | **Notify** |
+| Reply-to id | `aabceef1-63e4-4414-9554-a24b0be967d7` for `KBDEEDSPOLL@justice.gov.uk` | `NOTIFY_PROVISIONING_REQUEST.md` "A reply-to address" §, and `notify-nonprod.env` | **Steve's word** — Notify publishes no read-only API for reply-to addresses |
+
+**The configuration key, confirmed from this repo's code rather than from the naming convention.**
+`NotifyProperties.isProvisioned` resolves `templateId(template.key())` and `templateId` is a lookup into the
+`notify.templates` map, so the property key *is* the `EmailTemplate` key: Task 1 adds
+`chase-missing-documents: ${NOTIFY_TEMPLATE_CHASE_MISSING_DOCUMENTS:DEED_POLL_PLACEHOLDER}` beside the two
+already in `application.yaml`. That environment-variable name is the one `notify-nonprod.env` already exports,
+so a spelling of it that merely looks reasonable would leave a local run silently unprovisioned.
+
+**The 4,000-character cap is ours and the wording survives it.** Notify imposes no length on a placeholder;
+`((documents_required))` stands alone on its own line under a colon-introduced sentence, so a single sentence
+and a Markdown bullet list both read correctly — which is the property the cap needs, not a Notify constraint
+to be discovered.
+
+**So the amendment bullet above is discharged, not skipped: nothing in this plan changes.** Every assumption
+Task 0 existed to test — the template key, the one required slot, the surrounding wording living in Notify, and
+the reply-to dependency — matched.
+
+Two things deliberately *not* claimed, so Task 4 finds them stated rather than inferred:
+
+- **The reply-to id is unverified.** A wrong id is a loud 400; a *blank* one is silent, which is why
+  `NotifyProperties.isProvisioned` gates on it. It will be proven by the first real send.
+- **`charts/deed-poll-api` sets neither id** — `values.yaml` names only
+  `NOTIFY_TEMPLATE_APPLICATION_REJECTED` — so AAT will still report ⑤ unprovisioned after this plan. That is a
+  chart change and explicitly not this plan's job.
+
+One cosmetic mismatch, recorded because it will confuse whoever next opens the Notify UI: the template is
+**named `case_documents`** there, where ③ is named `application-rejected`. The api resolves by UUID, so nothing
+breaks.
+
+- [x] the provisioned template, placeholder names, required slot and reply-to behavior are recorded from
       evidence rather than assumption, with no implementation change
 
 ### Task 1: Add the template, personalisation and applicability
