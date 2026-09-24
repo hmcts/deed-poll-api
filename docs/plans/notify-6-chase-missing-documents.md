@@ -299,7 +299,54 @@ breaks.
   failures, applicability in every state, no referral lookup, applicant recipient and no raw case field
   override.
 
-- [ ] the case-driven template composes without a fake referral, is offered only in
+#### Recorded 2026-09-24 — what the generalisation actually cost, and the two decisions it forced
+
+Green from `./gradlew build` with Docker (**2666** `test`, 0 failures, 336 result files; **12** `integration`, all
+green) and from `INTEGRATION_TESTS_ENABLED=false ./gradlew build` (**1713** `test`, all green, `integration` not run
+— the directory was deleted first, so the count is this run's). **+56 unit tests against Task 0's baseline**, of
+which 23 are the new `chasing missing documents` nest; the integration count is unchanged, which is expected — this
+task added no schema and no statement.
+
+Four new files, all in `notify/`: `MissingDocumentsPersonalisation`, `EmailCause`, and the two test classes.
+`EmailExclusionGroup.DOCUMENT_CHASE` is a new member rather than a reuse of `REFERRAL_OUTCOME` — sharing it would
+make a chase and a refusal mutually exclusive on the same referral, which decision 5 forbids — and it is
+deliberately a group no index can act on, because a chase's rows carry no `referralId` and the V11 index is partial
+on `"referralId" IS NOT NULL`.
+
+**Two things the plan did not anticipate, both of which would have failed silently.**
+
+1. **`overview` composed its slot defaults through `EmailSlots.parse`.** That works only while every required slot
+   pre-populates from something — `judges_reason` has the direction. `documents_required` has nothing, so an
+   unchanged `overview` would have answered **400 for the whole Email tab on exactly the cases the chase is for**,
+   and no existing test would have said so. `EmailSlots.defaults` is now the one resolver for "what a form opens
+   with", `parse` remains the only gate a preview or send passes, and the pre-population rule itself is asked once
+   (`prePopulated`) so the two cannot disagree about what a caseworker was shown. An over-long migrated direction is
+   now *returned* by `defaults` rather than refusing the tab — the refusal says "shorten it", which is only
+   actionable if the form shows the text.
+2. **The required-slot refusal was hard-coded to the judge.** `judges_reason is required: this email quotes the
+   judge…` addressed to `documents_required` would send a caseworker to the referral tab for a field that has no
+   referral. Requiredness is now *spelled as* that sentence on `EmailSlot` — `required()` is "there is a sentence",
+   `OPTIONAL` is the empty one — so a required slot with no reason to give a caseworker is not expressible, and a
+   boolean and a message cannot drift apart. (Enum constants must qualify the constants they pass:
+   `EmailSlot.MAX_EMAIL_PROSE_LENGTH`, or javac calls it an illegal forward reference.)
+
+`MAX_EMAIL_PROSE_LENGTH = 4000` is declared on `EmailSlot`, equal to `ReferralSchemas.MAX_DIRECTIONS_LENGTH` and
+deliberately not read from it: the equality is two independent decisions agreeing, and a dependency would let a
+change to what a judge may record change what a caseworker may write to an applicant.
+
+Three existing tests asserted "every template applies" over a referral fixture and now name the two referral
+templates explicitly; `writesOneNotePerEmail` gained a fixture that satisfies all three at once and a
+`minimumSlots` switch, so a fourth template with an un-pre-populatable slot fails to compile there rather than
+failing at runtime. `CaseworkerEmailControllerTest` counted a template's slots off `EmailSlot.values().length`,
+which stopped being the same number. The checkstyle method-name trap the Validation Commands section warns about
+bit twice (`aCaseWithNoStateIsNotChased`, `aRefusalIsIrrelevantToIt`).
+
+Not done here, and not hidden: `send` still resolves a zero-row enqueue by reading the referral-keyed blocking row,
+so a chase that somehow conflicted would raise the "refused by the unique index, but no such row is readable"
+`IllegalStateException`. It is unreachable today — a null `referralId` cannot collide with the only index that
+exists — and Task 2 is what generalises that resolution.
+
+- [x] the case-driven template composes without a fake referral, is offered only in
       `AwaitingFurtherDocs`, requires bounded caseworker text, uses the reply-to provisioning rule, and the
       build is green
 

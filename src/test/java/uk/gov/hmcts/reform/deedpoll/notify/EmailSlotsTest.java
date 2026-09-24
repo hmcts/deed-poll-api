@@ -248,4 +248,127 @@ class EmailSlotsTest {
                 .hasMessage("Email content is not valid");
         }
     }
+
+    @Nested
+    @DisplayName("a required slot that pre-populates from nothing")
+    class TheChasesSlot {
+
+        private static final EmailTemplate CHASE = EmailTemplate.CHASE_MISSING_DOCUMENTS;
+
+        private static final String REQUIRED = "Your birth certificate, and proof of your current address.";
+
+        private static Map<EmailSlot, String> parseChase(Map<String, Object> raw) {
+            // The direction is passed and is deliberately irrelevant: this template has no referral, and a slot
+            // that fell back to one would put a judge's words into an email about missing documents.
+            return EmailSlots.parse(CHASE, raw, DIRECTION);
+        }
+
+        @Test
+        @DisplayName("takes the caseworker's text, trimmed, and takes nothing from the direction")
+        void takesTheCaseworkersTextOnly() {
+            Map<EmailSlot, String> slots = parseChase(body("documents_required", "  " + REQUIRED + "  "));
+
+            assertThat(slots).containsOnlyKeys(EmailSlot.DOCUMENTS_REQUIRED);
+            assertThat(slots.get(EmailSlot.DOCUMENTS_REQUIRED)).isEqualTo(REQUIRED);
+            assertThat(slots.values()).doesNotContain(DIRECTION);
+        }
+
+        @Test
+        @DisplayName("blank, absent and whitespace are the same refusal, in the slot's own words")
+        void blankIsRefusedWithItsOwnSentence() {
+            for (Map<String, Object> raw : List.of(body(), body("documents_required", "   "))) {
+                List<FieldError> refused = errorsFrom(() -> parseChase(raw));
+
+                assertThat(refused).extracting(FieldError::field).containsExactly("documents_required");
+                // Not the judge's sentence: there is no direction to shorten and no referral to read, so a
+                // caseworker told about one would go looking at the wrong tab.
+                assertThat(refused.getFirst().message())
+                    .contains("documents_required is required")
+                    .contains("only a caseworker can say")
+                    .doesNotContain("judge");
+            }
+        }
+
+        @Test
+        @DisplayName("the cap is inclusive at 4,000 and refused at 4,001")
+        void theCapIsInclusive() {
+            assertThat(parseChase(body("documents_required", repeated(EmailSlot.MAX_EMAIL_PROSE_LENGTH))))
+                .containsEntry(EmailSlot.DOCUMENTS_REQUIRED, repeated(EmailSlot.MAX_EMAIL_PROSE_LENGTH));
+            List<FieldError> refused = errorsFrom(() ->
+                parseChase(body("documents_required", repeated(EmailSlot.MAX_EMAIL_PROSE_LENGTH + 1))));
+
+            assertThat(refused).extracting(FieldError::field).containsExactly("documents_required");
+            // The typed-value message, not the pre-populated one: nothing pre-populates this slot, so "shorten the
+            // judge's direction" would be advice about a field the caseworker cannot see.
+            assertThat(refused.getFirst().message())
+                .contains("4000 characters or fewer")
+                .doesNotContain("pre-populated");
+        }
+
+        @Test
+        @DisplayName("the referral templates' keys are not this template's, and are named back as unknown")
+        void anotherTemplatesSlotIsUnknownHere() {
+            List<FieldError> refused = errorsFrom(() -> parseChase(body(
+                "documents_required", REQUIRED,
+                "judges_reason", "Refused.",
+                "decision_date", "1 June 2026")));
+
+            assertThat(refused).extracting(FieldError::field)
+                .containsExactlyInAnyOrder("judges_reason", "decision_date");
+            assertThat(refused.getFirst().message()).contains("is not a slot of chase-missing-documents");
+        }
+
+        @Test
+        @DisplayName("every resolved key is refused here too, including the reference the applicant is told")
+        void everyResolvedKeyIsRefused() {
+            for (String resolved : CHASE.resolvedKeys()) {
+                Map<String, Object> raw = body("documents_required", REQUIRED);
+                raw.put(resolved, "anything at all");
+
+                assertThat(errorsFrom(() -> parseChase(raw)))
+                    .as(resolved)
+                    .extracting(FieldError::field).containsExactly(resolved);
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("what a compose form opens with")
+    class Defaults {
+
+        @Test
+        @DisplayName("gives the chase's slot an empty string, where parse would have refused the same payload")
+        void theChaseOpensEmpty() {
+            // Why defaults exist separately from parse: this template's one slot is required and pre-populates
+            // from nothing, so composing defaults through the validator would answer 400 for the whole Email tab
+            // on exactly the cases the chase is for.
+            assertThat(EmailSlots.defaults(EmailTemplate.CHASE_MISSING_DOCUMENTS, null))
+                .containsExactly(Map.entry("documents_required", ""));
+            assertThatThrownBy(() -> EmailSlots.parse(EmailTemplate.CHASE_MISSING_DOCUMENTS, Map.of(), null))
+                .isInstanceOf(InvalidInputError.class);
+        }
+
+        @Test
+        @DisplayName("pre-populates the judge's reason and leaves the notes empty, in the order a form shows them")
+        void theReferralTemplateOpensWithTheDirection() {
+            assertThat(EmailSlots.defaults(TEMPLATE, DIRECTION)).containsExactly(
+                Map.entry("judges_reason", DIRECTION),
+                Map.entry("additional_notes", ""));
+            // Blank and absent are the same nothing, so a direction of one space leaves the slot to the caseworker
+            // exactly as a missing one does -- the rule parse applies, asked once.
+            assertThat(EmailSlots.defaults(TEMPLATE, "   ")).containsEntry("judges_reason", "");
+            assertThat(EmailSlots.defaults(TEMPLATE, null)).containsEntry("judges_reason", "");
+        }
+
+        @Test
+        @DisplayName("returns an over-long direction as it stands, so a caseworker can see what to shorten")
+        void anOverLongDirectionIsStillShown() {
+            // parse refuses it -- EmailSlotsTest.PrePopulation pins that -- and the refusal says to shorten it,
+            // which is only actionable if the form put the text in front of them. Withholding it here would make
+            // the tab refuse the case instead, over a field nobody was shown.
+            String tooLong = repeated(EmailSlot.JUDGES_REASON.maxLength() + 1);
+
+            assertThat(EmailSlots.defaults(TEMPLATE, tooLong)).containsEntry("judges_reason", tooLong);
+        }
+    }
 }

@@ -284,7 +284,10 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         void publishesTheSlots() throws Exception {
             authorised(get("/caseworker/cases/" + refusedCase() + "/emails"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.availability[0].slots.length()").value(EmailSlot.values().length))
+                // This template's slots, not every slot this service has: since ⑤ there is one no referral
+                // template takes, and a count off the enum would assert that the rejection email published it.
+                .andExpect(jsonPath("$.availability[0].slots.length()")
+                               .value(EmailTemplate.APPLICATION_REJECTED.slots().size()))
                 .andExpect(jsonPath("$.availability[0].slots[0].name")
                                .value(EmailSlot.JUDGES_REASON.placeholder()))
                 .andExpect(jsonPath("$.availability[0].slots[0].required").value(true))

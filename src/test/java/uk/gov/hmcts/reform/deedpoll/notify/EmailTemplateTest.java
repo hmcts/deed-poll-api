@@ -96,6 +96,17 @@ class EmailTemplateTest {
         }
 
         @Test
+        @DisplayName("the chase's member name, key and display name are the three spellings it is published as")
+        void chaseNamesAreTheStoredValues() {
+            // notify.templates.chase-missing-documents, /caseworker/cases/{id}/emails/chase-missing-documents, and
+            // CHASE_MISSING_DOCUMENTS in the outbox row. The key is the one notify-6's Task 0 read back out of
+            // Notify, so a respelling here would leave a provisioned template unreachable.
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.name()).isEqualTo("CHASE_MISSING_DOCUMENTS");
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.key()).isEqualTo("chase-missing-documents");
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.displayName()).isEqualTo("Chase missing documents");
+        }
+
+        @Test
         @DisplayName("the rejection email is listed first, which is the order the Email tab shows them in")
         void theRejectionEmailIsListedFirst() {
             assertThat(EmailTemplate.values())
@@ -130,6 +141,18 @@ class EmailTemplateTest {
             // V15 adds "exclusionGroup" text NOT NULL DEFAULT 'REFERRAL_OUTCOME' and enqueue binds this name, so
             // renaming the member is a data migration -- visible in a diff here rather than in production.
             assertThat(EmailExclusionGroup.REFERRAL_OUTCOME.name()).isEqualTo("REFERRAL_OUTCOME");
+        }
+
+        @Test
+        @DisplayName("the chase is in a group of its own, so a refusal and a chase are not alternatives")
+        void theChaseHasItsOwnGroup() {
+            // Decision 5 as a fact about the enum: sharing REFERRAL_OUTCOME would make a chase impossible on any
+            // case whose referral had already had an outcome email -- and those are unrelated processes.
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.exclusionGroup())
+                .isEqualTo(EmailExclusionGroup.DOCUMENT_CHASE)
+                .isNotEqualTo(EmailTemplate.APPLICATION_REJECTED.exclusionGroup());
+            // And the member name is the value a row stores, as REFERRAL_OUTCOME's is.
+            assertThat(EmailExclusionGroup.DOCUMENT_CHASE.name()).isEqualTo("DOCUMENT_CHASE");
         }
 
         @ParameterizedTest
@@ -192,6 +215,29 @@ class EmailTemplateTest {
             assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.slots())
                 .containsExactly(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES);
             assertThat(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.documentKeys()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("the chase takes one slot and resolves the four common case values, and nothing more")
+        void theChaseTakesOneSlot() {
+            // The contract notify-6's Task 0 verified against the provisioned template: exactly five placeholders,
+            // four resolved and one the caseworker writes. A sixth key would be personalisation Notify has nowhere
+            // to put, and a fifth missing one is a send Notify refuses.
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.slots())
+                .containsExactly(EmailSlot.DOCUMENTS_REQUIRED);
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.resolvedKeys()).containsExactly(
+                "reference_number", "online_application_reference", "old_forename", "old_surname");
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.personalisationKeys()).containsExactly(
+                "reference_number", "online_application_reference", "old_forename", "old_surname",
+                "documents_required");
+            // No refund branch: this email starts no refund, so the flag would be a value the template could not
+            // use and a reader of the stored row could not account for.
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.resolves("applied_online")).isFalse();
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.resolves("decision_date")).isFalse();
+            // And nothing attached: this email asks for incoming material and sends none.
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.documentKeys()).isEmpty();
+            // Its slot is not a slot of the referral templates, so a client sending it to one is told so.
+            assertThat(EmailTemplate.APPLICATION_REJECTED.slot("documents_required")).isEmpty();
         }
 
         @ParameterizedTest
@@ -293,6 +339,20 @@ class EmailTemplateTest {
         }
 
         @Test
+        @DisplayName("the chase does, because a reply is how the applicant sends what is missing")
+        void theChaseInvitesAReply() {
+            // "Reply to this email and we will help" -- read back off the provisioned template on 2026-09-24. Sent
+            // from no-reply, the documents this email exists to collect would arrive nowhere.
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.invitesReply()).isTrue();
+            String uuid = "2b0e6b6e-0000-4000-8000-0000000000aa";
+            Map<String, String> chase = Map.of(EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), uuid);
+            assertThat(new NotifyProperties("https://notify.example", "", chase, "")
+                           .isProvisioned(EmailTemplate.CHASE_MISSING_DOCUMENTS)).isFalse();
+            assertThat(new NotifyProperties("https://notify.example", "", chase, REPLY_TO)
+                           .isProvisioned(EmailTemplate.CHASE_MISSING_DOCUMENTS)).isTrue();
+        }
+
+        @Test
         @DisplayName("the rejection email does not, and must not start needing a reply-to")
         void theRejectionEmailInvitesNone() {
             // It states a decision and starts a refund; it asks the applicant for nothing. Asserted rather than
@@ -328,6 +388,28 @@ class EmailTemplateTest {
         void notesAreOptional() {
             assertThat(EmailSlot.ADDITIONAL_NOTES.maxLength()).isEqualTo(1000);
             assertThat(EmailSlot.ADDITIONAL_NOTES.required()).isFalse();
+        }
+
+        @Test
+        @DisplayName("documents_required is required and capped by this package's own constant, not by a referral's")
+        void documentsRequiredIsBoundedByEmailContent() {
+            // The same 4,000 a direction has, and deliberately not read from ReferralSchemas: the equality is two
+            // independent decisions agreeing, and a dependency would make a change to what a judge may record
+            // silently change what a caseworker may write to an applicant.
+            assertThat(EmailSlot.DOCUMENTS_REQUIRED.maxLength())
+                .isEqualTo(EmailSlot.MAX_EMAIL_PROSE_LENGTH)
+                .isEqualTo(4000);
+            assertThat(EmailSlot.DOCUMENTS_REQUIRED.required()).isTrue();
+        }
+
+        @ParameterizedTest
+        @EnumSource(EmailSlot.class)
+        @DisplayName("a required slot carries the sentence it is refused with, and an optional one carries none")
+        void requirednessIsTheSentence(EmailSlot slot) {
+            // The encoding, asserted rather than trusted: requiredness IS the sentence, so a required slot with no
+            // reason to give a caseworker is not expressible -- and an optional one cannot acquire a refusal
+            // message that never gets used.
+            assertThat(slot.required()).isEqualTo(!slot.requiredBecause().isEmpty());
         }
     }
 }

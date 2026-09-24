@@ -9,8 +9,12 @@ import java.util.stream.Collectors;
 /**
  * An email this service can send, and everything about it that is not the template's own words.
  *
- * <p>Two members. The remaining two in {@code NOTIFY_TEMPLATE_TAXONOMY.md} §6 -- the <em>forms for
+ * <p>Three members. The remaining two in {@code NOTIFY_TEMPLATE_TAXONOMY.md} §6 -- the <em>forms for
  * completion</em> emails -- are a later plan, blocked on document generation, which Notify cannot do.
+ *
+ * <p><strong>Two of the three are referral-driven and the third is case-driven</strong>, which is the axis
+ * {@link EmailCause} names: a template is entitled to be sent either by something a Master decided or by the
+ * state of the case itself, and the second kind stores no {@code referralId} rather than borrowing one.
  *
  * <p><strong>The member name is what the outbox row stores; the {@link #key()} is what configuration and a
  * URL say.</strong> Those are two different things on purpose. A Notify template UUID differs per environment,
@@ -86,6 +90,37 @@ public enum EmailTemplate {
         true,
         RequestConfirmationToProceedPersonalisation.RESOLVED_KEYS,
         List.of(EmailSlot.JUDGES_REASON, EmailSlot.ADDITIONAL_NOTES),
+        List.of()),
+
+    /**
+     * Waiting for further documents or information: names what is still needed and asks the applicant to send
+     * it. Template ⑤.
+     *
+     * <p><strong>The first case-driven template, and the reason {@link EmailCause} exists.</strong> It is
+     * offered when the case's own state is {@code AwaitingFurtherDocs} -- see {@code CaseEmailService} -- so
+     * there is no referral behind it and its outbox rows store a null {@code referralId}, which is what V11
+     * designed the nullable column for. No judge, no direction, no decision date and no refund branch.
+     *
+     * <p><strong>Its group is its own, and a repeat chase is deliberately not refused.</strong> A case can sit
+     * in {@code AwaitingFurtherDocs} after one reminder, and the caseworker may need to chase again -- so the
+     * mutual exclusion the other two have is the wrong shape here. See {@link EmailExclusionGroup#DOCUMENT_CHASE}
+     * for why a group is declared anyway, and the plan's decision 6 for what separates a deliberate second
+     * chase from a double-click.
+     *
+     * <p><strong>Invites a reply, and the wording says so twice.</strong> "Reply to this email" is how the
+     * applicant sends what is missing or says they have already sent it, so {@code notify.email-reply-to-id} is
+     * required configuration and this template reads unprovisioned without one.
+     *
+     * <p>One slot, required: only a caseworker knows which documents are outstanding. Nothing is attached --
+     * this email asks for incoming material and sends none -- so it declares no document keys.
+     */
+    CHASE_MISSING_DOCUMENTS(
+        "chase-missing-documents",
+        "Chase missing documents",
+        EmailExclusionGroup.DOCUMENT_CHASE,
+        true,
+        MissingDocumentsPersonalisation.RESOLVED_KEYS,
+        List.of(EmailSlot.DOCUMENTS_REQUIRED),
         List.of());
 
     private final String key;
