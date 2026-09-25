@@ -111,11 +111,30 @@ Carried from the original plan, which argued them; the numbering is this plan's.
    regenerated after the applicant signed a printed copy, the stored document and the paper in the court's hands
    could differ. A second request finds the existing row. (Original decision 7.)
 
-7. **No caseworker slots on either template.** Neither supplied document has an `[Enter …]` marker, unlike ③ and
-   ④ which have two each: the email is the same for every applicant of a given type. `slots()` is `List.of()`
-   and `EmailSlots.parse` refuses any slot a client sends. **If the business wants a notes box that is a template
-   change in notify-0 first** — adding a slot the template has no placeholder for makes Notify refuse the send.
-   (Original decision 13.)
+7. **No caseworker slots on either template — but the email IS personalised, and the two are different
+   questions.** The email is the same for every applicant *of a given type* in its wording; it still addresses
+   them by name and quotes their reference. See Task 4 for the four resolved keys, which come from the documents
+   themselves.
+
+   `slots()` is `List.of()` and `EmailSlots.parse` refuses any slot a client sends. **If the business wants a
+   free-text box that is a template change in notify-0 first** — adding a slot the template has no placeholder for
+   makes Notify refuse the send with a 400. (Original decision 13.)
+
+   **Re-checked on 2026-09-25 and the conclusion holds, though the original's evidence for it was wrong in its
+   detail.** It said neither document has an `[Enter …]` marker *"unlike ③ and ④, which have two each"*. Measured
+   across all four source documents, the marker style is not consistent and the counts were off:
+
+   | Source | Caseworker markers |
+   |---|---|
+   | ③ Application Rejected | `{insert judge's reason for refusal}` — **one**, in braces |
+   | ④ Request confirmation | `[Enter judge's comments]`, plus `[child's]` and `[delete if an adult application]` |
+   | **① forms adult** | **none, of any style** |
+   | **② forms minor** | **none, of any style** |
+
+   So ①/② genuinely have nothing for a caseworker to fill in and the decision stands — but it was reached partly
+   by grepping for one marker syntax when the documents use two. ③'s second slot, `additional_notes`, has no
+   marker in the source at all: it was an engineering addition, which is worth knowing before citing ③ as
+   precedent for anything.
 
 8. **① and ② are mutually exclusive per CASE, and notify-3's exclusion group does not cover them.** That index is
    partial on `"referralId" IS NOT NULL`, and these emails are not referral-driven — no judge, no referral — so it
@@ -234,9 +253,34 @@ Read first: decisions 1, 3, 7, 8, 9 and 10.
 
 - Two `EmailTemplate` members with no slots (decision 7), chosen by a `switch` over all four `DeedPollType`
   members with no `default` (decision 3).
-- Personalisation resolves the document references notify-4a's seam expects, plus `publishToLondonGazette` for
-  the Gazette conditional (decision 10). Every key present in deterministic order, nullable case values as empty
-  strings.
+- **Personalisation is the four resolved keys the supplied documents already name, plus the Gazette flag and the
+  document references.** Read from the source `.docx` on 2026-09-25 rather than chosen: ① and ② each reference
+  exactly `deedpoll_referencenumber`, `deedpoll_onlineapplicationreference`, `deedpoll_oldforename`,
+  `deedpoll_oldsurname` and `deedpoll_applicantemail` — the same set ③ and ⑤ use, which is why the Notify keys
+  should be the same four names those templates already use rather than new ones:
+
+  | Notify key | Column | Where it appears |
+  |---|---|---|
+  | `reference_number` | the case reference | subject line |
+  | `online_application_reference` | `onlineApplicationReference` | subject line, **nullable** |
+  | `old_forename` | `oldForename` | opening line |
+  | `old_surname` | `oldSurname` | opening line |
+  | `publish_to_london_gazette` | `publishToLondonGazette` | the Gazette conditional (decision 10) |
+
+  `deedpoll_applicantemail` is the **recipient**, not a placeholder — it is the address the row is sent to and
+  must not become a personalisation key.
+
+  **It addresses the applicant by their OLD name, and that is deliberate rather than an oversight.** The document
+  opens *"Regarding the application to enrol a deed poll change of name for `deedpoll_oldforename`
+  `deedpoll_oldsurname`"* — the new name is not theirs yet, and the deed the email carries is the instrument that
+  changes it. Do not "improve" this to the new name.
+
+  **`online_application_reference` is nullable and must resolve to an empty string, never be omitted** — Notify
+  refuses a send whose personalisation is missing a key the template names, which is how every other template
+  here handles it.
+
+  Every key present in deterministic order, nullable case values as empty strings, matching
+  `ApplicationRejectedPersonalisation`.
 - **The migration**: a second partial index on `("deedPollId", "exclusionGroup")` for rows where `"referralId"
   IS NULL`, carrying notify-1 task 7's permanent-failure predicate unchanged (decision 8). **Take the next free
   number by listing the directory** — never reserve one from this document.
