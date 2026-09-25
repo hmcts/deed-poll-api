@@ -2,8 +2,14 @@
 
 ## Overview
 
-The second half of the old `notify-4-forms-for-completion.md`, split on 2026-09-25. This is the half with the
-risk in it, and the half that finally makes ① and ② send.
+The second half of the old `notify-4-forms-for-completion.md`, split on 2026-09-25. It is what finally makes ①
+and ② send.
+
+**It was "the half with the risk in it" until 2026-09-25, and it no longer is.** Steve settled the output format:
+**`.docx` is fine for now**, because it duplicates the existing Power App process — the applicant downloads,
+prints and signs in wet ink, and a Word document prints. Faithful in-process Word→PDF conversion was the entire
+unresolved risk in this plan and in the programme; deferring it removes that risk rather than managing it. See
+decision 5.
 
 [`notify-4a`](notify-4a-attach-files-to-an-email.md) builds the machinery to attach a file and stores the five
 blank forms. This plan produces the one document that carries the applicant's data — **LOC020** (adult) and
@@ -14,9 +20,10 @@ engineering**: both deed templates are already in the workspace at
 `../deed-poll-admin/.business_context/doc_templates/`. notify-4a is the one waiting on five forms nobody has
 supplied and a Notify service setting nobody has switched on.
 
-**Task 1 is a spike whose job is to fail cheaply.** If the deed cannot be produced faithfully in-process, decision
-2's second reason evaporates and the route should be reconsidered rather than forced. **Do not build tasks 2
-onwards until one option is demonstrated on the real template.**
+**Task 1 is still a spike, but a much smaller one.** One question remains — can the 30 content controls be
+populated — and it is a known-library problem rather than an open one. It stays a spike because evidence 3 was
+wrong about the mechanism (see below) and nobody has driven this document yet. **Do not build tasks 2 onwards
+until it is demonstrated on the real template.**
 
 ---
 
@@ -49,9 +56,16 @@ documents to be generated**, and that is most of the apparent scope of this plan
 ```
 
 against `xmlns:ns0='urn:microsoft-crm/document-template/deedpoll_deedpoll/10740/'`. There are **no merge
-fields, no Docmosis `<<field>>` syntax and no plain-text tokens**: `10740` is the Dataverse entity type code
-and `customXml/item1.xml` is the bound data part. This cuts directly against the Docmosis route — see
-decision 3.
+fields, no Docmosis `<<field>>` syntax and no plain-text tokens**: `10740` is the Dataverse entity type code.
+This cuts directly against the Docmosis route — see decision 2.
+
+**⚠️ Corrected 2026-09-25, and it changes which route Task 1 should try first.** This evidence used to end
+*"and `customXml/item1.xml` is the bound data part"*, which reads as though the part is present and merely needs
+filling. **It is not in the file.** Measured by listing the archive: `word/_rels/document.xml.rels` declares a
+`customXml` relationship, but no `customXml/` entry exists in the zip — a dangling relationship, which is what a
+Dynamics template looks like. **Dynamics injects that data part at merge time; that injection *is* the Power App's
+population step.** So what is in this repo is the template half of a two-part mechanism whose other half lived in
+Dynamics, and there is no example of the data part's shape to copy.
 
 **4. The bound fields all exist on `DeedPoll`.** Adult binds 15 distinct fields, minor binds 13, and the two
 sets differ by more than the template text does:
@@ -74,8 +88,6 @@ The witness blocks on both deeds are **blank** — witnesses sign by hand on pap
 
 ---
 
----
-
 ## Decisions taken — implement these, do not revisit
 
 Carried from the original plan, which argued them; the numbering is this plan's.
@@ -90,22 +102,39 @@ Carried from the original plan, which argued them; the numbering is this plan's.
    bindings, no merge fields, no `<<field>>` syntax. Task 1 tests the other half of the reasoning. (Original
    decision 3.)
 
-3. **`DeedPollType` picks the template, and it has FOUR members.** `Adult` and `AdultTransgender` take ①;
-   `Minor` and `MinorTransgender` take ②. The taxonomy reads as though there were two — an `AdultTransgender`
-   application falling through to the minor branch would send an applicant an email about their child. A
-   `switch` with no `default`, so a fifth member fails to compile. (Original decision 2.)
+3. **`DeedPollType` picks the template, and it has SIX members and THREE templates.** `Adult` and
+   `AdultTransgender` take ①; `Minor` and `MinorTransgender` take ②; `DeedOfRelinquishment` takes a third,
+   ③′ `forms-for-completion-relinquishment` (Steve, 2026-09-25 — same journey as a change of name); `Unknown`
+   takes none, because the wrong deed means an applicant swears the wrong legal instrument and there is no safe
+   default. **The full rule, its reasons and its tests live in notify-4a Task 2** — this plan must not restate it
+   differently.
+
+   An `AdultTransgender` application falling through to the minor branch would send an applicant an email about
+   their child, which is why it is a `switch` with no `default`. The original said "four members" and warned a
+   fifth would fail to compile; there were already six. (Original decision 2, corrected.)
+
+   **Whether ③′ needs a generated deed at all is open** — notify-4a flag 5. If it does, it belongs in this plan and
+   its template is a third generator input; if its forms are all static, it never touches this plan. Do not assume
+   either.
 
 4. **Bind the supplied `.docx` as it is; do not retype it.** The content controls are standard OOXML with XPath
    data bindings, which a library can drive. Retyping the deed would put the court's legal wording under
    engineering's control, which is the wrong owner. (Original decision 5.)
 
-5. **The output is PDF, and this is the one genuinely unresolved risk.** The applicant prints the deed, signs it
-   before witnesses and a court seals it, so it must render identically everywhere — which a `.docx` does not.
-   **Task 1 must answer this, not assume it.** (Original decision 6.)
+5. **The output is `.docx`, decided by Steve on 2026-09-25, and that retires this plan's only serious risk.**
+   The original said PDF, on the ground that a document a court seals must render identically everywhere. The
+   business answer is that `.docx` **duplicates the existing process**: the Power App produced a Word document,
+   the applicant prints it and signs in wet ink, and the sealed original comes back by post. So the deed the
+   applicant downloads does not need to be a PDF.
 
-   **Worth raising before the spike rather than after:** if the court is content for the applicant to receive the
-   Word document they are going to print anyway, this risk disappears and task 1 halves. That is a business
-   question nobody has been asked. Ask it first — it is cheaper than the spike.
+   **"For now" is doing work in that sentence.** This is a deliberate deferral, not a finding that PDF is never
+   wanted — so keep the generator's output type behind one seam rather than assuming `.docx` throughout, and do
+   not let a mime type become a literal in five places. If PDF is asked for later it should be a conversion step
+   added after the generator, not a rewrite of it.
+
+   **What this removes:** the whole of the original task 1's second question — `docx4j-export-fo`, Docmosis
+   convert, headless LibreOffice, PDFBox — is out of scope. None of it needs evaluating, and the library and
+   licence question narrows to whatever drives the content controls. (Original decision 6, superseded.)
 
 6. **Generate once, store the bytes, and never regenerate.** LOC020 *becomes* the sealed deed. If it were
    regenerated after the applicant signed a printed copy, the stored document and the paper in the court's hands
@@ -187,34 +216,54 @@ Notes so no task rediscovers them:
 
 ## Tasks
 
-### Task 1: The spike — prove a deed can be produced, before building anything on it
+### Task 1: The spike — populate the 30 content controls
 
-**This task is throwaway and its output is a decision, not code.** Timebox it. If none of the options works,
-**stop and report**: decision 2 rests on this, and the honest outcome is to reconsider the route rather than force
-one.
+**Much smaller than it was, and the route is now known rather than open.** `.docx` output is settled (decision 5),
+so nothing here evaluates PDF conversion. And Steve supplied
+`../deed-poll-admin/.business_context/doc_templates/Deed Poll Adult Deed_completed.docx` on 2026-09-25, which is
+the missing half of the mechanism. **Read that file before writing anything.**
 
-Read first: evidence 3 and 4 above, and decisions 4 and 5. **Ask decision 5's question before starting** — if a
-`.docx` is acceptable to the court, question 2 below is moot.
+**What the supplied file settles, measured rather than assumed:**
 
-Two questions, in order, both answered against `Deed Poll Adult Deed.docx` itself and not a cut-down copy:
+| | |
+|---|---|
+| `customXml/item1.xml` | **present, 130 KB** — the data part the template's bindings point at, and absent from the template itself |
+| Root shape | `<DocumentTemplate xmlns="urn:microsoft-crm/document-template/deedpoll_deedpoll/10740/">` then `<deedpoll_deedpoll xmlns="">` — note the namespace **reset** on the child |
+| Contents | **93 elements**, the whole entity rather than the 15 bound fields. Every bound field checked is present |
+| `customXml/itemProps1.xml` | declares `ds:schemaRef ds:uri="urn:microsoft-crm/…/10740/"`, which is what makes a binding resolve |
+| `w:storeItemID` | **`{C9ADC254-2098-471F-A6B0-379E83CFF8E7}` in *both* files**, and it equals the data part's `ds:itemID` |
 
-1. **Can the bound content controls be driven?** `docx4j`'s binding support is the obvious first attempt — the
-   format is standard OOXML data binding and `customXml/item1.xml` is the part to populate. Apache POI's `XWPF`
-   is the fallback, walking the `w:sdt` elements directly. `et-ccd-callbacks` already depends on `docx4j` in
-   its test scope, so the dependency is not novel in HMCTS.
-2. **Can the result become a faithful PDF in-process?** The harder one. In the order I would try them:
-   `docx4j-export-fo`; **posting the bound `.docx` to Docmosis's convert endpoint** — what
-   `finrem-case-orchestration-service` does in `DocumentConversionService`, and worth noting it is *conversion
-   only*, a multipart POST returning bytes, with **no CCD, CDAM, S2S or IDAM involved**, so it does not carry
-   decision 2's objection; a headless LibreOffice conversion (faithful, but a large container dependency and a
-   process to supervise — weigh it honestly rather than dismissing it); or abandoning the `.docx` and laying the
-   deed out directly with **PDFBox**.
+**It is not a real-data example.** Every element's value is its own name — `<deedpoll_newforename>deedpoll_newforename</…>` — so it is Dynamics' template export, not a generated deed. It gives the *shape*, not the mapping, so flag 1's three ambiguous fields are **still ambiguous**.
+
+**So reconstruct the data part, and do not touch the document body.** This reverses the order an earlier draft of
+this task gave, and the reason is the supplied file:
+
+1. **Add `customXml/item1.xml`, `customXml/itemProps1.xml` and `customXml/_rels/item1.xml.rels` to the package**,
+   copying the shape above and filling the bound elements from case data. **The `itemID` must stay
+   `{C9ADC254-…}`** — the template's 30 bindings already name it, so there is no GUID to generate and no
+   relationship to invent.
+2. **`word/document.xml` needs no modification at all.** That is the whole argument for this route: the court's
+   legal wording stays byte-identical, which is decision 4 honoured mechanically rather than by care.
+
+**One thing to prove rather than assume, and it is the real risk now.** A content control caches its displayed
+text in the body; Word refreshes it from the bound data part when the document opens. So a data part alone may
+leave **stale visible text** in a reader that does not resolve bindings. docx4j's binding support updates the
+cached text *and* the data part together, which is why it exists — **use that rather than hand-writing the zip**,
+and verify by opening the output and reading the values, not by inspecting the XML.
+
+**If that proves unreliable**, fall back to walking the `w:sdt` elements and setting their text directly (Apache
+POI `XWPF`), accepting that the data part then goes stale. Say which was chosen and why.
+
 - **Also settle where api gets the templates from.** They live in `deed-poll-admin`'s `.business_context/`, which
   this repo must not read at runtime. They have to be **vendored into this repo as classpath resources** — record
-  where, and that a template change means a commit here. The original plan did not say this and it is not optional.
-- [ ] one route is demonstrated end to end on the real adult template with a rendered PDF a human has looked at,
-      OR the task reports that none works; the chosen library's size and licence are recorded; the template's home
-      in this repo is decided; and no spike code remains
+  where, and that a template change then means a commit here. The original plan did not say this and it is not
+  optional. **Vendor the completed file too**, as the reference for the data part's shape.
+- **Record the library's size and licence** and check the CNP whitelist. Scope is one OOXML library, not a
+  conversion stack.
+- [ ] every bound field on the real adult template is populated from case data, a human has **opened the result**
+      and confirmed the values appear in the right places, `word/document.xml` is unmodified if route 1 was used,
+      the templates' home in this repo is decided, the library's size and licence are recorded, and no spike code
+      remains
 
 ### Task 2: The generator
 
@@ -317,6 +366,8 @@ Read first: decisions 1, 3, 7, 8, 9 and 10.
 2. **Should sending ① or ② set `signatureRequestedDate`?** Decision 9 establishes that sending *is* the
    signature request, so the date arguably follows — but that changes the derived state, and nothing else in this
    service sets a case date as a side effect of an email. A business decision, deliberately unanswered.
-3. **Decision 5's question has not been asked.** Does the deed have to be a PDF, or will the `.docx` the
-   applicant prints anyway do? Asking is cheaper than the spike and could remove its hardest half.
+3. ~~**Decision 5's question has not been asked.**~~ **Answered 2026-09-25: `.docx` is fine for now**, because
+   it duplicates the existing Power App process. Recorded here rather than deleted, because it was the right
+   question and asking it removed more work than any amount of engineering would have. Kept as a reminder that
+   the next such plan should ask before spiking.
 4. **A new library and its licence.** Whatever task 1 settles on, check the CNP whitelist before depending on it.
