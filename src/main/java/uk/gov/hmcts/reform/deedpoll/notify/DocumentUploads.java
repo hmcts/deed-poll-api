@@ -41,12 +41,32 @@ import java.util.Optional;
  * come from {@link EmailTemplate#documentKeys()} rather than from the map, for the same reason
  * {@code CorrespondenceDocument} reads them that way: an arbitrary personalisation value is not a document id.
  *
- * <p><strong>Every failure here is {@link NotificationFailure#TECHNICAL}, with one deliberate
- * exception.</strong> {@code notify-4a} decision 7: a store that is briefly unavailable must not poison the case,
- * and after notify-1 task 7 {@code PERMANENT} is the one verdict whose row can be <em>replaced</em> -- so
- * classifying a missing blob as permanent would invite a second deed for one change of name. The exception is a
- * retention period nobody has configured, which is {@code PERMANENT} for exactly the reason a missing reply-to is:
- * no retry configures anything, and {@link NotifyProperties#isProvisioned} already tells the Email tab so.
+ * <p><strong>No failure here is ever {@link NotificationFailure#PERMANENT} except an unconfigured retention, and
+ * the rest divide by whether another attempt could answer differently.</strong> {@code notify-4a} decision 7: a
+ * store that is briefly unavailable must not poison the case, and after notify-1 task 7 {@code PERMANENT} is the
+ * one verdict whose row can be <em>replaced</em> -- so classifying a missing blob as permanent would invite a
+ * second deed for one change of name. Which leaves two verdicts and a real distinction between them:
+ *
+ * <ul>
+ *   <li><strong>A document that could not be read is {@link NotificationFailure#TEMPORARY}</strong> -- the only
+ *       verdict {@link NotificationFailure#retryable()} admits, and the only one that makes decision 7's first
+ *       half true. {@code TECHNICAL} is terminal on the <em>first</em> attempt, and a terminally failed row is
+ *       still counted by V15's and V20's partial indexes because it is not {@code PERMANENT}: the slot stays
+ *       occupied, so {@code CaseEmailService.resolveRefusedInsert} answers the caseworker's re-send with an
+ *       idempotent 200 naming the dead row and the applicant never gets the deed. One unmounted volume would
+ *       cost a case its only forms email with nothing in the Email tab offering to try again. Retrying is safe
+ *       because every read here happens <em>before</em> {@code sendEmail}, so a retry cannot resend anything
+ *       Notify has accepted; and when the attempts run out the row fails with a {@code TEMPORARY} verdict, which
+ *       those indexes count exactly as they counted a {@code TECHNICAL} one -- so the protection against a second
+ *       deed is unchanged.</li>
+ *   <li><strong>A defect in this service is {@link NotificationFailure#TECHNICAL}</strong>: a personalisation
+ *       holding no id for a key its template declares, a document larger than Notify will carry, a client that
+ *       refuses one for a reason nobody enumerated. No attempt answers any of those differently, so a retry would
+ *       only delay the note that tells a caseworker to look.</li>
+ *   <li><strong>An unconfigured retention is {@code PERMANENT}</strong>, for exactly the reason a missing reply-to
+ *       is: no retry configures anything, and {@link NotifyProperties#isProvisioned} already tells the Email tab
+ *       so before a caseworker composes.</li>
+ * </ul>
  */
 @Slf4j
 @Service
@@ -148,8 +168,16 @@ public class DocumentUploads {
             }
         } catch (IOException | RuntimeException unreadable) {
             // Includes NotFoundError for a row or blob that is not there, and UncheckedIOException for a store
-            // that would not read. Technical and retryable: the store being briefly unavailable must not poison
-            // the case (notify-4a decision 7).
+            // that would not read. Temporary, which is decision 7's "must not poison the case" taken literally:
+            // TECHNICAL would fail the row on the first attempt, and a failed row still holds its exclusion-group
+            // slot, so the re-send is an idempotent 200 on a row that is never going anywhere.
+            //
+            // NotFoundError is not split out and classified terminally, even though a blob that is really gone
+            // will not come back: an unmounted volume answers exactly the same way -- LocalFilesystemDocumentStore
+            // throws NotFoundError for a path that is not a regular file -- so this service cannot tell the two
+            // apart, and the shape it cannot tell apart is the one decision 7 is about. The cost of guessing
+            // "transient" is eight reads over three hours and a later note; the cost of guessing "gone" is an
+            // applicant who is never sent their deed.
             //
             // Catching it is only half of containing it: downloadDocument is @Transactional and participates in
             // the drain's transaction, so Spring's default would mark that transaction rollback-only before this
@@ -157,7 +185,7 @@ public class DocumentUploads {
             // `noRollbackFor` is what makes this catch mean what it says; see DocumentService.downloadDocument.
             log.warn("Notification {} for case {} could not read its {} document {}",
                      notification.getId(), notification.getDeedPollId(), key, id, unreadable);
-            return refused("the " + key + " document could not be read");
+            return unavailable("the " + key + " document could not be read");
         }
 
         if (content.length > MAX_UPLOAD_BYTES) {
@@ -206,7 +234,24 @@ public class DocumentUploads {
         return original == null || original.isBlank() ? document.getName() : original;
     }
 
+    /**
+     * A refusal no further attempt would answer differently: this service, or the document itself, is wrong.
+     *
+     * <p>Terminal, and terminal is the point -- but not {@code PERMANENT}, so the row keeps its exclusion-group
+     * slot and the case cannot be given a second deed to swear.
+     */
     private static ResolvedDocuments.Refused refused(String reason) {
         return new ResolvedDocuments.Refused(new SendOutcome.Failed(NotificationFailure.TECHNICAL, reason));
+    }
+
+    /**
+     * A refusal the next drain should try again: the document could not be read <em>now</em>.
+     *
+     * <p>The one verdict {@link NotificationFailure#retryable()} admits, which is why it is a separate factory and
+     * not a second argument -- the difference between this and {@link #refused} is whether an applicant eventually
+     * gets their deed, and the class javadoc is where the argument lives.
+     */
+    private static ResolvedDocuments.Refused unavailable(String reason) {
+        return new ResolvedDocuments.Refused(new SendOutcome.Failed(NotificationFailure.TEMPORARY, reason));
     }
 }

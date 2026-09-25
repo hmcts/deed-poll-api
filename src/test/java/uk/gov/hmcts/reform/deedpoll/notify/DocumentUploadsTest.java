@@ -113,31 +113,39 @@ class DocumentUploadsTest {
     }
 
     @Test
-    @DisplayName("a document that cannot be read is TECHNICAL, so the store being down does not poison the case")
-    void anUnreadableDocumentIsTechnical() {
+    @DisplayName("a document that cannot be read is retried, so the store being down does not poison the case")
+    void anUnreadableDocumentIsRetried() {
         when(documents.downloadDocument(CASE_ID, DEED_ID))
             .thenThrow(new NotFoundError("This document has no attached file"));
 
-        // Decision 7, and the reason is the opposite of the obvious one: after notify-1 task 7 PERMANENT is the one
-        // verdict whose row can be REPLACED, so classifying a missing blob as permanent would invite a second deed
-        // for one change of name. Technical is terminal but not replaceable, and it retries nothing.
-        assertThat(refusal(uploads.resolve(row(), EmailTemplate.FORMS_FOR_COMPLETION_ADULT)))
-            .isEqualTo(new SendOutcome.Failed(
-                NotificationFailure.TECHNICAL, "the deed_document document could not be read"));
+        // Decision 7's first half, and it needs TEMPORARY to be true rather than merely said. TECHNICAL is terminal
+        // on the first attempt and a terminally failed row still occupies V15's and V20's partial indexes, so
+        // CaseEmailService.resolveRefusedInsert answers the caseworker's re-send with an idempotent 200 naming that
+        // dead row: one unmounted volume and the applicant is never sent their deed. Not PERMANENT either, for the
+        // opposite reason -- after notify-1 task 7 that is the one verdict whose row can be REPLACED, which would
+        // invite a second deed for one change of name. When the eight attempts run out this row fails with a
+        // TEMPORARY verdict, which those indexes count exactly as they counted a TECHNICAL one.
+        SendOutcome.Failed refused = refusal(uploads.resolve(row(), EmailTemplate.FORMS_FOR_COMPLETION_ADULT));
+        assertThat(refused).isEqualTo(new SendOutcome.Failed(
+            NotificationFailure.TEMPORARY, "the deed_document document could not be read"));
+        // The behaviour and not the label, because the label is only worth what retryable() makes of it.
+        assertThat(refused.failure().retryable())
+            .as("a store that was briefly unavailable must leave the row claimable by the next drain")
+            .isTrue();
     }
 
     @Test
-    @DisplayName("a store that will not read is TECHNICAL too, rather than escaping the drain")
-    void storeThatWillNotReadIsTechnical() {
+    @DisplayName("a store that will not read is retried too, rather than escaping the drain")
+    void storeThatWillNotReadIsRetried() {
         DeedPollSupportingDocument deed = deedRow();
         when(documents.downloadDocument(CASE_ID, DEED_ID)).thenReturn(new DocumentDownload(deed, failingStream()));
 
         // LocalFilesystemDocumentStore throws UncheckedIOException, and CDAM will throw something of its own. Any
         // of them must become a verdict rather than propagate: the drain runs a whole batch in one transaction, and
-        // an exception here would be recorded as TECHNICAL anyway -- with a message naming an exception class
-        // instead of a document.
+        // an exception here would be recorded as TECHNICAL anyway -- terminal, and with a message naming an
+        // exception class instead of a document.
         assertThat(refusal(uploads.resolve(row(), EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).failure())
-            .isEqualTo(NotificationFailure.TECHNICAL);
+            .isEqualTo(NotificationFailure.TEMPORARY);
     }
 
     @Test
@@ -210,6 +218,10 @@ class DocumentUploadsTest {
         // A defect in this service rather than an operational failure -- the send freezes the id -- but refused
         // rather than sent: the template names the key, so Notify would refuse the personalisation anyway, and a
         // send that quietly dropped the deed would tell an applicant to sign a document they were never given.
+        //
+        // TECHNICAL and deliberately not the TEMPORARY an unreadable document gets: the row's own personalisation
+        // is what is wrong, so no attempt answers differently and retrying would only postpone the note that tells
+        // a caseworker to look. Terminal without being replaceable, which is what keeps one deed per case.
         assertThat(refusal(uploads.resolve(missing, EmailTemplate.FORMS_FOR_COMPLETION_ADULT)))
             .isEqualTo(new SendOutcome.Failed(
                 NotificationFailure.TECHNICAL, "the deed_document document reference is missing from this email"));

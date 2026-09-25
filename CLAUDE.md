@@ -193,10 +193,17 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   never rewritten. The ids it resolves come from `EmailTemplate.documentKeys()` rather than from the map — an
   arbitrary personalisation value is not a document id — and they are read only through the case-scoped
   `DocumentService.downloadDocument`, because the value came out of a stored `jsonb` column and would otherwise be
-  a way to make one applicant's email carry another's deed. `confirm_email_before_download` is always true. Every
-  failure is `TECHNICAL` and retryable **except** an unconfigured retention, which is `PERMANENT`: `PERMANENT` is
-  the one verdict whose row can be replaced, so classifying a missing blob that way would invite a second deed for
-  one change of name.
+  a way to make one applicant's email carry another's deed. `confirm_email_before_download` is always true. **No
+  failure here is `PERMANENT`** except an unconfigured retention, because `PERMANENT` is the one verdict whose row
+  can be replaced and a replaced forms email is a second deed for one change of name. The rest divides on whether
+  another attempt could answer differently, and `TECHNICAL` is **not** the retryable one — only `TEMPORARY` is. A
+  document that could not be *read* is therefore `TEMPORARY`: `TECHNICAL` would fail the row on its first attempt,
+  and a terminally failed row still occupies V15's and V20's indexes, so `resolveRefusedInsert` answers the
+  caseworker's re-send with an idempotent 200 on a dead row and one unmounted volume costs a case its deed for ever.
+  Retrying is safe because every read happens *before* `sendEmail`, and an exhausted retry lands on `Failed` with a
+  `TEMPORARY` verdict, which those indexes count exactly as they counted a `TECHNICAL` one. What stays `TECHNICAL`
+  is what no attempt fixes: a personalisation with no id for a key its template declares, a document over 2 MB, a
+  client refusing one for an unenumerated reason.
 - **A new case column has to be declared in four places**, or the build fails somewhere that does not name the
   cause: a reader in `DeedPollFields` (readable / writable / queryable are three separate decisions — `CaseSort`
   admits only readable names and `CaseQuery` only queryable ones), both `CaseDetailResponse` and

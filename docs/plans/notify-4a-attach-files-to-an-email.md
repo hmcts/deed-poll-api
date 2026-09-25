@@ -104,9 +104,21 @@ Carried from the original plan, which argued them; the numbering is this plan's.
    attachment. The templates must be authored to say so, because an email promising an attachment and delivering a
    link is a support call. (Original decision 12.)
 
-7. **A missing or unreadable document is a `TECHNICAL` failure, never `PERMANENT`.** The store being briefly
-   unavailable must not poison the case — and after notify-1 task 7, `PERMANENT` is the one verdict that can be
-   replaced, which is the opposite of what is wanted. Classify deliberately and say why in the javadoc.
+7. **A missing or unreadable document is never `PERMANENT`.** The store being briefly unavailable must not poison
+   the case — and after notify-1 task 7, `PERMANENT` is the one verdict that can be replaced, which is the opposite
+   of what is wanted. Classify deliberately and say why in the javadoc.
+
+   **Amended 2026-09-25, after this decision was implemented as written and found to defeat its own first half.**
+   It said `TECHNICAL`, and `NotificationFailure.retryable()` admits only `TEMPORARY` — so a document that could not
+   be read failed the row on its *first* attempt, and a `Failed` row whose verdict is not `PERMANENT` still occupies
+   V15's and V20's partial indexes. `CaseEmailService.resolveRefusedInsert` then answers the caseworker's re-send
+   with an idempotent 200 naming that dead row, so a store that was unavailable for one drain cost the case its only
+   forms email permanently — exactly what "must not poison the case" forbids. **A document that could not be read is
+   `TEMPORARY`**, which is safe because every read happens before `sendEmail` (a retry cannot resend anything Notify
+   accepted) and which changes nothing about exclusivity: an exhausted retry lands on `Failed` with a `TEMPORARY`
+   verdict, counted by those indexes exactly as a `TECHNICAL` one was. `TECHNICAL` is kept for what no attempt
+   answers differently — a personalisation holding no id for a key its template declares, a document over 2 MB
+   (decision 8), a client refusing one for an unenumerated reason.
 
 8. **A document over 2 MB must fail before `sendEmail`, with a message naming the document and its size.** The
    Notify Java client throws rather than truncating. `NotificationFailure.classify` would treat that as `TECHNICAL`
@@ -159,14 +171,15 @@ Read first: `NotifyEmailSender.send`, `NotificationOutbox`, and decisions 3, 4, 
   than a UUID.
 - **The resolved map is never written back.** Assert the row's `personalisation` is unchanged after a successful
   send: this is the invariant the design rests on and it would break silently.
-- A missing or unreadable document is `TECHNICAL` (decision 7). A document over 2 MB fails **before** `sendEmail`
+- A document that could not be read is `TEMPORARY`, and a personalisation that names no document id is `TECHNICAL`
+  — neither is ever `PERMANENT` (decision 7 and its amendment). A document over 2 MB fails **before** `sendEmail`
   with a message naming it and its size (decision 8).
 - Tests, **container-free** with a stubbed store and `StubNotify`: a send resolves a multi-document set; the stored
-  row survives unchanged; a missing document yields `TECHNICAL`; an oversized one fails with a useful message; and
-  `confirm_email_before_download` and the retention period reach the client as configured.
+  row survives unchanged; an unreadable document yields a verdict `retryable()` admits; an oversized one fails with
+  a useful message; and `confirm_email_before_download` and the retention period reach the client as configured.
 - [x] documents resolve to uploads at drain time and are never persisted, the frozen row survives a send
-      unchanged, missing and oversized documents fail as `TECHNICAL` with useful messages, and `./gradlew build`
-      green
+      unchanged, an unreadable document is retried and an oversized one fails terminally, both with useful
+      messages, and `./gradlew build` green
 
       **Done 2026-09-25 by [notify-4b](notify-4b-generate-the-deed.md) Task 4, not by this plan**, and amended
       here in its Task 5 so nobody builds the seam twice. 4b's Task 4 needed a document reference to become a
@@ -179,8 +192,10 @@ Read first: `NotifyEmailSender.send`, `NotificationOutbox`, and decisions 3, 4, 
       `EmailTemplate.documentKeys()` and never an arbitrary personalisation value, through
       `DocumentService.downloadDocument`, which is case-scoped — so a stored id cannot fetch another applicant's
       document; the frozen row survives a send unchanged; `confirm_email_before_download` is always true; a
-      missing or unreadable document is `TECHNICAL`; and an oversized one is refused **before** `sendEmail` with a
-      sentence naming the document and the limit.
+      document that could not be read is `TEMPORARY` and one this service never froze an id for is `TECHNICAL`,
+      neither of them `PERMANENT` (decision 7 as amended — it shipped saying `TECHNICAL` for both, which made the
+      row terminal on its first attempt and the case unrecoverable); and an oversized one is refused **before**
+      `sendEmail` with a sentence naming the document and the limit.
 
       **One thing this plan did not anticipate: the retention period is configuration with no default, and it is
       part of being provisioned.** `notify.document-retention-weeks`, and `NotifyProperties.isProvisioned` now
