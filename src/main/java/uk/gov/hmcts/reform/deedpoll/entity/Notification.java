@@ -85,6 +85,26 @@ public class Notification {
     private UUID referralId;
 
     /**
+     * The caller's own identifier for the send that wrote this row -- one compose journey's UUID, arriving
+     * as the {@code Idempotency-Key} header. With {@link #deedPollId} it is V19's unique index, which is
+     * what separates a caseworker's double-click from a deliberate second chase of the same case.
+     *
+     * <p><strong>Transport idempotency, and not correspondence.</strong> It answers "is this the same act
+     * of sending?" and nothing a caseworker reads, so it is deliberately absent from every history DTO and
+     * from every log line: publishing it would invite a client to treat it as the identity of the email,
+     * which {@link #id} already is.
+     *
+     * <p>NOT NULL, and set by whoever writes the row rather than defaulted here. {@code
+     * NotificationRepository.enqueue} binds the header's value; V19's database default of
+     * {@code gen_random_uuid()} exists only so an application instance that predates V19 can go on
+     * inserting during a rolling deployment. A {@code @PrePersist} fallback is deliberately not added --
+     * a row written through this entity with no request id is a writer that has not said what request it
+     * was, and that should fail rather than invent one.
+     */
+    @Column(name = "requestId", nullable = false)
+    private UUID requestId;
+
+    /**
      * The {@code EmailTemplate} member name.
      */
     @Column(name = "template", nullable = false)

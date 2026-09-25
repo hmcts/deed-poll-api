@@ -366,7 +366,73 @@ exists — and Task 2 is what generalises that resolution.
 - Container-free tests prove malformed/missing header responses, receipt reuse and the distinction between
   request-id conflict and exclusion-group conflict.
 
-- [ ] one compose journey cannot enqueue twice, later chase journeys can, all prior referral uniqueness and
+#### Recorded 2026-09-25 — the migration number, what the two keys cost each other, and three fixtures nobody expected
+
+Green from `./gradlew build` with Docker (**2702** `test`, 0 failures / 0 errors / 0 skipped, 340 result files;
+**12** `integration`, all green; 10m 20s, 24 of 24 tasks executed) and from
+`INTEGRATION_TESTS_ENABLED=false ./gradlew build` (**1729** `test`, all green, 236 files; `integration` never ran —
+`build/test-results/` was deleted first and the directory is *absent* afterwards, which is the stale-file trap the
+Validation Commands section warns about, checked rather than assumed). **+36 unit tests against Task 1**, of which
++16 are Docker-free; the gap is now **973**.
+
+**The migration is V19, not the V14 the plan's Constraints section names.** V14 through V18 were already committed,
+so the next free number was taken and recorded, as the rule says.
+
+**`ON CONFLICT` lost its target, and that is the one substantive design change.** With two unique indexes able to
+refuse the same insert — V19's `("deedPollId", "requestId")` and V15's partial `("referralId", "exclusionGroup")` —
+`ON CONFLICT` can infer only one of them, and the other would then raise a `DataIntegrityViolationException` that
+marks the caseworker's transaction rollback-only. So the statement is a bare `ON CONFLICT DO NOTHING`. What that
+gives up is stated in the javadoc rather than glossed: a target makes Postgres *verify* a matching index exists, so
+without one an index quietly dropped would make the statement stop deduplicating rather than fail. That guarantee is
+bought back by assertion — `NotificationRepositoryTest` now executes the statement for every conflict either index
+can produce, and it is the only place either clause runs.
+
+**Three fixtures the plan did not anticipate, each of which failed loudly rather than silently — the good outcome.**
+
+1. **`requestId` has no `@PrePersist` fallback, deliberately, so every entity-side writer had to be told.** The
+   column is `NOT NULL` with a database default that exists *only* for the rolling-deployment window, so a row
+   persisted through the entity with no request id fails. That caught `EntityMappingTest` (two fixtures),
+   `NotificationRepositoryTest.owed`, `NotificationOutboxConcurrencyTest.owedNotification` and
+   `ConfirmationConcurrencyTest`'s two direct `enqueue` calls. The alternative — mirroring `nextAttemptAt`'s
+   `@PrePersist` — would have let a future non-send writer invent a request id for a request nobody made.
+2. **The idempotent-match comparison cannot be over the serialised JSON.** `jsonb` does not preserve key order, so
+   the stored map comes back in whatever order Postgres hands over; a text comparison would refuse a caseworker's
+   own retry as a reused key, which is a 409 on the one path that exists to answer 200. The resolved map is
+   therefore round-tripped through Jackson and compared as a map, so both sides have been through the same
+   deserialiser and neither side's Java types are what is being asserted. `keyOrderIsNotPartOfTheComparison` pins it.
+3. **`MissingRequestHeaderException` had no handler, so a client that omitted the header got a `ProblemDetail`.**
+   Every refusal this service reasons about is an `ApiError`; one that is not means two shapes to parse for one
+   status, which is the argument `unreadableBody()` already makes. `DomainErrorHandler.missingHeader` is narrow on
+   purpose — one header is required anywhere in the service, and catching the parent
+   `ServletRequestBindingException` would take in signals from paths that answer correctly already.
+
+**The method-name checkstyle trap bit six times** (`aReusedRequest…`, `aSecondJourney…`, `aPermanentlyRefused…`),
+exactly as the Validation Commands section predicts: a single-letter first word followed by a capital is rejected.
+
+**How the migration is proved, since no build has rows to migrate.**
+`NotificationRequestIdMigrationTest` rebuilds the pre-V19 table in a schema of its own —
+`CREATE TABLE … AS SELECT * … WHERE false` off the real table, then `DROP COLUMN "requestId"` — points
+`search_path` at it, and executes the committed file verbatim. That is the only way to run an `ADD COLUMN` whose
+column Flyway has already added, and it means the backfill, the `NOT NULL`, the `gen_random_uuid()` default and the
+index are each asserted as effects of the file rather than of a restatement of it. Two rows on one case, because a
+backfill from anything but a per-row value would make the index impossible to build in the first environment that
+had chased anybody twice.
+
+**Container-free where CI can reach it, container-backed where only Postgres can answer.**
+`CaseEmailServiceTest.ResolvingARefusedInsert` states the *order* the two indexes are read in and the answer for
+each — a resolution that asked the exclusion group first would tell a caseworker retrying their own POST that the
+rejection email was already requested, and no database test would notice.
+`CaseworkerEmailIdempotencyHeaderTest` is a standalone `MockMvc` — the one place in this repo that is not the whole
+context, and it claims nothing about security, which is why that is defensible: it asserts argument binding and the
+refusal's shape, and the container-backed class still owns authentication. It also asserts the *declaration* by
+reflection, because `required = false` or a `String` parameter would keep every request-level assertion passing.
+
+**One thing deliberately not duplicated.** "Referral exclusion still blocks contradictory templates" is proved where
+it already was — `NotificationRepositoryTest.enqueuesNothingForTheCounterpartTemplate` against the statement and
+`CaseworkerEmailControllerTest` over HTTP — both still green under the retargeted `ON CONFLICT`. A third fixture for
+it would have been a third thing to keep in step.
+
+- [x] one compose journey cannot enqueue twice, later chase journeys can, all prior referral uniqueness and
       permanent-failure behavior survive, migration rollout is safe, and the build is green
 
 ### Task 3: History, security and admin contract

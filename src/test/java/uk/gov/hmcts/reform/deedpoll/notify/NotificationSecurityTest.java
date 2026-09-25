@@ -78,6 +78,11 @@ class NotificationSecurityTest {
 
     private static final UUID REFERRAL_ID = UUID.fromString("1af7b81c-5576-459c-9ba8-0c78bbf8bcb6");
 
+    /**
+     * One compose journey's {@code Idempotency-Key}: transport, and so never part of what leaves this service.
+     */
+    private static final UUID REQUEST_ID = UUID.fromString("6c9a1d0e-0000-4000-8000-0000000000fe");
+
     private static final CurrentUser CASEWORKER =
         CurrentUser.currentUser(List.of(), "A Caseworker", "caseworker-1");
 
@@ -135,20 +140,20 @@ class NotificationSecurityTest {
     void sendsOnlyTheDeclaredKeysToTheApplicant() throws Exception {
         storedCase(CASE_ID);
         when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(refusedReferral()));
-        when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(), anyString(),
-                                   any(), anyString())).thenReturn(1);
+        enqueueAnswers(1);
 
         emails.send(
             CASE_ID,
             EmailTemplate.APPLICATION_REJECTED,
             Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Please contact the court."),
-            CASEWORKER);
+            REQUEST_ID, CASEWORKER);
 
         var recipient = org.mockito.ArgumentCaptor.forClass(String.class);
         var personalisation = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(notifications).enqueue(
             any(),
             eq(CASE_ID),
+            eq(REQUEST_ID),
             eq(REFERRAL_ID),
             eq(EmailTemplate.APPLICATION_REJECTED.name()),
             eq(EmailTemplate.APPLICATION_REJECTED.exclusionGroup().name()),
@@ -170,16 +175,16 @@ class NotificationSecurityTest {
         storedCase(CASE_ID);
         when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID))
             .thenReturn(List.of(refusedNonPublicationReferral()));
-        when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(), anyString(),
-                                   any(), anyString())).thenReturn(1);
+        enqueueAnswers(1);
 
-        emails.send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER);
+        emails.send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), REQUEST_ID, CASEWORKER);
 
         var recipient = org.mockito.ArgumentCaptor.forClass(String.class);
         var personalisation = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(notifications).enqueue(
             any(),
             eq(CASE_ID),
+            eq(REQUEST_ID),
             eq(REFERRAL_ID),
             eq(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.name()),
             eq(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.exclusionGroup().name()),
@@ -240,14 +245,13 @@ class NotificationSecurityTest {
             assertThatThrownBy(() -> emails.preview(CASE_ID, template, Map.of()))
                 .as("%s cannot be previewed from another case's refusal", template)
                 .isInstanceOf(ConflictError.class);
-            assertThatThrownBy(() -> emails.send(CASE_ID, template, Map.of(), CASEWORKER))
+            assertThatThrownBy(() -> emails.send(CASE_ID, template, Map.of(), REQUEST_ID, CASEWORKER))
                 .as("%s cannot be sent from another case's refusal", template)
                 .isInstanceOf(ConflictError.class);
         }
 
         verify(referrals, never()).findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID);
-        verify(notifications, never()).enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                               anyString(), any(), anyString());
+        neverEnqueues();
     }
 
     @Test
@@ -344,6 +348,18 @@ class NotificationSecurityTest {
             .that().resideOutsideOfPackage("uk.gov.hmcts.reform.deedpoll.notify..")
             .should().dependOnClassesThat().haveFullyQualifiedName(NotificationClient.class.getName())
             .check(MAIN_CLASSES);
+    }
+
+    /** What the enqueue statement answers, with every one of its ten arguments matched loosely. */
+    private void enqueueAnswers(int rows) {
+        when(notifications.enqueue(any(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                                   anyString(), any(), anyString())).thenReturn(rows);
+    }
+
+    /** That nothing was enqueued at all. */
+    private void neverEnqueues() {
+        verify(notifications, never()).enqueue(any(), anyString(), any(), any(), anyString(), anyString(),
+                                              anyString(), anyString(), any(), anyString());
     }
 
     private DeedPoll storedCase(String id) {

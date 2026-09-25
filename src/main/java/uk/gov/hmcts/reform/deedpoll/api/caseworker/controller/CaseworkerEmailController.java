@@ -4,6 +4,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseEmailsResponse;
@@ -16,6 +17,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.notify.CaseEmailService;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailTemplate;
 import uk.gov.hmcts.reform.deedpoll.notify.NotificationOutbox;
+
+import java.util.UUID;
 
 /**
  * The emails a caseworker can send about a case: what may be sent, what one will look like, and sending it.
@@ -59,6 +62,15 @@ import uk.gov.hmcts.reform.deedpoll.notify.NotificationOutbox;
 @RestController
 @RequestMapping("/caseworker/cases/{id}/emails")
 public class CaseworkerEmailController {
+
+    /**
+     * The header a send identifies its compose journey with.
+     *
+     * <p>A constant rather than a literal in the annotation, because the tests that prove a missing and a
+     * malformed one are refused have to name the same header the route binds -- a test carrying a near-miss
+     * spelling would pass while proving nothing.
+     */
+    public static final String IDEMPOTENCY_KEY = "Idempotency-Key";
 
     private final CaseEmailService emails;
 
@@ -133,14 +145,32 @@ public class CaseworkerEmailController {
      * <p>422 for a case with no applicant email address, naming the column: the caseworker has chosen to send, so
      * silently skipping would leave them believing an applicant had been told something. 409 when no Master has
      * refused the application -- nothing about the request is wrong and it would succeed unchanged once one has.
+     *
+     * <p><strong>{@code Idempotency-Key} is required, and it is the client's job to make it mean something.</strong>
+     * One compose journey creates one UUID and sends it with every retry of this POST -- a timed-out request, a
+     * double-click, a caseworker refreshing after a validation failure -- and a later journey creates another. That
+     * is what lets the same case be chased twice on purpose while a double-click still writes one row: see
+     * {@link CaseEmailService#send}. A key reused across two different emails on one case is a 409, because the
+     * header and the body then contradict each other and neither can safely be believed.
+     *
+     * <p>Required rather than optional, and a header rather than a body field. Optional would mean a client that
+     * did not know about it silently lost the protection, which is the failure this exists to prevent; and the body
+     * is the caseworker's content, where a transport identifier has no business -- {@code SendEmailRequest} refuses
+     * every key that is not a declared slot, so putting it there would mean carving an exception into that rule.
+     * {@code Idempotency-Key} is the conventional spelling, so a client library's retry support already knows it.
+     *
+     * <p>A missing or unparseable key is a 400 naming the header, not a guess: a generated substitute would make
+     * every retry a new send, which is the behaviour this replaced.
      */
     @PostMapping("/{template}")
     public SentEmailResponse send(@PathVariable("id") String id,
                                   @PathVariable("template") String template,
+                                  @RequestHeader(IDEMPOTENCY_KEY) UUID requestId,
                                   @RequestBody(required = false) SendEmailRequest request) {
 
         SentEmailResponse sent = SentEmailResponse.from(emails.send(
-            id, requireTemplate(template), request == null ? null : request.fields(), CurrentUsers.required()));
+            id, requireTemplate(template), request == null ? null : request.fields(), requestId,
+            CurrentUsers.required()));
         outbox.drain();
         return sent;
     }

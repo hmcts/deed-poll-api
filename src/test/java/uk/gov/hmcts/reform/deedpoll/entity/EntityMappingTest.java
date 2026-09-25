@@ -622,8 +622,10 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         entityManager.persist(referral);
 
         UUID providerId = UUID.randomUUID();
+        UUID requestId = UUID.randomUUID();
         Notification notification = new Notification();
         notification.setDeedPollId(deedPoll.getId());
+        notification.setRequestId(requestId);
         notification.setReferralId(referral.getId());
         notification.setTemplate("APPLICATION_REJECTED");
         notification.setExclusionGroup("REFERRAL_OUTCOME");
@@ -661,6 +663,9 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
             .as("the parent is a bare id here, not a mapped relation -- see Notification")
             .isEqualTo(deedPoll.getId());
         assertThat(reloaded.getReferralId()).isEqualTo(referral.getId());
+        assertThat(reloaded.getRequestId())
+            .as("the caller's own identifier for the send, and half of V19's key")
+            .isEqualTo(requestId);
         assertThat(reloaded.getTemplate())
             .as("the EmailTemplate member name, never the Notify UUID")
             .isEqualTo("APPLICATION_REJECTED");
@@ -690,6 +695,7 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         // column is NOT NULL, so a mapping that wrote null for an empty map would fail on the first one.
         Notification notification = new Notification();
         notification.setDeedPollId(deedPoll.getId());
+        notification.setRequestId(UUID.randomUUID());
         notification.setTemplate("APPLICATION_REJECTED");
         notification.setExclusionGroup("REFERRAL_OUTCOME");
         notification.setRecipient("applicant@example.com");

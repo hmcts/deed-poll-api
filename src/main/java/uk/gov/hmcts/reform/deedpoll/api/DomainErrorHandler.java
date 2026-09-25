@@ -4,6 +4,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -220,6 +221,30 @@ public class DomainErrorHandler {
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ApiError> unconvertibleParameter(MethodArgumentTypeMismatchException error) {
         FieldError field = new FieldError(error.getName(), "is not a valid value for this parameter");
+        return ResponseEntity.badRequest().body(ApiError.of(ApiError.INVALID_PARAMETER, List.of(field)));
+    }
+
+    /**
+     * A required request header the caller did not send.
+     *
+     * <p>Spring already answers 400 for this, so what is added is the shape and the attribution -- the same two
+     * things {@link #unreadableBody()} and {@link #unconvertibleParameter} add, and for the same reason: without
+     * it a client gets {@link ApiError} for every refusal this service reasons about and a {@code ProblemDetail}
+     * for this one, which is two things to parse for one status.
+     *
+     * <p>Narrow on purpose. {@code MissingRequestHeaderException} is the only member of Spring's request-binding
+     * family this handles, because it is the only one a route here can produce: one header is required anywhere in
+     * the service -- the send's {@code Idempotency-Key} -- and nothing else is bound from a header at all.
+     * Catching the parent {@code ServletRequestBindingException} would take in signals from paths that have their
+     * own correct answers already.
+     *
+     * <p>The header is named because that is what makes the refusal actionable, and because a header name is the
+     * caller's own contract rather than caller-supplied data -- unlike the value, which is not echoed, for the
+     * reason {@link #unconvertibleParameter} gives.
+     */
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<ApiError> missingHeader(MissingRequestHeaderException error) {
+        FieldError field = new FieldError(error.getHeaderName(), "is a required header for this operation");
         return ResponseEntity.badRequest().body(ApiError.of(ApiError.INVALID_PARAMETER, List.of(field)));
     }
 }

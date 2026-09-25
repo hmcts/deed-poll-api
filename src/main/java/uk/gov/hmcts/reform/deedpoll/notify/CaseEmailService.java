@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.notify;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -154,6 +155,24 @@ public class CaseEmailService {
         + "information, so there is nothing to chase the applicant for: record the date awaited on the case "
         + "before sending this email";
 
+    /**
+     * Why a send is refused when its {@code Idempotency-Key} has already been used on this case for something
+     * else.
+     *
+     * <p>The one answer a request id can give that is neither success nor a business conflict: the key says "this
+     * is the send I already made" and the payload says it is a different email. Both cannot be true, and guessing
+     * either way is worse than refusing -- taking the key's word would silently discard the caseworker's edits
+     * and answer with an email they did not write, and taking the payload's word would write the second row the
+     * key exists to prevent.
+     *
+     * <p>409 rather than 400, because nothing in the payload is wrong: the same body under a request of its own
+     * would be accepted. So the sentence says what to do about it -- start the email again -- rather than naming
+     * a field to correct. It deliberately quotes neither the key nor either email's content: the key is transport
+     * and the content is the applicant's.
+     */
+    static final String REQUEST_ALREADY_USED = "This send was already recorded for this case as a different "
+        + "email, so nothing was sent: start composing the email again, which gives it a request of its own";
+
     private final DeedPollRepository deedPolls;
     private final ReferralRepository referrals;
     private final NotificationRepository notifications;
@@ -182,8 +201,9 @@ public class CaseEmailService {
     private final ReferralService referralService;
 
     /**
-     * Only to write the {@code personalisation} column, which {@link NotificationRepository#enqueue} takes as
-     * JSON text because its statement is native.
+     * Only for the {@code personalisation} column, which {@link NotificationRepository#enqueue} takes as JSON
+     * text because its statement is native -- and, on the one path that compares a stored row with a resolved
+     * one, to read that text back so both sides have been through the same deserialiser.
      */
     private final ObjectMapper json;
 
@@ -369,16 +389,26 @@ public class CaseEmailService {
      * later edit to the case cannot redirect an email already owed, and "what was this applicant told" stays
      * answerable from the row even though part of the content is text the caseworker wrote and may have edited.
      *
-     * <p><strong>A second send of the same email is a no-op that answers with the first row.</strong> The
-     * insert is {@code ON CONFLICT DO NOTHING} on the partial unique index, so a double-click or two replicas
-     * racing cannot tell an applicant twice that their application was refused -- and the caseworker is not shown
-     * a failure for a request that was merely redundant.
+     * <p><strong>A second send of the same request is a no-op that answers with the first row.</strong> The
+     * insert is {@code ON CONFLICT DO NOTHING}, so a double-click or two replicas racing cannot send one applicant
+     * two copies of one email -- and the caseworker is not shown a failure for a request that was merely
+     * redundant.
      *
-     * <p><strong>A send of the email that contradicts one already asked for is a 409 naming it.</strong> The key
+     * <p><strong>What "the same" means is the caller's own {@code requestId}, and that is the whole of decision
+     * 6.</strong> Neither payload equality nor a time window can express intent: the same text is a legitimate
+     * reminder next week, and two clicks milliseconds apart carry different timestamps. So one compose journey
+     * creates one UUID and reuses it for every retry of its final POST, and a later journey gets another -- which
+     * is what lets a case be chased twice on purpose while a double-click still writes one row. Scoped to the
+     * case by V19's index, so a caller cannot make one case's chosen UUID collide with another case's row.
+     *
+     * <p><strong>A send of the email that contradicts one already asked for is a 409 naming it.</strong> That key
      * is the template's exclusion group, so a referral gets one email of the group; the second one is refused by
      * the same {@code DO NOTHING} clause, which is what keeps the caseworker's transaction usable instead of
-     * handing them a {@code DataIntegrityViolationException}. Which of the two happened is read off the blocking
-     * row rather than guessed.
+     * handing them a {@code DataIntegrityViolationException}.
+     *
+     * <p><strong>Which of the three things happened is read off the row that refused it, in a defined
+     * order</strong> -- see {@link #resolveRefusedInsert}. Zero rows means one of two indexes refused the insert,
+     * and the answers are a 200, a 409 and a fault, so it cannot be guessed.
      *
      * <p>{@code templateVersion} is left null: this row was enqueued without asking Notify to render anything, so
      * there is no version to record and inventing one would claim knowledge of the wording. The sender records
@@ -391,11 +421,14 @@ public class CaseEmailService {
      * caseworker -- see {@link #note}. Those two are the whole of what a send does to anything other than the
      * outbox, and doing them here is why they commit or roll back with the row.
      *
+     * @param requestId the caller's own identifier for this send -- the {@code Idempotency-Key} header. One
+     *     compose journey's UUID, reused for every retry of that POST and never for a later journey
      * @param caller the caseworker sending it, who becomes {@code createdBy} -- not audit noise here, because
      *     they authored part of what the applicant reads
      * @throws NotFoundError if there is no such case
-     * @throws ConflictError if the case is in no state to send this email, the email that contradicts this one
-     *     has already been asked for on the same referral, or the applicant answered ④ while it was being sent
+     * @throws ConflictError if the case is in no state to send this email, this request id has already been used
+     *     on this case for a different email, the email that contradicts this one has already been asked for on
+     *     the same referral, or the applicant answered ④ while it was being sent
      * @throws IncompleteDataError if the case has no applicant email address
      * @throws uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError if the slots are not acceptable
      */
@@ -403,6 +436,7 @@ public class CaseEmailService {
     public SendReceipt send(String deedPollId,
                            EmailTemplate template,
                            Map<String, Object> slots,
+                           UUID requestId,
                            CurrentUser caller) {
 
         Composed composed = compose(deedPollId, template, slots);
@@ -414,15 +448,17 @@ public class CaseEmailService {
         // One instant for the row and for the clock the next paragraph starts, read once: two calls could
         // straddle a tick and make the outbox row and the referral disagree about when the applicant was asked.
         LocalDateTime now = AuditClock.now();
+        String personalisation = asJson(composed.personalisation());
 
         int enqueued = notifications.enqueue(
             id,
             deedPollId,
+            requestId,
             referralId,
             template.name(),
             template.exclusionGroup().name(),
             recipient,
-            asJson(composed.personalisation()),
+            personalisation,
             now,
             caller.name());
 
@@ -432,33 +468,113 @@ public class CaseEmailService {
             return SendReceipt.enqueued(id, recipient);
         }
 
-        // Zero rows: the unique index refused it, which is the mechanism working rather than a failure. Since the
-        // key is the exclusion group, that has two meanings and they get two different answers, so the row it
-        // collided with has to be read before either can be given.
-        Notification blocking = notifications
-            .findBlocking(deedPollId, referralId, template.exclusionGroup().name())
-            // Unreachable in practice: the insert was refused, so the row it collided with exists and satisfies
-            // the same predicate this read applies. A conflict with a row that then could not be read would mean
-            // the collision was with another case's row, which the partial index cannot produce -- so this says
-            // so rather than answering with a null id.
-            .orElseThrow(() -> new IllegalStateException(
-                "Enqueueing " + template.key() + " for referral " + referralId + " of case " + deedPollId
-                    + " was refused by the unique index, but no such row is readable"));
+        return resolveRefusedInsert(deedPollId, template, requestId, referralId, recipient, personalisation);
+    }
 
-        if (!template.name().equals(blocking.getTemplate())) {
+    /**
+     * What a zero-row {@link #enqueue} meant, read off the row that refused it rather than guessed.
+     *
+     * <p>Zero rows is the mechanism working rather than a failure -- but since V19 there are two unique indexes
+     * that can produce it, and the three answers are a 200, a 409 and a fault. {@code ON CONFLICT DO NOTHING}
+     * names no target and reports no reason, so the reason is established by reading, in this order:
+     *
+     * <ol>
+     *   <li><strong>This case's row with this request id.</strong> The most specific answer, and asked first for
+     *       that reason: it names the very send the caller is retrying. A caller retrying its own POST must not be
+     *       told that some other email of the same family is in the way.</li>
+     *   <li><strong>The row occupying the referral's exclusion group.</strong> V15's business constraint, whose
+     *       two meanings {@link #alreadyRequested} and {@link SendReceipt#alreadyOwed} split between them exactly
+     *       as they did before V19 -- only reached now for a request id that has never been seen.</li>
+     *   <li><strong>Neither.</strong> A database constraint refused a row this service cannot account for, which
+     *       is a fault and says so.</li>
+     * </ol>
+     *
+     * <p><strong>A matching row is an idempotent success and a differing one is a 409.</strong> The key asserts
+     * "this is the send I already made", so the content has to bear that out: same template, same recipient, same
+     * frozen personalisation. If it does not, one key has been reused for two different emails and neither
+     * reading is safe -- see {@link #REQUEST_ALREADY_USED}.
+     */
+    private SendReceipt resolveRefusedInsert(String deedPollId,
+                                             EmailTemplate template,
+                                             UUID requestId,
+                                             UUID referralId,
+                                             String recipient,
+                                             String personalisation) {
+
+        Optional<Notification> sameRequest = notifications.findByDeedPollIdAndRequestId(deedPollId, requestId);
+        if (sameRequest.isPresent()) {
+            Notification existing = sameRequest.get();
+            if (!isTheSameSend(existing, template, recipient, personalisation)) {
+                // One compose journey's UUID used for a second, different email. Logged without either email's
+                // content and without the key: what is worth knowing is that a client is reusing keys.
+                log.info("Case {} already recorded {} under this request, so {} was refused",
+                         deedPollId, existing.getTemplate(), template.key());
+                throw new ConflictError(REQUEST_ALREADY_USED);
+            }
+            // A caseworker pressing send twice, a client retrying a timed-out POST, or two replicas racing on one
+            // journey. Logged because those look identical from here and the frequency is worth knowing.
+            log.info("Case {} has already sent {} under this request, so nothing was enqueued",
+                     deedPollId, template.key());
+            return SendReceipt.alreadyOwed(existing);
+        }
+
+        // A request id never seen on this case, so what refused the insert was V15's key -- which only a
+        // referral-driven template can collide with, the index being partial on "referralId" IS NOT NULL. Asked
+        // only where there is a referral to ask about: a chase's rows cannot occupy that index, so a query with a
+        // null referral would be one whose answer is always empty.
+        Optional<Notification> blocking = referralId == null
+            ? Optional.empty()
+            : notifications.findBlocking(deedPollId, referralId, template.exclusionGroup().name());
+
+        Notification occupant = blocking
+            // Unreachable in practice, and named rather than answered with a null id: the insert was refused, so
+            // some row collided with it, and the two indexes are the only two that can. Reaching here means one
+            // of them refused a row neither of these reads can find -- a schema this service does not understand,
+            // not an outcome a caseworker can act on. Raising rolls the transaction back, which is the safe
+            // direction: nothing is owed and nothing was sent.
+            .orElseThrow(() -> new IllegalStateException(
+                "Enqueueing " + template.key() + " for case " + deedPollId + " was refused by a unique index, "
+                    + "but neither this case's request row nor a blocking row for referral " + referralId
+                    + " is readable"));
+
+        if (!template.name().equals(occupant.getTemplate())) {
             // The other email of the group. A 409 rather than a duplicate, because sending this one would tell
             // the applicant the opposite of what they have already been told -- and because nothing the
             // caseworker typed is wrong, so there is no field to correct.
             log.info("Case {} already owes {} for referral {}, so {} was refused",
-                     deedPollId, blocking.getTemplate(), referralId, template.key());
-            throw new ConflictError(alreadyRequested(blocking));
+                     deedPollId, occupant.getTemplate(), referralId, template.key());
+            throw new ConflictError(alreadyRequested(occupant));
         }
 
-        // The same email again: a caseworker pressing send twice, or a replica racing. Logged because those look
-        // identical from here and the frequency is worth knowing.
+        // The same email on the same referral from a different compose journey. Still not a second email -- the
+        // referral gets one -- so the receipt names the row that is already owed.
         log.info("Case {} already owes {} for referral {}, so nothing was enqueued",
                  deedPollId, template.key(), referralId);
-        return SendReceipt.alreadyOwed(blocking);
+        return SendReceipt.alreadyOwed(occupant);
+    }
+
+    /**
+     * Whether the row already recorded under this request id is the send the caller is retrying.
+     *
+     * <p>Template, recipient and frozen personalisation -- the whole of what the row was written with, minus the
+     * audit columns and the state the drain has since moved. Anything else differing is either derived from these
+     * or is not the caller's to have changed.
+     *
+     * <p><strong>The personalisation is compared through the JSON both sides would be stored as.</strong> The
+     * stored map came back out of {@code jsonb} and the resolved one is still Java, so a direct comparison would
+     * be asserting about Jackson's and pgjdbc's type choices rather than about the content: the round trip is what
+     * makes {@code true} and {@code "true"}, or an {@code Integer} and a {@code Long}, comparable at all. Key
+     * order is deliberately not part of it -- {@code jsonb} does not preserve it -- so this is a map comparison
+     * over normalised values and not a text one.
+     */
+    private boolean isTheSameSend(Notification existing,
+                                  EmailTemplate template,
+                                  String recipient,
+                                  String personalisation) {
+
+        return template.name().equals(existing.getTemplate())
+            && recipient.equals(existing.getRecipient())
+            && asMap(personalisation).equals(existing.getPersonalisation());
     }
 
     /**
@@ -911,6 +1027,22 @@ public class CaseEmailService {
             return json.writeValueAsString(personalisation);
         } catch (JsonProcessingException impossible) {
             throw new IllegalStateException("Resolved personalisation could not be written as JSON", impossible);
+        }
+    }
+
+    /**
+     * The same JSON read back as a map, so it can be compared with one that came out of {@code jsonb}.
+     *
+     * <p>Only for {@link #isTheSameSend}. Parsing what this service has just written is not a round trip for its
+     * own sake: it is what puts both sides of that comparison through the same deserialiser, so the comparison is
+     * about the content rather than about which Java type each side happened to hold.
+     */
+    private Map<String, Object> asMap(String personalisation) {
+        try {
+            return json.readValue(personalisation, new TypeReference<>() {
+            });
+        } catch (JsonProcessingException impossible) {
+            throw new IllegalStateException("Resolved personalisation could not be read back as JSON", impossible);
         }
     }
 

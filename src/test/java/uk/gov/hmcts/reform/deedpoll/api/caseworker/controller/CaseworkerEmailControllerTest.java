@@ -57,10 +57,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -630,14 +633,108 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                                              .getContentAsString())
                 .get("id").asText();
 
-            // A caseworker double-clicking, or two replicas racing, must not tell an applicant twice that their
-            // application was refused -- and must not be shown a failure for a request that was merely redundant.
+            // A SECOND COMPOSE JOURNEY, which the default helper's fresh Idempotency-Key is: a caseworker who came
+            // back to the tab later and sent again. Refused by the referral's exclusion group rather than by the
+            // request id -- one referral gets one of these emails, whoever asks and however often -- and refused as
+            // a success, because nothing about the request is wrong and a failure would invite a third attempt.
             authorised(post(sendOf(caseId)), "{}")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(first))
                 .andExpect(jsonPath("$.enqueued").value(false));
 
             assertThat(notifications.count()).isOne();
+        }
+
+        @Test
+        @DisplayName("a repeated POST of one journey owes one email, over HTTP and with the header that says so")
+        void repeatingOneJourneyOwesOneEmail() throws Exception {
+            // The double-click and the retried POST, which are what the header exists to identify -- and the only
+            // route by which they are distinguishable from the deliberate second send above. Over real HTTP,
+            // because the key is a header: a route that bound it per request, or defaulted it, would pass every
+            // service-level test and send two emails here.
+            String caseId = refusedCase();
+            UUID journey = UUID.randomUUID();
+            String first = JSON.readTree(authorised(post(sendOf(caseId)), "{}", journey)
+                                             .andExpect(status().isOk())
+                                             .andExpect(jsonPath("$.enqueued").value(true))
+                                             .andReturn()
+                                             .getResponse()
+                                             .getContentAsString())
+                .get("id").asText();
+
+            authorised(post(sendOf(caseId)), "{}", journey)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(first))
+                .andExpect(jsonPath("$.enqueued").value(false));
+
+            assertThat(notifications.findAll()).singleElement().satisfies(row ->
+                assertThat(row.getRequestId()).isEqualTo(journey));
+            // Notify heard about it once, which is the fact the applicant experiences. The drain runs after each
+            // send, so a second row would have been a second email rather than merely a second row.
+            assertThat(NOTIFY.emailRequests()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("409s a journey reused for different text, and leaves the first email owed")
+        void refusesAJourneyReusedForDifferentText() throws Exception {
+            // The other answer the header can give, over HTTP: the key says "this is the send I already made" and
+            // the body says otherwise. 409 rather than 400, because the same body under a request of its own would
+            // be accepted -- so there is no field to correct.
+            String caseId = refusedCase();
+            UUID journey = UUID.randomUUID();
+            authorised(post(sendOf(caseId)), "{\"additional_notes\":\"Ring the office.\"}", journey)
+                .andExpect(status().isOk());
+
+            authorised(post(sendOf(caseId)), "{\"additional_notes\":\"Write to the office.\"}", journey)
+                .andExpect(status().isConflict())
+                // The refusal's own wording rather than the constant, which is package-private like every other
+                // reason in that service -- and the exact sentence is pinned in CaseEmailServiceTest. What is
+                // asserted here is that this refusal and not another one reached the caseworker, and that neither
+                // email's text came with it.
+                .andExpect(jsonPath("$.error").value(containsString("start composing the email again")))
+                .andExpect(jsonPath("$.error").value(not(containsString("Write to the office"))));
+
+            assertThat(notifications.findAll()).singleElement().satisfies(row ->
+                assertThat(row.getPersonalisation())
+                    .containsEntry(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Ring the office."));
+            assertThat(NOTIFY.emailRequests()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("400s a send with no Idempotency-Key at all, and owes nothing")
+        void refusesASendWithNoIdempotencyKey() throws Exception {
+            // Over the real filter chain and the real advice, so the 400 is the running service's answer and not a
+            // slice's. CaseworkerEmailIdempotencyHeaderTest is the Docker-free half of the same claim.
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(IDAM.accessToken());
+
+            mockMvc.perform(post(sendOf(refusedCase())).headers(headers)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field")
+                               .value(CaseworkerEmailController.IDEMPOTENCY_KEY));
+
+            assertThat(notifications.count()).isZero();
+            assertThat(NOTIFY.emailRequests()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("the request id is nowhere in the send's answer, because it is transport and not the email")
+        void theRequestIdIsNotPublished() throws Exception {
+            UUID journey = UUID.randomUUID();
+
+            String body = authorised(post(sendOf(refusedCase())), "{}", journey)
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+            // Stored on the row and absent from the response: a client that saw it echoed would be invited to
+            // treat it as the email's identity, which the row id already is.
+            assertThat(body).doesNotContain(journey.toString());
+            assertThat(notifications.findAll()).singleElement().satisfies(row ->
+                assertThat(row.getRequestId()).isEqualTo(journey));
         }
 
         @Test
@@ -775,7 +872,8 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 String caseId = confirmationCase();
 
                 new TransactionTemplate(transactions).execute(status -> {
-                    emails.send(caseId, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), caseworker());
+                    emails.send(caseId, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), UUID.randomUUID(),
+                                caseworker());
                     status.setRollbackOnly();
                     return null;
                 });
@@ -962,7 +1060,8 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 String caseId = confirmationCase();
 
                 new TransactionTemplate(transactions).execute(status -> {
-                    emails.send(caseId, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), caseworker());
+                    emails.send(caseId, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), UUID.randomUUID(),
+                                caseworker());
                     status.setRollbackOnly();
                     return null;
                 });
@@ -1090,15 +1189,41 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
 
     /** The request, carrying a valid forwarded access token. */
     private ResultActions authorised(MockHttpServletRequestBuilder request) throws Exception {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(IDAM.accessToken());
-        return mockMvc.perform(request.headers(headers));
+        return mockMvc.perform(request.headers(tokenAndANewJourney()));
     }
 
     /** The request, carrying a valid forwarded access token and a JSON body. */
     private ResultActions authorised(MockHttpServletRequestBuilder request, String body) throws Exception {
+        return mockMvc.perform(
+            request.headers(tokenAndANewJourney()).contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    /**
+     * The same request as a named compose journey, for the tests about sending the same one twice.
+     *
+     * <p>The distinction the default helper cannot express, and it is decision 6's whole point: two POSTs of one
+     * journey are a double-click or a retry and must write one row, while two journeys are two deliberate sends.
+     * So a test that repeats a send says which it means by passing the key or not.
+     */
+    private ResultActions authorised(MockHttpServletRequestBuilder request, String body, UUID requestId)
+        throws Exception {
+        HttpHeaders headers = tokenAndANewJourney();
+        headers.set(CaseworkerEmailController.IDEMPOTENCY_KEY, requestId.toString());
+        return mockMvc.perform(
+            request.headers(headers).contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    /**
+     * A valid forwarded access token, and a fresh {@code Idempotency-Key}.
+     *
+     * <p>The key is on every request rather than only on the sends: it is required by one route and ignored by
+     * the others, and putting it here means a test that adds a send does not have to remember it. Fresh per
+     * request, so the default is "a new compose journey" -- which is what an unrelated test means when it sends.
+     */
+    private static HttpHeaders tokenAndANewJourney() {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(IDAM.accessToken());
-        return mockMvc.perform(request.headers(headers).contentType(MediaType.APPLICATION_JSON).content(body));
+        headers.set(CaseworkerEmailController.IDEMPOTENCY_KEY, UUID.randomUUID().toString());
+        return headers;
     }
 }

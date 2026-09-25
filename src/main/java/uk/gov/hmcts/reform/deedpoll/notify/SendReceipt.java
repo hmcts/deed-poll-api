@@ -12,10 +12,15 @@ import java.util.UUID;
  * honest answer is the row's id and the state it was last known to be in, which a client can read again.
  *
  * <p><strong>{@link #enqueued()} is false for a second click, and that is a success rather than an
- * error.</strong> One <em>Application Rejected</em> per referral is a unique index, so the second send does
- * nothing and answers with the first send's row: the caseworker's screen is out of date, not wrong, and telling
- * them their email failed would invite them to try a third time. A client wanting to say "this was already sent
- * on Tuesday" has the id to read it with.
+ * error.</strong> Two unique indexes can refuse the second insert -- the caller's own request id for this case,
+ * and one email of an exclusion group per referral -- so the second send does nothing and answers with the first
+ * send's row: the caseworker's screen is out of date, not wrong, and telling them their email failed would invite
+ * them to try a third time. A client wanting to say "this was already sent on Tuesday" has the id to read it
+ * with.
+ *
+ * <p><strong>The request id is deliberately not published here.</strong> It is transport idempotency and the
+ * caller supplied it, so echoing it would add nothing a client does not have while inviting it to be treated as
+ * the email's identity, which {@link #id} already is.
  *
  * @param id the outbox row, which is also the {@code reference} Notify is given -- so a row and a notification
  *     are mutually traceable
@@ -29,7 +34,7 @@ public record SendReceipt(UUID id, String recipient, boolean enqueued) {
         return new SendReceipt(id, recipient, true);
     }
 
-    /** The row a previous send wrote for the same referral and template. */
+    /** The row a previous send wrote -- for the same request, or for the same referral and exclusion group. */
     public static SendReceipt alreadyOwed(Notification existing) {
         return new SendReceipt(existing.getId(), existing.getRecipient(), false);
     }
