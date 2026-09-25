@@ -187,10 +187,12 @@ class CaseworkerEmailIdempotencyHeaderTest {
     @Test
     @DisplayName("the header is declared required and typed, so the refusals above are the route's own rule")
     void theHeaderIsDeclaredRequiredAndTyped() throws Exception {
-        // Reflection as well as the requests, because the requests above prove today's behaviour and this proves
-        // the declaration that produces it. `required = false` or a String parameter would keep every test above
-        // passing except this one -- a String binds anything, including a blank, and the parse would then happen
-        // somewhere with no error shape of its own.
+        // Reflection as well as the requests, because the requests above prove today's behaviour and this names the
+        // declaration that produces it -- which is what a reader needs in order to change the route without
+        // rediscovering why the type and the requiredness are load-bearing. It is not the only guard: relaxing
+        // either also fails the requests above, `required = false` by letting a keyless send reach the handler and
+        // a String parameter by letting "not-a-uuid" reach it, both of which break `verifyNoInteractions(emails)`.
+        // What this adds is the reason, stated once, next to the four attributes it is a reason about.
         Method send = CaseworkerEmailController.class.getMethod(
             "send", String.class, String.class, UUID.class, SendEmailRequest.class);
 

@@ -58,7 +58,8 @@ public class OpenAPIEmailTemplates {
         return openApi -> {
             String description = describedTemplates();
             for (String path : List.of(SEND_PATH, PREVIEW_PATH)) {
-                emailOperation(openApi, path).forEach(operation -> describeToken(operation, description));
+                emailOperation(openApi, path)
+                    .forEach(operation -> describeParameter(operation, TEMPLATE_TOKEN, description));
             }
             // Only the send: a preview writes nothing, so there is nothing for a second one to duplicate and a key
             // required there would be a refusal a client could not act on.
@@ -77,14 +78,6 @@ public class OpenAPIEmailTemplates {
     private List<Operation> emailOperation(OpenAPI openApi, String path) {
         PathItem item = openApi.getPaths() == null ? null : openApi.getPaths().get(path);
         return item == null ? List.of() : item.readOperations();
-    }
-
-    /**
-     * Describes the token and touches nothing else -- not its schema and not whether it is required, so nothing
-     * about how a client sends it changes.
-     */
-    private void describeToken(Operation operation, String description) {
-        describeParameter(operation, TEMPLATE_TOKEN, description);
     }
 
     /**

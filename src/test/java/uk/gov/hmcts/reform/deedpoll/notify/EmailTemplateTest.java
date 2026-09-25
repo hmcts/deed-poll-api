@@ -404,12 +404,22 @@ class EmailTemplateTest {
 
         @ParameterizedTest
         @EnumSource(EmailSlot.class)
-        @DisplayName("a required slot carries the sentence it is refused with, and an optional one carries none")
+        @DisplayName("a required slot's sentence is one a caseworker can read, and an optional one has none")
         void requirednessIsTheSentence(EmailSlot slot) {
-            // The encoding, asserted rather than trusted: requiredness IS the sentence, so a required slot with no
-            // reason to give a caseworker is not expressible -- and an optional one cannot acquire a refusal
-            // message that never gets used.
-            assertThat(slot.required()).isEqualTo(!slot.requiredBecause().isEmpty());
+            // Asserted against the sentence and not against required(), which IS "the sentence is not empty" --
+            // comparing the two would be one expression compared with itself, green for every possible value
+            // including a whitespace-only reason that produces the refusal "documents_required is required:    ".
+            // So: an optional slot carries nothing, and a required one carries prose.
+            if (slot.required()) {
+                assertThat(slot.requiredBecause())
+                    .as("%s is refused for being absent, so it owes the caseworker a reason", slot)
+                    .isNotBlank()
+                    .hasSizeGreaterThan(20);
+            } else {
+                assertThat(slot.requiredBecause())
+                    .as("%s is never refused for being absent, so a reason would never be shown", slot)
+                    .isEmpty();
+            }
         }
     }
 }

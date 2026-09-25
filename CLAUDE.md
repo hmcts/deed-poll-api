@@ -55,6 +55,17 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   *into* `NotificationState.Failed` (the transition, not a `PERMANENT` verdict, which would miss the
   exhausted-retry route), and none for a transient failure or an idempotent repeat send. A new send or settle path
   that skips the note leaves the case's only timeline silent and no existing test fails.
+- **`NotificationRepository.enqueue` names no `ON CONFLICT` target, so it infers *every* unique index on
+  `deedpoll_notification`.** Two of them can refuse a row — V19's `("deedPollId", "requestId")` and V15's partial
+  `("referralId", "exclusionGroup")` — and `ON CONFLICT` takes at most one inferred target, so naming either would
+  let the other raise `DataIntegrityViolationException` and mark the caseworker's transaction rollback-only. The
+  price is that zero rows now has three meanings, resolved by *reading* in `CaseEmailService.resolveRefusedInsert`
+  in a fixed order: this case's row for this request id (an idempotent 200, or a 409 if its content disagrees),
+  then the referral's exclusion-group occupant (200 for the same template, 409 for the contradictory one),
+  otherwise `IllegalStateException`. **A third unique index added without teaching that method turns an ordinary
+  conflict into a 500**, and nothing fails the build to say so. The index-existence check a named target used to
+  buy is gone too: `NotificationRepositoryTest` against real Postgres is the only place either conflict clause
+  executes, and Docker-free CI does not run it.
 
 ## Conventions worth knowing before writing code
 
@@ -90,6 +101,30 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   inside the same transaction. The rule itself lives in a class with no database in it (`CurrentReferralState`,
   `ConfirmationWait`) so that CI, which has no Docker, runs it. **A new write path that skips the recompute
   leaves the column wrong for ever and no existing test fails.**
+- **A send's identity is the caller's `Idempotency-Key`, and it is transport rather than correspondence.**
+  `POST /caseworker/cases/{id}/emails/{template}` requires the header — one compose journey mints one UUID and
+  reuses it for every retry of that POST, a later journey mints another — and it is stored as
+  `Notification.requestId`: NOT NULL, bound explicitly by `enqueue`, with V19's `gen_random_uuid()` default there
+  only to carry a pre-V19 instance through a rolling deployment and deliberately **no `@PrePersist` fallback**,
+  because a writer that cannot say which request it is should fail rather than invent one. It is the only header
+  bound anywhere in the service, which is why `DomainErrorHandler.missingHeader` handles
+  `MissingRequestHeaderException` and not its parent. The id is published nowhere — no DTO, no note, no log line —
+  asserted by an ArchUnit `noFields()` rule plus its counterpart that the column does exist on the entity. Every
+  lookup is case-scoped (`findByDeedPollIdAndRequestId`): widening it to the request id alone would answer one
+  caller with another case's receipt.
+- **A new email template is declared in a handful of places, and two of them fail silently.** The `EmailTemplate`
+  member (key, display name, `EmailExclusionGroup`, `invitesReply`, resolved keys, slots), a personalisation
+  record, and four `switch` *expressions* in `CaseEmailService` — `cause`, `compose`, `reasonNotApplicable`,
+  `startsConfirmationClock` — which have no `default` and so refuse to compile until somebody says what the new
+  template's rule is. What fails silently is a missing `notify.templates.<key>` in `application.yaml` or a missing
+  env var in the chart: the template then reads unprovisioned and never sends. A template is either
+  **referral-driven or case-driven** and `EmailCause` says which — a case-driven one stores a null `referralId`,
+  sits outside V15's partial index, and so has *no* database protection against a repeat; the request id is all
+  there is. A required `EmailSlot` carries the refusal sentence itself (`requiredBecause`) rather than a boolean
+  plus a message, and `OpenAPIWriteBodies` renders that same sentence, so the document and the refusal cannot
+  drift. Slot defaults come from `EmailSlots.defaults` and never from `parse` of an empty payload: a slot that is
+  required and pre-populated from nothing would otherwise make `GET /caseworker/cases/{id}/emails` answer 400 for
+  every case the template exists for.
 - **A new case column has to be declared in four places**, or the build fails somewhere that does not name the
   cause: a reader in `DeedPollFields` (readable / writable / queryable are three separate decisions — `CaseSort`
   admits only readable names and `CaseQuery` only queryable ones), both `CaseDetailResponse` and

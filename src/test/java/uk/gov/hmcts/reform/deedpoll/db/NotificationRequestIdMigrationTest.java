@@ -37,8 +37,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * <p><strong>It runs against a copy of the table in a schema of its own, rebuilt to the shape the column did not
  * exist in.</strong> That is the one way to execute an {@code ADD COLUMN} whose column Flyway has already added:
  * {@code search_path} puts the copy first, so every unqualified {@code "deedpoll_notification"} in the migration
- * resolves to it and the real table is untouched. The copy is taken from the real table -- {@code SELECT * WHERE
- * false} -- rather than written out, so it is the committed schema minus the one column, and not a guess at it.
+ * resolves to it and the real table is untouched. The copy is taken from the real table -- {@code LIKE ...
+ * INCLUDING ALL} -- rather than written out, so it is the committed schema minus the one column, constraints and
+ * keys included, and not a guess at it.
  *
  * <p>Everything here is inside the test's transaction, including {@code CREATE SCHEMA}: Postgres makes DDL
  * transactional, so the rollback takes the schema, the copy and its index with it.
@@ -75,15 +76,23 @@ class NotificationRequestIdMigrationTest extends AbstractPostgresContainerTest {
     /**
      * The outbox as it stood before V19: the committed table, minus the column this migration adds.
      *
-     * <p>No foreign keys, because {@code CREATE TABLE ... AS} copies none -- which suits this test, since what is
-     * under examination is one column and its index rather than the case a row belongs to.
+     * <p><strong>{@code LIKE ... INCLUDING ALL} and not {@code CREATE TABLE ... AS SELECT}.</strong> The latter
+     * copies column names and types and <em>nothing else</em> -- no {@code NOT NULL}, no defaults, no primary key,
+     * no indexes -- so the migration would have been run against a table far looser than the one it will meet,
+     * and neither the backfill nor step 5's {@code CREATE UNIQUE INDEX} would have been executed alongside V12's
+     * and V15's partial keys. {@code INCLUDING ALL} brings all of that, which is what makes this "the committed
+     * schema minus the one column" rather than a sketch of it: dropping {@code "requestId"} takes the copied
+     * V19 index with it, leaving exactly the pre-V19 shape.
+     *
+     * <p>No foreign keys, because {@code LIKE} copies none -- which suits this test, since what is under
+     * examination is one column and its index rather than the case a row belongs to.
      */
     @BeforeEach
     void rebuildTheTableAsItWasBeforeV19() {
         jdbcTemplate.execute("CREATE SCHEMA \"" + SCRATCH + "\"");
         jdbcTemplate.execute("""
-            CREATE TABLE "migration_proof"."deedpoll_notification" AS
-                 SELECT * FROM "public"."deedpoll_notification" WHERE false
+            CREATE TABLE "migration_proof"."deedpoll_notification" (
+                 LIKE "public"."deedpoll_notification" INCLUDING ALL)
             """);
         jdbcTemplate.execute(
             "ALTER TABLE \"" + SCRATCH + "\".\"deedpoll_notification\" DROP COLUMN \"requestId\"");

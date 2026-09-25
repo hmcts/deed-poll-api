@@ -31,12 +31,12 @@ row; its failed history remains unchanged when the replacement is sent.
 | Caseworker endpoints | **34 across 21 paths** on `master`, over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures, and on `notify-6` re-asserts the 34 **inside the test that proves the new send header is published**, because a header is the kind of change that looks like it should have added an operation |
 | Judicial endpoints | **5**, `referrals-api-6` having merged — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,725 on `notify-6`** — `test` 2,712 across 341 result files + `integration` 13 across 3, 0 failures / 0 errors / 0 skipped (measured 2026-09-25 from `build/test-results/` after `./gradlew build --rerun-tasks`, the directory deleted first). `email-case-notes` reads **2,622** (2,610 + 12) and `master` read 2,580 + 12. The branches are not stacked, so figures from one are never cumulative with another's |
-| Docker-free CI | **1,735 unit tests on `notify-6`**, measured with `INTEGRATION_TESTS_ENABLED=false`; the other **977** are in **33** container-backed classes, notify-6 having added one (`NotificationRequestIdMigrationTest`). `email-case-notes` reads 1,657 of 2,610 in 32 classes. **78 of notify-6's 102 new unit tests run in CI** — the migration proof and the enqueue statement's conflict paths are the only rules Postgres alone can answer, and each has a container-free companion. `build.gradle` carries the history and instructs the next plan to re-measure |
+| Tests | **2,727 on `notify-6`** — `test` 2,714 across 341 result files + `integration` 13 across 3, 0 failures / 0 errors / 0 skipped (measured 2026-09-25 from `build/test-results/` after `./gradlew build`, following the review's two added tests: one pinning the referral in the request-id comparison and one pinning the chase's case isolation). `email-case-notes` reads **2,622** (2,610 + 12) and `master` read 2,580 + 12. The branches are not stacked, so figures from one are never cumulative with another's |
+| Docker-free CI | **1,737 unit tests on `notify-6`**, measured with `INTEGRATION_TESTS_ENABLED=false`; the other **977** are in **33** container-backed classes, notify-6 having added one (`NotificationRequestIdMigrationTest`). `email-case-notes` reads 1,657 of 2,610 in 32 classes. **80 of notify-6's 104 new unit tests run in CI** — the migration proof and the enqueue statement's conflict paths are the only rules Postgres alone can answer, and each has a container-free companion. `build.gradle` carries the history and instructs the next plan to re-measure |
 | `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `notify-6` from cold, both with Docker and Docker-free (2026-09-25), on `email-case-notes` after its review (2026-09-24), and on `master` after notify-3b. **Wall clock is not a regression signal**: the same Docker build measured 35m 32s and 3m 58s on identical code, because container startup under this Docker configuration varies by an order of magnitude |
 
-**Twenty-two** plans are in [`plans/completed/`](plans/completed/) — the four added since this section was
-last rewritten are the saved-query publishing gate, notify-3, notify-3b and the email case notes. The arc since plan 01: the domain gaps
+**Twenty-three** plans are in [`plans/completed/`](plans/completed/) — the five added since this section was
+last rewritten are the saved-query publishing gate, notify-3, notify-3b, the email case notes and notify-6. The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
 then the original referrals feature in four completed plans — create/withdraw, claim/direction/close,
 `currentReferralState`, and the judicial surface — plus two CI plans and the ACR migration.
@@ -80,8 +80,8 @@ published anywhere.
 
 ## The Notify series: six api plans, and the order they should run in
 
-The original five are on `master` as of PR #26; notify-6 was drafted on 2026-09-20. The numbering is the order
-they were written, **not** the order to build them:
+The original five are on `master` as of PR #26; notify-6 was drafted on 2026-09-20 and completed on 2026-09-25 on
+its own branch, unmerged. The numbering is the order they were written, **not** the order to build them:
 
 ```
 notify-1  the send path                     COMPLETE
@@ -149,7 +149,7 @@ nothing in this repo can confirm the external half. Re-check rather than quote.
   `values.yaml`. That nagger was what failed master build #3.
 - **CI runs without Docker.** `INTEGRATION_TESTS_ENABLED=false` (set by `Jenkinsfile_CNP`) drops
   `integration` from `check` and excludes the `requires-docker` tag from `test`. On `notify-6` that is
-  **1,735 of 2,712** unit tests running in CI, with 977 in 33 container-backed classes; on `email-case-notes`,
+  **1,737 of 2,714** unit tests running in CI, with 977 in 33 container-backed classes; on `email-case-notes`,
   1,657 of 2,610 in 32. `build.gradle` carries the full history and instructs the next plan to re-measure it.
   **A count taken from `build/test-results/integration/` after a Docker-free run proves nothing** — the
   directory keeps the previous run's files and nothing marks them stale, so delete it first or read the task
@@ -257,7 +257,6 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 
 | File | State |
 |---|---|
-| `notify-6-chase-missing-documents.md` | **Complete on branch `notify-6-chase-missing-documents`, unmerged.** All four tasks done; the template contract was verified against Notify rather than assumed. Carries the only Notify contract delta still unmerged — V19 and the send's `Idempotency-Key` header |
 | `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
 | `role-model-generalisation.md` | **Gated, and may not be needed.** A behaviour-preserving refactor of `boolean isAdmin` into capabilities. Gated on scope question Q0.1 and, preferably, on a first successful deployment — so that a failed deploy is unambiguously a deployment problem and not a 33-site refactor |
 | `role-based-access-findings.md` | Findings, not a plan. The measured inventory of what could be role-gated, so the business question is asked against a concrete list |

@@ -34,6 +34,7 @@ import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
@@ -148,12 +149,20 @@ public class CaseEmailService {
      * state is derived by the cascade from {@code awaitingFurtherDocsInfo} and is not settable directly, so
      * "put the case in that state" is a date on the case details rather than a button on the Email tab.
      *
+     * <p><strong>It says the date has to be the case's latest, not merely that it has to be recorded.</strong>
+     * {@code awaitingFurtherDocsInfo} is the last date {@code CaseState.deriveState} consults, so every later
+     * one -- ready for the Master, referred, signature requested or received, enrolled, returned -- outranks it:
+     * a case can carry a date awaited and still be {@code ReadyForMaster}. A sentence that only said "record the
+     * date" would then tell a caseworker to do something they had already done, and they would record it twice
+     * before finding out that was never the obstacle.
+     *
      * <p>It does not quote the state the case is actually in. The Email tab shows that on the same screen, and a
      * reason that repeated it would be a second copy going stale in whichever of the two was refreshed less.
      */
     static final String NOT_AWAITING_FURTHER_DOCS = "This case is not waiting for further documents or "
-        + "information, so there is nothing to chase the applicant for: record the date awaited on the case "
-        + "before sending this email";
+        + "information, so there is nothing to chase the applicant for: the case waits for them only while the "
+        + "date awaited is the latest date recorded on it, so record that date -- and clear any later date that "
+        + "has moved the case past it -- before sending this email";
 
     /**
      * Why a send is refused when its {@code Idempotency-Key} has already been used on this case for something
@@ -229,20 +238,11 @@ public class CaseEmailService {
     }
 
     /**
-     * Every email this service knows about, and whether this case may have each one sent.
-     *
-     * <p>All of them, applicable or not -- {@link EmailAvailability} says why.
-     *
-     * @throws NotFoundError if there is no such case
-     */
-    @Transactional(readOnly = true)
-    public List<EmailAvailability> available(String deedPollId) {
-        DeedPoll deedPoll = requireCase(deedPollId);
-        return everyAvailability(deedPoll, newestRefusal(deedPollId));
-    }
-
-    /**
      * Every template's answer for one case, from one read of the case and one of its referrals.
+     *
+     * <p>Every email this service knows about, applicable or not -- {@link EmailAvailability} says why. Reached
+     * only through {@link #overview}, which is the one operation that publishes it: a second public read of the
+     * same thing would be a second entry point for a rule to drift in, exercised by tests and by nothing else.
      *
      * <p>The refusal is read once for the whole answer rather than per template: both referral-driven templates
      * speak for the same newest refusal, so one read gives them one answer -- which is also what guarantees they
@@ -410,6 +410,17 @@ public class CaseEmailService {
      * order</strong> -- see {@link #resolveRefusedInsert}. Zero rows means one of two indexes refused the insert,
      * and the answers are a 200, a 409 and a fault, so it cannot be guessed.
      *
+     * <p><strong>The request id is consulted only where the insert reached the database, and that bounds what it
+     * can promise.</strong> Everything before the statement -- the case's entitlement to this email, an applicant
+     * address to send it to, the slots being acceptable -- is judged afresh on every attempt, so a retry that
+     * arrives after the case has moved on is refused on that rather than answered with the receipt it is retrying:
+     * an applicant whose documents arrived is no longer {@link DeedPollState#AwaitingFurtherDocs}, and a chase
+     * already sent under this key then earns {@link #NOT_AWAITING_FURTHER_DOCS}. That is the deliberate direction
+     * to fail in -- nothing is sent twice, and a caseworker reading the Emails tab sees the send that happened --
+     * but it means the idempotent answer holds for a retry of an unchanged case rather than for all time. Moving
+     * the lookup in front of the composition would buy the stronger promise at the cost of a read on every send
+     * and a second place where "what does this key mean" is decided; decision 7 chose this one.
+     *
      * <p>{@code templateVersion} is left null: this row was enqueued without asking Notify to render anything, so
      * there is no version to record and inventing one would claim knowledge of the wording. The sender records
      * the version Notify reports when it accepts the send.
@@ -491,8 +502,8 @@ public class CaseEmailService {
      *
      * <p><strong>A matching row is an idempotent success and a differing one is a 409.</strong> The key asserts
      * "this is the send I already made", so the content has to bear that out: same template, same recipient, same
-     * frozen personalisation. If it does not, one key has been reused for two different emails and neither
-     * reading is safe -- see {@link #REQUEST_ALREADY_USED}.
+     * referral, same frozen personalisation. If it does not, one key has been reused for two different emails and
+     * neither reading is safe -- see {@link #REQUEST_ALREADY_USED}.
      */
     private SendReceipt resolveRefusedInsert(String deedPollId,
                                              EmailTemplate template,
@@ -504,7 +515,7 @@ public class CaseEmailService {
         Optional<Notification> sameRequest = notifications.findByDeedPollIdAndRequestId(deedPollId, requestId);
         if (sameRequest.isPresent()) {
             Notification existing = sameRequest.get();
-            if (!isTheSameSend(existing, template, recipient, personalisation)) {
+            if (!isTheSameSend(existing, template, referralId, recipient, personalisation)) {
                 // One compose journey's UUID used for a second, different email. Logged without either email's
                 // content and without the key: what is worth knowing is that a client is reusing keys.
                 log.info("Case {} already recorded {} under this request, so {} was refused",
@@ -556,9 +567,16 @@ public class CaseEmailService {
     /**
      * Whether the row already recorded under this request id is the send the caller is retrying.
      *
-     * <p>Template, recipient and frozen personalisation -- the whole of what the row was written with, minus the
-     * audit columns and the state the drain has since moved. Anything else differing is either derived from these
-     * or is not the caller's to have changed.
+     * <p>Template, referral, recipient and frozen personalisation -- the whole of what the row was written with,
+     * minus the audit columns and the state the drain has since moved. Anything else differing is either derived
+     * from these or is not the caller's to have changed.
+     *
+     * <p><strong>The referral is part of it even though no personalisation names it.</strong> A refusal's
+     * personalisation carries the direction and the applicant's former names and no referral id, so two refusals
+     * of one case recorded with the same direction resolve to identical maps. Without this comparison a key
+     * reused across those two journeys would answer with the first referral's row -- telling the caseworker the
+     * email had been sent while the new refusal had had none, and leaving the exclusion group it keys on empty.
+     * Comparing it makes that the 409 it is: the same key for a different email.
      *
      * <p><strong>The personalisation is compared through the JSON both sides would be stored as.</strong> The
      * stored map came back out of {@code jsonb} and the resolved one is still Java, so a direct comparison would
@@ -569,10 +587,12 @@ public class CaseEmailService {
      */
     private boolean isTheSameSend(Notification existing,
                                   EmailTemplate template,
+                                  UUID referralId,
                                   String recipient,
                                   String personalisation) {
 
         return template.name().equals(existing.getTemplate())
+            && Objects.equals(referralId, existing.getReferralId())
             && recipient.equals(existing.getRecipient())
             && asMap(personalisation).equals(existing.getPersonalisation());
     }

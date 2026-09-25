@@ -377,7 +377,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         String send = "/paths/~1caseworker~1cases~1{id}~1emails~1{template}/post/parameters";
         String preview = "/paths/~1caseworker~1cases~1{id}~1emails~1{template}~1preview/post/parameters";
         for (String operation : List.of(send, preview)) {
-            JsonNode token = templateToken(spec.at(operation));
+            JsonNode token = parameterNamed(spec.at(operation), "template");
             assertThat(token.isMissingNode()).as("%s declares the template token", operation).isFalse();
             String description = token.at("/description").asText();
             for (EmailTemplate template : EmailTemplate.values()) {
@@ -492,13 +492,6 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .filter(parameter -> name.equals(parameter.at("/name").asText()))
             .findFirst()
             .orElse(JSON.missingNode());
-    }
-
-    /**
-     * The {@code {template}} path token among an operation's parameters, or a missing node.
-     */
-    private static JsonNode templateToken(JsonNode parameters) {
-        return parameterNamed(parameters, "template");
     }
 
     /**
@@ -692,6 +685,20 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             // what a caseworker may write to an applicant -- and a form renders the counter from this number.
             assertThat(spec.at(slots + EmailSlot.DOCUMENTS_REQUIRED.placeholder() + "/maxLength").asInt())
                 .isEqualTo(EmailSlot.MAX_EMAIL_PROSE_LENGTH);
+            // And what omitting each of them means, which is three answers and not two: describing every required
+            // slot as pre-populated told a consumer that documents_required would be filled in for them, which is
+            // the opposite of the rule -- so the sentence carries the slot's own reason for being required.
+            assertThat(spec.at(slots + EmailSlot.DOCUMENTS_REQUIRED.placeholder() + "/description").asText())
+                .as("%s says documents_required is required of the request", email)
+                .contains("Required of the request")
+                .contains(EmailSlot.DOCUMENTS_REQUIRED.requiredBecause())
+                .doesNotContain("pre-populated from the referral");
+            assertThat(spec.at(slots + EmailSlot.JUDGES_REASON.placeholder() + "/description").asText())
+                .as("%s says judges_reason is required of the email and not of the request", email)
+                .contains("pre-populated from the referral's direction");
+            assertThat(spec.at(slots + EmailSlot.ADDITIONAL_NOTES.placeholder() + "/description").asText())
+                .as("%s says additional_notes is optional", email)
+                .startsWith("Optional");
             // The slots are the whole body: a client must not be told it may send reference_number, which is the
             // one thing this payload exists to refuse.
             assertThat(spec.at("/components/schemas/" + email + "/properties").size())

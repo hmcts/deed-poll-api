@@ -420,23 +420,48 @@ class NotificationSecurityTest {
 
         // Every template, not merely the first: another case's refusal must be invisible to all of them, and a
         // per-template rule is exactly where one of them could start reading outside its own case.
-        assertThat(emails.available(CASE_ID))
+        assertThat(emails.overview(CASE_ID).availability())
             .hasSize(EmailTemplate.values().length)
             .allSatisfy(availability ->
                             assertThat(availability.applicable()).as("%s", availability.template()).isFalse());
-        // Both templates, for the same reason the availability loop covers both: each reaches its referral through
-        // its own rule, so each is a place a read could start naming a case the caller did not ask about.
+        // Every template, for the same reason the availability loop covers all of them: each reaches its
+        // entitlement through its own rule, so each is a place a read could start naming a case the caller did not
+        // ask about. The two referral-driven ones are refused *because* the refusal belongs elsewhere; the chase is
+        // refused for a reason of its own -- this case is in no state to be chased -- so its arm of this loop says
+        // nothing about isolation, and theChaseResolvesNothingFromAnotherCase is what does.
         for (EmailTemplate template : EmailTemplate.values()) {
             assertThatThrownBy(() -> emails.preview(CASE_ID, template, Map.of()))
-                .as("%s cannot be previewed from another case's refusal", template)
+                .as("%s is refused for this case rather than composed from another case's refusal", template)
                 .isInstanceOf(ConflictError.class);
             assertThatThrownBy(() -> emails.send(CASE_ID, template, Map.of(), REQUEST_ID, CASEWORKER))
-                .as("%s cannot be sent from another case's refusal", template)
+                .as("%s is refused for this case rather than sent from another case's refusal", template)
                 .isInstanceOf(ConflictError.class);
         }
 
         verify(referrals, never()).findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID);
         neverEnqueues();
+    }
+
+    @Test
+    @DisplayName("a chase resolves nothing from another case, whose refusal is the only one recorded anywhere")
+    void theChaseResolvesNothingFromAnotherCase() {
+        // The case-driven template's isolation claim, which is not the referral-driven one: a chase is not refused
+        // because a refusal belongs elsewhere -- it never asks about a refusal at all. So it is asserted where it
+        // is *applicable*, which is the only place the claim can fail: the row is keyed on no referral, the
+        // recipient is this case's applicant, and the other case's referrals are never read.
+        storedCase(CASE_ID).setState(DeedPollState.AwaitingFurtherDocs);
+        storedCase(OTHER_CASE_ID);
+        when(referrals.findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID))
+            .thenReturn(List.of(refusedReferral()));
+        enqueueAnswers(1);
+
+        emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                    Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), DOCUMENTS_REQUIRED),
+                    REQUEST_ID, CASEWORKER);
+
+        verify(notifications).enqueue(any(), eq(CASE_ID), eq(REQUEST_ID), isNull(), anyString(), anyString(),
+                                      eq(APPLICANT), anyString(), any(), anyString());
+        verify(referrals, never()).findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID);
     }
 
     @Test

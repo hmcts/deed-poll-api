@@ -118,10 +118,23 @@ public final class EmailSlots {
      * and a guess in an applicant-facing email would be worse than an empty box on a form.
      */
     private static Optional<String> prePopulated(EmailSlot slot, String directionsText) {
-        if (slot != EmailSlot.JUDGES_REASON || directionsText == null || directionsText.isBlank()) {
+        if (!isPrePopulated(slot) || directionsText == null || directionsText.isBlank()) {
             return Optional.empty();
         }
         return Optional.of(directionsText);
+    }
+
+    /**
+     * Whether anything at all populates this slot before the caseworker types, which is what decides whether a
+     * required slot may be omitted from a request.
+     *
+     * <p>The question without the value, so the published contract can answer it for a slot rather than for a
+     * case: {@code OpenAPIWriteBodies} describes {@code judges_reason} as required of the email and not of the
+     * request, and {@code documents_required} as required of both, and neither sentence would be derivable from
+     * {@link EmailSlot#required()} alone. One place says which slots have a source, and this is it.
+     */
+    public static boolean isPrePopulated(EmailSlot slot) {
+        return slot == EmailSlot.JUDGES_REASON;
     }
 
     /**

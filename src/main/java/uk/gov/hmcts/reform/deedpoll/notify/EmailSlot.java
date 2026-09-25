@@ -120,11 +120,15 @@ public enum EmailSlot {
     /**
      * Why this slot cannot be left out, as the second half of the sentence a refusal carries.
      *
-     * <p>Empty for an optional slot, which is never refused for being absent. {@link EmailSlots} is the one
-     * caller: the message belongs to the slot because the answer differs per slot, and a form renders it
-     * against the input the caseworker has to fill in.
+     * <p>Empty for an optional slot, which is never refused for being absent. The message belongs to the slot
+     * because the answer differs per slot, and a form renders it against the input the caseworker has to fill
+     * in.
+     *
+     * <p>Public because the published contract says it too: {@code OpenAPIWriteBodies} renders this sentence
+     * into the slot's schema description rather than deciding from {@link #required()} alone, which is how the
+     * document and the refusal stay the same statement about the same field.
      */
-    String requiredBecause() {
+    public String requiredBecause() {
         return requiredBecause;
     }
 }
