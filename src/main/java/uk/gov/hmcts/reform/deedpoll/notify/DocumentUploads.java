@@ -93,11 +93,11 @@ public class DocumentUploads {
             // find a commissioner of oaths, so this service will not choose one. Permanent because no retry
             // configures it, and the tab already reports the template unprovisioned.
             log.error("Notification {} for case {} is {}, which carries a document, but "
-                          + "notify.document-retention-weeks is not configured",
+                          + "notify.document-retention-weeks is unset or outside the range Notify accepts",
                       notification.getId(), notification.getDeedPollId(), template.key());
             return new ResolvedDocuments.Refused(new SendOutcome.Failed(
                 NotificationFailure.PERMANENT,
-                "no document retention period is configured, and the " + template.key()
+                "no usable document retention period is configured, and the " + template.key()
                     + " email carries a document"));
         }
 

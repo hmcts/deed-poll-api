@@ -104,7 +104,15 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   is offered the other one with nothing in the outbox in the way. Where the outbox *can* see the contradiction it
   gets first say, so `CaseEmailService.deedDocumentId` reads the group slot before generating anything and the
   caseworker is shown the same sentence the Email tab greyed the option out with. The deed's
-  `DeedPollSupportingDocumentType` row is **created on first use and found by name** — no migration seeds it.
+  `DeedPollSupportingDocumentType` row is **created on first use and found by name** — no migration seeds it, and
+  because the row is real, `GET /caseworker/document-types` publishes it and the upload endpoint takes it as any
+  other `documentTypeId`. So **the name cannot tell a generated deed from a caseworker's upload filed under it** —
+  and the obvious thing to file under "LOC020 Change of name deed" is the signed deed coming back. The direction
+  decides: the court's deed went `Outgoing`, and `storeDeed` refuses anything else under a deed's type in the same
+  words, because answering with it would email the applicant their own returned paperwork as the deed to swear.
+  `existingDeed` still reads **both** directions on purpose — narrowing the query would hide a generated deed whose
+  direction a caseworker patched, and the next send would store a *second* legal instrument, which is the one
+  failure the generate-once rule exists to prevent. Refusing costs one correction; a sworn deed cannot be undone.
 - **A read-only `@Transactional` method that throws still poisons its caller's transaction**, unless it says
   otherwise. Spring's default marks a *participating* transaction rollback-only, so the caller's `catch` decides
   nothing and its commit fails anyway. That is why `DocumentService.downloadDocument` carries
@@ -167,7 +175,10 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   `EmailTemplateTest.Configuration` now holds the enum's keys against `application.yaml`'s text so the first of
   those fails a test. A template that carries a document has a third such setting, `notify.document-retention-weeks`:
   `isProvisioned` asks three questions (template id, reply-to if `invitesReply`, retention if it carries a
-  document), and an unset or non-positive retention reads as unconfigured, so the drain refuses the send. A
+  document), and a retention that is unset or outside the 1–78 weeks Notify accepts reads as unconfigured, so the
+  drain refuses the send. The upper bound is in `NotifyProperties.retention` and not left to Notify because the
+  client checks only the 2 MB size locally: a chart value of 104 would read as provisioned, the case's deed would be
+  generated and stored, and only then would the drain take a 400 it classifies `PERMANENT`. A
   template is either **referral-driven or case-driven** and `EmailCause` says which — a case-driven one stores a
   null `referralId` and sits outside V15's partial index, so its only database protection is V20's key, and only
   if its group is one `exclusivePerCase()` names; otherwise the request id is all there is. A required `EmailSlot`

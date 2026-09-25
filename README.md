@@ -172,7 +172,9 @@ five and four static forms the emails also name are attached to the **Notify tem
 stores nor sends them. Both emails invite a reply, so each reads **unprovisioned** unless its template id,
 `NOTIFY_EMAIL_REPLY_TO_ID` *and* `NOTIFY_DOCUMENT_RETENTION_WEEKS` are all set — the first emails to need three
 settings, and the retention has no working default because how long an applicant has to print, gather two
-witnesses and find a commissioner of oaths is not this service's number to guess.
+witnesses and find a commissioner of oaths is not this service's number to guess. It has to be **1 to 78 weeks**,
+the range Notify accepts; anything else reads as unset, because the client checks only the 2 MB size locally and
+an out-of-range value would otherwise fail permanently at Notify after the deed had already been stored.
 
 **The send requires an `Idempotency-Key`, and the client has to make it mean something.** One compose journey
 mints one UUID and sends it with every retry of the final POST — a request that timed out, a double-click, a

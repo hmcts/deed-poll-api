@@ -180,8 +180,24 @@ class DocumentUploadsTest {
         assertThat(refusal(unconfigured.resolve(row(), EmailTemplate.FORMS_FOR_COMPLETION_ADULT)))
             .isEqualTo(new SendOutcome.Failed(
                 NotificationFailure.PERMANENT,
-                "no document retention period is configured, and the forms-for-completion-adult email carries a "
-                    + "document"));
+                "no usable document retention period is configured, and the forms-for-completion-adult email "
+                    + "carries a document"));
+        verify(documents, never()).downloadDocument(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("a retention Notify would refuse is the same PERMANENT refusal as none at all")
+    void anOutOfRangeRetentionIsTheSameRefusal() {
+        // 104 weeks is past the 78 Notify documents, and the client checks only the size locally -- so without the
+        // range check in NotifyProperties.retention this row would reach Notify, take a 400, and be classified
+        // PERMANENT with a reason naming a status code, on a case whose deed had already been generated and stored.
+        DocumentUploads outOfRange = new DocumentUploads(documents, configured(104));
+
+        assertThat(refusal(outOfRange.resolve(row(), EmailTemplate.FORMS_FOR_COMPLETION_ADULT)))
+            .isEqualTo(new SendOutcome.Failed(
+                NotificationFailure.PERMANENT,
+                "no usable document retention period is configured, and the forms-for-completion-adult email "
+                    + "carries a document"));
         verify(documents, never()).downloadDocument(anyString(), anyString());
     }
 

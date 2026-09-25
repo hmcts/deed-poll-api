@@ -2,9 +2,11 @@ package uk.gov.hmcts.reform.deedpoll.notify;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import uk.gov.service.notify.RetentionPeriodDuration;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -140,6 +142,56 @@ class NotifyPropertiesTest {
         // Blank is unset, because the constructor trims -- " " configured and nothing configured are the same
         // state everywhere else in this class and must read the same here.
         assertThat(new NotifyProperties("", "   ", Map.of(), "", null).toString()).contains("apiKey=<unset>");
+    }
+
+    @Test
+    @DisplayName("a retention outside the weeks Notify accepts reads as unconfigured, like an unset one")
+    void retentionOutsideNotifysRangeReadsAsUnconfigured() {
+        // The bound is here rather than only at Notify because of what an out-of-range value costs by the time
+        // Notify answers. The client checks only the 2 MB size locally, so 0 or 104 would read as provisioned, the
+        // Email tab would offer the send, `CaseEmailService.send` would generate and permanently store the case's
+        // deed, and the drain would then take a 400 that classify() calls PERMANENT -- a terminal failure naming a
+        // status code, on a case now holding a deed nobody was emailed.
+        assertThat(retentionOf(null)).as("unset").isEmpty();
+        assertThat(retentionOf(0)).as("Notify would keep the deed for no time at all").isEmpty();
+        assertThat(retentionOf(-1)).isEmpty();
+        assertThat(retentionOf(79)).as("one week past what Notify documents").isEmpty();
+
+        // And the two ends of the range itself are accepted, so the check refuses nothing Notify would have taken.
+        assertThat(retentionOf(1)).isPresent();
+        assertThat(retentionOf(78)).isPresent();
+        assertThat(retentionOf(17)).isPresent();
+    }
+
+    @Test
+    @DisplayName("a template carrying a document is unprovisioned without a usable retention, and the others are not")
+    void documentNeedsARetentionToBeProvisioned() {
+        String uuid = "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e55";
+        Map<String, String> both = Map.of(
+            EmailTemplate.APPLICATION_REJECTED.key(), uuid,
+            EmailTemplate.FORMS_FOR_COMPLETION_ADULT.key(), uuid);
+        // The forms email invites a reply too, so the reply-to is set throughout: this test is about the third
+        // question isProvisioned asks, and it has to be the only unanswered one for the answer to mean anything.
+        String replyTo = "9b7c5d21-3f4e-4a6b-8c0d-1e2f3a4b5c66";
+
+        // Out of range and unset are the same state here, which is the whole point of stating the rule once in
+        // retention(): the tab tells the caseworker before they compose, rather than the drain failing the row
+        // permanently after a deed has been stored.
+        for (Integer unusable : new Integer[] {null, 0, 79}) {
+            NotifyProperties properties = new NotifyProperties("", "", both, replyTo, unusable);
+            assertThat(properties.isProvisioned(EmailTemplate.FORMS_FOR_COMPLETION_ADULT))
+                .as("retention %s", unusable).isFalse();
+            // And the emails that carry no document are untouched by it, for the reason the reply-to is asked per
+            // template: a missing retention must not disable an email that never needed one.
+            assertThat(properties.isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isTrue();
+        }
+
+        assertThat(new NotifyProperties("", "", both, replyTo, 17)
+                       .isProvisioned(EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).isTrue();
+    }
+
+    private static Optional<RetentionPeriodDuration> retentionOf(Integer weeks) {
+        return new NotifyProperties("", "", Map.of(), "", weeks).retention();
     }
 
     @Test

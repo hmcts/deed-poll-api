@@ -164,10 +164,13 @@ notify:
   # that is the same decision api-key above carries rather than an omission: an applicant who has to print a
   # deed, gather two witnesses and find a commissioner of oaths is not doing it in a week, and the number is a
   # business decision -- so a plausible guess committed here would silently become the number every environment
-  # ran on. Unset (or not positive), NotifyProperties.isProvisioned reports every template that carries a
-  # document as unprovisioned and the drain refuses to send it, exactly as it does for a missing reply-to. That
-  # is the two forms-for-completion emails, which are the only templates that carry one. notify-0 chooses the
-  # number; weeks because that is the unit Notify documents the retention period in.
+  # ran on. Unset, or outside the 1 to 78 weeks Notify accepts, NotifyProperties.isProvisioned reports every
+  # template that carries a document as unprovisioned and the drain refuses to send it, exactly as it does for a
+  # missing reply-to. That is the two forms-for-completion emails, which are the only templates that carry one.
+  # The range is checked in Java and not left to Notify because the client checks only the 2 MB size locally: a
+  # value of 104 here would read as provisioned, the case's deed would be generated and permanently stored, and
+  # only then would the drain take a 400 it classifies PERMANENT. notify-0 chooses the number; weeks because that
+  # is the unit Notify documents the retention period in.
   document-retention-weeks: ${NOTIFY_DOCUMENT_RETENTION_WEEKS:}
   templates:
     # The Notify template UUID, which differs per environment and so is configuration rather than a constant

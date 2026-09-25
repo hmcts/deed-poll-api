@@ -17,9 +17,11 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.PatchField;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UpdateDocumentInput;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
@@ -245,6 +247,58 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("refuses rather than emailing an incoming document a caseworker filed under a deed's own type")
+    void refusesAnIncomingDocumentFiledUnderADeedType() {
+        String caseId = storedCase();
+        // Reachable from the first deed generated anywhere in an environment onward: the type row is real, so
+        // GET /caseworker/document-types publishes it and the upload endpoint takes it as any other
+        // documentTypeId. The obvious thing to file under "LOC020 Change of name deed" is the signed deed coming
+        // back from the applicant -- and the lookup keys on the type's NAME, which cannot tell that row from a
+        // generated one. Answered with, it would email the applicant their own returned paperwork as the deed to
+        // print, sign before witnesses and swear, with no deed ever generated and nothing else failing.
+        DeedPollSupportingDocumentType deedType = new DeedPollSupportingDocumentType();
+        deedType.setName("LOC020 Change of name deed");
+        String misfiledId = documentService.uploadDocument(
+            caseId, types.save(deedType).getId(),
+            UploadedFile.of("a signed deed coming back".getBytes(StandardCharsets.UTF_8),
+                            "returned-deed.pdf", "application/pdf")).getId();
+        assertThat(stored(caseId, misfiledId).getDirection()).isEqualTo(DocumentDirection.Incoming);
+
+        assertThatThrownBy(() -> deedDocuments.storeDeed(caseId, DeedTemplate.ADULT))
+            .isInstanceOf(ConflictError.class)
+            .hasMessageContaining("LOC020 Change of name deed")
+            .hasMessageContaining("did not send out");
+
+        // Refused rather than ignored: an Incoming row under a deed's type is either this, or a generated deed
+        // whose direction a caseworker patched, and generating over the second is decision 6's failure. So
+        // nothing was generated and nothing was stored either way.
+        assertThat(documents.count()).isOne();
+        assertThat(storedBlobs()).hasSize(1);
+        verify(generator, times(0)).generate(any(), any());
+    }
+
+    @Test
+    @DisplayName("a generated deed whose direction was patched is refused, never regenerated")
+    void refusesRatherThanRegeneratingWhenTheDeedsDirectionWasPatched() {
+        String caseId = storedCase();
+        DeedPollSupportingDocument deed = deedDocuments.storeDeed(caseId, DeedTemplate.ADULT);
+
+        // PATCH /caseworker/cases/{id}/documents/{id} can write `direction`, so this is a real state. It is why the
+        // lookup reads both directions instead of narrowing to Outgoing: a narrowed query would answer "no deed
+        // yet" here and store a SECOND legal instrument for the same applicant, which is the one failure decision 6
+        // exists to prevent. Refusing costs a caseworker one correction; a second deed cannot be un-sworn.
+        documentService.updateDocument(caseId, deed.getId(), incoming());
+
+        assertThatThrownBy(() -> deedDocuments.storeDeed(caseId, DeedTemplate.ADULT))
+            .isInstanceOf(ConflictError.class)
+            .hasMessageContaining("did not send out");
+
+        assertThat(documents.count()).isOne();
+        assertThat(storedBlobs()).hasSize(1);
+        verify(generator, times(1)).generate(any(), any());
+    }
+
+    @Test
     @DisplayName("files the minor's deed under its own type, with its own applicable case types")
     void filesTheMinorDeedUnderItsOwnType() {
         String caseId = storedCase();
@@ -322,6 +376,17 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
 
         assertThat(documents.count()).isZero();
         assertThat(storedBlobs()).isEmpty();
+    }
+
+    /** The patch a caseworker sends to re-file a document as one that came in. */
+    private static UpdateDocumentInput incoming() {
+        return new UpdateDocumentInput(
+            PatchField.of(DocumentDirection.Incoming),
+            PatchField.absent(),
+            PatchField.absent(),
+            PatchField.absent(),
+            PatchField.absent(),
+            PatchField.absent());
     }
 
     /** A stored case with enough on it for a deed to print, and a reference number for the filename. */

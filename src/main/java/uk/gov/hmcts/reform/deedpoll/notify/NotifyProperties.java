@@ -41,8 +41,9 @@ import java.util.Optional;
  *     <strong>No working default</strong>, and for the inverse of {@link #apiKey()}'s reason: the number is a
  *     business decision about how long an applicant needs to print a deed, gather two witnesses and find a
  *     commissioner of oaths, so a plausible guess committed here would become the number every environment quietly
- *     ran on. Unset or not positive, a template that carries a document reads {@linkplain #isProvisioned
- *     unprovisioned} and the drain refuses to send it rather than choosing a retention on the business's behalf.
+ *     ran on. Unset, or outside the 1 to 78 weeks Notify accepts, a template that carries a document reads
+ *     {@linkplain #isProvisioned unprovisioned} and the drain refuses to send it rather than choosing a retention
+ *     on the business's behalf -- see {@link #retention()} for why the range is checked here.
  *     Weeks rather than a configurable {@link ChronoUnit} because Notify documents the period in weeks -- the
  *     client would format any unit, so this is a deliberate narrowing rather than a limit of the library
  */
@@ -139,19 +140,37 @@ public record NotifyProperties(String apiUrl,
             && (template.documentKeys().isEmpty() || retention().isPresent());
     }
 
+    /** The shortest retention Notify accepts. */
+    private static final int MIN_RETENTION_WEEKS = 1;
+
+    /** The longest retention Notify accepts, which its documentation states rather than the client enforcing. */
+    private static final int MAX_RETENTION_WEEKS = 78;
+
     /**
-     * How long Notify should keep this service's documents available, or empty if nobody has said.
+     * How long Notify should keep this service's documents available, or empty if nobody has said a usable number.
      *
-     * <p><strong>Empty for a null and for anything not positive</strong>, which is one rule rather than two
-     * readings of the same column: a chart that set {@code 0} would otherwise ask Notify to keep a deed for no
-     * time at all, and an applicant would follow a link to nothing. Not positive therefore means "unconfigured",
-     * which is the answer that makes the template read unprovisioned and the send be refused.
+     * <p><strong>Empty for a null and for anything outside {@value #MIN_RETENTION_WEEKS} to
+     * {@value #MAX_RETENTION_WEEKS} weeks</strong>, which is one rule rather than several readings of the same
+     * column: a chart that set {@code 0} would otherwise ask Notify to keep a deed for no time at all, and an
+     * applicant would follow a link to nothing. Out of range therefore means "unconfigured", which is the answer
+     * that makes the template read unprovisioned and the send be refused.
+     *
+     * <p><strong>The upper bound is here and not only at Notify</strong> because of what the send costs by the
+     * time Notify answers. {@code notifications-java-client} checks only the 2 MB size locally --
+     * {@link RetentionPeriodDuration#toString()} formats any number of weeks -- so {@code 104} would read as
+     * provisioned, the Email tab would offer the send, {@code CaseEmailService.send} would generate and
+     * permanently store the case's deed, and the drain would then get a 400 that
+     * {@code NotificationFailure.classify} calls {@code PERMANENT}: a terminal failure whose reason names a
+     * status code, on a case now holding a deed nobody was emailed. That is exactly the outcome the unset case is
+     * designed to avoid, and the bound is the only part of it that was missing.
      *
      * <p>Built here rather than held as a field so that {@link RetentionPeriodDuration} -- a library type with no
      * {@code equals} -- does not become part of this record's identity, and so that the unit is stated once.
      */
     public Optional<RetentionPeriodDuration> retention() {
-        if (documentRetentionWeeks == null || documentRetentionWeeks <= 0) {
+        if (documentRetentionWeeks == null
+            || documentRetentionWeeks < MIN_RETENTION_WEEKS
+            || documentRetentionWeeks > MAX_RETENTION_WEEKS) {
             return Optional.empty();
         }
         return Optional.of(new RetentionPeriodDuration(documentRetentionWeeks, ChronoUnit.WEEKS));

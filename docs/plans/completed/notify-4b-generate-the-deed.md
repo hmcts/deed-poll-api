@@ -515,12 +515,29 @@ Task 1 if it has run.
 >    **Task 4 must derive its routing from this or pin itself against it, not restate it.**
 >    `DeedOfRelinquishment` and `Unknown` are on neither list, asserted as decisions rather than left as a gap:
 >    flag 5 is open, and `Unknown` has no safe default.
-> 3. **"At most once per case" is per CASE, not per template.** A lookup narrowed to the requested deed would
->    answer "none yet" for a case whose type was corrected between two requests and store a second legal
->    instrument for one applicant. So both deed types are looked at, and a mismatch **returns the existing deed
->    with a warning** rather than adding to it — the deed that exists may already be signed in wet ink, and of
->    the two ways to be wrong only "a caseworker sees the wrong deed and asks" is recoverable. Not reachable
->    through the emails anyway, which the exclusion group makes mutually exclusive per case.
+> 3. **"At most once per case" is per CASE, not per template, and a mismatch is REFUSED.** A lookup narrowed to
+>    the requested deed would answer "none yet" for a case whose type was corrected between two requests and
+>    store a second legal instrument for one applicant. So both deed types are looked at.
+>    ~~and a mismatch **returns the existing deed with a warning** rather than adding to it … Not reachable
+>    through the emails anyway, which the exclusion group makes mutually exclusive per case.~~ **Corrected
+>    during review, and the reasoning struck through above was wrong on its own terms.** The mismatch *is*
+>    reachable: V20's index, like V15's, excludes a `Failed` row with a `PERMANENT` verdict — deliberately, so a
+>    send Notify certainly never made can be replaced — so a case whose first forms email failed permanently and
+>    whose type was then corrected is offered the *other* forms email with nothing in the outbox in the way.
+>    Returning the stored deed there emails an applicant a minor's covering letter carrying an adult's deed,
+>    with only a log line to say so. `storeDeed` therefore throws `ConflictError`: the stored deed is neither
+>    replaced (it may already be signed in wet ink) nor handed back (the caller is about to put it in front of
+>    an applicant under the other deed's covering words), and the caseworker resolves the contradiction.
+>    **A second review pass added the same refusal for a document filed under a deed's type that the court never
+>    sent out.** `DeedDocumentTypes` creates real `deedpoll_supportingdocumenttype` rows, so from the first deed
+>    generated in an environment onward `GET /caseworker/document-types` publishes them and the upload endpoint
+>    accepts them as any other `documentTypeId` — and the obvious thing to file under "LOC020 Change of name
+>    deed" is the signed deed coming back from the applicant. Keyed on the type's name, the lookup cannot tell
+>    that row from a generated one, so answering with it would email the applicant their own returned paperwork
+>    as the deed to print, sign and swear. The direction decides: the court's deed went `Outgoing`, and anything
+>    else under a deed's type is refused. Refused rather than skipped, because an `Incoming` row is either that
+>    or a generated deed whose direction a caseworker patched, and the second would have the service store a
+>    *second* deed — which is why `existingDeed` still reads both directions rather than narrowing the query.
 > 4. **Idempotency is a read-then-write in the caller's transaction, and there is deliberately no unique
 >    index.** The type row's id is data rather than a constant, so there is no predicate a partial index could
 >    carry to mean "a deed of a case". What closes the race in practice is the caller: the send that asks for a
