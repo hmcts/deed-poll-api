@@ -264,6 +264,13 @@ build` in 3m 49s. That is +73 tests across +10 result files (five test classes, 
 groups and so contributes six files), and **every one of them is container-free**, so CI runs the whole of the
 generator's coverage. The integration count is deliberately unchanged: nothing in Task 2 touches the database.
 
+**After Task 3: 2,819 across 354 classes + 13 integration, `skipped` 0, `failures` 0, `errors` 0** — `./gradlew
+build` in 3m 52s. That is +30 tests across +3 result files, of which **20 are container-free**
+(`DeedFilenameTest` 9, `DeedDocumentTypesTest` 11) and 10 need Docker (`DeedDocumentServiceTest`, which asserts
+what is in the row and on disk after a real commit — "one row and one blob" cannot be asserted against a mock
+that was asked to save twice). The integration count is unchanged again: Task 3 writes through the existing
+services, so it adds no integration-source-set test.
+
 Notes so no task rediscovers them:
 
 - **Measure, do not read the exit code.** A run selecting zero tests also exits 0, and a second `gradle test`
@@ -450,7 +457,56 @@ Task 1 if it has run.
 - Tests, container-backed: generating twice for one case yields one row and one blob; the row carries
   `Outgoing`; the stored bytes are byte-identical to what the generator produced; deleting the case's documents
   through the existing path does not orphan a blob.
-- [ ] a deed is stored exactly once per case as an `Outgoing` document with a recognisable filename, a second
+
+> ### ✅ RAN 2026-09-25. Read this block before Task 4.
+>
+> **`DeedDocumentService.storeDeed(caseId, DeedTemplate)` in `domain/deeds/`, no migration, 30 tests — 20 of
+> them container-free.** It writes through `DocumentService.uploadDocument`, so the blob goes to the existing
+> `DocumentStore` seam with that method's rollback cleanup behind it rather than through a second upload path.
+> `Outgoing` is passed explicitly, because `DocumentService`'s default is `Incoming`.
+>
+> **Five things this task settled that the instructions above did not say:**
+>
+> 1. **No suitable `DeedPollSupportingDocumentType` row exists — in any environment — so the service creates
+>    its own on first use.** Checked as instructed: `V3__children.sql` creates the table empty, no migration
+>    has ever inserted a row, the Dataverse export names no rows either, and a caseworker cannot make one
+>    because the type *write* operations deliberately have no HTTP surface. A migration insert was rejected
+>    rather than overlooked: it would not remove the runtime check (the row can still be absent, and a service
+>    that then threw would refuse an applicant their deed over reference data), and a seeded fixed id would be
+>    wiped by any test that clears the table — `DocumentServiceTest` and `DocumentTypeServiceTest` both
+>    `deleteAll()` against the shared container database, so a test asserting a seeded row would pass or fail
+>    on class order. Find-or-create is idempotent, self-healing and order-independent. **The lookup key is the
+>    type's NAME**, which is safe only while nothing can rename a type: if a rename endpoint is ever exposed,
+>    that key has to become a stable column, and the comment on `DeedDocumentTypes` says so.
+> 2. **Two type rows, and `DeedDocumentTypes.caseTypes` is now the only statement in this repository of which
+>    `DeedPollType` takes which deed.** `applicableTypes` cannot be filled without one, and decision 3 is
+>    emphatic that the rule is stated once — so LOC020 is `{Adult, AdultTransgender}` (Dynamics 1, 2) and
+>    LOC022 `{Minor, MinorTransgender}` (3, 4), from `DynamicsValues` rather than `ordinal()`.
+>    **Task 4 must derive its routing from this or pin itself against it, not restate it.**
+>    `DeedOfRelinquishment` and `Unknown` are on neither list, asserted as decisions rather than left as a gap:
+>    flag 5 is open, and `Unknown` has no safe default.
+> 3. **"At most once per case" is per CASE, not per template.** A lookup narrowed to the requested deed would
+>    answer "none yet" for a case whose type was corrected between two requests and store a second legal
+>    instrument for one applicant. So both deed types are looked at, and a mismatch **returns the existing deed
+>    with a warning** rather than adding to it — the deed that exists may already be signed in wet ink, and of
+>    the two ways to be wrong only "a caseworker sees the wrong deed and asks" is recoverable. Not reachable
+>    through the emails anyway, which the exclusion group makes mutually exclusive per case.
+> 4. **Idempotency is a read-then-write in the caller's transaction, and there is deliberately no unique
+>    index.** The type row's id is data rather than a constant, so there is no predicate a partial index could
+>    carry to mean "a deed of a case". What closes the race in practice is the caller: the send that asks for a
+>    deed is already guarded by the outbox's unique indexes and shares this transaction. A caller outside that
+>    path has to serialise itself, and the service's javadoc says so.
+> 5. **The filename is `LOC020-change-of-name-deed-KBDP2026-00001.docx`** — form code as the court writes it,
+>    what the document is in words, the reference as the applicant has seen it, and the extension off
+>    `DeedOutputFormat` rather than a literal (decision 5). Hyphenated ASCII because it travels through a
+>    Notify attachment, an email client and an unknown filesystem; the reference is cleaned rather than
+>    trusted, since a name assembled from a column is the shortest route to a path in a response header; and a
+>    case with no `displayReference` gets the name without it rather than `...deed-null.docx`.
+>
+> The mutation was tried to prove the suite bites: disabling the existing-deed check fails 2 tests — the one
+> row/one blob/one generate claim and the "keeps the deed it already holds" one.
+
+- [x] a deed is stored exactly once per case as an `Outgoing` document with a recognisable filename, a second
       request returns the first, and `./gradlew build` green
 
 ### Task 4: The two templates, their personalisation, and exclusivity
@@ -458,7 +514,9 @@ Task 1 if it has run.
 Read first: decisions 1, 3, 7, 8, 9 and 10.
 
 - Two `EmailTemplate` members with no slots (decision 7), chosen by a `switch` over all four `DeedPollType`
-  members with no `default` (decision 3).
+  members with no `default` (decision 3). **Task 3 left one statement of which case type takes which deed** —
+  `DeedDocumentTypes.caseTypes`, which the document-type row's `applicableTypes` needs — so derive this routing
+  from it or pin the two together in a test; do not write the lists a second time.
 > **If notify-4a has not run, build the minimum upload seam here rather than stopping.** Task 4 needs a document
 > reference to become a `prepareUpload` at drain time, which is notify-4a's Task 1. After the 2026-09-25 Notify
 > discovery — the five static forms are attached to the *template* in Notify, so api never touches them — **the deed

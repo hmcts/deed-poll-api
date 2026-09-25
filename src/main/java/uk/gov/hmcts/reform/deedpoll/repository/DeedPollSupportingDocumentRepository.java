@@ -3,13 +3,14 @@ package uk.gov.hmcts.reform.deedpoll.repository;
 import org.springframework.data.jpa.repository.JpaRepository;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 /**
  * Supporting documents, always scoped to their parent case.
  *
- * <p>Both finders carry {@code deedPollId} for the reason {@code DeedPollNoteRepository} gives: it makes an
+ * <p>Every finder but one carries {@code deedPollId} for the reason {@code DeedPollNoteRepository} gives: it makes an
  * unscoped read unavailable rather than merely discouraged. {@code findById} exists on {@link JpaRepository},
  * but nothing in {@code DocumentService} uses it, so a caller wanting one document has to say which case it
  * belongs to -- and every write, including the delete that removes a blob, goes through an entity loaded
@@ -30,6 +31,19 @@ public interface DeedPollSupportingDocumentRepository extends JpaRepository<Deed
 
     /** One document, only if it belongs to the given case. */
     Optional<DeedPollSupportingDocument> findByIdAndDeedPollId(String id, String deedPollId);
+
+    /**
+     * The oldest document on one case whose type is one of those named, if there is one.
+     *
+     * <p>Case-scoped like the rest, and keyed on the type's NAME rather than its id because the caller asking
+     * -- {@code DeedDocumentService}, deciding whether this case already has a generated deed -- knows the
+     * names it created the rows under and cannot know their ids without creating the rows to find out.
+     *
+     * <p>Oldest first for the reason that question has: if a case somehow holds two deeds, the one that
+     * matters is the first, because that is the one an applicant may already have signed.
+     */
+    Optional<DeedPollSupportingDocument> findFirstByDeedPollIdAndDocumentTypeNameInOrderByCreatedOnAsc(
+        String deedPollId, Collection<String> documentTypeNames);
 
     /** How many documents, across every case, reference the given type. */
     long countByDocumentTypeId(String documentTypeId);
