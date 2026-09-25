@@ -1,6 +1,7 @@
 # Resume state — where the next session picks up
 
-Rewritten **2026-09-20**; figures and plan states refreshed **2026-09-24** during the email-case-notes review.
+Rewritten **2026-09-20**; figures and plan states refreshed **2026-09-24** during the email-case-notes review, and
+again **2026-09-25** when notify-6 completed.
 The narrative below still needs a proper rewrite — it was written before notify-3 merged. **Read this before
 restarting the loop.**
 
@@ -16,6 +17,7 @@ with one referral-outcome email per referral enforced by the database.
 |---|---|
 | `master` / `origin/master` | notify-1, notify-5, notify-3 and **notify-3b** complete and merged in PRs #29, #30, #38 and #42, plus three small Notify fixes in #43, #44 and #45 — `applied_on_paper`, the measured JSON boolean, and never printing the API key |
 | `email-case-notes` | complete, filed in `plans/completed/`, **unmerged** — one case note when an email is enqueued and one when it terminally fails. **No contract delta**: no migration, no DTO field and no endpoint, so every count below except the test figures is the same as `master`'s |
+| `notify-6-chase-missing-documents` | complete, **unmerged**, four tasks done 2026-09-24/25 — the fifth email, the case-driven chase a caseworker may send more than once. **This one does have a contract delta**: migration **V19**, and a required `Idempotency-Key` UUID header on the send. Operation counts do not move (34 caseworker, 5 judicial) — a header is part of an operation, not one of its own. **Not stacked on `email-case-notes`**, so their test figures are never cumulative |
 
 V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 adds the
 nullable rendered subject and plain-text body. Only a definite permanent refusal permits a replacement
@@ -25,16 +27,16 @@ row; its failed history remains unchanged when the replacement is sent.
 
 | | |
 |---|---|
-| Flyway migrations | **18 on `master`**, notify-3b having merged — V14 adds the nullable referral owner subjects, V15 the notification exclusion group, V16 the referral's four confirmation columns, V17 the case's `awaitingConfirmationSince` read-model and V18 the correction to V16's partial index. `email-case-notes` adds none |
-| Caseworker endpoints | **34 across 21 paths** on `master`, over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures |
+| Flyway migrations | **18 on `master`**, notify-3b having merged — V14 adds the nullable referral owner subjects, V15 the notification exclusion group, V16 the referral's four confirmation columns, V17 the case's `awaitingConfirmationSince` read-model and V18 the correction to V16's partial index. `email-case-notes` adds none; **`notify-6` adds V19**, the notification's non-null `requestId` with a per-row backfill and a `("deedPollId", "requestId")` unique index |
+| Caseworker endpoints | **34 across 21 paths** on `master`, over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures, and on `notify-6` re-asserts the 34 **inside the test that proves the new send header is published**, because a header is the kind of change that looks like it should have added an operation |
 | Judicial endpoints | **5**, `referrals-api-6` having merged — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,622** on `email-case-notes` — `test` 2,610 across 331 classes + `integration` 12 across 3, 0 failures and 0 skipped (measured 2026-09-24 from `build/test-results/` after `./gradlew build --rerun-tasks`). `master` read 2,580 + 12 when this branch started. The branches are not stacked, so figures from one are never cumulative with another's |
-| Docker-free CI | **1,657 unit tests** on `email-case-notes`, measured with `INTEGRATION_TESTS_ENABLED=false`; the other 953 are in 32 container-backed classes, which this branch added none to. `build.gradle` carries the history and instructs the next plan to re-measure |
-| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `email-case-notes` after its review (2026-09-24), and on `master` after notify-3b |
+| Tests | **2,729 on `notify-6`** — `test` 2,716 across 341 result files + `integration` 13 across 3, 0 failures / 0 errors / 0 skipped (measured 2026-09-25 from `build/test-results/` after `./gradlew build`, following the two review passes' four added tests: the referral in the request-id comparison, the chase's case isolation, and the two pinning that a send judges the missing address before the payload while a preview judges it not at all). `email-case-notes` reads **2,622** (2,610 + 12) and `master` read 2,580 + 12. The branches are not stacked, so figures from one are never cumulative with another's |
+| Docker-free CI | **1,739 unit tests on `notify-6`**, measured with `INTEGRATION_TESTS_ENABLED=false`; the other **977** are in **33** container-backed classes, notify-6 having added one (`NotificationRequestIdMigrationTest`). `email-case-notes` reads 1,657 of 2,610 in 32 classes. **82 of notify-6's 106 new unit tests run in CI** — the migration proof and the enqueue statement's conflict paths are the only rules Postgres alone can answer, and each has a container-free companion. `build.gradle` carries the history and instructs the next plan to re-measure |
+| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `notify-6` from cold, both with Docker and Docker-free (2026-09-25), on `email-case-notes` after its review (2026-09-24), and on `master` after notify-3b. **Wall clock is not a regression signal**: the same Docker build measured 35m 32s and 3m 58s on identical code, because container startup under this Docker configuration varies by an order of magnitude |
 
-**Twenty-two** plans are in [`plans/completed/`](plans/completed/) — the four added since this section was
-last rewritten are the saved-query publishing gate, notify-3, notify-3b and the email case notes. The arc since plan 01: the domain gaps
+**Twenty-three** plans are in [`plans/completed/`](plans/completed/) — the five added since this section was
+last rewritten are the saved-query publishing gate, notify-3, notify-3b, the email case notes and notify-6. The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
 then the original referrals feature in four completed plans — create/withdraw, claim/direction/close,
 `currentReferralState`, and the judicial surface — plus two CI plans and the ACR migration.
@@ -78,15 +80,15 @@ published anywhere.
 
 ## The Notify series: six api plans, and the order they should run in
 
-The original five are on `master` as of PR #26; notify-6 was drafted on 2026-09-20. The numbering is the order
-they were written, **not** the order to build them:
+The original five are on `master` as of PR #26; notify-6 was drafted on 2026-09-20 and completed on 2026-09-25 on
+its own branch, unmerged. The numbering is the order they were written, **not** the order to build them:
 
 ```
 notify-1  the send path                     COMPLETE
 notify-5  what was sent, and when            case correspondence history   COMPLETE
 notify-3  request confirmation to proceed    three exclusive templates     COMPLETE (PR #38, merged)
 notify-3b track the applicant's reply                                      COMPLETE (PR #42, merged)
-notify-6  chase missing documents             case-driven, repeatable
+notify-6  chase missing documents            case-driven, repeatable       COMPLETE (branch, unmerged)
 notify-4  generate the deed forms            needs a spike first
 ```
 
@@ -112,9 +114,14 @@ Four things a session should hold before touching any of them:
    the rendered email comes back inside the send acceptance: history is exact at no extra Notify call and
    nothing against the rate limit. Confirmed with `javap` against `6.2.0-RELEASE`. If that turns out to be
    wrong, the plan's cost changes completely.
-5. **notify-6 assumes the missing-documents template is provisioned.** Steve authorised that assumption for
-   planning on 2026-09-20. Its Task 0 still verifies the real placeholder names and reply-to before
-   implementation; the Gazette notice remains deferred.
+5. **notify-6's template assumption is discharged, and its provisioning gap is not.** The chase template was
+   read back out of Notify on 2026-09-24 — UUID `a67e7dd1-0f8c-4366-a1de-ca5fbc24ec98`, exactly five
+   placeholders, `documents_required` unconditionally required — so the plan needed no amendment. But the
+   **reply-to id is Steve's word, not read-back evidence** (Notify publishes no read-only API for reply-to
+   addresses), and **`charts/deed-poll-api/values.yaml` sets neither the chase template id nor
+   `NOTIFY_EMAIL_REPLY_TO_ID`** — it names only `NOTIFY_TEMPLATE_APPLICATION_REJECTED`. So ⑤ **and ④** will
+   report unprovisioned in AAT after notify-6 merges, and that is a chart change nobody has made rather than a
+   defect in the code. The Gazette notice remains deferred with no engineering contract.
 
 **There is no download tracking and there never can be.** No download concept exists anywhere in the
 Notify Java client, and `getStatus()` is delivery status only. notify-5 owns the wording as much as the
@@ -141,9 +148,12 @@ nothing in this repo can confirm the external half. Re-check rather than quote.
 - **The ACR migration is done** — `hmctspublic` → `hmctsprod` in `Dockerfile`, `Chart.yaml` and
   `values.yaml`. That nagger was what failed master build #3.
 - **CI runs without Docker.** `INTEGRATION_TESTS_ENABLED=false` (set by `Jenkinsfile_CNP`) drops
-  `integration` from `check` and excludes the `requires-docker` tag from `test`. On `email-case-notes` that is
-  **1,657 of 2,610** unit tests running in CI, with 953 in 32 container-backed classes.
-  `build.gradle` carries the full history and instructs the next plan to re-measure it.
+  `integration` from `check` and excludes the `requires-docker` tag from `test`. On `notify-6` that is
+  **1,739 of 2,716** unit tests running in CI, with 977 in 33 container-backed classes; on `email-case-notes`,
+  1,657 of 2,610 in 32. `build.gradle` carries the full history and instructs the next plan to re-measure it.
+  **A count taken from `build/test-results/integration/` after a Docker-free run proves nothing** — the
+  directory keeps the previous run's files and nothing marks them stale, so delete it first or read the task
+  list.
 - **The chart is wired for workload identity** — `useWorkloadIdentity: true`, `saEnabled: true`, reading
   the shared `deed-poll-{env}` vault for `app-insights-connection-string` and the four `postgres-*`
   secrets. The matching identity, federated credential and service-account annotation are
@@ -247,7 +257,6 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 
 | File | State |
 |---|---|
-| `notify-6-chase-missing-documents.md` | **Drafted.** Assumes a provisioned template with required caseworker text; Task 0 verifies it |
 | `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
 | `role-model-generalisation.md` | **Gated, and may not be needed.** A behaviour-preserving refactor of `boolean isAdmin` into capabilities. Gated on scope question Q0.1 and, preferably, on a first successful deployment — so that a failed deploy is unambiguously a deployment problem and not a 33-site refactor |
 | `role-based-access-findings.md` | Findings, not a plan. The measured inventory of what could be role-gated, so the business question is asked against a concrete list |
@@ -267,15 +276,33 @@ The concrete Task 3 contract is now `CaseEmailsResponse`: `availability` retains
 generated client from the published spec rather than hand-writing this shape — the caseworker operation
 count is now **34**, notify-3b having added the confirmation route.
 
+**notify-6's handoff to admin, in three lines, because a session that never opens that plan still needs them**
+(its decision 16 is reinstated in `../deed-poll-admin/docs/plans/completed/notify-2-caseworker-email-tab.md`,
+2026-09-25):
+
+1. **`Idempotency-Key` is required on `POST /caseworker/cases/{id}/emails/{template}` for every template**, not
+   only the chase. It is `string`/`uuid`. The preview and the availability `GET` declare no header, because
+   neither writes a row.
+2. **One compose journey mints one UUID and preserves it** through preview, a validation failure and every
+   retry; a later journey mints another. A fresh UUID per request satisfies the schema and destroys the
+   protection — which is why the parameter's *description* says so and a test pins the description, not just the
+   declaration.
+3. **Three answers, three renderings**: 200 with `enqueued: false` is "already sent, here is the receipt"; 409 is
+   "this key was used for different content"; 400 names the missing or unparseable header. And the Email tab
+   renders the chase's template and its one required slot from the overview response — no chase-specific route,
+   form or wire type.
+
 ## Do not let a session drift into
 
 Writing plan 02 or 03 from guesses. Editing `src/test/resources/reference/` — it is a verbatim vendored
 copy of the specification and the conformance tests read it as ground truth, so if one looks wrong, stop
 and report. Editing a committed Flyway migration — **including `V11__notifications.sql`, which is
-committed as V11 and V12**; **`V18` is the highest committed** (`notify-3b` took V16, V17 and V18), so the next
-plan takes V19 — confirmed by listing `src/main/resources/db/migration` rather than by a number a plan named in
-advance. **Do not reserve a number and jump ahead of it**: Flyway runs with
-out-of-order disabled, so a V18 arriving after V19 has been applied fails every environment that applied V19. Inventing
+committed as V11 and V12**; **`V18` is the highest on `master`** (`notify-3b` took V16, V17 and V18) and
+**`V19` is the highest committed anywhere**, notify-6 having taken it, so the next plan takes **V20** — confirmed
+by listing `src/main/resources/db/migration` rather than by a number a plan named in advance. notify-6's
+Constraints section named V14 and the real answer was V19, which is exactly why the rule is "inspect, never
+reserve". **Do not reserve a number and jump ahead of it**: Flyway runs with
+out-of-order disabled, so a V19 arriving after V20 has been applied fails every environment that applied V20. Inventing
 an IDAM role name, a case type or a jurisdiction ID. Inferring the state of a Jenkins build from the code,
 rather than asking for the log.
 

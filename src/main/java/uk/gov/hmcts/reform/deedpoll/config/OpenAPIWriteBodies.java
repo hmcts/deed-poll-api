@@ -30,6 +30,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailSlot;
+import uk.gov.hmcts.reform.deedpoll.notify.EmailSlots;
 
 import java.util.Arrays;
 import java.util.LinkedHashSet;
@@ -578,20 +579,44 @@ public class OpenAPIWriteBodies {
                 + "key is likewise refused and named rather than ignored, unlike every other body here. "
                 + "judges_reason is required of the email but not of the request: it is pre-populated from the "
                 + "referral's direction, so a body omitting it is accepted whenever a direction was recorded, and "
-                + "refused with that field named when none was. An over-long slot is refused rather than "
+                + "refused with that field named when none was. documents_required is required of the request "
+                + "itself -- nothing pre-populates it -- so an empty body for that email is a 400. The properties "
+                + "here are every slot any template takes, which is not the set any one template takes: which "
+                + "slots a given template accepts, and what they open with, come from "
+                + "GET /caseworker/cases/{id}/emails, and a slot belonging to another template is refused by name. "
+                + "An over-long slot is refused rather than "
                 + "truncated, because a truncated quotation of a judge is worse than being asked to shorten one.");
         }
     }
 
     /**
-     * One slot, with the cap the slot enforces rather than a number written here.
+     * One slot, with the cap the slot enforces and the sentence the slot is refused with.
+     *
+     * <p><strong>Three answers rather than two, because "required" alone is not the contract.</strong> A slot
+     * nothing pre-populates is required <em>of the request</em> -- omitting it is a 400 -- while one that is
+     * pre-populated is required of the email and not of the request. Deriving the description from
+     * {@link EmailSlot#required()} alone published the second sentence for both, which told a consumer that
+     * {@code documents_required} would be filled in for them. The reason comes from
+     * {@link EmailSlot#requiredBecause()}, so the document and the refusal are one statement.
      */
     private Schema<?> slotSchema(EmailSlot slot) {
         return new StringSchema()
             .maxLength(slot.maxLength())
-            .description(slot.required()
-                             ? "Required, and pre-populated from the referral's direction when it is omitted."
-                             : "Optional. Anything the caseworker wants to add to the approved wording.");
+            .description(slotDescription(slot));
+    }
+
+    /** What omitting this slot means, in the words the service would refuse it with. */
+    private String slotDescription(EmailSlot slot) {
+        if (!slot.required()) {
+            return "Optional. Anything the caseworker wants to add to the approved wording.";
+        }
+        if (EmailSlots.isPrePopulated(slot)) {
+            return "Required of the email but not of the request: pre-populated from the referral's direction, so "
+                + "a body omitting it is accepted whenever a direction was recorded and refused with this field "
+                + "named when none was.";
+        }
+        return "Required of the request, and pre-populated from nothing -- " + slot.requiredBecause()
+            + ". An omitted or blank value is a 400 naming this field.";
     }
 
     /**

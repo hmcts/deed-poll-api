@@ -14,6 +14,7 @@ import org.springframework.core.type.filter.AssignableTypeFilter;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.reform.deedpoll.api.KeyedRequestBody;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.controller.CaseworkerEmailController;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
@@ -376,7 +377,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         String send = "/paths/~1caseworker~1cases~1{id}~1emails~1{template}/post/parameters";
         String preview = "/paths/~1caseworker~1cases~1{id}~1emails~1{template}~1preview/post/parameters";
         for (String operation : List.of(send, preview)) {
-            JsonNode token = templateToken(spec.at(operation));
+            JsonNode token = parameterNamed(spec.at(operation), "template");
             assertThat(token.isMissingNode()).as("%s declares the template token", operation).isFalse();
             String description = token.at("/description").asText();
             for (EmailTemplate template : EmailTemplate.values()) {
@@ -417,11 +418,78 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * The {@code {template}} path token among an operation's parameters, or a missing node.
+     * The send's required {@code Idempotency-Key} header, published without moving the caseworker contract.
+     *
+     * <p><strong>Both halves matter and they are opposite failures.</strong> {@code deed-poll-admin} generates its
+     * client from this document, so a required header the document does not mention is a client whose every send is
+     * a 400 -- and a header that arrived as a new operation or a new path would mean the Email tab had a route to
+     * add after all, which notify-2 was written not to need. So the parameter is asserted to be there, required and
+     * typed, and the caseworker operation count is asserted not to have moved with it.
+     *
+     * <p><strong>The description is asserted because the schema cannot carry the rule.</strong>
+     * {@code string/uuid, required} is satisfied exactly as well by a client that mints a fresh UUID per request --
+     * which sends a second email on every double-click, the behaviour the header exists to prevent. The one
+     * property that makes it work is that a compose journey reuses its key, and prose is the only place in an
+     * OpenAPI document that can say so. {@link uk.gov.hmcts.reform.deedpoll.config.OpenAPIEmailTemplates} puts it
+     * there.
+     *
+     * <p>And it is scoped to the send: a preview writes no row, so a key required there would be a refusal a
+     * client could not act on, and the availability {@code GET} takes no header at all.
      */
-    private static JsonNode templateToken(JsonNode parameters) {
+    @DisplayName("Documents the send's required Idempotency-Key header, and adds no operation for it")
+    @Test
+    void documentsTheIdempotencyKeyHeader() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                          .andExpect(status().isOk())
+                                          .andReturn()
+                                          .getResponse()
+                                          .getContentAsByteArray());
+
+        JsonNode send = spec.at("/paths/~1caseworker~1cases~1{id}~1emails~1{template}/post/parameters");
+        JsonNode key = parameterNamed(send, CaseworkerEmailController.IDEMPOTENCY_KEY);
+        assertThat(key.isMissingNode())
+            .as("the send declares the header a client must send, under the conventional spelling")
+            .isFalse();
+        assertThat(key.at("/in").asText()).isEqualTo("header");
+        assertThat(key.at("/required").asBoolean())
+            .as("required, so a client that has not been updated is told rather than silently losing the rule")
+            .isTrue();
+        assertThat(typesOf(key.at("/schema"))).contains("string");
+        assertThat(key.at("/schema/format").asText())
+            .as("a UUID, which is what the route binds and refuses anything else as a 400")
+            .isEqualTo("uuid");
+        String described = key.at("/description").asText();
+        assertThat(described)
+            .as("the document carries the one rule the schema cannot")
+            .contains("compose journey")
+            .contains("retry")
+            .contains("409")
+            .contains("enqueued=false");
+
+        // Neither read takes one. The preview's parameters are its two path tokens and nothing else; the
+        // availability GET's is the case id.
+        assertThat(parameterNamed(
+            spec.at("/paths/~1caseworker~1cases~1{id}~1emails~1{template}~1preview/post/parameters"),
+            CaseworkerEmailController.IDEMPOTENCY_KEY).isMissingNode())
+            .as("a preview owes nothing, so it requires no journey to be named")
+            .isTrue();
+        assertThat(parameterNamed(spec.at("/paths/~1caseworker~1cases~1{id}~1emails/get/parameters"),
+                                  CaseworkerEmailController.IDEMPOTENCY_KEY).isMissingNode())
+            .isTrue();
+
+        // And the surface is unmoved: a header is part of an operation rather than one of its own.
+        JsonNode paths = spec.get("paths");
+        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(34);
+        assertThat(paths.get("/caseworker/cases/{id}/emails/{template}").fieldNames()).toIterable()
+            .containsExactly("post");
+    }
+
+    /**
+     * The parameter an operation declares under {@code name}, or a missing node.
+     */
+    private static JsonNode parameterNamed(JsonNode parameters, String name) {
         return StreamSupport.stream(parameters.spliterator(), false)
-            .filter(parameter -> "template".equals(parameter.at("/name").asText()))
+            .filter(parameter -> name.equals(parameter.at("/name").asText()))
             .findFirst()
             .orElse(JSON.missingNode());
     }
@@ -612,6 +680,25 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                 .isEqualTo(ReferralSchemas.MAX_DIRECTIONS_LENGTH);
             assertThat(spec.at(slots + EmailSlot.ADDITIONAL_NOTES.placeholder() + "/maxLength").asInt())
                 .isEqualTo(ReferralSchemas.MAX_NOTES_LENGTH);
+            // ⑤'s slot, from the email package's own constant rather than ReferralSchemas': the two numbers are
+            // equal today and are two independent decisions, so a change to what a judge may record must not move
+            // what a caseworker may write to an applicant -- and a form renders the counter from this number.
+            assertThat(spec.at(slots + EmailSlot.DOCUMENTS_REQUIRED.placeholder() + "/maxLength").asInt())
+                .isEqualTo(EmailSlot.MAX_EMAIL_PROSE_LENGTH);
+            // And what omitting each of them means, which is three answers and not two: describing every required
+            // slot as pre-populated told a consumer that documents_required would be filled in for them, which is
+            // the opposite of the rule -- so the sentence carries the slot's own reason for being required.
+            assertThat(spec.at(slots + EmailSlot.DOCUMENTS_REQUIRED.placeholder() + "/description").asText())
+                .as("%s says documents_required is required of the request", email)
+                .contains("Required of the request")
+                .contains(EmailSlot.DOCUMENTS_REQUIRED.requiredBecause())
+                .doesNotContain("pre-populated from the referral");
+            assertThat(spec.at(slots + EmailSlot.JUDGES_REASON.placeholder() + "/description").asText())
+                .as("%s says judges_reason is required of the email and not of the request", email)
+                .contains("pre-populated from the referral's direction");
+            assertThat(spec.at(slots + EmailSlot.ADDITIONAL_NOTES.placeholder() + "/description").asText())
+                .as("%s says additional_notes is optional", email)
+                .startsWith("Optional");
             // The slots are the whole body: a client must not be told it may send reference_number, which is the
             // one thing this payload exists to refuse.
             assertThat(spec.at("/components/schemas/" + email + "/properties").size())

@@ -28,6 +28,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.PostCounter;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
@@ -46,11 +47,13 @@ import java.util.UUID;
 import java.util.stream.Stream;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noFields;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -76,7 +79,21 @@ class NotificationSecurityTest {
 
     private static final String DIRECTION = "Refused: no settled intention shown.";
 
+    /**
+     * What a caseworker types into the chase's one slot: applicant-facing prose about a real person's papers.
+     *
+     * <p>Distinctive on purpose. It is asserted <em>absent</em> from every log line, and a phrase that also
+     * appeared in a template name or an error sentence would make that assertion pass for the wrong reason.
+     */
+    private static final String DOCUMENTS_REQUIRED =
+        "Your birth certificate, and the consent of everyone with parental responsibility.";
+
     private static final UUID REFERRAL_ID = UUID.fromString("1af7b81c-5576-459c-9ba8-0c78bbf8bcb6");
+
+    /**
+     * One compose journey's {@code Idempotency-Key}: transport, and so never part of what leaves this service.
+     */
+    private static final UUID REQUEST_ID = UUID.fromString("6c9a1d0e-0000-4000-8000-0000000000fe");
 
     private static final CurrentUser CASEWORKER =
         CurrentUser.currentUser(List.of(), "A Caseworker", "caseworker-1");
@@ -120,7 +137,8 @@ class NotificationSecurityTest {
                 "https://notify.invalid",
                 "not-a-real-key",
                 Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1",
-                       EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), "template-2"),
+                       EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), "template-2",
+                       EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), "template-3"),
                 "reply-to-1"),
             mock(ReferralService.class),
             // Mocked: this class is about what leaves the service, and a note is written through the one path
@@ -135,20 +153,20 @@ class NotificationSecurityTest {
     void sendsOnlyTheDeclaredKeysToTheApplicant() throws Exception {
         storedCase(CASE_ID);
         when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(refusedReferral()));
-        when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(), anyString(),
-                                   any(), anyString())).thenReturn(1);
+        enqueueAnswers(1);
 
         emails.send(
             CASE_ID,
             EmailTemplate.APPLICATION_REJECTED,
             Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Please contact the court."),
-            CASEWORKER);
+            REQUEST_ID, CASEWORKER);
 
         var recipient = org.mockito.ArgumentCaptor.forClass(String.class);
         var personalisation = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(notifications).enqueue(
             any(),
             eq(CASE_ID),
+            eq(REQUEST_ID),
             eq(REFERRAL_ID),
             eq(EmailTemplate.APPLICATION_REJECTED.name()),
             eq(EmailTemplate.APPLICATION_REJECTED.exclusionGroup().name()),
@@ -170,16 +188,16 @@ class NotificationSecurityTest {
         storedCase(CASE_ID);
         when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID))
             .thenReturn(List.of(refusedNonPublicationReferral()));
-        when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(), anyString(),
-                                   any(), anyString())).thenReturn(1);
+        enqueueAnswers(1);
 
-        emails.send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER);
+        emails.send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), REQUEST_ID, CASEWORKER);
 
         var recipient = org.mockito.ArgumentCaptor.forClass(String.class);
         var personalisation = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(notifications).enqueue(
             any(),
             eq(CASE_ID),
+            eq(REQUEST_ID),
             eq(REFERRAL_ID),
             eq(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.name()),
             eq(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.exclusionGroup().name()),
@@ -220,6 +238,178 @@ class NotificationSecurityTest {
     }
 
     @Test
+    @DisplayName("the chase sends exactly its own five keys, to the applicant, with no referral on the row")
+    void theChaseSendsOnlyItsOwnKeysToTheApplicant() throws Exception {
+        // The case-driven template, asserted here for the reason the other two are: the declared-keys rule is the
+        // one that decides what leaves this service for GOV.UK Notify, and this template is the first whose
+        // entitlement comes from the case rather than from a referral -- so it is also the first that could have
+        // reached for a referral's fields while resolving.
+        storedCase(CASE_ID).setState(DeedPollState.AwaitingFurtherDocs);
+        enqueueAnswers(1);
+
+        emails.send(
+            CASE_ID,
+            EmailTemplate.CHASE_MISSING_DOCUMENTS,
+            Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), DOCUMENTS_REQUIRED),
+            REQUEST_ID, CASEWORKER);
+
+        var recipient = org.mockito.ArgumentCaptor.forClass(String.class);
+        var personalisation = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(notifications).enqueue(
+            any(),
+            eq(CASE_ID),
+            eq(REQUEST_ID),
+            // No referral at all: a chase's row stores the column's own null, so nothing about it is keyed to a
+            // decision it has nothing to do with.
+            isNull(),
+            eq(EmailTemplate.CHASE_MISSING_DOCUMENTS.name()),
+            eq(EmailTemplate.CHASE_MISSING_DOCUMENTS.exclusionGroup().name()),
+            recipient.capture(),
+            personalisation.capture(),
+            any(LocalDateTime.class),
+            eq(CASEWORKER.name()));
+
+        Map<String, Object> sent = JSON.readValue(personalisation.getValue(), new TypeReference<>() {
+        });
+        assertThat(sent.keySet())
+            .containsExactlyInAnyOrderElementsOf(EmailTemplate.CHASE_MISSING_DOCUMENTS.personalisationKeys());
+        // Exactly one key per component of the record that resolved them -- the four case values and the slot,
+        // which this record carries as a component of its own. A component added without a key would never reach
+        // the applicant; a key added without one would reach Notify with nothing behind it.
+        assertThat(sent)
+            .hasSize(MissingDocumentsPersonalisation.class.getRecordComponents().length)
+            .containsEntry(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), DOCUMENTS_REQUIRED);
+        // Nothing a judge wrote and nothing about a decision: this email is not about a referral, and a resolver
+        // that quietly carried one would put a refusal in front of an applicant who has not been refused.
+        assertThat(sent.values()).doesNotContain(DIRECTION);
+        assertThat(sent.keySet()).noneMatch(key -> key.contains("judge") || key.contains("decision"));
+
+        // The applicant, never the representative: the documents are the applicant's to send.
+        assertThat(recipient.getValue()).isEqualTo(APPLICANT).isNotEqualTo(REPRESENTATIVE);
+    }
+
+    @Test
+    @DisplayName("another case's request id is unreachable, so a chosen key cannot answer with a stranger's email")
+    void anotherCasesRequestIdIsUnreachable() {
+        // The disclosure the {@code Idempotency-Key} header makes possible and V19's index forecloses. The key is
+        // a UUID a caller chooses, so a caller who learned or guessed one used on another case must not be
+        // answered with that case's receipt -- which is what an unscoped lookup on the request id alone would do.
+        storedCase(CASE_ID).setState(DeedPollState.AwaitingFurtherDocs);
+        storedCase(OTHER_CASE_ID);
+        Notification elsewhere = notification();
+        elsewhere.setDeedPollId(OTHER_CASE_ID);
+        elsewhere.setRequestId(REQUEST_ID);
+        when(notifications.findByDeedPollIdAndRequestId(OTHER_CASE_ID, REQUEST_ID))
+            .thenReturn(Optional.of(elsewhere));
+        when(notifications.findByDeedPollIdAndRequestId(CASE_ID, REQUEST_ID)).thenReturn(Optional.empty());
+        // Zero rows, which is the only path that reads a row back at all.
+        enqueueAnswers(0);
+
+        // A fault rather than the other case's receipt: nothing on this case explains the refusal, so the
+        // transaction rolls back and nothing is owed. Answering with `elsewhere` would have published another
+        // case's notification id to a caller who supplied only a UUID of their own choosing.
+        assertThatThrownBy(() -> emails.send(
+            CASE_ID,
+            EmailTemplate.CHASE_MISSING_DOCUMENTS,
+            Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), DOCUMENTS_REQUIRED),
+            REQUEST_ID, CASEWORKER))
+            .isInstanceOf(IllegalStateException.class)
+            .satisfies(fault -> assertThat(fault.getMessage()).doesNotContain(OTHER_CASE_ID));
+
+        verify(notifications).findByDeedPollIdAndRequestId(CASE_ID, REQUEST_ID);
+        verify(notifications, never()).findByDeedPollIdAndRequestId(eq(OTHER_CASE_ID), any());
+    }
+
+    @Test
+    @DisplayName("neither the caseworker's slot text nor Notify's rendering reaches a log line")
+    void slotTextAndRenderedContentAreNotLogged() {
+        // Both halves of what an email contains, against both halves of the code that handles one: the service
+        // that resolves and refuses, and the sender that talks to Notify. The prose a caseworker writes about an
+        // applicant's papers is personal data whose home is the row and the Emails tab; a log line carrying it
+        // would copy it into an aggregator nobody has scoped to a case.
+        StubNotify stub = new StubNotify();
+        stub.start();
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        Logger logger = (Logger) LoggerFactory.getLogger("uk.gov.hmcts.reform.deedpoll.notify");
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            storedCase(CASE_ID).setState(DeedPollState.AwaitingFurtherDocs);
+            Map<String, Object> slots = Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), DOCUMENTS_REQUIRED);
+
+            enqueueAnswers(1);
+            emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots, REQUEST_ID, CASEWORKER);
+
+            // The refusal that has both texts in its hands at once, which is the log line most likely to explain
+            // itself too well: one key, two different emails.
+            enqueueAnswers(0);
+            Notification existing = notification();
+            existing.setRequestId(REQUEST_ID);
+            existing.setTemplate(EmailTemplate.CHASE_MISSING_DOCUMENTS.name());
+            existing.setPersonalisation(Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), "Your passport."));
+            when(notifications.findByDeedPollIdAndRequestId(CASE_ID, REQUEST_ID))
+                .thenReturn(Optional.of(existing));
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots, REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class);
+
+            // And the drain's own sender, against a Notify that accepts the send and answers with the rendered
+            // wording -- so the rendering exists to be logged and is asserted not to be.
+            Notification owed = notification();
+            owed.setTemplate(EmailTemplate.CHASE_MISSING_DOCUMENTS.name());
+            owed.setPersonalisation(slots);
+            new NotifyEmailSender(
+                stub.client(),
+                new NotifyProperties(
+                    stub.baseUrl(), stub.apiKey(),
+                    Map.of(EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), StubNotify.TEMPLATE_ID),
+                    StubNotify.REPLY_TO_ID))
+                .send(owed);
+
+            assertThat(logs.list)
+                .isNotEmpty()
+                .extracting(ILoggingEvent::getFormattedMessage)
+                .allSatisfy(message -> assertThat(message)
+                    .doesNotContain(DOCUMENTS_REQUIRED)
+                    .doesNotContain("birth certificate")
+                    .doesNotContain("Your passport.")
+                    // Notify's own rendering of the email, which the stub answers every send with.
+                    .doesNotContain("Because the Master said so.")
+                    .doesNotContain(APPLICANT)
+                    // And the key itself, which identifies a compose journey and belongs in no log either.
+                    .doesNotContain(REQUEST_ID.toString()));
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+            stub.stop();
+        }
+    }
+
+    @Test
+    @DisplayName("requestId is on the row and in no published type, because it is transport and not correspondence")
+    void theRequestIdIsPublishedNowhere() {
+        // Transport idempotency, deliberately invisible: a client that saw its own key echoed back would be
+        // invited to treat it as the email's identity, and a caseworker reading correspondence history has no use
+        // for it at all. Asserted over the whole API surface rather than over the three types that carry an
+        // email, so a DTO this test does not know about cannot publish one either.
+        assertThat(Stream.of(CaseCorrespondence.class, EmailHistoryResponse.class, SentEmailResponse.class)
+                       .flatMap(type -> Arrays.stream(type.getRecordComponents()))
+                       .map(RecordComponent::getName))
+            .doesNotContain("requestId");
+
+        noFields()
+            .that().areDeclaredInClassesThat().resideInAPackage("uk.gov.hmcts.reform.deedpoll.api..")
+            .should().haveName("requestId")
+            .allowEmptyShould(true)
+            .check(MAIN_CLASSES);
+
+        // The counterpart, so the rule above is not green because nothing stores one: the column exists, on the
+        // entity, which is the only place it is meant to.
+        assertThat(Arrays.stream(Notification.class.getDeclaredFields()).map(java.lang.reflect.Field::getName))
+            .contains("requestId");
+    }
+
+    @Test
     @DisplayName("another case's refusal cannot make availability, preview or send cross the case boundary")
     void anotherCasesRefusalIsUnreachable() {
         storedCase(CASE_ID);
@@ -230,24 +420,48 @@ class NotificationSecurityTest {
 
         // Every template, not merely the first: another case's refusal must be invisible to all of them, and a
         // per-template rule is exactly where one of them could start reading outside its own case.
-        assertThat(emails.available(CASE_ID))
+        assertThat(emails.overview(CASE_ID).availability())
             .hasSize(EmailTemplate.values().length)
             .allSatisfy(availability ->
                             assertThat(availability.applicable()).as("%s", availability.template()).isFalse());
-        // Both templates, for the same reason the availability loop covers both: each reaches its referral through
-        // its own rule, so each is a place a read could start naming a case the caller did not ask about.
+        // Every template, for the same reason the availability loop covers all of them: each reaches its
+        // entitlement through its own rule, so each is a place a read could start naming a case the caller did not
+        // ask about. The two referral-driven ones are refused *because* the refusal belongs elsewhere; the chase is
+        // refused for a reason of its own -- this case is in no state to be chased -- so its arm of this loop says
+        // nothing about isolation, and theChaseResolvesNothingFromAnotherCase is what does.
         for (EmailTemplate template : EmailTemplate.values()) {
             assertThatThrownBy(() -> emails.preview(CASE_ID, template, Map.of()))
-                .as("%s cannot be previewed from another case's refusal", template)
+                .as("%s is refused for this case rather than composed from another case's refusal", template)
                 .isInstanceOf(ConflictError.class);
-            assertThatThrownBy(() -> emails.send(CASE_ID, template, Map.of(), CASEWORKER))
-                .as("%s cannot be sent from another case's refusal", template)
+            assertThatThrownBy(() -> emails.send(CASE_ID, template, Map.of(), REQUEST_ID, CASEWORKER))
+                .as("%s is refused for this case rather than sent from another case's refusal", template)
                 .isInstanceOf(ConflictError.class);
         }
 
         verify(referrals, never()).findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID);
-        verify(notifications, never()).enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                               anyString(), any(), anyString());
+        neverEnqueues();
+    }
+
+    @Test
+    @DisplayName("a chase resolves nothing from another case, whose refusal is the only one recorded anywhere")
+    void theChaseResolvesNothingFromAnotherCase() {
+        // The case-driven template's isolation claim, which is not the referral-driven one: a chase is not refused
+        // because a refusal belongs elsewhere -- it never asks about a refusal at all. So it is asserted where it
+        // is *applicable*, which is the only place the claim can fail: the row is keyed on no referral, the
+        // recipient is this case's applicant, and the other case's referrals are never read.
+        storedCase(CASE_ID).setState(DeedPollState.AwaitingFurtherDocs);
+        storedCase(OTHER_CASE_ID);
+        when(referrals.findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID))
+            .thenReturn(List.of(refusedReferral()));
+        enqueueAnswers(1);
+
+        emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                    Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), DOCUMENTS_REQUIRED),
+                    REQUEST_ID, CASEWORKER);
+
+        verify(notifications).enqueue(any(), eq(CASE_ID), eq(REQUEST_ID), isNull(), anyString(), anyString(),
+                                      eq(APPLICANT), anyString(), any(), anyString());
+        verify(referrals, never()).findByDeedPollIdOrderByCreatedOnDesc(OTHER_CASE_ID);
     }
 
     @Test
@@ -344,6 +558,18 @@ class NotificationSecurityTest {
             .that().resideOutsideOfPackage("uk.gov.hmcts.reform.deedpoll.notify..")
             .should().dependOnClassesThat().haveFullyQualifiedName(NotificationClient.class.getName())
             .check(MAIN_CLASSES);
+    }
+
+    /** What the enqueue statement answers, with every one of its ten arguments matched loosely. */
+    private void enqueueAnswers(int rows) {
+        when(notifications.enqueue(any(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                                   anyString(), any(), anyString())).thenReturn(rows);
+    }
+
+    /** That nothing was enqueued at all. */
+    private void neverEnqueues() {
+        verify(notifications, never()).enqueue(any(), anyString(), any(), any(), anyString(), anyString(),
+                                              anyString(), anyString(), any(), anyString());
     }
 
     private DeedPoll storedCase(String id) {

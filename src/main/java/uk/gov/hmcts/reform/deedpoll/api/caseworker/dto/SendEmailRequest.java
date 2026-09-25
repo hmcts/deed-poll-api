@@ -16,8 +16,11 @@ import uk.gov.hmcts.reform.deedpoll.api.KeyedRequestBody;
  * reference an applicant is told, or flipping the refund branch, is a correctness and a fraud problem rather than
  * a convenience.
  *
- * <p><strong>Sending twice for one referral is a no-op, not a second email.</strong> The outbox's unique index
- * makes one of these per referral a database constraint, so a double-click answers with the first send's row.
+ * <p><strong>Sending one compose journey twice is a no-op, not a second email.</strong> Which journey this is comes
+ * from the {@code Idempotency-Key} header rather than from anything here, and deliberately: the body is the
+ * caseworker's content, and this type refuses every key that is not a declared slot -- so a transport identifier in
+ * it would mean carving an exception into that rule. The outbox's unique index on the case and the request is what
+ * makes a double-click answer with the first send's row.
  */
 public class SendEmailRequest extends KeyedRequestBody {
 }

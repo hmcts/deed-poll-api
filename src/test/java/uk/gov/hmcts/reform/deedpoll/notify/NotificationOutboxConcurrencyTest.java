@@ -112,6 +112,10 @@ class NotificationOutboxConcurrencyTest extends AbstractPostgresContainerTest {
 
         Notification notification = new Notification();
         notification.setDeedPollId(deedPoll.getId());
+        // The compose journey that owed it, which V19 makes NOT NULL. Nothing here is about idempotency -- the row
+        // is written directly rather than by a send -- but the column has no entity-side default on purpose, so a
+        // writer that does not say what request it was fails rather than inventing one.
+        notification.setRequestId(UUID.randomUUID());
         notification.setTemplate(EmailTemplate.APPLICATION_REJECTED.name());
         notification.setExclusionGroup(EmailTemplate.APPLICATION_REJECTED.exclusionGroup().name());
         notification.setRecipient("applicant@example.com");

@@ -5,6 +5,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -32,6 +33,11 @@ import java.util.Optional;
  * confirmed and the design works either way. The pre-populated value is validated exactly as a typed one is:
  * an over-long direction is refused rather than truncated, because a truncated quotation of a judge is worse
  * than a caseworker being asked to shorten one.
+ *
+ * <p><strong>{@link EmailSlot#DOCUMENTS_REQUIRED} is required and pre-populated from nothing</strong>, which is
+ * the shape the pre-population rule had not met before: this service cannot derive which documents are missing,
+ * so blank is a refusal naming the slot rather than a fallback. That is also why {@link #defaults} exists
+ * separately from {@link #parse} -- a form has to be able to open on a field that is not filled in yet.
  */
 public final class EmailSlots {
 
@@ -70,6 +76,65 @@ public final class EmailSlots {
             throw new InvalidInputError(INVALID_CONTENT, errors);
         }
         return accepted;
+    }
+
+    /**
+     * The values a compose form opens with: the pre-populated ones, and an empty string for the rest.
+     *
+     * <p><strong>Not {@link #parse} with an empty payload, and the difference is a template with a required
+     * slot nothing pre-populates.</strong> {@code judges_reason} opens with the judge's direction, so an empty
+     * payload for either referral template validates; {@code documents_required} has nothing behind it, so the
+     * same call would refuse -- and the Email tab would answer 400 for every case that is waiting for
+     * documents, which is precisely the case the tab is open for. Defaults are a read of what a form starts
+     * with, so nothing here is required of anybody yet. {@link #parse} is still the only gate a preview or a
+     * send passes through.
+     *
+     * <p><strong>An over-long pre-populated value is returned as it stands.</strong> A migrated direction longer
+     * than the cap is refused at preview and at send, with the sentence that says to shorten it -- which a
+     * caseworker can only act on if the form shows them the text to shorten. Withholding it here would make the
+     * tab refuse the whole case instead, over a field they were never shown.
+     *
+     * @param template the email a form is being opened for
+     * @param directionsText the referral's direction, or null where there is no referral or it recorded none
+     * @return every slot of this template, in the order a form shows them, each with its starting value
+     */
+    public static Map<String, String> defaults(EmailTemplate template, String directionsText) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        for (EmailSlot slot : template.slots()) {
+            fields.put(slot.placeholder(), prePopulated(slot, directionsText).orElse(""));
+        }
+        return fields;
+    }
+
+    /**
+     * What a slot opens with before the caseworker types anything, or empty if nothing populates it.
+     *
+     * <p>Only {@link EmailSlot#JUDGES_REASON} has a source, and it is read unaltered: the direction was already
+     * trimmed and bounded when the judge recorded it, and re-trimming a stored value would make this the second
+     * place that decides what a direction says. Blank is nothing rather than a value, so a referral whose
+     * direction is a space leaves the slot to the caseworker exactly as a missing one does.
+     *
+     * <p>The chase's slot has no source on purpose: this service cannot derive which documents are outstanding,
+     * and a guess in an applicant-facing email would be worse than an empty box on a form.
+     */
+    private static Optional<String> prePopulated(EmailSlot slot, String directionsText) {
+        if (!isPrePopulated(slot) || directionsText == null || directionsText.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(directionsText);
+    }
+
+    /**
+     * Whether anything at all populates this slot before the caseworker types, which is what decides whether a
+     * required slot may be omitted from a request.
+     *
+     * <p>The question without the value, so the published contract can answer it for a slot rather than for a
+     * case: {@code OpenAPIWriteBodies} describes {@code judges_reason} as required of the email and not of the
+     * request, and {@code documents_required} as required of both, and neither sentence would be derivable from
+     * {@link EmailSlot#required()} alone. One place says which slots have a source, and this is it.
+     */
+    public static boolean isPrePopulated(EmailSlot slot) {
+        return slot == EmailSlot.JUDGES_REASON;
     }
 
     /**
@@ -117,17 +182,20 @@ public final class EmailSlots {
             return bounded(slot, supplied, false, errors);
         }
 
-        // Nothing usable from the caller, so fall back to the direction for the slot that has one. Read
-        // unaltered: it was already trimmed and bounded when the judge recorded it, and re-trimming a stored
-        // value would make this the second place that decides what a direction says.
-        if (slot == EmailSlot.JUDGES_REASON && directionsText != null && !directionsText.isBlank()) {
-            return bounded(slot, directionsText, true, errors);
+        // Nothing usable from the caller, so fall back to whatever pre-populates this slot -- which is the same
+        // question `defaults` asks, answered in one place so a form and a validation cannot disagree about what
+        // a caseworker was shown.
+        Optional<String> prePopulated = prePopulated(slot, directionsText);
+        if (prePopulated.isPresent()) {
+            return bounded(slot, prePopulated.get(), true, errors);
         }
 
         if (slot.required()) {
-            errors.add(new FieldError(slot.placeholder(), slot.placeholder()
-                + " is required: this email quotes the judge, and there is no direction recorded to"
-                + " pre-populate it from"));
+            // The slot's own sentence, not one about the judge: a caseworker whose chase has no documents named
+            // in it has nothing to pre-populate from and nothing to shorten, and being told about a direction
+            // would send them to the wrong tab. See EmailSlot.requiredBecause().
+            errors.add(new FieldError(slot.placeholder(),
+                                      slot.placeholder() + " is required: " + slot.requiredBecause()));
         }
         return Optional.empty();
     }

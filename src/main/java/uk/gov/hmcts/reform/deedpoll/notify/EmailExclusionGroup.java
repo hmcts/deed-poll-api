@@ -36,5 +36,22 @@ public enum EmailExclusionGroup {
      * column default, so renaming this member is a data migration -- exactly as renaming an
      * {@link EmailTemplate} member is.
      */
-    REFERRAL_OUTCOME
+    REFERRAL_OUTCOME,
+
+    /**
+     * Asking the applicant for something the office is still waiting for.
+     *
+     * <p><strong>A group of one, and one the index cannot act on -- which is the honest answer rather than a
+     * gap.</strong> The chase is case-driven, so its rows carry no {@code referralId}, and the unique index is
+     * partial on {@code "referralId" IS NOT NULL}: these rows never reach it. Two chases on one case are
+     * <em>legitimate</em> -- an applicant who has not answered the first one has to be chased again -- so there
+     * is nothing here for a database key to refuse, and widening the key to the case would forbid the reminder
+     * this email exists to be.
+     *
+     * <p>Declared all the same, because the column is {@code NOT NULL} and the constructor argument is
+     * required. Its own member rather than {@link #REFERRAL_OUTCOME}: a chase is not an alternative to telling
+     * an applicant what a Master decided, and sharing that group would make the two mutually exclusive on any
+     * future row that did carry a referral.
+     */
+    DOCUMENT_CHASE
 }

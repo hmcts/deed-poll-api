@@ -29,6 +29,13 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
  * quote the judge both need the quotation, and the notes slot is an optional addition in all four. If a later
  * template wants {@link #JUDGES_REASON} optional, the flag moves onto {@link EmailTemplate} -- it does not
  * get defaulted away here.
+ *
+ * <p><strong>Requiredness is spelled as the sentence a caseworker is refused with, and that is deliberate
+ * rather than terse.</strong> A required slot needs a reason a form can show against its own input -- "this
+ * email quotes the judge" and "only a caseworker can say which documents are missing" send somebody to two
+ * different places -- and a boolean beside a message is two fields that can disagree. So one field carries
+ * both: {@link #OPTIONAL} is the empty sentence, and {@link #required()} is "there is a sentence". A required
+ * slot with no reason is then not expressible.
  */
 public enum EmailSlot {
 
@@ -39,7 +46,8 @@ public enum EmailSlot {
      * was accepted under, so a direction that was recordable is always sendable unedited. A narrower cap here
      * would mean a judge could write something a caseworker could not pass on.
      */
-    JUDGES_REASON("judges_reason", ReferralSchemas.MAX_DIRECTIONS_LENGTH, true),
+    JUDGES_REASON("judges_reason", ReferralSchemas.MAX_DIRECTIONS_LENGTH,
+                  "this email quotes the judge, and there is no direction recorded to pre-populate it from"),
 
     /**
      * Anything the caseworker wants to add, and the one slot an email can go out without.
@@ -47,16 +55,51 @@ public enum EmailSlot {
      * <p>Capped at {@link ReferralSchemas#MAX_NOTES_LENGTH}, the narrower of the two: this is an addition to
      * approved wording rather than a quotation of a judge.
      */
-    ADDITIONAL_NOTES("additional_notes", ReferralSchemas.MAX_NOTES_LENGTH, false);
+    ADDITIONAL_NOTES("additional_notes", ReferralSchemas.MAX_NOTES_LENGTH, EmailSlot.OPTIONAL),
+
+    /**
+     * What the office is still waiting for, in words the applicant reads: the one slot of the chase email.
+     *
+     * <p>Required and with nothing to pre-populate it from, which makes it the first slot in this enum whose
+     * absence is a caseworker's omission rather than a missing direction -- this service cannot derive which
+     * documents are outstanding, and {@code awaitingFurtherDocsInfo} is a date rather than a list. An email
+     * asking an applicant for nothing in particular would produce a phone call rather than a document.
+     *
+     * <p>Capped at {@link #MAX_EMAIL_PROSE_LENGTH} and deliberately <em>not</em> at
+     * {@link ReferralSchemas#MAX_DIRECTIONS_LENGTH}, though the two numbers are the same today: a direction's
+     * cap is a fact about what a judge may record on a referral, and this is a fact about how much prose an
+     * email carries. Tying them together would make a change to referral recording silently change what a
+     * caseworker may write to an applicant.
+     */
+    DOCUMENTS_REQUIRED("documents_required", EmailSlot.MAX_EMAIL_PROSE_LENGTH,
+                       "this email exists to tell the applicant what is still needed, and only a caseworker "
+                           + "can say what that is");
+
+    /**
+     * The longest caseworker-authored prose any email carries, in characters after trimming.
+     *
+     * <p>4,000, which is the same ceiling a judicial direction has -- long enough for several paragraphs and a
+     * list, short enough that the composed payload is one Notify will accept. Declared here as a property of
+     * email content rather than read from {@code ReferralSchemas}, for the reason
+     * {@link #DOCUMENTS_REQUIRED} gives: the equality is a coincidence of two independent decisions, and
+     * writing it as a dependency would make one of them govern the other.
+     */
+    public static final int MAX_EMAIL_PROSE_LENGTH = 4000;
+
+    /**
+     * The sentence an optional slot has, which is none: a slot an email can go out without is never refused
+     * for being absent, so there is nothing to tell anybody.
+     */
+    private static final String OPTIONAL = "";
 
     private final String placeholder;
     private final int maxLength;
-    private final boolean required;
+    private final String requiredBecause;
 
-    EmailSlot(String placeholder, int maxLength, boolean required) {
+    EmailSlot(String placeholder, int maxLength, String requiredBecause) {
         this.placeholder = placeholder;
         this.maxLength = maxLength;
-        this.required = required;
+        this.requiredBecause = requiredBecause;
     }
 
     /** The placeholder name, which is the request-body key and the personalisation key at once. */
@@ -71,6 +114,21 @@ public enum EmailSlot {
 
     /** Whether an email can be composed without this slot. */
     public boolean required() {
-        return required;
+        return !requiredBecause.isEmpty();
+    }
+
+    /**
+     * Why this slot cannot be left out, as the second half of the sentence a refusal carries.
+     *
+     * <p>Empty for an optional slot, which is never refused for being absent. The message belongs to the slot
+     * because the answer differs per slot, and a form renders it against the input the caseworker has to fill
+     * in.
+     *
+     * <p>Public because the published contract says it too: {@code OpenAPIWriteBodies} renders this sentence
+     * into the slot's schema description rather than deciding from {@link #required()} alone, which is how the
+     * document and the refusal stay the same statement about the same field.
+     */
+    public String requiredBecause() {
+        return requiredBecause;
     }
 }

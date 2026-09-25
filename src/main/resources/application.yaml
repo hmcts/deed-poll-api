@@ -151,8 +151,10 @@ notify:
   # `deed-poll` vault yet, which is why charts/deed-poll-api/values.yaml names no Notify secret -- a chart
   # naming a secret the vault does not hold fails to deploy. notify-0 adds both ends together.
   api-key: ${NOTIFY_API_KEY:}
-  # The reply-to address id for the emails whose words ask the applicant to reply -- today only
-  # request-confirmation-to-proceed, which asks whether they still want the deed enrolled. Not a secret: it
+  # The reply-to address id for the emails whose words ask the applicant to reply -- today
+  # request-confirmation-to-proceed, which asks whether they still want the deed enrolled, and
+  # chase-missing-documents, which asks them to send what is missing. One id for the service, because there is one
+  # monitored inbox and a second would be a second thing for somebody to watch. Not a secret: it
   # identifies an address the recipient reads on the email itself, so it is an environment variable rather than a
   # vault entry, and notify-0 supplies it with the template UUIDs. Unset, a template that invites a reply reports
   # itself unprovisioned and the drain refuses to send it -- deliberately, because Notify drops a blank reply-to
@@ -168,6 +170,15 @@ notify:
     # from this map the placeholder is what NotifyProperties.templateId answers anyway, but the environment
     # variable would then be one nobody reads.
     request-confirmation-to-proceed: ${NOTIFY_TEMPLATE_REQUEST_CONFIRMATION_TO_PROCEED:DEED_POLL_PLACEHOLDER}
+    # The chase for missing documents, which is provisioned: notify-6's Task 0 read template
+    # a67e7dd1-0f8c-4366-a1de-ca5fbc24ec98 (version 1, non-prod) back out of Notify on 2026-09-24 and confirmed
+    # its five placeholders character for character. The UUID still belongs in the environment rather than here --
+    # it differs per Notify service -- and the variable name is the one the non-prod env file already exports, so a
+    # plausible-looking respelling would leave a local run silently unprovisioned. This template invites a reply,
+    # so it also needs NOTIFY_EMAIL_REPLY_TO_ID above: without it NotifyProperties.isProvisioned reports it
+    # unprovisioned rather than letting Notify send it from an address nobody reads. charts/deed-poll-api sets
+    # neither id, so AAT reads unprovisioned until that separate chart change lands.
+    chase-missing-documents: ${NOTIFY_TEMPLATE_CHASE_MISSING_DOCUMENTS:DEED_POLL_PLACEHOLDER}
 
 deedpoll:
   ccd:

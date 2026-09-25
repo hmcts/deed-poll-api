@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.notify;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,6 +21,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
@@ -30,9 +32,9 @@ import uk.gov.service.notify.NotificationClientException;
 
 import java.time.LocalDateTime;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
@@ -64,6 +66,13 @@ import java.util.stream.Collectors;
  * cannot be composed from another case's refusal. That is {@code NoteService}'s rule and
  * {@code ReferralService}'s, and it is the same rule here.
  *
+ * <p><strong>Two of the three templates are entitled by a referral and one by the case's own state</strong>, and
+ * {@link EmailCause} is what says which. ⑤ is offered when {@code DeedPoll.state} is
+ * {@link DeedPollState#AwaitingFurtherDocs} -- the cascade's own answer to what the case is waiting for -- so
+ * composing it reads no referral at all and its outbox row stores a null {@code referralId}. Nothing about a
+ * chase is derived from referrals, correspondence history or document rows: those would be a second derivation
+ * to drift from the state the case already publishes.
+ *
  * <p><strong>The four answers a send can give, and why each is the status it is.</strong> 404 for a case that
  * does not exist. 409 when the case is in no state to send this email -- nothing about the request is wrong and
  * it would succeed unchanged once a Master has refused the application, or it would have succeeded had the
@@ -72,7 +81,10 @@ import java.util.stream.Collectors;
  * {@link IncompleteDataError} has the argument). 400 for a slot payload the schema refuses, with every offending
  * field named at once. The recipient is checked <em>before</em> the payload, deliberately: a caseworker whose
  * case has no address cannot fix that by editing what they typed, so making them correct a payload first would
- * be two refusals where one was useful.
+ * be two refusals where one was useful. ⑤ is what makes that order matter rather than theoretical --
+ * {@code documents_required} is required of the request and pre-populated from nothing, so an empty payload on a
+ * case with no address really would be refused twice. A <em>preview</em> checks the address not at all: reading
+ * what would go out before anybody has chased the applicant for an address is legitimate.
  *
  * <p><strong>Nothing here sends.</strong> A send resolves, enqueues in the caller's transaction -- stamping the
  * referral's {@code confirmationRequestedAt} in that same transaction where the email is the one that asks the
@@ -132,6 +144,47 @@ public class CaseEmailService {
         + "this case's most recent refusal, so there is nothing left to ask them: see the referral for what they "
         + "said";
 
+    /**
+     * Why <em>Chase missing documents</em> does not apply to a case that is not waiting for any.
+     *
+     * <p>The condition is the case's own derived state -- {@link DeedPollState#AwaitingFurtherDocs} -- and this
+     * sentence names the field that produces it, because that is the one thing a caseworker can act on: the
+     * state is derived by the cascade from {@code awaitingFurtherDocsInfo} and is not settable directly, so
+     * "put the case in that state" is a date on the case details rather than a button on the Email tab.
+     *
+     * <p><strong>It says the date has to be the case's latest, not merely that it has to be recorded.</strong>
+     * {@code awaitingFurtherDocsInfo} is the last date {@code CaseState.deriveState} consults, so every later
+     * one -- ready for the Master, referred, signature requested or received, enrolled, returned -- outranks it:
+     * a case can carry a date awaited and still be {@code ReadyForMaster}. A sentence that only said "record the
+     * date" would then tell a caseworker to do something they had already done, and they would record it twice
+     * before finding out that was never the obstacle.
+     *
+     * <p>It does not quote the state the case is actually in. The Email tab shows that on the same screen, and a
+     * reason that repeated it would be a second copy going stale in whichever of the two was refreshed less.
+     */
+    static final String NOT_AWAITING_FURTHER_DOCS = "This case is not waiting for further documents or "
+        + "information, so there is nothing to chase the applicant for: the case waits for them only while the "
+        + "date awaited is the latest date recorded on it, so record that date -- and clear any later date that "
+        + "has moved the case past it -- before sending this email";
+
+    /**
+     * Why a send is refused when its {@code Idempotency-Key} has already been used on this case for something
+     * else.
+     *
+     * <p>The one answer a request id can give that is neither success nor a business conflict: the key says "this
+     * is the send I already made" and the payload says it is a different email. Both cannot be true, and guessing
+     * either way is worse than refusing -- taking the key's word would silently discard the caseworker's edits
+     * and answer with an email they did not write, and taking the payload's word would write the second row the
+     * key exists to prevent.
+     *
+     * <p>409 rather than 400, because nothing in the payload is wrong: the same body under a request of its own
+     * would be accepted. So the sentence says what to do about it -- start the email again -- rather than naming
+     * a field to correct. It deliberately quotes neither the key nor either email's content: the key is transport
+     * and the content is the applicant's.
+     */
+    static final String REQUEST_ALREADY_USED = "This send was already recorded for this case as a different "
+        + "email, so nothing was sent: start composing the email again, which gives it a request of its own";
+
     private final DeedPollRepository deedPolls;
     private final ReferralRepository referrals;
     private final NotificationRepository notifications;
@@ -160,8 +213,9 @@ public class CaseEmailService {
     private final ReferralService referralService;
 
     /**
-     * Only to write the {@code personalisation} column, which {@link NotificationRepository#enqueue} takes as
-     * JSON text because its statement is native.
+     * Only for the {@code personalisation} column, which {@link NotificationRepository#enqueue} takes as JSON
+     * text because its statement is native -- and, on the one path that compares a stored row with a resolved
+     * one, to read that text back so both sides have been through the same deserialiser.
      */
     private final ObjectMapper json;
 
@@ -187,31 +241,43 @@ public class CaseEmailService {
     }
 
     /**
-     * Every email this service knows about, and whether this case may have each one sent.
+     * Every template's answer for one case, from one read of the case and one of its referrals.
      *
-     * <p>All of them, applicable or not -- {@link EmailAvailability} says why.
+     * <p>Every email this service knows about, applicable or not -- {@link EmailAvailability} says why. Reached
+     * only through {@link #overview}, which is the one operation that publishes it: a second public read of the
+     * same thing would be a second entry point for a rule to drift in, exercised by tests and by nothing else.
      *
-     * @throws NotFoundError if there is no such case
+     * <p>The refusal is read once for the whole answer rather than per template: both referral-driven templates
+     * speak for the same newest refusal, so one read gives them one answer -- which is also what guarantees they
+     * name the same {@code referralId} when both apply. The case-driven template does not consult it at all
+     * (decision 1); that is a property of {@link #cause}, not of when the read happens.
      */
-    @Transactional(readOnly = true)
-    public List<EmailAvailability> available(String deedPollId) {
-        requireCase(deedPollId);
-        return Arrays.stream(EmailTemplate.values()).map(template -> availability(template, deedPollId)).toList();
+    private List<EmailAvailability> everyAvailability(DeedPoll deedPoll, Optional<Referral> newestRefusal) {
+        return Arrays.stream(EmailTemplate.values())
+            .map(template -> availability(template, deedPoll, newestRefusal))
+            .toList();
     }
 
     /**
      * Everything the Email tab needs, resolved without asking Notify to render anything.
      *
-     * <p>Defaults come from {@link #compose}, the same path preview and send use, so a compose form opens with
-     * exactly the values an empty preview request would use without spending a Notify API call merely to discover
-     * them.
+     * <p>Defaults come from {@link EmailSlots#defaults}, which is the pre-population {@link EmailSlots#parse}
+     * applies to an empty payload -- one rule, so a compose form opens with the values a preview would use
+     * without spending a Notify API call to discover them.
+     *
+     * <p><strong>Not from {@link #compose}, which is the change ⑤ forced.</strong> A template whose required
+     * slot nothing pre-populates refuses an empty payload -- correctly, at preview and at send -- so composing
+     * defaults through the validator would answer 400 for the whole tab on exactly the cases the chase exists
+     * for. Defaults are what a form starts with; requiredness is what a send is judged by.
      */
     @Transactional(readOnly = true)
     public CaseEmailOverview overview(String deedPollId) {
-        List<EmailAvailability> availability = available(deedPollId);
+        DeedPoll deedPoll = requireCase(deedPollId);
+        Optional<Referral> newestRefusal = newestRefusal(deedPollId);
+        List<EmailAvailability> availability = everyAvailability(deedPoll, newestRefusal);
         List<EmailSlotDefaults> defaults = availability.stream()
             .filter(EmailAvailability::applicable)
-            .map(entry -> slotDefaults(deedPollId, entry.template()))
+            .map(entry -> slotDefaults(entry.template(), deedPoll, newestRefusal))
             .toList();
         return new CaseEmailOverview(availability, correspondence(deedPollId), defaults);
     }
@@ -267,13 +333,21 @@ public class CaseEmailService {
         return CaseCorrespondence.from(notification, template, carried);
     }
 
-    private EmailSlotDefaults slotDefaults(String deedPollId, EmailTemplate template) {
-        Map<String, Object> personalisation = compose(deedPollId, template, Map.of()).personalisation();
-        Map<String, String> fields = new LinkedHashMap<>();
-        for (EmailSlot slot : template.slots()) {
-            fields.put(slot.placeholder(), (String) personalisation.getOrDefault(slot.placeholder(), ""));
-        }
-        return new EmailSlotDefaults(template, fields);
+    /**
+     * One applicable template's starting values, keyed by placeholder.
+     *
+     * <p>The direction comes from this template's own cause, so a template that is not about a referral is given
+     * none rather than one belonging to a refusal it has nothing to do with. The cause is present by
+     * construction -- only an applicable template reaches here -- and an absent one would leave every slot empty,
+     * which is what a form would have shown anyway.
+     */
+    private EmailSlotDefaults slotDefaults(
+        EmailTemplate template, DeedPoll deedPoll, Optional<Referral> newestRefusal) {
+
+        String directionsText = cause(template, deedPoll, newestRefusal)
+            .map(EmailCause::directionsText)
+            .orElse(null);
+        return new EmailSlotDefaults(template, EmailSlots.defaults(template, directionsText));
     }
 
     /**
@@ -318,16 +392,37 @@ public class CaseEmailService {
      * later edit to the case cannot redirect an email already owed, and "what was this applicant told" stays
      * answerable from the row even though part of the content is text the caseworker wrote and may have edited.
      *
-     * <p><strong>A second send of the same email is a no-op that answers with the first row.</strong> The
-     * insert is {@code ON CONFLICT DO NOTHING} on the partial unique index, so a double-click or two replicas
-     * racing cannot tell an applicant twice that their application was refused -- and the caseworker is not shown
-     * a failure for a request that was merely redundant.
+     * <p><strong>A second send of the same request is a no-op that answers with the first row.</strong> The
+     * insert is {@code ON CONFLICT DO NOTHING}, so a double-click or two replicas racing cannot send one applicant
+     * two copies of one email -- and the caseworker is not shown a failure for a request that was merely
+     * redundant.
      *
-     * <p><strong>A send of the email that contradicts one already asked for is a 409 naming it.</strong> The key
+     * <p><strong>What "the same" means is the caller's own {@code requestId}, and that is the whole of decision
+     * 6.</strong> Neither payload equality nor a time window can express intent: the same text is a legitimate
+     * reminder next week, and two clicks milliseconds apart carry different timestamps. So one compose journey
+     * creates one UUID and reuses it for every retry of its final POST, and a later journey gets another -- which
+     * is what lets a case be chased twice on purpose while a double-click still writes one row. Scoped to the
+     * case by V19's index, so a caller cannot make one case's chosen UUID collide with another case's row.
+     *
+     * <p><strong>A send of the email that contradicts one already asked for is a 409 naming it.</strong> That key
      * is the template's exclusion group, so a referral gets one email of the group; the second one is refused by
      * the same {@code DO NOTHING} clause, which is what keeps the caseworker's transaction usable instead of
-     * handing them a {@code DataIntegrityViolationException}. Which of the two happened is read off the blocking
-     * row rather than guessed.
+     * handing them a {@code DataIntegrityViolationException}.
+     *
+     * <p><strong>Which of the three things happened is read off the row that refused it, in a defined
+     * order</strong> -- see {@link #resolveRefusedInsert}. Zero rows means one of two indexes refused the insert,
+     * and the answers are a 200, a 409 and a fault, so it cannot be guessed.
+     *
+     * <p><strong>The request id is consulted only where the insert reached the database, and that bounds what it
+     * can promise.</strong> Everything before the statement -- the case's entitlement to this email, an applicant
+     * address to send it to, the slots being acceptable -- is judged afresh on every attempt, so a retry that
+     * arrives after the case has moved on is refused on that rather than answered with the receipt it is retrying:
+     * an applicant whose documents arrived is no longer {@link DeedPollState#AwaitingFurtherDocs}, and a chase
+     * already sent under this key then earns {@link #NOT_AWAITING_FURTHER_DOCS}. That is the deliberate direction
+     * to fail in -- nothing is sent twice, and a caseworker reading the Emails tab sees the send that happened --
+     * but it means the idempotent answer holds for a retry of an unchanged case rather than for all time. Moving
+     * the lookup in front of the composition would buy the stronger promise at the cost of a read on every send
+     * and a second place where "what does this key mean" is decided; decision 7 chose this one.
      *
      * <p>{@code templateVersion} is left null: this row was enqueued without asking Notify to render anything, so
      * there is no version to record and inventing one would claim knowledge of the wording. The sender records
@@ -340,11 +435,14 @@ public class CaseEmailService {
      * caseworker -- see {@link #note}. Those two are the whole of what a send does to anything other than the
      * outbox, and doing them here is why they commit or roll back with the row.
      *
+     * @param requestId the caller's own identifier for this send -- the {@code Idempotency-Key} header. One
+     *     compose journey's UUID, reused for every retry of that POST and never for a later journey
      * @param caller the caseworker sending it, who becomes {@code createdBy} -- not audit noise here, because
      *     they authored part of what the applicant reads
      * @throws NotFoundError if there is no such case
-     * @throws ConflictError if the case is in no state to send this email, the email that contradicts this one
-     *     has already been asked for on the same referral, or the applicant answered ④ while it was being sent
+     * @throws ConflictError if the case is in no state to send this email, this request id has already been used
+     *     on this case for a different email, the email that contradicts this one has already been asked for on
+     *     the same referral, or the applicant answered ④ while it was being sent
      * @throws IncompleteDataError if the case has no applicant email address
      * @throws uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError if the slots are not acceptable
      */
@@ -352,24 +450,33 @@ public class CaseEmailService {
     public SendReceipt send(String deedPollId,
                            EmailTemplate template,
                            Map<String, Object> slots,
+                           UUID requestId,
                            CurrentUser caller) {
 
-        Composed composed = compose(deedPollId, template, slots);
-        String recipient = requireRecipient(composed.deedPoll());
-        UUID referralId = composed.referral().getId();
+        // Entitlement, then the address, then the payload -- the order the four answers are documented in, and the
+        // reason this is two calls rather than one: a case with no address is told so before a caseworker is asked
+        // to correct what they typed.
+        Entitled entitled = entitle(deedPollId, template);
+        String recipient = requireRecipient(entitled.deedPoll());
+        Composed composed = compose(entitled, template, slots);
+        // Null for a case-driven email, which is the column's own null rather than a stand-in: such a row sits
+        // outside the partial unique index, so nothing about it is keyed on a referral it does not have.
+        UUID referralId = composed.cause().referralId();
         UUID id = UUID.randomUUID();
         // One instant for the row and for the clock the next paragraph starts, read once: two calls could
         // straddle a tick and make the outbox row and the referral disagree about when the applicant was asked.
         LocalDateTime now = AuditClock.now();
+        String personalisation = asJson(composed.personalisation());
 
         int enqueued = notifications.enqueue(
             id,
             deedPollId,
+            requestId,
             referralId,
             template.name(),
             template.exclusionGroup().name(),
             recipient,
-            asJson(composed.personalisation()),
+            personalisation,
             now,
             caller.name());
 
@@ -379,33 +486,122 @@ public class CaseEmailService {
             return SendReceipt.enqueued(id, recipient);
         }
 
-        // Zero rows: the unique index refused it, which is the mechanism working rather than a failure. Since the
-        // key is the exclusion group, that has two meanings and they get two different answers, so the row it
-        // collided with has to be read before either can be given.
-        Notification blocking = notifications
-            .findBlocking(deedPollId, referralId, template.exclusionGroup().name())
-            // Unreachable in practice: the insert was refused, so the row it collided with exists and satisfies
-            // the same predicate this read applies. A conflict with a row that then could not be read would mean
-            // the collision was with another case's row, which the partial index cannot produce -- so this says
-            // so rather than answering with a null id.
-            .orElseThrow(() -> new IllegalStateException(
-                "Enqueueing " + template.key() + " for referral " + referralId + " of case " + deedPollId
-                    + " was refused by the unique index, but no such row is readable"));
+        return resolveRefusedInsert(deedPollId, template, requestId, referralId, recipient, personalisation);
+    }
 
-        if (!template.name().equals(blocking.getTemplate())) {
+    /**
+     * What a zero-row {@link #enqueue} meant, read off the row that refused it rather than guessed.
+     *
+     * <p>Zero rows is the mechanism working rather than a failure -- but since V19 there are two unique indexes
+     * that can produce it, and the three answers are a 200, a 409 and a fault. {@code ON CONFLICT DO NOTHING}
+     * names no target and reports no reason, so the reason is established by reading, in this order:
+     *
+     * <ol>
+     *   <li><strong>This case's row with this request id.</strong> The most specific answer, and asked first for
+     *       that reason: it names the very send the caller is retrying. A caller retrying its own POST must not be
+     *       told that some other email of the same family is in the way.</li>
+     *   <li><strong>The row occupying the referral's exclusion group.</strong> V15's business constraint, whose
+     *       two meanings {@link #alreadyRequested} and {@link SendReceipt#alreadyOwed} split between them exactly
+     *       as they did before V19 -- only reached now for a request id that has never been seen.</li>
+     *   <li><strong>Neither.</strong> A database constraint refused a row this service cannot account for, which
+     *       is a fault and says so.</li>
+     * </ol>
+     *
+     * <p><strong>A matching row is an idempotent success and a differing one is a 409.</strong> The key asserts
+     * "this is the send I already made", so the content has to bear that out: same template, same recipient, same
+     * referral, same frozen personalisation. If it does not, one key has been reused for two different emails and
+     * neither reading is safe -- see {@link #REQUEST_ALREADY_USED}.
+     */
+    private SendReceipt resolveRefusedInsert(String deedPollId,
+                                             EmailTemplate template,
+                                             UUID requestId,
+                                             UUID referralId,
+                                             String recipient,
+                                             String personalisation) {
+
+        Optional<Notification> sameRequest = notifications.findByDeedPollIdAndRequestId(deedPollId, requestId);
+        if (sameRequest.isPresent()) {
+            Notification existing = sameRequest.get();
+            if (!isTheSameSend(existing, template, referralId, recipient, personalisation)) {
+                // One compose journey's UUID used for a second, different email. Logged without either email's
+                // content and without the key: what is worth knowing is that a client is reusing keys.
+                log.info("Case {} already recorded {} under this request, so {} was refused",
+                         deedPollId, existing.getTemplate(), template.key());
+                throw new ConflictError(REQUEST_ALREADY_USED);
+            }
+            // A caseworker pressing send twice, a client retrying a timed-out POST, or two replicas racing on one
+            // journey. Logged because those look identical from here and the frequency is worth knowing.
+            log.info("Case {} has already sent {} under this request, so nothing was enqueued",
+                     deedPollId, template.key());
+            return SendReceipt.alreadyOwed(existing);
+        }
+
+        // A request id never seen on this case, so what refused the insert was V15's key -- which only a
+        // referral-driven template can collide with, the index being partial on "referralId" IS NOT NULL. Asked
+        // only where there is a referral to ask about: a chase's rows cannot occupy that index, so a query with a
+        // null referral would be one whose answer is always empty.
+        Optional<Notification> blocking = referralId == null
+            ? Optional.empty()
+            : notifications.findBlocking(deedPollId, referralId, template.exclusionGroup().name());
+
+        Notification occupant = blocking
+            // Unreachable in practice, and named rather than answered with a null id: the insert was refused, so
+            // some row collided with it, and the two indexes are the only two that can. Reaching here means one
+            // of them refused a row neither of these reads can find -- a schema this service does not understand,
+            // not an outcome a caseworker can act on. Raising rolls the transaction back, which is the safe
+            // direction: nothing is owed and nothing was sent.
+            .orElseThrow(() -> new IllegalStateException(
+                "Enqueueing " + template.key() + " for case " + deedPollId + " was refused by a unique index, "
+                    + "but neither this case's request row nor a blocking row for referral " + referralId
+                    + " is readable"));
+
+        if (!template.name().equals(occupant.getTemplate())) {
             // The other email of the group. A 409 rather than a duplicate, because sending this one would tell
             // the applicant the opposite of what they have already been told -- and because nothing the
             // caseworker typed is wrong, so there is no field to correct.
             log.info("Case {} already owes {} for referral {}, so {} was refused",
-                     deedPollId, blocking.getTemplate(), referralId, template.key());
-            throw new ConflictError(alreadyRequested(blocking));
+                     deedPollId, occupant.getTemplate(), referralId, template.key());
+            throw new ConflictError(alreadyRequested(occupant));
         }
 
-        // The same email again: a caseworker pressing send twice, or a replica racing. Logged because those look
-        // identical from here and the frequency is worth knowing.
+        // The same email on the same referral from a different compose journey. Still not a second email -- the
+        // referral gets one -- so the receipt names the row that is already owed.
         log.info("Case {} already owes {} for referral {}, so nothing was enqueued",
                  deedPollId, template.key(), referralId);
-        return SendReceipt.alreadyOwed(blocking);
+        return SendReceipt.alreadyOwed(occupant);
+    }
+
+    /**
+     * Whether the row already recorded under this request id is the send the caller is retrying.
+     *
+     * <p>Template, referral, recipient and frozen personalisation -- the whole of what the row was written with,
+     * minus the audit columns and the state the drain has since moved. Anything else differing is either derived
+     * from these or is not the caller's to have changed.
+     *
+     * <p><strong>The referral is part of it even though no personalisation names it.</strong> A refusal's
+     * personalisation carries the direction and the applicant's former names and no referral id, so two refusals
+     * of one case recorded with the same direction resolve to identical maps. Without this comparison a key
+     * reused across those two journeys would answer with the first referral's row -- telling the caseworker the
+     * email had been sent while the new refusal had had none, and leaving the exclusion group it keys on empty.
+     * Comparing it makes that the 409 it is: the same key for a different email.
+     *
+     * <p><strong>The personalisation is compared through the JSON both sides would be stored as.</strong> The
+     * stored map came back out of {@code jsonb} and the resolved one is still Java, so a direct comparison would
+     * be asserting about Jackson's and pgjdbc's type choices rather than about the content: the round trip is what
+     * makes {@code true} and {@code "true"}, or an {@code Integer} and a {@code Long}, comparable at all. Key
+     * order is deliberately not part of it -- {@code jsonb} does not preserve it -- so this is a map comparison
+     * over normalised values and not a text one.
+     */
+    private boolean isTheSameSend(Notification existing,
+                                  EmailTemplate template,
+                                  UUID referralId,
+                                  String recipient,
+                                  String personalisation) {
+
+        return template.name().equals(existing.getTemplate())
+            && Objects.equals(referralId, existing.getReferralId())
+            && recipient.equals(existing.getRecipient())
+            && asMap(personalisation).equals(existing.getPersonalisation());
     }
 
     /**
@@ -528,6 +724,11 @@ public class CaseEmailService {
             // Tells the applicant a decision and starts a refund. It asks them for nothing, so there is nothing
             // to wait for and no clock to start.
             case APPLICATION_REJECTED -> false;
+            // Asks for documents, and does wait for an answer -- but not this clock. `confirmationRequestedAt`
+            // and `awaitingConfirmationSince` are the record of one referral's confirmation exchange, which a
+            // chase is not part of: it has no referral to stamp, and the case is already recorded as waiting by
+            // `awaitingFurtherDocsInfo`, which is what put it in the state that offers this email at all.
+            case CHASE_MISSING_DOCUMENTS -> false;
         };
     }
 
@@ -551,15 +752,16 @@ public class CaseEmailService {
      * of it, because the index is keyed on the outbox row and the row that asked has long since been drained.
      * {@link #awaitingAnAnswer} is what refuses that, on this path and on the send's through {@link #cause}.
      */
-    private EmailAvailability availability(EmailTemplate template, String deedPollId) {
+    private EmailAvailability availability(
+        EmailTemplate template, DeedPoll deedPoll, Optional<Referral> newestRefusal) {
+
         boolean provisioned = properties.isProvisioned(template);
-        Optional<Referral> newestRefusal = newestRefusal(deedPollId);
-        Optional<Referral> cause = cause(template, newestRefusal);
+        Optional<EmailCause> cause = cause(template, deedPoll, newestRefusal);
         if (cause.isEmpty()) {
             return EmailAvailability.unavailable(
                 template, reasonNotApplicable(template, newestRefusal), provisioned);
         }
-        return counterpart(deedPollId, cause.get(), template)
+        return counterpart(deedPoll.getId(), cause.get(), template)
             .map(blocking -> EmailAvailability.unavailable(template, alreadyRequested(blocking), provisioned))
             .orElseGet(() -> EmailAvailability.applicable(template, provisioned));
     }
@@ -577,11 +779,17 @@ public class CaseEmailService {
      * <p>A row for <em>this</em> template is not a counterpart and is not reported here: a second send of the
      * same email is the idempotent no-op {@link #send} answers with the original row, not something to hide the
      * template over.
+     *
+     * <p><strong>A case-driven email has no counterpart and is not asked about.</strong> The index is partial on
+     * {@code "referralId" IS NOT NULL}, so a chase's rows cannot occupy it and no row can occupy it against a
+     * chase -- asking with a null referral would be a query whose answer is always empty, and one that read as
+     * though a repeat chase were something the database had an opinion about. It is not: decision 5 says a
+     * second chase is legitimate.
      */
-    private Optional<Notification> counterpart(String deedPollId, Referral cause, EmailTemplate template) {
-        return notifications
-            .findBlocking(deedPollId, cause.getId(), template.exclusionGroup().name())
-            .filter(blocking -> !template.name().equals(blocking.getTemplate()));
+    private Optional<Notification> counterpart(String deedPollId, EmailCause cause, EmailTemplate template) {
+        return cause.referral().flatMap(referral -> notifications
+            .findBlocking(deedPollId, referral.getId(), template.exclusionGroup().name())
+            .filter(blocking -> !template.name().equals(blocking.getTemplate())));
     }
 
     /**
@@ -607,10 +815,16 @@ public class CaseEmailService {
     }
 
     /**
-     * The referral that entitles this case to this email, or empty if there is none.
+     * What entitles this case to this email, or empty if nothing does.
      *
      * <p>A {@code switch} with no {@code default}, so a template added to the enum does not silently inherit
      * another one's rule: it fails to compile until somebody says what makes it applicable.
+     *
+     * <p><strong>An {@link EmailCause} rather than a referral, since ⑤.</strong> Two of the three templates are
+     * entitled by a referral and the third by the case's own state, and the type says which -- so a case-driven
+     * template is not handed a referral that happens to exist, and the outbox row it writes carries the null
+     * {@code referralId} V11 designed the column for. See {@link EmailCause} for the alternatives and why each
+     * is worse.
      *
      * <p>Newest first, because the case-scoped finder is ordered that way and a case referred twice has been
      * refused on whichever referral was most recent -- an older refusal is history, and quoting it would tell the
@@ -626,14 +840,36 @@ public class CaseEmailService {
      *
      * <p>The newest refusal is a parameter rather than read here, so one caller reads it once and then asks
      * which of its sentences to say when it entitles the case to nothing.
+     *
+     * <p><strong>⑤ reads the case's derived state and nothing else</strong> -- decision 1. Not its referrals, not
+     * its correspondence history and not its document rows: {@code state} is already the cascade's answer to
+     * "what is this case waiting for", computed from {@code awaitingFurtherDocsInfo}, and a second derivation
+     * here would be a second answer to drift from it. The refusal passed in is deliberately unread on that arm.
      */
-    private static Optional<Referral> cause(EmailTemplate template, Optional<Referral> newestRefusal) {
+    private static Optional<EmailCause> cause(
+        EmailTemplate template, DeedPoll deedPoll, Optional<Referral> newestRefusal) {
+
         return switch (template) {
-            case APPLICATION_REJECTED -> newestRefusal;
+            case APPLICATION_REJECTED -> newestRefusal.map(EmailCause::of);
             case REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal
                 .filter(CaseEmailService::aboutNonPublication)
-                .filter(CaseEmailService::awaitingAnAnswer);
+                .filter(CaseEmailService::awaitingAnAnswer)
+                .map(EmailCause::of);
+            case CHASE_MISSING_DOCUMENTS -> awaitingFurtherDocuments(deedPoll)
+                ? Optional.of(EmailCause.ofCase())
+                : Optional.empty();
         };
+    }
+
+    /**
+     * Whether the case is in the one state this chase is sent from.
+     *
+     * <p>{@link DeedPollState#AwaitingFurtherDocs} exactly, and a null state is not it: a case whose state has
+     * never been derived is one this service knows nothing about, and the safe reading of "we do not know" is
+     * that the applicant is not owed a demand for documents nobody has recorded a need for.
+     */
+    private static boolean awaitingFurtherDocuments(DeedPoll deedPoll) {
+        return deedPoll.getState() == DeedPollState.AwaitingFurtherDocs;
     }
 
     /** The case's most recent refused referral, which is the only one either email may speak for. */
@@ -719,6 +955,9 @@ public class CaseEmailService {
         return switch (template) {
             case APPLICATION_REJECTED -> NO_REFUSAL;
             case REQUEST_CONFIRMATION_TO_PROCEED -> reasonNoConfirmationToAskFor(newestRefusal);
+            // One condition, so one sentence -- and its own rather than a shared "this does not apply", because
+            // what a caseworker does about it is nothing like what they do about a missing refusal.
+            case CHASE_MISSING_DOCUMENTS -> NOT_AWAITING_FURTHER_DOCS;
         };
     }
 
@@ -736,6 +975,29 @@ public class CaseEmailService {
     }
 
     /**
+     * The case and the reason it is entitled to this email, or the 404 or 409 that says it is not.
+     *
+     * <p><strong>Separate from {@link #compose} so that the recipient can be judged between them.</strong> A send
+     * checks the address before the slot payload -- notify-1's decision, and the argument is in {@link #send}'s
+     * own documentation -- which is only expressible if entitlement and composition are two steps. A preview
+     * takes both in one go and never checks the address at all.
+     */
+    private Entitled entitle(String deedPollId, EmailTemplate template) {
+        DeedPoll deedPoll = requireCase(deedPollId);
+        // Read only where this template's own rule is about a referral. A chase is case-driven, so composing one
+        // queries the referral table not at all -- which is decision 1 as behaviour rather than as intent, and a
+        // switch expression because an arm somebody forgot would otherwise read a referral into a rule that has
+        // no business with one.
+        Optional<Referral> newestRefusal = switch (template) {
+            case APPLICATION_REJECTED, REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal(deedPollId);
+            case CHASE_MISSING_DOCUMENTS -> Optional.empty();
+        };
+        EmailCause cause = cause(template, deedPoll, newestRefusal)
+            .orElseThrow(() -> new ConflictError(reasonNotApplicable(template, newestRefusal)));
+        return new Entitled(deedPoll, cause);
+    }
+
+    /**
      * The case, the referral behind the email, and the personalisation the two of them plus the slots resolve to.
      *
      * <p>Shared by the preview and the send so that what a caseworker approved is what is stored: two resolvers
@@ -743,23 +1005,29 @@ public class CaseEmailService {
      * letter about a refusal.
      */
     private Composed compose(String deedPollId, EmailTemplate template, Map<String, Object> slots) {
-        DeedPoll deedPoll = requireCase(deedPollId);
-        Optional<Referral> newestRefusal = newestRefusal(deedPollId);
-        Referral referral = cause(template, newestRefusal)
-            .orElseThrow(() -> new ConflictError(reasonNotApplicable(template, newestRefusal)));
+        return compose(entitle(deedPollId, template), template, slots);
+    }
+
+    private Composed compose(Entitled entitled, EmailTemplate template, Map<String, Object> slots) {
+        DeedPoll deedPoll = entitled.deedPoll();
+        EmailCause cause = entitled.cause();
 
         // The judge's words reach the email only through this slot, pre-populated and editable. ③'s resolve() is
         // deliberately not given the referral at all, and ④'s is given it only for the decision date and
         // documents that it never reads getDirectionsText() -- a second, un-edited copy of the direction in the
-        // same email would make "what was this applicant told" a question with two answers.
-        Map<EmailSlot, String> accepted = EmailSlots.parse(template, slots, referral.getDirectionsText());
+        // same email would make "what was this applicant told" a question with two answers. ⑤ has no referral,
+        // so its cause pre-populates nothing and its one slot is the caseworker's from an empty box.
+        Map<EmailSlot, String> accepted = EmailSlots.parse(template, slots, cause.directionsText());
         Map<String, Object> personalisation = switch (template) {
             case APPLICATION_REJECTED ->
                 ApplicationRejectedPersonalisation.resolve(deedPoll, accepted).toMap();
             case REQUEST_CONFIRMATION_TO_PROCEED ->
-                RequestConfirmationToProceedPersonalisation.resolve(deedPoll, referral, accepted).toMap();
+                RequestConfirmationToProceedPersonalisation.resolve(
+                    deedPoll, cause.requireReferral(), accepted).toMap();
+            case CHASE_MISSING_DOCUMENTS ->
+                MissingDocumentsPersonalisation.resolve(deedPoll, accepted).toMap();
         };
-        return new Composed(deedPoll, referral, personalisation);
+        return new Composed(deedPoll, cause, personalisation);
     }
 
     /**
@@ -808,11 +1076,37 @@ public class CaseEmailService {
     }
 
     /**
-     * One request's resolved email: the case it is about, the referral that caused it, and what Notify is given.
+     * The same JSON read back as a map, so it can be compared with one that came out of {@code jsonb}.
+     *
+     * <p>Only for {@link #isTheSameSend}. Parsing what this service has just written is not a round trip for its
+     * own sake: it is what puts both sides of that comparison through the same deserialiser, so the comparison is
+     * about the content rather than about which Java type each side happened to hold.
+     */
+    private Map<String, Object> asMap(String personalisation) {
+        try {
+            return json.readValue(personalisation, new TypeReference<>() {
+            });
+        } catch (JsonProcessingException impossible) {
+            throw new IllegalStateException("Resolved personalisation could not be read back as JSON", impossible);
+        }
+    }
+
+    /**
+     * One request's resolved email: the case it is about, what entitled it, and what Notify is given.
      *
      * <p>A record rather than three returns, so the preview and the send cannot resolve two of the three and
      * disagree about the fourth.
+     *
+     * <p>{@link EmailCause} and not a {@code Referral}, because a case-driven template has none -- and a nullable
+     * field here would put "is there one?" at every call site rather than at the one place that answers it.
      */
-    private record Composed(DeedPoll deedPoll, Referral referral, Map<String, Object> personalisation) {
+    private record Composed(DeedPoll deedPoll, EmailCause cause, Map<String, Object> personalisation) {
+    }
+
+    /**
+     * A case that may have this email, and the reason it may -- everything a send knows before it reads the
+     * caseworker's payload.
+     */
+    private record Entitled(DeedPoll deedPoll, EmailCause cause) {
     }
 }

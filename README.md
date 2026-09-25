@@ -70,7 +70,7 @@ both counts, so a route added without a row here is a count that stops agreeing 
 | POST | `/caseworker/cases/{id}/referrals/{referralId}/confirmation` | Record the applicant's answer to the *Request confirmation to proceed* email — `outcome` (`Confirmed` or `Withdrawn`) and an optional `note`. **409** if an answer is already stored (naming it and its date) and **409** if nobody asked this referral to confirm |
 | GET | `/caseworker/cases/{id}/emails` | The Email tab in one call — which templates apply and why not, what has already been sent, and the slot defaults |
 | POST | `/caseworker/cases/{id}/emails/{template}/preview` | What Notify would render for this case and these slots — writes nothing |
-| POST | `/caseworker/cases/{id}/emails/{template}` | Enqueue one — an outbox row and a case note inside the caseworker's transaction, idempotent on a second send, **409** for the email of the group that contradicts one already asked for |
+| POST | `/caseworker/cases/{id}/emails/{template}` | Enqueue one — an outbox row and a case note inside the caseworker's transaction. Requires an **`Idempotency-Key`** UUID header; a repeat of one key answers **200** with `enqueued: false`, the same key used for different content is a **409**, and so is the email of the group that contradicts one already asked for |
 
 There are deliberately **no** case deletes, no document-type writes and no `validate` endpoint. The domain
 implements and tests them; nothing consumes them, and the sibling prototype's mistake was building an API
@@ -136,6 +136,32 @@ caseworkers already look: raise, withdraw and close to the caseworker, claim and
 the inactivity sweep's to the service account, because a lapsed claim erases the fact it is about. Recording the
 applicant's confirmation writes one too, although it moves no state — the answer is an event, and the grid is
 the only place it would appear.
+
+**A third email, and the first one the case rather than a referral entitles.** *Chase missing documents* is
+offered while the case's derived state is `AwaitingFurtherDocs` — the state the cascade derives from
+`awaitingFurtherDocsInfo`, and only while no later date has moved the case past it — and it is a **409** otherwise,
+in words that name the date to record rather than a field to correct. It reads no referral at all, so its outbox
+row carries no `referralId` and sits outside the exclusion-group key: **a second chase is legitimate** and
+deliberately not refused, which is why the send carries an idempotency key rather than relying on a database
+constraint. Its one slot, `documents_required`, is **required and pre-populated from nothing** — this service
+cannot derive which documents are outstanding — so the compose form opens on an empty box and an empty body is a
+400 naming the slot; it is capped at 4,000 characters. The email invites a reply, so it reads **unprovisioned**
+unless both its template id and `NOTIFY_EMAIL_REPLY_TO_ID` are set.
+
+**The send requires an `Idempotency-Key`, and the client has to make it mean something.** One compose journey
+mints one UUID and sends it with every retry of the final POST — a request that timed out, a double-click, a
+resubmit after a validation failure — and a later journey mints another. That is what lets one case be chased
+twice on purpose while a double-click still sends one email, and it is a **breaking change for any client that
+predates it**: a POST with no header is a **400** naming `Idempotency-Key`, and so is one whose value is not a
+UUID. A repeat of the same key for the same case and content answers **200 with `enqueued: false`** and the first
+send's receipt; the same key for a different email — edited text, a corrected applicant address, another refusal —
+is a **409** telling the caseworker to start the email again, because neither reading is safe. A fresh UUID per
+request satisfies the schema and destroys the protection. Neither the availability `GET` nor the preview takes the
+header; neither writes a row. The key is stored as `requestId` (V19, unique per `("deedPollId", "requestId")`, so
+one client's chosen UUID can never reach another case) and is published nowhere — not in a DTO, a note or a log.
+It is consulted only once the insert reaches the database, so a retry that arrives *after* the case has moved on
+is refused on the new state rather than answered with the earlier receipt: nothing is sent twice, and the Emails
+tab is where the send that did happen is visible.
 
 **An email writes case notes on the same reasoning, and they are markers rather than the record.** Enqueuing one
 writes *"&lt;Name&gt; email sent. See the Emails tab for its delivery status."* in the caseworker's own transaction, so

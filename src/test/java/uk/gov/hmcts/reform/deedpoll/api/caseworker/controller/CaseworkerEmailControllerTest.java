@@ -36,14 +36,17 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.notify.ApplicationRejectedPersonalisation;
 import uk.gov.hmcts.reform.deedpoll.notify.CaseEmailService;
+import uk.gov.hmcts.reform.deedpoll.notify.EmailExclusionGroup;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailNotes;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailSlot;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailTemplate;
+import uk.gov.hmcts.reform.deedpoll.notify.MissingDocumentsPersonalisation;
 import uk.gov.hmcts.reform.deedpoll.notify.StubNotify;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollNoteRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
@@ -57,10 +60,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -115,6 +121,18 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
     /** The email that asks the applicant to confirm, which is the one that starts a clock on the referral. */
     private static final String CONFIRMATION = EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key();
 
+    /** The case-driven chase, whose entitlement is the case's own state rather than a judge's decision. */
+    private static final String CHASE = EmailTemplate.CHASE_MISSING_DOCUMENTS.key();
+
+    /**
+     * Where ⑤ sits in the availability list, which is enum order.
+     *
+     * <p>Read off the enum rather than written as a number, for the reason {@code CaseEmailServiceTest} looks its
+     * entry up by template: a fourth email declared before this one would otherwise make every assertion below
+     * quietly describe a different template.
+     */
+    private static final int CHASE_INDEX = EmailTemplate.CHASE_MISSING_DOCUMENTS.ordinal();
+
     /**
      * The monitored inbox ④ is sent from, invented here as every Notify id in this class is.
      *
@@ -155,6 +173,9 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         // refuses it permanently without a reply-to. Registered so that the confirmation clock can be asserted
         // through a send that really reaches the stub rather than one that fails before it.
         registry.add("notify.templates.request-confirmation-to-proceed", () -> StubNotify.TEMPLATE_ID);
+        // ⑤ too, which needs the same reply-to for the same reason: it asks the applicant to send the missing
+        // documents by replying. Registered so the journey below can be driven all the way to a drained send.
+        registry.add("notify.templates.chase-missing-documents", () -> StubNotify.TEMPLATE_ID);
         registry.add("notify.email-reply-to-id", () -> REPLY_TO_ID);
     }
 
@@ -284,7 +305,10 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         void publishesTheSlots() throws Exception {
             authorised(get("/caseworker/cases/" + refusedCase() + "/emails"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.availability[0].slots.length()").value(EmailSlot.values().length))
+                // This template's slots, not every slot this service has: since ⑤ there is one no referral
+                // template takes, and a count off the enum would assert that the rejection email published it.
+                .andExpect(jsonPath("$.availability[0].slots.length()")
+                               .value(EmailTemplate.APPLICATION_REJECTED.slots().size()))
                 .andExpect(jsonPath("$.availability[0].slots[0].name")
                                .value(EmailSlot.JUDGES_REASON.placeholder()))
                 .andExpect(jsonPath("$.availability[0].slots[0].required").value(true))
@@ -627,14 +651,108 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                                              .getContentAsString())
                 .get("id").asText();
 
-            // A caseworker double-clicking, or two replicas racing, must not tell an applicant twice that their
-            // application was refused -- and must not be shown a failure for a request that was merely redundant.
+            // A SECOND COMPOSE JOURNEY, which the default helper's fresh Idempotency-Key is: a caseworker who came
+            // back to the tab later and sent again. Refused by the referral's exclusion group rather than by the
+            // request id -- one referral gets one of these emails, whoever asks and however often -- and refused as
+            // a success, because nothing about the request is wrong and a failure would invite a third attempt.
             authorised(post(sendOf(caseId)), "{}")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(first))
                 .andExpect(jsonPath("$.enqueued").value(false));
 
             assertThat(notifications.count()).isOne();
+        }
+
+        @Test
+        @DisplayName("a repeated POST of one journey owes one email, over HTTP and with the header that says so")
+        void repeatingOneJourneyOwesOneEmail() throws Exception {
+            // The double-click and the retried POST, which are what the header exists to identify -- and the only
+            // route by which they are distinguishable from the deliberate second send above. Over real HTTP,
+            // because the key is a header: a route that bound it per request, or defaulted it, would pass every
+            // service-level test and send two emails here.
+            String caseId = refusedCase();
+            UUID journey = UUID.randomUUID();
+            String first = JSON.readTree(authorised(post(sendOf(caseId)), "{}", journey)
+                                             .andExpect(status().isOk())
+                                             .andExpect(jsonPath("$.enqueued").value(true))
+                                             .andReturn()
+                                             .getResponse()
+                                             .getContentAsString())
+                .get("id").asText();
+
+            authorised(post(sendOf(caseId)), "{}", journey)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(first))
+                .andExpect(jsonPath("$.enqueued").value(false));
+
+            assertThat(notifications.findAll()).singleElement().satisfies(row ->
+                assertThat(row.getRequestId()).isEqualTo(journey));
+            // Notify heard about it once, which is the fact the applicant experiences. The drain runs after each
+            // send, so a second row would have been a second email rather than merely a second row.
+            assertThat(NOTIFY.emailRequests()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("409s a journey reused for different text, and leaves the first email owed")
+        void refusesAJourneyReusedForDifferentText() throws Exception {
+            // The other answer the header can give, over HTTP: the key says "this is the send I already made" and
+            // the body says otherwise. 409 rather than 400, because the same body under a request of its own would
+            // be accepted -- so there is no field to correct.
+            String caseId = refusedCase();
+            UUID journey = UUID.randomUUID();
+            authorised(post(sendOf(caseId)), "{\"additional_notes\":\"Ring the office.\"}", journey)
+                .andExpect(status().isOk());
+
+            authorised(post(sendOf(caseId)), "{\"additional_notes\":\"Write to the office.\"}", journey)
+                .andExpect(status().isConflict())
+                // The refusal's own wording rather than the constant, which is package-private like every other
+                // reason in that service -- and the exact sentence is pinned in CaseEmailServiceTest. What is
+                // asserted here is that this refusal and not another one reached the caseworker, and that neither
+                // email's text came with it.
+                .andExpect(jsonPath("$.error").value(containsString("start composing the email again")))
+                .andExpect(jsonPath("$.error").value(not(containsString("Write to the office"))));
+
+            assertThat(notifications.findAll()).singleElement().satisfies(row ->
+                assertThat(row.getPersonalisation())
+                    .containsEntry(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Ring the office."));
+            assertThat(NOTIFY.emailRequests()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("400s a send with no Idempotency-Key at all, and owes nothing")
+        void refusesASendWithNoIdempotencyKey() throws Exception {
+            // Over the real filter chain and the real advice, so the 400 is the running service's answer and not a
+            // slice's. CaseworkerEmailIdempotencyHeaderTest is the Docker-free half of the same claim.
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(IDAM.accessToken());
+
+            mockMvc.perform(post(sendOf(refusedCase())).headers(headers)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field")
+                               .value(CaseworkerEmailController.IDEMPOTENCY_KEY));
+
+            assertThat(notifications.count()).isZero();
+            assertThat(NOTIFY.emailRequests()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("the request id is nowhere in the send's answer, because it is transport and not the email")
+        void theRequestIdIsNotPublished() throws Exception {
+            UUID journey = UUID.randomUUID();
+
+            String body = authorised(post(sendOf(refusedCase())), "{}", journey)
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+            // Stored on the row and absent from the response: a client that saw it echoed would be invited to
+            // treat it as the email's identity, which the row id already is.
+            assertThat(body).doesNotContain(journey.toString());
+            assertThat(notifications.findAll()).singleElement().satisfies(row ->
+                assertThat(row.getRequestId()).isEqualTo(journey));
         }
 
         @Test
@@ -772,7 +890,8 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 String caseId = confirmationCase();
 
                 new TransactionTemplate(transactions).execute(status -> {
-                    emails.send(caseId, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), caseworker());
+                    emails.send(caseId, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), UUID.randomUUID(),
+                                caseworker());
                     status.setRollbackOnly();
                     return null;
                 });
@@ -959,7 +1078,8 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 String caseId = confirmationCase();
 
                 new TransactionTemplate(transactions).execute(status -> {
-                    emails.send(caseId, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), caseworker());
+                    emails.send(caseId, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), UUID.randomUUID(),
+                                caseworker());
                     status.setRollbackOnly();
                     return null;
                 });
@@ -967,6 +1087,228 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 assertThat(notifications.count()).isZero();
                 assertThat(emailNotes(caseId)).isEmpty();
             }
+        }
+    }
+
+    /**
+     * The case-driven chase, end to end: what the tab is told, what Notify renders, what is sent, and what history
+     * then says about it.
+     *
+     * <p><strong>The whole journey in one place, because every step of it is new.</strong> ⑤ is the first template
+     * whose entitlement is the case's own derived state, the first whose rows carry no {@code referralId}, and the
+     * first a caseworker may legitimately send twice -- so the thing worth proving is not any one of those in
+     * isolation but that the four operations agree about the same case as it moves. The rules themselves are pinned
+     * container-free in {@code CaseEmailServiceTest} and {@code CaseworkerEmailIdempotencyHeaderTest}; what only a
+     * booted service can show is that the route, Postgres, the drain and the Notify client are wired to them.
+     */
+    @Nested
+    @DisplayName("the chase-missing-documents journey")
+    class ChaseMissingDocuments {
+
+        /** What the caseworker types into the one slot. */
+        private static final String REQUIRED =
+            "Your birth certificate, and the consent of everyone with parental responsibility.";
+
+        @Test
+        @DisplayName("availability, preview, send, drain and history, for one case waiting for documents")
+        void theWholeJourney() throws Exception {
+            String caseId = chasedCase();
+
+            // 1. Availability. Applicable and provisioned, with its one required slot and its cap -- which is what
+            // a generic Email tab renders the form from, without knowing this template exists.
+            authorised(get("/caseworker/cases/" + caseId + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].template").value(CHASE))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].applicable").value(true))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].reason").doesNotExist())
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].provisioned").value(true))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].slots.length()").value(1))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].slots[0].name")
+                               .value(EmailSlot.DOCUMENTS_REQUIRED.placeholder()))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].slots[0].required").value(true))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].slots[0].maxLength")
+                               .value(EmailSlot.MAX_EMAIL_PROSE_LENGTH))
+                // The form opens empty, because nothing pre-populates this slot. A tab that asked for defaults
+                // through the validator would be refused on exactly the cases this email is for.
+                .andExpect(jsonPath("$.slotDefaults[0].template").value(CHASE))
+                .andExpect(jsonPath("$.slotDefaults[0].fields.documents_required").value(""))
+                .andExpect(jsonPath("$.history").isEmpty());
+
+            // 2. Preview. Notify renders it, from the resolved case values and the caseworker's words -- and
+            // nothing a judge wrote, because there is no referral in this journey at all.
+            NOTIFY.stubPreview("We need more information about your application",
+                               "<p>Please send your papers.</p>", StubNotify.TEMPLATE_VERSION);
+            authorised(post(chasePreviewOf(caseId)), slots(REQUIRED))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.subject").value("We need more information about your application"))
+                .andExpect(jsonPath("$.html").value("<p>Please send your papers.</p>"))
+                .andExpect(jsonPath("$.templateVersion").value(StubNotify.TEMPLATE_VERSION));
+            Map<String, Object> previewed = previewedPersonalisation();
+            assertThat(previewed)
+                .containsEntry(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED)
+                .containsEntry(MissingDocumentsPersonalisation.OLD_FORENAME, "Alex")
+                .containsEntry(MissingDocumentsPersonalisation.OLD_SURNAME, "Okonjo")
+                .containsEntry(MissingDocumentsPersonalisation.ONLINE_APPLICATION_REFERENCE, "DP-2026-0042")
+                .containsKey(MissingDocumentsPersonalisation.REFERENCE_NUMBER)
+                .hasSize(EmailTemplate.CHASE_MISSING_DOCUMENTS.personalisationKeys().size());
+            assertThat(notifications.count()).as("a preview owes nothing").isZero();
+
+            // 3. Send, and 4. the drain that follows it in the same request.
+            NOTIFY.stubSend(StubNotify.NOTIFICATION_ID, "We need more information", "Please send your papers.");
+            UUID journey = UUID.randomUUID();
+            String sent = JSON.readTree(authorised(post(chaseSendOf(caseId)), slots(REQUIRED), journey)
+                                            .andExpect(status().isOk())
+                                            .andExpect(jsonPath("$.recipient").value(APPLICANT_EMAIL))
+                                            .andExpect(jsonPath("$.enqueued").value(true))
+                                            .andReturn()
+                                            .getResponse()
+                                            .getContentAsString())
+                .get("id").asText();
+
+            assertThat(notifications.findAll()).singleElement().satisfies(row -> {
+                assertThat(row.getState()).isEqualTo(NotificationState.Sent);
+                assertThat(row.getTemplate()).isEqualTo(EmailTemplate.CHASE_MISSING_DOCUMENTS.name());
+                // The null V11 made the column nullable for, read back off real Postgres: a chase belongs to the
+                // case and to no decision, so nothing about it sits in the referral exclusion index.
+                assertThat(row.getReferralId()).isNull();
+                assertThat(row.getExclusionGroup()).isEqualTo(EmailExclusionGroup.DOCUMENT_CHASE.name());
+                assertThat(row.getRequestId()).isEqualTo(journey);
+                assertThat(row.getRecipient()).isEqualTo(APPLICANT_EMAIL);
+                assertThat(row.getPersonalisation())
+                    .containsEntry(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED);
+                assertThat(row.getSubject()).isEqualTo("We need more information");
+                assertThat(row.getBody()).isEqualTo("Please send your papers.");
+                assertThat(row.getCreatedBy()).isEqualTo("A Caseworker");
+            });
+
+            // The reply-to, on the wire. Its words ask the applicant to reply, so a send from Notify's no-reply
+            // sender would lose the documents this email exists to collect -- and a blank one fails silently,
+            // which is why it is asserted as the value the stub's configuration carries.
+            assertThat(NOTIFY.emailRequests()).singleElement().satisfies(request ->
+                assertThat(JSON.readTree(request.getBodyAsString()).path("email_reply_to_id").asText())
+                    .isEqualTo(REPLY_TO_ID));
+
+            // 5. History. One attempt, with the wording the applicant received and no request id anywhere in it.
+            String history = authorised(get("/caseworker/cases/" + caseId + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.history.length()").value(1))
+                .andExpect(jsonPath("$.history[0].id").value(sent))
+                .andExpect(jsonPath("$.history[0].template").value(CHASE))
+                .andExpect(jsonPath("$.history[0].templateName")
+                               .value(EmailTemplate.CHASE_MISSING_DOCUMENTS.displayName()))
+                .andExpect(jsonPath("$.history[0].createdBy").value("A Caseworker"))
+                .andExpect(jsonPath("$.history[0].recipient").value(APPLICANT_EMAIL))
+                .andExpect(jsonPath("$.history[0].notifyState").value("Sent"))
+                .andExpect(jsonPath("$.history[0].subject").value("We need more information"))
+                .andExpect(jsonPath("$.history[0].body").value("Please send your papers."))
+                .andExpect(jsonPath("$.history[0].failureReason").doesNotExist())
+                // Nothing is attached: this email asks for incoming material and sends none.
+                .andExpect(jsonPath("$.history[0].documents").isEmpty())
+                // And the email is still offered, because the case is still waiting: chasing again is legitimate.
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].applicable").value(true))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+            assertThat(history)
+                .as("the request id is transport and belongs in no correspondence")
+                .doesNotContain(journey.toString());
+
+            // One note on the case's only timeline, naming the email and nothing the caseworker typed.
+            assertThat(emailNotes(caseId)).singleElement().satisfies(note -> {
+                assertThat(note.getNote()).isEqualTo(EmailNotes.sent(EmailTemplate.CHASE_MISSING_DOCUMENTS));
+                assertThat(note.getNote()).doesNotContain("birth certificate");
+            });
+        }
+
+        @Test
+        @DisplayName("a second chase is a second email, and history keeps both newest first")
+        void chasingAgainKeepsBothAttempts() throws Exception {
+            // Decision 5 over HTTP and real Postgres: the exclusion group must not make one chase per case, and the
+            // second attempt must not overwrite the first -- the first is the only record that the applicant was
+            // already asked, and a caseworker deciding whether to chase again is reading exactly that.
+            String caseId = chasedCase();
+            NOTIFY.stubSend(StubNotify.NOTIFICATION_ID, "We need more information", "Please send your papers.");
+            String first = sentId(authorised(post(chaseSendOf(caseId)), slots(REQUIRED), UUID.randomUUID()));
+
+            NOTIFY.stubSend(StubNotify.NOTIFICATION_ID, "A reminder about your application", "A second ask.");
+            String second = sentId(authorised(
+                post(chaseSendOf(caseId)),
+                slots("Your birth certificate. We wrote to you on 10 September and have had no reply."),
+                UUID.randomUUID()));
+
+            assertThat(second).isNotEqualTo(first);
+            assertThat(notifications.count()).isEqualTo(2);
+            assertThat(NOTIFY.emailRequests()).hasSize(2);
+
+            authorised(get("/caseworker/cases/" + caseId + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.history.length()").value(2))
+                // Newest first, each with its own wording: a history that showed the latest rendering against both
+                // rows would say the applicant had been asked the same thing twice.
+                .andExpect(jsonPath("$.history[0].id").value(second))
+                .andExpect(jsonPath("$.history[0].subject").value("A reminder about your application"))
+                .andExpect(jsonPath("$.history[0].body").value("A second ask."))
+                .andExpect(jsonPath("$.history[1].id").value(first))
+                .andExpect(jsonPath("$.history[1].subject").value("We need more information"))
+                .andExpect(jsonPath("$.history[1].body").value("Please send your papers."));
+
+            // Two emails, two markers on the Notes grid.
+            assertThat(emailNotes(caseId)).hasSize(2);
+        }
+
+        @Test
+        @DisplayName("one compose journey chases once, however many times its POST arrives")
+        void oneJourneyChasesOnce() throws Exception {
+            // The case V15's index cannot help with at all: a chase's rows carry no referralId, so without V19 a
+            // double-click here would be a second email to the applicant. Over HTTP because the key is a header.
+            String caseId = chasedCase();
+            UUID journey = UUID.randomUUID();
+            String first = sentId(authorised(post(chaseSendOf(caseId)), slots(REQUIRED), journey));
+
+            authorised(post(chaseSendOf(caseId)), slots(REQUIRED), journey)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(first))
+                .andExpect(jsonPath("$.enqueued").value(false));
+
+            assertThat(notifications.count()).isOne();
+            assertThat(NOTIFY.emailRequests()).hasSize(1);
+            assertThat(emailNotes(caseId)).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("409s a case that is not waiting for documents, and 400s a chase with nothing in the slot")
+        void refusesWhatItCannotSend() throws Exception {
+            // The two refusals a generic tab has to render, and they are different things: the first is about the
+            // case and would succeed unchanged once it is waiting, the second is about the form.
+            authorised(post(chaseSendOf(refusedCase())), slots(REQUIRED))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString("awaited")))
+                // Not the refusal email's sentence: a caseworker sent looking for a Master's decision would be
+                // looking at the wrong tab for a field that has no referral behind it.
+                .andExpect(jsonPath("$.error").value(not(containsString("Master"))));
+
+            authorised(post(chaseSendOf(chasedCase())), "{}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field")
+                               .value(EmailSlot.DOCUMENTS_REQUIRED.placeholder()));
+
+            assertThat(notifications.count()).isZero();
+            assertThat(NOTIFY.emailRequests()).isEmpty();
+        }
+
+        /** The row id out of a send's answer. */
+        private String sentId(ResultActions sent) throws Exception {
+            return JSON.readTree(sent.andExpect(status().isOk())
+                                     .andExpect(jsonPath("$.enqueued").value(true))
+                                     .andReturn()
+                                     .getResponse()
+                                     .getContentAsString())
+                .get("id").asText();
+        }
+
+        private String slots(String documentsRequired) throws Exception {
+            return JSON.writeValueAsString(
+                Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), documentsRequired));
         }
     }
 
@@ -1007,6 +1349,31 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
 
     private String confirmationSendOf(String caseId) {
         return "/caseworker/cases/" + caseId + "/emails/" + CONFIRMATION;
+    }
+
+    private String chaseSendOf(String caseId) {
+        return "/caseworker/cases/" + caseId + "/emails/" + CHASE;
+    }
+
+    private String chasePreviewOf(String caseId) {
+        return chaseSendOf(caseId) + "/preview";
+    }
+
+    /**
+     * A case the office is waiting on documents for, reached the way a caseworker reaches it.
+     *
+     * <p>Through the write path rather than by setting the column: {@code state} is derived by the cascade from
+     * {@code awaitingFurtherDocsInfo}, and a fixture that wrote {@code AwaitingFurtherDocs} straight onto the row
+     * would be asserting about a case this service could not have produced -- and would go on passing if the
+     * cascade stopped deriving it.
+     */
+    private String chasedCase() {
+        String caseId = newCase();
+        deedPollService.updateDeedPoll(caseId, DeedPollPatch.of(Map.of("awaitingFurtherDocsInfo", RECEIVED)));
+        assertThat(deedPolls.findById(caseId).orElseThrow().getState())
+            .as("the cascade derives the state this email is offered in")
+            .isEqualTo(DeedPollState.AwaitingFurtherDocs);
+        return caseId;
     }
 
     /**
@@ -1087,15 +1454,41 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
 
     /** The request, carrying a valid forwarded access token. */
     private ResultActions authorised(MockHttpServletRequestBuilder request) throws Exception {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(IDAM.accessToken());
-        return mockMvc.perform(request.headers(headers));
+        return mockMvc.perform(request.headers(tokenAndANewJourney()));
     }
 
     /** The request, carrying a valid forwarded access token and a JSON body. */
     private ResultActions authorised(MockHttpServletRequestBuilder request, String body) throws Exception {
+        return mockMvc.perform(
+            request.headers(tokenAndANewJourney()).contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    /**
+     * The same request as a named compose journey, for the tests about sending the same one twice.
+     *
+     * <p>The distinction the default helper cannot express, and it is decision 6's whole point: two POSTs of one
+     * journey are a double-click or a retry and must write one row, while two journeys are two deliberate sends.
+     * So a test that repeats a send says which it means by passing the key or not.
+     */
+    private ResultActions authorised(MockHttpServletRequestBuilder request, String body, UUID requestId)
+        throws Exception {
+        HttpHeaders headers = tokenAndANewJourney();
+        headers.set(CaseworkerEmailController.IDEMPOTENCY_KEY, requestId.toString());
+        return mockMvc.perform(
+            request.headers(headers).contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    /**
+     * A valid forwarded access token, and a fresh {@code Idempotency-Key}.
+     *
+     * <p>The key is on every request rather than only on the sends: it is required by one route and ignored by
+     * the others, and putting it here means a test that adds a send does not have to remember it. Fresh per
+     * request, so the default is "a new compose journey" -- which is what an unrelated test means when it sends.
+     */
+    private static HttpHeaders tokenAndANewJourney() {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(IDAM.accessToken());
-        return mockMvc.perform(request.headers(headers).contentType(MediaType.APPLICATION_JSON).content(body));
+        headers.set(CaseworkerEmailController.IDEMPOTENCY_KEY, UUID.randomUUID().toString());
+        return headers;
     }
 }

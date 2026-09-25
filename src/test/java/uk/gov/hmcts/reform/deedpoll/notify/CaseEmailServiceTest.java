@@ -26,6 +26,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationFailureVerdict;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
@@ -40,6 +41,8 @@ import uk.gov.service.notify.TemplatePreview;
 
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -50,6 +53,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -79,6 +83,15 @@ class CaseEmailServiceTest {
     private static final String DIRECTION = "Refused: no settled intention shown.";
 
     private static final UUID REFERRAL_ID = UUID.fromString("22222222-2222-2222-2222-222222222222");
+
+    /**
+     * One compose journey's {@code Idempotency-Key}, shared by every test here that sends once.
+     *
+     * <p>A constant rather than a fresh UUID per call, because a test that needed two <em>different</em> journeys
+     * would then be indistinguishable from one that did not care -- and the difference between one journey and
+     * two is the whole of decision 6. The tests about repeats say which they mean.
+     */
+    private static final UUID REQUEST_ID = UUID.fromString("66666666-6666-6666-6666-666666666666");
 
     private static final CurrentUser CASEWORKER =
         CurrentUser.currentUser(List.of(), "A Caseworker", "caseworker-1");
@@ -137,7 +150,7 @@ class CaseEmailServiceTest {
             storedCase();
             when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of());
 
-            List<EmailAvailability> available = emails.available(CASE_ID);
+            List<EmailAvailability> available = emails.overview(CASE_ID).availability();
 
             // Every template, not only the applicable ones: a shorter list would leave a caseworker asking
             // somebody why the refusal letter is missing.
@@ -153,6 +166,12 @@ class CaseEmailServiceTest {
                 assertThat(entry.applicable()).isFalse();
                 assertThat(entry.reason()).isEqualTo(CaseEmailService.NO_REFUSAL_TO_CONFIRM);
             });
+            // And the case-driven one, whose sentence is about the case rather than about a referral: the fixture
+            // is a case in no state at all, so there is nothing recorded as awaited.
+            assertThat(entryFor(available, EmailTemplate.CHASE_MISSING_DOCUMENTS)).satisfies(entry -> {
+                assertThat(entry.applicable()).isFalse();
+                assertThat(entry.reason()).isEqualTo(CaseEmailService.NOT_AWAITING_FURTHER_DOCS);
+            });
         }
 
         @Test
@@ -161,7 +180,7 @@ class CaseEmailServiceTest {
             storedCase();
             refusedReferral();
 
-            assertThat(entryFor(emails.available(CASE_ID), EmailTemplate.APPLICATION_REJECTED))
+            assertThat(entryFor(emails.overview(CASE_ID).availability(), EmailTemplate.APPLICATION_REJECTED))
                 .satisfies(entry -> {
                     assertThat(entry.applicable()).isTrue();
                     assertThat(entry.reason()).isNull();
@@ -176,7 +195,7 @@ class CaseEmailServiceTest {
             storedCase();
             refusedReferralFor(ReferralReason.DeclarantRequirementsNotMet);
 
-            List<EmailAvailability> available = emails.available(CASE_ID);
+            List<EmailAvailability> available = emails.overview(CASE_ID).availability();
 
             assertThat(entryFor(available, EmailTemplate.APPLICATION_REJECTED).applicable()).isTrue();
             assertThat(entryFor(available, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED))
@@ -199,8 +218,13 @@ class CaseEmailServiceTest {
             storedCase();
             refusedReferralFor(ReferralReason.NonPublication, ReferralReason.DeclarantRequirementsNotMet);
 
-            assertThat(emails.available(CASE_ID))
-                .allSatisfy(entry -> assertThat(entry.applicable()).as("%s", entry.template()).isTrue());
+            List<EmailAvailability> available = emails.overview(CASE_ID).availability();
+
+            assertThat(entryFor(available, EmailTemplate.APPLICATION_REJECTED).applicable()).isTrue();
+            assertThat(entryFor(available, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED).applicable()).isTrue();
+            // And the chase is untouched by any of it: it is case-driven, so a refusal neither offers nor
+            // withholds it. This case is not waiting for documents, and that is the only question asked of it.
+            assertThat(entryFor(available, EmailTemplate.CHASE_MISSING_DOCUMENTS).applicable()).isFalse();
         }
 
         @Test
@@ -218,7 +242,7 @@ class CaseEmailServiceTest {
             answered.setConfirmationRequestedAt(LocalDateTime.parse("2026-05-03T09:15:00"));
             answered.setConfirmationOutcome(ConfirmationOutcome.Confirmed);
 
-            List<EmailAvailability> available = emails.available(CASE_ID);
+            List<EmailAvailability> available = emails.overview(CASE_ID).availability();
 
             // The rejection email is untouched: it asks the applicant for nothing, so an answer they have already
             // given says nothing about whether they may still be told a decision.
@@ -247,7 +271,7 @@ class CaseEmailServiceTest {
             Referral asked = refusedReferralFor(ReferralReason.NonPublication);
             asked.setConfirmationRequestedAt(LocalDateTime.parse("2026-05-03T09:15:00"));
 
-            assertThat(entryFor(emails.available(CASE_ID), EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)
+            assertThat(entryFor(emails.overview(CASE_ID).availability(), EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)
                            .applicable()).isTrue();
         }
 
@@ -260,7 +284,7 @@ class CaseEmailServiceTest {
             when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID))
                 .thenReturn(List.of(referral(MasterDecision.Approved, "Approved. Publish in the Gazette.")));
 
-            assertThat(emails.available(CASE_ID))
+            assertThat(emails.overview(CASE_ID).availability())
                 .allSatisfy(entry -> assertThat(entry.applicable()).as("%s", entry.template()).isFalse());
         }
 
@@ -278,7 +302,7 @@ class CaseEmailServiceTest {
             when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID))
                 .thenReturn(List.of(newest, superseded));
 
-            assertThat(entryFor(emails.available(CASE_ID), EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)
+            assertThat(entryFor(emails.overview(CASE_ID).availability(), EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)
                            .applicable()).isFalse();
         }
 
@@ -290,7 +314,7 @@ class CaseEmailServiceTest {
             storedCase();
             refusedReferralFor();
 
-            assertThat(entryFor(emails.available(CASE_ID), EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)
+            assertThat(entryFor(emails.overview(CASE_ID).availability(), EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)
                            .applicable()).isFalse();
         }
 
@@ -303,7 +327,7 @@ class CaseEmailServiceTest {
             referral.setNotes("The applicant asks for non publication in the Gazette.");
             when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(referral));
 
-            assertThat(entryFor(emails.available(CASE_ID), EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)
+            assertThat(entryFor(emails.overview(CASE_ID).availability(), EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)
                            .applicable()).isFalse();
         }
 
@@ -317,7 +341,7 @@ class CaseEmailServiceTest {
             refusedReferralFor(ReferralReason.NonPublication);
             blocking(EmailTemplate.APPLICATION_REJECTED, LocalDateTime.of(2026, 6, 3, 9, 30));
 
-            List<EmailAvailability> available = emails.available(CASE_ID);
+            List<EmailAvailability> available = emails.overview(CASE_ID).availability();
 
             assertThat(entryFor(available, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED))
                 .satisfies(entry -> {
@@ -341,7 +365,7 @@ class CaseEmailServiceTest {
             refusedReferralFor(ReferralReason.NonPublication);
             blocking(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, LocalDateTime.of(2026, 6, 4, 16, 0));
 
-            List<EmailAvailability> available = emails.available(CASE_ID);
+            List<EmailAvailability> available = emails.overview(CASE_ID).availability();
 
             assertThat(entryFor(available, EmailTemplate.APPLICATION_REJECTED)).satisfies(entry -> {
                 assertThat(entry.applicable()).isFalse();
@@ -363,14 +387,19 @@ class CaseEmailServiceTest {
             storedCase();
             refusedReferralFor(ReferralReason.NonPublication);
 
-            assertThat(emails.available(CASE_ID))
-                .allSatisfy(entry -> assertThat(entry.applicable()).as("%s", entry.template()).isTrue());
+            List<EmailAvailability> available = emails.overview(CASE_ID).availability();
 
-            // Once per template, both asking about the same group, which is the whole mechanism: two questions
-            // with one answer rather than two rules that could disagree.
+            assertThat(entryFor(available, EmailTemplate.APPLICATION_REJECTED).applicable()).isTrue();
+            assertThat(entryFor(available, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED).applicable()).isTrue();
+
+            // Once per referral-driven template, both asking about the same group, which is the whole mechanism:
+            // two questions with one answer rather than two rules that could disagree.
             verify(notifications, times(2)).findBlocking(
                 CASE_ID, REFERRAL_ID, EmailExclusionGroup.REFERRAL_OUTCOME.name());
-            verify(notifications, never()).findByDeedPollIdOrderByCreatedOnDesc(CASE_ID);
+            // And exactly twice in total: the chase carries no referral, so there is no row the partial index
+            // could hold against it and no question to ask. A third call with a null referral would be a query
+            // whose answer is always empty, dressed up as a rule.
+            verify(notifications, times(2)).findBlocking(anyString(), any(), anyString());
         }
 
         @Test
@@ -385,7 +414,7 @@ class CaseEmailServiceTest {
             storedCase();
             refusedReferral();
 
-            assertThat(entryFor(unprovisioned.available(CASE_ID), EmailTemplate.APPLICATION_REJECTED))
+            assertThat(entryFor(unprovisioned.overview(CASE_ID).availability(), EmailTemplate.APPLICATION_REJECTED))
                 .satisfies(entry -> {
                     assertThat(entry.applicable()).isTrue();
                     assertThat(entry.provisioned()).isFalse();
@@ -411,7 +440,7 @@ class CaseEmailServiceTest {
             storedCase();
             refusedReferralFor(ReferralReason.NonPublication);
 
-            List<EmailAvailability> available = noReplyTo.available(CASE_ID);
+            List<EmailAvailability> available = noReplyTo.overview(CASE_ID).availability();
 
             assertThat(entryFor(available, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).satisfies(entry -> {
                 // Applicable and unprovisioned: the case is in the right state and the environment is not ready,
@@ -562,7 +591,7 @@ class CaseEmailServiceTest {
         void refusesAMissingCase() {
             when(deedPolls.findById(CASE_ID)).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> emails.available(CASE_ID))
+            assertThatThrownBy(() -> emails.overview(CASE_ID).availability())
                 .isInstanceOf(NotFoundError.class)
                 .hasMessageContaining(CASE_ID);
         }
@@ -584,14 +613,55 @@ class CaseEmailServiceTest {
             deedPoll.setApplicantEmail(applicantEmail);
             refusedReferral();
 
-            assertThatThrownBy(() -> emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER))
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), REQUEST_ID, CASEWORKER))
                 .isInstanceOf(IncompleteDataError.class)
                 .satisfies(refusal -> assertThat(((IncompleteDataError) refusal).errors())
                     .extracting(FieldError::field)
                     .containsExactly("applicantEmail"));
 
-            verify(notifications, never()).enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                                   anyString(), any(), anyString());
+            neverEnqueues();
+        }
+
+        @Test
+        @DisplayName("422s the missing address before 400ing the payload, so one refusal does the work of two")
+        void judgesTheRecipientBeforeThePayload() {
+            // notify-1's decision, and ⑤ is what makes it reachable rather than theoretical: documents_required is
+            // required of the request and pre-populated from nothing, so a caseworker pressing Send on an empty
+            // chase form would otherwise be told to type the documents and only then that the case has nobody to
+            // send them to. The payload here is refusable twice over -- the required slot is absent and an unknown
+            // key is present -- and the answer is still the 422.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setState(DeedPollState.AwaitingFurtherDocs);
+            deedPoll.setApplicantEmail(null);
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, Map.of("no_such_slot", "anything"),
+                REQUEST_ID, CASEWORKER))
+                .isInstanceOf(IncompleteDataError.class)
+                .satisfies(refusal -> assertThat(((IncompleteDataError) refusal).errors())
+                    .extracting(FieldError::field)
+                    .containsExactly("applicantEmail"));
+
+            neverEnqueues();
+        }
+
+        @Test
+        @DisplayName("previews the same case without checking the address, because a preview sends nothing")
+        void previewsWithoutTheRecipient() {
+            // The other half of the same decision: reading what would go out before anybody has chased the
+            // applicant for an address is legitimate, so only the send judges the recipient.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setState(DeedPollState.AwaitingFurtherDocs);
+            deedPoll.setApplicantEmail(null);
+
+            // The payload is the only thing left to refuse, which is the proof: the address is never looked at.
+            assertThatThrownBy(() ->
+                emails.preview(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, Map.of()))
+                .isInstanceOf(InvalidInputError.class)
+                .satisfies(refusal -> assertThat(((InvalidInputError) refusal).errors())
+                    .extracting(FieldError::field)
+                    .containsExactly(EmailSlot.DOCUMENTS_REQUIRED.placeholder()));
         }
 
         @Test
@@ -599,16 +669,15 @@ class CaseEmailServiceTest {
         void enqueuesTheResolvedEmail() {
             storedCase();
             refusedReferral();
-            when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                       anyString(), any(), anyString())).thenReturn(1);
+            enqueueAnswers(1);
 
             SendReceipt receipt = emails.send(
                 CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of("additional_notes", " Ring the office. "),
-                CASEWORKER);
+                REQUEST_ID, CASEWORKER);
 
             ArgumentCaptor<UUID> id = ArgumentCaptor.forClass(UUID.class);
             ArgumentCaptor<String> personalisation = ArgumentCaptor.forClass(String.class);
-            verify(notifications).enqueue(id.capture(), eq(CASE_ID), eq(REFERRAL_ID),
+            verify(notifications).enqueue(id.capture(), eq(CASE_ID), eq(REQUEST_ID), eq(REFERRAL_ID),
                                           // The member name and never the Notify UUID, which is configuration and
                                           // differs per environment.
                                           eq(EmailTemplate.APPLICATION_REJECTED.name()),
@@ -633,10 +702,10 @@ class CaseEmailServiceTest {
         void trimsTheRecipient() {
             storedCase().setApplicantEmail("  " + RECIPIENT + " ");
             refusedReferral();
-            when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                       anyString(), any(), anyString())).thenReturn(1);
+            enqueueAnswers(1);
 
-            assertThat(emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER).recipient())
+            assertThat(emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), REQUEST_ID, CASEWORKER)
+                           .recipient())
                 .isEqualTo(RECIPIENT);
         }
 
@@ -648,8 +717,7 @@ class CaseEmailServiceTest {
             // third attempt.
             storedCase();
             refusedReferral();
-            when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                       anyString(), any(), anyString())).thenReturn(0);
+            enqueueAnswers(0);
             Notification existing = new Notification();
             UUID existingId = UUID.fromString("33333333-3333-3333-3333-333333333333");
             existing.setId(existingId);
@@ -662,7 +730,7 @@ class CaseEmailServiceTest {
                 .thenReturn(Optional.of(existing));
 
             SendReceipt receipt = emails.send(
-                CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER);
+                CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), REQUEST_ID, CASEWORKER);
 
             assertThat(receipt.id()).isEqualTo(existingId);
             assertThat(receipt.enqueued()).isFalse();
@@ -676,12 +744,11 @@ class CaseEmailServiceTest {
             // DataIntegrityViolationException reaching the caseworker would be the same fact as a 500.
             storedCase();
             refusedReferralFor(ReferralReason.NonPublication);
-            when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                       anyString(), any(), anyString())).thenReturn(0);
+            enqueueAnswers(0);
             blocking(EmailTemplate.APPLICATION_REJECTED, LocalDateTime.of(2026, 6, 3, 9, 30));
 
             assertThatThrownBy(() -> emails.send(
-                CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER))
+                CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), REQUEST_ID, CASEWORKER))
                 .isInstanceOf(ConflictError.class)
                 .hasMessageContaining(EmailTemplate.APPLICATION_REJECTED.displayName())
                 .hasMessageContaining("3 June 2026")
@@ -697,7 +764,8 @@ class CaseEmailServiceTest {
             storedCase();
             when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of());
 
-            assertThatThrownBy(() -> emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER))
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), REQUEST_ID, CASEWORKER))
                 .isInstanceOf(ConflictError.class)
                 .hasMessage(CaseEmailService.NO_REFUSAL);
         }
@@ -710,11 +778,10 @@ class CaseEmailServiceTest {
 
             assertThatThrownBy(() -> emails.send(
                 CASE_ID, EmailTemplate.APPLICATION_REJECTED,
-                Map.of(ApplicationRejectedPersonalisation.REFERENCE_NUMBER, "2026/999999"), CASEWORKER))
+                Map.of(ApplicationRejectedPersonalisation.REFERENCE_NUMBER, "2026/999999"), REQUEST_ID, CASEWORKER))
                 .isInstanceOf(InvalidInputError.class);
 
-            verify(notifications, never()).enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                                   anyString(), any(), anyString());
+            neverEnqueues();
         }
 
         @Test
@@ -727,13 +794,12 @@ class CaseEmailServiceTest {
             Referral earlier = referral(MasterDecision.Rejected, DIRECTION);
             earlier.setId(UUID.fromString("44444444-4444-4444-4444-444444444444"));
             when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(latest, earlier));
-            when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                       anyString(), any(), anyString())).thenReturn(1);
+            enqueueAnswers(1);
 
-            emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER);
+            emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), REQUEST_ID, CASEWORKER);
 
             ArgumentCaptor<String> personalisation = ArgumentCaptor.forClass(String.class);
-            verify(notifications).enqueue(any(), anyString(), eq(REFERRAL_ID), anyString(), anyString(),
+            verify(notifications).enqueue(any(), anyString(), any(), eq(REFERRAL_ID), anyString(), anyString(),
                                           anyString(), personalisation.capture(), any(), anyString());
             assertThat(personalisation.getValue())
                 .contains("Refused again, for the reasons given in court.")
@@ -745,10 +811,9 @@ class CaseEmailServiceTest {
         void doesNotCallNotify() {
             storedCase();
             refusedReferral();
-            when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                       anyString(), any(), anyString())).thenReturn(1);
+            enqueueAnswers(1);
 
-            emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER);
+            emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), REQUEST_ID, CASEWORKER);
 
             // A send that called Notify from the operation would not be an outbox: a Notify outage would become a
             // failed caseworker request rather than a row that is tried again.
@@ -764,9 +829,9 @@ class CaseEmailServiceTest {
             void stampsTheReferral() {
                 storedCase();
                 refusedReferralFor(ReferralReason.NonPublication);
-                enqueueSucceeds();
+                enqueueAnswers(1);
 
-                emails.send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER);
+                emails.send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), REQUEST_ID, CASEWORKER);
 
                 // Read before the verification below rather than inside it, because it is a verification itself.
                 LocalDateTime enqueuedAt = enqueuedAt();
@@ -799,7 +864,7 @@ class CaseEmailServiceTest {
                 // and restart a wait the applicant has already ended.
                 storedCase();
                 refusedReferralFor(ReferralReason.NonPublication);
-                enqueueSucceeds();
+                enqueueAnswers(1);
                 when(referrals.startConfirmationClockByIdAndDeedPollId(any(), anyString(), any(), anyString()))
                     .thenReturn(0);
 
@@ -808,7 +873,7 @@ class CaseEmailServiceTest {
                 // which side of their answer the click landed on is not a difference they can see. Raising it takes
                 // the outbox row with it, which is why the email never goes.
                 assertThatThrownBy(() -> emails.send(
-                    CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER))
+                    CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), REQUEST_ID, CASEWORKER))
                     .isInstanceOf(ConflictError.class)
                     .hasMessage(CaseEmailService.CONFIRMATION_ALREADY_ANSWERED);
 
@@ -822,9 +887,9 @@ class CaseEmailServiceTest {
             void startsNoClockForTheRejectionEmail() {
                 storedCase();
                 Referral referral = refusedReferral();
-                enqueueSucceeds();
+                enqueueAnswers(1);
 
-                emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER);
+                emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), REQUEST_ID, CASEWORKER);
 
                 // ③ tells the applicant a decision and starts a refund. A case recorded as waiting for a reply to
                 // it would sit in the waiting list for ever, because no reply is coming.
@@ -843,13 +908,13 @@ class CaseEmailServiceTest {
                 Referral referral = refusedReferralFor(ReferralReason.NonPublication);
                 LocalDateTime asked = LocalDateTime.of(2026, 5, 3, 9, 30);
                 referral.setConfirmationRequestedAt(asked);
-                when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                           anyString(), any(), anyString())).thenReturn(0);
+                enqueueAnswers(0);
                 Notification existing =
                     blocking(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, LocalDateTime.of(2026, 5, 3, 9, 30));
 
                 assertThat(emails
-                               .send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER)
+                               .send(CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(),
+                                     REQUEST_ID, CASEWORKER)
                                .id())
                     .isEqualTo(existing.getId());
 
@@ -872,7 +937,7 @@ class CaseEmailServiceTest {
                 Referral referral = refusedReferralFor(ReferralReason.NonPublication);
 
                 assertThatThrownBy(() -> emails.send(
-                    CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER))
+                    CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), REQUEST_ID, CASEWORKER))
                     .isInstanceOf(IncompleteDataError.class);
 
                 assertThat(referral.getConfirmationRequestedAt()).isNull();
@@ -897,15 +962,14 @@ class CaseEmailServiceTest {
                 answered.setConfirmationReceivedAt(LocalDateTime.of(2026, 5, 20, 11, 0));
 
                 assertThatThrownBy(() -> emails.send(
-                    CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER))
+                    CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), REQUEST_ID, CASEWORKER))
                     .isInstanceOf(ConflictError.class)
                     .hasMessage(CaseEmailService.CONFIRMATION_ALREADY_ANSWERED);
 
                 // Refused before the outbox, so there is no email and no new request date. A send that got through
                 // would leave the row asked later than it was answered, and -- because the case's column counts
                 // only referrals with no outcome -- a case waiting for a reply that the waiting list cannot show.
-                verify(notifications, never()).enqueue(any(), anyString(), any(), anyString(), anyString(),
-                                                       anyString(), anyString(), any(), anyString());
+                neverEnqueues();
                 assertThat(answered.getConfirmationRequestedAt()).isEqualTo(asked);
                 assertThat(answered.getConfirmationOutcome()).isEqualTo(ConfirmationOutcome.Withdrawn);
                 verify(referrals, never()).startConfirmationClockByIdAndDeedPollId(
@@ -913,16 +977,11 @@ class CaseEmailServiceTest {
                 verifyNoInteractions(referralService);
             }
 
-            private void enqueueSucceeds() {
-                when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                           anyString(), any(), anyString())).thenReturn(1);
-            }
-
             /** The instant the outbox row was written with, read off the statement the service called. */
             private LocalDateTime enqueuedAt() {
                 ArgumentCaptor<LocalDateTime> now = ArgumentCaptor.forClass(LocalDateTime.class);
-                verify(notifications).enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                              anyString(), now.capture(), anyString());
+                verify(notifications).enqueue(any(), anyString(), any(), any(), anyString(), anyString(),
+                                              anyString(), anyString(), now.capture(), anyString());
                 return now.getValue();
             }
         }
@@ -937,12 +996,13 @@ class CaseEmailServiceTest {
             void writesOneNotePerEmail(EmailTemplate template) {
                 // Every template rather than one, because the composer is deliberately not per template: a member
                 // added to the enum must reach the timeline without anybody remembering to extend this. The
-                // non-publication refusal is the one fixture both templates apply to.
-                storedCase();
+                // fixture satisfies all three at once -- a non-publication refusal for the two referral-driven
+                // ones, and a case awaiting documents for the case-driven one.
+                storedCase().setState(DeedPollState.AwaitingFurtherDocs);
                 refusedReferralFor(ReferralReason.NonPublication);
-                enqueueSucceeds();
+                enqueueAnswers(1);
 
-                emails.send(CASE_ID, template, Map.of(), CASEWORKER);
+                emails.send(CASE_ID, template, minimumSlots(template), REQUEST_ID, CASEWORKER);
 
                 // Scoped to the case the outbox row was written for, and authored by the person who chose to
                 // send -- on ③ and ④ they wrote part of what the applicant reads, so the service account would be
@@ -961,11 +1021,11 @@ class CaseEmailServiceTest {
                 // and then clicked again -- and notes are never revised.
                 storedCase();
                 refusedReferral();
-                when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                           anyString(), any(), anyString())).thenReturn(0);
+                enqueueAnswers(0);
                 blocking(EmailTemplate.APPLICATION_REJECTED, LocalDateTime.of(2026, 6, 3, 9, 30));
 
-                assertThat(emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER).enqueued())
+                assertThat(emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), REQUEST_ID,
+                                       CASEWORKER).enqueued())
                     .isFalse();
 
                 verifyNoInteractions(caseNotes);
@@ -976,13 +1036,13 @@ class CaseEmailServiceTest {
             void writesNoNoteForASendRefusedBeforeTheRow() {
                 // A note claiming an email was sent is worse than no note at all: the Emails tab has no row to
                 // contradict it, the pointer sends the reader to a tab that says nothing, and notes are never
-                // revised. The blank recipient rather than the missing refusal, because it is the refusal that
-                // happens latest of the pre-enqueue three.
+                // revised. The blank recipient rather than the missing refusal, because it is the later of the two
+                // refusals that happen before the payload is even read.
                 storedCase().setApplicantEmail("  ");
                 refusedReferral();
 
                 assertThatThrownBy(() -> emails.send(
-                    CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), CASEWORKER))
+                    CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), REQUEST_ID, CASEWORKER))
                     .isInstanceOf(IncompleteDataError.class);
 
                 verifyNoInteractions(caseNotes);
@@ -997,12 +1057,12 @@ class CaseEmailServiceTest {
                 // throws.
                 storedCase();
                 refusedReferralFor(ReferralReason.NonPublication);
-                enqueueSucceeds();
+                enqueueAnswers(1);
                 when(referrals.startConfirmationClockByIdAndDeedPollId(any(), anyString(), any(), anyString()))
                     .thenReturn(0);
 
                 assertThatThrownBy(() -> emails.send(
-                    CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), CASEWORKER))
+                    CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), REQUEST_ID, CASEWORKER))
                     .isInstanceOf(ConflictError.class)
                     .hasMessage(CaseEmailService.CONFIRMATION_ALREADY_ANSWERED);
 
@@ -1016,10 +1076,10 @@ class CaseEmailServiceTest {
                 // second copy of personal data on a timeline nothing re-renders and nobody revises.
                 storedCase();
                 refusedReferral();
-                enqueueSucceeds();
+                enqueueAnswers(1);
 
                 emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED,
-                            Map.of("additional_notes", "Ring the office on 0300 123 4567."), CASEWORKER);
+                            Map.of("additional_notes", "Ring the office on 0300 123 4567."), REQUEST_ID, CASEWORKER);
 
                 ArgumentCaptor<CreateNoteInput> note = ArgumentCaptor.forClass(CreateNoteInput.class);
                 verify(caseNotes).createNote(anyString(), note.capture(), any());
@@ -1030,10 +1090,6 @@ class CaseEmailServiceTest {
                     .doesNotContain(DIRECTION);
             }
 
-            private void enqueueSucceeds() {
-                when(notifications.enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                           anyString(), any(), anyString())).thenReturn(1);
-            }
         }
     }
 
@@ -1078,8 +1134,7 @@ class CaseEmailServiceTest {
             assertThatThrownBy(() -> emails.preview(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of()))
                 .isInstanceOf(UpstreamFailureError.class);
 
-            verify(notifications, never()).enqueue(any(), anyString(), any(), anyString(), anyString(), anyString(),
-                                                   anyString(), any(), anyString());
+            neverEnqueues();
         }
 
         @Test
@@ -1135,6 +1190,771 @@ class CaseEmailServiceTest {
             // spend any of it.
             verifyNoInteractions(notify);
         }
+    }
+
+    /**
+     * The case-driven chase: what makes it applicable, and what it composes without a referral.
+     *
+     * <p>Container-free like the rest of this class, and here that matters more than usual: the rule under test is
+     * that applicability comes from one derived column and from nothing else, and the only other place it is
+     * proved is a controller test CI does not run.
+     */
+    @Nested
+    @DisplayName("chasing missing documents")
+    class ChasingMissingDocuments {
+
+        /** What a caseworker types into the one slot: applicant-facing prose naming what is outstanding. */
+        private static final String REQUIRED =
+            "Your birth certificate, and the consent of everyone with parental responsibility.";
+
+        @ParameterizedTest
+        @EnumSource(DeedPollState.class)
+        @DisplayName("applies in AwaitingFurtherDocs and in no other state, with its own sentence when it does not")
+        void appliesOnlyWhileAwaitingFurtherDocuments(DeedPollState state) {
+            // Decision 1 across every state rather than against one: the condition is a single equality, so the
+            // way it breaks is by being widened -- a predicate on "has an awaitingFurtherDocsInfo date" would go
+            // on offering the chase after the documents arrived and the case moved on to ReadyForMaster.
+            storedCase().setState(state);
+            when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of());
+
+            EmailAvailability entry =
+                entryFor(emails.overview(CASE_ID).availability(), EmailTemplate.CHASE_MISSING_DOCUMENTS);
+
+            if (state == DeedPollState.AwaitingFurtherDocs) {
+                assertThat(entry.applicable()).isTrue();
+                assertThat(entry.reason()).isNull();
+            } else {
+                assertThat(entry.applicable()).isFalse();
+                // Its own sentence, and not one about a referral: a caseworker sent to look for a refusal would
+                // find the wrong tab. It names the field that derives the state, because the state is not settable.
+                assertThat(entry.reason())
+                    .isEqualTo(CaseEmailService.NOT_AWAITING_FURTHER_DOCS)
+                    .isNotEqualTo(CaseEmailService.NO_REFUSAL)
+                    .contains("awaited");
+            }
+        }
+
+        @Test
+        @DisplayName("a case with no state derived yet is not chased")
+        void caseWithNoStateIsNotChased() {
+            // Unreachable through the write path -- the cascade always derives one -- but a migrated row is not
+            // this service's to vouch for, and "we do not know what this case is waiting for" must not become a
+            // demand sent to an applicant.
+            storedCase().setState(null);
+            when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of());
+
+            assertThat(entryFor(emails.overview(CASE_ID).availability(), EmailTemplate.CHASE_MISSING_DOCUMENTS)
+                           .applicable())
+                .isFalse();
+        }
+
+        @Test
+        @DisplayName("a refusal neither offers nor withholds it, because it is not about a referral")
+        void refusalIsIrrelevantToTheChase() {
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            refusedReferralFor(ReferralReason.NonPublication);
+            blocking(EmailTemplate.APPLICATION_REJECTED, LocalDateTime.of(2026, 6, 3, 9, 30));
+
+            // The rejection email has taken the referral's slot in its group, which hides ④ -- and says nothing
+            // at all about ⑤. Sharing REFERRAL_OUTCOME would have made a chase impossible on any case whose
+            // referral had been decided, which is most of them.
+            List<EmailAvailability> available = emails.overview(CASE_ID).availability();
+            assertThat(entryFor(available, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED).applicable()).isFalse();
+            assertThat(entryFor(available, EmailTemplate.CHASE_MISSING_DOCUMENTS).applicable()).isTrue();
+        }
+
+        @Test
+        @DisplayName("is unprovisioned without a reply-to, because its words ask the applicant to answer")
+        void needsTheReplyTo() {
+            String uuid = "2b0e6b6e-0000-4000-8000-0000000000aa";
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of());
+
+            assertThat(entryFor(chaseService(uuid, "").overview(CASE_ID).availability(),
+                                EmailTemplate.CHASE_MISSING_DOCUMENTS))
+                .satisfies(entry -> {
+                    // Applicable and unprovisioned: the case is waiting for documents and the environment cannot
+                    // send an email that asks for them from an address anybody reads.
+                    assertThat(entry.applicable()).isTrue();
+                    assertThat(entry.provisioned()).isFalse();
+                });
+            assertThat(entryFor(chaseService(uuid, "reply-to-1").overview(CASE_ID).availability(),
+                               EmailTemplate.CHASE_MISSING_DOCUMENTS).provisioned()).isTrue();
+        }
+
+        @Test
+        @DisplayName("opens a form with an empty documents_required and asks Notify nothing")
+        void publishesAnEmptyDefault() {
+            // The slot nothing pre-populates, which is why defaults are not composed through the validator: an
+            // empty payload is a refusal for this template, and a tab that asked for defaults through the send
+            // path would answer 400 on exactly the cases the chase is for.
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            when(referrals.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of());
+            when(notifications.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of());
+
+            CaseEmailOverview overview = emails.overview(CASE_ID);
+
+            assertThat(overview.slotDefaults()).singleElement().satisfies(defaults -> {
+                assertThat(defaults.template()).isEqualTo(EmailTemplate.CHASE_MISSING_DOCUMENTS);
+                assertThat(defaults.fields())
+                    .containsExactly(Map.entry(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), ""));
+            });
+            verifyNoInteractions(notify);
+        }
+
+        @Test
+        @DisplayName("enqueues with no referral, its own group, the applicant, and the caseworker's words")
+        void enqueuesWithoutAReferral() {
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            enqueueAnswers(1);
+
+            SendReceipt receipt = emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), "  " + REQUIRED + "  "), REQUEST_ID, CASEWORKER);
+
+            ArgumentCaptor<String> personalisation = ArgumentCaptor.forClass(String.class);
+            verify(notifications).enqueue(
+                any(), eq(CASE_ID), eq(REQUEST_ID),
+                // Null, and not a referral that happens to exist: V11 made the column nullable for this, and a
+                // borrowed id would key a chase to a refusal it has nothing to do with.
+                isNull(),
+                eq(EmailTemplate.CHASE_MISSING_DOCUMENTS.name()),
+                eq(EmailExclusionGroup.DOCUMENT_CHASE.name()),
+                eq(RECIPIENT), personalisation.capture(), any(LocalDateTime.class), eq("A Caseworker"));
+
+            assertThat(receipt.enqueued()).isTrue();
+            assertThat(receipt.recipient()).isEqualTo(RECIPIENT);
+            // Trimmed, and resolved from the case beside it. No refund flag, no decision date, no direction.
+            assertThat(personalisation.getValue())
+                .contains("\"documents_required\":\"" + REQUIRED + "\"")
+                .contains("\"reference_number\":\"DP2026-000123\"")
+                .doesNotContain("applied_online")
+                .doesNotContain("decision_date")
+                .doesNotContain(DIRECTION);
+        }
+
+        @Test
+        @DisplayName("reads no referral at all when it is sent, which is decision 1 as behaviour")
+        void readsNoReferral() {
+            // The rule that is easiest to lose: a compose that read the newest refusal "just in case" would make
+            // a chase quietly depend on the referral table, and the first case with a superseded refusal would
+            // start behaving differently from one without.
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            enqueueAnswers(1);
+
+            emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                        Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED), REQUEST_ID, CASEWORKER);
+
+            verifyNoInteractions(referrals);
+            // And no confirmation clock, on the referral or on the case: this email waits for documents, which
+            // awaitingFurtherDocsInfo already records, not for the answer to one referral's question.
+            verifyNoInteractions(referralService);
+        }
+
+        @Test
+        @DisplayName("writes one note naming the email, and repeats nothing the caseworker typed")
+        void writesOneNote() {
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            enqueueAnswers(1);
+
+            emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                        Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED), REQUEST_ID, CASEWORKER);
+
+            verify(caseNotes).createNote(
+                CASE_ID,
+                new CreateNoteInput(EmailNotes.sent(EmailTemplate.CHASE_MISSING_DOCUMENTS)),
+                CASEWORKER.noteAuthor());
+            ArgumentCaptor<CreateNoteInput> note = ArgumentCaptor.forClass(CreateNoteInput.class);
+            verify(caseNotes).createNote(anyString(), note.capture(), any());
+            // The marker, not the record: the documents asked for are personal data and the Emails tab holds them.
+            assertThat(note.getValue().note()).doesNotContain("birth certificate").doesNotContain(RECIPIENT);
+        }
+
+        @Test
+        @DisplayName("a second chase of the same case is a second email, because a reminder is legitimate")
+        void chasesAgain() {
+            // Decision 5. The exclusion group must not turn a reminder into a conflict: a case can sit in
+            // AwaitingFurtherDocs after the first chase, and the caseworker is the one who decides to ask again.
+            //
+            // Two request ids, because that is what a second chase is: one compose journey, one key. The same key
+            // twice is the double-click V19's index refuses, which SendIdempotencyTest asserts against real
+            // Postgres -- asserting two rows for one key here would document behaviour the service does not have,
+            // and would only pass because the statement is stubbed.
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            enqueueAnswers(1);
+            Map<String, Object> slots = Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED);
+            UUID laterJourney = UUID.fromString("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa");
+
+            assertThat(emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots, REQUEST_ID, CASEWORKER)
+                           .enqueued())
+                .isTrue();
+            assertThat(emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots, laterJourney, CASEWORKER)
+                           .enqueued())
+                .isTrue();
+
+            // Two rows, and nothing read off the index between them: what separates a deliberate repeat from a
+            // double-click is the request id notify-6's Task 2 adds, not this group.
+            verify(notifications, times(2)).enqueue(any(), anyString(), any(), isNull(), anyString(), anyString(),
+                                                    anyString(), anyString(), any(), anyString());
+            verify(notifications, never()).findBlocking(anyString(), any(), anyString());
+        }
+
+        @Test
+        @DisplayName("409s a case that is not waiting for documents, and enqueues nothing")
+        void refusesACaseThatIsNotWaiting() {
+            storedCase().setState(DeedPollState.ReadyForMaster);
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage(CaseEmailService.NOT_AWAITING_FURTHER_DOCS);
+
+            neverEnqueues();
+            verifyNoInteractions(caseNotes);
+        }
+
+        @ParameterizedTest
+        @NullSource
+        @ValueSource(strings = {"", "   "})
+        @DisplayName("400s a blank documents_required, because nothing pre-populates it")
+        void refusesABlankSlot(String supplied) {
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            Map<String, Object> slots = new HashMap<>();
+            slots.put(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), supplied);
+
+            assertThatThrownBy(() ->
+                emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots, REQUEST_ID, CASEWORKER))
+                .isInstanceOf(InvalidInputError.class)
+                .satisfies(refusal -> {
+                    assertThat(((InvalidInputError) refusal).errors())
+                        .extracting(FieldError::field)
+                        .containsExactly(EmailSlot.DOCUMENTS_REQUIRED.placeholder());
+                    // The slot's own sentence: there is no direction to shorten and no referral to look at, so
+                    // being told about a judge would send the caseworker somewhere useless.
+                    assertThat(((InvalidInputError) refusal).errors().getFirst().message())
+                        .contains("only a caseworker can say")
+                        .doesNotContain("judge");
+                });
+
+            neverEnqueues();
+        }
+
+        @Test
+        @DisplayName("takes 4,000 characters and refuses 4,001, which is the cap being inclusive")
+        void refusesAnOverLongSlot() {
+            // The cap is this package's own constant rather than ReferralSchemas', so the boundary is asserted
+            // against the number an email declares -- a change to what a judge may record must not move it.
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            enqueueAnswers(1);
+
+            assertThat(emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(),
+                       "x".repeat(EmailSlot.MAX_EMAIL_PROSE_LENGTH)),
+                REQUEST_ID, CASEWORKER).enqueued()).isTrue();
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(),
+                       "x".repeat(EmailSlot.MAX_EMAIL_PROSE_LENGTH + 1)),
+                REQUEST_ID, CASEWORKER))
+                .isInstanceOf(InvalidInputError.class);
+        }
+
+        @Test
+        @DisplayName("400s an unknown key and a resolved one, and never overrides a case value")
+        void refusesEverythingButItsOwnSlot() {
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            enqueueAnswers(1);
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED,
+                       MissingDocumentsPersonalisation.REFERENCE_NUMBER, "DP2026-999999",
+                       "sign_off", "Kind regards"),
+                REQUEST_ID, CASEWORKER))
+                .isInstanceOf(InvalidInputError.class)
+                .satisfies(refusal -> assertThat(((InvalidInputError) refusal).errors())
+                    .extracting(FieldError::field)
+                    .containsExactlyInAnyOrder(MissingDocumentsPersonalisation.REFERENCE_NUMBER, "sign_off"));
+
+            // Refused rather than stripped, so the reference the applicant is told is the case's own and a
+            // caseworker who tried to change it is told they cannot -- not given a success and a different email.
+            emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                        Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED), REQUEST_ID, CASEWORKER);
+            ArgumentCaptor<String> personalisation = ArgumentCaptor.forClass(String.class);
+            verify(notifications).enqueue(any(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                                          personalisation.capture(), any(), anyString());
+            assertThat(personalisation.getValue())
+                .contains("\"reference_number\":\"DP2026-000123\"")
+                .doesNotContain("DP2026-999999");
+        }
+
+        @Test
+        @DisplayName("every chase is its own entry, newest first, with its own state, author, address and wording")
+        void repeatedChasesAreEachTheirOwnEntry() {
+            // Decision 5's other half. A case may be chased more than once, so history has to show each attempt
+            // rather than the latest -- and each attempt carries what *that* send resolved: the address as it stood
+            // then, the caseworker who wrote it, and the wording Notify rendered for it. A history that collapsed
+            // them, or that rendered one attempt's subject against another's row, would leave a caseworker unable
+            // to tell whether the applicant had already been asked for this document.
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            Notification second = chase(
+                UUID.fromString("aaaaaaaa-0000-4000-8000-000000000002"),
+                LocalDateTime.of(2026, 9, 24, 15, 30),
+                NotificationState.Pending,
+                "A Second Caseworker",
+                "corrected.address@example.com");
+            Notification first = chase(
+                UUID.fromString("aaaaaaaa-0000-4000-8000-000000000001"),
+                LocalDateTime.of(2026, 9, 10, 9, 0),
+                NotificationState.Sent,
+                "A Caseworker",
+                RECIPIENT);
+            first.setSubject("We need more information about your deed poll application");
+            first.setBody("Dear Alex,\n\nPlease send us your birth certificate.");
+            when(notifications.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID))
+                .thenReturn(List.of(second, first));
+            when(documents.findByDeedPollIdOrderByCreatedOnAsc(CASE_ID)).thenReturn(List.of());
+
+            List<CaseCorrespondence> history = emails.correspondence(CASE_ID);
+
+            // Newest first, and two of them: the repository supplies the order and nothing here re-sorts or
+            // de-duplicates by template, which is what a "one chase per case" reading would have done.
+            assertThat(history).extracting(CaseCorrespondence::id)
+                .containsExactly(second.getId(), first.getId());
+            assertThat(history).allSatisfy(entry -> {
+                assertThat(entry.template()).isEqualTo(EmailTemplate.CHASE_MISSING_DOCUMENTS.key());
+                assertThat(entry.templateName()).isEqualTo(EmailTemplate.CHASE_MISSING_DOCUMENTS.displayName());
+                // Nothing is attached to a chase, so no entry of one carries a document.
+                assertThat(entry.documents()).isEmpty();
+            });
+            assertThat(history.getFirst()).satisfies(entry -> {
+                assertThat(entry.createdOn()).isEqualTo(second.getCreatedOn());
+                assertThat(entry.createdBy()).isEqualTo("A Second Caseworker");
+                assertThat(entry.recipient()).isEqualTo("corrected.address@example.com");
+                assertThat(entry.state()).isEqualTo(NotificationState.Pending);
+                // Not yet accepted, so there is no rendering to show -- and deliberately not the first attempt's.
+                assertThat(entry.subject()).isNull();
+                assertThat(entry.body()).isNull();
+            });
+            assertThat(history.getLast()).satisfies(entry -> {
+                assertThat(entry.createdOn()).isEqualTo(first.getCreatedOn());
+                assertThat(entry.createdBy()).isEqualTo("A Caseworker");
+                assertThat(entry.recipient()).isEqualTo(RECIPIENT);
+                assertThat(entry.state()).isEqualTo(NotificationState.Sent);
+                assertThat(entry.subject()).isEqualTo("We need more information about your deed poll application");
+                assertThat(entry.body()).contains("birth certificate");
+                assertThat(entry.failureReason()).isNull();
+            });
+            verifyNoInteractions(notify);
+        }
+
+        @Test
+        @DisplayName("a failed chase stays in history with its reason, so a reminder is not silently lost")
+        void failedChaseStaysInHistory() {
+            // The attempt a caseworker most needs to see: the applicant was never asked, and the only record of
+            // that is this row. V19's index predicate is what lets a corrected send be made without it vanishing.
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            Notification failed = chase(
+                UUID.fromString("aaaaaaaa-0000-4000-8000-000000000003"),
+                LocalDateTime.of(2026, 9, 24, 16, 0),
+                NotificationState.Failed,
+                "A Caseworker",
+                RECIPIENT);
+            failed.setFailureVerdict(NotificationFailureVerdict.PERMANENT);
+            failed.setFailureReason("PERMANENT: GOV.UK Notify refused the send with status 400");
+            when(notifications.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(failed));
+            when(documents.findByDeedPollIdOrderByCreatedOnAsc(CASE_ID)).thenReturn(List.of());
+
+            assertThat(emails.correspondence(CASE_ID)).singleElement().satisfies(entry -> {
+                assertThat(entry.state()).isEqualTo(NotificationState.Failed);
+                assertThat(entry.failureReason()).startsWith("PERMANENT:");
+                assertThat(entry.subject()).isNull();
+                assertThat(entry.body()).isNull();
+            });
+        }
+
+        /**
+         * One chase attempt as the outbox holds it: the template, the address that send resolved, its author and
+         * the state the drain left it in.
+         *
+         * <p>Its own fixture rather than {@code notification(...)}, which is the refusal email's -- a chase's row
+         * carries no {@code referralId} and a different template name, and this class's history assertions are
+         * about telling one attempt from another.
+         */
+        private Notification chase(UUID id,
+                                   LocalDateTime createdOn,
+                                   NotificationState state,
+                                   String author,
+                                   String recipient) {
+            Notification row = new Notification();
+            row.setId(id);
+            row.setDeedPollId(CASE_ID);
+            row.setRequestId(UUID.randomUUID());
+            row.setTemplate(EmailTemplate.CHASE_MISSING_DOCUMENTS.name());
+            row.setExclusionGroup(EmailExclusionGroup.DOCUMENT_CHASE.name());
+            row.setRecipient(recipient);
+            row.setPersonalisation(Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED));
+            row.setState(state);
+            row.setCreatedBy(author);
+            row.setCreatedOn(createdOn);
+            return row;
+        }
+
+        @Test
+        @DisplayName("422s a case with no applicant email, as every send does")
+        void refusesABlankRecipient() {
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setState(DeedPollState.AwaitingFurtherDocs);
+            deedPoll.setApplicantEmail("   ");
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(IncompleteDataError.class);
+        }
+
+        private CaseEmailService chaseService(String templateId, String replyToId) {
+            return new CaseEmailService(
+                deedPolls, referrals, notifications, documents, notify,
+                new NotifyProperties("https://notify.invalid", "key",
+                                     Map.of(EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), templateId), replyToId),
+                referralService, caseNotes, new ObjectMapper());
+        }
+
+    }
+
+    /**
+     * What a zero-row enqueue is resolved to, which since V19 has three answers rather than two.
+     *
+     * <p><strong>Container-free deliberately, and this is where these rules have to live.</strong> The two unique
+     * indexes are proved against real Postgres in {@code NotificationRepositoryTest}; what is asserted here is the
+     * <em>order</em> the service reads them in and the answer it gives for each, which is the part CI runs. A
+     * resolution that asked the exclusion group first would report "the rejection email was already requested" to a
+     * caseworker who had merely retried their own POST, and no database test would notice.
+     *
+     * <p>The chase is the fixture for most of it because its personalisation is all strings, so an expected map can
+     * be written out rather than captured -- and because a case-driven template is the one whose rows cannot collide
+     * on the referral key at all, which is what makes the third answer reachable.
+     */
+    @Nested
+    @DisplayName("resolving a refused insert")
+    class ResolvingARefusedInsert {
+
+        private static final String REQUIRED = "Your birth certificate.";
+
+        /** A second compose journey: a different key for what may be a perfectly legitimate second send. */
+        private static final UUID ANOTHER_REQUEST_ID = UUID.fromString("77777777-7777-7777-7777-777777777777");
+
+        @Test
+        @DisplayName("answers with the row this request already wrote, and writes no second note or clock")
+        void theSameRequestAnswersWithItsOwnRow() {
+            // A double-click, a client retrying a POST whose response was lost, or two replicas racing on one
+            // journey. All three are the same fact from here: this request has already been recorded, so the
+            // caseworker is shown the row rather than a failure.
+            chasedCase();
+            enqueueAnswers(0);
+            Notification existing = alreadySentUnderThisRequest(REQUIRED);
+
+            SendReceipt receipt = emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots(REQUIRED), REQUEST_ID, CASEWORKER);
+
+            assertThat(receipt.id()).isEqualTo(existing.getId());
+            assertThat(receipt.enqueued()).isFalse();
+            assertThat(receipt.recipient()).isEqualTo(RECIPIENT);
+            // One email owed, so one marker on the timeline: a second note would leave the case reading as though
+            // the applicant had been written to twice.
+            verifyNoInteractions(caseNotes);
+            // And the referral key is not even asked about: this request id answered the question, and a chase's
+            // rows cannot occupy that index anyway.
+            verify(notifications, never()).findBlocking(anyString(), any(), anyString());
+        }
+
+        @Test
+        @DisplayName("compares the frozen personalisation as a map, so key order is not what decides it")
+        void keyOrderIsNotPartOfTheComparison() {
+            // jsonb does not preserve insertion order, so the row read back may hand its entries over in any
+            // order at all. A comparison of the serialised text would therefore refuse a caseworker's own retry
+            // as a reused key -- a 409 on the one path that exists to answer 200.
+            chasedCase();
+            enqueueAnswers(0);
+            Notification existing = alreadySentUnderThisRequest(REQUIRED);
+            Map<String, Object> shuffled = new LinkedHashMap<>();
+            existing.getPersonalisation().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> shuffled.put(entry.getKey(), entry.getValue()));
+            existing.setPersonalisation(shuffled);
+
+            assertThat(emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots(REQUIRED), REQUEST_ID,
+                                   CASEWORKER).enqueued())
+                .isFalse();
+        }
+
+        @Test
+        @DisplayName("409s a request id reused for text the caseworker has since edited, and sends nothing")
+        void theSameJourneyWithEditedTextIsRefused() {
+            // The failure the 409 exists for: taking the key's word would answer with the email they first wrote
+            // and discard the edit, and taking the payload's word would write the second row the key exists to
+            // prevent. Neither is safe, so the caseworker is told to start the email again.
+            chasedCase();
+            enqueueAnswers(0);
+            alreadySentUnderThisRequest("Your birth certificate.");
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                slots("Your birth certificate, and your marriage certificate."), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage(CaseEmailService.REQUEST_ALREADY_USED)
+                // Neither email's content, and not the key either: one is the applicant's and the other is
+                // transport.
+                .hasMessageNotContaining("marriage")
+                .hasMessageNotContaining(REQUEST_ID.toString());
+
+            verifyNoInteractions(caseNotes);
+        }
+
+        @Test
+        @DisplayName("409s a request id reused for a different template on the same case")
+        void theSameJourneyForADifferentEmailIsRefused() {
+            chasedCase();
+            refusedReferral();
+            enqueueAnswers(0);
+            Notification existing = alreadySentUnderThisRequest(REQUIRED);
+            existing.setTemplate(EmailTemplate.APPLICATION_REJECTED.name());
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots(REQUIRED), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage(CaseEmailService.REQUEST_ALREADY_USED);
+        }
+
+        @Test
+        @DisplayName("409s a request id reused after the applicant's address changed, because the row is frozen")
+        void theSameJourneyToADifferentRecipientIsRefused() {
+            // The recipient is frozen on the row and re-resolved on every send, so a case whose applicantEmail was
+            // corrected between two POSTs of one journey is a different email to a different person. Answering
+            // with the first row would tell the caseworker the corrected address had been written to.
+            DeedPoll deedPoll = chasedCase();
+            enqueueAnswers(0);
+            alreadySentUnderThisRequest(REQUIRED).setRecipient("old.address@example.com");
+            deedPoll.setApplicantEmail(RECIPIENT);
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots(REQUIRED), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage(CaseEmailService.REQUEST_ALREADY_USED);
+        }
+
+        @Test
+        @DisplayName("409s a request id reused after a second refusal, though both emails resolve identically")
+        void theSameJourneyOnADifferentReferralIsRefused() throws Exception {
+            // A refusal's personalisation names no referral -- the direction, the applicant's former names and the
+            // refund branch, and nothing else -- so two refusals of one case recorded with the same direction
+            // resolve to the same map. The referral the row is keyed on is therefore the only thing that tells the
+            // two sends apart, which is why it is part of the comparison: without it this key answers with the
+            // first refusal's row, telling the caseworker the applicant has been written to about a refusal that
+            // has had no email at all, and leaving the exclusion group the new one keys on empty.
+            storedCase();
+            refusedReferral();
+            // The personalisation the resolver actually produces, harvested rather than written out: the point of
+            // the test is that the two sides are identical, so a hand-built copy that happened to differ would
+            // make it pass for the wrong reason.
+            //
+            // The preview is built before the stubbing and not inside it, for the reason returnsNotifysRendering
+            // gives: Mockito reads a `when` inside a `when` as one unfinished stubbing.
+            TemplatePreview rendered = rendered();
+            when(notify.generateTemplatePreview(anyString(), any())).thenReturn(rendered);
+            emails.preview(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of());
+            ArgumentCaptor<Map<String, Object>> resolved = personalisationCaptor();
+            verify(notify).generateTemplatePreview(anyString(), resolved.capture());
+
+            Notification existing = new Notification();
+            existing.setId(UUID.fromString("99999999-9999-9999-9999-999999999999"));
+            existing.setDeedPollId(CASE_ID);
+            existing.setRequestId(REQUEST_ID);
+            existing.setTemplate(EmailTemplate.APPLICATION_REJECTED.name());
+            existing.setExclusionGroup(EmailExclusionGroup.REFERRAL_OUTCOME.name());
+            existing.setRecipient(RECIPIENT);
+            existing.setPersonalisation(resolved.getValue());
+            // The refusal that was newest when the first journey ran, since superseded by the one storedCase now
+            // reports.
+            existing.setReferralId(UUID.fromString("33333333-3333-3333-3333-333333333333"));
+            when(notifications.findByDeedPollIdAndRequestId(CASE_ID, REQUEST_ID)).thenReturn(Optional.of(existing));
+            enqueueAnswers(0);
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage(CaseEmailService.REQUEST_ALREADY_USED);
+            verifyNoInteractions(caseNotes);
+
+            // And the other direction, so the referral is shown to be what decides it rather than something else
+            // about these two rows: the same row keyed on the refusal this send resolved is the caseworker's own
+            // retry, and answers with it.
+            existing.setReferralId(REFERRAL_ID);
+            assertThat(emails.send(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), REQUEST_ID, CASEWORKER))
+                .satisfies(receipt -> {
+                    assertThat(receipt.enqueued()).isFalse();
+                    assertThat(receipt.id()).isEqualTo(existing.getId());
+                });
+        }
+
+        @Test
+        @DisplayName("a request id never seen falls through to the referral key, which answers in its own words")
+        void anUnseenRequestFallsThroughToTheExclusionGroup() {
+            // The distinction this whole resolution exists to draw. Both conflicts arrive as zero rows, and the
+            // two answers are different sentences about different things: one says "start the email again" and
+            // the other says "this referral has already had the email that contradicts this one".
+            storedCase();
+            refusedReferralFor(ReferralReason.NonPublication);
+            enqueueAnswers(0);
+            when(notifications.findByDeedPollIdAndRequestId(CASE_ID, ANOTHER_REQUEST_ID))
+                .thenReturn(Optional.empty());
+            blocking(EmailTemplate.APPLICATION_REJECTED, LocalDateTime.of(2026, 6, 3, 9, 30));
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED, Map.of(), ANOTHER_REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining(EmailTemplate.APPLICATION_REJECTED.displayName())
+                .hasMessageContaining("already requested")
+                .satisfies(refusal -> assertThat(refusal.getMessage())
+                    .isNotEqualTo(CaseEmailService.REQUEST_ALREADY_USED));
+        }
+
+        @Test
+        @DisplayName("a second journey on the same referral is still the one email that referral gets")
+        void secondJourneyOnOneReferralIsStillOneEmail() {
+            // V15's rule survives V19 intact: a new compose journey does not buy a second copy of an email the
+            // referral has already had. The receipt names the row that is already owed, as it did before.
+            storedCase();
+            refusedReferral();
+            enqueueAnswers(0);
+            Notification existing = blocking(
+                EmailTemplate.APPLICATION_REJECTED, LocalDateTime.of(2026, 6, 3, 9, 30));
+
+            SendReceipt receipt = emails.send(
+                CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), ANOTHER_REQUEST_ID, CASEWORKER);
+
+            assertThat(receipt.id()).isEqualTo(existing.getId());
+            assertThat(receipt.enqueued()).isFalse();
+        }
+
+        @Test
+        @DisplayName("a chase refused with no readable row is a fault, and never a silent success")
+        void refusalNoRowCanExplainIsAFault() {
+            // Unreachable today: a chase's rows carry no referralId, so V19's key is the only one that can refuse
+            // one -- and its row would then be readable. Reaching here means a constraint this service does not
+            // know about refused the insert, and the safe answer is to raise: the transaction rolls back, so
+            // nothing is owed and nothing was sent. Answering 200 with an unwritten row's id would tell a
+            // caseworker an applicant had been emailed.
+            chasedCase();
+            enqueueAnswers(0);
+            when(notifications.findByDeedPollIdAndRequestId(CASE_ID, REQUEST_ID)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots(REQUIRED), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("refused by a unique index");
+
+            // And the referral key was never asked about with a null referral: that query's answer is always
+            // empty, and asking it would read as though the database had an opinion about a repeat chase.
+            verify(notifications, never()).findBlocking(anyString(), any(), anyString());
+            verifyNoInteractions(caseNotes);
+        }
+
+        @Test
+        @DisplayName("passes the caller's own request id to the statement, rather than one of its own")
+        void bindsTheCallersRequestId() {
+            // The one thing that makes every rule above reachable. An id generated here instead would make every
+            // retry a new send, which is the behaviour V19 replaced -- and nothing else in this class would fail.
+            chasedCase();
+            enqueueAnswers(1);
+
+            emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots(REQUIRED), REQUEST_ID, CASEWORKER);
+
+            ArgumentCaptor<UUID> id = ArgumentCaptor.forClass(UUID.class);
+            verify(notifications).enqueue(id.capture(), anyString(), eq(REQUEST_ID), isNull(), anyString(),
+                                          anyString(), anyString(), anyString(), any(), anyString());
+            // And it is not the row id either: the row is this service's identifier for the email and the request
+            // id is the caller's for the journey, and conflating them would make a retry look like a new row.
+            assertThat(id.getValue()).isNotEqualTo(REQUEST_ID);
+        }
+
+        private Map<String, Object> slots(String documentsRequired) {
+            return Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), documentsRequired);
+        }
+
+        /** A case waiting for documents, which is the one state the chase is offered in. */
+        private DeedPoll chasedCase() {
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setState(DeedPollState.AwaitingFurtherDocs);
+            return deedPoll;
+        }
+
+        /**
+         * The row this case already holds for {@link #REQUEST_ID}: the chase, to the applicant, with exactly the
+         * personalisation the resolver would produce for {@code documentsRequired}.
+         *
+         * <p>Written out rather than captured from a first send, so a resolver that started sending a different
+         * set of keys fails here -- the comparison is only worth anything if the expected side is independent.
+         */
+        private Notification alreadySentUnderThisRequest(String documentsRequired) {
+            Notification existing = new Notification();
+            existing.setId(UUID.fromString("88888888-8888-8888-8888-888888888888"));
+            existing.setDeedPollId(CASE_ID);
+            existing.setRequestId(REQUEST_ID);
+            existing.setTemplate(EmailTemplate.CHASE_MISSING_DOCUMENTS.name());
+            existing.setExclusionGroup(EmailExclusionGroup.DOCUMENT_CHASE.name());
+            existing.setRecipient(RECIPIENT);
+            Map<String, Object> frozen = new LinkedHashMap<>();
+            frozen.put(MissingDocumentsPersonalisation.REFERENCE_NUMBER, "DP2026-000123");
+            frozen.put(MissingDocumentsPersonalisation.ONLINE_APPLICATION_REFERENCE, "DP-2026-0042");
+            frozen.put(MissingDocumentsPersonalisation.OLD_FORENAME, "Alex");
+            frozen.put(MissingDocumentsPersonalisation.OLD_SURNAME, "Okonjo");
+            frozen.put(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), documentsRequired);
+            existing.setPersonalisation(frozen);
+            existing.setCreatedBy("A Caseworker");
+            when(notifications.findByDeedPollIdAndRequestId(CASE_ID, REQUEST_ID))
+                .thenReturn(Optional.of(existing));
+            return existing;
+        }
+    }
+
+    /**
+     * The smallest payload each template accepts, which is nothing at all unless it has a required slot that
+     * pre-populates from nothing.
+     *
+     * <p>A switch expression so a fourth template with an un-pre-populatable slot fails to compile here rather
+     * than failing whichever every-template test reaches it first.
+     */
+    private static Map<String, Object> minimumSlots(EmailTemplate template) {
+        return switch (template) {
+            case APPLICATION_REJECTED, REQUEST_CONFIRMATION_TO_PROCEED -> Map.of();
+            case CHASE_MISSING_DOCUMENTS -> Map.of(
+                EmailSlot.DOCUMENTS_REQUIRED.placeholder(), "Your birth certificate.");
+        };
+    }
+
+    /**
+     * What the enqueue statement answers, for a test that does not care which of its ten arguments is which.
+     *
+     * <p>One helper rather than the matcher list repeated at every stub, because the list changes whenever the
+     * statement gains a column -- V19's request id most recently -- and a copy of it per test is a copy to get
+     * wrong. The tests that <em>are</em> about an argument name it explicitly instead.
+     *
+     * @param rows 1 for an insert that wrote the row, 0 for one a unique index refused
+     */
+    private void enqueueAnswers(int rows) {
+        when(notifications.enqueue(any(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                                   anyString(), any(), anyString())).thenReturn(rows);
+    }
+
+    /** That nothing was enqueued at all, which is the assertion every refusal before the insert shares. */
+    private void neverEnqueues() {
+        verify(notifications, never()).enqueue(any(), anyString(), any(), any(), anyString(), anyString(),
+                                              anyString(), anyString(), any(), anyString());
     }
 
     /** A stored case carrying everything the refusal email resolves from. */

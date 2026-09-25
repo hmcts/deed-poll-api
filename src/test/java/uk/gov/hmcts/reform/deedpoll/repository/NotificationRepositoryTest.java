@@ -80,6 +80,18 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
      */
     private static final String LONE_GROUP = "FORMS_FOR_COMPLETION";
 
+    /**
+     * The case-driven template, whose rows carry no {@code referralId}.
+     *
+     * <p>The fixture for everything about V19, because it is the template V15's key cannot touch: its rows sit
+     * outside that partial index entirely, so the request id is the only thing standing between one compose
+     * journey and two emails.
+     */
+    private static final String CHASE_TEMPLATE = "CHASE_MISSING_DOCUMENTS";
+
+    /** Its own exclusion group, which no index acts on -- a repeat chase is legitimate. */
+    private static final String CHASE_GROUP = "DOCUMENT_CHASE";
+
     private static final String RECIPIENT = "applicant@example.com";
 
     /**
@@ -122,6 +134,9 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
     private Notification owed(DeedPoll parent, Referral referral, LocalDateTime nextAttemptAt) {
         Notification notification = new Notification();
         notification.setDeedPollId(parent.getId());
+        // A request of its own, because V19's key is ("deedPollId", "requestId") and several tests here put two
+        // rows on one case. A shared constant would make those collide on a key none of them is about.
+        notification.setRequestId(UUID.randomUUID());
         notification.setReferralId(referral == null ? null : referral.getId());
         notification.setTemplate(TEMPLATE);
         notification.setExclusionGroup(GROUP);
@@ -272,8 +287,8 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
 
         // The statement itself, against a real Postgres. Every other test of it mocks this repository, so
         // the jsonb cast, the literals and the ON CONFLICT clause are only ever executed here.
-        int enqueued = notifications.enqueue(id, deedPoll.getId(), referral.getId(), TEMPLATE, GROUP,
-                                             RECIPIENT, PERSONALISATION, NOW, "A Caseworker");
+        int enqueued = notifications.enqueue(id, deedPoll.getId(), UUID.randomUUID(), referral.getId(), TEMPLATE,
+                                             GROUP, RECIPIENT, PERSONALISATION, NOW, "A Caseworker");
 
         assertThat(enqueued).isOne();
         entityManager.clear();
@@ -294,8 +309,9 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
 
         // The caseworker's double click. ON CONFLICT DO NOTHING rather than a caught exception, so the
         // caller's transaction stays usable -- the second click is a no-op to log, not a failed request.
-        int enqueued = notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(), TEMPLATE,
-                                             GROUP, RECIPIENT, PERSONALISATION, NOW, "A Caseworker");
+        int enqueued = notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(),
+                                             referral.getId(), TEMPLATE, GROUP, RECIPIENT, PERSONALISATION,
+                                             NOW, "A Caseworker");
 
         assertThat(enqueued).isZero();
         entityManager.clear();
@@ -314,8 +330,9 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         entityManager.flush();
         UUID replacementId = UUID.randomUUID();
 
-        int enqueued = notifications.enqueue(replacementId, deedPoll.getId(), referral.getId(), TEMPLATE, GROUP,
-                                             RECIPIENT, PERSONALISATION, NOW.plusMinutes(1), "A Caseworker");
+        int enqueued = notifications.enqueue(replacementId, deedPoll.getId(), UUID.randomUUID(), referral.getId(),
+                                             TEMPLATE, GROUP, RECIPIENT, PERSONALISATION,
+                                             NOW.plusMinutes(1), "A Caseworker");
 
         assertThat(enqueued)
             .as("Notify definitely refused the first request, so there is nothing to duplicate")
@@ -360,7 +377,7 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
             entityManager.flush();
 
             assertThat(notifications.enqueue(
-                UUID.randomUUID(), deedPoll.getId(), referral.getId(), TEMPLATE, GROUP,
+                UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), referral.getId(), TEMPLATE, GROUP,
                 RECIPIENT, PERSONALISATION, NOW.plusMinutes(1), "A Caseworker"))
                 .as(fixture.reason())
                 .isZero();
@@ -378,9 +395,9 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         // Decision 3, as the fact about Postgres that the whole mechanism rests on. The old key --
         // ("referralId", "template") -- would have permitted this row: one email telling the applicant that
         // enrolment is refused and a second asking whether they still want the deed enrolled.
-        int enqueued = notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(),
-                                             COUNTERPART_TEMPLATE, GROUP, RECIPIENT, PERSONALISATION,
-                                             NOW.plusMinutes(1), "A Caseworker");
+        int enqueued = notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(),
+                                             referral.getId(), COUNTERPART_TEMPLATE, GROUP, RECIPIENT,
+                                             PERSONALISATION, NOW.plusMinutes(1), "A Caseworker");
 
         assertThat(enqueued).isZero();
         entityManager.clear();
@@ -405,8 +422,9 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(notifications.findBlocking(deedPoll.getId(), referral.getId(), GROUP)).isEmpty();
 
         UUID replacementId = UUID.randomUUID();
-        assertThat(notifications.enqueue(replacementId, deedPoll.getId(), referral.getId(), COUNTERPART_TEMPLATE,
-                                         GROUP, RECIPIENT, PERSONALISATION, NOW.plusMinutes(1), "A Caseworker"))
+        assertThat(notifications.enqueue(replacementId, deedPoll.getId(), UUID.randomUUID(), referral.getId(),
+                                         COUNTERPART_TEMPLATE, GROUP, RECIPIENT, PERSONALISATION,
+                                         NOW.plusMinutes(1), "A Caseworker"))
             .isOne();
         entityManager.clear();
 
@@ -435,13 +453,14 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         // A group of one makes ("referralId", "exclusionGroup") and the old ("referralId", "template") the same
         // key, so widening the index generalises the existing rule rather than adding a second one beside it:
         // an email in nobody else's group is unaffected by one that has already gone out.
-        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(), "A_LATER_TEMPLATE",
-                                         LONE_GROUP, RECIPIENT, PERSONALISATION, NOW, "A Caseworker"))
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), referral.getId(),
+                                         "A_LATER_TEMPLATE", LONE_GROUP, RECIPIENT, PERSONALISATION, NOW,
+                                         "A Caseworker"))
             .as("another group's slot is free")
             .isOne();
-        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(), "A_LATER_TEMPLATE",
-                                         LONE_GROUP, RECIPIENT, PERSONALISATION, NOW.plusMinutes(1),
-                                         "A Caseworker"))
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), referral.getId(),
+                                         "A_LATER_TEMPLATE", LONE_GROUP, RECIPIENT, PERSONALISATION,
+                                         NOW.plusMinutes(1), "A Caseworker"))
             .as("and then it is taken, once, exactly as the template key used to do it")
             .isZero();
 
@@ -482,7 +501,7 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(entityManager.find(Notification.class, id).getExclusionGroup()).isEqualTo(GROUP);
         // And such a row occupies the slot, so the email it contradicts is refused even though the instance
         // that wrote it had never heard of a group.
-        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), referral.getId(),
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), referral.getId(),
                                          COUNTERPART_TEMPLATE, GROUP, RECIPIENT, PERSONALISATION,
                                          NOW.plusMinutes(1), "A Caseworker"))
             .isZero();
@@ -502,6 +521,165 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         entityManager.clear();
 
         assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId())).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("enqueues nothing for a request this case has already sent, answering 0 rather than throwing")
+    void enqueuesNothingForARequestAlreadySent() {
+        DeedPoll deedPoll = persistedCase();
+        UUID requestId = UUID.randomUUID();
+
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), requestId, null, CHASE_TEMPLATE,
+                                        CHASE_GROUP, RECIPIENT, PERSONALISATION, NOW, "A Caseworker"))
+            .isOne();
+        // The double-click, on a template the referral key cannot help with: a chase's rows carry no referralId,
+        // so V19's ("deedPollId", "requestId") is the only thing between one journey and two emails. ON CONFLICT
+        // DO NOTHING with no target is what makes this a 0 rather than a DataIntegrityViolationException that
+        // would mark the caseworker's transaction rollback-only.
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), requestId, null, CHASE_TEMPLATE,
+                                        CHASE_GROUP, RECIPIENT, PERSONALISATION, NOW.plusMinutes(1),
+                                        "A Caseworker"))
+            .isZero();
+
+        entityManager.clear();
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId())).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("enqueues a second chase under a request of its own, because a reminder is legitimate")
+    void enqueuesASecondChaseUnderItsOwnRequest() {
+        DeedPoll deedPoll = persistedCase();
+
+        // Decision 5, as a fact about the two keys together. A case can sit in AwaitingFurtherDocs after one
+        // reminder, so the database must not make a second chase impossible -- and a key on the payload or on a
+        // time window would have done exactly that.
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), null,
+                                        CHASE_TEMPLATE, CHASE_GROUP, RECIPIENT, PERSONALISATION, NOW,
+                                        "A Caseworker"))
+            .isOne();
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), null,
+                                        CHASE_TEMPLATE, CHASE_GROUP, RECIPIENT, PERSONALISATION,
+                                        NOW.plusDays(7), "A Caseworker"))
+            .as("a second compose journey a week later, which is a reminder rather than a duplicate")
+            .isOne();
+
+        entityManager.clear();
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId())).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("the same request id on another case does not collide, because the key is scoped to the case")
+    void theSameRequestIdOnAnotherCaseDoesNotCollide() {
+        DeedPoll one = persistedCase();
+        DeedPoll another = persistedCase();
+        UUID requestId = UUID.randomUUID();
+
+        // The safety property the scope buys. The key is a value the caller chose, so a global unique index would
+        // let one client's UUID turn an unrelated case's send into a conflict -- or worse, into an idempotent
+        // "already owed" answer naming a notification for a different applicant.
+        assertThat(notifications.enqueue(UUID.randomUUID(), one.getId(), requestId, null, CHASE_TEMPLATE,
+                                        CHASE_GROUP, RECIPIENT, PERSONALISATION, NOW, "A Caseworker"))
+            .isOne();
+        assertThat(notifications.enqueue(UUID.randomUUID(), another.getId(), requestId, null, CHASE_TEMPLATE,
+                                        CHASE_GROUP, RECIPIENT, PERSONALISATION, NOW, "A Caseworker"))
+            .isOne();
+
+        entityManager.clear();
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(one.getId())).hasSize(1);
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(another.getId())).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("a permanently refused row keeps its request id, so the same request does not replace it")
+    void permanentlyRefusedRowKeepsItsRequestId() {
+        DeedPoll deedPoll = persistedCase();
+        UUID requestId = UUID.randomUUID();
+        Notification refused = owed(deedPoll, null, NOW);
+        refused.setRequestId(requestId);
+        refused.setTemplate(CHASE_TEMPLATE);
+        refused.setExclusionGroup(CHASE_GROUP);
+        refused.setState(NotificationState.Failed);
+        refused.setFailureVerdict(NotificationFailureVerdict.PERMANENT);
+        entityManager.flush();
+
+        // V19's index is deliberately NOT partial on the failure verdict, unlike V12's and V15's predicate. A
+        // retry of the same request must go on answering with the failed row: the caseworker's next move is to
+        // compose a corrected email, which is a new journey, and the failed attempt has to survive as history.
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), requestId, null, CHASE_TEMPLATE,
+                                        CHASE_GROUP, RECIPIENT, PERSONALISATION, NOW.plusMinutes(1),
+                                        "A Caseworker"))
+            .isZero();
+        // And the new journey is what gets through, which is the other half of the same rule.
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), null,
+                                        CHASE_TEMPLATE, CHASE_GROUP, RECIPIENT, PERSONALISATION,
+                                        NOW.plusMinutes(2), "A Caseworker"))
+            .isOne();
+
+        entityManager.clear();
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId())).hasSize(2);
+        assertThat(entityManager.find(Notification.class, refused.getId()).getState())
+            .as("the refused attempt survives as history rather than being replaced")
+            .isEqualTo(NotificationState.Failed);
+    }
+
+    @Test
+    @DisplayName("finds this case's row for a request id, and never another case's row for the same one")
+    void findsThisCasesRowForARequestId() {
+        DeedPoll deedPoll = persistedCase();
+        DeedPoll elsewhere = persistedCase();
+        UUID requestId = UUID.randomUUID();
+        Notification mine = owed(deedPoll, null, NOW);
+        mine.setRequestId(requestId);
+        Notification theirs = owed(elsewhere, null, NOW);
+        theirs.setRequestId(requestId);
+        entityManager.flush();
+        entityManager.clear();
+
+        // The read the service resolves a zero-row enqueue with, and it has to be scoped: an unscoped one would
+        // answer a caseworker's retry with a notification belonging to a different applicant.
+        assertThat(notifications.findByDeedPollIdAndRequestId(deedPoll.getId(), requestId))
+            .get()
+            .satisfies(row -> assertThat(row.getId()).isEqualTo(mine.getId()));
+        assertThat(notifications.findByDeedPollIdAndRequestId(elsewhere.getId(), requestId))
+            .get()
+            .satisfies(row -> assertThat(row.getId()).isEqualTo(theirs.getId()));
+        assertThat(notifications.findByDeedPollIdAndRequestId(deedPoll.getId(), UUID.randomUUID())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a row written without naming the request id gets one of its own, which is V19's backfill default")
+    void theRequestIdDefaultCarriesAnOlderInstance() {
+        DeedPoll deedPoll = persistedCase();
+
+        // The rolling-deployment half of V19, and the only place the default is ever executed. An application
+        // instance that predates this migration issues an INSERT that does not name the column at all -- exactly
+        // as one predating V15 omits "exclusionGroup" -- so without the default every send from an old pod would
+        // violate NOT NULL for as long as old and new pods overlap. Two rows, because the value also has to be
+        // unique per row within the case: a constant default would make the second of them collide with the first.
+        List<UUID> ids = List.of(UUID.randomUUID(), UUID.randomUUID());
+        for (UUID id : ids) {
+            entityManager.createNativeQuery("""
+                INSERT INTO "deedpoll_notification" (
+                            "id", "deedPollId", "template", "recipient", "personalisation",
+                            "state", "attempts", "nextAttemptAt", "createdBy", "createdOn", "modifiedOn")
+                     VALUES (:id, :deedPollId, :template, :recipient, CAST(:personalisation AS jsonb),
+                            'Pending', 0, :now, :createdBy, :now, :now)
+                """)
+                .setParameter("id", id)
+                .setParameter("deedPollId", deedPoll.getId())
+                .setParameter("template", CHASE_TEMPLATE)
+                .setParameter("recipient", RECIPIENT)
+                .setParameter("personalisation", PERSONALISATION)
+                .setParameter("now", NOW)
+                .setParameter("createdBy", "An Older Instance")
+                .executeUpdate();
+        }
+        entityManager.clear();
+
+        List<UUID> written = ids.stream()
+            .map(id -> entityManager.find(Notification.class, id).getRequestId())
+            .toList();
+        assertThat(written).doesNotContainNull().doesNotHaveDuplicates();
     }
 
     @Test

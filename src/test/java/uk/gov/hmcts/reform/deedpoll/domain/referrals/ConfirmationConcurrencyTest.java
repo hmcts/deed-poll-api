@@ -247,9 +247,9 @@ class ConfirmationConcurrencyTest extends AbstractPostgresContainerTest {
             // read-model -- written here rather than through the service because this test needs a schedule
             // inside that transaction and not a Notify stub.
             () -> {
-                notifications.enqueue(UUID.randomUUID(), caseId, UUID.fromString(referralId),
-                                      "REQUEST_CONFIRMATION_TO_PROCEED", "REFERRAL_OUTCOME",
-                                      "applicant@example.com", "{}", asked, ADA.name());
+                notifications.enqueue(UUID.randomUUID(), caseId, UUID.randomUUID(),
+                                      UUID.fromString(referralId), "REQUEST_CONFIRMATION_TO_PROCEED",
+                                      "REFERRAL_OUTCOME", "applicant@example.com", "{}", asked, ADA.name());
                 referrals.startConfirmationClockByIdAndDeedPollId(
                     UUID.fromString(referralId), caseId, asked, ADA.name());
                 service.refreshAwaitingConfirmation(caseId);
@@ -316,9 +316,9 @@ class ConfirmationConcurrencyTest extends AbstractPostgresContainerTest {
         List<Throwable> failures = bothRecomputeAfterWritingTheirRow(
             caseId,
             () -> notes.saveAndFlush(note(caseId, "The applicant's reply, read out of the shared inbox.")),
-            () -> notifications.enqueue(UUID.randomUUID(), caseId, UUID.fromString(referralId),
-                                       "REQUEST_CONFIRMATION_TO_PROCEED", "REFERRAL_OUTCOME",
-                                       "applicant@example.com", "{}",
+            () -> notifications.enqueue(UUID.randomUUID(), caseId, UUID.randomUUID(),
+                                       UUID.fromString(referralId), "REQUEST_CONFIRMATION_TO_PROCEED",
+                                       "REFERRAL_OUTCOME", "applicant@example.com", "{}",
                                        LocalDateTime.of(2026, 5, 3, 9, 30), BO.name()));
 
         assertThat(failures)
