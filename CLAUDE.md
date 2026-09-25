@@ -22,12 +22,14 @@ api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
 domain/referrals                  referrals to the judiciary and the applicant's confirmation — NOT a port
+domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
 domain/auth                       CurrentUser, IdamClaims, Role — transport-independent
 notify/                           the GOV.UK Notify outbox: compose, enqueue, drain — NOT a port
 auth/                             IDAM resource-server wiring (transport)
 entity/, repository/              JPA over a Flyway-owned schema
 health/                          readiness that names the missing tables
 storage/                         LocalFilesystemDocumentStore — the seam CDAM replaces
+src/main/resources/deed-templates/  VENDORED Word templates: LOC020 and LOC022, plus their provenance
 src/test/resources/reference/    VENDORED specification: TypeScript source and Dataverse exports
 ```
 
@@ -38,6 +40,18 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   wrong, stop and report it — do not "fix" it.
 - **Never edit a committed Flyway migration.** Add `V{n+1}__….sql`. Editing one breaks every
   environment that has already run it.
+- **The deed templates in `src/main/resources/deed-templates/` are the court's wording, and the generator may
+  only change the text inside their 30 and 13 content controls.** Both are Dynamics 365 Word templates: the
+  values sit in `w:sdt` controls carrying an XPath data binding, not merge fields, so `DeedGenerator` replaces
+  exactly two entries of the zip — `customXml/item1.xml`, rebuilt from scratch because the supplied one holds
+  all 111 Dataverse elements with 17 of them stuffed with an escaped Word document, and the cached `w:t` text
+  inside each control, because a reader that does not resolve bindings shows that instead. **Everything that
+  can go wrong here goes wrong silently**: a data part in the wrong namespace, one template's `ds:itemID`
+  written into the other (they differ), a control the mapping does not know, or the cached text left alone — all
+  produce a deed that opens cleanly and prints blanks or field names. Hence the checks in `DeedControls` and
+  `DeedGenerator.checkFields`, and hence `DeedGeneratorTest` verifies the output by evaluating each binding's own
+  XPath with a real XPath engine rather than by re-reading what the generator was told to write. A template
+  changed only in `deed-poll-admin` never reaches production; see that directory's `README.md`.
 - **Never invent the CCD case type or jurisdiction ID.** They are unconfirmed. The single constant is
   `deedpoll.ccd.case-type-id: DEED_POLL_PLACEHOLDER` in `application.yaml`.
 - **No live calls to CCD, CDAM, IDAM or payments in any test.** WireMock only (`StubIdam`); there are

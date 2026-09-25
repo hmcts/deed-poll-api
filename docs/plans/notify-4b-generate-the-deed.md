@@ -130,9 +130,11 @@ decision: take it as the date the application was created.
 > deliberate departure from the literal instruction rather than as the instruction itself, because the next person
 > to read "the date the application was created" in a ticket will reach for `createdOn` again.
 >
-> **Task 2 must still handle a null `dateReceived` deliberately** rather than printing an empty date on a deed.
-> Decide and record what it prints: the state cascade treats the column as optional, so a case can reach a send
-> without one.
+> ~~**Task 2 must still handle a null `dateReceived` deliberately** rather than printing an empty date on a
+> deed. Decide and record what it prints: the state cascade treats the column as optional, so a case can reach a
+> send without one.~~ **Decided in Task 2: it prints nothing** — no fallback column and no clock, because a
+> blank is a line the applicant completes in wet ink and a plausible wrong date on a legal instrument is not
+> recoverable by the person holding it. See `DeedValues.date`.
 >
 > **One thing Task 1 read off the rendered deeds that this decision should be held against: the two deeds label
 > the same bound field differently.** Adult LOC020 prints it under **"Date you completed the form"**; minor LOC022
@@ -256,6 +258,11 @@ leave none behind.
 `skipped` 0, `failures` 0** (counted from `build/test-results/*/[*].xml` immediately after `./gradlew build`, which
 took 4m). That is the expected result, since Task 1 adds two `.docx` files and no code — so this figure is the one
 Task 2 should be read against.
+
+**After Task 2: 2,789 across 351 classes + 13 integration, `skipped` 0, `failures` 0, `errors` 0** — `./gradlew
+build` in 3m 49s. That is +73 tests across +10 result files (five test classes, one of which has six `@Nested`
+groups and so contributes six files), and **every one of them is container-free**, so CI runs the whole of the
+generator's coverage. The integration count is deliberately unchanged: nothing in Task 2 touches the database.
 
 Notes so no task rediscovers them:
 
@@ -387,7 +394,46 @@ Read first: evidence 4, decisions 3 and 4, and whatever task 1 settled.
   the literal `null`, and never the enum's `name()` where a label is wanted.
 - Tests: every bound field reaches the output for both types; a null optional column produces an empty binding
   rather than breaking the document; the adult and minor field sets differ exactly as evidence 4 says.
-- [ ] both deeds generate from real case data with every bound field populated, nulls degrade to empty, and
+
+> ### ✅ RAN 2026-09-25. Read this block before Task 3.
+>
+> **`domain/deeds/`, no new dependency, 73 container-free tests.** `DeedGenerator.generate(DeedPoll,
+> DeedTemplate)` returns a `GeneratedDeed`; `DeedTemplate` has two members and **says nothing about
+> `DeedPollType`**, so decision 3's rule is still stated once, in notify-4a task 2, and Task 4 supplies the
+> template. `DeedOutputFormat` is decision 5's seam: `GeneratedDeed.mimeType()` comes off the format, so Task 3
+> must not write the `.docx` mime type as a literal.
+>
+> **Six things this task settled that the instructions above did not say:**
+>
+> 1. **A null `dateReceived` prints nothing, and that is the recorded decision** the caveat in evidence 4 asked
+>    for. No fallback column and no clock: `createdOn` is an audit column and for a migrated case is the
+>    migration date, and `now()` would assert a fact nobody recorded. A blank is a line the applicant completes
+>    in wet ink, which is what LOC020 always was. `DeedValues.date` holds the reasoning.
+> 2. **`deedpoll_section` renders "Under section Section 1 of the British Nationality Act 1981", and that is
+>    faithful rather than a bug.** Dataverse bound the control to the option's *label*, and the vendored
+>    reference's `NATIONALITY_SECTION_LABEL` is `Section1 → "Section 1"`, so the existing process printed the
+>    same duplication. **A content designer should see this once**; changing it is a change to the court's
+>    template, not to this code. Same class of finding as the two deeds labelling `deedpoll_date` differently.
+> 3. **The data-part namespace, root element and entity element are read from the template's own bindings rather
+>    than held as constants.** Getting any of the three wrong resolves every binding to empty with no error, and
+>    a constant can go stale against a re-authored template where a value read from the template cannot. The
+>    documented values are still asserted (`10740`, `DocumentTemplate`, `deedpoll_deedpoll`) so a template swap
+>    that changes them is visible.
+> 4. **Task 1's three assertions are kept, and a fourth was added**: the binding's prefix must actually be
+>    mapped by its own `w:prefixMappings`. All four now fail the build through `DeedControlsTest` and
+>    `DeedGeneratorTest$Refusals`, which drive synthetic faulty packages through a package-private
+>    `generateFrom` — the vendored templates are correct, so they cannot demonstrate a refusal.
+> 5. **The output is byte-deterministic** (every zip entry carries a fixed 1980-01-01 timestamp), which is what
+>    makes Task 3's "the stored bytes are what the generator produced" a question answerable twice.
+> 6. **"The court's wording is untouched" is a check, not an intention.** Emptying every `w:t` in the generated
+>    `word/document.xml` gives the template's part back byte for byte, and exactly 30 / 13 text runs differ —
+>    each one a run that held a `deedpoll_` name. `DeedPackages` shares no code with the generator and resolves
+>    each binding with a real XPath engine, which is the docx4j check from the spike without the 16.3 MB.
+>
+> Both mutations were tried to prove the suite bites: a data part in the wrong namespace fails 8 tests, and
+> skipping the cached-text write fails 13.
+
+- [x] both deeds generate from real case data with every bound field populated, nulls degrade to empty, and
       `./gradlew build` green
 
 ### Task 3: Store the generated deed exactly once
