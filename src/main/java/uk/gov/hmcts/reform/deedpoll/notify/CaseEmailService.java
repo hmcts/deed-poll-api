@@ -468,13 +468,14 @@ public class CaseEmailService {
      * case by V19's index, so a caller cannot make one case's chosen UUID collide with another case's row.
      *
      * <p><strong>A send of the email that contradicts one already asked for is a 409 naming it.</strong> That key
-     * is the template's exclusion group, so a referral gets one email of the group; the second one is refused by
-     * the same {@code DO NOTHING} clause, which is what keeps the caseworker's transaction usable instead of
-     * handing them a {@code DataIntegrityViolationException}.
+     * is the template's exclusion group, scoped to the referral for the two outcome emails and -- since V20 -- to
+     * the <em>case</em> for the two forms emails, which have no referral to be keyed on. Either way the second one
+     * is refused by the same {@code DO NOTHING} clause, which is what keeps the caseworker's transaction usable
+     * instead of handing them a {@code DataIntegrityViolationException}.
      *
-     * <p><strong>Which of the three things happened is read off the row that refused it, in a defined
-     * order</strong> -- see {@link #resolveRefusedInsert}. Zero rows means one of two indexes refused the insert,
-     * and the answers are a 200, a 409 and a fault, so it cannot be guessed.
+     * <p><strong>Which of the four things happened is read off the row that refused it, in a defined
+     * order</strong> -- see {@link #resolveRefusedInsert}. Zero rows means one of three unique indexes refused the
+     * insert, and the answers are a 200, two different 409s and a fault, so it cannot be guessed.
      *
      * <p><strong>The request id is consulted only where the insert reached the database, and that bounds what it
      * can promise.</strong> Everything before the statement -- the case's entitlement to this email, an applicant
@@ -505,7 +506,8 @@ public class CaseEmailService {
      * @throws NotFoundError if there is no such case
      * @throws ConflictError if the case is in no state to send this email, this request id has already been used
      *     on this case for a different email, the email that contradicts this one has already been asked for on
-     *     the same referral, or the applicant answered ④ while it was being sent
+     *     the same referral or on the same case, the case already holds the other deed, or the applicant answered
+     *     ④ while it was being sent
      * @throws IncompleteDataError if the case has no applicant email address
      * @throws uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError if the slots are not acceptable
      */
@@ -523,7 +525,7 @@ public class CaseEmailService {
         String recipient = requireRecipient(entitled.deedPoll());
         // Composing a forms email generates and stores the case's deed, in this transaction -- see
         // deedDocumentId. Nothing happens here for a template that carries no document.
-        Composed composed = compose(entitled, template, slots, deed -> deedDocumentId(deedPollId, deed));
+        Composed composed = compose(entitled, template, slots, deed -> deedDocumentId(deedPollId, template, deed));
         // Null for a case-driven email, which is the column's own null rather than a stand-in: such a row sits
         // outside the partial unique index, so nothing about it is keyed on a referral it does not have.
         UUID referralId = composed.cause().referralId();
@@ -606,18 +608,10 @@ public class CaseEmailService {
         }
 
         // A request id never seen on this case, so what refused the insert was one of the two exclusion-group
-        // keys -- V15's, which only a referral-driven template can collide with, or V20's, which only a
-        // case-driven template in a group that is exclusive per case can. Asked in that order, and asked at all
-        // only where there is something to find: a chase's rows occupy neither index, so either query would be one
-        // whose answer is always empty and one that read as though a repeat chase were refusable.
+        // keys. Which of them, and whether either can have, is the one question occupantOfTheGroupSlot answers --
+        // here and for the availability check, so the scope rule is stated in Java exactly once.
         String group = template.exclusionGroup().name();
-        Optional<Notification> blocking = referralId != null
-            ? notifications.findBlocking(deedPollId, referralId, group)
-            : template.exclusionGroup().exclusivePerCase()
-                ? notifications.findBlockingForCase(deedPollId, group)
-                : Optional.empty();
-
-        Notification occupant = blocking
+        Notification occupant = occupantOfTheGroupSlot(deedPollId, referralId, template)
             // Unreachable in practice, and named rather than answered with a null id: the insert was refused, so
             // some row collided with it, and the three indexes are the only ones that can. Reaching here means one
             // of them refused a row none of these reads can find -- a schema this service does not understand, not
@@ -635,9 +629,7 @@ public class CaseEmailService {
             // swear -- and because nothing the caseworker typed is wrong, so there is no field to correct.
             log.info("Case {} already owes {} for its {} group (referral {}), so {} was refused",
                      deedPollId, occupant.getTemplate(), group, referralId, template.key());
-            throw new ConflictError(referralId == null
-                                        ? alreadyRequestedOnThisCase(occupant)
-                                        : alreadyRequested(occupant));
+            throw new ConflictError(alreadyRequested(referralId, occupant));
         }
 
         // The same email on the same referral, or the same case, from a different compose journey. Still not a
@@ -844,15 +836,16 @@ public class CaseEmailService {
             return EmailAvailability.unavailable(
                 template, reasonNotApplicable(template, deedPoll, newestRefusal), provisioned);
         }
-        return counterpart(deedPoll.getId(), cause.get(), template)
+        UUID referralId = cause.get().referralId();
+        return counterpart(deedPoll.getId(), referralId, template)
             .map(blocking -> EmailAvailability.unavailable(
-                template, alreadyRequested(cause.get(), blocking), provisioned))
+                template, alreadyRequested(referralId, blocking), provisioned))
             .orElseGet(() -> EmailAvailability.applicable(template, provisioned));
     }
 
     /**
-     * The row that has taken this referral's slot for some <em>other</em> email of this template's exclusion
-     * group, or empty if nothing has.
+     * The row that has taken this referral's -- or this case's -- slot for some <em>other</em> email of this
+     * template's exclusion group, or empty if nothing has.
      *
      * <p><strong>Blocking is the index's definition of it, read through the statement that repeats the index's
      * predicate.</strong> A {@code Failed} row with a {@code PERMANENT} verdict does not occupy the index --
@@ -864,22 +857,44 @@ public class CaseEmailService {
      * same email is the idempotent no-op {@link #send} answers with the original row, not something to hide the
      * template over.
      *
+     * <p>Which slot that is, and whether there is one at all, is {@link #occupantOfTheGroupSlot}'s answer -- the
+     * one place the scope rule is written, shared with the send's own resolution of a refused insert.
+     */
+    private Optional<Notification> counterpart(String deedPollId, UUID referralId, EmailTemplate template) {
+        return occupantOfTheGroupSlot(deedPollId, referralId, template)
+            .filter(occupant -> !template.name().equals(occupant.getTemplate()));
+    }
+
+    /**
+     * The row holding this template's exclusion-group slot, whichever of the two keys the slot belongs to.
+     *
+     * <p><strong>The one statement of V20's scope rule, read by both callers.</strong> {@link #availability} asks
+     * it to grey an option out in advance and {@link #resolveRefusedInsert} asks it to explain a refusal the
+     * database has already made, and the two must agree: a send refused on a row availability said nothing about
+     * is a caseworker composing an email that cannot be sent. Written twice is how they would come to disagree,
+     * and there is no test that would catch it -- {@code EmailExclusionGroupTest} holds the flag against the
+     * migration's text, not the call sites against each other.
+     *
      * <p><strong>A case-driven email is asked about only where its group is exclusive per case.</strong> V15's
      * index is partial on {@code "referralId" IS NOT NULL}, so a chase's rows cannot occupy it and no row can
      * occupy it against a chase -- asking with a null referral would be a query whose answer is always empty, and
      * one that read as though a repeat chase were something the database had an opinion about. It is not: decision
      * 5 says a second chase is legitimate. The forms emails are the other shape: no referral, and one deed per
-     * case, which is what V20's key enforces and what
-     * {@link EmailExclusionGroup#exclusivePerCase()} distinguishes.
+     * case, which is what V20's key enforces and what {@link EmailExclusionGroup#exclusivePerCase()} distinguishes.
+     *
+     * @param referralId the referral the email speaks for, or null for a case-driven one -- which is the column
+     *     the two partial indexes are partial on opposite sides of, so it is also which key can have refused a row
      */
-    private Optional<Notification> counterpart(String deedPollId, EmailCause cause, EmailTemplate template) {
+    private Optional<Notification> occupantOfTheGroupSlot(
+        String deedPollId, UUID referralId, EmailTemplate template) {
+
         String group = template.exclusionGroup().name();
-        Optional<Notification> blocking = cause.referral()
-            .map(referral -> notifications.findBlocking(deedPollId, referral.getId(), group))
-            .orElseGet(() -> template.exclusionGroup().exclusivePerCase()
-                ? notifications.findBlockingForCase(deedPollId, group)
-                : Optional.empty());
-        return blocking.filter(occupant -> !template.name().equals(occupant.getTemplate()));
+        if (referralId != null) {
+            return notifications.findBlocking(deedPollId, referralId, group);
+        }
+        return template.exclusionGroup().exclusivePerCase()
+            ? notifications.findBlockingForCase(deedPollId, group)
+            : Optional.empty();
     }
 
     /**
@@ -890,9 +905,13 @@ public class CaseEmailService {
      * went wrong: a referral gets one outcome email because the two contradict each other about enrolment, and a
      * case gets one forms email because an applicant signs one deed. A caseworker reading either needs the reason,
      * not the shape.
+     *
+     * <p>Keyed on the nullable referral id rather than on an {@link EmailCause}, so that the send -- which holds
+     * the id and not the cause by the time it is explaining a refusal -- says it through this method too rather
+     * than repeating the choice inline.
      */
-    private static String alreadyRequested(EmailCause cause, Notification blocking) {
-        return cause.referral().isPresent()
+    private static String alreadyRequested(UUID referralId, Notification blocking) {
+        return referralId != null
             ? alreadyRequested(blocking)
             : alreadyRequestedOnThisCase(blocking);
     }
@@ -1262,8 +1281,29 @@ public class CaseEmailService {
      * <p><strong>Generated at most once per case</strong> (decision 6): a retry of the same compose journey finds
      * the deed the first attempt stored, which is why the frozen personalisation of an idempotent repeat compares
      * equal to the stored row's. {@code DeedDocumentService} is where that rule and its idempotency argument live.
+     *
+     * <p><strong>A case that already holds the <em>other</em> deed is a 409, and the outbox gets first say on
+     * it.</strong> Both routes to a contradiction end here -- the case's type was corrected between two sends --
+     * but only one of them is a contradiction the database can see: V20's index, like V15's, deliberately excludes
+     * a row Notify refused {@code PERMANENT}, so a first forms email that failed that way leaves the slot free and
+     * {@code storeDeed} is the only thing standing between the applicant and a minor's covering words carrying an
+     * adult's deed. Where the slot is <em>not</em> free the refusal is the outbox's business rather than the deed's,
+     * and the sentence has to be the one {@link #availability} already greyed the option out with -- so the slot is
+     * read here, before a deed is generated, and {@code storeDeed}'s own refusal is what is left over.
+     *
+     * <p>Read rather than left to the insert, unlike everywhere else in this class: the insert happens after the
+     * composition, so by the time it could answer the deed would already be stored. The index is still what settles
+     * the race -- {@link #resolveRefusedInsert} is unchanged -- and this read only decides which of two true
+     * sentences a caseworker is shown.
      */
-    private String deedDocumentId(String deedPollId, DeedTemplate deed) {
+    private String deedDocumentId(String deedPollId, EmailTemplate template, DeedTemplate deed) {
+        counterpart(deedPollId, null, template).ifPresent(occupant -> {
+            // Null referral because a forms email is case-driven and this method is reached for no other kind:
+            // requireDeed is what says so, and FormsForCompletion.deedOf is where it is declared.
+            log.info("Case {} already owes {} for its {} group, so {} was refused before a deed was generated",
+                     deedPollId, occupant.getTemplate(), template.exclusionGroup().name(), template.key());
+            throw new ConflictError(alreadyRequested(null, occupant));
+        });
         return deeds.storeDeed(deedPollId, deed).getId();
     }
 

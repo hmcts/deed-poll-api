@@ -484,6 +484,31 @@ class DeedGeneratorTest {
                 }
             }
         }
+
+        @ParameterizedTest
+        @EnumSource(DeedTemplate.class)
+        @DisplayName("a value carrying a character XML cannot express still produces a package that parses")
+        void valueWithAnIllegalCharacterStillParses(DeedTemplate template) {
+            DeedPoll deedPoll = completeCase();
+            // A soft line break out of Word and a stray control out of a migration. There is no escape for
+            // either, so writing them through would make both halves non-well-formed -- and nothing here would
+            // notice, because the generator never parses its own output. The parses below are the notice.
+            deedPoll.setNewSurname("Okonkwo\u000BHart");
+            deedPoll.setOldForename("Rob\u0001ert");
+
+            Map<String, byte[]> entries = DeedPackages.entries(generator.generate(deedPoll, template).content());
+            Document document = DeedPackages.parse(DeedPackages.entry(entries, DOCUMENT_PART));
+            Document dataPart = DeedPackages.parse(DeedPackages.entry(entries, DATA_PART));
+
+            assertThat(DeedPackages.cachedText(document))
+                .containsEntry("deedpoll_newsurname", "Okonkwo Hart")
+                .containsEntry("deedpoll_oldforename", "Rob ert");
+            for (Element binding : DeedPackages.bindings(document)) {
+                if ("deedpoll_newsurname".equals(DeedPackages.element(binding))) {
+                    assertThat(DeedPackages.resolveBinding(binding, dataPart)).isEqualTo("Okonkwo Hart");
+                }
+            }
+        }
     }
 
     private Document documentPartOf(DeedTemplate template) {

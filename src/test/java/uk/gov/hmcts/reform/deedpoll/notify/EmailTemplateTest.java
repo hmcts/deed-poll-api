@@ -6,6 +6,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
 
@@ -500,6 +505,54 @@ class EmailTemplateTest {
                 assertThat(slot.requiredBecause())
                     .as("%s is never refused for being absent, so a reason would never be shown", slot)
                     .isEmpty();
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("the configuration a template needs to exist at all")
+    class Configuration {
+
+        /**
+         * {@code application.yaml}, read as text.
+         *
+         * <p>From {@code src/main/resources} rather than the classpath, for the reason
+         * {@code EmailExclusionGroupTest} reads V20 that way: a stale {@code build/} copy must not be able to
+         * make this pass against a file that is no longer what is committed.
+         */
+        private static final Path CONFIGURATION = Path.of("src/main/resources/application.yaml");
+
+        @ParameterizedTest
+        @EnumSource(EmailTemplate.class)
+        @DisplayName("every template's key is declared under notify.templates, which nothing else would catch")
+        void everyKeyIsDeclaredInTheConfiguration(EmailTemplate template) {
+            // One of the two declaration sites CLAUDE.md names as failing silently. A member added to this enum
+            // without a `notify.templates.<key>` line reads the placeholder for ever: its NOTIFY_TEMPLATE_* env
+            // var is one nobody binds, isProvisioned stays false whatever the chart sets, and the email never
+            // sends even once it has been authored in Notify. Nothing else in the build says so.
+            assertThat(configuration())
+                .as("notify.templates.%s must be declared, or NOTIFY_TEMPLATE_* for it is read by nobody",
+                    template.key())
+                .contains("    " + template.key() + ": ${NOTIFY_TEMPLATE_");
+        }
+
+        @Test
+        @DisplayName("document-retention-weeks is declared, because a template carrying a document needs it")
+        void retentionIsDeclaredForTheTemplatesThatCarryADocument() {
+            assertThat(Arrays.stream(EmailTemplate.values()).anyMatch(t -> !t.documentKeys().isEmpty()))
+                .as("if no template carries a document any more, this test is what has to be reconsidered")
+                .isTrue();
+            // The third silent-configuration failure, beside a missing template key and a missing env var: with
+            // no retention isProvisioned answers false for both forms emails and the drain refuses the send.
+            assertThat(configuration())
+                .contains("document-retention-weeks: ${NOTIFY_DOCUMENT_RETENTION_WEEKS:");
+        }
+
+        private static String configuration() {
+            try {
+                return Files.readString(CONFIGURATION);
+            } catch (IOException unreadable) {
+                throw new UncheckedIOException("Could not read " + CONFIGURATION, unreadable);
             }
         }
     }

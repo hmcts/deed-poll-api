@@ -186,7 +186,10 @@ notify:
     # plausible-looking respelling would leave a local run silently unprovisioned. This template invites a reply,
     # so it also needs NOTIFY_EMAIL_REPLY_TO_ID above: without it NotifyProperties.isProvisioned reports it
     # unprovisioned rather than letting Notify send it from an address nobody reads. charts/deed-poll-api sets
-    # neither id, so AAT reads unprovisioned until that separate chart change lands.
+    # BOTH ids, so ⑤ reads provisioned in AAT -- this comment used to say it set neither, which was true before
+    # the chart's own CORRECTED 2026-09-25 block. What AAT still lacks is the Notify API key, which
+    # isProvisioned deliberately does not read: the template is offered and every send fails terminally with
+    # "Empty key" until azure-access#8111 lets the secret be written. The chart says the whole of that.
     chase-missing-documents: ${NOTIFY_TEMPLATE_CHASE_MISSING_DOCUMENTS:DEED_POLL_PLACEHOLDER}
     # The two forms-for-completion emails, ① and ②, which carry the generated deed. Neither has been authored in
     # Notify yet -- the content draft is deed-poll-admin's .business_context/notify-templates/forms-for-completion.md

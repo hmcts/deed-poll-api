@@ -150,6 +150,11 @@ public class DocumentUploads {
             // Includes NotFoundError for a row or blob that is not there, and UncheckedIOException for a store
             // that would not read. Technical and retryable: the store being briefly unavailable must not poison
             // the case (notify-4a decision 7).
+            //
+            // Catching it is only half of containing it: downloadDocument is @Transactional and participates in
+            // the drain's transaction, so Spring's default would mark that transaction rollback-only before this
+            // block ever ran -- taking down rows Notify had already accepted in the same batch. Its
+            // `noRollbackFor` is what makes this catch mean what it says; see DocumentService.downloadDocument.
             log.warn("Notification {} for case {} could not read its {} document {}",
                      notification.getId(), notification.getDeedPollId(), key, id, unreadable);
             return refused("the " + key + " document could not be read");
@@ -158,11 +163,13 @@ public class DocumentUploads {
         if (content.length > MAX_UPLOAD_BYTES) {
             // Before sendEmail, and naming the document and its size, because the client's own refusal names
             // neither (decision 8). The document's name and not the applicant's filename: this sentence is
-            // displayed to a caseworker on the Email tab.
-            log.warn("Notification {} for case {} carries {} ({}), which is larger than the {} bytes Notify takes",
-                     notification.getId(), notification.getDeedPollId(), row.getName(), key, MAX_UPLOAD_BYTES);
-            return refused("the " + key + " document \"" + row.getName() + "\" is larger than "
-                + MAX_UPLOAD_BYTES + " bytes, which is more than GOV.UK Notify will send");
+            // displayed to a caseworker on the Email tab. The size is the recorded column rather than what was
+            // read, because readNBytes deliberately stops one byte over the cap and so cannot say how big.
+            log.warn("Notification {} for case {} carries {} ({}, {}), which is larger than the {} bytes Notify "
+                         + "takes", notification.getId(), notification.getDeedPollId(), row.getName(), key,
+                     size(row), MAX_UPLOAD_BYTES);
+            return refused("the " + key + " document \"" + row.getName() + "\" (" + size(row) + ") is more than "
+                + "the " + MAX_UPLOAD_BYTES + " bytes GOV.UK Notify will send");
         }
 
         try {
@@ -179,6 +186,18 @@ public class DocumentUploads {
             return refused("GOV.UK Notify would not accept the " + key + " document (status "
                 + notAccepted.getHttpResult() + ")");
         }
+    }
+
+    /**
+     * How big the document is, in the words a caseworker reads.
+     *
+     * <p>The {@code sizeBytes} column, which {@code uploadDocument} records from the file it stored and no patch
+     * can change. A row without one still has to produce a readable parenthesis -- the refusal is displayed to a
+     * caseworker -- so it says the size is unrecorded rather than printing {@code null}.
+     */
+    private static String size(DeedPollSupportingDocument document) {
+        Integer bytes = document.getSizeBytes();
+        return bytes == null ? "size unrecorded" : bytes + " bytes";
     }
 
     /** The name the applicant's own computer will show, falling back to the recorded name. */

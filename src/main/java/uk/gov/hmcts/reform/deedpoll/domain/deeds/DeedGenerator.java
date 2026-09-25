@@ -160,9 +160,9 @@ public class DeedGenerator {
      * The package written back out.
      *
      * <p>Entry order is the template's, which keeps {@code [Content_Types].xml} first as the OPC specification
-     * requires. No timestamp is set, so the output does not depend on when it was generated: two runs over the
-     * same case produce the same bytes, which is what makes "the stored bytes are what the generator produced"
-     * a check somebody can repeat.
+     * requires. Every entry carries the fixed {@link #ENTRY_TIME} rather than the clock, so the output does not
+     * depend on when it was generated: two runs over the same case produce the same bytes, which is what makes
+     * "the stored bytes are what the generator produced" a check somebody can repeat.
      */
     private byte[] write(Map<String, byte[]> entries) {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream(entries.size() * 4096);

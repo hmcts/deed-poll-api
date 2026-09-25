@@ -1476,6 +1476,20 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
             assertThat(notifications.findAll().getFirst().getPersonalisation())
                 .containsEntry(FormsForCompletionPersonalisation.DEED_DOCUMENT,
                                documents.findByDeedPollIdOrderByCreatedOnAsc(caseId).getFirst().getId());
+
+            // 6. The Emails tab names the deed the applicant was sent -- the only templates for which that list
+            // is not empty, so this is the one place a non-empty one is produced from documentKeys() at all. A
+            // rename of the personalisation key on one side only would leave it silently blank, and a caseworker
+            // asking "which deed did this applicant get" would be shown nothing.
+            String deedId = documents.findByDeedPollIdOrderByCreatedOnAsc(caseId).getFirst().getId();
+            authorised(get("/caseworker/cases/" + caseId + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.history[0].documents.length()").value(1))
+                .andExpect(jsonPath("$.history[0].documents[0].id").value(deedId))
+                // The recorded name, which is the document type's -- not the applicant-facing filename, which is
+                // the originalName the upload token carries.
+                .andExpect(jsonPath("$.history[0].documents[0].name")
+                               .value("LOC020 Change of name deed"));
         }
 
         @Test

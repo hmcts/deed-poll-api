@@ -162,6 +162,26 @@ class NotifyEmailSenderTest {
         assertThat(notify.emailRequests()).isEmpty();
     }
 
+    @Test
+    @DisplayName("a document that cannot be resolved stops the send rather than sending the email without it")
+    void refusesASendWhoseDocumentCannotBeResolved() {
+        // The one branch of the sender the three document-free templates cannot reach. Without it a change that
+        // moved the resolve after sendEmail, or dropped the refusal check, would put the raw supporting-document
+        // id in front of the applicant where the deed's download link belongs -- Notify renders it as text, the
+        // row is marked Sent, and every test here would still pass. DocumentUploadsTest proves the refusals
+        // themselves; this proves the sender acts on one.
+        Notification row = notification();
+        row.setTemplate(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.name());
+        row.setPersonalisation(Map.of());
+
+        assertThat(sender.send(row))
+            .isEqualTo(SendOutcome.failed(
+                NotificationFailure.TECHNICAL,
+                "the " + FormsForCompletionPersonalisation.DEED_DOCUMENT
+                    + " document reference is missing from this email"));
+        assertThat(notify.emailRequests()).as("and Notify was never asked").isEmpty();
+    }
+
     /** What Notify was told to set as the reply-to on the nth send, or empty if it was told nothing. */
     private String replyToOf(int request) {
         try {

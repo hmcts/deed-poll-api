@@ -15,10 +15,12 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
@@ -33,6 +35,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -196,18 +199,49 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("keeps the deed a case already holds even when asked for the other one")
-    void keepsTheDeedTheCaseAlreadyHolds() {
+    @DisplayName("refuses the other deed for a case that already holds one, rather than handing back the wrong one")
+    void refusesTheOtherDeedForACaseThatAlreadyHoldsOne() {
         String caseId = storedCase();
         DeedPollSupportingDocument first = deedDocuments.storeDeed(caseId, DeedTemplate.ADULT);
 
-        DeedPollSupportingDocument second = deedDocuments.storeDeed(caseId, DeedTemplate.MINOR);
+        // A case gets one deed, and the caller asking for the other one is about to put it in front of an
+        // applicant under the other deed's covering words. Returning what the case holds would email a minor's
+        // forms carrying an adult's deed -- reachable whenever the first forms email failed PERMANENT, because
+        // V20's index deliberately frees the slot for one of those. So it refuses.
+        assertThatThrownBy(() -> deedDocuments.storeDeed(caseId, DeedTemplate.MINOR))
+            .isInstanceOf(ConflictError.class)
+            .hasMessageContaining("LOC020 Change of name deed")
+            .hasMessageContaining("LOC022");
 
-        // A case gets one deed. Two signed deeds in circulation for one change of name is the failure worth
-        // preventing; a caseworker seeing the wrong one and asking about it is recoverable, so it is logged.
-        assertThat(second.getId()).isEqualTo(first.getId());
+        // And it neither replaced nor added to the stored deed: the bytes an applicant may already have signed.
         assertThat(documents.count()).isOne();
-        assertThat(logs.list).anyMatch(event -> event.getFormattedMessage().contains("already holds"));
+        assertThat(stored(caseId, first.getId()).getDocumentType().getName())
+            .isEqualTo("LOC020 Change of name deed");
+        assertThat(storedBlobs()).hasSize(1);
+        verify(generator, times(1)).generate(any(), any());
+    }
+
+    @Test
+    @DisplayName("a case carrying the applicant's own documents still gets a deed generated for it")
+    void generatesADeedForACaseThatAlreadyHasOtherDocuments() {
+        String caseId = storedCase();
+        // The ordinary state of a deed poll case by the time forms go out: evidence the applicant sent in. The
+        // type-name filter is the only thing separating "this case already has its deed" from "this case has
+        // documents", and if it ever stopped discriminating the applicant would be emailed their own upload as
+        // the deed to print, sign and swear -- with no deed ever generated and nothing else failing.
+        DeedPollSupportingDocumentType other = new DeedPollSupportingDocumentType();
+        other.setName("Evidence of citizenship");
+        String otherId = documentService.uploadDocument(
+            caseId, types.save(other).getId(),
+            UploadedFile.of("a passport scan".getBytes(StandardCharsets.UTF_8),
+                            "citizenship.pdf", "application/pdf")).getId();
+
+        DeedPollSupportingDocument deed = deedDocuments.storeDeed(caseId, DeedTemplate.ADULT);
+
+        assertThat(deed.getId()).isNotEqualTo(otherId);
+        assertThat(deed.getDocumentType().getName()).isEqualTo("LOC020 Change of name deed");
+        assertThat(documents.count()).isEqualTo(2);
+        verify(generator, times(1)).generate(any(), any());
     }
 
     @Test

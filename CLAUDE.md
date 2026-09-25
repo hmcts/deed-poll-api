@@ -25,6 +25,9 @@ domain/referrals                  referrals to the judiciary and the applicant's
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
 domain/auth                       CurrentUser, IdamClaims, Role — transport-independent
 notify/                           the GOV.UK Notify outbox: compose, enqueue, drain — NOT a port
+notify/DocumentUploads            turns the document ids frozen on an outbox row into Notify uploads at drain
+                                  time — a time-limited download link, never an attachment; the row is read and
+                                  never rewritten, because a token expires and would be at rest in the database
 auth/                             IDAM resource-server wiring (transport)
 entity/, repository/              JPA over a Flyway-owned schema
 health/                          readiness that names the missing tables
@@ -51,7 +54,12 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   produce a deed that opens cleanly and prints blanks or field names. Hence the checks in `DeedControls` and
   `DeedGenerator.checkFields`, and hence `DeedGeneratorTest` verifies the output by evaluating each binding's own
   XPath with a real XPath engine rather than by re-reading what the generator was told to write. A template
-  changed only in `deed-poll-admin` never reaches production; see that directory's `README.md`.
+  changed only in `deed-poll-admin` never reaches production; see that directory's `README.md`. **One case value
+  can break the package on its own**: `DeedXml.escape` is the single escaper both halves share, and a character
+  XML 1.0 cannot carry at all — a C0 control other than tab/LF/CR, or an unpaired surrogate — has no escape, so it
+  is replaced with a space rather than written through. `DeedPollSchemas` validates these columns by length only,
+  and the generator never parses its own output, so without that the deed would be stored, frozen onto a
+  notification and emailed before anybody discovered Word would not open it.
 - **Never invent the CCD case type or jurisdiction ID.** They are unconfirmed. The single constant is
   `deedpoll.ccd.case-type-id: DEED_POLL_PLACEHOLDER` in `application.yaml`.
 - **No live calls to CCD, CDAM, IDAM or payments in any test.** WireMock only (`StubIdam`); there are
@@ -70,16 +78,39 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   exhausted-retry route), and none for a transient failure or an idempotent repeat send. A new send or settle path
   that skips the note leaves the case's only timeline silent and no existing test fails.
 - **`NotificationRepository.enqueue` names no `ON CONFLICT` target, so it infers *every* unique index on
-  `deedpoll_notification`.** Two of them can refuse a row — V19's `("deedPollId", "requestId")` and V15's partial
-  `("referralId", "exclusionGroup")` — and `ON CONFLICT` takes at most one inferred target, so naming either would
-  let the other raise `DataIntegrityViolationException` and mark the caseworker's transaction rollback-only. The
-  price is that zero rows now has three meanings, resolved by *reading* in `CaseEmailService.resolveRefusedInsert`
-  in a fixed order: this case's row for this request id (an idempotent 200, or a 409 if its content disagrees),
-  then the referral's exclusion-group occupant (200 for the same template, 409 for the contradictory one),
-  otherwise `IllegalStateException`. **A third unique index added without teaching that method turns an ordinary
-  conflict into a 500**, and nothing fails the build to say so. The index-existence check a named target used to
-  buy is gone too: `NotificationRepositoryTest` against real Postgres is the only place either conflict clause
-  executes, and Docker-free CI does not run it.
+  `deedpoll_notification`.** Three of them can refuse a row — V19's `("deedPollId", "requestId")`, V15's partial
+  `("referralId", "exclusionGroup")` and V20's partial `("deedPollId", "exclusionGroup")` over the groups
+  `EmailExclusionGroup.exclusivePerCase()` names — and `ON CONFLICT` takes at most one inferred target, so naming
+  any of them would let the others raise `DataIntegrityViolationException` and mark the caseworker's transaction
+  rollback-only. The price is that zero rows now has four meanings, resolved by *reading* in
+  `CaseEmailService.resolveRefusedInsert` in a fixed order: this case's row for this request id (an idempotent 200,
+  or a 409 if its content disagrees), then the referral's exclusion-group occupant (200 for the same template, 409
+  for the contradictory one), then — only where the referral is null and the group is exclusive per case — the
+  case's occupant (the same two answers in the case's words), otherwise `IllegalStateException`. **A fourth unique
+  index added without teaching that method turns an ordinary conflict into a 500**, and nothing fails the build to
+  say so. Which of V15's and V20's scopes applies is stated in Java exactly once, in
+  `CaseEmailService.occupantOfTheGroupSlot`, because the availability check and the refusal must agree; the enum
+  flag and V20's `IN` list state the same fact twice and `EmailExclusionGroupTest` holds them together. The
+  index-existence check a named target used to buy is gone too: `NotificationRepositoryTest` against real Postgres
+  is the only place any conflict clause executes, and Docker-free CI does not run it.
+- **A deed is generated once per *case*, and which `DeedPollType` takes which deed is stated once.**
+  `DeedDocumentTypes.caseTypes` is the one statement; `DeedRouting.deedFor` searches it, `FormsForCompletion` is the
+  only place a `DeedTemplate` meets an `EmailTemplate`, and a second copy of the adult/minor lists is how an
+  applicant swears the wrong legal instrument. `DeedDocumentService.storeDeed` looks across *both* deed types and
+  **refuses** when the case holds the other one — it neither regenerates (the stored deed may already be signed in
+  wet ink) nor hands the wrong one back (the caller is about to email it under the other deed's covering words).
+  That contradiction is reachable, which is why it refuses rather than warns: V20's index, like V15's, excludes a
+  `Failed`/`PERMANENT` row, so a case whose first forms email failed permanently and whose type was then corrected
+  is offered the other one with nothing in the outbox in the way. Where the outbox *can* see the contradiction it
+  gets first say, so `CaseEmailService.deedDocumentId` reads the group slot before generating anything and the
+  caseworker is shown the same sentence the Email tab greyed the option out with. The deed's
+  `DeedPollSupportingDocumentType` row is **created on first use and found by name** — no migration seeds it.
+- **A read-only `@Transactional` method that throws still poisons its caller's transaction**, unless it says
+  otherwise. Spring's default marks a *participating* transaction rollback-only, so the caller's `catch` decides
+  nothing and its commit fails anyway. That is why `DocumentService.downloadDocument` carries
+  `noRollbackFor = Exception.class`: `DocumentUploads` catches an unreadable document and answers a retryable
+  refusal inside the drain's single transaction, and without it one missing blob rolled back rows Notify had
+  already accepted and emailed those applicants again on the next drain.
 
 ## Conventions worth knowing before writing code
 
@@ -127,18 +158,34 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   lookup is case-scoped (`findByDeedPollIdAndRequestId`): widening it to the request id alone would answer one
   caller with another case's receipt.
 - **A new email template is declared in a handful of places, and two of them fail silently.** The `EmailTemplate`
-  member (key, display name, `EmailExclusionGroup`, `invitesReply`, resolved keys, slots), a personalisation
-  record, and four `switch` *expressions* in `CaseEmailService` — `cause`, `compose`, `reasonNotApplicable`,
-  `startsConfirmationClock` — which have no `default` and so refuse to compile until somebody says what the new
-  template's rule is. What fails silently is a missing `notify.templates.<key>` in `application.yaml` or a missing
-  env var in the chart: the template then reads unprovisioned and never sends. A template is either
-  **referral-driven or case-driven** and `EmailCause` says which — a case-driven one stores a null `referralId`,
-  sits outside V15's partial index, and so has *no* database protection against a repeat; the request id is all
-  there is. A required `EmailSlot` carries the refusal sentence itself (`requiredBecause`) rather than a boolean
+  member (key, display name, `EmailExclusionGroup`, `invitesReply`, resolved keys, slots, **document keys**), a
+  personalisation record, four `switch` *expressions* in `CaseEmailService` — `cause`, `compose`,
+  `reasonNotApplicable`, `startsConfirmationClock` — and a fifth in `FormsForCompletion.deedOf`, which is the only
+  place an `EmailTemplate` meets a `DeedTemplate`. None has a `default`, so all five refuse to compile until
+  somebody says what the new template's rule is. What fails silently is a missing `notify.templates.<key>` in
+  `application.yaml` or a missing env var in the chart — the template then reads unprovisioned and never sends;
+  `EmailTemplateTest.Configuration` now holds the enum's keys against `application.yaml`'s text so the first of
+  those fails a test. A template that carries a document has a third such setting, `notify.document-retention-weeks`:
+  `isProvisioned` asks three questions (template id, reply-to if `invitesReply`, retention if it carries a
+  document), and an unset or non-positive retention reads as unconfigured, so the drain refuses the send. A
+  template is either **referral-driven or case-driven** and `EmailCause` says which — a case-driven one stores a
+  null `referralId` and sits outside V15's partial index, so its only database protection is V20's key, and only
+  if its group is one `exclusivePerCase()` names; otherwise the request id is all there is. A required `EmailSlot`
+  carries the refusal sentence itself (`requiredBecause`) rather than a boolean
   plus a message, and `OpenAPIWriteBodies` renders that same sentence, so the document and the refusal cannot
   drift. Slot defaults come from `EmailSlots.defaults` and never from `parse` of an empty payload: a slot that is
   required and pre-populated from nothing would otherwise make `GET /caseworker/cases/{id}/emails` answer 400 for
   every case the template exists for.
+- **A document reaches an applicant as a Notify download link, resolved at drain time and never stored.**
+  `DocumentUploads` swaps the supporting-document ids the caseworker's send froze for `prepareUpload` tokens in a
+  *copy* of the personalisation: a token expires and would be at rest in the database, so the row is read and
+  never rewritten. The ids it resolves come from `EmailTemplate.documentKeys()` rather than from the map — an
+  arbitrary personalisation value is not a document id — and they are read only through the case-scoped
+  `DocumentService.downloadDocument`, because the value came out of a stored `jsonb` column and would otherwise be
+  a way to make one applicant's email carry another's deed. `confirm_email_before_download` is always true. Every
+  failure is `TECHNICAL` and retryable **except** an unconfigured retention, which is `PERMANENT`: `PERMANENT` is
+  the one verdict whose row can be replaced, so classifying a missing blob that way would invite a second deed for
+  one change of name.
 - **A new case column has to be declared in four places**, or the build fails somewhere that does not name the
   cause: a reader in `DeedPollFields` (readable / writable / queryable are three separate decisions — `CaseSort`
   admits only readable names and `CaseQuery` only queryable ones), both `CaseDetailResponse` and
