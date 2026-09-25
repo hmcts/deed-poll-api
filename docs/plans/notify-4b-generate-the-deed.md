@@ -76,15 +76,44 @@ sets differ by more than the template text does:
 | `deedpoll_oldforename` / `_oldmiddlename` / `_oldsurname` | `oldForename`, `oldMiddleName`, `oldSurname` | both |
 | `deedpoll_nationality` | `nationality` | both, an enum |
 | `deedpoll_section` / `_sectionother` | `nationalitySection`, `nationalitySectionOther` | both |
-| `deedpoll_referencenumber` | **ambiguous** — `referencenumber` or `displayReference` | both; flag 4 |
-| `deedpoll_date` | **ambiguous** — "Date you completed the form"; flag 4 | both |
+| `deedpoll_referencenumber` | **`displayReference`** — resolved, see below | both |
+| `deedpoll_date` | **the application's date** — resolved, but read the caveat | both |
 | `deedpoll_applicantbuildingnoname`, `_applicantaddress1`, `_applicantaddress2`, `_applicanttowncity`, `_applicantpostcode`, `_applicantemail` | the matching `applicant*` columns | **adult only** |
-| `deedpoll_status` | `maritalStatus`, probably; flag 4 | **adult only** |
+| `deedpoll_status` | **`maritalStatus`** — resolved, see below | **adult only** |
 | `deedpoll_ageofminor` | `ageOfMinor` | **minor only** |
 | `deedpoll_parents` | `parents` | **minor only** |
 
 The witness blocks on both deeds are **blank** — witnesses sign by hand on paper, so nothing in
 `DeedPollWitness` is merged into the deed. That is worth knowing before somebody tries.
+
+### The three ambiguous mappings, resolved 2026-09-25
+
+**`deedpoll_referencenumber` → `displayReference`.** Steve read the Dataverse table: it holds the **rendered**
+value, `KBDP2026-00001`, not the integer serial. So the deed shows the reference an applicant and a caseworker both
+recognise, and api's `referencenumber` integer is never printed.
+
+**`deedpoll_status` → `maritalStatus`.** Confirmed by absence rather than by inference: the supplied data part
+contains **no `deedpoll_maritalstatus` element** among its 93, so `deedpoll_status` is the only candidate — Dataverse
+simply named the column `status`. Note the part *also* carries `statuscode`, which is Dataverse's own record state
+and is **not** bound by the deed; do not confuse the two.
+
+**`deedpoll_date` → the application's date, and Steve's reasoning explains why it looked unmappable.** LOC020 is
+part of the **old paper process**, where the applicant hand-wrote the date they completed the form. There is no such
+moment in an online application, so the field has no natural equivalent — which is why the port left it out. Steve's
+decision: take it as the date the application was created.
+
+> **⚠️ One caveat, and it is the reason to pause over a one-line instruction.** "The date the application was
+> created" reads most naturally as `createdOn` — but that is an **audit** column, and for a migrated case it is the
+> *migration* date, not the application's. `migratedRecord` exists precisely because such cases exist, so a
+> literal reading would print a wrong date on a legal document for exactly the cases whose paper origins make
+> LOC020 relevant.
+>
+> **Use `dateReceived`.** It is the business date, it survives migration, and — the clincher — the reference number
+> printed on the *same deed* takes its year from it (`ReferenceNumbers`: *"year: 4-digit year taken from Date
+> Received"*). Using `createdOn` could therefore print `KBDP2026-00001` beside a 2027 date on one document.
+>
+> Flagged rather than silently substituted, because it is a change to what Steve said. **Confirm before Task 2
+> codes it**, and handle a null `dateReceived` deliberately rather than printing an empty date on a deed.
 
 ---
 
@@ -360,9 +389,12 @@ Read first: decisions 1, 3, 7, 8, 9 and 10.
 
 ## Flags
 
-1. **Three field mappings inferred and not verified.** `deedpoll_referencenumber` — `referencenumber` or
-   `displayReference`? — and `deedpoll_date`, described as "Date you completed the form", which matches no
-   column cleanly. Resolve before Task 2 codes them.
+1. ~~**Three field mappings inferred and not verified.**~~ **All three resolved 2026-09-25 — see evidence 4.**
+   `deedpoll_referencenumber` is the **rendered** value (Steve, read off the Dataverse table), so
+   `displayReference`. `deedpoll_status` is **marital status**, confirmed by absence: the data part has no
+   `deedpoll_maritalstatus` element, so `deedpoll_status` is the only candidate and api's `maritalStatus` is the
+   column. `deedpoll_date` is the application's date — **but see the caveat in evidence 4 about which column that
+   is**, because it is the one place where following the instruction literally would be wrong for migrated cases.
 2. **Should sending ① or ② set `signatureRequestedDate`?** Decision 9 establishes that sending *is* the
    signature request, so the date arguably follows — but that changes the derived state, and nothing else in this
    service sets a case date as a side effect of an email. A business decision, deliberately unanswered.
