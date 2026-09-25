@@ -164,9 +164,32 @@ Read first: `NotifyEmailSender.send`, `NotificationOutbox`, and decisions 3, 4, 
 - Tests, **container-free** with a stubbed store and `StubNotify`: a send resolves a multi-document set; the stored
   row survives unchanged; a missing document yields `TECHNICAL`; an oversized one fails with a useful message; and
   `confirm_email_before_download` and the retention period reach the client as configured.
-- [ ] documents resolve to uploads at drain time and are never persisted, the frozen row survives a send
+- [x] documents resolve to uploads at drain time and are never persisted, the frozen row survives a send
       unchanged, missing and oversized documents fail as `TECHNICAL` with useful messages, and `./gradlew build`
       green
+
+      **Done 2026-09-25 by [notify-4b](notify-4b-generate-the-deed.md) Task 4, not by this plan**, and amended
+      here in its Task 5 so nobody builds the seam twice. 4b's Task 4 needed a document reference to become a
+      `prepareUpload` at drain time and was told not to wait for this plan; after the Notify discovery that the
+      five static forms are attached to the *template* rather than supplied by api, the seam was a handful of
+      lines rather than a subsystem.
+
+      It is `notify/DocumentUploads` plus the sealed `ResolvedDocuments`, called from `NotifyEmailSender`
+      immediately before `sendEmail`. **Decisions 3, 4, 7 and 8 are all implemented and asserted**: it resolves
+      `EmailTemplate.documentKeys()` and never an arbitrary personalisation value, through
+      `DocumentService.downloadDocument`, which is case-scoped — so a stored id cannot fetch another applicant's
+      document; the frozen row survives a send unchanged; `confirm_email_before_download` is always true; a
+      missing or unreadable document is `TECHNICAL`; and an oversized one is refused **before** `sendEmail` with a
+      sentence naming the document and the limit.
+
+      **One thing this plan did not anticipate: the retention period is configuration with no default, and it is
+      part of being provisioned.** `notify.document-retention-weeks`, and `NotifyProperties.isProvisioned` now
+      asks **three** questions rather than two — a template carrying a document is unprovisioned without a
+      period, exactly as a reply-inviting one is without a reply-to. Not positive means unconfigured, because a
+      chart setting `0` would otherwise send an applicant a link to nothing. See 4b's flag 7 for the one claim
+      about it that could not be verified from this devcontainer.
+
+      **Tasks 2, 3 and 4 of this plan are untouched.**
 
 ### Task 2: Refuse the wrong forms for the case, at every layer that can
 

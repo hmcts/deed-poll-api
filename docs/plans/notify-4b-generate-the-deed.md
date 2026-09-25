@@ -285,6 +285,22 @@ covered container-free by proxy — `EmailExclusionGroupTest` holds `exclusivePe
 which is the specific disagreement that would otherwise fail silently — but "the index refuses the row" is a claim
 only Postgres can settle. The integration source set is unchanged again: Task 4 adds no integration-source-set test.
 
+**After Task 5 — the final figures, and they are a re-measurement rather than a new number: 2,904 across 360 +
+13 integration, `skipped` 0, `failures` 0, `errors` 0** — `./gradlew build --rerun-tasks` in 4m 19s. Identical to
+Task 4's, which is the point of measuring it again: nothing in the branch depends on test-execution order or on a
+result file left behind by an earlier run. Docker-free re-measured at **1,908 across 253** with
+`INTEGRATION_TESTS_ENABLED=false --rerun-tasks` in 1m 10s, also identical.
+
+**The 13 integration tests in that Docker-free count are stale and were not re-run** — checked by file
+timestamp, which is the only way to tell: the `integration` result files were 8 minutes older than the `test`
+ones. The note below about stale files is therefore not hypothetical; it caught something in this very task.
+
+**Against the plan's baseline of 2,716 across 341 + 13, notify-4b added +188 tests across +19 result files and
+no integration-source-set test at all.** Every task's figure above was re-derived from the XML rather than
+quoted, and the integration count is unchanged from the baseline through all five tasks — this plan never
+touched the database except through existing services and one migration whose only executor is
+`NotificationRepositoryTest`.
+
 Notes so no task rediscovers them:
 
 - **Measure, do not read the exit code.** A run selecting zero tests also exits 0, and a second `gradle test`
@@ -655,7 +671,65 @@ Read first: decisions 1, 3, 7, 8, 9 and 10.
   task 4's assertion that the Email tab needs no change per template.** If it does, that is a finding to report,
   not a change to make quietly in `deed-poll-admin`.
 - Confirm every `[ASSUMED]` or provisional statement introduced during the spike is resolved.
-- [ ] final counts recorded against the baseline, the notify-2 question answered either way, and no provisional
+
+> ### ✅ RAN 2026-09-25. This is the end of the plan; read this block and the flags.
+>
+> **Counts are in Validation Commands above, re-measured both ways and identical to Task 4's.** No code changed
+> in this task — it is a measurement, an answer and three handoffs.
+>
+> **The notify-2 question, answered in three parts, because it is three questions wearing one coat.**
+>
+> 1. **notify-2 Task 4's assertion holds: the Email tab needs no change for either template.** Read in
+>    `deed-poll-admin` rather than assumed. `emails-view.ts`'s `sendableTemplates` filters api's `availability`
+>    rows on applicable **and** provisioned **and** a usable key, and `buildUnsendable` turns the rest into a
+>    sentence — so today ① and ② appear on the tab as *unsendable* carrying notify-2's own `NOT_PROVISIONED`
+>    wording, which is true and actionable, and the moment notify-0 provisions them they appear as two more
+>    buttons. Task 4 already pinned that with a test rendering two. Nothing to change.
+> 2. **The attachment needs no change either, and notify-2 said so before it could check.** `email-detail.njk`
+>    branches on `email.documents.length` and renders a `<ul>` of `document.name`, falling back to "None" — and
+>    api publishes `CorrespondenceDocumentResponse(id, name)` where the name is Task 3's filename, so the
+>    per-email page will read `LOC020-change-of-name-deed-KBDP2026-00001.docx` with no edit. What is now stale is
+>    notify-2's *prose*, not its code: its "What is on the wire but out of scope" section says the list is "empty
+>    for every email today". A comment, not a defect.
+> 3. **What does break is the COMPOSE step, which is notify-2 Task 5 and not Task 4 — and it is reported here,
+>    not fixed in `deed-poll-admin`.** `slots()` is `List.of()` (decision 7), so `buildComposeView` returns
+>    `fields: []` and `email-compose.njk` renders a form with **no controls at all**: a caption, a heading, an
+>    intro, the hint *"Anything already filled in comes from the case and the Master's direction"* — which names
+>    a direction these emails have nothing to do with — and a Continue button. **It works**: `validateEmailSlots`
+>    over an empty field list is `ok` with `{}`, `preview` posts an empty slot map, and api's `EmailSlots.parse`
+>    accepts it for a slotless template. So no test fails and no send is refused; a caseworker simply reads a
+>    page that looks half-loaded. Two answers are available and **both are admin's to choose** — skip straight to
+>    the mandatory check page when a template has no slots, or render a page that states what will be sent and
+>    offers Continue without a form. See flag 6. Decision 2 of notify-2 makes the *check* step mandatory, so
+>    whichever is chosen, the preview must stay.
+>
+> **No `[ASSUMED]` or `[PROVISIONAL]` marker survives anywhere** — grepped across `src/main/java`,
+> `src/test/java`, `src/main/resources` and this file, along with `TODO`/`FIXME`/`XXX`; the only hit was Task 5's
+> own instruction to look. The spike's three wrong statements were corrected in place rather than deleted (the
+> data part's presence, the per-template `itemID`, and "`word/document.xml` needs no modification"), each with the
+> measurement that settled it, because all three were believed on reasonable grounds.
+>
+> **Three things are open rather than provisional, and the distinction matters — nobody should read them as
+> loose ends in the code.** Flag 2 (`signatureRequestedDate`) and notify-4a's flag 5 (the relinquishment deed)
+> are business questions this plan deliberately declines to answer; the new flags 5–7 below are two gaps and one
+> unverifiable claim, all recorded at the point they were found.
+>
+> **What this plan hands to notify-0, in full, because "unprovisioned" is three separate settings.**
+> `charts/deed-poll-api/values.yaml` needs `NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_ADULT`,
+> `NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_MINOR` and `NOTIFY_DOCUMENT_RETENTION_WEEKS`; `NOTIFY_EMAIL_REPLY_TO_ID`
+> is already there and both templates need it, since both say "you can reply to this email". The content draft
+> lives at `deed-poll-admin`'s `.business_context/notify-templates/forms-for-completion.md`. **And the deployment
+> blocker is not in this plan at all**: `DOCUMENT_STORE_ROOT` (notify-4a flag 3) — the deed is written through
+> `DocumentStore`, so an environment without a real store cannot send either email however well Notify is
+> configured.
+>
+> **Two findings a content designer should see once**, both recorded in Task 2 and repeated here so the handoff
+> carries them: `deedpoll_section` renders "Under section **Section 1** of the British Nationality Act 1981"
+> because Dataverse bound the control to the option's label, and the two deeds label the same bound date
+> differently ("Date you completed the form" / "Date the deed is made"). Both are the court's templates behaving
+> exactly as they always did; changing either is a template change, not a code change.
+
+- [x] final counts recorded against the baseline, the notify-2 question answered either way, and no provisional
       statement left standing
 
 ---
@@ -686,3 +760,23 @@ Read first: decisions 1, 3, 7, 8, 9 and 10.
    templates with `java.util.zip` and `javax.xml`. docx4j (31 jars, 16.3 MB, Apache 2.0) and POI (13 jars, 18.5 MB,
    Apache 2.0) were measured and rejected on weight, not licence — the measurements are in Task 1 so a later PDF
    step does not have to redo them.
+5. **Half of decision 9 is not modelled anywhere, so only half of it is enforced.** Raised by Task 4 and left
+   open deliberately. "The application has been checked" has **no column on `DeedPoll`** and nothing in the state
+   cascade stands for it, so the only condition the service can enforce is `signatureRequestedDate IS NULL`. A case
+   that is `Returned` or `Enroled` *without* a signature ever having been requested is therefore still offered the
+   forms — reachable only through a data path that skipped the request, but reachable. Closing it needs a business
+   answer about what "checked" is and a column to hold it; guessing one here would put an availability rule on a
+   field nobody defined. Decision 9 is implemented literally in the meantime.
+6. **`deed-poll-admin`'s compose page renders an empty form for a slotless template**, and that is a finding for
+   that repo rather than work for this one — Task 5 has the reading and the two candidate answers. It is cosmetic
+   rather than functional: the journey completes and the email sends. It is listed as a flag because it is the one
+   thing in either repo that notify-4b changes the behaviour of without being able to fix from here, and because
+   the hint text naming "the Master's direction" on a forms email is the sort of wrong sentence that survives for
+   a year.
+7. **"Weeks" as Notify's retention unit is documented but not verified from here.**
+   `notify.document-retention-weeks` narrows configuration to the unit GOV.UK Notify states in its own
+   documentation for `prepareUpload`'s retention period — but this devcontainer cannot reach that documentation,
+   so the claim rests on the API's published shape as remembered rather than as read. If it turns out Notify
+   expects something else, the fix is one property and one call site (`NotifyProperties.retention`), and
+   `isProvisioned` already refuses to send without a positive value — so the failure mode of being wrong is a
+   rejected send at provisioning time, not a document that quietly expires.
