@@ -271,6 +271,20 @@ what is in the row and on disk after a real commit — "one row and one blob" ca
 that was asked to save twice). The integration count is unchanged again: Task 3 writes through the existing
 services, so it adds no integration-source-set test.
 
+**After Task 4: 2,904 across 360 classes + 13 integration, `skipped` 0, `failures` 0, `errors` 0** — `./gradlew
+build --rerun-tasks` in 4m 11s. That is +85 tests across +6 result files, of which **76 are container-free** —
+Docker-free re-measured with `INTEGRATION_TESTS_ENABLED=false --rerun-tasks` at **1,908 across 253**, against
+1,832 after Task 3. The new container-free classes are `FormsForCompletionTest` 15,
+`CaseEmailServiceTest$FormsForCompletionEmails` 13, `EmailExclusionGroupTest` 12, `DocumentUploadsTest` 10 and
+`FormsForCompletionPersonalisationTest` 8, plus additions to `EmailTemplateTest`.
+
+**The 9 that need Docker are the ones worth knowing about**, because CI runs neither: 4 in
+`NotificationRepositoryTest`, which is the only place V20's index ever executes, and 5 in
+`CaseworkerEmailControllerTest`, which is the only place that index and the service's reading of it meet. Both are
+covered container-free by proxy — `EmailExclusionGroupTest` holds `exclusivePerCase()` against V20's own SQL text,
+which is the specific disagreement that would otherwise fail silently — but "the index refuses the row" is a claim
+only Postgres can settle. The integration source set is unchanged again: Task 4 adds no integration-source-set test.
+
 Notes so no task rediscovers them:
 
 - **Measure, do not read the exit code.** A run selecting zero tests also exits 0, and a second `gradle test`
@@ -559,7 +573,79 @@ Read first: decisions 1, 3, 7, 8, 9 and 10.
 - Availability per decision 9, and **do not set `signatureRequestedDate`** — flag 2 is unanswered.
 - Tests: an `AdultTransgender` case is offered ① and never ②; both emails cannot be sent for one case; the
   exclusion index refuses the second without hiding which rule fired; the Gazette key is always present.
-- [ ] both templates send with their documents, the four `DeedPollType` members route correctly, a case cannot
+
+> ### ✅ RAN 2026-09-25. Read this block before Task 5.
+>
+> **Two `EmailTemplate` members, one migration (V20), one new personalisation record, the upload seam, and 85
+> tests — 76 of them container-free.** The routing is derived rather than restated: `DeedRouting.deedFor` (in
+> `domain/deeds`, searching `DeedDocumentTypes.caseTypes` rather than holding a list) answers which deed a type
+> takes, and `notify/FormsForCompletion` is the only place `EmailTemplate` and `DeedTemplate` meet.
+> `FormsForCompletionTest` holds the two switches to each other and to the document-type rows, so no case-type
+> list exists twice.
+>
+> **Nine things this task settled that the instructions above did not say:**
+>
+> 1. **notify-4a's Task 1 is done, and its plan needs amending.** The seam is `notify/DocumentUploads` plus the
+>    sealed `ResolvedDocuments`, called from `NotifyEmailSender` immediately before `sendEmail`. It resolves
+>    `EmailTemplate.documentKeys()` — never arbitrary personalisation — through `DocumentService.downloadDocument`,
+>    which is case-scoped, so a stored id cannot fetch another applicant's deed. All of 4a's decisions 3, 4, 7 and
+>    8 are implemented and asserted: the frozen row survives a send unchanged, `confirm_email_before_download` is
+>    always true, a missing or unreadable document is `TECHNICAL`, and an oversized one is refused **before**
+>    `sendEmail` with a sentence naming the document and the limit. 4a's Tasks 2–4 are untouched.
+> 2. **The retention period is configuration with no default, and it is part of being provisioned.**
+>    `notify.document-retention-weeks` (`NotifyProperties.documentRetentionWeeks`, `retention()`), and
+>    `isProvisioned` now asks **three** questions rather than two: a template that carries a document is
+>    unprovisioned without a period, exactly as one that invites a reply is without a reply-to. Not positive means
+>    unconfigured — a chart setting `0` would otherwise send an applicant a link to nothing. Unset in every
+>    environment, so ① and ② read unprovisioned today for two reasons rather than one. **Weeks and not a
+>    `ChronoUnit`**: that is the unit Notify documents, so it is a narrowing rather than a limitation — and it was
+>    not verifiable from this devcontainer, which cannot reach Notify's docs.
+> 3. **V20's index names the groups it applies to, positively, in an `IN` list.** A case-scoped key over every
+>    null-referral row would have made the second *chase* impossible, which notify-3's decision 5 forbids. An
+>    exclusion list (`<> 'DOCUMENT_CHASE'`) was rejected because it makes every future group exclusive by default
+>    and the failure is a legitimate email refused in production. The price is that the enum and the SQL now state
+>    one fact twice, so `EmailExclusionGroup.exclusivePerCase()` is **held against V20's own text** by
+>    `EmailExclusionGroupTest` — container-free, because only `NotificationRepositoryTest` executes the index and
+>    CI has no Docker. Both directions of that disagreement fail silently: unenforced exclusivity sends two deeds,
+>    and an index the service cannot read turns an ordinary conflict into a 500.
+> 4. **`resolveRefusedInsert` now has four answers and a third read.** `findBlockingForCase` is V20's index read
+>    back through a statement repeating its predicate, asked only where the referral is null *and* the group is
+>    exclusive per case. The 409 sentence is per scope — `alreadyRequestedOnThisCase` says "a case gets one of
+>    these emails: an applicant signs and swears one deed", because "one referral gets one" would be about nothing.
+> 5. **A preview cannot generate the deed, so `compose` takes a function.** `preview` is a read that writes no row
+>    and changes no state; decision 6 makes the deed a once-per-case write with a blob behind it. So the send
+>    passes `deed -> deeds.storeDeed(...).getId()` and the preview passes a fixed sentence
+>    (`DEED_NOT_YET_GENERATED`) — a function rather than a flag, so the preview path has no way to store one. It
+>    could not show the real link anyway: Notify creates one only when given the bytes.
+> 6. **The deed is stored inside the send's transaction, which is what makes a refusal clean.** A 409 or a reused
+>    request id rolls the document row and its blob back with the outbox row, so a case never holds a deed for an
+>    email nobody was owed. It also makes the idempotent answer work: `storeDeed` is generate-once, so a retry
+>    freezes the same id and `isTheSameSend` compares equal.
+> 7. **`signatureRequestedDate` is read and never written** (decision 9, flag 2). The **column** and not `state`:
+>    `dateReturned`, `dateEnroled` and `signatureReceivedDate` all outrank the signature request in the cascade, so
+>    a rule written against the derived state would offer the forms again to an applicant whose deed had been
+>    sealed. **One gap is recorded rather than closed:** decision 9's other half — "the application has been
+>    checked" — has no column on `DeedPoll`, and nothing in the cascade models it. So the only enforced condition
+>    is the signature date, and a case that is `Returned` or `Enroled` *without* a signature ever having been
+>    requested is still offered the forms. That is decision 9 implemented literally; see Task 5.
+> 8. **Four refusal sentences for two conditions, because a caseworker does four different things.** An unset type
+>    and `Unknown` share one (`TYPE_NOT_ESTABLISHED`) because both mean "set the type"; `DeedOfRelinquishment` has
+>    its own, because its type *is* established and what is missing is the document set (4a flag 5); the wrong
+>    template for the type composes its sentence from the deed the case does take, so it cannot drift from the
+>    routing; and `SIGNATURE_ALREADY_REQUESTED` names the column. ③′ is deliberately **not declared** — that is
+>    notify-4a Task 2's, and its documents are unidentified.
+> 9. **`CaseworkerEmailControllerTest.FormsForCompletion` is the only place the index and the service's reading of
+>    it meet**, and it needed a temporary `local-store-root`: a forms send really runs the generator and really
+>    writes a `.docx`, which under the shipped `data/documents` default would have left files in the working tree.
+>    It drives the whole journey over HTTP against real Postgres and `StubNotify` — availability, send, a real
+>    `prepareUpload` in the request body, the row unchanged afterwards, a second journey answered with the first
+>    receipt, and the contradictory send as a 409 naming the first email.
+>
+> **`EmailNotes` needed no change**, but the two display names had to differ ("Forms for completion" and "Forms
+> for completion for a child"): the note is composed from the display name alone, and one name on both would leave
+> the case's only timeline unable to say which deed an applicant was sent.
+
+- [x] both templates send with their documents, the four `DeedPollType` members route correctly, a case cannot
       receive both, and `./gradlew build` green
 
 ### Task 5: Full validation and handoff

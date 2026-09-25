@@ -34,6 +34,13 @@ import java.util.Map;
  * caseworker never approved whenever the case had been edited in between, and would make "what was this applicant
  * told" a question about the state of the case at drain time.
  *
+ * <p><strong>The one exception is a document, and it is a resolution rather than a recomputation.</strong> A row
+ * that carries a file holds the supporting-document <em>id</em> the caseworker's send froze; the bytes cannot be
+ * frozen into a {@code jsonb} column and a Notify upload token cannot be either, because it expires. So
+ * {@link DocumentUploads} reads that id -- case-scoped -- and swaps it for a {@code prepareUpload} in a copy of the
+ * map immediately before the call. Which document is sent is still the caseworker's decision; only its
+ * representation is resolved here.
+ *
  * <p><strong>A template that invites a reply is sent with a reply-to address, and is not sent without one.</strong>
  * {@code notify.email-reply-to-id} is the monitored inbox; {@link EmailTemplate#invitesReply()} is which emails
  * need it. The two overloads are kept apart deliberately -- the client drops a blank reply-to and sends from
@@ -54,9 +61,16 @@ public class NotifyEmailSender implements NotificationSender {
     private final NotificationClient notify;
     private final NotifyProperties properties;
 
-    public NotifyEmailSender(NotificationClient notify, NotifyProperties properties) {
+    /**
+     * Only to turn a row's document references into uploads -- see {@link DocumentUploads}, which is also where
+     * every failure of that is classified.
+     */
+    private final DocumentUploads uploads;
+
+    public NotifyEmailSender(NotificationClient notify, NotifyProperties properties, DocumentUploads uploads) {
         this.notify = notify;
         this.properties = properties;
+        this.uploads = uploads;
     }
 
     /**
@@ -103,11 +117,18 @@ public class NotifyEmailSender implements NotificationSender {
                 "no reply-to address is configured, and the " + template.key() + " email asks for a reply");
         }
 
+        // Before anything is sent, so a document this service cannot produce is a failed row rather than an email
+        // that arrives with its deed missing. The frozen row is unchanged by this: what comes back is a copy.
+        ResolvedDocuments documents = uploads.resolve(notification, template);
+        if (documents instanceof ResolvedDocuments.Refused refused) {
+            return refused.outcome();
+        }
+
         String templateId = template.templateId(properties);
         // The row id, which Notify keeps against the notification. Bare rather than prefixed: a reference that
         // needed unwrapping to be matched back to a row would defeat the point of storing it.
         String reference = notification.getId().toString();
-        Map<String, Object> personalisation = notification.getPersonalisation();
+        Map<String, Object> personalisation = ((ResolvedDocuments.Ready) documents).personalisation();
 
         try {
             // Two overloads rather than one with a nullable argument, so adding a reply-to for ④ cannot change

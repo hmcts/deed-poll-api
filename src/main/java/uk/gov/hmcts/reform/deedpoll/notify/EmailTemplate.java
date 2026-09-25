@@ -9,12 +9,14 @@ import java.util.stream.Collectors;
 /**
  * An email this service can send, and everything about it that is not the template's own words.
  *
- * <p>Three members. The remaining two in {@code NOTIFY_TEMPLATE_TAXONOMY.md} §6 -- the <em>forms for
- * completion</em> emails -- are a later plan, blocked on document generation, which Notify cannot do.
+ * <p>Five members. The <em>forms for completion</em> pair joined once this service could generate the deed they
+ * carry, which Notify cannot do. A sixth -- {@code forms-for-completion-relinquishment} -- is settled as a real
+ * template but its document set has not been identified, so it is deliberately not declared here yet: see
+ * {@code docs/plans/notify-4a-attach-files-to-an-email.md} flag 5.
  *
- * <p><strong>Two of the three are referral-driven and the third is case-driven</strong>, which is the axis
- * {@link EmailCause} names: a template is entitled to be sent either by something a Master decided or by the
- * state of the case itself, and the second kind stores no {@code referralId} rather than borrowing one.
+ * <p><strong>Two are referral-driven and three are case-driven</strong>, which is the axis {@link EmailCause}
+ * names: a template is entitled to be sent either by something a Master decided or by the state of the case
+ * itself, and the second kind stores no {@code referralId} rather than borrowing one.
  *
  * <p><strong>The member name is what the outbox row stores; the {@link #key()} is what configuration and a
  * URL say.</strong> Those are two different things on purpose. A Notify template UUID differs per environment,
@@ -121,7 +123,68 @@ public enum EmailTemplate {
         true,
         MissingDocumentsPersonalisation.RESOLVED_KEYS,
         List.of(EmailSlot.DOCUMENTS_REQUIRED),
-        List.of());
+        List.of()),
+
+    /**
+     * The forms an adult applicant has to print, sign and swear, with their generated LOC020 deed. Template ①.
+     *
+     * <p><strong>The first template that carries a document, which is what {@link #documentKeys()} exists
+     * for.</strong> The deed is generated per case by {@code DeedDocumentService} and its id is frozen into the
+     * row's personalisation under {@link FormsForCompletionPersonalisation#DEED_DOCUMENT}; the drain resolves that
+     * to a Notify download link. The other three forms this email names -- LOC021 and LOC027 -- are the same bytes
+     * for every applicant and are attached to the Notify template itself, so this service never holds them.
+     *
+     * <p><strong>Case-driven, like ⑤, and its condition is the case's own signature date.</strong> Sending this
+     * email <em>is</em> the request for a signature (decision 9), so it is offered while
+     * {@code signatureRequestedDate} is null and the case's type takes the adult deed. Whether the send should
+     * therefore set that date is a business question this service deliberately does not answer -- the plan's flag
+     * 2 -- so it does not.
+     *
+     * <p><strong>In a group of two with ②, exclusive per case rather than per referral.</strong> There is no
+     * referral behind either, so V15's index never sees their rows; V20's case-scoped key is what stops one
+     * applicant being sent two different deeds to swear. See {@link EmailExclusionGroup#FORMS_FOR_COMPLETION}.
+     *
+     * <p><strong>No slots, and that was measured rather than assumed</strong> -- see
+     * {@link FormsForCompletionPersonalisation}, which also has the reason this email addresses the applicant by
+     * their former name.
+     *
+     * <p><strong>Invites a reply, which an earlier draft of the plan had not noticed.</strong> The source ends
+     * "you can reply to this email or call the Deed Poll office", so {@code notify.email-reply-to-id} is required
+     * configuration and this template reads unprovisioned without one.
+     */
+    FORMS_FOR_COMPLETION_ADULT(
+        "forms-for-completion-adult",
+        "Forms for completion",
+        EmailExclusionGroup.FORMS_FOR_COMPLETION,
+        true,
+        FormsForCompletionPersonalisation.RESOLVED_KEYS,
+        List.of(),
+        FormsForCompletionPersonalisation.DOCUMENT_KEYS),
+
+    /**
+     * The same, for a child's application: four forms rather than three, and the LOC022 deed. Template ②.
+     *
+     * <p>Everything ① says applies, with two differences that are the source documents' own: this one names
+     * LOC023, LOC024 and LOC028 instead of LOC021 and LOC027, and its Exhibit B is the child's birth certificate
+     * rather than evidence of citizenship. None of that is a difference in the values below -- both resolve from
+     * {@link FormsForCompletionPersonalisation} -- which is why two templates is decision 1 rather than one
+     * template with conditionals in it.
+     *
+     * <p>Declared after ① because the order here is the order the Email tab lists templates in, and an adult
+     * application is much the commoner of the two.
+     *
+     * <p>A different {@link #displayName()} from ①'s, unlike its wording, because the display name is what a case
+     * note says an email was -- and "Forms for completion" on both would make a timeline unable to say which deed
+     * an applicant was sent. See {@link EmailNotes}.
+     */
+    FORMS_FOR_COMPLETION_MINOR(
+        "forms-for-completion-minor",
+        "Forms for completion for a child",
+        EmailExclusionGroup.FORMS_FOR_COMPLETION,
+        true,
+        FormsForCompletionPersonalisation.RESOLVED_KEYS,
+        List.of(),
+        FormsForCompletionPersonalisation.DOCUMENT_KEYS);
 
     private final String key;
     private final String displayName;

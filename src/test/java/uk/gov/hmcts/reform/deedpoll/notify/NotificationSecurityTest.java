@@ -21,6 +21,8 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailTypeResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SentEmailResponse;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedDocumentService;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
@@ -114,10 +116,17 @@ class NotificationSecurityTest {
 
     private NotificationClient notify;
 
+    /**
+     * Mocked, because the deed's bytes are not what this class is about: what it asserts is that the id frozen into
+     * an outbox row is this case's document and that nothing else about the deed leaves the service.
+     */
+    private DeedDocumentService deeds;
+
     private CaseEmailService emails;
 
     @BeforeEach
     void setUp() {
+        deeds = mock(DeedDocumentService.class);
         deedPolls = mock(DeedPollRepository.class);
         referrals = mock(ReferralRepository.class);
         notifications = mock(NotificationRepository.class);
@@ -138,13 +147,20 @@ class NotificationSecurityTest {
                 "not-a-real-key",
                 Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1",
                        EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), "template-2",
-                       EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), "template-3"),
-                "reply-to-1"),
+                       EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), "template-3",
+                       EmailTemplate.FORMS_FOR_COMPLETION_ADULT.key(), "template-4",
+                       EmailTemplate.FORMS_FOR_COMPLETION_MINOR.key(), "template-5"),
+                "reply-to-1",
+                StubNotify.RETENTION_WEEKS),
             mock(ReferralService.class),
             // Mocked: this class is about what leaves the service, and a note is written through the one path
             // that scopes it to its parent case. What the note may say is pinned in EmailNotesTest and
             // CaseEmailServiceTest.
             mock(NoteService.class),
+            // Mocked for the same reason: a forms send stores a deed, and what this class asserts is what leaves
+            // the service rather than what reaches the disk. DeedDocumentServiceTest is where the storing itself
+            // meets a database.
+            deeds,
             JSON);
     }
 
@@ -363,7 +379,9 @@ class NotificationSecurityTest {
                 new NotifyProperties(
                     stub.baseUrl(), stub.apiKey(),
                     Map.of(EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), StubNotify.TEMPLATE_ID),
-                    StubNotify.REPLY_TO_ID))
+                    StubNotify.REPLY_TO_ID,
+                    StubNotify.RETENTION_WEEKS),
+                uploads(stub))
                 .send(owed);
 
             assertThat(logs.list)
@@ -517,7 +535,7 @@ class NotificationSecurityTest {
         logs.start();
         logger.addAppender(logs);
         try {
-            NotifyEmailSender sender = new NotifyEmailSender(stub.client(), stub.properties());
+            NotifyEmailSender sender = new NotifyEmailSender(stub.client(), stub.properties(), uploads(stub));
             sender.send(notification());
             stub.stubSendStatus(500);
             sender.send(notification());
@@ -592,6 +610,17 @@ class NotificationSecurityTest {
         referral.setDecision(MasterDecision.Rejected);
         referral.setDirectionsText(DIRECTION);
         return referral;
+    }
+
+    /**
+     * A document resolver for a sender under test, with no documents behind it.
+     *
+     * <p>Every row this class sends is for a template that carries none, so the resolver never reads: what it
+     * supplies is the retention period, without which a template that <em>did</em> carry a document would be
+     * refused for a reason this class is not about.
+     */
+    private static DocumentUploads uploads(StubNotify stub) {
+        return new DocumentUploads(mock(DocumentService.class), stub.properties());
     }
 
     /** The refusal the confirmation email is sent off: raised for a non-publication request, and decided. */

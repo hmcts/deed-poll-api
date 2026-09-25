@@ -17,6 +17,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedDocumentService;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
@@ -27,6 +29,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationFailureVerdict;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
@@ -96,6 +99,12 @@ class CaseEmailServiceTest {
     private static final CurrentUser CASEWORKER =
         CurrentUser.currentUser(List.of(), "A Caseworker", "caseworker-1");
 
+    /** A configured retention period, so a template that carries a document reads provisioned here. */
+    private static final int RETENTION_WEEKS = 17;
+
+    /** The id of the deed a forms send stores, which is what its personalisation carries. */
+    private static final String DEED_DOCUMENT_ID = "aa6d1f80-0000-4000-8000-0000000000de";
+
     private DeedPollRepository deedPolls;
     private ReferralRepository referrals;
     private NotificationRepository notifications;
@@ -116,10 +125,21 @@ class CaseEmailServiceTest {
      */
     private NoteService caseNotes;
 
+    /**
+     * Mocked so that "a forms send stores exactly one deed and freezes its id" is assertable without generating a
+     * Word document or touching a disk -- the generate-once rule and what reaches the store are
+     * {@code DeedDocumentServiceTest}'s, against a real database.
+     */
+    private DeedDocumentService deeds;
+
     private CaseEmailService emails;
 
     @BeforeEach
     void setUp() {
+        deeds = mock(DeedDocumentService.class);
+        // Every deed asked for is stored as the same document, which is what generate-once means for one case: the
+        // one test about two journeys on one case relies on the id being stable across both calls.
+        when(deeds.storeDeed(anyString(), any())).thenReturn(storedDeed());
         deedPolls = mock(DeedPollRepository.class);
         referrals = mock(ReferralRepository.class);
         notifications = mock(NotificationRepository.class);
@@ -129,7 +149,13 @@ class CaseEmailServiceTest {
         // A provisioned template, so nothing here turns on the placeholder. The unprovisioned case is a Notify
         // refusal, which is asserted in its own test below.
         NotifyProperties properties = new NotifyProperties(
-            "https://notify.invalid", "key", Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1"), "");
+            "https://notify.invalid", "key",
+            // Both forms templates configured too, so a test about one of them is not accidentally asserting the
+            // unprovisioned case -- which reportsProvisioning does deliberately, with its own properties.
+            Map.of(EmailTemplate.APPLICATION_REJECTED.key(), "template-1",
+                   EmailTemplate.FORMS_FOR_COMPLETION_ADULT.key(), "template-4",
+                   EmailTemplate.FORMS_FOR_COMPLETION_MINOR.key(), "template-5"),
+            "reply-to-1", RETENTION_WEEKS);
         referralService = mock(ReferralService.class);
         // The clock starting, which is what the statement answers on an unanswered referral. Stubbed here rather
         // than per test so that the one test about the other answer -- 0, the applicant answered mid-send -- is the
@@ -137,7 +163,7 @@ class CaseEmailServiceTest {
         when(referrals.startConfirmationClockByIdAndDeedPollId(any(), anyString(), any(), anyString())).thenReturn(1);
         emails = new CaseEmailService(
             deedPolls, referrals, notifications, documents, notify, properties, referralService, caseNotes,
-            new ObjectMapper());
+            deeds, new ObjectMapper());
     }
 
     @Nested
@@ -409,8 +435,8 @@ class CaseEmailServiceTest {
             // the drain and a preview is a 502. NotifyProperties.isProvisioned exists for this sentence.
             CaseEmailService unprovisioned = new CaseEmailService(
                 deedPolls, referrals, notifications, documents, notify,
-                new NotifyProperties("https://notify.invalid", "", Map.of(), ""), referralService, caseNotes,
-                new ObjectMapper());
+                new NotifyProperties("https://notify.invalid", "", Map.of(), "", null), referralService, caseNotes,
+                deeds, new ObjectMapper());
             storedCase();
             refusedReferral();
 
@@ -433,9 +459,10 @@ class CaseEmailServiceTest {
                 deedPolls, referrals, notifications, documents, notify,
                 new NotifyProperties("https://notify.invalid", "key", Map.of(
                     EmailTemplate.APPLICATION_REJECTED.key(), uuid,
-                    EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), uuid), ""),
+                    EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), uuid), "", null),
                 referralService,
                 caseNotes,
+                deeds,
                 new ObjectMapper());
             storedCase();
             refusedReferralFor(ReferralReason.NonPublication);
@@ -996,9 +1023,12 @@ class CaseEmailServiceTest {
             void writesOneNotePerEmail(EmailTemplate template) {
                 // Every template rather than one, because the composer is deliberately not per template: a member
                 // added to the enum must reach the timeline without anybody remembering to extend this. The
-                // fixture satisfies all three at once -- a non-publication refusal for the two referral-driven
-                // ones, and a case awaiting documents for the case-driven one.
-                storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+                // fixture satisfies every one of them at once -- a non-publication refusal for the two
+                // referral-driven ones, a case awaiting documents for the chase, and a case type that takes this
+                // template's deed with no signature yet requested for the two forms emails.
+                DeedPoll fixture = storedCase();
+                fixture.setState(DeedPollState.AwaitingFurtherDocs);
+                fixture.setType(typeEntitling(template));
                 refusedReferralFor(ReferralReason.NonPublication);
                 enqueueAnswers(1);
 
@@ -1620,8 +1650,9 @@ class CaseEmailServiceTest {
             return new CaseEmailService(
                 deedPolls, referrals, notifications, documents, notify,
                 new NotifyProperties("https://notify.invalid", "key",
-                                     Map.of(EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), templateId), replyToId),
-                referralService, caseNotes, new ObjectMapper());
+                                     Map.of(EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), templateId), replyToId,
+                                     null),
+                referralService, caseNotes, deeds, new ObjectMapper());
         }
 
     }
@@ -1639,6 +1670,319 @@ class CaseEmailServiceTest {
      * be written out rather than captured -- and because a case-driven template is the one whose rows cannot collide
      * on the referral key at all, which is what makes the third answer reachable.
      */
+    /**
+     * The two forms-for-completion emails: which case is offered which, and what a send of one does.
+     *
+     * <p><strong>Its own group because its rules are its own.</strong> These are the only templates routed by the
+     * case's <em>type</em>, the only ones that carry a document, and the only ones whose exclusion group is
+     * enforced per case rather than per referral. None of that is a variation on the chase; it is a third shape.
+     *
+     * <p>The failure the routing tests exist to prevent is decision 3's: an applicant sent the wrong deed
+     * completes it, takes it to two witnesses and a commissioner of oaths, and the court cannot seal it.
+     */
+    @Nested
+    @DisplayName("the forms for completion")
+    class FormsForCompletionEmails {
+
+        @Test
+        @DisplayName("offers an adult application the adult email and reports why the minor one does not apply")
+        void offersAnAdultApplicationTheAdultEmail() {
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+
+            List<EmailAvailability> available = emails.overview(CASE_ID).availability();
+
+            assertThat(entryFor(available, EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).satisfies(entry -> {
+                assertThat(entry.applicable()).isTrue();
+                assertThat(entry.reason()).isNull();
+            });
+            // Listed and refused, with a sentence composed from the deed the case does take rather than written
+            // per template -- so it cannot drift from the routing, and it tells the caseworker which email to use.
+            assertThat(entryFor(available, EmailTemplate.FORMS_FOR_COMPLETION_MINOR)).satisfies(entry -> {
+                assertThat(entry.applicable()).isFalse();
+                assertThat(entry.reason()).contains("LOC020").contains("the other forms email");
+            });
+        }
+
+        @Test
+        @DisplayName("offers a transgender adult application the ADULT email and never the minor one")
+        void offersATransgenderAdultApplicationTheAdultEmail() {
+            // The member decision 3 is emphatic about, and the reason the routing is a switch with no default: an
+            // AdultTransgender case falling through to the minor branch would send an applicant an email about
+            // their child and a deed for a child who does not exist.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.AdultTransgender);
+
+            List<EmailAvailability> available = emails.overview(CASE_ID).availability();
+
+            assertThat(entryFor(available, EmailTemplate.FORMS_FOR_COMPLETION_ADULT).applicable()).isTrue();
+            assertThat(entryFor(available, EmailTemplate.FORMS_FOR_COMPLETION_MINOR).applicable()).isFalse();
+
+            // And the send path refuses it independently of availability, because the template is a path segment
+            // and a caller can type a URL the tab never offered. Presentation is not enforcement.
+            assertThatThrownBy(() -> emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_MINOR, Map.of(),
+                                                 REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining("LOC020");
+            neverEnqueues();
+            verifyNoInteractions(deeds);
+        }
+
+        @Test
+        @DisplayName("offers a transgender child's application the MINOR email and never the adult one")
+        void offersATransgenderChildsApplicationTheMinorEmail() {
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.MinorTransgender);
+
+            List<EmailAvailability> available = emails.overview(CASE_ID).availability();
+
+            assertThat(entryFor(available, EmailTemplate.FORMS_FOR_COMPLETION_MINOR).applicable()).isTrue();
+            assertThat(entryFor(available, EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).satisfies(entry -> {
+                assertThat(entry.applicable()).isFalse();
+                assertThat(entry.reason()).contains("LOC022");
+            });
+        }
+
+        @Test
+        @DisplayName("offers a case with no type neither email, in its own words")
+        void offersACaseWithNoTypeNeither() {
+            // Offering the adult email would be the wording default ResolvedValues.isMinor makes, and it is
+            // deliberately not the forms default: a sentence is merely impersonal if wrong, and the wrong deed is
+            // sworn. Both an unset type and Unknown are the same position and get the same sentence, because what
+            // a caseworker does about either is set the type.
+            for (DeedPollType type : new DeedPollType[]{null, DeedPollType.Unknown}) {
+                storedCase().setType(type);
+
+                List<EmailAvailability> available = emails.overview(CASE_ID).availability();
+
+                assertThat(entryFor(available, EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).satisfies(entry -> {
+                    assertThat(entry.applicable()).as("%s is offered no forms email", type).isFalse();
+                    assertThat(entry.reason()).isEqualTo(CaseEmailService.TYPE_NOT_ESTABLISHED);
+                });
+                assertThat(entryFor(available, EmailTemplate.FORMS_FOR_COMPLETION_MINOR).reason())
+                    .isEqualTo(CaseEmailService.TYPE_NOT_ESTABLISHED);
+            }
+        }
+
+        @Test
+        @DisplayName("offers a relinquishment neither, and says so in its own words rather than the type's")
+        void offersARelinquishmentNeither() {
+            // Its own sentence because a caseworker does something different about it: the type IS established,
+            // and what is missing is the document set -- notify-4a flag 5. Told the type was not established they
+            // would set a type that is already right.
+            storedCase().setType(DeedPollType.DeedOfRelinquishment);
+
+            assertThat(entryFor(emails.overview(CASE_ID).availability(),
+                                EmailTemplate.FORMS_FOR_COMPLETION_ADULT))
+                .satisfies(entry -> {
+                    assertThat(entry.applicable()).isFalse();
+                    assertThat(entry.reason())
+                        .isEqualTo(CaseEmailService.RELINQUISHMENT_HAS_ITS_OWN_FORMS)
+                        .isNotEqualTo(CaseEmailService.TYPE_NOT_ESTABLISHED);
+                });
+        }
+
+        @Test
+        @DisplayName("stops offering the forms once a signature has been requested, naming the column")
+        void stopsOfferingOnceASignatureIsRequested() {
+            // Decision 9: sending this email IS the request for a signature, so the case is entitled to it while
+            // signatureRequestedDate is null. The column and not the derived state, because dateEnroled and
+            // dateReturned outrank the signature request in the cascade -- a rule written against `state` would
+            // offer the forms again to an applicant whose deed had already been sealed.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+            deedPoll.setSignatureRequestedDate(LocalDateTime.of(2026, 6, 1, 9, 0));
+
+            assertThat(entryFor(emails.overview(CASE_ID).availability(),
+                                EmailTemplate.FORMS_FOR_COMPLETION_ADULT))
+                .satisfies(entry -> {
+                    assertThat(entry.applicable()).isFalse();
+                    assertThat(entry.reason()).isEqualTo(CaseEmailService.SIGNATURE_ALREADY_REQUESTED);
+                });
+
+            assertThatThrownBy(() -> emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of(),
+                                                 REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage(CaseEmailService.SIGNATURE_ALREADY_REQUESTED);
+            neverEnqueues();
+        }
+
+        @Test
+        @DisplayName("stores the case's deed and freezes its id, and never touches the signature date")
+        void storesTheDeedAndFreezesItsId() {
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+            enqueueAnswers(1);
+
+            assertThat(emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of(), REQUEST_ID,
+                                   CASEWORKER).enqueued())
+                .isTrue();
+
+            // The deed the email's own routing says this case takes, stored through the one path that generates it
+            // at most once per case -- and in this transaction, so a refused enqueue takes the document with it.
+            verify(deeds).storeDeed(CASE_ID, DeedTemplate.ADULT);
+            assertThat(frozenPersonalisation())
+                .containsEntry(FormsForCompletionPersonalisation.DEED_DOCUMENT, DEED_DOCUMENT_ID)
+                .containsEntry(FormsForCompletionPersonalisation.PUBLISH_TO_LONDON_GAZETTE, true)
+                .containsEntry(FormsForCompletionPersonalisation.OLD_FORENAME, "Alex");
+            // Flag 2 is a business question and this service does not answer it by accident: sending is the
+            // signature request, but nothing else here sets a case date as a side effect of an email.
+            assertThat(deedPoll.getSignatureRequestedDate()).isNull();
+            // And no confirmation clock: that pair of columns is one referral's exchange, which this email is no
+            // part of. The wait for a signed deed is weeks and arrives by post.
+            verify(referrals, never()).startConfirmationClockByIdAndDeedPollId(any(), anyString(), any(),
+                                                                              anyString());
+            verifyNoInteractions(referralService);
+        }
+
+        @Test
+        @DisplayName("writes the row with no referral, so it sits outside V15's index and inside V20's")
+        void writesTheRowWithNoReferral() {
+            // The case-driven half of EmailCause, and here it is load-bearing twice: V15's index is partial on
+            // "referralId" IS NOT NULL so a borrowed referral would key this row to a refusal it has nothing to do
+            // with, and V20's is partial on IS NULL so a borrowed one would take it out of the index that makes the
+            // two forms emails exclusive.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Minor);
+            refusedReferralFor(ReferralReason.NonPublication);
+            enqueueAnswers(1);
+
+            emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_MINOR, Map.of(), REQUEST_ID, CASEWORKER);
+
+            verify(notifications).enqueue(any(), eq(CASE_ID), eq(REQUEST_ID), isNull(),
+                                          eq(EmailTemplate.FORMS_FOR_COMPLETION_MINOR.name()),
+                                          eq(EmailExclusionGroup.FORMS_FOR_COMPLETION.name()),
+                                          eq(RECIPIENT), anyString(), any(), anyString());
+            verify(deeds).storeDeed(CASE_ID, DeedTemplate.MINOR);
+        }
+
+        @Test
+        @DisplayName("refuses the other forms email once one is owed, and says which and when")
+        void refusesTheOtherFormsEmailOnceOneIsOwed() {
+            // Decision 8 as the caseworker sees it. The enforcement is V20's key -- proved against Postgres in
+            // NotificationRepositoryTest -- and this is the sentence the refusal carries: not the referral one,
+            // because no referral is involved and "one referral gets one of these" would be about nothing.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+            blockingOnThisCase(EmailTemplate.FORMS_FOR_COMPLETION_MINOR, LocalDateTime.of(2026, 6, 3, 9, 30));
+
+            // Greyed out in advance, so a caseworker is not told on submit.
+            assertThat(entryFor(emails.overview(CASE_ID).availability(),
+                                EmailTemplate.FORMS_FOR_COMPLETION_ADULT))
+                .satisfies(entry -> {
+                    assertThat(entry.applicable()).isFalse();
+                    assertThat(entry.reason())
+                        .contains("Forms for completion for a child")
+                        .contains("3 June 2026")
+                        .contains("this case")
+                        .contains("one deed");
+                });
+
+            // And refused on the send, which is where the database actually decides: the insert answers 0 and the
+            // service reads which of the three indexes refused it rather than guessing.
+            enqueueAnswers(0);
+            assertThatThrownBy(() -> emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of(),
+                                                 REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessageContaining("Forms for completion for a child")
+                .hasMessageContaining("this case");
+            verifyNoInteractions(caseNotes);
+        }
+
+        @Test
+        @DisplayName("answers a repeat of the same forms email with the row already owed, writing no second note")
+        void answersARepeatWithTheRowAlreadyOwed() {
+            // The idempotent half of the same zero-row answer: the occupying row is THIS template, so a case is not
+            // owed a second email and the receipt names the first. A 409 here would tell a caseworker their own
+            // email contradicted itself.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+            Notification owed =
+                blockingOnThisCase(EmailTemplate.FORMS_FOR_COMPLETION_ADULT, LocalDateTime.of(2026, 6, 3, 9, 30));
+            enqueueAnswers(0);
+
+            SendReceipt receipt = emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of(),
+                                              REQUEST_ID, CASEWORKER);
+
+            assertThat(receipt.enqueued()).isFalse();
+            assertThat(receipt.id()).isEqualTo(owed.getId());
+            verifyNoInteractions(caseNotes);
+        }
+
+        @Test
+        @DisplayName("a preview describes the deed rather than generating one, because a read must not write")
+        void previewGeneratesNoDeed() throws Exception {
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+            // Built before the outer stubbing rather than inside it: `rendered()` stubs a mock of its own, and
+            // Mockito refuses that nested inside an unfinished when().
+            TemplatePreview rendered = rendered();
+            when(notify.generateTemplatePreview(anyString(), any())).thenReturn(rendered);
+
+            emails.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of());
+
+            // Generating the deed is a once-per-case write with a stored blob behind it, and preview is documented
+            // as writing nothing. It also could not show the real thing: Notify creates the link only when it is
+            // given the bytes.
+            verifyNoInteractions(deeds);
+            assertThat(previewedPersonalisation())
+                .containsEntry(FormsForCompletionPersonalisation.DEED_DOCUMENT,
+                               FormsForCompletionPersonalisation.DEED_NOT_YET_GENERATED);
+        }
+
+        @Test
+        @DisplayName("refuses any slot a client sends, because neither template has one")
+        void refusesAnySlot() {
+            // Decision 7 enforced rather than documented. A caseworker cannot add a sentence to a court-authored
+            // email through this API, and a client that tries is told which key was refused rather than having it
+            // silently stripped -- which would be a success and a different email.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Please hurry."), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(InvalidInputError.class)
+                .satisfies(refused -> assertThat(((InvalidInputError) refused).errors())
+                    .extracting(FieldError::field)
+                    .containsExactly(EmailSlot.ADDITIONAL_NOTES.placeholder()));
+            neverEnqueues();
+        }
+
+        @Test
+        @DisplayName("resolves nothing from a referral, so a refusal on the case changes neither email")
+        void resolvesNothingFromAReferral() {
+            // The chase's rule, restated for these two because they are case-driven for a different reason: there
+            // is no judge in the sentence at all. A case with a refused non-publication referral is offered these
+            // exactly as one without is, and composing one reads no referral.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+            enqueueAnswers(1);
+
+            emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of(), REQUEST_ID, CASEWORKER);
+
+            verify(referrals, never()).findByDeedPollIdOrderByCreatedOnDesc(CASE_ID);
+            assertThat(frozenPersonalisation().values()).doesNotContain(DIRECTION);
+        }
+
+        /**
+         * A row already occupying this <em>case's</em> slot in the forms group.
+         *
+         * <p>Stubbed on {@code findBlockingForCase}, which is V20's index read back through the statement that
+         * repeats its predicate -- so "already occupying" is decided in one place and proved against Postgres in
+         * {@code NotificationRepositoryTest} rather than restated here.
+         */
+        private Notification blockingOnThisCase(EmailTemplate template, LocalDateTime createdOn) {
+            Notification row = notification(
+                UUID.fromString("88888888-8888-8888-8888-888888888888"), createdOn, NotificationState.Pending);
+            row.setTemplate(template.name());
+            row.setExclusionGroup(template.exclusionGroup().name());
+            when(notifications.findBlockingForCase(CASE_ID, template.exclusionGroup().name()))
+                .thenReturn(Optional.of(row));
+            return row;
+        }
+    }
+
     @Nested
     @DisplayName("resolving a refused insert")
     class ResolvingARefusedInsert {
@@ -1923,6 +2267,23 @@ class CaseEmailServiceTest {
     }
 
     /**
+     * The case type that entitles a case to this template, or null where the template does not read the type.
+     *
+     * <p>A switch expression for the reason {@link #minimumSlots} is one: a sixth template routed by the case's
+     * type must fail to compile here rather than fail whichever every-template test reaches it first, with a
+     * refusal about an unestablished type that looks nothing like the rule being tested.
+     */
+    private static DeedPollType typeEntitling(EmailTemplate template) {
+        return switch (template) {
+            case FORMS_FOR_COMPLETION_ADULT -> DeedPollType.Adult;
+            case FORMS_FOR_COMPLETION_MINOR -> DeedPollType.Minor;
+            // Null, as the fixture has always left it: none of these three reads the type, and leaving it unset is
+            // what proves that.
+            case APPLICATION_REJECTED, REQUEST_CONFIRMATION_TO_PROCEED, CHASE_MISSING_DOCUMENTS -> null;
+        };
+    }
+
+    /**
      * The smallest payload each template accepts, which is nothing at all unless it has a required slot that
      * pre-populates from nothing.
      *
@@ -1931,7 +2292,10 @@ class CaseEmailServiceTest {
      */
     private static Map<String, Object> minimumSlots(EmailTemplate template) {
         return switch (template) {
-            case APPLICATION_REJECTED, REQUEST_CONFIRMATION_TO_PROCEED -> Map.of();
+            // The forms emails have no slots at all, so an empty payload is not merely the minimum -- it is the
+            // only payload either of them accepts.
+            case APPLICATION_REJECTED, REQUEST_CONFIRMATION_TO_PROCEED, FORMS_FOR_COMPLETION_ADULT,
+                 FORMS_FOR_COMPLETION_MINOR -> Map.of();
             case CHASE_MISSING_DOCUMENTS -> Map.of(
                 EmailSlot.DOCUMENTS_REQUIRED.placeholder(), "Your birth certificate.");
         };
@@ -1969,6 +2333,16 @@ class CaseEmailServiceTest {
         deedPoll.setPostCounter(PostCounter.Online);
         when(deedPolls.findById(CASE_ID)).thenReturn(Optional.of(deedPoll));
         return deedPoll;
+    }
+
+    /**
+     * The stored deed {@code storeDeed} answers with, of which only the id ever reaches an email.
+     */
+    private static DeedPollSupportingDocument storedDeed() {
+        DeedPollSupportingDocument deed = new DeedPollSupportingDocument();
+        deed.setId(DEED_DOCUMENT_ID);
+        deed.setName("LOC020 Change of name deed");
+        return deed;
     }
 
     private static Notification notification(UUID id, LocalDateTime createdOn, NotificationState state) {
@@ -2013,6 +2387,32 @@ class CaseEmailServiceTest {
         Referral referral = refusedReferral();
         referral.setReasons(Arrays.stream(reasons).map(ReferralReason::name).toList());
         return referral;
+    }
+
+    /**
+     * The personalisation the send froze onto the outbox row, read back off the statement it was bound to.
+     *
+     * <p>Through the same {@code ObjectMapper} the service wrote it with, so what is asserted is the content
+     * rather than Jackson's spelling of it -- which is the reading {@code isTheSameSend} does for the same reason.
+     */
+    private Map<String, Object> frozenPersonalisation() {
+        ArgumentCaptor<String> personalisation = ArgumentCaptor.forClass(String.class);
+        verify(notifications).enqueue(any(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                                      personalisation.capture(), any(), anyString());
+        try {
+            return new ObjectMapper().readValue(
+                personalisation.getValue(), new com.fasterxml.jackson.core.type.TypeReference<>() {
+                });
+        } catch (Exception unreadable) {
+            throw new AssertionError("The frozen personalisation was not readable JSON", unreadable);
+        }
+    }
+
+    /** The personalisation Notify was asked to render, read off the call the preview made. */
+    private Map<String, Object> previewedPersonalisation() throws Exception {
+        ArgumentCaptor<Map<String, Object>> sent = personalisationCaptor();
+        verify(notify).generateTemplatePreview(anyString(), sent.capture());
+        return sent.getValue();
     }
 
     /**

@@ -24,6 +24,9 @@ class EmailTemplateTest {
     /** A reply-to address id, invented: what matters about it here is only that it is configured. */
     private static final String REPLY_TO = "9b7c5d21-3f4e-4a6b-8c0d-1e2f3a4b5c66";
 
+    /** A configured document retention period, so a template that carries a document can read provisioned. */
+    private static final int RETENTION_WEEKS = 17;
+
     @Nested
     @DisplayName("naming")
     class Naming {
@@ -104,6 +107,31 @@ class EmailTemplateTest {
             assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.name()).isEqualTo("CHASE_MISSING_DOCUMENTS");
             assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.key()).isEqualTo("chase-missing-documents");
             assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.displayName()).isEqualTo("Chase missing documents");
+        }
+
+        @Test
+        @DisplayName("each forms email's three spellings are the ones it is published as")
+        void formsNamesAreTheStoredValues() {
+            // notify.templates.forms-for-completion-adult, /caseworker/cases/{id}/emails/forms-for-completion-adult,
+            // and FORMS_FOR_COMPLETION_ADULT in the outbox row. Pinned because the keys are also the environment
+            // variable names the chart and the content draft already use -- NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_
+            // ADULT -- so a plausible respelling would leave a provisioned template unreachable.
+            assertThat(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.name()).isEqualTo("FORMS_FOR_COMPLETION_ADULT");
+            assertThat(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.key()).isEqualTo("forms-for-completion-adult");
+            assertThat(EmailTemplate.FORMS_FOR_COMPLETION_MINOR.name()).isEqualTo("FORMS_FOR_COMPLETION_MINOR");
+            assertThat(EmailTemplate.FORMS_FOR_COMPLETION_MINOR.key()).isEqualTo("forms-for-completion-minor");
+        }
+
+        @Test
+        @DisplayName("the two forms emails have different display names, because a note says which was sent")
+        void theFormsEmailsAreNamedApart() {
+            // EmailNotes composes from the display name alone, so one name on both would leave the case's only
+            // timeline unable to say which deed the applicant was sent -- and notes are never revised.
+            assertThat(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.displayName())
+                .isEqualTo("Forms for completion")
+                .isNotEqualTo(EmailTemplate.FORMS_FOR_COMPLETION_MINOR.displayName());
+            assertThat(EmailTemplate.FORMS_FOR_COMPLETION_MINOR.displayName())
+                .isEqualTo("Forms for completion for a child");
         }
 
         @Test
@@ -240,6 +268,28 @@ class EmailTemplateTest {
             assertThat(EmailTemplate.APPLICATION_REJECTED.slot("documents_required")).isEmpty();
         }
 
+        @Test
+        @DisplayName("the forms emails take no slots and carry one document each")
+        void theFormsEmailsTakeNoSlots() {
+            // Decision 7, measured rather than assumed: neither source document carries a caseworker marker of any
+            // style, unlike ③ and ④. EmailSlots.parse therefore refuses anything a client sends, and a free-text
+            // box would be a template change in notify-0 before it could be a slot here -- a slot the Notify
+            // template has no placeholder for makes the send a 400.
+            for (EmailTemplate template : new EmailTemplate[]{
+                EmailTemplate.FORMS_FOR_COMPLETION_ADULT, EmailTemplate.FORMS_FOR_COMPLETION_MINOR}) {
+                assertThat(template.slots()).isEmpty();
+                assertThat(template.slot("judges_reason")).isEmpty();
+                // The first templates that carry a file, and each carries exactly one: the deed. The five blank
+                // forms are attached to the Notify template itself, so this service never holds them.
+                assertThat(template.documentKeys()).containsExactly("deed_document");
+                // The document key is a resolved key too, which is what refuses a client that tries to nominate
+                // which document an applicant is sent.
+                assertThat(template.resolves("deed_document")).isTrue();
+            }
+            // And no other template carries one, so nothing else reaches the upload seam.
+            assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.resolves("deed_document")).isFalse();
+        }
+
         @ParameterizedTest
         @EnumSource(EmailTemplate.class)
         @DisplayName("no slot is also a resolved key, so no key is both client input and not")
@@ -276,7 +326,7 @@ class EmailTemplateTest {
     class TemplateId {
 
         private static NotifyProperties configured(Map<String, String> templates) {
-            return new NotifyProperties("https://notify.example", "", templates, REPLY_TO);
+            return new NotifyProperties("https://notify.example", "", templates, REPLY_TO, RETENTION_WEEKS);
         }
 
         @Test
@@ -317,11 +367,11 @@ class EmailTemplateTest {
             Map<String, String> both = Map.of(
                 EmailTemplate.APPLICATION_REJECTED.key(), uuid,
                 EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key(), uuid);
-            NotifyProperties noReplyTo = new NotifyProperties("https://notify.example", "", both, "");
+            NotifyProperties noReplyTo = new NotifyProperties("https://notify.example", "", both, "", RETENTION_WEEKS);
 
             assertThat(noReplyTo.isProvisioned(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).isFalse();
             assertThat(noReplyTo.isProvisioned(EmailTemplate.APPLICATION_REJECTED)).isTrue();
-            assertThat(new NotifyProperties("https://notify.example", "", both, REPLY_TO)
+            assertThat(new NotifyProperties("https://notify.example", "", both, REPLY_TO, RETENTION_WEEKS)
                            .isProvisioned(EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED)).isTrue();
         }
     }
@@ -346,9 +396,40 @@ class EmailTemplateTest {
             assertThat(EmailTemplate.CHASE_MISSING_DOCUMENTS.invitesReply()).isTrue();
             String uuid = "2b0e6b6e-0000-4000-8000-0000000000aa";
             Map<String, String> chase = Map.of(EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), uuid);
-            assertThat(new NotifyProperties("https://notify.example", "", chase, "")
+            assertThat(new NotifyProperties("https://notify.example", "", chase, "", RETENTION_WEEKS)
                            .isProvisioned(EmailTemplate.CHASE_MISSING_DOCUMENTS)).isFalse();
-            assertThat(new NotifyProperties("https://notify.example", "", chase, REPLY_TO)
+            assertThat(new NotifyProperties("https://notify.example", "", chase, REPLY_TO, RETENTION_WEEKS)
+                           .isProvisioned(EmailTemplate.CHASE_MISSING_DOCUMENTS)).isTrue();
+        }
+
+        @Test
+        @DisplayName("both forms emails do, and each also needs a retention period to be sendable")
+        void theFormsEmailsInviteAReplyAndCarryADocument() {
+            // "If you have any questions relating to your application you can reply to this email" -- read off both
+            // source documents on 2026-09-25. An earlier draft of the plan had treated reply-to as ④ and ⑤'s
+            // concern alone; it is these two as well, and Notify silently drops a blank one.
+            assertThat(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.invitesReply()).isTrue();
+            assertThat(EmailTemplate.FORMS_FOR_COMPLETION_MINOR.invitesReply()).isTrue();
+
+            // Three things rather than two, because these are the first templates that carry a file: the UUID, the
+            // reply-to, and the retention period the drain needs to call prepareUpload. Any one missing reads
+            // unprovisioned, which is what the Email tab says instead of offering a send that fails on the drain.
+            String uuid = "2b0e6b6e-0000-4000-8000-0000000000aa";
+            Map<String, String> forms = Map.of(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.key(), uuid);
+            assertThat(new NotifyProperties("https://notify.example", "", forms, REPLY_TO, RETENTION_WEEKS)
+                           .isProvisioned(EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).isTrue();
+            assertThat(new NotifyProperties("https://notify.example", "", forms, "", RETENTION_WEEKS)
+                           .isProvisioned(EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).isFalse();
+            assertThat(new NotifyProperties("https://notify.example", "", forms, REPLY_TO, null)
+                           .isProvisioned(EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).isFalse();
+            // Zero is unset rather than "keep it for no time at all", which is one rule and not two readings: a
+            // chart that set it would otherwise send an applicant a link to nothing.
+            assertThat(new NotifyProperties("https://notify.example", "", forms, REPLY_TO, 0)
+                           .isProvisioned(EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).isFalse();
+            // And a template that carries no document is unaffected by the retention period in either direction,
+            // so configuring one for ① cannot quietly change what ⑤ needs.
+            Map<String, String> chase = Map.of(EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), uuid);
+            assertThat(new NotifyProperties("https://notify.example", "", chase, REPLY_TO, null)
                            .isProvisioned(EmailTemplate.CHASE_MISSING_DOCUMENTS)).isTrue();
         }
 

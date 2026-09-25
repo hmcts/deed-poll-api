@@ -12,6 +12,9 @@ import uk.gov.hmcts.reform.deedpoll.domain.IncompleteDataError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedDocumentService;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedRouting;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
@@ -22,6 +25,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
@@ -168,6 +172,54 @@ public class CaseEmailService {
         + "has moved the case past it -- before sending this email";
 
     /**
+     * Why neither <em>Forms for completion</em> email applies to a case whose type nobody has established.
+     *
+     * <p>{@link uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType#Unknown} and an unset type alike -- they
+     * are the same position, which is that this service cannot tell which deed the applicant has to swear.
+     *
+     * <p><strong>Offering nothing is a different judgement from the wording default this service already
+     * makes</strong>, and deliberately so. {@code ResolvedValues.isMinor} gives an unknown type the adult
+     * <em>wording</em>, on the ground that it is merely impersonal if wrong. Forms are not a sentence: the wrong
+     * deed means an applicant completes, witnesses and swears the wrong legal instrument, and there is no
+     * recovering from that by rereading the email. So there is no safe default and the honest answer is to offer
+     * none and say why.
+     */
+    static final String TYPE_NOT_ESTABLISHED = "This case's type has not been established, so we cannot tell "
+        + "which deed the applicant has to sign: set the case type before sending either forms email, because "
+        + "sending the wrong deed has an applicant swear the wrong legal instrument";
+
+    /**
+     * Why neither forms email applies to a deed of relinquishment.
+     *
+     * <p>Its own sentence rather than {@link #TYPE_NOT_ESTABLISHED}'s, because a caseworker does something
+     * different about it: the type <em>is</em> established, and what is missing is the document set. A
+     * relinquishment follows the same journey as a change of name -- a caseworker sends a forms email with links
+     * to the relevant documents -- but a relinquishment is a different instrument, so LOC020 is very unlikely to
+     * be right and nobody has said what is. That is {@code notify-4a} flag 5, and until it is answered this case
+     * has no forms email at all rather than one of these two.
+     */
+    static final String RELINQUISHMENT_HAS_ITS_OWN_FORMS = "This case is a deed of relinquishment, which needs "
+        + "its own forms and its own email: nobody has yet identified which documents it carries, so neither "
+        + "change of name forms email applies to it";
+
+    /**
+     * Why the applicant has already been asked to sign, keyed on the column that says so.
+     *
+     * <p>Decision 9: sending one of these emails <em>is</em> the request for a signature, and
+     * {@code AwaitingSignature} is derived from {@code signatureRequestedDate} -- so the email is offered while
+     * that date is null and withheld once it is set. The sentence names the column for the reason
+     * {@link #NOT_AWAITING_FURTHER_DOCS} does: the state is derived and not settable, so what a caseworker acts on
+     * is the date on the case details.
+     *
+     * <p><strong>It says "clear the date" rather than offering to send anyway</strong>, because the deed is the
+     * thing being sent. An applicant who already has one and is sent another has two documents that look like the
+     * deed the court will seal, and only one of them is.
+     */
+    static final String SIGNATURE_ALREADY_REQUESTED = "This case already has a signature requested date "
+        + "recorded, so the applicant has already been sent their deed to sign: clear that date on the case "
+        + "details if the forms genuinely have to go out again";
+
+    /**
      * Why a send is refused when its {@code Idempotency-Key} has already been used on this case for something
      * else.
      *
@@ -219,6 +271,15 @@ public class CaseEmailService {
      */
     private final ObjectMapper json;
 
+    /**
+     * Only so that a forms email has a deed to carry -- see {@link #deedDocumentId}.
+     *
+     * <p>The service and not the generator, because what a send needs is the stored document's id and decision 6's
+     * generate-once rule, both of which are {@code DeedDocumentService}'s. Calling the generator here would produce
+     * fresh bytes on every retry of one journey and store none of them.
+     */
+    private final DeedDocumentService deeds;
+
     public CaseEmailService(DeedPollRepository deedPolls,
                            ReferralRepository referrals,
                            NotificationRepository notifications,
@@ -227,6 +288,7 @@ public class CaseEmailService {
                            NotifyProperties properties,
                            ReferralService referralService,
                            NoteService notes,
+                           DeedDocumentService deeds,
                            ObjectMapper json) {
 
         this.deedPolls = deedPolls;
@@ -237,6 +299,7 @@ public class CaseEmailService {
         this.properties = properties;
         this.referralService = referralService;
         this.notes = notes;
+        this.deeds = deeds;
         this.json = json;
     }
 
@@ -458,7 +521,9 @@ public class CaseEmailService {
         // to correct what they typed.
         Entitled entitled = entitle(deedPollId, template);
         String recipient = requireRecipient(entitled.deedPoll());
-        Composed composed = compose(entitled, template, slots);
+        // Composing a forms email generates and stores the case's deed, in this transaction -- see
+        // deedDocumentId. Nothing happens here for a template that carries no document.
+        Composed composed = compose(entitled, template, slots, deed -> deedDocumentId(deedPollId, deed));
         // Null for a case-driven email, which is the column's own null rather than a stand-in: such a row sits
         // outside the partial unique index, so nothing about it is keyed on a referral it does not have.
         UUID referralId = composed.cause().referralId();
@@ -492,19 +557,23 @@ public class CaseEmailService {
     /**
      * What a zero-row {@link #enqueue} meant, read off the row that refused it rather than guessed.
      *
-     * <p>Zero rows is the mechanism working rather than a failure -- but since V19 there are two unique indexes
-     * that can produce it, and the three answers are a 200, a 409 and a fault. {@code ON CONFLICT DO NOTHING}
-     * names no target and reports no reason, so the reason is established by reading, in this order:
+     * <p>Zero rows is the mechanism working rather than a failure -- but since V20 there are three unique indexes
+     * that can produce it, and the answers are a 200, a 409 and a fault. {@code ON CONFLICT DO NOTHING} names no
+     * target and reports no reason, so the reason is established by reading, in this order:
      *
      * <ol>
      *   <li><strong>This case's row with this request id.</strong> The most specific answer, and asked first for
      *       that reason: it names the very send the caller is retrying. A caller retrying its own POST must not be
      *       told that some other email of the same family is in the way.</li>
      *   <li><strong>The row occupying the referral's exclusion group.</strong> V15's business constraint, whose
-     *       two meanings {@link #alreadyRequested} and {@link SendReceipt#alreadyOwed} split between them exactly
-     *       as they did before V19 -- only reached now for a request id that has never been seen.</li>
-     *   <li><strong>Neither.</strong> A database constraint refused a row this service cannot account for, which
-     *       is a fault and says so.</li>
+     *       two meanings {@link #alreadyRequested(Notification)} and {@link SendReceipt#alreadyOwed} split between
+     *       them exactly as they did before V19 -- only reached now for a request id that has never been seen.</li>
+     *   <li><strong>The row occupying the case's exclusion group.</strong> V20's, for a case-driven email whose
+     *       group is {@linkplain EmailExclusionGroup#exclusivePerCase() exclusive per case} -- which is the forms
+     *       pair and not the chase. Asked only where the referral is null, because the two indexes are partial on
+     *       opposite sides of that column and at most one of them can have refused the row.</li>
+     *   <li><strong>None of them.</strong> A database constraint refused a row this service cannot account for,
+     *       which is a fault and says so.</li>
      * </ol>
      *
      * <p><strong>A matching row is an idempotent success and a differing one is a 409.</strong> The key asserts
@@ -536,38 +605,45 @@ public class CaseEmailService {
             return SendReceipt.alreadyOwed(existing);
         }
 
-        // A request id never seen on this case, so what refused the insert was V15's key -- which only a
-        // referral-driven template can collide with, the index being partial on "referralId" IS NOT NULL. Asked
-        // only where there is a referral to ask about: a chase's rows cannot occupy that index, so a query with a
-        // null referral would be one whose answer is always empty.
-        Optional<Notification> blocking = referralId == null
-            ? Optional.empty()
-            : notifications.findBlocking(deedPollId, referralId, template.exclusionGroup().name());
+        // A request id never seen on this case, so what refused the insert was one of the two exclusion-group
+        // keys -- V15's, which only a referral-driven template can collide with, or V20's, which only a
+        // case-driven template in a group that is exclusive per case can. Asked in that order, and asked at all
+        // only where there is something to find: a chase's rows occupy neither index, so either query would be one
+        // whose answer is always empty and one that read as though a repeat chase were refusable.
+        String group = template.exclusionGroup().name();
+        Optional<Notification> blocking = referralId != null
+            ? notifications.findBlocking(deedPollId, referralId, group)
+            : template.exclusionGroup().exclusivePerCase()
+                ? notifications.findBlockingForCase(deedPollId, group)
+                : Optional.empty();
 
         Notification occupant = blocking
             // Unreachable in practice, and named rather than answered with a null id: the insert was refused, so
-            // some row collided with it, and the two indexes are the only two that can. Reaching here means one
-            // of them refused a row neither of these reads can find -- a schema this service does not understand,
-            // not an outcome a caseworker can act on. Raising rolls the transaction back, which is the safe
-            // direction: nothing is owed and nothing was sent.
+            // some row collided with it, and the three indexes are the only ones that can. Reaching here means one
+            // of them refused a row none of these reads can find -- a schema this service does not understand, not
+            // an outcome a caseworker can act on. A fourth unique index added without teaching this method is what
+            // turns an ordinary conflict into a 500, and nothing fails the build to say so. Raising rolls the
+            // transaction back, which is the safe direction: nothing is owed and nothing was sent.
             .orElseThrow(() -> new IllegalStateException(
                 "Enqueueing " + template.key() + " for case " + deedPollId + " was refused by a unique index, "
-                    + "but neither this case's request row nor a blocking row for referral " + referralId
-                    + " is readable"));
+                    + "but neither this case's request row nor a blocking row for its " + group
+                    + " group (referral " + referralId + ") is readable"));
 
         if (!template.name().equals(occupant.getTemplate())) {
-            // The other email of the group. A 409 rather than a duplicate, because sending this one would tell
-            // the applicant the opposite of what they have already been told -- and because nothing the
-            // caseworker typed is wrong, so there is no field to correct.
-            log.info("Case {} already owes {} for referral {}, so {} was refused",
-                     deedPollId, occupant.getTemplate(), referralId, template.key());
-            throw new ConflictError(alreadyRequested(occupant));
+            // The other email of the group. A 409 rather than a duplicate, because sending this one would either
+            // tell the applicant the opposite of what they have already been told or send them a second deed to
+            // swear -- and because nothing the caseworker typed is wrong, so there is no field to correct.
+            log.info("Case {} already owes {} for its {} group (referral {}), so {} was refused",
+                     deedPollId, occupant.getTemplate(), group, referralId, template.key());
+            throw new ConflictError(referralId == null
+                                        ? alreadyRequestedOnThisCase(occupant)
+                                        : alreadyRequested(occupant));
         }
 
-        // The same email on the same referral from a different compose journey. Still not a second email -- the
-        // referral gets one -- so the receipt names the row that is already owed.
-        log.info("Case {} already owes {} for referral {}, so nothing was enqueued",
-                 deedPollId, template.key(), referralId);
+        // The same email on the same referral, or the same case, from a different compose journey. Still not a
+        // second email -- the group gets one -- so the receipt names the row that is already owed.
+        log.info("Case {} already owes {} for its {} group (referral {}), so nothing was enqueued",
+                 deedPollId, template.key(), group, referralId);
         return SendReceipt.alreadyOwed(occupant);
     }
 
@@ -729,6 +805,13 @@ public class CaseEmailService {
             // chase is not part of: it has no referral to stamp, and the case is already recorded as waiting by
             // `awaitingFurtherDocsInfo`, which is what put it in the state that offers this email at all.
             case CHASE_MISSING_DOCUMENTS -> false;
+            // Asks the applicant to print, sign, swear and POST the deed back, which is a wait of weeks and
+            // certainly not a reply to this email. `confirmationRequestedAt` and `awaitingConfirmationSince` are
+            // the record of one referral's confirmation exchange, which these emails are no part of: they have no
+            // referral to stamp, and the wait for a signed deed is what signatureRequestedDate and
+            // signatureReceivedDate record on the case. Whether the send should set the first of those is flag 2,
+            // a business question this service deliberately leaves alone.
+            case FORMS_FOR_COMPLETION_ADULT, FORMS_FOR_COMPLETION_MINOR -> false;
         };
     }
 
@@ -759,10 +842,11 @@ public class CaseEmailService {
         Optional<EmailCause> cause = cause(template, deedPoll, newestRefusal);
         if (cause.isEmpty()) {
             return EmailAvailability.unavailable(
-                template, reasonNotApplicable(template, newestRefusal), provisioned);
+                template, reasonNotApplicable(template, deedPoll, newestRefusal), provisioned);
         }
         return counterpart(deedPoll.getId(), cause.get(), template)
-            .map(blocking -> EmailAvailability.unavailable(template, alreadyRequested(blocking), provisioned))
+            .map(blocking -> EmailAvailability.unavailable(
+                template, alreadyRequested(cause.get(), blocking), provisioned))
             .orElseGet(() -> EmailAvailability.applicable(template, provisioned));
     }
 
@@ -780,16 +864,37 @@ public class CaseEmailService {
      * same email is the idempotent no-op {@link #send} answers with the original row, not something to hide the
      * template over.
      *
-     * <p><strong>A case-driven email has no counterpart and is not asked about.</strong> The index is partial on
-     * {@code "referralId" IS NOT NULL}, so a chase's rows cannot occupy it and no row can occupy it against a
-     * chase -- asking with a null referral would be a query whose answer is always empty, and one that read as
-     * though a repeat chase were something the database had an opinion about. It is not: decision 5 says a
-     * second chase is legitimate.
+     * <p><strong>A case-driven email is asked about only where its group is exclusive per case.</strong> V15's
+     * index is partial on {@code "referralId" IS NOT NULL}, so a chase's rows cannot occupy it and no row can
+     * occupy it against a chase -- asking with a null referral would be a query whose answer is always empty, and
+     * one that read as though a repeat chase were something the database had an opinion about. It is not: decision
+     * 5 says a second chase is legitimate. The forms emails are the other shape: no referral, and one deed per
+     * case, which is what V20's key enforces and what
+     * {@link EmailExclusionGroup#exclusivePerCase()} distinguishes.
      */
     private Optional<Notification> counterpart(String deedPollId, EmailCause cause, EmailTemplate template) {
-        return cause.referral().flatMap(referral -> notifications
-            .findBlocking(deedPollId, referral.getId(), template.exclusionGroup().name())
-            .filter(blocking -> !template.name().equals(blocking.getTemplate())));
+        String group = template.exclusionGroup().name();
+        Optional<Notification> blocking = cause.referral()
+            .map(referral -> notifications.findBlocking(deedPollId, referral.getId(), group))
+            .orElseGet(() -> template.exclusionGroup().exclusivePerCase()
+                ? notifications.findBlockingForCase(deedPollId, group)
+                : Optional.empty());
+        return blocking.filter(occupant -> !template.name().equals(occupant.getTemplate()));
+    }
+
+    /**
+     * The sentence that says another email of this group has already been asked for, chosen by what the group is
+     * scoped to.
+     *
+     * <p>Two sentences rather than one with the noun substituted, because the two say different things about what
+     * went wrong: a referral gets one outcome email because the two contradict each other about enrolment, and a
+     * case gets one forms email because an applicant signs one deed. A caseworker reading either needs the reason,
+     * not the shape.
+     */
+    private static String alreadyRequested(EmailCause cause, Notification blocking) {
+        return cause.referral().isPresent()
+            ? alreadyRequested(blocking)
+            : alreadyRequestedOnThisCase(blocking);
     }
 
     /**
@@ -805,13 +910,38 @@ public class CaseEmailService {
      * format an applicant sees -- a caseworker reading this is reading about an email an applicant has.
      */
     private static String alreadyRequested(Notification blocking) {
-        String email = EmailTemplate.byName(blocking.getTemplate())
-            .map(EmailTemplate::displayName)
-            .orElse(blocking.getTemplate());
-        return "The " + email + " email was already requested for this referral on "
+        return "The " + displayName(blocking) + " email was already requested for this referral on "
             + ResolvedValues.date(blocking.getCreatedOn())
             + ", and one referral gets one of these emails: the two would tell the applicant opposite things "
             + "about enrolment";
+    }
+
+    /**
+     * The sentence that says another email of this group has already been asked for on this <em>case</em>, and
+     * when.
+     *
+     * <p>V20's constraint in words. "Requested" rather than "delivered" for the reason
+     * {@link #alreadyRequested(Notification)} gives, and the date is formatted the way an applicant sees one for
+     * the same reason.
+     */
+    private static String alreadyRequestedOnThisCase(Notification blocking) {
+        return "The " + displayName(blocking) + " email was already requested for this case on "
+            + ResolvedValues.date(blocking.getCreatedOn())
+            + ", and a case gets one of these emails: an applicant signs and swears one deed, and the two would "
+            + "send them two different legal instruments to sign";
+    }
+
+    /**
+     * What to call the email an occupying row was written for.
+     *
+     * <p>The stored member name turned back into a display name where it still names a template, and left as it
+     * stands where it does not: a template renamed after rows were written must still produce a readable sentence
+     * rather than nothing at all.
+     */
+    private static String displayName(Notification blocking) {
+        return EmailTemplate.byName(blocking.getTemplate())
+            .map(EmailTemplate::displayName)
+            .orElse(blocking.getTemplate());
     }
 
     /**
@@ -858,7 +988,38 @@ public class CaseEmailService {
             case CHASE_MISSING_DOCUMENTS -> awaitingFurtherDocuments(deedPoll)
                 ? Optional.of(EmailCause.ofCase())
                 : Optional.empty();
+            // Case-driven like ⑤, and on two conditions rather than one: the case's type has to take this deed,
+            // and no signature may have been requested yet. Neither reads a referral -- no judge is involved in
+            // sending an applicant their forms.
+            case FORMS_FOR_COMPLETION_ADULT, FORMS_FOR_COMPLETION_MINOR -> formsApply(template, deedPoll)
+                ? Optional.of(EmailCause.ofCase())
+                : Optional.empty();
         };
+    }
+
+    /**
+     * Whether this case is entitled to <em>this</em> forms email, which is two questions.
+     *
+     * <p><strong>The type has to route to this very template, not merely to one of the two.</strong> That is the
+     * whole of decision 3 as behaviour: an {@code AdultTransgender} case is offered ① and must never be offered
+     * ②, because an applicant sent the wrong deed swears the wrong legal instrument. The routing is
+     * {@link FormsForCompletion#emailFor}, which derives it from the document-type rows rather than restating
+     * which type takes which deed.
+     *
+     * <p><strong>And no signature may have been requested</strong> -- decision 9. {@code AwaitingSignature} is
+     * derived from {@code signatureRequestedDate}, so the email is offered while that column is null; sending it
+     * <em>is</em> the request for a signature, which is why it is the right column to read and why this service
+     * deliberately does not write it (flag 2 is a business question).
+     *
+     * <p><strong>The column and not {@code state}</strong>, though the two are one fact. {@code state} is derived,
+     * and {@code dateReturned}, {@code dateEnroled} and {@code signatureReceivedDate} all outrank the signature
+     * request in the cascade -- so a case that has been signed and enrolled reads {@code Enroled} while still
+     * carrying the requested date, and a rule written against the state would offer the forms again to an applicant
+     * whose deed has already been sealed. Reading the column is decision 9 exactly as it is written.
+     */
+    private static boolean formsApply(EmailTemplate template, DeedPoll deedPoll) {
+        return FormsForCompletion.emailFor(deedPoll.getType()).filter(template::equals).isPresent()
+            && deedPoll.getSignatureRequestedDate() == null;
     }
 
     /**
@@ -951,14 +1112,43 @@ public class CaseEmailService {
      * <p>The order repeats {@link #cause}'s filters, so the sentence names the first condition that failed rather
      * than the last one tested.
      */
-    private static String reasonNotApplicable(EmailTemplate template, Optional<Referral> newestRefusal) {
+    private static String reasonNotApplicable(
+        EmailTemplate template, DeedPoll deedPoll, Optional<Referral> newestRefusal) {
+
         return switch (template) {
             case APPLICATION_REJECTED -> NO_REFUSAL;
             case REQUEST_CONFIRMATION_TO_PROCEED -> reasonNoConfirmationToAskFor(newestRefusal);
             // One condition, so one sentence -- and its own rather than a shared "this does not apply", because
             // what a caseworker does about it is nothing like what they do about a missing refusal.
             case CHASE_MISSING_DOCUMENTS -> NOT_AWAITING_FURTHER_DOCS;
+            case FORMS_FOR_COMPLETION_ADULT, FORMS_FOR_COMPLETION_MINOR -> reasonNoFormsToSend(template, deedPoll);
         };
+    }
+
+    /**
+     * Which of a forms email's conditions failed, in the order {@link #formsApply} tests them.
+     *
+     * <p>Four sentences for two conditions, because "the type does not take this deed" splits three ways and a
+     * caseworker does something different about each: set the type, wait for somebody to identify a
+     * relinquishment's forms, or send the other forms email instead. A shared sentence would send all three of them
+     * looking in the same wrong place.
+     *
+     * <p>The third is composed from the deed the case does take rather than written per template, so it cannot
+     * drift from {@link FormsForCompletion}'s routing -- and it says what a caseworker should do rather than only
+     * what is wrong.
+     */
+    private static String reasonNoFormsToSend(EmailTemplate template, DeedPoll deedPoll) {
+        Optional<DeedTemplate> deed = DeedRouting.deedFor(deedPoll.getType());
+        if (deed.isEmpty()) {
+            return deedPoll.getType() == DeedPollType.DeedOfRelinquishment
+                ? RELINQUISHMENT_HAS_ITS_OWN_FORMS
+                : TYPE_NOT_ESTABLISHED;
+        }
+        if (!FormsForCompletion.deedOf(template).equals(deed)) {
+            return "This case takes " + deed.get().formCode() + ", so it is offered the other forms email and not "
+                + "this one: an applicant sent the wrong deed would sign and swear the wrong legal instrument";
+        }
+        return SIGNATURE_ALREADY_REQUESTED;
     }
 
     /**
@@ -990,10 +1180,11 @@ public class CaseEmailService {
         // no business with one.
         Optional<Referral> newestRefusal = switch (template) {
             case APPLICATION_REJECTED, REQUEST_CONFIRMATION_TO_PROCEED -> newestRefusal(deedPollId);
-            case CHASE_MISSING_DOCUMENTS -> Optional.empty();
+            case CHASE_MISSING_DOCUMENTS, FORMS_FOR_COMPLETION_ADULT, FORMS_FOR_COMPLETION_MINOR ->
+                Optional.empty();
         };
         EmailCause cause = cause(template, deedPoll, newestRefusal)
-            .orElseThrow(() -> new ConflictError(reasonNotApplicable(template, newestRefusal)));
+            .orElseThrow(() -> new ConflictError(reasonNotApplicable(template, deedPoll, newestRefusal)));
         return new Entitled(deedPoll, cause);
     }
 
@@ -1005,10 +1196,23 @@ public class CaseEmailService {
      * letter about a refusal.
      */
     private Composed compose(String deedPollId, EmailTemplate template, Map<String, Object> slots) {
-        return compose(entitle(deedPollId, template), template, slots);
+        // A preview describes the deed rather than generating one -- see FormsForCompletionPersonalisation's
+        // DEED_NOT_YET_GENERATED, and this method's own documentation for why a read must not write it.
+        return compose(entitle(deedPollId, template), template, slots,
+                       deed -> FormsForCompletionPersonalisation.DEED_NOT_YET_GENERATED);
     }
 
-    private Composed compose(Entitled entitled, EmailTemplate template, Map<String, Object> slots) {
+    /**
+     * The same, once the case and its cause are in hand.
+     *
+     * @param deedDocument how this path gets a reference to the case's deed: the stored document's id on a send,
+     *     and a description of where the link will go on a preview. A function rather than a flag so that the
+     *     preview path does not merely <em>choose</em> not to store a deed -- it has no way to
+     */
+    private Composed compose(Entitled entitled,
+                             EmailTemplate template,
+                             Map<String, Object> slots,
+                             Function<DeedTemplate, String> deedDocument) {
         DeedPoll deedPoll = entitled.deedPoll();
         EmailCause cause = entitled.cause();
 
@@ -1026,8 +1230,41 @@ public class CaseEmailService {
                     deedPoll, cause.requireReferral(), accepted).toMap();
             case CHASE_MISSING_DOCUMENTS ->
                 MissingDocumentsPersonalisation.resolve(deedPoll, accepted).toMap();
+            // No slots at all, so `accepted` is empty here by construction -- EmailSlots.parse has already refused
+            // anything a client tried to send. The one value that is not a column is the deed, which the caller
+            // supplies because a send stores one and a preview must not.
+            case FORMS_FOR_COMPLETION_ADULT, FORMS_FOR_COMPLETION_MINOR ->
+                FormsForCompletionPersonalisation.resolve(deedPoll, deedDocument.apply(requireDeed(template)))
+                    .toMap();
         };
         return new Composed(deedPoll, cause, personalisation);
+    }
+
+    /**
+     * The deed a forms email carries.
+     *
+     * <p>Unreachable for any other template: the only caller is the arm of a switch over {@link EmailTemplate}
+     * whose members {@link FormsForCompletion#deedOf} answers for. That is what this says rather than a
+     * {@code NoSuchElementException} two frames further in.
+     */
+    private static DeedTemplate requireDeed(EmailTemplate template) {
+        return FormsForCompletion.deedOf(template).orElseThrow(() -> new IllegalStateException(
+            "The " + template.key() + " email is composed with a deed, but it declares none"));
+    }
+
+    /**
+     * The id of this case's deed, generating and storing it if the case has none yet.
+     *
+     * <p><strong>In the send's own transaction, which is what makes the row and the deed one act.</strong> If the
+     * enqueue is then refused -- the other forms email already asked for, the request id reused -- the document row
+     * and its blob roll back with the refusal, so a case never holds a deed for an email nobody was owed.
+     *
+     * <p><strong>Generated at most once per case</strong> (decision 6): a retry of the same compose journey finds
+     * the deed the first attempt stored, which is why the frozen personalisation of an idempotent repeat compares
+     * equal to the stored row's. {@code DeedDocumentService} is where that rule and its idempotency argument live.
+     */
+    private String deedDocumentId(String deedPollId, DeedTemplate deed) {
+        return deeds.storeDeed(deedPollId, deed).getId();
     }
 
     /**

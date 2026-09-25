@@ -81,6 +81,42 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
                                         @Param("exclusionGroup") String exclusionGroup);
 
     /**
+     * The row occupying V20's case-scoped unique index for this case and exclusion group, if there is one.
+     *
+     * <p><strong>{@link #findBlocking}'s twin for a case-driven email, and the two are not interchangeable.</strong>
+     * That one asks about a referral's slot; this one asks about a case's, which is the key V20 added because the
+     * forms-for-completion emails have no referral to be keyed on -- so V15's partial index never sees their rows
+     * and permits one applicant both deeds. Read after {@link #enqueue} answered {@code 0}, and by the availability
+     * check that greys the option out in advance, exactly as its twin is.
+     *
+     * <p><strong>The predicate is V20's, repeated character for character, and the group filter is part of
+     * it.</strong> {@code "referralId" IS NULL} is what makes this the case-scoped index rather than the
+     * referral-scoped one, and {@code "exclusionGroup" IN (...)} is what keeps a repeat chase legitimate -- the
+     * caller only asks this for a group {@code EmailExclusionGroup.exclusivePerCase()} answers true for, so the
+     * {@code IN} list is not repeated here and the caller's flag is what has to agree with the migration. The
+     * failure-verdict clause is V12's, unchanged: a permanently refused row does not occupy the slot.
+     *
+     * <p>Case-scoped like every other finder here -- which is the key's own scope this time rather than a
+     * convention applied on top -- and {@code LIMIT 1} because the index permits at most one such row, stated
+     * rather than assumed since a permanently refused row may sit beside the live one.
+     *
+     * @param deedPollId the case whose slot is occupied
+     * @param exclusionGroup the {@code EmailExclusionGroup} member name, which must be one V20's index names
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT *
+          FROM "deedpoll_notification"
+         WHERE "deedPollId" = :deedPollId
+           AND "referralId" IS NULL
+           AND "exclusionGroup" = :exclusionGroup
+           AND ("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT')
+         ORDER BY "createdOn" DESC
+         LIMIT 1
+        """)
+    Optional<Notification> findBlockingForCase(@Param("deedPollId") String deedPollId,
+                                               @Param("exclusionGroup") String exclusionGroup);
+
+    /**
      * The row this case already has for this request id, if the caller has sent this request before.
      *
      * <p>Read after {@link #enqueue} answered {@code 0}, and read <em>first</em> of the two resolutions: an
@@ -115,9 +151,10 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
      * which is the one thing the outbox is supposed to guarantee. This statement refuses the duplicate inside the
      * caller's transaction and leaves it usable: {@code 0} rows is the no-op to log, not an error.
      *
-     * <p><strong>There is no conflict target since V19, and its absence is the correctness choice.</strong> Two
-     * unique indexes can now refuse this row -- V19's {@code ("deedPollId", "requestId")} and V15's partial
-     * {@code ("referralId", "exclusionGroup")} -- and {@code ON CONFLICT} takes at most one inferred target. A
+     * <p><strong>There is no conflict target since V19, and its absence is the correctness choice.</strong> Three
+     * unique indexes can now refuse this row -- V19's {@code ("deedPollId", "requestId")}, V15's partial
+     * {@code ("referralId", "exclusionGroup")} and V20's partial {@code ("deedPollId", "exclusionGroup")} -- and
+     * {@code ON CONFLICT} takes at most one inferred target. A
      * statement naming either one would leave the other to raise a {@code DataIntegrityViolationException},
      * marking the caseworker's transaction rollback-only for a conflict that has a perfectly good answer. A bare
      * {@code DO NOTHING} covers every unique index on the table, which is what makes both refusals reachable as
@@ -132,10 +169,11 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
      * failure-verdict expression, under which only an explicit permanent refusal leaves the exclusion slot -- are
      * unchanged and still spelled out in {@link #findBlocking}, which is what the caller resolves a refusal with.
      *
-     * <p><strong>{@code 0} rows therefore has three meanings, and the caller must tell them apart.</strong> The
+     * <p><strong>{@code 0} rows therefore has four meanings, and the caller must tell them apart.</strong> The
      * same request already sent (idempotent success), the other email of the referral's exclusion group
-     * (a {@code 409}), or -- if neither row is readable -- a constraint this service cannot explain, which is a
-     * fault rather than an outcome. {@code CaseEmailService.send} resolves them in that order.
+     * (a {@code 409}), the other email of the <em>case's</em> exclusion group (also a {@code 409}, and V20's), or
+     * -- if no such row is readable -- a constraint this service cannot explain, which is a fault rather than an
+     * outcome. {@code CaseEmailService.resolveRefusedInsert} resolves them in that order.
      *
      * <p>Native SQL for the reason {@link #claimNextDue} is: this <em>is</em> the statement, and the
      * {@code ON CONFLICT} clause has no JPA spelling. Identifiers are quoted because they are mixed case.

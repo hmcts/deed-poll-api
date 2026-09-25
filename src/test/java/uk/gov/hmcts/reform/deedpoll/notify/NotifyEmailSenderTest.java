@@ -6,12 +6,14 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 /**
  * The production sender over a real HTTP round trip to {@link StubNotify}, with no database or container.
@@ -29,12 +31,21 @@ class NotifyEmailSenderTest {
 
     private final StubNotify notify = new StubNotify();
 
+    /**
+     * Real rather than mocked, because it is a no-op for every template this class sends: none of the three carries
+     * a document, so {@code resolve} answers with the row's own map and never reaches the document service at all.
+     * A mock would have made that a stubbing decision instead of the property it is -- see
+     * {@code DocumentUploadsTest} for the templates that do carry one.
+     */
+    private DocumentUploads uploads;
+
     private NotifyEmailSender sender;
 
     @BeforeEach
     void startStub() {
         notify.start();
-        sender = new NotifyEmailSender(notify.client(), notify.properties());
+        uploads = new DocumentUploads(mock(DocumentService.class), notify.properties());
+        sender = new NotifyEmailSender(notify.client(), notify.properties(), uploads);
     }
 
     @AfterEach
@@ -123,7 +134,8 @@ class NotifyEmailSenderTest {
         NotifyEmailSender noReplyTo = new NotifyEmailSender(
             notify.client(),
             new NotifyProperties(notify.baseUrl(), notify.apiKey(),
-                                 notify.properties().templates(), ""));
+                                 notify.properties().templates(), "", StubNotify.RETENTION_WEEKS),
+            uploads);
 
         assertThat(noReplyTo.send(confirmationRow()))
             .isEqualTo(SendOutcome.failed(
