@@ -81,7 +81,10 @@ import java.util.stream.Collectors;
  * {@link IncompleteDataError} has the argument). 400 for a slot payload the schema refuses, with every offending
  * field named at once. The recipient is checked <em>before</em> the payload, deliberately: a caseworker whose
  * case has no address cannot fix that by editing what they typed, so making them correct a payload first would
- * be two refusals where one was useful.
+ * be two refusals where one was useful. ⑤ is what makes that order matter rather than theoretical --
+ * {@code documents_required} is required of the request and pre-populated from nothing, so an empty payload on a
+ * case with no address really would be refused twice. A <em>preview</em> checks the address not at all: reading
+ * what would go out before anybody has chased the applicant for an address is legitimate.
  *
  * <p><strong>Nothing here sends.</strong> A send resolves, enqueues in the caller's transaction -- stamping the
  * referral's {@code confirmationRequestedAt} in that same transaction where the email is the one that asks the
@@ -450,8 +453,12 @@ public class CaseEmailService {
                            UUID requestId,
                            CurrentUser caller) {
 
-        Composed composed = compose(deedPollId, template, slots);
-        String recipient = requireRecipient(composed.deedPoll());
+        // Entitlement, then the address, then the payload -- the order the four answers are documented in, and the
+        // reason this is two calls rather than one: a case with no address is told so before a caseworker is asked
+        // to correct what they typed.
+        Entitled entitled = entitle(deedPollId, template);
+        String recipient = requireRecipient(entitled.deedPoll());
+        Composed composed = compose(entitled, template, slots);
         // Null for a case-driven email, which is the column's own null rather than a stand-in: such a row sits
         // outside the partial unique index, so nothing about it is keyed on a referral it does not have.
         UUID referralId = composed.cause().referralId();
@@ -968,13 +975,14 @@ public class CaseEmailService {
     }
 
     /**
-     * The case, the referral behind the email, and the personalisation the two of them plus the slots resolve to.
+     * The case and the reason it is entitled to this email, or the 404 or 409 that says it is not.
      *
-     * <p>Shared by the preview and the send so that what a caseworker approved is what is stored: two resolvers
-     * would be two ways of answering the same question, and the one place they could differ is the content of a
-     * letter about a refusal.
+     * <p><strong>Separate from {@link #compose} so that the recipient can be judged between them.</strong> A send
+     * checks the address before the slot payload -- notify-1's decision, and the argument is in {@link #send}'s
+     * own documentation -- which is only expressible if entitlement and composition are two steps. A preview
+     * takes both in one go and never checks the address at all.
      */
-    private Composed compose(String deedPollId, EmailTemplate template, Map<String, Object> slots) {
+    private Entitled entitle(String deedPollId, EmailTemplate template) {
         DeedPoll deedPoll = requireCase(deedPollId);
         // Read only where this template's own rule is about a referral. A chase is case-driven, so composing one
         // queries the referral table not at all -- which is decision 1 as behaviour rather than as intent, and a
@@ -986,6 +994,23 @@ public class CaseEmailService {
         };
         EmailCause cause = cause(template, deedPoll, newestRefusal)
             .orElseThrow(() -> new ConflictError(reasonNotApplicable(template, newestRefusal)));
+        return new Entitled(deedPoll, cause);
+    }
+
+    /**
+     * The case, the referral behind the email, and the personalisation the two of them plus the slots resolve to.
+     *
+     * <p>Shared by the preview and the send so that what a caseworker approved is what is stored: two resolvers
+     * would be two ways of answering the same question, and the one place they could differ is the content of a
+     * letter about a refusal.
+     */
+    private Composed compose(String deedPollId, EmailTemplate template, Map<String, Object> slots) {
+        return compose(entitle(deedPollId, template), template, slots);
+    }
+
+    private Composed compose(Entitled entitled, EmailTemplate template, Map<String, Object> slots) {
+        DeedPoll deedPoll = entitled.deedPoll();
+        EmailCause cause = entitled.cause();
 
         // The judge's words reach the email only through this slot, pre-populated and editable. ③'s resolve() is
         // deliberately not given the referral at all, and ④'s is given it only for the decision date and
@@ -1076,5 +1101,12 @@ public class CaseEmailService {
      * field here would put "is there one?" at every call site rather than at the one place that answers it.
      */
     private record Composed(DeedPoll deedPoll, EmailCause cause, Map<String, Object> personalisation) {
+    }
+
+    /**
+     * A case that may have this email, and the reason it may -- everything a send knows before it reads the
+     * caseworker's payload.
+     */
+    private record Entitled(DeedPoll deedPoll, EmailCause cause) {
     }
 }

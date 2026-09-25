@@ -43,6 +43,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * <p>Everything here is inside the test's transaction, including {@code CREATE SCHEMA}: Postgres makes DDL
  * transactional, so the rollback takes the schema, the copy and its index with it.
+ *
+ * <p><strong>One correction to the migration's own commentary, recorded here because a committed migration is
+ * never edited.</strong> Step 1's note says the {@code ACCESS EXCLUSIVE} lock "is held for an instant". Only the
+ * half about the table not being rewritten is true: Flyway runs a PostgreSQL migration in a single transaction --
+ * which is also why this test can execute the file inside its own -- so that lock is held to commit, across the
+ * backfill, the validating scan {@code SET NOT NULL} needs and the non-{@code CONCURRENTLY} index build. Every
+ * write to {@code deedpoll_notification} blocks for the whole file, which is acceptable only because the outbox
+ * is small in every environment that will apply it. If it ever is not, the index belongs in a script of its own
+ * with {@code -- flyway:executeInTransaction=false} and {@code CREATE UNIQUE INDEX CONCURRENTLY}. For the same
+ * reason step 2's {@code WHERE "requestId" IS NULL} guards only a hand-run of the file, not a row an old instance
+ * slipped in between the two statements: inside one transaction there can be no such row.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Transactional

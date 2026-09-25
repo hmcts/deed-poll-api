@@ -624,6 +624,47 @@ class CaseEmailServiceTest {
         }
 
         @Test
+        @DisplayName("422s the missing address before 400ing the payload, so one refusal does the work of two")
+        void judgesTheRecipientBeforeThePayload() {
+            // notify-1's decision, and ⑤ is what makes it reachable rather than theoretical: documents_required is
+            // required of the request and pre-populated from nothing, so a caseworker pressing Send on an empty
+            // chase form would otherwise be told to type the documents and only then that the case has nobody to
+            // send them to. The payload here is refusable twice over -- the required slot is absent and an unknown
+            // key is present -- and the answer is still the 422.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setState(DeedPollState.AwaitingFurtherDocs);
+            deedPoll.setApplicantEmail(null);
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, Map.of("no_such_slot", "anything"),
+                REQUEST_ID, CASEWORKER))
+                .isInstanceOf(IncompleteDataError.class)
+                .satisfies(refusal -> assertThat(((IncompleteDataError) refusal).errors())
+                    .extracting(FieldError::field)
+                    .containsExactly("applicantEmail"));
+
+            neverEnqueues();
+        }
+
+        @Test
+        @DisplayName("previews the same case without checking the address, because a preview sends nothing")
+        void previewsWithoutTheRecipient() {
+            // The other half of the same decision: reading what would go out before anybody has chased the
+            // applicant for an address is legitimate, so only the send judges the recipient.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setState(DeedPollState.AwaitingFurtherDocs);
+            deedPoll.setApplicantEmail(null);
+
+            // The payload is the only thing left to refuse, which is the proof: the address is never looked at.
+            assertThatThrownBy(() ->
+                emails.preview(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, Map.of()))
+                .isInstanceOf(InvalidInputError.class)
+                .satisfies(refusal -> assertThat(((InvalidInputError) refusal).errors())
+                    .extracting(FieldError::field)
+                    .containsExactly(EmailSlot.DOCUMENTS_REQUIRED.placeholder()));
+        }
+
+        @Test
         @DisplayName("enqueues the resolved email against the case, the referral and the template's member name")
         void enqueuesTheResolvedEmail() {
             storedCase();
@@ -995,8 +1036,8 @@ class CaseEmailServiceTest {
             void writesNoNoteForASendRefusedBeforeTheRow() {
                 // A note claiming an email was sent is worse than no note at all: the Emails tab has no row to
                 // contradict it, the pointer sends the reader to a tab that says nothing, and notes are never
-                // revised. The blank recipient rather than the missing refusal, because it is the refusal that
-                // happens latest of the pre-enqueue three.
+                // revised. The blank recipient rather than the missing refusal, because it is the later of the two
+                // refusals that happen before the payload is even read.
                 storedCase().setApplicantEmail("  ");
                 refusedReferral();
 
