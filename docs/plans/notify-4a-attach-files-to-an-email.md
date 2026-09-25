@@ -28,9 +28,42 @@ That is deliberate rather than unfortunate. It means the risky half can fail wit
 and it means the two halves are blocked on different things — see below.
 
 **The dependency is the other way round from what you might expect.** notify-4b needs **nothing external**: the
-two deed templates are already in the workspace. *This* plan is the one waiting on people — the five forms do not
-exist here, and *send a file by email* is a per-service Notify setting somebody has to switch on. So if only one
-can start, it is notify-4b.
+two deed templates are already in the workspace.
+
+**But this plan is more startable than an earlier draft of it claimed, and that correction matters.** It said this
+half was "waiting on people". Two things, and neither is much of a wait:
+
+- **The five forms are published court forms** — LOC021, LOC023, LOC024, LOC027, LOC028. Sourcing them is most
+  likely downloading them, not a request to the business. Framing it as a dependency on somebody else was wrong.
+- ***Send a file by email* is a checkbox** on the Notify service, not a request queue.
+
+**And Task 1 — the whole technical substance of this plan — needs neither.** The drain-time seam works against any
+document, so it can be built and tested today with a fixture. Only Task 3 (storing the *real* forms) and Task 4
+(the end-to-end proof) need the files and the setting. **The tasks are ordered accordingly**: the seam first, the
+selection rules second, the forms third.
+
+## Which email carries which forms
+
+Settled, from the supplied documents rather than inferred. The content draft is
+[`deed-poll-admin/.business_context/notify-templates/forms-for-completion.md`](../../../deed-poll-admin/.business_context/notify-templates/forms-for-completion.md),
+which also holds the wording and the placeholder names to author with.
+
+| | ① adult | ② minor |
+|---|---|---|
+| Deed — **generated**, notify-4b | LOC020 | LOC022 |
+| Static, this plan | LOC021 statutory declaration | LOC023 affidavit of best interest |
+| Static, this plan | — | LOC024 statutory declaration for a child |
+| Static, this plan | LOC027 exhibit cover sheets | LOC028 exhibit cover sheets |
+| The email says | *"three forms"* | *"four forms"* |
+
+**Each document is its own personalisation key**, and the drain replaces each with a `prepareUpload`. The keys name
+the document's **role**, not its LOC code — `deed_document`, `statutory_declaration`, `affidavit_of_best_interest`,
+`exhibit_cover_sheets` — so `statutory_declaration` appears in both templates resolving to LOC021 and LOC024
+respectively. A form reissued under a new code is then a change to one mapping rather than to a template, an api
+enum and a key name.
+
+**The mapping from template to files lives in one place in this repo**, so *"which forms does ② carry"* has exactly
+one answer that can be tested. Task 3 owns it.
 
 ---
 
@@ -111,24 +144,7 @@ Notes so no task rediscovers them:
 
 ## Tasks
 
-### Task 1: Settle where the five blank forms live, and put them there
-
-Read first: flag 1 below, `DocumentService`, `DocumentStore`, `DeedPollSupportingDocumentType`.
-
-- **The five forms do not exist in this workspace.** Record what was supplied, from whom and when, before writing
-  code that assumes a shape. If they are still missing, **stop and report** rather than inventing placeholders —
-  a plan that ships fake statutory forms is worse than one that waits.
-- Decide and record *where* they live: classpath resources in this repo, or rows in the document store seeded
-  once. Argue it rather than picking — the test is which one lets a corrected LOC024 replace the old one in one
-  place, for every case, without a migration.
-- **They are referenced, not copied per case** (decision 1). Whatever the mechanism, adding a case must not add
-  five blobs.
-- Check whether a suitable `DeedPollSupportingDocumentType` already exists before adding one, and if one is added,
-  make `applicableTypes` reflect that adult and minor take different sets.
-- [ ] the five forms are stored once and referenced per case, their provenance is recorded, no per-case copies
-      exist, and `./gradlew build` green
-
-### Task 2: Resolve a stored document to a Notify upload at drain time
+### Task 1: Resolve a stored document to a Notify upload at drain time
 
 Read first: `NotifyEmailSender.send`, `NotificationOutbox`, and decisions 3, 4, 5, 7 and 8.
 
@@ -147,7 +163,59 @@ Read first: `NotifyEmailSender.send`, `NotificationOutbox`, and decisions 3, 4, 
       unchanged, missing and oversized documents fail as `TECHNICAL` with useful messages, and `./gradlew build`
       green
 
-### Task 3: Prove it end to end against a real Notify, and record what is left
+### Task 2: Refuse the wrong forms for the case, at every layer that can
+
+Read first: `CaseEmailService.availability`, `EmailTemplate`, `DeedPollType`, and the rule below.
+
+**`DeedPollType` has SIX members, not four, and two of them take neither email.** An earlier draft of notify-4
+said four and warned that "a fifth member fails to compile" — there is already a fifth and a sixth:
+
+| `DeedPollType` | Offered |
+|---|---|
+| `Adult`, `AdultTransgender` | ① only |
+| `Minor`, `MinorTransgender` | ② only |
+| `DeedOfRelinquishment` | **neither** — a different legal instrument with its own forms, none of which exist |
+| `Unknown` | **neither** — a case whose type nobody has established cannot be sent type-specific forms |
+
+- A `switch` over all six with **no `default`**, so a seventh member fails to compile rather than falling through
+  to somebody else's forms. This is the convention `CaseEmailService.cause()` already uses.
+- **The two "neither" cases get distinct reasons, not one shared sentence.** `Unknown` is *"this case's type has
+  not been established, so we cannot tell which forms apply"*; `DeedOfRelinquishment` is *"a deed of
+  relinquishment uses different forms, which this service does not yet send"*. A caseworker reading the tab
+  learns which of the two situations they are in, and the second is a prompt to ask for the forms rather than a
+  dead end.
+- **Three layers, and each exists because the one above it can be bypassed:**
+  1. **Availability** — api reports `applicable: false` with the reason, so admin's Email tab never renders the
+     option. This is the layer that makes the wrong email unselectable, which is the requirement.
+  2. **The send path re-checks** and refuses with 409. The template is a path segment, so a caller can type a URL
+     the tab never offered; presentation is not enforcement.
+  3. **Per-case exclusivity** (notify-4b decision 8) stops ① and ② both reaching one case even across two
+     journeys or a race — a database constraint, not a check.
+- Tests, container-free: each of the six members is offered exactly the templates the table says and no others; an
+  `AdultTransgender` case is **never** offered ②; `DeedOfRelinquishment` and `Unknown` are offered neither and
+  give *different* reasons; and a send of the wrong template for the type is a 409 even though availability
+  already said no.
+- [ ] all six `DeedPollType` members route to exactly the right template or to neither with a distinct reason, the
+      send path refuses independently of availability, and `./gradlew build` green
+
+### Task 3: Settle where the five blank forms live, and put them there
+
+Read first: flag 1 below, `DocumentService`, `DocumentStore`, `DeedPollSupportingDocumentType`.
+
+- **The five forms do not exist in this workspace.** Record what was supplied, from whom and when, before writing
+  code that assumes a shape. If they are still missing, **stop and report** rather than inventing placeholders —
+  a plan that ships fake statutory forms is worse than one that waits.
+- Decide and record *where* they live: classpath resources in this repo, or rows in the document store seeded
+  once. Argue it rather than picking — the test is which one lets a corrected LOC024 replace the old one in one
+  place, for every case, without a migration.
+- **They are referenced, not copied per case** (decision 1). Whatever the mechanism, adding a case must not add
+  five blobs.
+- Check whether a suitable `DeedPollSupportingDocumentType` already exists before adding one, and if one is added,
+  make `applicableTypes` reflect that adult and minor take different sets.
+- [ ] the five forms are stored once and referenced per case, their provenance is recorded, no per-case copies
+      exist, and `./gradlew build` green
+
+### Task 4: Prove it end to end against a real Notify, and record what is left
 
 - With *send a file by email* enabled (flag 2), send **one** document through the non-prod service to a
   guest-listed address and confirm the link arrives, the confirmation step appears, and the retention is what was
@@ -160,6 +228,8 @@ Read first: `NotifyEmailSender.send`, `NotificationOutbox`, and decisions 3, 4, 
 
 ---
 
+---
+
 ## Deliberately not in this plan
 
 - **Generating the deed.** notify-4b, including its spike. Nothing here depends on the answer.
@@ -169,9 +239,11 @@ Read first: `NotifyEmailSender.send`, `NotificationOutbox`, and decisions 3, 4, 
 
 ## Flags
 
-1. **The five blank forms do not exist in this workspace and somebody has to supply them.** LOC021, LOC023,
-   LOC024, LOC027 and LOC028. `doc_templates/` holds the two deeds and the four email sources and none of these.
-   Task 1 cannot start without them.
+1. **The five blank forms are not in this workspace, but they are published court forms rather than something to
+   request.** LOC021, LOC023, LOC024, LOC027 and LOC028. `doc_templates/` holds the two deeds and the four email
+   sources and none of these. **Task 3 needs them; Tasks 1 and 2 do not**, so this does not block a start — and an
+   earlier draft of this plan was wrong to call it "waiting on people". Whoever sources them should record where
+   from and which version, because a form reissued under the same code is otherwise an undetectable change.
 2. **Notify's *send a file by email* is a per-service setting and may not be on.** It is not in notify-0's
    checklist as a distinct item beyond the template work, so it needs checking on the non-prod service — and
    again on prod when that exists.
