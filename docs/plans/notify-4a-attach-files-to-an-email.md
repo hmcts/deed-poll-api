@@ -48,13 +48,18 @@ Settled, from the supplied documents rather than inferred. The content draft is
 [`deed-poll-admin/.business_context/notify-templates/forms-for-completion.md`](../../../deed-poll-admin/.business_context/notify-templates/forms-for-completion.md),
 which also holds the wording and the placeholder names to author with.
 
-| | ① adult | ② minor |
-|---|---|---|
-| Deed — **generated**, notify-4b | LOC020 | LOC022 |
-| Static, this plan | LOC021 statutory declaration | LOC023 affidavit of best interest |
-| Static, this plan | — | LOC024 statutory declaration for a child |
-| Static, this plan | LOC027 exhibit cover sheets | LOC028 exhibit cover sheets |
-| The email says | *"three forms"* | *"four forms"* |
+| | ① adult | ② minor | ③′ relinquishment |
+|---|---|---|---|
+| Deed — **generated**, notify-4b | LOC020 | LOC022 | unknown |
+| Static, this plan | LOC021 statutory declaration | LOC023 affidavit of best interest | unknown |
+| Static, this plan | — | LOC024 statutory declaration for a child | unknown |
+| Static, this plan | LOC027 exhibit cover sheets | LOC028 exhibit cover sheets | unknown |
+| The email says | *"three forms"* | *"four forms"* | — |
+
+**③′ `forms-for-completion-relinquishment` is a real third template** — Steve settled on 2026-09-25 that a
+`DeedOfRelinquishment` follows the same journey as a change of name. **Its forms are not identified** (flag 5), so
+Task 2 declares the member and leaves it reporting `provisioned: false`; nothing here maps documents to it, and
+nothing should until somebody says what they are. Whether it even needs a *generated* deed is part of that question.
 
 **Each document is its own personalisation key**, and the drain replaces each with a `prepareUpload`. The keys name
 the document's **role**, not its LOC code — `deed_document`, `statutory_declaration`, `affidavit_of_best_interest`,
@@ -167,23 +172,47 @@ Read first: `NotifyEmailSender.send`, `NotificationOutbox`, and decisions 3, 4, 
 
 Read first: `CaseEmailService.availability`, `EmailTemplate`, `DeedPollType`, and the rule below.
 
-**`DeedPollType` has SIX members, not four, and two of them take neither email.** An earlier draft of notify-4
-said four and warned that "a fifth member fails to compile" — there is already a fifth and a sixth:
+**`DeedPollType` has SIX members, not four, and there are THREE forms emails, not two.** An earlier draft of
+notify-4 said four members and warned that "a fifth member fails to compile" — there is already a fifth and a
+sixth, and Steve settled both on 2026-09-25:
 
-| `DeedPollType` | Offered |
-|---|---|
-| `Adult`, `AdultTransgender` | ① only |
-| `Minor`, `MinorTransgender` | ② only |
-| `DeedOfRelinquishment` | **neither** — a different legal instrument with its own forms, none of which exist |
-| `Unknown` | **neither** — a case whose type nobody has established cannot be sent type-specific forms |
+| `DeedPollType` | Offered | |
+|---|---|---|
+| `Adult`, `AdultTransgender` | ① `forms-for-completion-adult` | LOC020 + LOC021 + LOC027 |
+| `Minor`, `MinorTransgender` | ② `forms-for-completion-minor` | LOC022 + LOC023 + LOC024 + LOC028 |
+| **`DeedOfRelinquishment`** | **③′ `forms-for-completion-relinquishment`** | **forms unidentified — flag 5** |
+| `Unknown` | **nothing** | see below |
+
+**`DeedOfRelinquishment` follows the same journey as a change of name** — Steve's decision: the application is
+created and a caseworker sends a forms email carrying links to the relevant documents. So it is **a third template,
+not an exclusion**. Declare the `EmailTemplate` member now with its id defaulting to `DEED_POLL_PLACEHOLDER`, which
+makes `isProvisioned` report it **unprovisioned** — and admin's tab then says *"this email cannot be sent in this
+environment yet, because its template has not been set up in GOV.UK Notify"*, which is true and actionable.
+`request-confirmation-to-proceed` sat in exactly that state between notify-3 and 2026-09-24, so the mechanism is
+proven rather than novel.
+
+**Which forms it carries is not known and must not be guessed** — see flag 5. Declaring the member is not the same
+as inventing a document set: until the forms are identified, the template has no content to author and no mapping
+to write.
+
+**`Unknown` is offered nothing, and that is a different judgement from the wording default this repo already
+makes.** `ResolvedValues.isMinor` treats `DeedOfRelinquishment` and `Unknown` as *not* a child's application, so
+they take the adult **wording**, on the stated ground that the adult reading is *"merely impersonal if wrong, where
+the child wording would refer an adult applicant to a child who does not exist"*. That reasoning is about a
+sentence. **Forms are not a sentence**: sending an applicant the wrong deed means they complete, witness and swear
+the wrong legal instrument, so there is no safe default and the honest answer is to offer none. Say so in the
+reason rather than silently omitting the option.
+
+`Unknown` appears to mean "type not established": `DeedPollValidation` imposes no type-driven required fields for
+it, `DeedPollService`'s patch path falls through to "keep the current value", and the source left it untouched
+through the port. It is a Dynamics option-set member (6) rather than something this service creates.
 
 - A `switch` over all six with **no `default`**, so a seventh member fails to compile rather than falling through
-  to somebody else's forms. This is the convention `CaseEmailService.cause()` already uses.
-- **The two "neither" cases get distinct reasons, not one shared sentence.** `Unknown` is *"this case's type has
-  not been established, so we cannot tell which forms apply"*; `DeedOfRelinquishment` is *"a deed of
-  relinquishment uses different forms, which this service does not yet send"*. A caseworker reading the tab
-  learns which of the two situations they are in, and the second is a prompt to ask for the forms rather than a
-  dead end.
+  to somebody else's forms. This is the convention `ResolvedValues.isMinor` and `CaseEmailService.cause()` already
+  use.
+- **Distinct reasons, never one shared sentence.** `Unknown` is *"this case's type has not been established, so we
+  cannot tell which forms apply"*. ③′ unprovisioned is Notify's own wording via `provisioned: false`. A caseworker
+  learns which situation they are in, and only one of the two is waiting on a template.
 - **Three layers, and each exists because the one above it can be bypassed:**
   1. **Availability** — api reports `applicable: false` with the reason, so admin's Email tab never renders the
      option. This is the layer that makes the wrong email unselectable, which is the requirement.
@@ -191,12 +220,14 @@ said four and warned that "a fifth member fails to compile" — there is already
      the tab never offered; presentation is not enforcement.
   3. **Per-case exclusivity** (notify-4b decision 8) stops ① and ② both reaching one case even across two
      journeys or a race — a database constraint, not a check.
-- Tests, container-free: each of the six members is offered exactly the templates the table says and no others; an
-  `AdultTransgender` case is **never** offered ②; `DeedOfRelinquishment` and `Unknown` are offered neither and
-  give *different* reasons; and a send of the wrong template for the type is a 409 even though availability
-  already said no.
-- [ ] all six `DeedPollType` members route to exactly the right template or to neither with a distinct reason, the
-      send path refuses independently of availability, and `./gradlew build` green
+- Tests, container-free: each of the six members is offered exactly the template the table says and no others; an
+  `AdultTransgender` case is **never** offered ②; a `DeedOfRelinquishment` case is offered ③′ and sees it reported
+  **unprovisioned** rather than inapplicable; an `Unknown` case is offered **nothing**, carrying the type reason and
+  not the unprovisioned one; and a send of the wrong template for the type is a 409 even though availability already
+  said no.
+- [ ] all six `DeedPollType` members route to exactly one template or to none, ③′ is declared and reports
+      unprovisioned rather than inapplicable, `Unknown` is offered nothing with its own reason, the send path
+      refuses independently of availability, and `./gradlew build` green
 
 ### Task 3: Settle where the five blank forms live, and put them there
 
@@ -252,3 +283,9 @@ Read first: flag 1 below, `DocumentService`, `DocumentStore`, `DeedPollSupportin
    volume and the chart declares none. Today that loses uploads; after this plan it also loses the blob a deed
    link points at. **It is a deployment blocker for ① and ②, not a tidy-up**, and it is nobody's plan yet.
 4. **The retention number is unchosen** (decision 5) and is notify-0's to pick.
+5. **Nobody knows which forms a deed of relinquishment needs, and that is now the blocking question for ③′.**
+   Steve settled the *journey* on 2026-09-25 — the same as a change of name, a caseworker sends a forms email with
+   links to the relevant documents — but not the document set. A relinquishment is a different legal instrument, so
+   LOC020 / LOC021 / LOC027 are very unlikely to be right, and none of the six supplied `.docx` files covers it.
+   **Identify the forms before authoring ③′**, then its content can be drafted the way ① and ② were. Declaring the
+   enum member costs nothing and is safe; guessing its documents would not be.
