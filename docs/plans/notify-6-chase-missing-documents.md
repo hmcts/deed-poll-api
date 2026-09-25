@@ -523,7 +523,82 @@ the same date and points at it.
 - Update `docs/RESUME.md`, this plan's measured totals and the admin contract handoff.
 - Confirm every `[ASSUMED]` or provisional statement introduced during Task 0 has been resolved.
 
-- [ ] the full build is green from cold, counts and contract are recorded, admin has an exact handoff, and
+#### Recorded 2026-09-25 — the final totals, the three things the spec proves, and what is still not this plan's to close
+
+Both runs from `build --rerun-tasks` with `build/test-results/` deleted first, counted off the XML immediately
+after each, as the Validation Commands section requires. **Both green first time** — the baseline's unreproduced
+red did not recur, and there was nothing to capture.
+
+| Run | `test` | `integration` | Files | Wall clock | Tasks |
+|---|---|---|---|---|---|
+| `./gradlew build` (Docker) | **2712**, 0 failures / 0 errors / 0 skipped | **13**, all green | 341 | 3m 58s | 24 of 24 executed |
+| `INTEGRATION_TESTS_ENABLED=false ./gradlew build` (what CI runs) | **1735**, 0 failures / 0 errors / 0 skipped | **never ran** | 236 | 1m 7s | 23 |
+
+**Against Task 0's baseline of 2610 / 12 / 1657: +102 unit, +1 integration, +78 Docker-free.** The Docker-free gap
+is now **977**, up from 953, in **33** container-backed unit classes — one more than the 32 `docs/RESUME.md`
+records, `NotificationRequestIdMigrationTest` being it. 78 of the 102 new unit tests run in CI, which is the figure
+the "container-free companions" rule existed to produce: the migration proof and the enqueue statement's two
+conflict paths are the only things CI cannot reach, and each has a container-free companion stating the same rule.
+
+**The stale-file trap was checked, not assumed.** After the Docker-free run `build/test-results/` held **only**
+`test/` — the `integration` directory is absent, and the log shows `:integrationTestClasses` compiled while
+`:integration` never appears, so the count is this run's and the task's absence is confirmed two ways.
+
+**Wall clock is not a regression signal here.** Task 3 recorded 35m 32s for the same Docker build that took 3m 58s
+now, on the same code — container startup under this Docker configuration varies by an order of magnitude. Read the
+test count, not the clock.
+
+**Checkstyle: all five source sets executed and clean.** `checkstyleMain`, `checkstyleTest`,
+`checkstyleIntegrationTest`, `checkstyleFunctionalTest`, `checkstyleSmokeTest` all ran in both builds, with no
+`violations by severity` line at all — which under this repo's configuration is the only passing outcome, since
+`severity="warning"` fails the build.
+
+**The ArchUnit Notify-client boundary runs where CI can see it.** `notifyClientHasOneBoundary` is one of
+`NotificationSecurityTest`'s 10 cases, and the class is in the Docker-free 1735 — verified by reading the case
+names out of its result file after that run, not by reading the source. Its companion
+`theRequestIdIsPublishedNowhere` is there too, so both the client boundary and the `requestId` non-disclosure are
+CI-enforced rather than Docker-gated.
+
+**`/tmp/openapi-specs.json`: 62,991 bytes, and three things read out of it rather than off the test.**
+
+1. **21 caseworker paths carrying 34 operations, and 5 judicial paths carrying 5** — unchanged, so the header
+   added no operation, exactly as decision 9 requires. (`docs/RESUME.md`'s 57,495-byte figure is
+   `referrals-api-6`'s; four Notify plans have landed since, so the byte count is not the comparison to make.)
+2. **`Idempotency-Key` on the send is `in: header`, `required: true`, `type: string`, `format: uuid`** — and
+   carries the description Task 3 wrote, including the instruction not to mint one per request, which is the one
+   part of the contract the schema cannot express.
+3. **Neither the preview nor the availability `GET` declares a header parameter at all.** Zero, both of them —
+   because neither writes a row, and a client told to send the key everywhere would have no way to know which
+   request its journey's UUID actually protects.
+
+**The `[ASSUMED]` bullet, answered precisely: Task 0 introduced no `[ASSUMED]` marker, and the plan's one planning
+assumption is discharged.** Line 10's "treat the approved template and its provisioning as available" was replaced
+by Notify's own read-back — template key, the single required slot, the wording living in Notify, the reply-to
+dependency — and all four matched, so nothing was translated between two contracts in code.
+
+Two statements Task 0 deliberately left open are **still open, re-verified today rather than quoted, and neither is
+this plan's to close**:
+
+- **The reply-to id is still Steve's word, not read-back evidence.** `aabceef1-63e4-4414-9554-a24b0be967d7` is
+  what `../local-notes/deed-poll-api/notify-nonprod.env` and the authored template file both carry — confirmed
+  unchanged — but Notify publishes no read-only API for reply-to addresses, so the first real send is what proves
+  it. A wrong id is a loud 400; a blank one is silent, which is why `NotifyProperties.isProvisioned` gates on it
+  and why `emailReplyToId` is asserted on the wire in the controller journey.
+- **`charts/deed-poll-api/values.yaml` still sets neither id** — it names `NOTIFY_TEMPLATE_APPLICATION_REJECTED`
+  and nothing else, re-checked today — so **AAT will report ⑤ unprovisioned after this plan merges, and ④ too**,
+  since the reply-to is one value for the whole service. That is a chart change, explicitly out of scope here, and
+  it is the one thing a reader could mistake for a defect in this work.
+
+**The admin handoff, in one place.** notify-2's decision 16 is reinstated in
+`../deed-poll-admin/docs/plans/completed/notify-2-caseworker-email-tab.md` (sibling commit `473be87`), and the
+contract it now consumes is: the generated client must carry `Idempotency-Key` on **every** send, not only ⑤'s; one
+compose journey mints one UUID and preserves it through preview, validation failure and retry; the three answers
+are three different renderings (200 with `enqueued: false` is "already sent, here is the receipt", 409 is "this key
+was used for different content", 400 names the missing header); and the Email tab renders ⑤'s template and its one
+required slot from `GET /caseworker/cases/{id}/emails` with no template-specific code. `docs/RESUME.md` now carries
+the same three lines so a session that never opens this plan still finds them.
+
+- [x] the full build is green from cold, counts and contract are recorded, admin has an exact handoff, and
       no assumption remains disguised as implementation evidence
 
 ---
