@@ -1444,6 +1444,118 @@ class CaseEmailServiceTest {
         }
 
         @Test
+        @DisplayName("every chase is its own entry, newest first, with its own state, author, address and wording")
+        void repeatedChasesAreEachTheirOwnEntry() {
+            // Decision 5's other half. A case may be chased more than once, so history has to show each attempt
+            // rather than the latest -- and each attempt carries what *that* send resolved: the address as it stood
+            // then, the caseworker who wrote it, and the wording Notify rendered for it. A history that collapsed
+            // them, or that rendered one attempt's subject against another's row, would leave a caseworker unable
+            // to tell whether the applicant had already been asked for this document.
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            Notification second = chase(
+                UUID.fromString("aaaaaaaa-0000-4000-8000-000000000002"),
+                LocalDateTime.of(2026, 9, 24, 15, 30),
+                NotificationState.Pending,
+                "A Second Caseworker",
+                "corrected.address@example.com");
+            Notification first = chase(
+                UUID.fromString("aaaaaaaa-0000-4000-8000-000000000001"),
+                LocalDateTime.of(2026, 9, 10, 9, 0),
+                NotificationState.Sent,
+                "A Caseworker",
+                RECIPIENT);
+            first.setSubject("We need more information about your deed poll application");
+            first.setBody("Dear Alex,\n\nPlease send us your birth certificate.");
+            when(notifications.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID))
+                .thenReturn(List.of(second, first));
+            when(documents.findByDeedPollIdOrderByCreatedOnAsc(CASE_ID)).thenReturn(List.of());
+
+            List<CaseCorrespondence> history = emails.correspondence(CASE_ID);
+
+            // Newest first, and two of them: the repository supplies the order and nothing here re-sorts or
+            // de-duplicates by template, which is what a "one chase per case" reading would have done.
+            assertThat(history).extracting(CaseCorrespondence::id)
+                .containsExactly(second.getId(), first.getId());
+            assertThat(history).allSatisfy(entry -> {
+                assertThat(entry.template()).isEqualTo(EmailTemplate.CHASE_MISSING_DOCUMENTS.key());
+                assertThat(entry.templateName()).isEqualTo(EmailTemplate.CHASE_MISSING_DOCUMENTS.displayName());
+                // Nothing is attached to a chase, so no entry of one carries a document.
+                assertThat(entry.documents()).isEmpty();
+            });
+            assertThat(history.getFirst()).satisfies(entry -> {
+                assertThat(entry.createdOn()).isEqualTo(second.getCreatedOn());
+                assertThat(entry.createdBy()).isEqualTo("A Second Caseworker");
+                assertThat(entry.recipient()).isEqualTo("corrected.address@example.com");
+                assertThat(entry.state()).isEqualTo(NotificationState.Pending);
+                // Not yet accepted, so there is no rendering to show -- and deliberately not the first attempt's.
+                assertThat(entry.subject()).isNull();
+                assertThat(entry.body()).isNull();
+            });
+            assertThat(history.getLast()).satisfies(entry -> {
+                assertThat(entry.createdOn()).isEqualTo(first.getCreatedOn());
+                assertThat(entry.createdBy()).isEqualTo("A Caseworker");
+                assertThat(entry.recipient()).isEqualTo(RECIPIENT);
+                assertThat(entry.state()).isEqualTo(NotificationState.Sent);
+                assertThat(entry.subject()).isEqualTo("We need more information about your deed poll application");
+                assertThat(entry.body()).contains("birth certificate");
+                assertThat(entry.failureReason()).isNull();
+            });
+            verifyNoInteractions(notify);
+        }
+
+        @Test
+        @DisplayName("a failed chase stays in history with its reason, so a reminder is not silently lost")
+        void failedChaseStaysInHistory() {
+            // The attempt a caseworker most needs to see: the applicant was never asked, and the only record of
+            // that is this row. V19's index predicate is what lets a corrected send be made without it vanishing.
+            storedCase().setState(DeedPollState.AwaitingFurtherDocs);
+            Notification failed = chase(
+                UUID.fromString("aaaaaaaa-0000-4000-8000-000000000003"),
+                LocalDateTime.of(2026, 9, 24, 16, 0),
+                NotificationState.Failed,
+                "A Caseworker",
+                RECIPIENT);
+            failed.setFailureVerdict(NotificationFailureVerdict.PERMANENT);
+            failed.setFailureReason("PERMANENT: GOV.UK Notify refused the send with status 400");
+            when(notifications.findByDeedPollIdOrderByCreatedOnDesc(CASE_ID)).thenReturn(List.of(failed));
+            when(documents.findByDeedPollIdOrderByCreatedOnAsc(CASE_ID)).thenReturn(List.of());
+
+            assertThat(emails.correspondence(CASE_ID)).singleElement().satisfies(entry -> {
+                assertThat(entry.state()).isEqualTo(NotificationState.Failed);
+                assertThat(entry.failureReason()).startsWith("PERMANENT:");
+                assertThat(entry.subject()).isNull();
+                assertThat(entry.body()).isNull();
+            });
+        }
+
+        /**
+         * One chase attempt as the outbox holds it: the template, the address that send resolved, its author and
+         * the state the drain left it in.
+         *
+         * <p>Its own fixture rather than {@code notification(...)}, which is the refusal email's -- a chase's row
+         * carries no {@code referralId} and a different template name, and this class's history assertions are
+         * about telling one attempt from another.
+         */
+        private Notification chase(UUID id,
+                                   LocalDateTime createdOn,
+                                   NotificationState state,
+                                   String author,
+                                   String recipient) {
+            Notification row = new Notification();
+            row.setId(id);
+            row.setDeedPollId(CASE_ID);
+            row.setRequestId(UUID.randomUUID());
+            row.setTemplate(EmailTemplate.CHASE_MISSING_DOCUMENTS.name());
+            row.setExclusionGroup(EmailExclusionGroup.DOCUMENT_CHASE.name());
+            row.setRecipient(recipient);
+            row.setPersonalisation(Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED));
+            row.setState(state);
+            row.setCreatedBy(author);
+            row.setCreatedOn(createdOn);
+            return row;
+        }
+
+        @Test
         @DisplayName("422s a case with no applicant email, as every send does")
         void refusesABlankRecipient() {
             DeedPoll deedPoll = storedCase();

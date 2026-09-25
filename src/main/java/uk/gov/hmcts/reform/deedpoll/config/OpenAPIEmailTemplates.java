@@ -6,6 +6,7 @@ import io.swagger.v3.oas.models.PathItem;
 import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.controller.CaseworkerEmailController;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailTemplate;
 
 import java.util.Arrays;
@@ -13,7 +14,8 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Names the emails a caseworker may send, on the {@code {template}} token of the two operations that take one.
+ * Names the emails a caseworker may send, on the {@code {template}} token of the two operations that take one --
+ * and says what the send's required {@code Idempotency-Key} header means.
  *
  * <p>The same problem {@link OpenAPIQueryParameters} solves, one parameter over: springdoc reflects the token as
  * an undescribed required string, because that is what {@code CaseworkerEmailController} declares it as -- so the
@@ -32,6 +34,14 @@ import java.util.stream.Collectors;
  * send -- would be contradicted by the client's own types. The service's answer to an unknown token is a 404
  * naming the alternatives, and prose is what describes that honestly. It is the reasoning
  * {@link OpenAPIQueryParameters} gives for leaving the page size's cap out of {@code maximum}.
+ *
+ * <p><strong>The send's {@code Idempotency-Key} is described for a different reason: the header is published
+ * without it, and a client cannot tell from that what value to put in it.</strong> springdoc reflects the
+ * {@code @RequestHeader} faithfully -- {@code required: true}, {@code string/uuid} -- which says a UUID is
+ * mandatory and says nothing at all about the one property that makes it work: <em>one compose journey, one
+ * UUID, reused for every retry of that POST</em>. A client generating a fresh UUID per request satisfies every
+ * published constraint and sends a second email on every double-click, which is precisely the behaviour the
+ * header exists to prevent. So the rule goes in the document, where the consumer generating a client reads it.
  */
 @Configuration
 public class OpenAPIEmailTemplates {
@@ -50,6 +60,11 @@ public class OpenAPIEmailTemplates {
             for (String path : List.of(SEND_PATH, PREVIEW_PATH)) {
                 emailOperation(openApi, path).forEach(operation -> describeToken(operation, description));
             }
+            // Only the send: a preview writes nothing, so there is nothing for a second one to duplicate and a key
+            // required there would be a refusal a client could not act on.
+            emailOperation(openApi, SEND_PATH)
+                .forEach(operation -> describeParameter(
+                    operation, CaseworkerEmailController.IDEMPOTENCY_KEY, describedIdempotencyKey()));
         };
     }
 
@@ -69,11 +84,19 @@ public class OpenAPIEmailTemplates {
      * about how a client sends it changes.
      */
     private void describeToken(Operation operation, String description) {
+        describeParameter(operation, TEMPLATE_TOKEN, description);
+    }
+
+    /**
+     * Describes the named parameter and touches nothing else -- not its schema and not whether it is required, so
+     * nothing about how a client sends it changes.
+     */
+    private void describeParameter(Operation operation, String name, String description) {
         if (operation.getParameters() == null) {
             return;
         }
         operation.getParameters().stream()
-            .filter(parameter -> TEMPLATE_TOKEN.equals(parameter.getName()))
+            .filter(parameter -> name.equals(parameter.getName()))
             .forEach(parameter -> parameter.setDescription(description));
     }
 
@@ -86,6 +109,24 @@ public class OpenAPIEmailTemplates {
             + entries() + ". That GET is also where a client learns which of them this case may have sent and "
             + "whether this environment can send it at all: a template it reports as inapplicable is a 409 here, "
             + "and an unprovisioned one fails at GOV.UK Notify.";
+    }
+
+    /**
+     * What the header means, in the terms a client has to implement it in.
+     *
+     * <p>The three answers are stated because they are three different things for a caller to do: 200 with
+     * {@code enqueued: false} is the retry succeeding, a 409 means the key has been reused for a different email
+     * and the caseworker starts again, and a 400 means the header was missing or unparseable.
+     */
+    private String describedIdempotencyKey() {
+        return "Which compose journey this send belongs to. One journey creates one UUID and sends it with every "
+            + "retry of this POST -- a timed-out request, a double-click, a resubmit after a validation failure -- "
+            + "and a later journey creates another: that is what lets one case be chased twice on purpose while a "
+            + "double-click still sends one email. A repeat of the same key for the same case and the same content "
+            + "answers 200 with the first receipt and enqueued=false; the same key with different content is a "
+            + "409, because the header and the body then contradict each other; a missing or unparseable key is a "
+            + "400 naming this header. Do not generate a fresh UUID per request -- that satisfies this schema and "
+            + "loses the protection entirely.";
     }
 
     private String entries() {

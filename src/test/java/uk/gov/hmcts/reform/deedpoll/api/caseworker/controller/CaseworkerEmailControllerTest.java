@@ -36,14 +36,17 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.notify.ApplicationRejectedPersonalisation;
 import uk.gov.hmcts.reform.deedpoll.notify.CaseEmailService;
+import uk.gov.hmcts.reform.deedpoll.notify.EmailExclusionGroup;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailNotes;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailSlot;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailTemplate;
+import uk.gov.hmcts.reform.deedpoll.notify.MissingDocumentsPersonalisation;
 import uk.gov.hmcts.reform.deedpoll.notify.StubNotify;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollNoteRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
@@ -118,6 +121,18 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
     /** The email that asks the applicant to confirm, which is the one that starts a clock on the referral. */
     private static final String CONFIRMATION = EmailTemplate.REQUEST_CONFIRMATION_TO_PROCEED.key();
 
+    /** The case-driven chase, whose entitlement is the case's own state rather than a judge's decision. */
+    private static final String CHASE = EmailTemplate.CHASE_MISSING_DOCUMENTS.key();
+
+    /**
+     * Where ⑤ sits in the availability list, which is enum order.
+     *
+     * <p>Read off the enum rather than written as a number, for the reason {@code CaseEmailServiceTest} looks its
+     * entry up by template: a fourth email declared before this one would otherwise make every assertion below
+     * quietly describe a different template.
+     */
+    private static final int CHASE_INDEX = EmailTemplate.CHASE_MISSING_DOCUMENTS.ordinal();
+
     /**
      * The monitored inbox ④ is sent from, invented here as every Notify id in this class is.
      *
@@ -158,6 +173,9 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         // refuses it permanently without a reply-to. Registered so that the confirmation clock can be asserted
         // through a send that really reaches the stub rather than one that fails before it.
         registry.add("notify.templates.request-confirmation-to-proceed", () -> StubNotify.TEMPLATE_ID);
+        // ⑤ too, which needs the same reply-to for the same reason: it asks the applicant to send the missing
+        // documents by replying. Registered so the journey below can be driven all the way to a drained send.
+        registry.add("notify.templates.chase-missing-documents", () -> StubNotify.TEMPLATE_ID);
         registry.add("notify.email-reply-to-id", () -> REPLY_TO_ID);
     }
 
@@ -1073,6 +1091,228 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
     }
 
     /**
+     * The case-driven chase, end to end: what the tab is told, what Notify renders, what is sent, and what history
+     * then says about it.
+     *
+     * <p><strong>The whole journey in one place, because every step of it is new.</strong> ⑤ is the first template
+     * whose entitlement is the case's own derived state, the first whose rows carry no {@code referralId}, and the
+     * first a caseworker may legitimately send twice -- so the thing worth proving is not any one of those in
+     * isolation but that the four operations agree about the same case as it moves. The rules themselves are pinned
+     * container-free in {@code CaseEmailServiceTest} and {@code CaseworkerEmailIdempotencyHeaderTest}; what only a
+     * booted service can show is that the route, Postgres, the drain and the Notify client are wired to them.
+     */
+    @Nested
+    @DisplayName("the chase-missing-documents journey")
+    class ChaseMissingDocuments {
+
+        /** What the caseworker types into the one slot. */
+        private static final String REQUIRED =
+            "Your birth certificate, and the consent of everyone with parental responsibility.";
+
+        @Test
+        @DisplayName("availability, preview, send, drain and history, for one case waiting for documents")
+        void theWholeJourney() throws Exception {
+            String caseId = chasedCase();
+
+            // 1. Availability. Applicable and provisioned, with its one required slot and its cap -- which is what
+            // a generic Email tab renders the form from, without knowing this template exists.
+            authorised(get("/caseworker/cases/" + caseId + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].template").value(CHASE))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].applicable").value(true))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].reason").doesNotExist())
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].provisioned").value(true))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].slots.length()").value(1))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].slots[0].name")
+                               .value(EmailSlot.DOCUMENTS_REQUIRED.placeholder()))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].slots[0].required").value(true))
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].slots[0].maxLength")
+                               .value(EmailSlot.MAX_EMAIL_PROSE_LENGTH))
+                // The form opens empty, because nothing pre-populates this slot. A tab that asked for defaults
+                // through the validator would be refused on exactly the cases this email is for.
+                .andExpect(jsonPath("$.slotDefaults[0].template").value(CHASE))
+                .andExpect(jsonPath("$.slotDefaults[0].fields.documents_required").value(""))
+                .andExpect(jsonPath("$.history").isEmpty());
+
+            // 2. Preview. Notify renders it, from the resolved case values and the caseworker's words -- and
+            // nothing a judge wrote, because there is no referral in this journey at all.
+            NOTIFY.stubPreview("We need more information about your application",
+                               "<p>Please send your papers.</p>", StubNotify.TEMPLATE_VERSION);
+            authorised(post(chasePreviewOf(caseId)), slots(REQUIRED))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.subject").value("We need more information about your application"))
+                .andExpect(jsonPath("$.html").value("<p>Please send your papers.</p>"))
+                .andExpect(jsonPath("$.templateVersion").value(StubNotify.TEMPLATE_VERSION));
+            Map<String, Object> previewed = previewedPersonalisation();
+            assertThat(previewed)
+                .containsEntry(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED)
+                .containsEntry(MissingDocumentsPersonalisation.OLD_FORENAME, "Alex")
+                .containsEntry(MissingDocumentsPersonalisation.OLD_SURNAME, "Okonjo")
+                .containsEntry(MissingDocumentsPersonalisation.ONLINE_APPLICATION_REFERENCE, "DP-2026-0042")
+                .containsKey(MissingDocumentsPersonalisation.REFERENCE_NUMBER)
+                .hasSize(EmailTemplate.CHASE_MISSING_DOCUMENTS.personalisationKeys().size());
+            assertThat(notifications.count()).as("a preview owes nothing").isZero();
+
+            // 3. Send, and 4. the drain that follows it in the same request.
+            NOTIFY.stubSend(StubNotify.NOTIFICATION_ID, "We need more information", "Please send your papers.");
+            UUID journey = UUID.randomUUID();
+            String sent = JSON.readTree(authorised(post(chaseSendOf(caseId)), slots(REQUIRED), journey)
+                                            .andExpect(status().isOk())
+                                            .andExpect(jsonPath("$.recipient").value(APPLICANT_EMAIL))
+                                            .andExpect(jsonPath("$.enqueued").value(true))
+                                            .andReturn()
+                                            .getResponse()
+                                            .getContentAsString())
+                .get("id").asText();
+
+            assertThat(notifications.findAll()).singleElement().satisfies(row -> {
+                assertThat(row.getState()).isEqualTo(NotificationState.Sent);
+                assertThat(row.getTemplate()).isEqualTo(EmailTemplate.CHASE_MISSING_DOCUMENTS.name());
+                // The null V11 made the column nullable for, read back off real Postgres: a chase belongs to the
+                // case and to no decision, so nothing about it sits in the referral exclusion index.
+                assertThat(row.getReferralId()).isNull();
+                assertThat(row.getExclusionGroup()).isEqualTo(EmailExclusionGroup.DOCUMENT_CHASE.name());
+                assertThat(row.getRequestId()).isEqualTo(journey);
+                assertThat(row.getRecipient()).isEqualTo(APPLICANT_EMAIL);
+                assertThat(row.getPersonalisation())
+                    .containsEntry(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), REQUIRED);
+                assertThat(row.getSubject()).isEqualTo("We need more information");
+                assertThat(row.getBody()).isEqualTo("Please send your papers.");
+                assertThat(row.getCreatedBy()).isEqualTo("A Caseworker");
+            });
+
+            // The reply-to, on the wire. Its words ask the applicant to reply, so a send from Notify's no-reply
+            // sender would lose the documents this email exists to collect -- and a blank one fails silently,
+            // which is why it is asserted as the value the stub's configuration carries.
+            assertThat(NOTIFY.emailRequests()).singleElement().satisfies(request ->
+                assertThat(JSON.readTree(request.getBodyAsString()).path("email_reply_to_id").asText())
+                    .isEqualTo(REPLY_TO_ID));
+
+            // 5. History. One attempt, with the wording the applicant received and no request id anywhere in it.
+            String history = authorised(get("/caseworker/cases/" + caseId + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.history.length()").value(1))
+                .andExpect(jsonPath("$.history[0].id").value(sent))
+                .andExpect(jsonPath("$.history[0].template").value(CHASE))
+                .andExpect(jsonPath("$.history[0].templateName")
+                               .value(EmailTemplate.CHASE_MISSING_DOCUMENTS.displayName()))
+                .andExpect(jsonPath("$.history[0].createdBy").value("A Caseworker"))
+                .andExpect(jsonPath("$.history[0].recipient").value(APPLICANT_EMAIL))
+                .andExpect(jsonPath("$.history[0].notifyState").value("Sent"))
+                .andExpect(jsonPath("$.history[0].subject").value("We need more information"))
+                .andExpect(jsonPath("$.history[0].body").value("Please send your papers."))
+                .andExpect(jsonPath("$.history[0].failureReason").doesNotExist())
+                // Nothing is attached: this email asks for incoming material and sends none.
+                .andExpect(jsonPath("$.history[0].documents").isEmpty())
+                // And the email is still offered, because the case is still waiting: chasing again is legitimate.
+                .andExpect(jsonPath("$.availability[" + CHASE_INDEX + "].applicable").value(true))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+            assertThat(history)
+                .as("the request id is transport and belongs in no correspondence")
+                .doesNotContain(journey.toString());
+
+            // One note on the case's only timeline, naming the email and nothing the caseworker typed.
+            assertThat(emailNotes(caseId)).singleElement().satisfies(note -> {
+                assertThat(note.getNote()).isEqualTo(EmailNotes.sent(EmailTemplate.CHASE_MISSING_DOCUMENTS));
+                assertThat(note.getNote()).doesNotContain("birth certificate");
+            });
+        }
+
+        @Test
+        @DisplayName("a second chase is a second email, and history keeps both newest first")
+        void chasingAgainKeepsBothAttempts() throws Exception {
+            // Decision 5 over HTTP and real Postgres: the exclusion group must not make one chase per case, and the
+            // second attempt must not overwrite the first -- the first is the only record that the applicant was
+            // already asked, and a caseworker deciding whether to chase again is reading exactly that.
+            String caseId = chasedCase();
+            NOTIFY.stubSend(StubNotify.NOTIFICATION_ID, "We need more information", "Please send your papers.");
+            String first = sentId(authorised(post(chaseSendOf(caseId)), slots(REQUIRED), UUID.randomUUID()));
+
+            NOTIFY.stubSend(StubNotify.NOTIFICATION_ID, "A reminder about your application", "A second ask.");
+            String second = sentId(authorised(
+                post(chaseSendOf(caseId)),
+                slots("Your birth certificate. We wrote to you on 10 September and have had no reply."),
+                UUID.randomUUID()));
+
+            assertThat(second).isNotEqualTo(first);
+            assertThat(notifications.count()).isEqualTo(2);
+            assertThat(NOTIFY.emailRequests()).hasSize(2);
+
+            authorised(get("/caseworker/cases/" + caseId + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.history.length()").value(2))
+                // Newest first, each with its own wording: a history that showed the latest rendering against both
+                // rows would say the applicant had been asked the same thing twice.
+                .andExpect(jsonPath("$.history[0].id").value(second))
+                .andExpect(jsonPath("$.history[0].subject").value("A reminder about your application"))
+                .andExpect(jsonPath("$.history[0].body").value("A second ask."))
+                .andExpect(jsonPath("$.history[1].id").value(first))
+                .andExpect(jsonPath("$.history[1].subject").value("We need more information"))
+                .andExpect(jsonPath("$.history[1].body").value("Please send your papers."));
+
+            // Two emails, two markers on the Notes grid.
+            assertThat(emailNotes(caseId)).hasSize(2);
+        }
+
+        @Test
+        @DisplayName("one compose journey chases once, however many times its POST arrives")
+        void oneJourneyChasesOnce() throws Exception {
+            // The case V15's index cannot help with at all: a chase's rows carry no referralId, so without V19 a
+            // double-click here would be a second email to the applicant. Over HTTP because the key is a header.
+            String caseId = chasedCase();
+            UUID journey = UUID.randomUUID();
+            String first = sentId(authorised(post(chaseSendOf(caseId)), slots(REQUIRED), journey));
+
+            authorised(post(chaseSendOf(caseId)), slots(REQUIRED), journey)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(first))
+                .andExpect(jsonPath("$.enqueued").value(false));
+
+            assertThat(notifications.count()).isOne();
+            assertThat(NOTIFY.emailRequests()).hasSize(1);
+            assertThat(emailNotes(caseId)).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("409s a case that is not waiting for documents, and 400s a chase with nothing in the slot")
+        void refusesWhatItCannotSend() throws Exception {
+            // The two refusals a generic tab has to render, and they are different things: the first is about the
+            // case and would succeed unchanged once it is waiting, the second is about the form.
+            authorised(post(chaseSendOf(refusedCase())), slots(REQUIRED))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString("awaited")))
+                // Not the refusal email's sentence: a caseworker sent looking for a Master's decision would be
+                // looking at the wrong tab for a field that has no referral behind it.
+                .andExpect(jsonPath("$.error").value(not(containsString("Master"))));
+
+            authorised(post(chaseSendOf(chasedCase())), "{}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field")
+                               .value(EmailSlot.DOCUMENTS_REQUIRED.placeholder()));
+
+            assertThat(notifications.count()).isZero();
+            assertThat(NOTIFY.emailRequests()).isEmpty();
+        }
+
+        /** The row id out of a send's answer. */
+        private String sentId(ResultActions sent) throws Exception {
+            return JSON.readTree(sent.andExpect(status().isOk())
+                                     .andExpect(jsonPath("$.enqueued").value(true))
+                                     .andReturn()
+                                     .getResponse()
+                                     .getContentAsString())
+                .get("id").asText();
+        }
+
+        private String slots(String documentsRequired) throws Exception {
+            return JSON.writeValueAsString(
+                Map.of(EmailSlot.DOCUMENTS_REQUIRED.placeholder(), documentsRequired));
+        }
+    }
+
+    /**
      * The notes on a case that an email wrote, which are the notes whose text {@link EmailNotes} composes.
      *
      * <p>Filtered rather than counted, because the fixtures raise, claim and decide a referral and each of those
@@ -1109,6 +1349,31 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
 
     private String confirmationSendOf(String caseId) {
         return "/caseworker/cases/" + caseId + "/emails/" + CONFIRMATION;
+    }
+
+    private String chaseSendOf(String caseId) {
+        return "/caseworker/cases/" + caseId + "/emails/" + CHASE;
+    }
+
+    private String chasePreviewOf(String caseId) {
+        return chaseSendOf(caseId) + "/preview";
+    }
+
+    /**
+     * A case the office is waiting on documents for, reached the way a caseworker reaches it.
+     *
+     * <p>Through the write path rather than by setting the column: {@code state} is derived by the cascade from
+     * {@code awaitingFurtherDocsInfo}, and a fixture that wrote {@code AwaitingFurtherDocs} straight onto the row
+     * would be asserting about a case this service could not have produced -- and would go on passing if the
+     * cascade stopped deriving it.
+     */
+    private String chasedCase() {
+        String caseId = newCase();
+        deedPollService.updateDeedPoll(caseId, DeedPollPatch.of(Map.of("awaitingFurtherDocsInfo", RECEIVED)));
+        assertThat(deedPolls.findById(caseId).orElseThrow().getState())
+            .as("the cascade derives the state this email is offered in")
+            .isEqualTo(DeedPollState.AwaitingFurtherDocs);
+        return caseId;
     }
 
     /**

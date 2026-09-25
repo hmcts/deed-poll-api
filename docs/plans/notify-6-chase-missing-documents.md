@@ -449,7 +449,69 @@ it would have been a third thing to keep in step.
   creates one UUID and preserves it through preview, validation failure and retry, and a fixture with this
   template renders from metadata without template-specific code.
 
-- [ ] repeated chases are complete correspondence history, case scope and disclosure boundaries are explicit,
+#### Recorded 2026-09-25 — what the published contract was missing, and the one disclosure the header creates
+
+Green from `./gradlew build` with Docker (**2712** `test`, 0 failures / 0 errors / 0 skipped, 341 result files;
+**13** `integration`, all green; 35m 32s, 24 of 24 tasks executed) and from
+`INTEGRATION_TESTS_ENABLED=false ./gradlew build` (**1735** `test`, 0 skipped, 236 files; `build/test-results/`
+held **only** `test/` afterwards, so the stale-file trap was checked rather than assumed). **+10 unit tests
+against Task 2 and +1 integration**, of which 6 are Docker-free; the gap is now **977**.
+
+**The header was published and undescribed, which is the one substantive source change this task made.** springdoc
+reflects the `@RequestHeader` faithfully — `required: true`, `string`/`uuid` — and that is exactly what a client
+minting a fresh UUID per request satisfies, while sending one email per double-click. The schema cannot express
+"one compose journey, one UUID", so `OpenAPIEmailTemplates` now describes the parameter as well as the
+`{template}` token: the three answers (200 with `enqueued: false`, 409 for the same key with different content,
+400 for a missing one) and the instruction not to generate one per request. `documentsTheIdempotencyKeyHeader`
+pins the description, not only the declaration, for that reason — and pins that the preview and the availability
+`GET` carry no such header, because neither writes a row.
+
+**One disclosure the header creates that nothing else in this service does, now stated as a test.** A request id
+is a UUID the *caller* chooses, so a caller who learned one used on another case could ask for it. V19's index is
+on `("deedPollId", "requestId")` and `resolveRefusedInsert` reads `findByDeedPollIdAndRequestId` — both scoped —
+but the rule was implicit: nothing failed if the lookup were widened to the request id alone, which would answer a
+caller with a stranger's receipt. `anotherCasesRequestIdIsUnreachable` puts a row under the other case with the
+same key and asserts the fault rather than the receipt, and that the other case's id is never queried.
+
+**Three things asserted that the container-backed journey could not be trusted alone for.**
+
+1. **`requestId` is absent from the whole API surface, by ArchUnit rather than by naming three DTOs.**
+   `noFields()` over `api..` plus the counterpart that the column *does* exist on `Notification`, so the rule
+   cannot pass because nothing stores one.
+2. **Neither the slot text nor Notify's rendering reaches a log line**, over the notify package's own logger and
+   across both halves of the code that handles an email: the service's refusal path, which has both texts in its
+   hands at once, and the real sender against `StubNotify`. The key itself is asserted absent too.
+3. **Repeated chases are separate history, container-free.** The controller journey proves it over Postgres, and
+   CI runs neither that class nor `integration` — so `repeatedChasesAreEachTheirOwnEntry` states the same rule
+   where CI reaches it: each attempt carries its own state, author, address and rendered wording, and a `Pending`
+   second attempt does not borrow the first's subject.
+
+**The controller journey is one test rather than five, deliberately.** ⑤ is the first template whose entitlement
+is the case's derived state, the first whose rows carry a null `referralId`, and the first a caseworker may send
+twice — and what needed proving is that availability, preview, send, drain and history agree about *one case as
+it moves*, which five independent tests would each have re-established from scratch. `chasedCase()` reaches
+`AwaitingFurtherDocs` through `updateDeedPoll` and asserts the cascade derived it, so the fixture is a case this
+service could have produced rather than a row with a state written onto it.
+
+**The reply-to is asserted on the wire**, read off the stub's recorded request body as `email_reply_to_id`: a
+wrong id is a loud 400 and a blank one is silent, and silence here loses the documents the email exists to collect.
+
+**The method-name checkstyle trap bit once more** (`aFailedChaseStaysInHistory`), which the Validation Commands
+section predicts. **Two counts that are not what they look like:** `CHASE_INDEX` is read off
+`EmailTemplate.ordinal()` rather than written as `2`, and the caseworker operation count stays **34** — a header
+is part of an operation, not one of its own.
+
+**notify-2's correction is in the sibling repo, not this one.**
+`../deed-poll-admin/docs/plans/completed/notify-2-caseworker-email-tab.md` decision 16 was *reinstated* rather
+than amended: its original wording ("every send carries one idempotency key for its compose journey, sent as
+api's required header") was corrected away on 2026-09-21 because no such header existed, and the removal's own
+"the gap that leaves" paragraph named this plan as where it would have to be built. The correction records that
+the adapter sends the header for every template rather than only for ⑤, that the journey must preserve one UUID
+through preview, validation failure and retry, that the three answers are three different renderings, and that
+the tests written to assert the token's *absence* now assert the opposite of the contract. Task 5's bullet carries
+the same date and points at it.
+
+- [x] repeated chases are complete correspondence history, case scope and disclosure boundaries are explicit,
       the header is published without a new operation, notify-2 records its generic responsibility, and the
       build is green
 
