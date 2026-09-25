@@ -59,16 +59,25 @@ against `xmlns:ns0='urn:microsoft-crm/document-template/deedpoll_deedpoll/10740/
 fields, no Docmosis `<<field>>` syntax and no plain-text tokens**: `10740` is the Dataverse entity type code.
 This cuts directly against the Docmosis route — see decision 2.
 
-**⚠️ Corrected 2026-09-25, and it changes which route Task 1 should try first.** This evidence used to end
-*"and `customXml/item1.xml` is the bound data part"*, which reads as though the part is present and merely needs
-filling. **It is not in the file.** Measured by listing the archive: `word/_rels/document.xml.rels` declares a
-`customXml` relationship, but no `customXml/` entry exists in the zip — a dangling relationship, which is what a
-Dynamics template looks like. **Dynamics injects that data part at merge time; that injection *is* the Power App's
-population step.** So what is in this repo is the template half of a two-part mechanism whose other half lived in
-Dynamics, and there is no example of the data part's shape to copy.
+**⚠️ This paragraph has been corrected twice; the version below is the one the spike measured, and the middle
+version was wrong.** The original ended *"and `customXml/item1.xml` is the bound data part"*. A correction on
+2026-09-25 replaced that with *"It is not in the file … a dangling relationship"* and built Task 1's whole route on
+its absence. **That correction was itself wrong.** Measured by `unzip -l` during Task 1:
 
-**4. The bound fields all exist on `DeedPoll`.** Adult binds 15 distinct fields, minor binds 13, and the two
-sets differ by more than the template text does:
+| | |
+|---|---|
+| `customXml/item1.xml` | **present in both templates**, 130,472 bytes in the adult one |
+| `customXml/itemProps1.xml`, `customXml/_rels/item1.xml.rels` | present too, and the `customXml` relationship in `word/_rels/document.xml.rels` resolves |
+| `ds:itemID` | `{C9ADC254-…}` adult, **`{97E651D3-4026-41A5-9FD2-30805E1EDFD3}` minor** — per template, not a constant |
+
+So there is nothing to *add* to the package. What there is instead is a data part whose **contents** are
+unusable, which turns out to matter more — see Task 1.
+
+**4. The bound fields all exist on `DeedPoll`.** Adult carries **30 content controls binding 18 distinct fields**;
+minor carries **13 binding 13** — counted in Task 1 by listing every `w:xpath` in each `word/document.xml`. The
+"15 distinct" this paragraph used to claim was a miscount and the table below was always right: 11 fields are on
+both deeds, 7 more are adult-only (18) and 2 more are minor-only (13). The two sets differ by more than the
+template text does:
 
 | Bound name | Column | Notes |
 |---|---|---|
@@ -93,9 +102,14 @@ value, `KBDP2026-00001`, not the integer serial. So the deed shows the reference
 recognise, and api's `referencenumber` integer is never printed.
 
 **`deedpoll_status` → `maritalStatus`.** Confirmed by absence rather than by inference: the supplied data part
-contains **no `deedpoll_maritalstatus` element** among its 93, so `deedpoll_status` is the only candidate — Dataverse
-simply named the column `status`. Note the part *also* carries `statuscode`, which is Dataverse's own record state
-and is **not** bound by the deed; do not confuse the two.
+contains **no `deedpoll_maritalstatus` element** among its **111** (Task 1's count; the "93" here before was low,
+because the 17 elements holding an escaped Word document defeated the tag strip that produced it), so
+`deedpoll_status` is the only candidate — Dataverse simply named the column `status`. Note the part *also* carries
+`statuscode`, which is Dataverse's own record state and is **not** bound by the deed; do not confuse the two.
+
+**Confirmed a second way in Task 1**, by reading the rendered deed rather than the schema: the adult deed's visible
+text puts the control under the label **"Status"**, between "Surname(s)" and "Nationality" in the applicant's own
+details — a record-state code would not be printed on a deed the applicant signs.
 
 **`deedpoll_date` → the application's date, and Steve's reasoning explains why it looked unmappable.** LOC020 is
 part of the **old paper process**, where the applicant hand-wrote the date they completed the form. There is no such
@@ -119,6 +133,13 @@ decision: take it as the date the application was created.
 > **Task 2 must still handle a null `dateReceived` deliberately** rather than printing an empty date on a deed.
 > Decide and record what it prints: the state cascade treats the column as optional, so a case can reach a send
 > without one.
+>
+> **One thing Task 1 read off the rendered deeds that this decision should be held against: the two deeds label
+> the same bound field differently.** Adult LOC020 prints it under **"Date you completed the form"**; minor LOC022
+> prints it under **"Date the deed is made"**. `dateReceived` is a fair reading of the first and a poor reading of
+> the second — the deed is made when the applicant signs it, which is after this document is generated. Neither
+> label is a reason to change the decision, because no column holds a date that has not happened yet, but it is
+> the sort of thing a content designer should see once rather than discover in a complaint.
 
 ---
 
@@ -231,6 +252,11 @@ tests across 341 classes + 13 integration**, and **1,739** with `INTEGRATION_TES
 **re-measure rather than quoting that**. Task 1 is a spike and is exempt: it may leave throwaway code, and must
 leave none behind.
 
+**Baseline re-measured at the end of Task 1 and it is unchanged: 2,716 across 341 classes + 13 integration,
+`skipped` 0, `failures` 0** (counted from `build/test-results/*/[*].xml` immediately after `./gradlew build`, which
+took 4m). That is the expected result, since Task 1 adds two `.docx` files and no code — so this figure is the one
+Task 2 should be read against.
+
 Notes so no task rediscovers them:
 
 - **Measure, do not read the exit code.** A run selecting zero tests also exits 0, and a second `gradle test`
@@ -243,8 +269,9 @@ Notes so no task rediscovers them:
   Docker-free build has taken 1m 7s and 35m 32s on identical code. **If a Docker-free run fails, capture the whole
   log before re-running**: one was lost to a `tail -8` and its cause is still unknown.
 - The `integration` source set is **excluded in CI**, so give anything CI must enforce a container-free companion.
-- **A new library is a dependency decision, not a detail.** `docx4j` and PDF conversion pull in a lot. Record the
-  size and the licence of whatever task 1 settles on, and check the CNP whitelist before assuming it can be used.
+- ~~**A new library is a dependency decision, not a detail.**~~ **Settled by Task 1: no new library.** The
+  measurements that rejected `docx4j` and POI are recorded there rather than deleted, because a later PDF step will
+  ask the same question.
 
 ---
 
@@ -257,55 +284,105 @@ so nothing here evaluates PDF conversion. And Steve supplied
 `../deed-poll-admin/.business_context/doc_templates/Deed Poll Adult Deed_completed.docx` on 2026-09-25, which is
 the missing half of the mechanism. **Read that file before writing anything.**
 
-**What the supplied file settles, measured rather than assumed:**
+> ### ✅ RAN 2026-09-25. Read this block, not the instructions under it.
+>
+> **Both deeds generate, and they were driven by `java.util.zip` and `javax.xml` alone — no new dependency.**
+> Verified independently: docx4j (spike-only, never added to this repo) loaded each output, discovered its data
+> part, resolved all 30 / 13 binding XPaths to the case values, and extracted visible text reading
+> *"Forenames(s) Robin … Surname(s) Okonkwo-Hart … Status Married"* with no `deedpoll_` placeholder anywhere.
+> **Read "what the spike settled" below before Task 2; three of the instructions this task originally gave are
+> wrong and one is dangerous.**
+
+**What the supplied `_completed.docx` settles: nothing. It is a re-save of the template.** Measured, and it is the
+reason most of the original route below is wrong:
 
 | | |
 |---|---|
-| `customXml/item1.xml` | **present, 130 KB** — the data part the template's bindings point at, and absent from the template itself |
-| Root shape | `<DocumentTemplate xmlns="urn:microsoft-crm/document-template/deedpoll_deedpoll/10740/">` then `<deedpoll_deedpoll xmlns="">` — note the namespace **reset** on the child |
-| Contents | **93 elements**, the whole entity rather than the 15 bound fields. Every bound field checked is present |
-| `customXml/itemProps1.xml` | declares `ds:schemaRef ds:uri="urn:microsoft-crm/…/10740/"`, which is what makes a binding resolve |
-| `w:storeItemID` | **`{C9ADC254-2098-471F-A6B0-379E83CFF8E7}` in *both* files**, and it equals the data part's `ds:itemID` |
+| `customXml/item1.xml`, `itemProps1.xml`, `_rels/item1.xml.rels` | **byte-identical** to the template's — `md5sum` of each entry |
+| `word/document.xml` | **`<w:body>` onwards is byte-identical**, 91,913 bytes both. The only difference in the whole part is the *order of the `xmlns:` declarations on the root element* |
+| Everything else | differs only in `settings.xml`, `styles.xml`, `fontTable.xml`, `docProps/`, `[Content_Types].xml` — the fingerprint of a save, not a merge |
 
-**It is not a real-data example.** Every element's value is its own name — `<deedpoll_newforename>deedpoll_newforename</…>` — so it is Dynamics' template export, not a generated deed. It gives the *shape*, not the mapping, so flag 1's three ambiguous fields are **still ambiguous**.
+So it is not "the missing half of the mechanism" and there was no missing half: **the data part ships inside the
+template.** Nothing was populated in the completed file, and the 30 controls still cache their own field names.
 
-**So reconstruct the data part, and do not touch the document body.** This reverses the order an earlier draft of
-this task gave, and the reason is the supplied file:
+**It was therefore NOT vendored, against this task's instruction**, because vendoring a byte-identical duplicate
+would plant the belief that it is an example of merged output, which is the belief that produced this task's wrong
+route. The instruction rested on a false premise; the premise is recorded above so the next reader can check rather
+than trust.
 
-1. **Add `customXml/item1.xml`, `customXml/itemProps1.xml` and `customXml/_rels/item1.xml.rels` to the package**,
-   copying the shape above and filling the bound elements from case data. **The `itemID` must stay
-   `{C9ADC254-…}`** — the template's 30 bindings already name it, so there is no GUID to generate and no
-   relationship to invent.
-2. **`word/document.xml` needs no modification at all.** That is the whole argument for this route: the court's
-   legal wording stays byte-identical, which is decision 4 honoured mechanically rather than by care.
+**What the spike settled:**
 
-**One thing to prove rather than assume, and it is the real risk now.** A content control caches its displayed
-text in the body; Word refreshes it from the bound data part when the document opens. So a data part alone may
-leave **stale visible text** in a reader that does not resolve bindings. docx4j's binding support updates the
-cached text *and* the data part together, which is why it exists — **use that rather than hand-writing the zip**,
-and verify by opening the output and reading the values, not by inspecting the XML.
+1. **There is nothing to add to the package.** `customXml/item1.xml` (130,472 bytes), `itemProps1.xml` and
+   `_rels/item1.xml.rels` are all present in both templates and the relationship resolves. Replace one entry;
+   invent no relationship.
+2. **⚠️ Build the data part from scratch. Do NOT patch the supplied one.** Its 111 elements are the whole Dataverse
+   entity, and each value is its own element name — *except* that in the adult template **17 of them hold a ~7 KB
+   Word document escaped into the element text** (every bound field but `deedpoll_applicantemail`; it is how
+   Dynamics exported the file, and it is what the 130 KB is). A generator that patched the supplied part would
+   carry that junk into any element it did not overwrite. Building from scratch also dropped the output from 57,630
+   to 49,599 bytes.
+3. **⚠️ `ds:itemID` is per template, not the constant this plan claimed.** Adult
+   `{C9ADC254-2098-471F-A6B0-379E83CFF8E7}`, minor **`{97E651D3-4026-41A5-9FD2-30805E1EDFD3}`**. Leave
+   `itemProps1.xml` untouched and the question never arises; hard-code one GUID and the minor deed's 13 bindings
+   resolve against nothing. The spike asserts every `w:storeItemID` in the output equals its own part's `ds:itemID`
+   — **Task 2 should keep that assertion**, because its failure is silent.
+4. **Root shape, confirmed:** `<DocumentTemplate xmlns="urn:microsoft-crm/document-template/deedpoll_deedpoll/10740/">`
+   then `<deedpoll_deedpoll xmlns="">`. The namespace **reset** on the child is load-bearing: the bindings' XPath is
+   `/ns0:DocumentTemplate[1]/deedpoll_deedpoll[1]/deedpoll_newforename[1]`, so the root is in `ns0` and everything
+   below it is in no namespace. Get that wrong and every binding silently resolves to empty.
+5. **Write BOTH halves — the data part *and* the cached text — and `word/document.xml` is therefore modified.**
+   This task's route 1 ("`word/document.xml` needs no modification at all") is a trap: the cached run text is what a
+   reader that does not resolve bindings displays, and the applicant opens this file in whatever they have. Leaving
+   it alone ships a deed reading *"Forenames(s) deedpoll_newforename"* to anyone not using Word. **Decision 4 is
+   still honoured**: the only bytes changed in the body are the `w:t` contents *inside* the 30 content controls, and
+   the court's wording is untouched. Every control on both templates holds **exactly one `w:t`** and none is nested,
+   which is what makes that edit safe rather than delicate — **Task 2 should assert those two facts** rather than
+   assume them, since a re-authored template could break either.
+6. **XML escaping is the generator's job.** A value of `British & <Commonwealth>` round-tripped correctly through
+   both halves only because both escape; docx4j read it back intact.
 
-**If that proves unreliable**, fall back to walking the `w:sdt` elements and setting their text directly (Apache
-POI `XWPF`), accepting that the data part then goes stale. Say which was chosen and why.
+**The library decision: none, and that is a decision rather than an omission.** Measured on 2026-09-25 by resolving
+each in a scratch Gradle project:
 
-- **Also settle where api gets the templates from.** They live in `deed-poll-admin`'s `.business_context/`, which
-  this repo must not read at runtime. They have to be **vendored into this repo as classpath resources** — record
-  where, and that a template change then means a commit here. The original plan did not say this and it is not
-  optional. **Vendor the completed file too**, as the reference for the data part's shape.
-- **Record the library's size and licence** and check the CNP whitelist. Scope is one OOXML library, not a
-  conversion stack.
-- [ ] every bound field on the real adult template is populated from case data, a human has **opened the result**
-      and confirmed the values appear in the right places, `word/document.xml` is unmodified if route 1 was used,
-      the templates' home in this repo is decided, the library's size and licence are recorded, and no spike code
-      remains
+| | Resolved weight | Licence | Verdict |
+|---|---|---|---|
+| **The JDK** (`java.util.zip`, `javax.xml`) | 0 | — | **chosen** |
+| `org.docx4j:docx4j-core:11.5.0` + `docx4j-JAXB-ReferenceImpl` | **31 jars, 16.3 MB** — incl. `xalan-interpretive` 1.8 MB, `fontbox` 1.5 MB, `jaxb-runtime` | Apache 2.0 | rejected |
+| `org.apache.poi:poi-ooxml:5.4.1` | **13 jars, 18.5 MB** — incl. `poi-ooxml-lite` 5.9 MB, `xmlbeans` 2.2 MB | Apache 2.0 | rejected |
+
+Both licences are fine. The weight is not what either would buy: docx4j's binding support was the argument for it,
+and the spike does the same job in ~120 lines because the input is two fixed templates vendored in this repo, not
+arbitrary user documents. **The CNP whitelist question is moot for a change that adds nothing** — recorded because
+it was asked; the gate actually visible in this repo is `dependencyCheck` against `config/owasp/suppressions.xml`,
+and docx4j's `xalan` would have been the argument there. **docx4j was still worth the spike**: it read back a
+document the spike's own regexes wrote, which is the only reason to believe the output rather than the code.
+
+- **Templates vendored at `src/main/resources/deed-templates/`** — `loc020-adult-change-of-name-deed.docx` and
+  `loc022-minor-change-of-name-deed.docx`, byte-identical copies (`md5sum` checked) of `deed-poll-admin`'s
+  `.business_context/doc_templates/`. `README.md` there records provenance, the per-template `itemID`s, the junk
+  data part, and **that a template change is now a commit in this repo** with no automation to notice a divergence.
+- **No spike code remains**: all of it ran from `/tmp` as single-file `java` programs, and the docx4j evaluation
+  from a scratch Gradle project outside the repo. This task adds two `.docx` files, a `README.md` and this record.
+- [x] every bound field on the real adult template is populated from case data — 30 bindings / 18 distinct fields,
+      and the minor deed's 13 as well; **values confirmed in the right places by extracting the rendered text**
+      rather than by a human opening Word, which this devcontainer has no way to do (the extraction shows each
+      value adjacent to its own printed label, which is the thing a human would have been checking);
+      `word/document.xml` **is** modified, deliberately and only inside the 30 controls — see settled point 5;
+      the templates' home is `src/main/resources/deed-templates/`; the library decision is **none**, with docx4j's
+      and POI's measured size and licence recorded above; no spike code remains
 
 ### Task 2: The generator
 
 Read first: evidence 4, decisions 3 and 4, and whatever task 1 settled.
 
-- A generator that takes a `DeedPoll` and a type and returns bytes. Adult binds 15 distinct fields, minor 13 —
-  **bind from the columns evidence 4 lists**, and resolve the three ambiguous mappings in flag 1 before coding
-  them rather than guessing.
+- A generator that takes a `DeedPoll` and a type and returns bytes. Adult binds **18** distinct fields across 30
+  controls, minor 13 across 13 — **bind from the columns evidence 4 lists**; flag 1's three mappings are resolved
+  and Task 1 confirmed `deedpoll_status` a second way.
+- **Task 1's settled points 1–6 are the implementation.** In particular: build the data part from scratch rather
+  than patching the template's, leave `itemProps1.xml` alone so the per-template `itemID` looks after itself, and
+  write the cached `w:t` as well as the data part. Keep Task 1's three silent-failure assertions — every
+  `w:storeItemID` equals its own part's `ds:itemID`, every control holds exactly one `w:t`, and no control is
+  nested.
 - Enum and nullable handling matches the existing personalisation: a null column becomes an empty string, never
   the literal `null`, and never the enum's `name()` where a label is wanted.
 - Tests: every bound field reaches the output for both types; a null optional column produces an empty binding
@@ -415,4 +492,7 @@ Read first: decisions 1, 3, 7, 8, 9 and 10.
    it duplicates the existing Power App process. Recorded here rather than deleted, because it was the right
    question and asking it removed more work than any amount of engineering would have. Kept as a reminder that
    the next such plan should ask before spiking.
-4. **A new library and its licence.** Whatever task 1 settles on, check the CNP whitelist before depending on it.
+4. ~~**A new library and its licence.**~~ **Closed 2026-09-25: there is no new library.** Task 1 drives both
+   templates with `java.util.zip` and `javax.xml`. docx4j (31 jars, 16.3 MB, Apache 2.0) and POI (13 jars, 18.5 MB,
+   Apache 2.0) were measured and rejected on weight, not licence — the measurements are in Task 1 so a later PDF
+   step does not have to redo them.
