@@ -112,8 +112,13 @@ decision: take it as the date the application was created.
 > printed on the *same deed* takes its year from it (`ReferenceNumbers`: *"year: 4-digit year taken from Date
 > Received"*). Using `createdOn` could therefore print `KBDP2026-00001` beside a 2027 date on one document.
 >
-> Flagged rather than silently substituted, because it is a change to what Steve said. **Confirm before Task 2
-> codes it**, and handle a null `dateReceived` deliberately rather than printing an empty date on a deed.
+> **Confirmed by Steve 2026-09-25: use `dateReceived`.** So this is settled, not pending — but it is recorded as a
+> deliberate departure from the literal instruction rather than as the instruction itself, because the next person
+> to read "the date the application was created" in a ticket will reach for `createdOn` again.
+>
+> **Task 2 must still handle a null `dateReceived` deliberately** rather than printing an empty date on a deed.
+> Decide and record what it prints: the state cascade treats the column as optional, so a case can reach a send
+> without one.
 
 ---
 
@@ -331,6 +336,14 @@ Read first: decisions 1, 3, 7, 8, 9 and 10.
 
 - Two `EmailTemplate` members with no slots (decision 7), chosen by a `switch` over all four `DeedPollType`
   members with no `default` (decision 3).
+> **If notify-4a has not run, build the minimum upload seam here rather than stopping.** Task 4 needs a document
+> reference to become a `prepareUpload` at drain time, which is notify-4a's Task 1. After the 2026-09-25 Notify
+> discovery — the five static forms are attached to the *template* in Notify, so api never touches them — **the deed
+> is the only document api supplies**, and that seam is now a handful of lines rather than a subsystem. So: if it
+> exists, use it; if not, build it for one document, and record in Task 5 that notify-4a's Task 1 is thereby done
+> and its plan needs amending. Do **not** wait, and do **not** build storage for the static forms — Notify holds
+> them.
+
 - **Personalisation is the four resolved keys the supplied documents already name, plus the Gazette flag and the
   document references.** Read from the source `.docx` on 2026-09-25 rather than chosen: ① and ② each reference
   exactly `deedpoll_referencenumber`, `deedpoll_onlineapplicationreference`, `deedpoll_oldforename`,
