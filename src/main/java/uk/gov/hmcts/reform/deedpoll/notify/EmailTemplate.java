@@ -12,7 +12,7 @@ import java.util.stream.Collectors;
  * <p>Five members. The <em>forms for completion</em> pair joined once this service could generate the deed they
  * carry, which Notify cannot do. A sixth -- {@code forms-for-completion-relinquishment} -- is settled as a real
  * template but its document set has not been identified, so it is deliberately not declared here yet: see
- * {@code docs/plans/notify-4a-attach-files-to-an-email.md} flag 5.
+ * {@code docs/plans/completed/notify-4a-attach-files-to-an-email.md} flag 5.
  *
  * <p><strong>Two are referral-driven and three are case-driven</strong>, which is the axis {@link EmailCause}
  * names: a template is entitled to be sent either by something a Master decided or by the state of the case

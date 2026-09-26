@@ -11,7 +11,7 @@ proper rewrite, and **its test figures are per-branch measurements from before t
 rather than quote them. **Read this before restarting the loop.**
 
 The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1, notify-5,
-notify-3, notify-3b, notify-6, notify-4b and notify-4c are all merged on `master`; only notify-4a is open. notify-5's four tasks capture the exact subject and plain-text body, provide
+notify-3, notify-3b, notify-6, notify-4b and notify-4c are all merged on `master`; notify-4a is filed too, with ②'s LOC024 still to attach. notify-5's four tasks capture the exact subject and plain-text body, provide
 the case-scoped correspondence read, return availability, history and slot defaults from the existing Email-tab
 GET, and pin the public wording and cross-case security boundary. notify-3 sends the confirmation email itself,
 with one referral-outcome email per referral enforced by the database.
@@ -21,7 +21,7 @@ with one referral-outcome email per referral enforced by the database.
 | Where | What is there |
 |---|---|
 | `master` / `origin/master` | **Everything.** notify-1, -5, -3 and -3b (PRs #29, #30, #38, #42), the three small Notify fixes (#43–#45: `applied_on_paper`, the measured JSON boolean, never printing the API key), the email case notes (#46, #48), notify-6 (#49, #50), the 4a/4b split (#51), notify-4b (#52) and notify-4c (#54). No Notify work sits on an unmerged branch |
-| [`plans/notify-4a-attach-files-to-an-email.md`](plans/notify-4a-attach-files-to-an-email.md) | the one open Notify plan. **All five tasks are ticked** (#56–#58): ① was sent for real, local admin → local api → real Notify, on 2026-09-26. It stays open only for ②'s LOC024 attachment, and Task 5 is the handover table of what stands between ① / ② and AAT |
+| [`plans/completed/notify-4a-attach-files-to-an-email.md`](plans/completed/notify-4a-attach-files-to-an-email.md) | **filed as complete 2026-09-26**, the last of the series. **All five tasks are ticked** (#56–#58): ① was sent for real, local admin → local api → real Notify, on 2026-09-26. The one item still open is ②'s LOC024 attachment (Steve's), and Task 5 is the handover table of what stands between ① / ② and AAT |
 | `charts/deed-poll-api/values.yaml` | sets the ③ `b2cb5754-…`, ④ `a58c5a8c-…` (#59) and ⑤ `a67e7dd1-…` template ids and `NOTIFY_EMAIL_REPLY_TO_ID`. ① and ② are **deliberately not set** (4a's decision 7) until the deed has a durable store |
 
 V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 adds the
@@ -84,7 +84,7 @@ delta**: the judicial operation count is **4 → 5** with one new response schem
 while `JudicialReferralSummary` is reused unchanged and the caseworker 33 does not move. Neither owner id is
 published anywhere.
 
-## The Notify series: seven api plans, six of them merged
+## The Notify series: seven api plans, all complete
 
 The numbering is the order they were written, **not** the order they were built:
 
@@ -96,7 +96,7 @@ notify-3b track the applicant's reply                                      COMPL
 notify-6  chase missing documents            case-driven, repeatable       COMPLETE (PR #50)
 notify-4b generate the deed                  LOC020 and LOC022 from a case COMPLETE (PR #52)
 notify-4c preview attachments, forms notes   split out of 4a               COMPLETE (PR #54)
-notify-4a attach files to an email           the Notify upload seam        all tasks ticked; open for ②'s LOC024
+notify-4a attach files to an email           the Notify upload seam        COMPLETE (#56–#58); ②'s LOC024 still to attach
 ```
 
 **Every template is authored on the non-prod Notify service**, and each was read back through
@@ -293,7 +293,6 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 
 | File | State |
 |---|---|
-| `notify-4a-attach-files-to-an-email.md` | **Partly landed.** Task 1 — the drain-time Notify upload seam, `DocumentUploads` and `ResolvedDocuments` — shipped inside `notify-4b`. Tasks 2 and 3 are open and both now **contradict what shipped**: Task 2 instructs declaring the relinquishment template ③′ now, and notify-4b deliberately did not (a relinquishment case is answered *inapplicable*, with `RELINQUISHMENT_HAS_ITS_OWN_FORMS` as the sentence); Task 3 rests on storing the five static forms, which notify-4b measured as Notify's and explicitly forbids. Read notify-4b's Task 4 before either |
 | `role-model-generalisation.md` | **Gated, and may not be needed.** A behaviour-preserving refactor of `boolean isAdmin` into capabilities. Gated on scope question Q0.1 and, preferably, on a first successful deployment — so that a failed deploy is unambiguously a deployment problem and not a 33-site refactor |
 | `role-based-access-findings.md` | Findings, not a plan. The measured inventory of what could be role-gated, so the business question is asked against a concrete list |
 | `role-based-access-questions-for-the-business.md` | **Resolved 2026-09-11**, never sent; the business's `.docx` answered it. Kept for the reasoning |
