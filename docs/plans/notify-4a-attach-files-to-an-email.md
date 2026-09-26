@@ -16,14 +16,14 @@ original plan unnecessary:
 
 **What is left is mostly proof, plus two code changes found on 2026-09-26 while proving it:**
 
-- **notify-4c Task 1: ①'s preview is refused by Notify, so ① cannot be sent from admin at all.** A template attachment is a
+- **~~notify-4c Task 1: ①'s preview is refused by Notify, so ① cannot be sent from admin at all.~~ Done 2026-09-26.** A template attachment is a
   placeholder, and Notify's *preview* endpoint demands a value for it even though a real send fills it in. Found by
   reading ① back and calling both endpoints (Task 3).
-- **notify-4c Task 2: ① and ② gain the optional `additional_notes` slot**, by Steve's decision on 2026-09-26. That also
+- **~~notify-4c Task 2: ① and ② gain the optional `additional_notes` slot~~ Done 2026-09-26.** By Steve's decision on 2026-09-26. That also
   removes notify-4b flag 6's empty compose page.
 
 Both are ordinary code, so they are in their own plan, [`notify-4c`](notify-4c-preview-attachments-and-notes.md),
-which ralphex can run. **What stays here needs a person**: authoring ② in the portal (Task 3) and a guest-listed
+which ralphex can run. **notify-4c is complete (2026-09-26): 2,950 unit tests across 363 classes + 13 integration, 0 skipped.** **What stays here needs a person**: authoring ② in the portal (Task 3) and a guest-listed
 inbox someone has to open (Task 4). Do not run this plan under ralphex.
 
 ## Which email carries which forms
@@ -200,7 +200,7 @@ Read first: decision 7, and the content draft's "How the right forms reach the r
 
 - Run api locally (`deed-poll-local-end-to-end` recipe) with `NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_ADULT` set to
   ①'s id, `NOTIFY_DOCUMENT_RETENTION_WEEKS=26` and the team-and-guest-list key, **not** the Test key, which
-  returns success and sends nothing. **Needs notify-4c merged, and ((additional_notes)) added to ① in Notify.** Send ① from admin's Email tab, with a
+  returns success and sends nothing. **notify-4c is done (2026-09-26), so this task is unblocked once it is merged and Steve has added `((additional_notes))` to ① in Notify** — without that placeholder a caseworker's note is dropped with nothing failing. Send ① from admin's Email tab, with a
   note, for an `Adult` case whose applicant email is
   guest-listed.
 - Confirm in the inbox: the deed arrives as a link where `((deed_document))` sits, **with the applicant's own

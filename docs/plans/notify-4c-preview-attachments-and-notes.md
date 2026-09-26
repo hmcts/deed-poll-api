@@ -119,4 +119,8 @@ Read first: `EmailSlot.ADDITIONAL_NOTES`, `EmailTemplate`, and how ③ `applicat
 - The validation commands with `--rerun-tasks`, counts recorded against the baseline, `skipped` confirmed 0.
 - Tick notify-4a's reference to this plan as done, and record in notify-4a's Task 4 that it is unblocked **once
   Steve has added `((additional_notes))` to ① in Notify**.
-- [ ] counts recorded against the baseline, notify-4a updated, and the Notify edit handed to Steve in one sentence
+- [x] counts recorded against the baseline, notify-4a updated, and the Notify edit handed to Steve in one sentence
+
+      **Done 2026-09-26.** `--rerun-tasks`: 2,950 unit tests across 363 classes + 13 integration (3 classes), 0
+      skipped, 0 failed, against a baseline of 2,922 across 361 + 13. Steve: add `((additional_notes))` to ① in
+      Notify, where the draft places it, or a caseworker's note is dropped with nothing failing.
