@@ -242,7 +242,29 @@ Read first: decision 7, and the content draft's "How the right forms reach the r
 
 - Write down each outstanding dependency, who owns it and what it blocks, so the next step is a list rather than
   a rediscovery: the three flags below, plus ②'s authoring.
-- [ ] the handover is written and each blocker names an owner
+- [x] the handover is written and each blocker names an owner
+
+      **Written 2026-09-26.** ① works end to end locally (Task 4). This is what stands between ① / ② and AAT,
+      in the order they have to clear:
+
+      | # | Blocker | Owner | State on 2026-09-26 | Blocks |
+      |---|---|---|---|---|
+      | 1 | **AAT has no Notify key** (flag 1) | DTS platform reviewers of `hmcts/azure-access`; **Steve** chases, then writes the vault secret | azure-access#8111 open, review required | **Every** email in AAT, not only ① and ② |
+      | 2 | **The deed store is local pod disk** (flag 2) | **Steve / deed-poll team**: [plan 03](deed-poll-api-03-cdam-documents.md) (CDAM), after [plan 02](deed-poll-api-02-ccd-foundation.md) (CCD foundation) and CCD + CDAM onboarding | Both plans drafted, no tasks started; onboarding identifiers unconfirmed | ① and ② in any deployed environment |
+      | 3 | **② is not authored** (Task 3) | **Steve**, in the Notify portal: LOC023, LOC024 and LOC028 attached, plus `((additional_notes))` where ① has it | Not started; Notify lists no minor template | ② only; then Task 3's second box |
+      | 4 | **The chart values** (decision 7) | **deed-poll team**, and only once 1 and 2 have cleared | Deliberately not set | Two lines: `NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_ADULT` / `_MINOR` and `NOTIFY_DOCUMENT_RETENTION_WEEKS: 26` |
+      | 5 | **Relinquishment forms unknown** (flag 3) | **The Deed Poll office**, asked by Steve | Open | ③′ only (decision 4). **Does not block ① or ②** |
+
+      **An open question for Steve, not a decision taken here: does ① wait for CDAM?** Blocker 2 routes durable
+      storage through CCD and CDAM, which is two external onboardings away. An interim durable store (for
+      example Azure Blob behind the existing `DocumentStore` seam) would let ① reach AAT sooner, at the cost of a
+      second migration later. ADR 0005 in `deed-poll-documentation` weighed Blob in place of CCD and is still
+      `proposed`. The 2026-09-26 decision for decentralised CCD probably supersedes it, and it should say so either
+      way.
+
+      **Not blockers, but owned (from Task 4):** the subject line's empty "(online application reference: )" is
+      a Notify wording change (**Steve**). admin re-offering ① after it has been sent is a deed-poll-admin UI
+      question (**deed-poll team**).
 
 ---
 
@@ -261,8 +283,8 @@ Read first: decision 7, and the content draft's "How the right forms reach the r
 2. **`DOCUMENT_STORE_ROOT` is local pod disk**, which is lost on restart and not shared between replicas. The
    deed is written through `DocumentStore` at send time and read back at drain time, so in AAT a restart between
    the two loses it. The read then retries as `TEMPORARY` until it lands on `Failed`, still holding V20's slot.
-   **A deployment blocker for ① and ②**, and the subject of its own plan (the draft ADR 0005 in
-   `deed-poll-documentation` is the starting point).
+   **A deployment blocker for ① and ②.** Durable storage is now [plan 03](deed-poll-api-03-cdam-documents.md)
+   (CDAM), drafted 2026-09-26; see Task 5 for its dependencies and the interim-store question.
 3. **Which forms a deed of relinquishment needs is unknown**, and so is whether it needs a generated deed.
    Decision 4 waits on it.
 4. **~~admin's compose page is empty for a slotless template~~ (notify-4b flag 6).** Closed by notify-4c Task 2: ① and ②
