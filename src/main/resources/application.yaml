@@ -181,6 +181,7 @@ notify:
     # Listed for the same reason, so an environment can point it at a real template without a code change. Absent
     # from this map the placeholder is what NotifyProperties.templateId answers anyway, but the environment
     # variable would then be one nobody reads.
+    # Authored on non-prod 2026-09-26 as a58c5a8c-7727-4d1f-af08-4953d9f3d33e, which charts/deed-poll-api sets.
     request-confirmation-to-proceed: ${NOTIFY_TEMPLATE_REQUEST_CONFIRMATION_TO_PROCEED:DEED_POLL_PLACEHOLDER}
     # The chase for missing documents, which is provisioned: notify-6's Task 0 read template
     # a67e7dd1-0f8c-4366-a1de-ca5fbc24ec98 (version 1, non-prod) back out of Notify on 2026-09-24 and confirmed
