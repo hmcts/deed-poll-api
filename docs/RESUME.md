@@ -1,5 +1,9 @@
 # Resume state — where the next session picks up
 
+**CCD planning update, 2026-09-26:** read the
+[new integration-plan baseline](#ccd-planning-update--2026-09-26) below before using
+the older statements that plans 02/03 are unwritten.
+
 Rewritten **2026-09-20**; figures and plan states refreshed **2026-09-24** during the email-case-notes review, and
 again **2026-09-25** when notify-6 completed.
 The narrative below still needs a proper rewrite — it was written before notify-3 merged. **Read this before
@@ -334,3 +338,30 @@ Full context, if a session needs the *why*:
 `../deed-poll-admin/.business_context/DEED_POLL_API_PLAN.md`, and for the email work
 `NOTIFY_TEMPLATE_TAXONOMY.md` and `NOTIFY_PROVISIONING_REQUEST.md` beside it. Per-clone conventions that
 break silently: `../CLAUDE.md` in this repo's root.
+
+## CCD planning update — 2026-09-26
+
+Steve has chosen decentralised CCD, a minimal case definition and a nullable CCD
+reference on the deed-poll record, followed by CDAM and Retain and Dispose. Draft plans
+now exist; the earlier statements that plans 02/03 are unwritten are superseded.
+No CCD/CDAM/payment integration was implemented or onboarded in this planning session.
+
+- [Plan 02: CCD foundation](plans/deed-poll-api-02-ccd-foundation.md)
+- [Resumable CCD migration](plans/ccd-migration.md)
+- [Payment plan amendment](plans/fees-and-pay-1-ways-to-pay-card.md#amendment-2026-09-26--ccd-and-queue-admission)
+- [Plan 03: CDAM documents](plans/deed-poll-api-03-cdam-documents.md)
+- [Unpaid online applications](plans/unpaid-online-applications.md)
+- [Retain and Dispose](plans/retain-and-dispose.md)
+- [Cross-repository overview](../../deed-poll-documentation/plans/active/ccd-and-shared-services.md)
+
+New online submissions enter the normal caseworker queue only after verified payment.
+Existing/migrated/manual cases using the established payment route retain their queue
+eligibility. Online submissions get a seven-day payment deadline and one day-three
+reminder with secure payment recovery. Resolve uncertain payments before coordinated
+deletion. `feeReference` is free text, not evidence of receipt; record payment route and
+verified status separately. Historical retention periods remain unconfirmed.
+
+The identifiers, roles/system accounts and platform onboarding are still open inputs.
+Read the new plans' dependencies rather than inventing values. The September 22
+drop-CCD/synthetic-reference direction is historical and is not the implementation
+baseline for this work. Next step: review plan 02 and record confirmed onboarding inputs.
