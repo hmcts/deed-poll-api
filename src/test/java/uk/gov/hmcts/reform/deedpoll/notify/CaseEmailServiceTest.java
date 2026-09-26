@@ -1,6 +1,8 @@
 package uk.gov.hmcts.reform.deedpoll.notify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.tomakehurst.wiremock.verification.LoggedRequest;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -43,6 +45,7 @@ import uk.gov.service.notify.NotificationClientException;
 import uk.gov.service.notify.TemplatePreview;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -50,6 +53,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -1219,6 +1223,149 @@ class CaseEmailServiceTest {
             // Notify's rate limit is a shared allowance, so a request that was going to be refused anyway does not
             // spend any of it.
             verifyNoInteractions(notify);
+        }
+    }
+
+    /**
+     * A template with files attached in the Notify portal: previewed with a stand-in under each, sent without one.
+     *
+     * <p>Over {@link StubNotify} rather than a mocked client wherever the difference between a preview and a send is
+     * the point, because that difference is Notify's behaviour and only a stub that reproduces it can fail. The
+     * file names are invented on purpose: nothing in the service may know them.
+     */
+    @Nested
+    @DisplayName("previewing a template with attachments")
+    class PreviewingATemplateWithAttachments {
+
+        private static final String DECLARATION = "LOC021 statutory declaration.pdf";
+
+        private static final String EXHIBIT = "LOC027 exhibit sheet.pdf";
+
+        private final StubNotify stub = new StubNotify();
+
+        private CaseEmailService overHttp;
+
+        @BeforeEach
+        void startStub() {
+            stub.start();
+            overHttp = new CaseEmailService(
+                deedPolls, referrals, notifications, documents, stub.client(), stub.properties(), referralService,
+                caseNotes, deeds, new ObjectMapper());
+        }
+
+        @AfterEach
+        void stopStub() {
+            stub.stop();
+        }
+
+        @Test
+        @DisplayName("renders the adult forms email with a stand-in under each attached file")
+        void rendersAStandInUnderEachAttachment() {
+            storedCase().setType(DeedPollType.Adult);
+            stub.stubTemplateRequiring(formsPlaceholdersAnd(DECLARATION, EXHIBIT));
+
+            EmailPreview preview = overHttp.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of());
+
+            // Twice, once per file: the check page shows where each link goes rather than a 502.
+            assertThat(preview.html().split(Pattern.quote(AttachmentStandIns.STAND_IN), -1)).hasSize(3);
+            assertThat(preview.html()).contains(FormsForCompletionPersonalisation.DEED_NOT_YET_GENERATED);
+            // The first call is exactly what a preview always sent; only the retry carries the stand-ins.
+            List<LoggedRequest> calls = stub.previewRequests();
+            assertThat(calls).hasSize(2);
+            assertThat(calls.get(0).getBodyAsString()).doesNotContain(AttachmentStandIns.STAND_IN);
+            assertThat(calls.get(1).getBodyAsString()).contains(DECLARATION).contains(EXHIBIT);
+        }
+
+        @Test
+        @DisplayName("previews a template with no attachment in exactly the one call it always made")
+        void makesOneCallWithoutAttachments() {
+            storedCase();
+            refusedReferral();
+
+            overHttp.preview(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of());
+
+            assertThat(stub.previewRequests()).hasSize(1);
+            assertThat(stub.previewRequests().getFirst().getBodyAsString())
+                .doesNotContain(AttachmentStandIns.STAND_IN);
+        }
+
+        @Test
+        @DisplayName("still 502s a misspelt placeholder, because a stand-in would hide it until the drain")
+        void stillRefusesAMisspeltPlaceholder() {
+            // What a template whose ((deed_document)) was typed wrong looks like from here: a required key api does
+            // not send and that is not a file. Standing in for it would pass the check page and fail every send.
+            storedCase().setType(DeedPollType.Adult);
+            stub.stubTemplateRequiring(formsPlaceholdersAnd(DECLARATION, "deed_documnet"));
+
+            assertThatThrownBy(() -> overHttp.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of()))
+                .isInstanceOf(UpstreamFailureError.class)
+                .hasMessageContaining("status 400");
+            assertThat(stub.previewRequests()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("502s an api-owned key Notify says is missing, and never retries with a stand-in for it")
+        void neverStandsInForAnOwnedKey() throws Exception {
+            // Reached through a mocked client because the composition always supplies its own keys: this is the
+            // rule, stated for the day it does not.
+            storedCase().setType(DeedPollType.Adult);
+            when(notify.generateTemplatePreview(anyString(), any())).thenThrow(missing(
+                FormsForCompletionPersonalisation.DEED_DOCUMENT, DECLARATION));
+
+            assertThatThrownBy(() -> emails.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of()))
+                .isInstanceOf(UpstreamFailureError.class);
+            verify(notify, times(1)).generateTemplatePreview(anyString(), any());
+        }
+
+        @Test
+        @DisplayName("502s when the retry is refused too, and retries only once")
+        void retriesOnlyOnce() throws Exception {
+            storedCase().setType(DeedPollType.Adult);
+            when(notify.generateTemplatePreview(anyString(), any())).thenThrow(missing(DECLARATION));
+
+            assertThatThrownBy(() -> emails.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of()))
+                .isInstanceOf(UpstreamFailureError.class);
+            verify(notify, times(2)).generateTemplatePreview(anyString(), any());
+        }
+
+        @Test
+        @DisplayName("does not retry an outage, which no stand-in answers")
+        void doesNotRetryAnOutage() {
+            storedCase().setType(DeedPollType.Adult);
+            stub.stubPreviewStatus(500);
+
+            assertThatThrownBy(() -> overHttp.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of()))
+                .isInstanceOf(UpstreamFailureError.class)
+                .hasMessageContaining("status 500");
+            assertThat(stub.previewRequests()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("a send after a preview freezes no stand-in, because a real send fills the files in itself")
+        void sendCarriesNoStandIn() {
+            storedCase().setType(DeedPollType.Adult);
+            stub.stubTemplateRequiring(formsPlaceholdersAnd(DECLARATION, EXHIBIT));
+            overHttp.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of());
+            enqueueAnswers(1);
+
+            overHttp.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of(), REQUEST_ID, CASEWORKER);
+
+            // The row is what the drain sends, verbatim: no stand-in text and no key for either file.
+            assertThat(frozenPersonalisation().values()).doesNotContain(AttachmentStandIns.STAND_IN);
+            assertThat(frozenPersonalisation()).doesNotContainKeys(DECLARATION, EXHIBIT);
+            assertThat(stub.emailRequests()).isEmpty();
+        }
+
+        private static String[] formsPlaceholdersAnd(String... attachments) {
+            List<String> placeholders = new ArrayList<>(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.personalisationKeys());
+            placeholders.addAll(List.of(attachments));
+            return placeholders.toArray(String[]::new);
+        }
+
+        /** Notify's 400 for a preview lacking these keys, as the client carries it. */
+        private static NotificationClientException missing(String... keys) {
+            return new NotificationClientException("Status code: 400 {\"status_code\": 400, \"errors\": [{\"error\": "
+                + "\"BadRequestError\", \"message\": \"Missing personalisation: " + String.join(", ", keys) + "\"}]}");
         }
     }
 

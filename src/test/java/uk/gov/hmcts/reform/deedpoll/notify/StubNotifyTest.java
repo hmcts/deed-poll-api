@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.notify;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -115,6 +116,45 @@ class StubNotifyTest {
             () -> client.generateTemplatePreview(NotifyProperties.UNPROVISIONED_TEMPLATE_ID, Map.of()));
 
         assertThat(NotificationFailure.classify(thrown)).isEqualTo(NotificationFailure.PERMANENT);
+    }
+
+    @Test
+    @DisplayName("a template with required placeholders refuses a preview lacking one, in Notify's words")
+    void refusesAPreviewLackingARequiredPlaceholder() {
+        notify.stubTemplateRequiring("reference_number", "LOC021 statutory declaration.pdf");
+        NotificationClient client = notify.client();
+
+        NotificationClientException thrown = catchThrowableOfType(NotificationClientException.class,
+            () -> client.generateTemplatePreview(StubNotify.TEMPLATE_ID, Map.of("reference_number", "DP1")));
+
+        // The status and the message the real Notify answered in notify-4a Task 3, read the way the service reads it.
+        assertThat(thrown.getHttpResult()).isEqualTo(400);
+        assertThat(AttachmentStandIns.missingKeys(thrown.getMessage(), new ObjectMapper()))
+            .containsExactly("LOC021 statutory declaration.pdf");
+    }
+
+    @Test
+    @DisplayName("a template with required placeholders renders each value once all are supplied")
+    void rendersAPreviewSupplyingEveryPlaceholder() throws Exception {
+        notify.stubTemplateRequiring("reference_number", "LOC021 statutory declaration.pdf");
+
+        TemplatePreview preview = notify.client().generateTemplatePreview(StubNotify.TEMPLATE_ID, Map.of(
+            "reference_number", "DP1", "LOC021 statutory declaration.pdf", "a stand-in"));
+
+        assertThat(preview.getHtml().orElseThrow()).contains("<p>DP1</p>").contains("<p>a stand-in</p>");
+        assertThat(preview.getVersion()).isEqualTo(StubNotify.TEMPLATE_VERSION);
+    }
+
+    @Test
+    @DisplayName("a template with required placeholders still accepts a send without them, as the real one does")
+    void acceptsASendLackingARequiredPlaceholder() throws Exception {
+        // A real send fills an attached file in itself; only the preview demands a value for it.
+        notify.stubTemplateRequiring("reference_number", "LOC021 statutory declaration.pdf");
+
+        assertThat(notify.client()
+            .sendEmail(StubNotify.TEMPLATE_ID, "applicant@example.com", Map.of("reference_number", "DP1"),
+                       "outbox-row-1")
+            .getNotificationId()).isEqualTo(StubNotify.NOTIFICATION_ID);
     }
 
     @Test

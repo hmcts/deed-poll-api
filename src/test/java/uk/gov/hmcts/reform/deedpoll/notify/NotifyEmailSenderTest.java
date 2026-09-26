@@ -84,6 +84,20 @@ class NotifyEmailSenderTest {
     }
 
     @Test
+    @DisplayName("sends a template with attached files the frozen row alone, with no stand-in for either file")
+    void sendsNoStandInForAnAttachment() throws Exception {
+        // A template whose preview demands a value for its file, which a send does not: the row goes out as frozen.
+        notify.stubTemplateRequiring("judges_reason", "LOC021 statutory declaration.pdf");
+
+        assertThat(sender.send(notification())).isInstanceOf(SendOutcome.Sent.class);
+        assertThat(notify.emailRequests()).singleElement().satisfies(request -> {
+            JsonNode personalisation = JSON.readTree(request.getBodyAsString()).path("personalisation");
+            assertThat(personalisation.has("LOC021 statutory declaration.pdf")).isFalse();
+            assertThat(request.getBodyAsString()).doesNotContain(AttachmentStandIns.STAND_IN);
+        });
+    }
+
+    @Test
     @DisplayName("turns a 400 refusal into a permanent verdict")
     void classifiesAPermanentRefusal() {
         notify.stubSendStatus(400);

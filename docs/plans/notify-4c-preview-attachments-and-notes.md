@@ -42,6 +42,9 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 it was **2,922 unit tests across 361 classes + 13 integration**, measured at the branch's head commit on
 2026-09-25. Re-measure rather than quoting that.
 
+**Re-measured 2026-09-26 at `12c57da`, before Task 1:** 2,922 unit tests across 361 classes + 13 integration
+(3 classes), 0 skipped, 0 failed (`--rerun-tasks`, counted from the XML). **After Task 1:** 2,945 across 363 + 13.
+
 - **Measure, do not read the exit code.** A run selecting zero tests also exits 0, and a second `gradle test`
   wipes `build/test-results/`. Count from the XML straight after each run, using `--rerun-tasks` when the count is
   the point.
@@ -82,8 +85,12 @@ provisioned. No test fails today, because `StubNotify` has no notion of an attac
 - Tests, container-free where possible: ①'s preview renders with a stand-in under each attachment; a template
   with no attachments (③, ⑤) makes exactly the calls it makes today; a placeholder that api owns but the
   personalisation lacks is still a 502; and a send carries no stand-in.
-- [ ] a template with Notify attachments previews, api-owned keys are never stood in for, the send path is
+- [x] a template with Notify attachments previews, api-owned keys are never stood in for, the send path is
       unchanged, `StubNotify` distinguishes preview from send, and `./gradlew build` green
+
+      **Done 2026-09-26.** `AttachmentStandIns` reads the 400's `Missing personalisation:` list and retries once,
+      argued in its javadoc over `getTemplateById`: a template with no attachment keeps its single call. It also
+      stands in only for a key shaped like a file name, so a misspelt `deed_documnet` still 502s.
 
 ### Task 2: Give ① and ② the optional additional-notes slot
 
