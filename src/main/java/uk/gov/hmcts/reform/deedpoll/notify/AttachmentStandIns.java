@@ -8,6 +8,7 @@ import uk.gov.service.notify.NotificationClientException;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -33,7 +34,7 @@ import java.util.regex.Pattern;
  *   <li><em>Read Notify's own refusal and retry once</em> -- this one. A template with no attachment makes exactly
  *       the one call it made before, and one with attachments makes two. It does lean on the wording of Notify's
  *       message, but every way that reading can go wrong fails closed: a message it does not recognise, or a list
- *       it splits badly, yields no stand-ins or the wrong ones, and Notify then refuses the preview again. Nothing
+ *       it cannot read as file names, yields no stand-ins, and Notify then refuses the preview again. Nothing
  *       here can make a preview pass that Notify would not have passed with the right keys.</li>
  * </ul>
  *
@@ -86,11 +87,12 @@ final class AttachmentStandIns {
         if (refused.getHttpResult() != 400) {
             return Optional.empty();
         }
-        List<String> missing = missingKeys(refused.getMessage(), json);
         Set<String> owned = ownedKeys(template);
-        boolean everyOneAnAttachment = !missing.isEmpty() && missing.stream().allMatch(
-            key -> !owned.contains(key) && !personalisation.containsKey(key) && FILE_NAME.matcher(key).matches());
-        if (!everyOneAnAttachment) {
+        List<String> fragments = missingKeys(refused.getMessage(), json);
+        boolean anyOneOwned = fragments.stream().anyMatch(
+            fragment -> owned.contains(fragment) || personalisation.containsKey(fragment));
+        List<String> missing = anyOneOwned ? List.of() : candidateFileNames(fragments);
+        if (missing.isEmpty()) {
             return Optional.empty();
         }
         Map<String, Object> standIns = new LinkedHashMap<>(personalisation);
@@ -124,6 +126,34 @@ final class AttachmentStandIns {
         } catch (JsonProcessingException unreadable) {
             return List.of();
         }
+    }
+
+    /**
+     * Every file name Notify's list could be naming, or none if the list cannot be read as file names at all.
+     *
+     * <p>Notify joins the missing keys with {@code ", "} and a portal file name may itself contain one, so the list
+     * is ambiguous: {@code LOC021.pdf, Welsh version.pdf} is two files or one, and the text alone cannot say which.
+     * So no reading is chosen -- every run of consecutive fragments that is file-shaped gets a stand-in, and Notify,
+     * which ignores personalisation a template does not use, takes whichever of them it asked for. The list must
+     * still divide wholly into file-shaped runs, or it is not a list of attachments and nothing is stood in for. A
+     * fragment that is a key api owns is refused before this is reached, so it is never swallowed into a file name.
+     */
+    static List<String> candidateFileNames(List<String> fragments) {
+        int count = fragments.size();
+        // divides[i]: the fragments from i onwards can be read wholly as file names.
+        boolean[] divides = new boolean[count + 1];
+        divides[count] = true;
+        Set<String> candidates = new LinkedHashSet<>();
+        for (int from = count - 1; from >= 0; from--) {
+            for (int to = from + 1; to <= count; to++) {
+                String run = String.join(", ", fragments.subList(from, to));
+                if (FILE_NAME.matcher(run).matches()) {
+                    candidates.add(run);
+                    divides[from] |= divides[to];
+                }
+            }
+        }
+        return count > 0 && divides[0] ? List.copyOf(candidates) : List.of();
     }
 
     private static Set<String> ownedKeys(EmailTemplate template) {

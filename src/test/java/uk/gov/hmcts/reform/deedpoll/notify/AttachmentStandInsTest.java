@@ -62,6 +62,35 @@ class AttachmentStandInsTest {
         assertThat(composed).isEqualTo(FORMS_PERSONALISATION);
     }
 
+    @Test
+    @DisplayName("stands in under a file whose name holds a comma, which Notify's list also separates with")
+    void standsInUnderAFileNamedWithAComma() {
+        Map<String, Object> retry = AttachmentStandIns.retryWith(
+            EmailTemplate.FORMS_FOR_COMPLETION_ADULT, FORMS_PERSONALISATION,
+            missing("LOC021, statutory declaration.pdf, LOC027 blank.pdf"), JSON)
+            .orElseThrow();
+
+        assertThat(retry)
+            .containsEntry("LOC021, statutory declaration.pdf", AttachmentStandIns.STAND_IN)
+            .containsEntry("LOC027 blank.pdf", AttachmentStandIns.STAND_IN)
+            .doesNotContainKey("LOC021");
+    }
+
+    @Test
+    @DisplayName("stands in under both readings when a comma-split list is itself made of file names")
+    void standsInUnderEveryReadingOfAnAmbiguousList() {
+        Map<String, Object> retry = AttachmentStandIns.retryWith(
+            EmailTemplate.FORMS_FOR_COMPLETION_ADULT, FORMS_PERSONALISATION,
+            missing("LOC021.pdf, Welsh version.pdf"), JSON)
+            .orElseThrow();
+
+        // One file or two: the text cannot say, and Notify ignores the stand-ins it did not ask for.
+        assertThat(retry)
+            .containsEntry("LOC021.pdf, Welsh version.pdf", AttachmentStandIns.STAND_IN)
+            .containsEntry("LOC021.pdf", AttachmentStandIns.STAND_IN)
+            .containsEntry("Welsh version.pdf", AttachmentStandIns.STAND_IN);
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
         // A key the template owns: the one a misspelt ((deed_document)) would otherwise hide until the drain.
@@ -70,6 +99,8 @@ class AttachmentStandInsTest {
         // A key nobody owns that is not a file: api's misspelling, not the portal's upload.
         "deed_documnet",
         "LOC021_0226.pdf, deed_documnet",
+        // A key the template owns is never carried into the file name after it.
+        FormsForCompletionPersonalisation.OLD_SURNAME + ", LOC021_0226.pdf",
         // This template's own slot. The file-name shape already refuses it: every key api owns is snake_case, so the
         // ownership test in retryWith is a second guard that no key declared today can reach on its own.
         "additional_notes",
