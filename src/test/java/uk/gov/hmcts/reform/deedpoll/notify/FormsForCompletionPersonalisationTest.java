@@ -6,6 +6,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 
 import java.util.Arrays;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -20,11 +21,16 @@ class FormsForCompletionPersonalisationTest {
 
     private static final String DEED_ID = "aa6d1f80-0000-4000-8000-0000000000de";
 
+    /**
+     * What a caseworker who wrote nothing in the notes box sends: {@link EmailSlots#parse} omits a blank slot.
+     */
+    private static final Map<EmailSlot, String> NO_SLOTS = Map.of();
+
     @Test
     @DisplayName("resolves the reference, the applicant's FORMER names, the Gazette flag and the deed")
     void resolvesTheCasesValues() {
         FormsForCompletionPersonalisation resolved =
-            FormsForCompletionPersonalisation.resolve(populatedCase(), DEED_ID);
+            FormsForCompletionPersonalisation.resolve(populatedCase(), DEED_ID, NO_SLOTS);
 
         assertThat(resolved.toMap()).containsExactlyInAnyOrderEntriesOf(Map.of(
             "reference_number", "KBDP2026-00001",
@@ -35,11 +41,13 @@ class FormsForCompletionPersonalisationTest {
             "old_forename", "Alex",
             "old_surname", "Okonjo",
             "publish_to_london_gazette", true,
-            "deed_document", DEED_ID));
+            "deed_document", DEED_ID,
+            // The optional notes box, empty rather than absent when the caseworker wrote nothing.
+            "additional_notes", ""));
         // And in the declared order, which is the order the stored jsonb reads in -- worth having when the question
         // asked of an outbox row is "what was this applicant sent".
         assertThat(resolved.toMap().keySet())
-            .containsExactlyElementsOf(FormsForCompletionPersonalisation.RESOLVED_KEYS);
+            .containsExactlyElementsOf(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.personalisationKeys());
     }
 
     @Test
@@ -50,7 +58,7 @@ class FormsForCompletionPersonalisationTest {
 
         // The same value the deed itself prints, so the email and the document a caseworker compares agree. The
         // serial is an internal component of the rendered reference and is not what the applicant was ever shown.
-        assertThat(FormsForCompletionPersonalisation.resolve(deedPoll, DEED_ID).referenceNumber())
+        assertThat(FormsForCompletionPersonalisation.resolve(deedPoll, DEED_ID, NO_SLOTS).referenceNumber())
             .isEqualTo("KBDP2026-00001")
             .isNotEqualTo("1");
     }
@@ -62,7 +70,7 @@ class FormsForCompletionPersonalisationTest {
         // a paper application has none. An absent key would turn a blank column into a permanent failure on the
         // drain, where nobody is waiting to read it; an empty string renders as nothing, which is what blank means.
         Map<String, Object> resolved =
-            FormsForCompletionPersonalisation.resolve(new DeedPoll(), DEED_ID).toMap();
+            FormsForCompletionPersonalisation.resolve(new DeedPoll(), DEED_ID, NO_SLOTS).toMap();
 
         assertThat(resolved)
             .containsKeys(FormsForCompletionPersonalisation.RESOLVED_KEYS.toArray(String[]::new))
@@ -83,12 +91,12 @@ class FormsForCompletionPersonalisationTest {
         DeedPoll notPublishing = populatedCase();
         notPublishing.setPublishToLondonGazette(false);
 
-        assertThat(FormsForCompletionPersonalisation.resolve(publishing, DEED_ID).toMap())
+        assertThat(FormsForCompletionPersonalisation.resolve(publishing, DEED_ID, NO_SLOTS).toMap())
             .containsEntry("publish_to_london_gazette", true);
-        assertThat(FormsForCompletionPersonalisation.resolve(notPublishing, DEED_ID).toMap())
+        assertThat(FormsForCompletionPersonalisation.resolve(notPublishing, DEED_ID, NO_SLOTS).toMap())
             .containsEntry("publish_to_london_gazette", false);
         // And on a case where nothing has been set at all, which is the entity's own default.
-        assertThat(FormsForCompletionPersonalisation.resolve(new DeedPoll(), DEED_ID).toMap())
+        assertThat(FormsForCompletionPersonalisation.resolve(new DeedPoll(), DEED_ID, NO_SLOTS).toMap())
             .containsEntry("publish_to_london_gazette", true);
     }
 
@@ -99,10 +107,26 @@ class FormsForCompletionPersonalisationTest {
         // because Notify creates one only when it is given the bytes. Prose rather than an empty string, so a
         // caseworker can see where the link will appear instead of finding a gap.
         assertThat(FormsForCompletionPersonalisation
-                       .resolve(populatedCase(), FormsForCompletionPersonalisation.DEED_NOT_YET_GENERATED)
+                       .resolve(populatedCase(), FormsForCompletionPersonalisation.DEED_NOT_YET_GENERATED,
+                                NO_SLOTS)
                        .toMap())
             .containsEntry("deed_document", FormsForCompletionPersonalisation.DEED_NOT_YET_GENERATED);
         assertThat(FormsForCompletionPersonalisation.DEED_NOT_YET_GENERATED).isNotBlank();
+    }
+
+    @Test
+    @DisplayName("the caseworker's notes are sent under additional_notes, and no notes is an empty string")
+    void carriesTheCaseworkersNotes() {
+        // The same key ③ and ④ send, so one Notify placeholder spelling serves every template with a notes box.
+        assertThat(FormsForCompletionPersonalisation
+                       .resolve(populatedCase(), DEED_ID,
+                                Map.of(EmailSlot.ADDITIONAL_NOTES, "Please sign in black ink."))
+                       .toMap())
+            .containsEntry("additional_notes", "Please sign in black ink.");
+        // Present and empty rather than absent: a template naming ((additional_notes)) and a personalisation
+        // omitting it is a 400 from Notify, which on the drain is a permanent failure nobody is waiting to read.
+        assertThat(FormsForCompletionPersonalisation.resolve(populatedCase(), DEED_ID, NO_SLOTS).toMap())
+            .containsEntry("additional_notes", "");
     }
 
     @Test
@@ -111,7 +135,7 @@ class FormsForCompletionPersonalisationTest {
         // The property that makes this record's personalisation enumerable rather than hand-maintained: a value
         // this service resolves and never sends is worse than one it never resolves, because the template would
         // render a blank where the applicant expected their reference.
-        assertThat(FormsForCompletionPersonalisation.resolve(populatedCase(), DEED_ID).toMap())
+        assertThat(FormsForCompletionPersonalisation.resolve(populatedCase(), DEED_ID, NO_SLOTS).toMap())
             .hasSize(FormsForCompletionPersonalisation.class.getRecordComponents().length);
     }
 
@@ -122,10 +146,14 @@ class FormsForCompletionPersonalisationTest {
                                                     EmailTemplate.FORMS_FOR_COMPLETION_MINOR)) {
             assertThat(template.resolvedKeys())
                 .isEqualTo(FormsForCompletionPersonalisation.RESOLVED_KEYS);
-            // No slots at all (decision 7), so the resolved keys are the whole personalisation and a client has
-            // nothing it may set. A free-text box would be a template change in notify-0 first.
-            assertThat(template.slots()).isEmpty();
-            assertThat(template.personalisationKeys()).isEqualTo(template.resolvedKeys());
+            // One slot, the notes box ③ and ④ already carry (notify-4c Task 2) rather than a second name for it,
+            // and optional: nothing pre-populates it and the email reads complete without it.
+            assertThat(template.slots()).containsExactly(EmailSlot.ADDITIONAL_NOTES);
+            assertThat(EmailSlot.ADDITIONAL_NOTES.required()).isFalse();
+            assertThat(template.personalisationKeys())
+                .containsExactly(Stream.concat(template.resolvedKeys().stream(), Stream.of("additional_notes"))
+                                     .toArray(String[]::new));
+            assertThat(template.resolves("additional_notes")).isFalse();
             // The document key is resolved too, which is what stops a client nominating which document an
             // applicant is sent.
             assertThat(template.resolves("deed_document")).isTrue();

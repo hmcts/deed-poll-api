@@ -144,9 +144,9 @@ public enum EmailTemplate {
      * referral behind either, so V15's index never sees their rows; V20's case-scoped key is what stops one
      * applicant being sent two different deeds to swear. See {@link EmailExclusionGroup#FORMS_FOR_COMPLETION}.
      *
-     * <p><strong>No slots, and that was measured rather than assumed</strong> -- see
-     * {@link FormsForCompletionPersonalisation}, which also has the reason this email addresses the applicant by
-     * their former name.
+     * <p><strong>One optional slot, {@link EmailSlot#ADDITIONAL_NOTES}</strong> -- the same box ③ and ④ carry, not
+     * a second one meaning the same thing. See {@link FormsForCompletionPersonalisation}, which also has the reason
+     * this email addresses the applicant by their former name.
      *
      * <p><strong>Invites a reply, which an earlier draft of the plan had not noticed.</strong> The source ends
      * "you can reply to this email or call the Deed Poll office", so {@code notify.email-reply-to-id} is required
@@ -158,7 +158,7 @@ public enum EmailTemplate {
         EmailExclusionGroup.FORMS_FOR_COMPLETION,
         true,
         FormsForCompletionPersonalisation.RESOLVED_KEYS,
-        List.of(),
+        List.of(EmailSlot.ADDITIONAL_NOTES),
         FormsForCompletionPersonalisation.DOCUMENT_KEYS),
 
     /**
@@ -183,7 +183,7 @@ public enum EmailTemplate {
         EmailExclusionGroup.FORMS_FOR_COMPLETION,
         true,
         FormsForCompletionPersonalisation.RESOLVED_KEYS,
-        List.of(),
+        List.of(EmailSlot.ADDITIONAL_NOTES),
         FormsForCompletionPersonalisation.DOCUMENT_KEYS);
 
     private final String key;

@@ -426,6 +426,12 @@ public class CaseEmailService {
      * permanent branch -- and this reports that its dependency refused rather than pretending to have rendered
      * something. {@link EmailAvailability#provisioned()} is how the tab knows in advance and says so instead.
      *
+     * <p><strong>A template with a file attached in the Notify portal is rendered on a second call.</strong> Notify
+     * refuses to preview it without a value for the file's placeholder, which a real send fills in itself, so a
+     * refusal naming only such files is retried once with {@link AttachmentStandIns#STAND_IN} under each. A
+     * template without one makes the single call it always did. {@link AttachmentStandIns} has the argument, and
+     * why a key this service owns is never stood in for.
+     *
      * @throws NotFoundError if there is no such case
      * @throws ConflictError if the case is in no state to send this email
      * @throws uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError if the slots are not acceptable
@@ -438,14 +444,32 @@ public class CaseEmailService {
         try {
             return EmailPreview.from(notify.generateTemplatePreview(templateId, composed.personalisation()));
         } catch (NotificationClientException refused) {
-            NotificationFailure verdict = NotificationFailure.classify(refused);
-            // Logged in full here and summarised in the answer: the client's message contains Notify's response,
-            // and this body is rendered by whatever is on the other end.
-            log.warn("Notify would not render {} for case {} ({}, status {})",
-                     template.key(), deedPollId, verdict, refused.getHttpResult(), refused);
-            throw new UpstreamFailureError("GOV.UK Notify could not render the " + template.key()
-                + " template (" + verdict + ", status " + refused.getHttpResult() + ")");
+            Optional<Map<String, Object>> withStandIns =
+                AttachmentStandIns.retryWith(template, composed.personalisation(), refused, json);
+            if (withStandIns.isEmpty()) {
+                throw notRendered(deedPollId, template, refused);
+            }
+            try {
+                return EmailPreview.from(notify.generateTemplatePreview(templateId, withStandIns.get()));
+            } catch (NotificationClientException refusedAgain) {
+                throw notRendered(deedPollId, template, refusedAgain);
+            }
         }
+    }
+
+    /**
+     * A preview Notify would not render, as the 502 the caseworker is shown.
+     */
+    private static UpstreamFailureError notRendered(
+        String deedPollId, EmailTemplate template, NotificationClientException refused) {
+
+        NotificationFailure verdict = NotificationFailure.classify(refused);
+        // Logged in full here and summarised in the answer: the client's message contains Notify's response,
+        // and this body is rendered by whatever is on the other end.
+        log.warn("Notify would not render {} for case {} ({}, status {})",
+                 template.key(), deedPollId, verdict, refused.getHttpResult(), refused);
+        return new UpstreamFailureError("GOV.UK Notify could not render the " + template.key()
+            + " template (" + verdict + ", status " + refused.getHttpResult() + ")");
     }
 
     /**
@@ -1249,12 +1273,11 @@ public class CaseEmailService {
                     deedPoll, cause.requireReferral(), accepted).toMap();
             case CHASE_MISSING_DOCUMENTS ->
                 MissingDocumentsPersonalisation.resolve(deedPoll, accepted).toMap();
-            // No slots at all, so `accepted` is empty here by construction -- EmailSlots.parse has already refused
-            // anything a client tried to send. The one value that is not a column is the deed, which the caller
-            // supplies because a send stores one and a preview must not.
+            // One optional slot, the caseworker's notes. The one value that is neither a column nor a slot is the
+            // deed, which the caller supplies because a send stores one and a preview must not.
             case FORMS_FOR_COMPLETION_ADULT, FORMS_FOR_COMPLETION_MINOR ->
-                FormsForCompletionPersonalisation.resolve(deedPoll, deedDocument.apply(requireDeed(template)))
-                    .toMap();
+                FormsForCompletionPersonalisation.resolve(
+                    deedPoll, deedDocument.apply(requireDeed(template)), accepted).toMap();
         };
         return new Composed(deedPoll, cause, personalisation);
     }

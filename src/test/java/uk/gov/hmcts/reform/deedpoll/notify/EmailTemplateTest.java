@@ -274,15 +274,16 @@ class EmailTemplateTest {
         }
 
         @Test
-        @DisplayName("the forms emails take no slots and carry one document each")
-        void theFormsEmailsTakeNoSlots() {
-            // Decision 7, measured rather than assumed: neither source document carries a caseworker marker of any
-            // style, unlike ③ and ④. EmailSlots.parse therefore refuses anything a client sends, and a free-text
-            // box would be a template change in notify-0 before it could be a slot here -- a slot the Notify
-            // template has no placeholder for makes the send a 400.
+        @DisplayName("the forms emails take the optional notes slot only, and carry one document each")
+        void theFormsEmailsTakeTheNotesSlotOnly() {
+            // notify-4c Task 2. The same slot ③ and ④ carry, not a second name for one box: already optional,
+            // already capped, and rendered by admin with no change. Nothing pre-populates it, so it must stay
+            // optional or the Email tab would refuse every case the template exists for.
             for (EmailTemplate template : new EmailTemplate[]{
                 EmailTemplate.FORMS_FOR_COMPLETION_ADULT, EmailTemplate.FORMS_FOR_COMPLETION_MINOR}) {
-                assertThat(template.slots()).isEmpty();
+                assertThat(template.slots()).containsExactly(EmailSlot.ADDITIONAL_NOTES);
+                assertThat(template.slots()).noneMatch(EmailSlot::required);
+                assertThat(template.slot("additional_notes")).contains(EmailSlot.ADDITIONAL_NOTES);
                 assertThat(template.slot("judges_reason")).isEmpty();
                 // The first templates that carry a file, and each carries exactly one: the deed. The five blank
                 // forms are attached to the Notify template itself, so this service never holds them.

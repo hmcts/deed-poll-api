@@ -155,7 +155,11 @@ unless both its template id and `NOTIFY_EMAIL_REPLY_TO_ID` are set.
 *Forms for completion* and *Forms for completion for a child* are offered while the case's `signatureRequestedDate`
 is null **and** the case's type routes to that email's deed — `Adult` and `AdultTransgender` take LOC020,
 `Minor` and `MinorTransgender` take LOC022, and `DeedOfRelinquishment` and an unknown or unset type are offered
-neither, each with its own sentence. They have **no slots**: there is nothing for a caseworker to write. Sending
+neither, each with its own sentence. They carry one **optional** slot, `additional_notes` — the same box, and the
+same 1,000-character cap, as the two referral-outcome emails — which opens empty and may be sent empty. The notes are
+part of the frozen personalisation, so one `Idempotency-Key` reused with different notes is a **409**, and the
+Notify template has to place `((additional_notes))`: Notify drops a key its template does not name, so without the
+placeholder a caseworker's note never reaches the applicant. Sending
 one deliberately does **not** set `signatureRequestedDate` — who should, and when, is a business question this
 service does not answer.
 
@@ -169,7 +173,10 @@ not be sent a child's covering letter carrying an adult's deed.
 The deed reaches the applicant as a **GOV.UK Notify download link with a confirmation step**, not an attachment —
 the deed carries their name, address and email, so a URL anybody holding it could fetch is the wrong default. The
 five and four static forms the emails also name are attached to the **Notify template**, so this service neither
-stores nor sends them. Both emails invite a reply, so each reads **unprovisioned** unless its template id,
+stores nor sends them. Notify's *preview* nonetheless demands a value for each attached file's placeholder, so a
+preview it refuses for exactly that is retried once with a sentence saying where the link will go under each
+missing key shaped like a file name (`AttachmentStandIns`). A key this service owns is never stood in for, so a
+misspelt `((deed_document))` still fails the preview with a 502, and nothing stood in reaches a send. Both emails invite a reply, so each reads **unprovisioned** unless its template id,
 `NOTIFY_EMAIL_REPLY_TO_ID` *and* `NOTIFY_DOCUMENT_RETENTION_WEEKS` are all set — the first emails to need three
 settings, and the retention has no working default because how long an applicant has to print, gather two
 witnesses and find a commissioner of oaths is not this service's number to guess. It has to be **1 to 78 weeks**,

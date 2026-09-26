@@ -2,7 +2,7 @@
 
 ## Overview
 
-Two code changes that [`notify-4a`](notify-4a-attach-files-to-an-email.md) found on 2026-09-26 while checking ①
+Two code changes that [`notify-4a`](../notify-4a-attach-files-to-an-email.md) found on 2026-09-26 while checking ①
 `forms_for_completion_adult` against the real Notify API. They were split out so that ralphex can run them: the
 rest of 4a needs a person (authoring ② in the Notify portal, and opening a guest-listed inbox).
 
@@ -41,6 +41,9 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 **Measure the baseline before Task 1 and record it.** As at api master after notify-4b (`d21db37`, 2026-09-26)
 it was **2,922 unit tests across 361 classes + 13 integration**, measured at the branch's head commit on
 2026-09-25. Re-measure rather than quoting that.
+
+**Re-measured 2026-09-26 at `12c57da`, before Task 1:** 2,922 unit tests across 361 classes + 13 integration
+(3 classes), 0 skipped, 0 failed (`--rerun-tasks`, counted from the XML). **After Task 1:** 2,945 across 363 + 13. **After Task 2:** 2,950 across 363 + 13.
 
 - **Measure, do not read the exit code.** A run selecting zero tests also exits 0, and a second `gradle test`
   wipes `build/test-results/`. Count from the XML straight after each run, using `--rerun-tasks` when the count is
@@ -82,8 +85,12 @@ provisioned. No test fails today, because `StubNotify` has no notion of an attac
 - Tests, container-free where possible: ①'s preview renders with a stand-in under each attachment; a template
   with no attachments (③, ⑤) makes exactly the calls it makes today; a placeholder that api owns but the
   personalisation lacks is still a 502; and a send carries no stand-in.
-- [ ] a template with Notify attachments previews, api-owned keys are never stood in for, the send path is
+- [x] a template with Notify attachments previews, api-owned keys are never stood in for, the send path is
       unchanged, `StubNotify` distinguishes preview from send, and `./gradlew build` green
+
+      **Done 2026-09-26.** `AttachmentStandIns` reads the 400's `Missing personalisation:` list and retries once,
+      argued in its javadoc over `getTemplateById`: a template with no attachment keeps its single call. It also
+      stands in only for a key shaped like a file name, so a misspelt `deed_documnet` still 502s.
 
 ### Task 2: Give ① and ② the optional additional-notes slot
 
@@ -100,11 +107,20 @@ Read first: `EmailSlot.ADDITIONAL_NOTES`, `EmailTemplate`, and how ③ `applicat
   lands (notify-4a Task 3, finding 4: without it, a note is dropped with nothing failing).
 - Tests: both templates publish the slot as optional; a send with no notes and a send with notes both compose;
   the notes cap is enforced; two journeys differing only in their notes are a 409, not an idempotent 200.
-- [ ] ① and ② carry `additional_notes`, optional, compared by the idempotency check, and `./gradlew build` green
+- [x] ① and ② carry `additional_notes`, optional, compared by the idempotency check, and `./gradlew build` green
+
+      **Done 2026-09-26.** 2,950 unit tests across 363 classes + 13 integration, 0 skipped. The notes are part of
+      the frozen personalisation, so `isTheSameSend` compares them with no change to it: the same `Idempotency-Key`
+      with different notes (or none) is a 409. A *new* key for a forms email already owed still answers 200 with
+      the owed row through V20, exactly as ③ does through V15, so the second journey's notes are not sent.
 
 ### Task 3: Full validation and handoff
 
 - The validation commands with `--rerun-tasks`, counts recorded against the baseline, `skipped` confirmed 0.
 - Tick notify-4a's reference to this plan as done, and record in notify-4a's Task 4 that it is unblocked **once
   Steve has added `((additional_notes))` to ① in Notify**.
-- [ ] counts recorded against the baseline, notify-4a updated, and the Notify edit handed to Steve in one sentence
+- [x] counts recorded against the baseline, notify-4a updated, and the Notify edit handed to Steve in one sentence
+
+      **Done 2026-09-26.** `--rerun-tasks`: 2,950 unit tests across 363 classes + 13 integration (3 classes), 0
+      skipped, 0 failed, against a baseline of 2,922 across 361 + 13. Steve: add `((additional_notes))` to ① in
+      Notify, where the draft places it, or a caseworker's note is dropped with nothing failing.

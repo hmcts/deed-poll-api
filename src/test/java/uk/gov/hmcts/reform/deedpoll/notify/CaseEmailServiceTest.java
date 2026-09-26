@@ -1,6 +1,8 @@
 package uk.gov.hmcts.reform.deedpoll.notify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.tomakehurst.wiremock.verification.LoggedRequest;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -43,6 +45,7 @@ import uk.gov.service.notify.NotificationClientException;
 import uk.gov.service.notify.TemplatePreview;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -50,6 +53,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -1223,6 +1227,154 @@ class CaseEmailServiceTest {
     }
 
     /**
+     * A template with files attached in the Notify portal: previewed with a stand-in under each, sent without one.
+     *
+     * <p>Over {@link StubNotify} rather than a mocked client wherever the difference between a preview and a send is
+     * the point, because that difference is Notify's behaviour and only a stub that reproduces it can fail. The
+     * file names are invented on purpose: nothing in the service may know them.
+     */
+    @Nested
+    @DisplayName("previewing a template with attachments")
+    class PreviewingATemplateWithAttachments {
+
+        private static final String DECLARATION = "LOC021 statutory declaration.pdf";
+
+        private static final String EXHIBIT = "LOC027 exhibit sheet.pdf";
+
+        private final StubNotify stub = new StubNotify();
+
+        private CaseEmailService overHttp;
+
+        @BeforeEach
+        void startStub() {
+            stub.start();
+            overHttp = new CaseEmailService(
+                deedPolls, referrals, notifications, documents, stub.client(), stub.properties(), referralService,
+                caseNotes, deeds, new ObjectMapper());
+        }
+
+        @AfterEach
+        void stopStub() {
+            stub.stop();
+        }
+
+        @Test
+        @DisplayName("renders the adult forms email with a stand-in under each attached file")
+        void rendersAStandInUnderEachAttachment() {
+            storedCase().setType(DeedPollType.Adult);
+            stub.stubTemplateRequiring(formsPlaceholdersAnd(DECLARATION, EXHIBIT));
+
+            EmailPreview preview = overHttp.preview(
+                CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Ring the office."));
+
+            // Twice, once per file: the check page shows where each link goes rather than a 502.
+            assertThat(preview.html().split(Pattern.quote(AttachmentStandIns.STAND_IN), -1)).hasSize(3);
+            assertThat(preview.html()).contains(FormsForCompletionPersonalisation.DEED_NOT_YET_GENERATED);
+            // The first call is exactly what a preview always sent; only the retry carries the stand-ins.
+            List<LoggedRequest> calls = stub.previewRequests();
+            assertThat(calls).hasSize(2);
+            assertThat(calls.get(0).getBodyAsString()).doesNotContain(AttachmentStandIns.STAND_IN);
+            assertThat(calls.get(1).getBodyAsString()).contains(DECLARATION).contains(EXHIBIT);
+            // The caseworker's note is in both calls: the retry copies the composed personalisation, never rebuilds it.
+            assertThat(preview.html()).contains("Ring the office.");
+            assertThat(calls).allSatisfy(call -> assertThat(call.getBodyAsString()).contains("Ring the office."));
+        }
+
+        @Test
+        @DisplayName("previews a template with no attachment in exactly the one call it always made")
+        void makesOneCallWithoutAttachments() {
+            storedCase();
+            refusedReferral();
+
+            overHttp.preview(CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of());
+
+            assertThat(stub.previewRequests()).hasSize(1);
+            assertThat(stub.previewRequests().getFirst().getBodyAsString())
+                .doesNotContain(AttachmentStandIns.STAND_IN);
+        }
+
+        @Test
+        @DisplayName("still 502s a misspelt placeholder, because a stand-in would hide it until the drain")
+        void stillRefusesAMisspeltPlaceholder() {
+            // What a template whose ((deed_document)) was typed wrong looks like from here: a required key api does
+            // not send and that is not a file. Standing in for it would pass the check page and fail every send.
+            storedCase().setType(DeedPollType.Adult);
+            stub.stubTemplateRequiring(formsPlaceholdersAnd(DECLARATION, "deed_documnet"));
+
+            assertThatThrownBy(() -> overHttp.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of()))
+                .isInstanceOf(UpstreamFailureError.class)
+                .hasMessageContaining("status 400");
+            assertThat(stub.previewRequests()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("502s an api-owned key Notify says is missing, and never retries with a stand-in for it")
+        void neverStandsInForAnOwnedKey() throws Exception {
+            // Reached through a mocked client because the composition always supplies its own keys: this is the
+            // rule, stated for the day it does not.
+            storedCase().setType(DeedPollType.Adult);
+            when(notify.generateTemplatePreview(anyString(), any())).thenThrow(missing(
+                FormsForCompletionPersonalisation.DEED_DOCUMENT, DECLARATION));
+
+            assertThatThrownBy(() -> emails.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of()))
+                .isInstanceOf(UpstreamFailureError.class);
+            verify(notify, times(1)).generateTemplatePreview(anyString(), any());
+        }
+
+        @Test
+        @DisplayName("502s when the retry is refused too, and retries only once")
+        void retriesOnlyOnce() throws Exception {
+            storedCase().setType(DeedPollType.Adult);
+            when(notify.generateTemplatePreview(anyString(), any())).thenThrow(missing(DECLARATION));
+
+            assertThatThrownBy(() -> emails.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of()))
+                .isInstanceOf(UpstreamFailureError.class);
+            verify(notify, times(2)).generateTemplatePreview(anyString(), any());
+        }
+
+        @Test
+        @DisplayName("does not retry an outage, which no stand-in answers")
+        void doesNotRetryAnOutage() {
+            storedCase().setType(DeedPollType.Adult);
+            stub.stubPreviewStatus(500);
+
+            assertThatThrownBy(() -> overHttp.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of()))
+                .isInstanceOf(UpstreamFailureError.class)
+                .hasMessageContaining("status 500");
+            assertThat(stub.previewRequests()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("a send after a preview freezes no stand-in, because a real send fills the files in itself")
+        void sendCarriesNoStandIn() {
+            storedCase().setType(DeedPollType.Adult);
+            stub.stubTemplateRequiring(formsPlaceholdersAnd(DECLARATION, EXHIBIT));
+            overHttp.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of());
+            enqueueAnswers(1);
+
+            overHttp.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of(), REQUEST_ID, CASEWORKER);
+
+            // The row is what the drain sends, verbatim: no stand-in text and no key for either file.
+            assertThat(frozenPersonalisation().values()).doesNotContain(AttachmentStandIns.STAND_IN);
+            assertThat(frozenPersonalisation()).doesNotContainKeys(DECLARATION, EXHIBIT);
+            assertThat(stub.emailRequests()).isEmpty();
+        }
+
+        private static String[] formsPlaceholdersAnd(String... attachments) {
+            List<String> placeholders = new ArrayList<>(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.personalisationKeys());
+            placeholders.addAll(List.of(attachments));
+            return placeholders.toArray(String[]::new);
+        }
+
+        /** Notify's 400 for a preview lacking these keys, as the client carries it. */
+        private static NotificationClientException missing(String... keys) {
+            return new NotificationClientException("Status code: 400 {\"status_code\": 400, \"errors\": [{\"error\": "
+                + "\"BadRequestError\", \"message\": \"Missing personalisation: " + String.join(", ", keys) + "\"}]}");
+        }
+    }
+
+    /**
      * The case-driven chase: what makes it applicable, and what it composes without a referral.
      *
      * <p>Container-free like the rest of this class, and here that matters more than usual: the rule under test is
@@ -1931,22 +2083,117 @@ class CaseEmailServiceTest {
         }
 
         @Test
-        @DisplayName("refuses any slot a client sends, because neither template has one")
-        void refusesAnySlot() {
-            // Decision 7 enforced rather than documented. A caseworker cannot add a sentence to a court-authored
-            // email through this API, and a client that tries is told which key was refused rather than having it
-            // silently stripped -- which would be a success and a different email.
+        @DisplayName("freezes the caseworker's notes into the row, stripped")
+        void freezesTheCaseworkersNotes() {
+            // notify-4c Task 2: the one slot either template has, and the same one ③ and ④ carry.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Minor);
+            enqueueAnswers(1);
+
+            emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_MINOR,
+                        Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "  Please sign in black ink.  "),
+                        REQUEST_ID, CASEWORKER);
+
+            assertThat(frozenPersonalisation())
+                .containsEntry(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Please sign in black ink.")
+                .containsEntry(FormsForCompletionPersonalisation.DEED_DOCUMENT, DEED_DOCUMENT_ID);
+        }
+
+        @ParameterizedTest
+        @NullSource
+        @ValueSource(strings = {"", "   "})
+        @DisplayName("freezes an empty, blank or omitted notes box as an empty string, never as a missing key")
+        void freezesNoNotesAsAnEmptyString(String notes) {
+            // A missing key is a permanent 400 on the drain once the Notify template places ((additional_notes)).
+            storedCase().setType(DeedPollType.Adult);
+            enqueueAnswers(1);
+
+            emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                        notes == null ? Map.of() : Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), notes),
+                        REQUEST_ID, CASEWORKER);
+
+            assertThat(frozenPersonalisation()).containsEntry(EmailSlot.ADDITIONAL_NOTES.placeholder(), "");
+        }
+
+        @Test
+        @DisplayName("refuses notes over the cap, before generating a deed or writing a row")
+        void refusesNotesOverTheCap() {
             DeedPoll deedPoll = storedCase();
             deedPoll.setType(DeedPollType.Adult);
 
             assertThatThrownBy(() -> emails.send(
                 CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
-                Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Please hurry."), REQUEST_ID, CASEWORKER))
+                Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(),
+                       "n".repeat(EmailSlot.ADDITIONAL_NOTES.maxLength() + 1)),
+                REQUEST_ID, CASEWORKER))
                 .isInstanceOf(InvalidInputError.class)
                 .satisfies(refused -> assertThat(((InvalidInputError) refused).errors())
                     .extracting(FieldError::field)
                     .containsExactly(EmailSlot.ADDITIONAL_NOTES.placeholder()));
+            // A deed is a once-per-case legal instrument, so a payload refusal must not leave one stored behind it.
+            verifyNoInteractions(deeds);
             neverEnqueues();
+        }
+
+        @Test
+        @DisplayName("refuses any other slot a client sends, naming it rather than stripping it")
+        void refusesAnyOtherSlot() {
+            // The judge's words are ③'s and ④'s, and there is no judge behind this email. A client that sends the
+            // slot is told which key was refused rather than having it silently stripped -- which would be a
+            // success and a different email.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                Map.of(EmailSlot.JUDGES_REASON.placeholder(), "Please hurry."), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(InvalidInputError.class)
+                .satisfies(refused -> assertThat(((InvalidInputError) refused).errors())
+                    .extracting(FieldError::field)
+                    .containsExactly(EmailSlot.JUDGES_REASON.placeholder()));
+            neverEnqueues();
+        }
+
+        @Test
+        @DisplayName("409s a request id reused for different notes, and answers the same notes with the row")
+        void comparesTheNotesWhenARequestIdIsReused() {
+            // The idempotency comparison is over the frozen personalisation, so the notes are part of it exactly as
+            // they are for ③: the same key with different notes is a different email, and answering it with the
+            // first row would discard what the caseworker wrote the second time.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+            enqueueAnswers(1);
+            emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                        Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Ring the office."), REQUEST_ID, CASEWORKER);
+
+            Notification existing = new Notification();
+            existing.setId(UUID.fromString("88888888-8888-8888-8888-888888888888"));
+            existing.setDeedPollId(CASE_ID);
+            existing.setRequestId(REQUEST_ID);
+            existing.setTemplate(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.name());
+            existing.setExclusionGroup(EmailExclusionGroup.FORMS_FOR_COMPLETION.name());
+            existing.setRecipient(RECIPIENT);
+            existing.setPersonalisation(frozenPersonalisation());
+            existing.setCreatedBy("A Caseworker");
+            when(notifications.findByDeedPollIdAndRequestId(CASE_ID, REQUEST_ID)).thenReturn(Optional.of(existing));
+            enqueueAnswers(0);
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Write to the office."), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage(CaseEmailService.REQUEST_ALREADY_USED);
+            // And so is an empty box, which is not the same email as one carrying a note.
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of(), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage(CaseEmailService.REQUEST_ALREADY_USED);
+
+            SendReceipt retry = emails.send(
+                CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Ring the office."), REQUEST_ID, CASEWORKER);
+            assertThat(retry.enqueued()).isFalse();
+            assertThat(retry.id()).isEqualTo(existing.getId());
         }
 
         @Test
@@ -2292,8 +2539,7 @@ class CaseEmailServiceTest {
      */
     private static Map<String, Object> minimumSlots(EmailTemplate template) {
         return switch (template) {
-            // The forms emails have no slots at all, so an empty payload is not merely the minimum -- it is the
-            // only payload either of them accepts.
+            // The forms emails' one slot is the optional notes box, so like ③ and ④ they accept an empty payload.
             case APPLICATION_REJECTED, REQUEST_CONFIRMATION_TO_PROCEED, FORMS_FOR_COMPLETION_ADULT,
                  FORMS_FOR_COMPLETION_MINOR -> Map.of();
             case CHASE_MISSING_DOCUMENTS -> Map.of(

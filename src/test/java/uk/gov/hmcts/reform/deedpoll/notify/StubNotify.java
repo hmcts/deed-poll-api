@@ -1,8 +1,14 @@
 package uk.gov.hmcts.reform.deedpoll.notify;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.client.ResponseDefinitionBuilder;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.github.tomakehurst.wiremock.extension.ResponseDefinitionTransformerV2;
+import com.github.tomakehurst.wiremock.http.ResponseDefinition;
+import com.github.tomakehurst.wiremock.stubbing.ServeEvent;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
 import uk.gov.service.notify.NotificationClient;
 
@@ -75,7 +81,8 @@ public final class StubNotify {
     // fixed one. The reference is the outbox row id (plan decision 14 and task 5), and a stub that echoed
     // something else would let a sender that sent the wrong reference pass.
     private final WireMockServer server =
-        new WireMockServer(WireMockConfiguration.options().dynamicPort().globalTemplating(true));
+        new WireMockServer(WireMockConfiguration.options().dynamicPort().globalTemplating(true)
+            .extensions(new RequiredPlaceholders()));
 
     public void start() {
         server.start();
@@ -157,6 +164,23 @@ public final class StubNotify {
     }
 
     /**
+     * A Notify whose template has these placeholders, all required: a preview lacking any of them is Notify's 400,
+     * and a send is accepted either way.
+     *
+     * <p><strong>That asymmetry is the real Notify's, measured in notify-4a Task 3.</strong> A file attached to a
+     * template in the portal is a placeholder named after the file, and a real send fills it in as a download link
+     * while the preview endpoint answers {@code Missing personalisation: <names>} without a value for it. A stub that
+     * rendered every preview would let a service that previewed such a template pass a test and 502 in production.
+     *
+     * <p>The rendering prints each placeholder's value, as Notify does, so a test can see what stood in for it.
+     */
+    public void stubTemplateRequiring(String... placeholders) {
+        server.stubFor(post(urlPathMatching("/v2/template/[^/]+/preview")).willReturn(
+            aResponse().withTransformers(RequiredPlaceholders.NAME)
+                .withTransformerParameter(RequiredPlaceholders.REQUIRED, List.of(placeholders))));
+    }
+
+    /**
      * Whatever Notify should answer a preview with.
      *
      * <p>400 is the one that matters most: it is what a real Notify answers for the placeholder template ID
@@ -222,18 +246,80 @@ public final class StubNotify {
             RETENTION_WEEKS);
     }
 
+    /**
+     * Answers a preview the way Notify does for a template whose placeholders are all required.
+     *
+     * <p>Applied only to the stub {@link #stubTemplateRequiring} writes, so every other test's preview is
+     * unchanged. The request's personalisation is read as JSON rather than matched as text, because a placeholder
+     * named after a file has spaces and dots in it.
+     */
+    private static final class RequiredPlaceholders implements ResponseDefinitionTransformerV2 {
+
+        static final String NAME = "stub-notify-required-placeholders";
+
+        static final String REQUIRED = "required";
+
+        private static final ObjectMapper JSON = new ObjectMapper();
+
+        @Override
+        public String getName() {
+            return NAME;
+        }
+
+        @Override
+        public boolean applyGlobally() {
+            return false;
+        }
+
+        @Override
+        public ResponseDefinition transform(ServeEvent event) {
+            @SuppressWarnings("unchecked")
+            List<String> required = (List<String>) event.getTransformerParameters().get(REQUIRED);
+            JsonNode personalisation;
+            try {
+                personalisation = JSON.readTree(event.getRequest().getBodyAsString()).path("personalisation");
+            } catch (JsonProcessingException unreadable) {
+                return errorResponse(400, "the stub could not read the request").build();
+            }
+            List<String> missing = required.stream().filter(key -> !personalisation.has(key)).toList();
+            if (!missing.isEmpty()) {
+                // Notify's own error class and wording, so the client and the service read it as the real one.
+                return errorResponse(400, "BadRequestError", "Missing personalisation: " + String.join(", ", missing))
+                    .build();
+            }
+            String html = required.stream()
+                .map(key -> "<p>" + personalisation.path(key).asText() + "</p>")
+                .collect(Collectors.joining());
+            return aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("""
+                {
+                  "id": "%s",
+                  "type": "email",
+                  "version": %d,
+                  "body": %s,
+                  "subject": "Forms for completion",
+                  "html": %s
+                }
+                """.formatted(TEMPLATE_ID, TEMPLATE_VERSION, quote(html.replaceAll("<[^>]*>", "")), quote(html)))
+                .build();
+        }
+    }
+
     /** A 201 with a JSON body -- what the real Notify answers a send with, and what its client insists on. */
     private static ResponseDefinitionBuilder createdJson(String body) {
         return aResponse().withStatus(201).withHeader("Content-Type", "application/json").withBody(body);
     }
 
     private static ResponseDefinitionBuilder errorResponse(int status, String message) {
+        return errorResponse(status, "StubNotifyError", message);
+    }
+
+    private static ResponseDefinitionBuilder errorResponse(int status, String error, String message) {
         return aResponse()
             .withStatus(status)
             .withHeader("Content-Type", "application/json")
             .withBody("""
-                {"status_code": %d, "errors": [{"error": "StubNotifyError", "message": %s}]}
-                """.formatted(status, quote(message)));
+                {"status_code": %d, "errors": [{"error": %s, "message": %s}]}
+                """.formatted(status, quote(error), quote(message)));
     }
 
     /** JSON-quotes a value, so an html body full of angle brackets and quotes survives being embedded. */
