@@ -73,7 +73,7 @@ java:
     # none, and this chart deliberately names no Notify *secret* because a chart naming a secret the vault does
     # not hold fails to deploy. Adding the key is blocked on `azure-access#8111`, which puts Steve in the
     # `DTS Deed Poll` group so the secret can be written at all. **Until that lands, these templates are offered
-    # and every send fails.** That was already true of ③ before this file listed ⑤; it is now true of both.
+    # and every send fails.** That was already true of ③ before this file listed ⑤ and ④; it is now true of all three.
     #
     # **These are the non-prod ids and prod must not inherit them.** There is no prod Notify service yet, so
     # there is no second value to set here; a structural Helm conditional is not the answer because
@@ -97,8 +97,10 @@ java:
     # A blank one is the dangerous case rather than a wrong one: Notify **silently drops** it and sends from
     # no-reply, so ⑤'s "reply to this email" sentence would point nowhere while the email still went out. An
     # unrecognised id is a loud 400 instead. That asymmetry is why `isProvisioned` gates on it.
-    #
-    # ④ `request-confirmation-to-proceed` is deliberately **absent**: its template has not been authored, so its
-    # id is unknown and it stays on the placeholder — which correctly reports it unprovisioned rather than
-    # offering a send that cannot render. This reply-to is already in place for it.
     NOTIFY_EMAIL_REPLY_TO_ID: aabceef1-63e4-4414-9554-a24b0be967d7
+    # ④ Request confirmation to proceed, authored 2026-09-26 (version 1) and verified by reading it back through
+    # `GET /v2/template/{id}`: all ten placeholders match `RequestConfirmationToProceedPersonalisation`. Two
+    # previews confirmed that `is_minor` works as a JSON boolean ("your details" for an adult, "your child's
+    # details" for a minor) and that each case gets only its own refund paragraph. It invites a reply, so it
+    # needs the reply-to above, which is already set.
+    NOTIFY_TEMPLATE_REQUEST_CONFIRMATION_TO_PROCEED: a58c5a8c-7727-4d1f-af08-4953d9f3d33e
