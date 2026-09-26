@@ -5,12 +5,13 @@
 the older statements that plans 02/03 are unwritten.
 
 Rewritten **2026-09-20**; figures and plan states refreshed **2026-09-24** during the email-case-notes review, and
-again **2026-09-25** when notify-6 completed.
-The narrative below still needs a proper rewrite — it was written before notify-3 merged. **Read this before
-restarting the loop.**
+again **2026-09-25** when notify-6 completed. **The Notify sections were refreshed 2026-09-26**, after every
+Notify plan except notify-4a had merged. The older narrative further down ("What is built" onwards) still needs a
+proper rewrite, and **its test figures are per-branch measurements from before those merges**, so re-measure
+rather than quote them. **Read this before restarting the loop.**
 
 The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1, notify-5,
-notify-3 and notify-3b are merged on `master`. notify-5's four tasks capture the exact subject and plain-text body, provide
+notify-3, notify-3b, notify-6, notify-4b and notify-4c are all merged on `master`; only notify-4a is open. notify-5's four tasks capture the exact subject and plain-text body, provide
 the case-scoped correspondence read, return availability, history and slot defaults from the existing Email-tab
 GET, and pin the public wording and cross-case security boundary. notify-3 sends the confirmation email itself,
 with one referral-outcome email per referral enforced by the database.
@@ -19,11 +20,9 @@ with one referral-outcome email per referral enforced by the database.
 
 | Where | What is there |
 |---|---|
-| `master` / `origin/master` | notify-1, notify-5, notify-3 and **notify-3b** complete and merged in PRs #29, #30, #38 and #42, plus three small Notify fixes in #43, #44 and #45 — `applied_on_paper`, the measured JSON boolean, and never printing the API key |
-| `email-case-notes` | complete, filed in `plans/completed/`, **unmerged** — one case note when an email is enqueued and one when it terminally fails. **No contract delta**: no migration, no DTO field and no endpoint, so every count below except the test figures is the same as `master`'s |
-| `notify-6-chase-missing-documents` | complete, **unmerged**, four tasks done 2026-09-24/25 — the fifth email, the case-driven chase a caseworker may send more than once. **This one does have a contract delta**: migration **V19**, and a required `Idempotency-Key` UUID header on the send. Operation counts do not move (34 caseworker, 5 judicial) — a header is part of an operation, not one of its own. **Not stacked on `email-case-notes`**, so their test figures are never cumulative |
-| `notify-4b-generate-the-deed` | complete, filed in `plans/completed/`, **unmerged**, five tasks done 2026-09-25 — the two *Forms for completion* emails, the LOC020/LOC022 generator over the vendored `.docx` templates, and the deed stored once per case. **Contract delta**: migration **V20** (the case-scoped exclusion-group key), two new `EmailTemplate` members, and `NOTIFY_DOCUMENT_RETENTION_WEEKS`. Operation counts do not move (34 caseworker, 5 judicial) — the two emails are templates on an existing path, not new routes. **notify-4a's Task 1 landed inside it**: `DocumentUploads`, the drain-time Notify upload seam. The spike is discharged — no new library, JDK `java.util.zip` and `javax.xml`, docx4j and POI both measured and rejected |
-| `notify-4c-preview-attachments-and-notes` | complete, filed in `plans/completed/`, **unmerged**, three tasks done 2026-09-26 — a template with files attached in the Notify portal can now be previewed (`AttachmentStandIns` answers Notify's `Missing personalisation` 400 with one preview-only retry), and the two forms emails gain the optional `additional_notes` slot. **No contract delta beyond the slot**: no migration, no endpoint, operation counts unchanged (34 caseworker, 5 judicial). 2,950 unit tests across 363 classes + 13 integration |
+| `master` / `origin/master` | **Everything.** notify-1, -5, -3 and -3b (PRs #29, #30, #38, #42), the three small Notify fixes (#43–#45: `applied_on_paper`, the measured JSON boolean, never printing the API key), the email case notes (#46, #48), notify-6 (#49, #50), the 4a/4b split (#51), notify-4b (#52) and notify-4c (#54). No Notify work sits on an unmerged branch |
+| [`plans/notify-4a-attach-files-to-an-email.md`](plans/notify-4a-attach-files-to-an-email.md) | the one open Notify plan. **All five tasks are ticked** (#56–#58): ① was sent for real, local admin → local api → real Notify, on 2026-09-26. It stays open only for ②'s LOC024 attachment, and Task 5 is the handover table of what stands between ① / ② and AAT |
+| `charts/deed-poll-api/values.yaml` | sets the ③ `b2cb5754-…`, ④ `a58c5a8c-…` (#59) and ⑤ `a67e7dd1-…` template ids and `NOTIFY_EMAIL_REPLY_TO_ID`. ① and ② are **deliberately not set** (4a's decision 7) until the deed has a durable store |
 
 V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 adds the
 nullable rendered subject and plain-text body. Only a definite permanent refusal permits a replacement
@@ -33,7 +32,7 @@ row; its failed history remains unchanged when the replacement is sent.
 
 | | |
 |---|---|
-| Flyway migrations | **18 on `master`**, notify-3b having merged — V14 adds the nullable referral owner subjects, V15 the notification exclusion group, V16 the referral's four confirmation columns, V17 the case's `awaitingConfirmationSince` read-model and V18 the correction to V16's partial index. `email-case-notes` adds none; **`notify-6` adds V19**, the notification's non-null `requestId` with a per-row backfill and a `("deedPollId", "requestId")` unique index; **`notify-4b` adds V20**, the partial `("deedPollId", "exclusionGroup")` key over the groups `EmailExclusionGroup.exclusivePerCase()` names — which is what stops one applicant being sent both deeds |
+| Flyway migrations | **20 on `master`** (V1–V20), notify-6 and notify-4b having merged. Earlier wording, kept for the per-migration detail — V14 adds the nullable referral owner subjects, V15 the notification exclusion group, V16 the referral's four confirmation columns, V17 the case's `awaitingConfirmationSince` read-model and V18 the correction to V16's partial index. `email-case-notes` adds none; **`notify-6` adds V19**, the notification's non-null `requestId` with a per-row backfill and a `("deedPollId", "requestId")` unique index; **`notify-4b` adds V20**, the partial `("deedPollId", "exclusionGroup")` key over the groups `EmailExclusionGroup.exclusivePerCase()` names — which is what stops one applicant being sent both deeds |
 | Caseworker endpoints | **34 across 21 paths** on `master`, over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures, and on `notify-6` re-asserts the 34 **inside the test that proves the new send header is published**, because a header is the kind of change that looks like it should have added an operation |
 | Judicial endpoints | **5**, `referrals-api-6` having merged — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
@@ -85,21 +84,33 @@ delta**: the judicial operation count is **4 → 5** with one new response schem
 while `JudicialReferralSummary` is reused unchanged and the caseworker 33 does not move. Neither owner id is
 published anywhere.
 
-## The Notify series: six api plans, and the order they should run in
+## The Notify series: seven api plans, six of them merged
 
-The original five are on `master` as of PR #26; notify-6 was drafted on 2026-09-20 and completed on 2026-09-25 on
-its own branch, unmerged. The numbering is the order they were written, **not** the order to build them:
+The numbering is the order they were written, **not** the order they were built:
 
 ```
-notify-1  the send path                     COMPLETE
-notify-5  what was sent, and when            case correspondence history   COMPLETE
-notify-3  request confirmation to proceed    three exclusive templates     COMPLETE (PR #38, merged)
-notify-3b track the applicant's reply                                      COMPLETE (PR #42, merged)
-notify-6  chase missing documents            case-driven, repeatable       COMPLETE (branch, unmerged)
-notify-4a attach files to an email           the Notify upload seam        Task 1 COMPLETE (inside 4b); 3-4 need a person
-notify-4b generate the deed                  LOC020 and LOC022 from a case COMPLETE (branch, unmerged)
-notify-4c preview attachments, forms notes   split out of 4a               COMPLETE (branch, unmerged)
+notify-1  the send path                     COMPLETE (PR #29)
+notify-5  what was sent, and when            case correspondence history   COMPLETE (PR #30)
+notify-3  request confirmation to proceed    three exclusive templates     COMPLETE (PR #38)
+notify-3b track the applicant's reply                                      COMPLETE (PR #42)
+notify-6  chase missing documents            case-driven, repeatable       COMPLETE (PR #50)
+notify-4b generate the deed                  LOC020 and LOC022 from a case COMPLETE (PR #52)
+notify-4c preview attachments, forms notes   split out of 4a               COMPLETE (PR #54)
+notify-4a attach files to an email           the Notify upload seam        all tasks ticked; open for ②'s LOC024
 ```
+
+**Every template is authored on the non-prod Notify service**, and each was read back through
+`GET /v2/template/{id}` rather than taken on trust:
+
+```
+③ application-rejected             b2cb5754-591d-40c0-b961-b2823a5792eb   in the chart
+④ request-confirmation-to-proceed  a58c5a8c-7727-4d1f-af08-4953d9f3d33e   in the chart (2026-09-26, two previews)
+⑤ chase-missing-documents          a67e7dd1-0f8c-4366-a1de-ca5fbc24ec98   in the chart
+① forms-for-completion-adult       91a89945-bfa6-4423-86f5-be6f1c782aa5   sent for real locally; not in the chart
+② forms-for-completion-minor       a2500c11-b282-48c3-a196-9f5700d13c91   LOC024 not attached yet; not in the chart
+```
+
+The drafts behind them are in deed-poll-admin's `.business_context/notify-templates/`.
 
 `notify-4` was split into `notify-4a` (attaching a file to an email) and `notify-4b` (generating the deed); the
 single file no longer exists.
@@ -109,11 +120,13 @@ to emails; shipping that while a permanent failure is still invisible means an a
 receives their deed forms and a court that cannot tell. notify-5 also depends on nothing from `notify-0`,
 so it can run while template authoring is still outstanding — which no other plan in the series can.
 
-Four things a session should hold before touching any of them:
+Five things a session should hold before touching any of them:
 
-1. **Nothing can send a real email, and preview cannot render, until `notify-0`.** No Notify service
-   exists for deed poll: no API key, no templates, no template IDs. That is expected, not a defect;
-   notify-1 task 1 establishes the placeholder convention. `notify-0` is Steve's.
+1. **`notify-0` is done locally but not in AAT.** The non-prod Notify service, its templates and a
+   team-and-guest-list key exist, and the key lives in `cft-workspace/local-notes/deed-poll-api/notify-nonprod.env`.
+   **AAT has no key**: the `deed-poll-aat` vault grants write only to the `DTS Deed Poll` group, which has no
+   members until azure-access#8111 merges. Until then ③, ④ and ⑤ are offered in AAT and every send fails
+   terminally with `Empty key`, visibly (a case note and a `Failed` row).
 2. **notify-3 re-keys notify-1 task 7's index, which is now V12.** It must carry V12's null-safe
    permanent-failure predicate through unchanged rather than reconstructing it. Both plans carry the
    reciprocal note. Getting this wrong silently changes which rows the partial index covers.
@@ -126,7 +139,8 @@ Four things a session should hold before touching any of them:
    the rendered email comes back inside the send acceptance: history is exact at no extra Notify call and
    nothing against the rate limit. Confirmed with `javap` against `6.2.0-RELEASE`. If that turns out to be
    wrong, the plan's cost changes completely.
-5. **notify-6's template assumption is discharged, and its provisioning gap is not.** The chase template was
+5. **notify-6's template assumption is discharged, and so is its provisioning gap** (the chart now sets the
+   chase id and the reply-to; the rest of this point is the history). The chase template was
    read back out of Notify on 2026-09-24 — UUID `a67e7dd1-0f8c-4366-a1de-ca5fbc24ec98`, exactly five
    placeholders, `documents_required` unconditionally required — so the plan needed no amendment. But the
    **reply-to id is Steve's word, not read-back evidence** (Notify publishes no read-only API for reply-to
