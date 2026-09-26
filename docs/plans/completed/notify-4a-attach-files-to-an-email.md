@@ -1,9 +1,17 @@
 # notify-4a — attach files to an email
 
+**Filed as complete on 2026-09-26, with one item still open, owned by Steve: ②'s LOC024 attachment.** Every task
+is ticked and the code is all on `master` (Task 1 inside notify-4b, #52; the rest #56–#58). ① was sent for real
+end to end. ② (`a2500c11-…`) is authored, but it holds a typed `((LOC024))` with no file behind it, so Notify
+would refuse every send of ② until the file, which has been requested from the team, is attached in the portal.
+Once it is, read the template back with `GET /v2/template/{id}` and check the key has become a `.pdf` name,
+since `AttachmentStandIns` only stands in for file-shaped keys. Task 3's note has the detail, and Task 5's table
+is still the list of what stands between ① / ② and AAT.
+
 ## Overview
 
 The first half of the old `notify-4-forms-for-completion.md`, split on 2026-09-25. **Rewritten 2026-09-26** after
-[`notify-4b`](completed/notify-4b-generate-the-deed.md) merged (api #52), because two things made most of the
+[`notify-4b`](notify-4b-generate-the-deed.md) merged (api #52), because two things made most of the
 original plan unnecessary:
 
 1. **The five static forms are attached to the template in GOV.UK Notify.** Steve found this on 2026-09-25 while
@@ -22,7 +30,7 @@ original plan unnecessary:
 - **~~notify-4c Task 2: ① and ② gain the optional `additional_notes` slot~~ Done 2026-09-26.** By Steve's decision on 2026-09-26. That also
   removes notify-4b flag 6's empty compose page.
 
-Both are ordinary code, so they are in their own plan, [`notify-4c`](completed/notify-4c-preview-attachments-and-notes.md),
+Both are ordinary code, so they are in their own plan, [`notify-4c`](notify-4c-preview-attachments-and-notes.md),
 which ralphex can run. **notify-4c is merged (api #54, 2026-09-26): 2,956 unit tests across 363 classes + 13 integration, 0 skipped, after its review.** **What stays here needs a person**: authoring ② in the portal (Task 3) and a guest-listed
 inbox someone has to open (Task 4). Do not run this plan under ralphex.
 
@@ -38,7 +46,7 @@ inbox someone has to open (Task 4). Do not run this plan under ralphex.
 
 `Unknown` is offered nothing: sending the wrong deed means swearing the wrong legal instrument, so it has no safe
 default. The content draft, now matching this table, is
-[`deed-poll-admin/.business_context/notify-templates/forms-for-completion.md`](../../../deed-poll-admin/.business_context/notify-templates/forms-for-completion.md).
+[`deed-poll-admin/.business_context/notify-templates/forms-for-completion.md`](../../../../deed-poll-admin/.business_context/notify-templates/forms-for-completion.md).
 
 **Notify is where a wrong attachment gets through, and api cannot catch it.** api decides only which *template*
 a case gets. The files attached to each template are portal configuration, so LOC023 attached to ① would reach
@@ -109,7 +117,7 @@ Read first: `NotifyEmailSender.send`, `NotificationOutbox`, and decisions 3, 4, 
       unchanged, an unreadable document is retried and an oversized one fails terminally, both with useful
       messages, and `./gradlew build` green
 
-      **Done 2026-09-25 by [notify-4b](completed/notify-4b-generate-the-deed.md) Task 4, not by this plan**, and amended
+      **Done 2026-09-25 by [notify-4b](notify-4b-generate-the-deed.md) Task 4, not by this plan**, and amended
       here in its Task 5 so nobody builds the seam twice. 4b's Task 4 needed a document reference to become a
       `prepareUpload` at drain time and was told not to wait for this plan; after the Notify discovery that the
       five static forms are attached to the *template* rather than supplied by api, the seam was a handful of
@@ -264,7 +272,7 @@ Read first: decision 7, and the content draft's "How the right forms reach the r
       | # | Blocker | Owner | State on 2026-09-26 | Blocks |
       |---|---|---|---|---|
       | 1 | **AAT has no Notify key** (flag 1) | DTS platform reviewers of `hmcts/azure-access`; **Steve** chases, then writes the vault secret | azure-access#8111 open, review required | **Every** email in AAT, not only ① and ② |
-      | 2 | **The deed store is local pod disk** (flag 2) | **Steve / deed-poll team**: [plan 03](deed-poll-api-03-cdam-documents.md) (CDAM), after [plan 02](deed-poll-api-02-ccd-foundation.md) (CCD foundation) and CCD + CDAM onboarding | Both plans drafted, no tasks started; onboarding identifiers unconfirmed | ① and ② in any deployed environment |
+      | 2 | **The deed store is local pod disk** (flag 2) | **Steve / deed-poll team**: [plan 03](../deed-poll-api-03-cdam-documents.md) (CDAM), after [plan 02](../deed-poll-api-02-ccd-foundation.md) (CCD foundation) and CCD + CDAM onboarding | Both plans drafted, no tasks started; onboarding identifiers unconfirmed | ① and ② in any deployed environment |
       | 3 | **② is missing LOC024** (Task 3) | **Steve**, who has asked the team for the file, then attaches it in the portal | Authored 2026-09-26 (`a2500c11-…`, v5); `((LOC024))` is typed, not attached | Every send of ②, and ②'s check page |
       | 4 | **The chart values** (decision 7) | **deed-poll team**, and only once 1 and 2 have cleared | Deliberately not set | Two lines: `NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_ADULT` / `_MINOR` and `NOTIFY_DOCUMENT_RETENTION_WEEKS: 26` |
       | 5 | **Relinquishment forms unknown** (flag 3) | **The Deed Poll office**, asked by Steve | Open | ③′ only (decision 4). **Does not block ① or ②** |
@@ -297,7 +305,7 @@ Read first: decision 7, and the content draft's "How the right forms reach the r
 2. **`DOCUMENT_STORE_ROOT` is local pod disk**, which is lost on restart and not shared between replicas. The
    deed is written through `DocumentStore` at send time and read back at drain time, so in AAT a restart between
    the two loses it. The read then retries as `TEMPORARY` until it lands on `Failed`, still holding V20's slot.
-   **A deployment blocker for ① and ②.** Durable storage is now [plan 03](deed-poll-api-03-cdam-documents.md)
+   **A deployment blocker for ① and ②.** Durable storage is now [plan 03](../deed-poll-api-03-cdam-documents.md)
    (CDAM), drafted 2026-09-26; see Task 5 for its dependencies and the interim-store question.
 3. **Which forms a deed of relinquishment needs is unknown**, and so is whether it needs a generated deed.
    Decision 4 waits on it.
