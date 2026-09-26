@@ -70,7 +70,8 @@ class AttachmentStandInsTest {
         // A key nobody owns that is not a file: api's misspelling, not the portal's upload.
         "deed_documnet",
         "LOC021_0226.pdf, deed_documnet",
-        // A slot another template owns, which this one does not send either.
+        // This template's own slot. The file-name shape already refuses it: every key api owns is snake_case, so the
+        // ownership test in retryWith is a second guard that no key declared today can reach on its own.
         "additional_notes",
     })
     @DisplayName("stands in for nothing when any missing key is not an attached file")

@@ -19,6 +19,7 @@ with one referral-outcome email per referral enforced by the database.
 | `email-case-notes` | complete, filed in `plans/completed/`, **unmerged** — one case note when an email is enqueued and one when it terminally fails. **No contract delta**: no migration, no DTO field and no endpoint, so every count below except the test figures is the same as `master`'s |
 | `notify-6-chase-missing-documents` | complete, **unmerged**, four tasks done 2026-09-24/25 — the fifth email, the case-driven chase a caseworker may send more than once. **This one does have a contract delta**: migration **V19**, and a required `Idempotency-Key` UUID header on the send. Operation counts do not move (34 caseworker, 5 judicial) — a header is part of an operation, not one of its own. **Not stacked on `email-case-notes`**, so their test figures are never cumulative |
 | `notify-4b-generate-the-deed` | complete, filed in `plans/completed/`, **unmerged**, five tasks done 2026-09-25 — the two *Forms for completion* emails, the LOC020/LOC022 generator over the vendored `.docx` templates, and the deed stored once per case. **Contract delta**: migration **V20** (the case-scoped exclusion-group key), two new `EmailTemplate` members, and `NOTIFY_DOCUMENT_RETENTION_WEEKS`. Operation counts do not move (34 caseworker, 5 judicial) — the two emails are templates on an existing path, not new routes. **notify-4a's Task 1 landed inside it**: `DocumentUploads`, the drain-time Notify upload seam. The spike is discharged — no new library, JDK `java.util.zip` and `javax.xml`, docx4j and POI both measured and rejected |
+| `notify-4c-preview-attachments-and-notes` | complete, filed in `plans/completed/`, **unmerged**, three tasks done 2026-09-26 — a template with files attached in the Notify portal can now be previewed (`AttachmentStandIns` answers Notify's `Missing personalisation` 400 with one preview-only retry), and the two forms emails gain the optional `additional_notes` slot. **No contract delta beyond the slot**: no migration, no endpoint, operation counts unchanged (34 caseworker, 5 judicial). 2,950 unit tests across 363 classes + 13 integration |
 
 V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 adds the
 nullable rendered subject and plain-text body. Only a definite permanent refusal permits a replacement
@@ -36,9 +37,9 @@ row; its failed history remains unchanged when the replacement is sent.
 | Docker-free CI | **1,923 unit tests on `notify-4b`** across 254 classes, measured with `INTEGRATION_TESTS_ENABLED=false`; the other **999** are in the container-backed classes, notify-4b having added two (`DeedDocumentServiceTest` and the forms nest of `CaseworkerEmailControllerTest` — the latter pre-existing as a class). `notify-6` reads 1,739 of 2,716 in 33 classes. Everything about the deed generator, the routing, the escaping and the exclusion-group flag runs in CI: the container-backed rules are the enqueue statement's conflict paths and the stored-once-per-case claim, and each has a container-free companion. `build.gradle` carries the history and instructs the next plan to re-measure |
 | `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `notify-4b` after its review, both with Docker and Docker-free (2026-09-25), on `notify-6` from cold (2026-09-25), on `email-case-notes` after its review (2026-09-24), and on `master` after notify-3b. **Wall clock is not a regression signal**: the same Docker build measured 35m 32s and 3m 58s on identical code, because container startup under this Docker configuration varies by an order of magnitude |
 
-**Twenty-four** plans are in [`plans/completed/`](plans/completed/) — the six added since this section was
-last rewritten are the saved-query publishing gate, notify-3, notify-3b, the email case notes, notify-6 and
-notify-4b. The arc since plan 01: the domain gaps
+**Twenty-five** plans are in [`plans/completed/`](plans/completed/) — the seven added since this section was
+last rewritten are the saved-query publishing gate, notify-3, notify-3b, the email case notes, notify-6,
+notify-4b and notify-4c. The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
 then the original referrals feature in four completed plans — create/withdraw, claim/direction/close,
 `currentReferralState`, and the judicial surface — plus two CI plans and the ACR migration.
@@ -91,8 +92,9 @@ notify-5  what was sent, and when            case correspondence history   COMPL
 notify-3  request confirmation to proceed    three exclusive templates     COMPLETE (PR #38, merged)
 notify-3b track the applicant's reply                                      COMPLETE (PR #42, merged)
 notify-6  chase missing documents            case-driven, repeatable       COMPLETE (branch, unmerged)
-notify-4a attach files to an email           the Notify upload seam        Task 1 COMPLETE (inside 4b); 2-3 open
+notify-4a attach files to an email           the Notify upload seam        Task 1 COMPLETE (inside 4b); 3-4 need a person
 notify-4b generate the deed                  LOC020 and LOC022 from a case COMPLETE (branch, unmerged)
+notify-4c preview attachments, forms notes   split out of 4a               COMPLETE (branch, unmerged)
 ```
 
 `notify-4` was split into `notify-4a` (attaching a file to an email) and `notify-4b` (generating the deed); the
@@ -216,7 +218,8 @@ What it does **not** give, and each of these is a real constraint on what a sess
    default because how long an applicant needs is a business decision — and which must be **1 to 78 weeks**, the
    range Notify accepts and `NotifyProperties.retention` enforces, because anything else reads as unconfigured and
    the Email tab greys the two forms emails out. `NOTIFY_EMAIL_REPLY_TO_ID` is already in the chart and serves
-   both.
+   both. notify-4c hands over one Notify edit: place `((additional_notes))` in ① (and in ② when it is authored),
+   or a caseworker's note is dropped with nothing failing.
    The checklist is `../deed-poll-admin/.business_context/NOTIFY_PROVISIONING_REQUEST.md`, corrected and
    merged 19 September. **All five Notify plans depend on this and none of them can be demonstrated
    without it.**

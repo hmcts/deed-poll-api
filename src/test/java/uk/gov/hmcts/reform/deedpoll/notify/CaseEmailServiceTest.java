@@ -1264,7 +1264,9 @@ class CaseEmailServiceTest {
             storedCase().setType(DeedPollType.Adult);
             stub.stubTemplateRequiring(formsPlaceholdersAnd(DECLARATION, EXHIBIT));
 
-            EmailPreview preview = overHttp.preview(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of());
+            EmailPreview preview = overHttp.preview(
+                CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Ring the office."));
 
             // Twice, once per file: the check page shows where each link goes rather than a 502.
             assertThat(preview.html().split(Pattern.quote(AttachmentStandIns.STAND_IN), -1)).hasSize(3);
@@ -1274,6 +1276,9 @@ class CaseEmailServiceTest {
             assertThat(calls).hasSize(2);
             assertThat(calls.get(0).getBodyAsString()).doesNotContain(AttachmentStandIns.STAND_IN);
             assertThat(calls.get(1).getBodyAsString()).contains(DECLARATION).contains(EXHIBIT);
+            // The caseworker's note is in both calls: the retry copies the composed personalisation, never rebuilds it.
+            assertThat(preview.html()).contains("Ring the office.");
+            assertThat(calls).allSatisfy(call -> assertThat(call.getBodyAsString()).contains("Ring the office."));
         }
 
         @Test
@@ -2078,7 +2083,7 @@ class CaseEmailServiceTest {
         }
 
         @Test
-        @DisplayName("freezes the caseworker's notes into the row, and an empty box as an empty string")
+        @DisplayName("freezes the caseworker's notes into the row, stripped")
         void freezesTheCaseworkersNotes() {
             // notify-4c Task 2: the one slot either template has, and the same one ③ and ④ carry.
             DeedPoll deedPoll = storedCase();
@@ -2092,6 +2097,22 @@ class CaseEmailServiceTest {
             assertThat(frozenPersonalisation())
                 .containsEntry(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Please sign in black ink.")
                 .containsEntry(FormsForCompletionPersonalisation.DEED_DOCUMENT, DEED_DOCUMENT_ID);
+        }
+
+        @ParameterizedTest
+        @NullSource
+        @ValueSource(strings = {"", "   "})
+        @DisplayName("freezes an empty, blank or omitted notes box as an empty string, never as a missing key")
+        void freezesNoNotesAsAnEmptyString(String notes) {
+            // A missing key is a permanent 400 on the drain once the Notify template places ((additional_notes)).
+            storedCase().setType(DeedPollType.Adult);
+            enqueueAnswers(1);
+
+            emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                        notes == null ? Map.of() : Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), notes),
+                        REQUEST_ID, CASEWORKER);
+
+            assertThat(frozenPersonalisation()).containsEntry(EmailSlot.ADDITIONAL_NOTES.placeholder(), "");
         }
 
         @Test

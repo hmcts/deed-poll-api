@@ -22,7 +22,7 @@ original plan unnecessary:
 - **~~notify-4c Task 2: ① and ② gain the optional `additional_notes` slot~~ Done 2026-09-26.** By Steve's decision on 2026-09-26. That also
   removes notify-4b flag 6's empty compose page.
 
-Both are ordinary code, so they are in their own plan, [`notify-4c`](notify-4c-preview-attachments-and-notes.md),
+Both are ordinary code, so they are in their own plan, [`notify-4c`](completed/notify-4c-preview-attachments-and-notes.md),
 which ralphex can run. **notify-4c is complete (2026-09-26): 2,950 unit tests across 363 classes + 13 integration, 0 skipped.** **What stays here needs a person**: authoring ② in the portal (Task 3) and a guest-listed
 inbox someone has to open (Task 4). Do not run this plan under ralphex.
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Two code changes that [`notify-4a`](notify-4a-attach-files-to-an-email.md) found on 2026-09-26 while checking ①
+Two code changes that [`notify-4a`](../notify-4a-attach-files-to-an-email.md) found on 2026-09-26 while checking ①
 `forms_for_completion_adult` against the real Notify API. They were split out so that ralphex can run them: the
 rest of 4a needs a person (authoring ② in the Notify portal, and opening a guest-listed inbox).
 
