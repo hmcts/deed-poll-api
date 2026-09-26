@@ -209,8 +209,34 @@ Read first: decision 7, and the content draft's "How the right forms reach the r
   and the case's Emails tab shows the row `Sent` with the deed listed.
 - **If any of this cannot be observed, stop and record why.** Do not report a success on the strength of a 200
   from Notify.
-- [ ] a real ① has reached a guest-listed inbox with the case's own deed, the confirmation step and the right
+- [x] a real ① has reached a guest-listed inbox with the case's own deed, the confirmation step and the right
       static forms, and the result is recorded here
+
+      **Done 2026-09-26.** Sent from admin's Email tab through a local api (template version 8, retention 26
+      weeks, the team-and-guest-list key) for KBDP2026-00001, an `Adult` case with the Gazette flag set, with a
+      note. Notify notification `bfddf42d-95bc-47ab-b9df-9ba350cf581e` is **`delivered`** to
+      steve.newman@justice.gov.uk. Each item above was observed, not inferred:
+
+      - **The check page rendered** with notify-4c's stand-in under LOC021 and LOC027, the deed placeholder, and
+        the note as its own paragraph before *What happens next*.
+      - **Notify's record of the send** has three `documents.service.gov.uk` links (the deed, the statutory
+        declaration and the exhibit cover sheet), the note and the Gazette sentence.
+      - **Steve confirmed in the inbox** that the email and its downloads were right, the confirm-your-email
+        step included.
+      - **The deed is the case's own.** The `.docx` Steve downloaded is byte-identical (SHA-256) to the one api
+        generated and stored, and it carries the case's old and new names.
+      - **api recorded the row as `Sent`** with "LOC020 Change of name deed" listed, and admin's Emails tab shows it
+        as "Accepted by Notify".
+
+      **Three things found along the way, none of them blocking:**
+
+      1. **The subject reads "(online application reference: )"** on a case without one. The field is nullable
+         and resolves to empty. ⑤ has the same subject shape. A Notify wording change, if wanted.
+      2. **admin still offers ① after it has been sent.** A second send is harmless (V20 answers with the
+         existing row), but the offer may mislead a caseworker.
+      3. **In the devcontainer, DNS lookups that include IPv6 take 10-15 s**, which outlasts admin's 10 s api
+         timeout on the first Notify call. Run api with `JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true`
+         locally. This is environmental, not a code fault.
 
 ### Task 5: Record what stands between ① / ② and AAT
 
