@@ -14,11 +14,12 @@ import java.util.Map;
  * {@code NOTIFY_TEMPLATE_TAXONOMY.md}, and both read from this one record -- they differ in their words, in which
  * forms they name and in which deed the link resolves to, and in none of the values below.
  *
- * <p><strong>No slots at all, which is decision 7 and was re-checked against the source documents.</strong>
- * Neither supplied {@code .docx} carries a caseworker marker of any style -- no {@code [Enter …]} and no
- * {@code {insert …}}, unlike ③ and ④ -- so there is nothing for a caseworker to write and
- * {@link EmailSlots#parse} refuses any slot a client sends. A free-text box would be a template change in
- * notify-0 first: a slot the Notify template has no placeholder for makes the send a 400.
+ * <p><strong>One slot, optional: {@link EmailSlot#ADDITIONAL_NOTES}.</strong> Neither supplied {@code .docx}
+ * carries a caseworker marker of any style, so decision 7 first gave these templates no slots at all; the notes box
+ * was added by decision on 2026-09-26 (notify-4c Task 2), and it is the same slot ③ and ④ carry rather than a
+ * second name for one box. It pre-populates from nothing and may go out empty, which renders as nothing.
+ * <strong>The Notify template has to place {@code ((additional_notes))}</strong>: Notify drops a key its template
+ * does not name with nothing failing, so without the placeholder a caseworker's note never reaches the applicant.
  *
  * <p><strong>It addresses the applicant by their OLD name, deliberately.</strong> The document opens
  * <em>"Regarding the application to enrol a deed poll change of name for {@code deedpoll_oldforename}
@@ -54,6 +55,7 @@ import java.util.Map;
  * @param oldSurname the surname being changed from
  * @param publishToLondonGazette whether the Gazette sentence is rendered
  * @param deedDocument the id of this case's generated deed, which the drain resolves to a download link
+ * @param additionalNotes anything the caseworker added, empty when they added nothing
  */
 public record FormsForCompletionPersonalisation(
     String referenceNumber,
@@ -61,7 +63,8 @@ public record FormsForCompletionPersonalisation(
     String oldForename,
     String oldSurname,
     boolean publishToLondonGazette,
-    String deedDocument) {
+    String deedDocument,
+    String additionalNotes) {
 
     public static final String REFERENCE_NUMBER = "reference_number";
     public static final String ONLINE_APPLICATION_REFERENCE = "online_application_reference";
@@ -115,12 +118,15 @@ public record FormsForCompletionPersonalisation(
     public static final List<String> DOCUMENT_KEYS = List.of(DEED_DOCUMENT);
 
     /**
-     * Resolves the email's content from the case and the reference of the deed it carries.
+     * Resolves the email's content from the case, the reference of the deed it carries and the validated slots.
      *
      * @param deedPoll the case the email is about
      * @param deedDocument the stored deed's id for a send, or {@link #DEED_NOT_YET_GENERATED} for a preview
+     * @param slots what {@link EmailSlots#parse} accepted, keyed by slot
      */
-    public static FormsForCompletionPersonalisation resolve(DeedPoll deedPoll, String deedDocument) {
+    public static FormsForCompletionPersonalisation resolve(DeedPoll deedPoll,
+                                                            String deedDocument,
+                                                            Map<EmailSlot, String> slots) {
         return new FormsForCompletionPersonalisation(
             // displayReference, never the `referencenumber` integer: the serial is an internal component of the
             // rendered reference and is not what the applicant was ever shown -- and it is the same value the
@@ -130,7 +136,8 @@ public record FormsForCompletionPersonalisation(
             ResolvedValues.text(deedPoll.getOldForename()),
             ResolvedValues.text(deedPoll.getOldSurname()),
             deedPoll.isPublishToLondonGazette(),
-            ResolvedValues.text(deedDocument));
+            ResolvedValues.text(deedDocument),
+            ResolvedValues.text(slots.get(EmailSlot.ADDITIONAL_NOTES)));
     }
 
     /**
@@ -151,6 +158,7 @@ public record FormsForCompletionPersonalisation(
         personalisation.put(OLD_SURNAME, oldSurname);
         personalisation.put(PUBLISH_TO_LONDON_GAZETTE, publishToLondonGazette);
         personalisation.put(DEED_DOCUMENT, deedDocument);
+        personalisation.put(EmailSlot.ADDITIONAL_NOTES.placeholder(), additionalNotes);
         return personalisation;
     }
 }

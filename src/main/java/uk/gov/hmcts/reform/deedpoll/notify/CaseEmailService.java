@@ -1273,12 +1273,11 @@ public class CaseEmailService {
                     deedPoll, cause.requireReferral(), accepted).toMap();
             case CHASE_MISSING_DOCUMENTS ->
                 MissingDocumentsPersonalisation.resolve(deedPoll, accepted).toMap();
-            // No slots at all, so `accepted` is empty here by construction -- EmailSlots.parse has already refused
-            // anything a client tried to send. The one value that is not a column is the deed, which the caller
-            // supplies because a send stores one and a preview must not.
+            // One optional slot, the caseworker's notes. The one value that is neither a column nor a slot is the
+            // deed, which the caller supplies because a send stores one and a preview must not.
             case FORMS_FOR_COMPLETION_ADULT, FORMS_FOR_COMPLETION_MINOR ->
-                FormsForCompletionPersonalisation.resolve(deedPoll, deedDocument.apply(requireDeed(template)))
-                    .toMap();
+                FormsForCompletionPersonalisation.resolve(
+                    deedPoll, deedDocument.apply(requireDeed(template)), accepted).toMap();
         };
         return new Composed(deedPoll, cause, personalisation);
     }

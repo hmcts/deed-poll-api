@@ -2078,22 +2078,101 @@ class CaseEmailServiceTest {
         }
 
         @Test
-        @DisplayName("refuses any slot a client sends, because neither template has one")
-        void refusesAnySlot() {
-            // Decision 7 enforced rather than documented. A caseworker cannot add a sentence to a court-authored
-            // email through this API, and a client that tries is told which key was refused rather than having it
-            // silently stripped -- which would be a success and a different email.
+        @DisplayName("freezes the caseworker's notes into the row, and an empty box as an empty string")
+        void freezesTheCaseworkersNotes() {
+            // notify-4c Task 2: the one slot either template has, and the same one ③ and ④ carry.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Minor);
+            enqueueAnswers(1);
+
+            emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_MINOR,
+                        Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "  Please sign in black ink.  "),
+                        REQUEST_ID, CASEWORKER);
+
+            assertThat(frozenPersonalisation())
+                .containsEntry(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Please sign in black ink.")
+                .containsEntry(FormsForCompletionPersonalisation.DEED_DOCUMENT, DEED_DOCUMENT_ID);
+        }
+
+        @Test
+        @DisplayName("refuses notes over the cap, before generating a deed or writing a row")
+        void refusesNotesOverTheCap() {
             DeedPoll deedPoll = storedCase();
             deedPoll.setType(DeedPollType.Adult);
 
             assertThatThrownBy(() -> emails.send(
                 CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
-                Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Please hurry."), REQUEST_ID, CASEWORKER))
+                Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(),
+                       "n".repeat(EmailSlot.ADDITIONAL_NOTES.maxLength() + 1)),
+                REQUEST_ID, CASEWORKER))
                 .isInstanceOf(InvalidInputError.class)
                 .satisfies(refused -> assertThat(((InvalidInputError) refused).errors())
                     .extracting(FieldError::field)
                     .containsExactly(EmailSlot.ADDITIONAL_NOTES.placeholder()));
+            // A deed is a once-per-case legal instrument, so a payload refusal must not leave one stored behind it.
+            verifyNoInteractions(deeds);
             neverEnqueues();
+        }
+
+        @Test
+        @DisplayName("refuses any other slot a client sends, naming it rather than stripping it")
+        void refusesAnyOtherSlot() {
+            // The judge's words are ③'s and ④'s, and there is no judge behind this email. A client that sends the
+            // slot is told which key was refused rather than having it silently stripped -- which would be a
+            // success and a different email.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                Map.of(EmailSlot.JUDGES_REASON.placeholder(), "Please hurry."), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(InvalidInputError.class)
+                .satisfies(refused -> assertThat(((InvalidInputError) refused).errors())
+                    .extracting(FieldError::field)
+                    .containsExactly(EmailSlot.JUDGES_REASON.placeholder()));
+            neverEnqueues();
+        }
+
+        @Test
+        @DisplayName("409s a request id reused for different notes, and answers the same notes with the row")
+        void comparesTheNotesWhenARequestIdIsReused() {
+            // The idempotency comparison is over the frozen personalisation, so the notes are part of it exactly as
+            // they are for ③: the same key with different notes is a different email, and answering it with the
+            // first row would discard what the caseworker wrote the second time.
+            DeedPoll deedPoll = storedCase();
+            deedPoll.setType(DeedPollType.Adult);
+            enqueueAnswers(1);
+            emails.send(CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                        Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Ring the office."), REQUEST_ID, CASEWORKER);
+
+            Notification existing = new Notification();
+            existing.setId(UUID.fromString("88888888-8888-8888-8888-888888888888"));
+            existing.setDeedPollId(CASE_ID);
+            existing.setRequestId(REQUEST_ID);
+            existing.setTemplate(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.name());
+            existing.setExclusionGroup(EmailExclusionGroup.FORMS_FOR_COMPLETION.name());
+            existing.setRecipient(RECIPIENT);
+            existing.setPersonalisation(frozenPersonalisation());
+            existing.setCreatedBy("A Caseworker");
+            when(notifications.findByDeedPollIdAndRequestId(CASE_ID, REQUEST_ID)).thenReturn(Optional.of(existing));
+            enqueueAnswers(0);
+
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Write to the office."), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage(CaseEmailService.REQUEST_ALREADY_USED);
+            // And so is an empty box, which is not the same email as one carrying a note.
+            assertThatThrownBy(() -> emails.send(
+                CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT, Map.of(), REQUEST_ID, CASEWORKER))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage(CaseEmailService.REQUEST_ALREADY_USED);
+
+            SendReceipt retry = emails.send(
+                CASE_ID, EmailTemplate.FORMS_FOR_COMPLETION_ADULT,
+                Map.of(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Ring the office."), REQUEST_ID, CASEWORKER);
+            assertThat(retry.enqueued()).isFalse();
+            assertThat(retry.id()).isEqualTo(existing.getId());
         }
 
         @Test
@@ -2439,8 +2518,7 @@ class CaseEmailServiceTest {
      */
     private static Map<String, Object> minimumSlots(EmailTemplate template) {
         return switch (template) {
-            // The forms emails have no slots at all, so an empty payload is not merely the minimum -- it is the
-            // only payload either of them accepts.
+            // The forms emails' one slot is the optional notes box, so like ③ and ④ they accept an empty payload.
             case APPLICATION_REJECTED, REQUEST_CONFIRMATION_TO_PROCEED, FORMS_FOR_COMPLETION_ADULT,
                  FORMS_FOR_COMPLETION_MINOR -> Map.of();
             case CHASE_MISSING_DOCUMENTS -> Map.of(

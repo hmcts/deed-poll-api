@@ -1416,20 +1416,27 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
             String caseId = typedCase("Adult");
 
             // 1. Availability. Applicable and provisioned -- this context has the UUID, the reply-to and the
-            // retention period, which are the three things a template carrying a document needs. No slots at all.
+            // retention period, which are the three things a template carrying a document needs. One slot, the
+            // optional notes box ③ and ④ already publish (notify-4c Task 2).
             authorised(get("/caseworker/cases/" + caseId + "/emails"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].template").value(FORMS_ADULT))
                 .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].applicable").value(true))
                 .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].provisioned").value(true))
-                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].slots").isEmpty())
+                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].slots.length()").value(1))
+                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].slots[0].name")
+                               .value(EmailSlot.ADDITIONAL_NOTES.placeholder()))
+                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].slots[0].required").value(false))
+                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].slots[0].maxLength")
+                               .value(ReferralSchemas.MAX_NOTES_LENGTH))
                 // And the minor one is listed, refused, and says which email to use instead.
                 .andExpect(jsonPath("$.availability[" + FORMS_MINOR_INDEX + "].applicable").value(false))
                 .andExpect(jsonPath("$.availability[" + FORMS_MINOR_INDEX + "].reason")
                                .value(containsString("LOC020")));
 
             // 2. Send. One row, one note, and one stored deed.
-            authorised(post(formsSendOf(caseId, FORMS_ADULT)), "{}")
+            authorised(post(formsSendOf(caseId, FORMS_ADULT)),
+                       "{\"additional_notes\":\"Please sign in black ink.\"}")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.enqueued").value(true))
                 .andExpect(jsonPath("$.recipient").value(APPLICANT_EMAIL));
@@ -1471,6 +1478,8 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
             assertThat(sent).containsEntry(FormsForCompletionPersonalisation.PUBLISH_TO_LONDON_GAZETTE, true);
             // The applicant's FORMER names, deliberately: the new name is not theirs until the deed is sealed.
             assertThat(sent).containsEntry(FormsForCompletionPersonalisation.OLD_FORENAME, "Alex");
+            // The caseworker's notes, under the key the Notify template has to place as ((additional_notes)).
+            assertThat(sent).containsEntry(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Please sign in black ink.");
 
             // 5. And the stored row is untouched by the send: still the document id, never the upload token.
             assertThat(notifications.findAll().getFirst().getPersonalisation())
@@ -1512,6 +1521,28 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
             assertThat(emailNotes(caseId)).as("one email owed, so one line on the timeline").hasSize(1);
             // And one deed: the generator is not called again, so the bytes the applicant may already have signed
             // are the bytes this service still holds.
+            assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(caseId)).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("409s a journey reused for different notes, and leaves the first forms email owed")
+        void refusesAJourneyReusedForDifferentNotes() throws Exception {
+            // ③'s rule for the notes box, now that the forms emails have one: the key says "this is the send I
+            // already made" and the body says otherwise, so it is a different email and not an idempotent 200.
+            String caseId = typedCase("Adult");
+            UUID journey = UUID.randomUUID();
+            authorised(post(formsSendOf(caseId, FORMS_ADULT)), "{\"additional_notes\":\"Ring the office.\"}",
+                       journey)
+                .andExpect(status().isOk());
+
+            authorised(post(formsSendOf(caseId, FORMS_ADULT)), "{\"additional_notes\":\"Write to the office.\"}",
+                       journey)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString("start composing the email again")));
+
+            assertThat(notifications.findAll()).singleElement().satisfies(row ->
+                assertThat(row.getPersonalisation())
+                    .containsEntry(EmailSlot.ADDITIONAL_NOTES.placeholder(), "Ring the office."));
             assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(caseId)).hasSize(1);
         }
 

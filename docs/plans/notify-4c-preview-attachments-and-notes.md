@@ -43,7 +43,7 @@ it was **2,922 unit tests across 361 classes + 13 integration**, measured at the
 2026-09-25. Re-measure rather than quoting that.
 
 **Re-measured 2026-09-26 at `12c57da`, before Task 1:** 2,922 unit tests across 361 classes + 13 integration
-(3 classes), 0 skipped, 0 failed (`--rerun-tasks`, counted from the XML). **After Task 1:** 2,945 across 363 + 13.
+(3 classes), 0 skipped, 0 failed (`--rerun-tasks`, counted from the XML). **After Task 1:** 2,945 across 363 + 13. **After Task 2:** 2,950 across 363 + 13.
 
 - **Measure, do not read the exit code.** A run selecting zero tests also exits 0, and a second `gradle test`
   wipes `build/test-results/`. Count from the XML straight after each run, using `--rerun-tasks` when the count is
@@ -107,7 +107,12 @@ Read first: `EmailSlot.ADDITIONAL_NOTES`, `EmailTemplate`, and how ③ `applicat
   lands (notify-4a Task 3, finding 4: without it, a note is dropped with nothing failing).
 - Tests: both templates publish the slot as optional; a send with no notes and a send with notes both compose;
   the notes cap is enforced; two journeys differing only in their notes are a 409, not an idempotent 200.
-- [ ] ① and ② carry `additional_notes`, optional, compared by the idempotency check, and `./gradlew build` green
+- [x] ① and ② carry `additional_notes`, optional, compared by the idempotency check, and `./gradlew build` green
+
+      **Done 2026-09-26.** 2,950 unit tests across 363 classes + 13 integration, 0 skipped. The notes are part of
+      the frozen personalisation, so `isTheSameSend` compares them with no change to it: the same `Idempotency-Key`
+      with different notes (or none) is a 409. A *new* key for a forms email already owed still answers 200 with
+      the owed row through V20, exactly as ③ does through V15, so the second journey's notes are not sent.
 
 ### Task 3: Full validation and handoff
 
