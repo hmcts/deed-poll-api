@@ -16,14 +16,15 @@ original plan unnecessary:
 
 **What is left is mostly proof, plus two code changes found on 2026-09-26 while proving it:**
 
-- **Task 4: ①'s preview is refused by Notify, so ① cannot be sent from admin at all.** A template attachment is a
+- **notify-4c Task 1: ①'s preview is refused by Notify, so ① cannot be sent from admin at all.** A template attachment is a
   placeholder, and Notify's *preview* endpoint demands a value for it even though a real send fills it in. Found by
   reading ① back and calling both endpoints (Task 3).
-- **Task 5: ① and ② gain the optional `additional_notes` slot**, by Steve's decision on 2026-09-26. That also
+- **notify-4c Task 2: ① and ② gain the optional `additional_notes` slot**, by Steve's decision on 2026-09-26. That also
   removes notify-4b flag 6's empty compose page.
 
-**Tasks 3 and 6 need a person**: a template id only the portal shows, and a guest-listed inbox someone has to
-open. Tasks 4 and 5 are ordinary code and can run under ralphex, **but only once Task 3's ① box is ticked**.
+Both are ordinary code, so they are in their own plan, [`notify-4c`](notify-4c-preview-attachments-and-notes.md),
+which ralphex can run. **What stays here needs a person**: authoring ② in the portal (Task 3) and a guest-listed
+inbox someone has to open (Task 4). Do not run this plan under ralphex.
 
 ## Which email carries which forms
 
@@ -67,8 +68,8 @@ what Notify publishes, and whoever replaces an attachment.
    AAT at once (`isProvisioned` never looks at the API key; see `values.yaml`), and AAT has no Notify key. For
    ③ and ⑤ that means a visible failure. For ① it costs the case its forms email for good: the send generates and
    stores the deed, the drain fails `TECHNICAL: Empty key`, and the dead row still holds V20's slot, so every
-   re-send answers with it. **Both chart settings wait for flags 1 and 2.** Tasks 3 and 4 use environment
-   variables in a local api only.
+   re-send answers with it. **Both chart settings wait for flags 1 and 2.** Task 4 uses environment variables
+   in a local api only.
 
 ---
 
@@ -79,7 +80,7 @@ export TESTCONTAINERS_RYUK_DISABLED=true
 ./gradlew build --rerun-tasks
 ```
 
-Tasks 3 and 4 change no production code, so this should only move if a task adds a test. Count from the XML
+The tasks left here change no production code, so this should only move if a task adds a test. Count from the XML
 after the run (`build/test-results/`), not from the exit code. As at api master `d21db37` (2026-09-26, notify-4b
 merged) it was **2,922 unit tests across 361 classes + 13 integration**, measured on 2026-09-25 at the branch's
 head commit.
@@ -185,69 +186,21 @@ Read first: decision 7, and the content draft's "How the right forms reach the r
          no key for a static form**, which confirms decision 1.
       3. **The preview endpoint does not.** `POST /v2/template/{id}/preview` with the same six keys is **400
          `Missing personalisation: LOC021_0226.pdf, LOC027 blank.pdf`**. Given values, it prints them verbatim and
-         renders no link. That is Task 4.
+         renders no link. That is notify-4c Task 1.
       4. **An extra key is silently ignored**, not refused: a preview carrying `additional_notes`, which ① has no
          placeholder for, was a 200 with the value nowhere in the body. `application-rejected.md` in
          deed-poll-admin says the opposite ("a slot with no matching placeholder makes Notify refuse the send"), and
          is wrong. The real hazard is the reverse: a caseworker's note that vanishes with nothing failing. That is
-         why Task 5 has to land together with the Notify edit.
+         why notify-4c Task 2 has to land together with the Notify edit.
       5. **The file name is the key, so replacing an attachment in the portal can rename it.** Anything api writes
          about these keys must not name `LOC021_0226.pdf`, and must still work when the name changes.
 - [ ] ② the same, with attachments exactly LOC023, LOC024 and LOC028
 
-### Task 4: Let a template with attachments be previewed
-
-Read first: `CaseEmailService.preview`, `EmailPreview`, `NotifyEmailSender`, and Task 3's findings 1–3 and 5.
-
-**The defect:** `preview` passes `composed.personalisation()` to `generateTemplatePreview`, and for ① Notify
-answers 400, which `preview` turns into an `UpstreamFailureError` (502). The check page is mandatory (notify-2
-decision 2), so a caseworker cannot get past it and **① cannot be sent through admin at all**, however it is
-provisioned. No test fails today, because `StubNotify` has no notion of an attachment placeholder.
-
-- **For the preview only**, supply a stand-in for each placeholder that is a Notify attachment. Use a sentence a
-  caseworker can read on the check page, such as *"[A download link for this form is added when the email is
-  sent]"*. That is honest, and it is what the preview already does for the deed (`DEED_NOT_YET_GENERATED`).
-- **The keys cannot be hard-coded** (finding 5), so they come from Notify at preview time. Choose between two
-  options and argue it in the javadoc, rather than just picking one:
-  - read the template (`getTemplateById`) and fill each `required` key that api does not own;
-  - or parse the 400's `Missing personalisation:` list and retry once.
-
-  Either way, **a key api does own must never be stood in for**. If `deed_document` were misspelt in the
-  template, a preview that papered over it would pass while every real send failed at the drain. So fill in
-  only keys that are not in `EmailTemplate.resolvedKeys()`, `slots()` or `documentKeys()`, and let everything
-  else fail as today.
-- **The send path must not change.** Finding 2 is that a real send fills the attachments in, so the drain sends
-  the frozen personalisation exactly as now. Assert that no stand-in text can reach `sendEmail`.
-- `StubNotify` has to learn the difference between the two endpoints, or the test proves nothing: a preview
-  missing a required key is a 400 with Notify's message, and a send is not.
-- Tests, container-free where possible: ①'s preview renders with a stand-in under each attachment; a template
-  with no attachments (③, ⑤) makes exactly the calls it makes today; a placeholder that api owns but the
-  personalisation lacks is still a 502; and a send carries no stand-in.
-- [ ] a template with Notify attachments previews, api-owned keys are never stood in for, the send path is
-      unchanged, `StubNotify` distinguishes preview from send, and `./gradlew build` green
-
-### Task 5: Give ① and ② the optional additional-notes slot
-
-Read first: `EmailSlot.ADDITIONAL_NOTES`, `EmailTemplate`, and how ③ `application-rejected` uses it.
-
-- Add `EmailSlot.ADDITIONAL_NOTES` to both `FORMS_FOR_COMPLETION_ADULT` and `_MINOR`. **Reuse the existing slot**:
-  it is already optional, capped at `MAX_NOTES_LENGTH` and rendered by admin with no change, so a second slot
-  meaning the same thing would be two names for one box.
-- **The idempotency comparison has to include it.** A second journey with *different* notes is a different
-  email, so check `isTheSameSend` treats it as one, as it does for ③.
-- **The content side is already done**, in deed-poll-admin's `forms-for-completion-static-forms-in-notify` branch
-  (2026-09-26): the draft places `((additional_notes))` and `application-rejected.md`'s wrong sentence is
-  corrected. **Do not edit deed-poll-admin from this task.** Steve adds the placeholder to ① in Notify when this
-  lands (finding 4: without it, a note is dropped with nothing failing).
-- Tests: both templates publish the slot as optional; a send with no notes and a send with notes both compose;
-  the notes cap is enforced; two journeys differing only in their notes are a 409, not an idempotent 200.
-- [ ] ① and ② carry `additional_notes`, optional, compared by the idempotency check, and `./gradlew build` green
-
-### Task 6: Send ① for real, from admin through a local api
+### Task 4: Send ① for real, from admin through a local api
 
 - Run api locally (`deed-poll-local-end-to-end` recipe) with `NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_ADULT` set to
   ①'s id, `NOTIFY_DOCUMENT_RETENTION_WEEKS=26` and the team-and-guest-list key, **not** the Test key, which
-  returns success and sends nothing. **Needs Tasks 4 and 5, and ((additional_notes)) added to ① in Notify.** Send ① from admin's Email tab, with a
+  returns success and sends nothing. **Needs notify-4c merged, and ((additional_notes)) added to ① in Notify.** Send ① from admin's Email tab, with a
   note, for an `Adult` case whose applicant email is
   guest-listed.
 - Confirm in the inbox: the deed arrives as a link where `((deed_document))` sits, **with the applicant's own
@@ -259,7 +212,7 @@ Read first: `EmailSlot.ADDITIONAL_NOTES`, `EmailTemplate`, and how ③ `applicat
 - [ ] a real ① has reached a guest-listed inbox with the case's own deed, the confirmation step and the right
       static forms, and the result is recorded here
 
-### Task 7: Record what stands between ① / ② and AAT
+### Task 5: Record what stands between ① / ② and AAT
 
 - Write down each outstanding dependency, who owns it and what it blocks, so the next step is a list rather than
   a rediscovery: the three flags below, plus ②'s authoring.
@@ -286,5 +239,5 @@ Read first: `EmailSlot.ADDITIONAL_NOTES`, `EmailTemplate`, and how ③ `applicat
    `deed-poll-documentation` is the starting point).
 3. **Which forms a deed of relinquishment needs is unknown**, and so is whether it needs a generated deed.
    Decision 4 waits on it.
-4. **~~admin's compose page is empty for a slotless template~~ (notify-4b flag 6).** Closed by Task 5: ① and ②
+4. **~~admin's compose page is empty for a slotless template~~ (notify-4b flag 6).** Closed by notify-4c Task 2: ① and ②
    are no longer slotless, and no other template is.
