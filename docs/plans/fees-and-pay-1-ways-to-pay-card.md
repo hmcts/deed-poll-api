@@ -1,5 +1,8 @@
 # Fees & Pay 1 — Ways2Pay card payments for citizen applications
 
+Read the [2026-09-26 amendment](#amendment-2026-09-26--ccd-and-queue-admission)
+before implementation; it resolves the case/reference direction and adds the queue rule.
+
 ## Overview
 
 Implement the backend half of the public deed-poll payment journey. `deed-poll-api` resolves the
@@ -313,3 +316,70 @@ and integration test totals at the start and end of the plan.
 - Changing the established browser-page design except where the real contract proves it incorrect.
 - Treating a payment callback as proof that GOV.UK Pay settled funds beyond the status semantics supplied by
   Fees & Pay.
+
+## Amendment 2026-09-26 — CCD and queue admission
+
+Steve confirmed the following direction during the decentralised CCD planning session.
+This amendment takes precedence over conflicting earlier text; original reasoning is
+retained above. Implementation tasks remain unchecked.
+
+### Resolved decisions
+
+1. A new online submission creates a deed-poll record before payment and uses the
+   [CCD foundation](deed-poll-api-02-ccd-foundation.md) to establish a real CCD reference
+   before creating its Fees & Pay Service Request. This resolves stop gates 1 and 2's
+   architecture questions. It does not claim CCD/payment onboarding is complete.
+2. New online submissions enter the normal caseworker work queue only after verified
+   payment. Casework state remains date-derived; payment/admission is a separate concern.
+3. Existing, migrated and manually entered cases using the established payment process
+   remain eligible under their existing queue filters. CCD backfill and a missing online
+   payment record cannot hide them. Record origin/payment route explicitly: the boolean
+   `migratedRecord` is insufficient, and missing payment evidence must not automatically
+   label a newly submitted online application as a legacy case.
+4. `feeReference` is optional free text in both the current entity and captured Dataverse
+   schema. Preserve it for its existing purpose; it is not verified online payment status.
+5. Online submissions have a seven-day payment deadline, one day-three reminder and a
+   secure payment return route. The [unpaid lifecycle plan](unpaid-online-applications.md)
+   owns those behaviours, and the [retention plan](retain-and-dispose.md) owns disposal.
+   Existing/migrated cases are excluded from this unpaid policy.
+
+### Changes to execution tasks
+
+- Task 0: replace the synthetic-reference question with proof that CCD onboarding and the
+  shared linking operation work for the agreed case type. Retain the unanswered fee,
+  service identity, callback, system-user and fee-validity questions (the original list
+  contains eight gates, despite Task 0's older reference to six).
+- Tasks 1–2: make submission durably idempotent across web/API replicas and restarts.
+  The browser's process-local double-submit latch is not sufficient. Persist the online
+  origin, first accepted submission time and deadline once; reuse the same local record,
+  display reference and CCD linking operation on retry.
+- Task 2: backfill existing rows explicitly to the established route without labelling
+  them as paid online. Protect route/reference/payment fields from ordinary patches.
+  Do not treat nullable CCD registration as an admission flag.
+- Tasks 4–5: require confirmed CCD registration before starting a Service Request; use
+  its actual reference as `ccd_case_number`. Gate new card attempts on deadline and
+  lifecycle state as well as existing payment-attempt concurrency checks.
+- Task 6: a validated successful payment atomically admits the online record to normal
+  queue filters and stops unpaid lifecycle work. Delayed pending/failed callbacks cannot
+  reverse success. Reconcile success arriving after the deadline before any disposal.
+- Task 8: prove the queue rule through the API and deed-poll-admin. Audit paged and
+  unpaged queries, totals, saved queries, reference-match shortcuts and every queue
+  entry point; filtering only the rendered page is insufficient. Keep operational
+  reconciliation access separate from the normal work queue, with explicit permissions.
+
+### Additional acceptance criteria
+
+- [ ] Unpaid new online cases do not appear in the normal queue, its counts or saved-query
+      results; paid ones appear once and remain subject to normal casework filters.
+- [ ] Existing/manual/migrated cases retain their prior eligibility with an empty
+      `feeReference`, null CCD reference or no online payment record.
+- [ ] Origin cannot be supplied or patched by an applicant to bypass the payment gate.
+- [ ] Duplicate submission, CCD uncertainty and payment retries preserve one application
+      and its original deadline. Payment cannot start while CCD registration is uncertain.
+- [ ] API and admin regression tests demonstrate the eligibility matrix. The web uses
+      the published contract and does not infer payment success from redirects.
+
+The earlier exclusion of implementing CCD/CDAM inside this payment plan still separates
+ownership: those have dedicated plans. The prerequisite is now a real CCD link. A
+production journey promising reminders and deletion must also complete the unpaid
+lifecycle and disposal plans; this amendment does not mark them as shipped.

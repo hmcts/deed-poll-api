@@ -10,8 +10,10 @@ The Spring Boot 3 backend for deed poll case management, on Java 21 with Gradle.
 the TypeScript domain layer in the sibling repo `hmcts/deed-poll-admin` (`libs/deed-poll`), which is
 the specification. It replaces that repo's `apps/api`.
 
-There is **no CCD and no CDAM** here. Those are plans 02 and 03, both blocked on external onboarding.
-See `docs/RESUME.md` for the current state and `docs/plans/` for the build plans.
+There is **no implemented CCD or CDAM integration** here. Draft plans 02 and 03 were written on
+2026-09-26, alongside migration, unpaid-application and retention plans. Identifiers and external
+onboarding remain unconfirmed. See the dated update in `docs/RESUME.md` and `docs/plans/` for the
+agreed direction and dependencies; older statements that the plans are unwritten are historical.
 
 ## Layout
 
