@@ -74,11 +74,12 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
     /**
      * A group of one, standing in for a template that is nobody's alternative.
      *
-     * <p>A literal rather than an {@code EmailExclusionGroup} member, because the claim is about the index
-     * rather than about today's enum: a template alone in its group must behave exactly as it did when the key
-     * was the template, and there is no such member to name yet.
+     * <p>A literal that matches no {@code EmailExclusionGroup} member, deliberately, because the claim is about
+     * the index rather than about today's enum: a template alone in its group must behave exactly as it did when
+     * the key was the template. It used to be spelled {@code FORMS_FOR_COMPLETION}, which V20 has since given a
+     * case-scoped index of its own -- so a real member here would make this test's subject a different rule.
      */
-    private static final String LONE_GROUP = "FORMS_FOR_COMPLETION";
+    private static final String LONE_GROUP = "A_LATER_GROUP";
 
     /**
      * The case-driven template, whose rows carry no {@code referralId}.
@@ -91,6 +92,20 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
 
     /** Its own exclusion group, which no index acts on -- a repeat chase is legitimate. */
     private static final String CHASE_GROUP = "DOCUMENT_CHASE";
+
+    /**
+     * The adult forms email, whose rows carry no {@code referralId} and <em>are</em> keyed on the case.
+     *
+     * <p>The fixture for everything about V20, and the contrast with {@link #CHASE_TEMPLATE}: both are
+     * case-driven, both sit outside V15's index, and only one of them is something a case may have twice.
+     */
+    private static final String FORMS_ADULT_TEMPLATE = "FORMS_FOR_COMPLETION_ADULT";
+
+    /** The minor forms email, which the same case must never also be sent. */
+    private static final String FORMS_MINOR_TEMPLATE = "FORMS_FOR_COMPLETION_MINOR";
+
+    /** The group the two share, and the one V20's partial index names in SQL. */
+    private static final String FORMS_GROUP = "FORMS_FOR_COMPLETION";
 
     private static final String RECIPIENT = "applicant@example.com";
 
@@ -644,6 +659,123 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
             .get()
             .satisfies(row -> assertThat(row.getId()).isEqualTo(theirs.getId()));
         assertThat(notifications.findByDeedPollIdAndRequestId(deedPoll.getId(), UUID.randomUUID())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("refuses the other forms email on one case, because an applicant swears one deed")
+    void refusesTheOtherFormsEmailOnOneCase() {
+        DeedPoll deedPoll = persistedCase();
+
+        // V20's whole reason. Neither forms email is referral-driven, so both rows carry a null "referralId" and
+        // V15's partial index never sees them -- and a case sent both would have an applicant holding LOC020 and
+        // LOC022, two different legal instruments to sign in front of witnesses, of which at most one is the deed
+        // the court will seal. Different request ids, so V19's key is not what refuses the second.
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), null,
+                                        FORMS_ADULT_TEMPLATE, FORMS_GROUP, RECIPIENT, PERSONALISATION, NOW,
+                                        "A Caseworker"))
+            .isOne();
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), null,
+                                        FORMS_MINOR_TEMPLATE, FORMS_GROUP, RECIPIENT, PERSONALISATION,
+                                        NOW.plusDays(1), "A Caseworker"))
+            .as("the other email of the group, a day later and under a journey of its own")
+            .isZero();
+        // And the same email again, which is the idempotent case rather than the contradictory one: still one row.
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), null,
+                                        FORMS_ADULT_TEMPLATE, FORMS_GROUP, RECIPIENT, PERSONALISATION,
+                                        NOW.plusDays(2), "A Caseworker"))
+            .isZero();
+
+        entityManager.clear();
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId())).hasSize(1);
+        // A different case is untouched, because the key is scoped to the case and to nothing wider.
+        assertThat(notifications.enqueue(UUID.randomUUID(), persistedCase().getId(), UUID.randomUUID(), null,
+                                        FORMS_MINOR_TEMPLATE, FORMS_GROUP, RECIPIENT, PERSONALISATION, NOW,
+                                        "A Caseworker"))
+            .isOne();
+    }
+
+    @Test
+    @DisplayName("leaves the case's forms slot free after a permanent refusal, so a corrected send replaces it")
+    void permanentlyRefusedFormsEmailDoesNotBlockAReplacement() {
+        DeedPoll deedPoll = persistedCase();
+        Notification refused = owed(deedPoll, null, NOW);
+        refused.setTemplate(FORMS_ADULT_TEMPLATE);
+        refused.setExclusionGroup(FORMS_GROUP);
+        refused.setState(NotificationState.Failed);
+        refused.setFailureVerdict(NotificationFailureVerdict.PERMANENT);
+        entityManager.flush();
+
+        // V12's predicate, carried into V20 verbatim: Notify definitely sent nothing, so the applicant has no deed
+        // and the slot is free. That is notify-1 task 7's rule, and it has to hold for the case-scoped key too --
+        // otherwise every send made while the template was unprovisioned would lock a case out of its own deed.
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), null,
+                                        FORMS_ADULT_TEMPLATE, FORMS_GROUP, RECIPIENT, PERSONALISATION,
+                                        NOW.plusMinutes(1), "A Caseworker"))
+            .isOne();
+
+        entityManager.clear();
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId())).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("finds the row occupying a case's forms slot, never a permanently refused one or another case's")
+    void findsTheRowOccupyingTheCasesGroup() {
+        DeedPoll deedPoll = persistedCase();
+        DeedPoll elsewhere = persistedCase();
+        Notification occupant = owed(deedPoll, null, NOW);
+        occupant.setTemplate(FORMS_ADULT_TEMPLATE);
+        occupant.setExclusionGroup(FORMS_GROUP);
+        Notification theirs = owed(elsewhere, null, NOW);
+        theirs.setTemplate(FORMS_MINOR_TEMPLATE);
+        theirs.setExclusionGroup(FORMS_GROUP);
+        entityManager.flush();
+        entityManager.clear();
+
+        // The read that turns a zero-row enqueue into a 409 naming the other email. Scoped to the case, and
+        // repeating V20's predicate character for character -- a mismatch would leave the service unable to
+        // explain a refusal it caused, which is a 500 rather than an answer.
+        assertThat(notifications.findBlockingForCase(deedPoll.getId(), FORMS_GROUP))
+            .get()
+            .satisfies(row -> assertThat(row.getId()).isEqualTo(occupant.getId()));
+        assertThat(notifications.findBlockingForCase(elsewhere.getId(), FORMS_GROUP))
+            .get()
+            .satisfies(row -> assertThat(row.getId()).isEqualTo(theirs.getId()));
+        // Another group on the same case is not this group's business.
+        assertThat(notifications.findBlockingForCase(deedPoll.getId(), CHASE_GROUP)).isEmpty();
+
+        // And a permanently refused row does not occupy the slot, so the availability check offers the email
+        // again rather than reporting a blocker the enqueue would have let through.
+        Notification stored = entityManager.find(Notification.class, occupant.getId());
+        stored.setState(NotificationState.Failed);
+        stored.setFailureVerdict(NotificationFailureVerdict.PERMANENT);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(notifications.findBlockingForCase(deedPoll.getId(), FORMS_GROUP)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("V20 leaves a referral-driven row alone, so a case can have a refusal email and a forms email")
+    void theCaseScopedKeyIgnoresAReferralDrivenRow() {
+        DeedPoll deedPoll = persistedCase();
+        Referral referral = persistedReferral(deedPoll);
+        owed(deedPoll, referral, NOW);
+        entityManager.flush();
+
+        // V20 is partial on "referralId" IS NULL and names only the groups that are exclusive per case, so the two
+        // keys act on disjoint sets of rows. A case that has been told its application was refused is a different
+        // thing from a case that has been sent its forms, and neither excludes the other.
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), null,
+                                        FORMS_ADULT_TEMPLATE, FORMS_GROUP, RECIPIENT, PERSONALISATION, NOW,
+                                        "A Caseworker"))
+            .isOne();
+        // And the referral's own slot is still keyed on the referral, not on the case.
+        assertThat(notifications.findBlockingForCase(deedPoll.getId(), GROUP))
+            .as("the refusal row names a referral, so V20's index does not see it")
+            .isEmpty();
+
+        entityManager.clear();
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(deedPoll.getId())).hasSize(2);
     }
 
     @Test

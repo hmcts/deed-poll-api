@@ -160,6 +160,18 @@ notify:
   # itself unprovisioned and the drain refuses to send it -- deliberately, because Notify drops a blank reply-to
   # and sends from no-reply, which loses the answer and says nothing. See NotifyProperties.isProvisioned.
   email-reply-to-id: ${NOTIFY_EMAIL_REPLY_TO_ID:}
+  # How many weeks Notify keeps a document this service sends available for download. NO WORKING DEFAULT, and
+  # that is the same decision api-key above carries rather than an omission: an applicant who has to print a
+  # deed, gather two witnesses and find a commissioner of oaths is not doing it in a week, and the number is a
+  # business decision -- so a plausible guess committed here would silently become the number every environment
+  # ran on. Unset, or outside the 1 to 78 weeks Notify accepts, NotifyProperties.isProvisioned reports every
+  # template that carries a document as unprovisioned and the drain refuses to send it, exactly as it does for a
+  # missing reply-to. That is the two forms-for-completion emails, which are the only templates that carry one.
+  # The range is checked in Java and not left to Notify because the client checks only the 2 MB size locally: a
+  # value of 104 here would read as provisioned, the case's deed would be generated and permanently stored, and
+  # only then would the drain take a 400 it classifies PERMANENT. notify-0 chooses the number; weeks because that
+  # is the unit Notify documents the retention period in.
+  document-retention-weeks: ${NOTIFY_DOCUMENT_RETENTION_WEEKS:}
   templates:
     # The Notify template UUID, which differs per environment and so is configuration rather than a constant
     # in Java. DEED_POLL_PLACEHOLDER is the same literal deedpoll.ccd.case-type-id uses, so one grep lists
@@ -177,8 +189,21 @@ notify:
     # plausible-looking respelling would leave a local run silently unprovisioned. This template invites a reply,
     # so it also needs NOTIFY_EMAIL_REPLY_TO_ID above: without it NotifyProperties.isProvisioned reports it
     # unprovisioned rather than letting Notify send it from an address nobody reads. charts/deed-poll-api sets
-    # neither id, so AAT reads unprovisioned until that separate chart change lands.
+    # BOTH ids, so ⑤ reads provisioned in AAT -- this comment used to say it set neither, which was true before
+    # the chart's own CORRECTED 2026-09-25 block. What AAT still lacks is the Notify API key, which
+    # isProvisioned deliberately does not read: the template is offered and every send fails terminally with
+    # "Empty key" until azure-access#8111 lets the secret be written. The chart says the whole of that.
     chase-missing-documents: ${NOTIFY_TEMPLATE_CHASE_MISSING_DOCUMENTS:DEED_POLL_PLACEHOLDER}
+    # The two forms-for-completion emails, ① and ②, which carry the generated deed. Neither has been authored in
+    # Notify yet -- the content draft is deed-poll-admin's .business_context/notify-templates/forms-for-completion.md
+    # -- so both stay on the placeholder and read unprovisioned, which is what the Email tab should say rather than
+    # offering a send that cannot render. They are listed here all the same, for the reason
+    # request-confirmation-to-proceed is: absent from this map the placeholder is what templateId answers anyway,
+    # but the environment variable would then be one nobody reads. Both invite a reply (their words say "you can
+    # reply to this email"), so each also needs NOTIFY_EMAIL_REPLY_TO_ID above, and both carry a document, so each
+    # also needs document-retention-weeks -- three things, and isProvisioned asks for all three.
+    forms-for-completion-adult: ${NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_ADULT:DEED_POLL_PLACEHOLDER}
+    forms-for-completion-minor: ${NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_MINOR:DEED_POLL_PLACEHOLDER}
 
 deedpoll:
   ccd:

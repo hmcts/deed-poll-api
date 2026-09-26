@@ -6,9 +6,10 @@ import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
 import uk.gov.service.notify.NotificationClient;
 
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
@@ -60,6 +61,15 @@ public final class StubNotify {
 
     /** The template version the stub's preview and send responses agree on. */
     public static final int TEMPLATE_VERSION = 7;
+
+    /**
+     * How long the stub's properties say Notify keeps a document, in weeks.
+     *
+     * <p>Invented, and deliberately not a round number a real environment would plausibly use: the number reaches
+     * the send body as part of the upload, so a test asserting on it must be asserting on <em>this</em> value
+     * rather than on a default somebody guessed.
+     */
+    public static final int RETENTION_WEEKS = 17;
 
     // Response templating on, so a send's response can echo the `reference` the request carried instead of a
     // fixed one. The reference is the outbox row id (plan decision 14 and task 5), and a stub that echoed
@@ -193,17 +203,23 @@ public final class StubNotify {
     /**
      * The properties a service under test should be configured with to reach this stub.
      *
-     * <p>Both templates point at {@link #TEMPLATE_ID}, because the stub answers any template id: what a test
+     * <p>Every template points at {@link #TEMPLATE_ID}, because the stub answers any template id: what a test
      * asserts about a send is the request body, and a second id would only be a second thing to keep in step.
      * {@link #REPLY_TO_ID} is set, so a template that invites a reply is provisioned here -- the unconfigured
      * case is its own assertion rather than the default this stub imposes on every test.
+     *
+     * <p>{@link #RETENTION_WEEKS} is set for the same reason: a template that carries a document is unprovisioned
+     * without a retention period, so leaving it out would make every forms-email test assert the unconfigured case
+     * by accident.
      */
     public NotifyProperties properties() {
         return new NotifyProperties(
             baseUrl(),
             apiKey(),
-            Map.of("application-rejected", TEMPLATE_ID, "request-confirmation-to-proceed", TEMPLATE_ID),
-            REPLY_TO_ID);
+            Arrays.stream(EmailTemplate.values())
+                .collect(Collectors.toMap(EmailTemplate::key, template -> TEMPLATE_ID)),
+            REPLY_TO_ID,
+            RETENTION_WEEKS);
     }
 
     /** A 201 with a JSON body -- what the real Notify answers a send with, and what its client insists on. */

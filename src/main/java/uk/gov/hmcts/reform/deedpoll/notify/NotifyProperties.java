@@ -1,8 +1,11 @@
 package uk.gov.hmcts.reform.deedpoll.notify;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import uk.gov.service.notify.RetentionPeriodDuration;
 
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * What this service needs to know about GOV.UK Notify: where it is, how to authenticate, and which template
@@ -34,12 +37,22 @@ import java.util.Map;
  *     an id for an address a recipient reads on the email anyway, so it is an environment variable rather than a
  *     vault entry. One id rather than one per template: there is one office inbox, and a second would be a
  *     second thing for somebody to monitor
+ * @param documentRetentionWeeks how long Notify keeps a document this service sends available for download.
+ *     <strong>No working default</strong>, and for the inverse of {@link #apiKey()}'s reason: the number is a
+ *     business decision about how long an applicant needs to print a deed, gather two witnesses and find a
+ *     commissioner of oaths, so a plausible guess committed here would become the number every environment quietly
+ *     ran on. Unset, or outside the 1 to 78 weeks Notify accepts, a template that carries a document reads
+ *     {@linkplain #isProvisioned unprovisioned} and the drain refuses to send it rather than choosing a retention
+ *     on the business's behalf -- see {@link #retention()} for why the range is checked here.
+ *     Weeks rather than a configurable {@link ChronoUnit} because Notify documents the period in weeks -- the
+ *     client would format any unit, so this is a deliberate narrowing rather than a limit of the library
  */
 @ConfigurationProperties(prefix = "notify")
 public record NotifyProperties(String apiUrl,
                               String apiKey,
                               Map<String, String> templates,
-                              String emailReplyToId) {
+                              String emailReplyToId,
+                              Integer documentRetentionWeeks) {
 
     /**
      * The value a template ID has until notify-0 provisions a real one. Deliberately the same literal as
@@ -50,7 +63,8 @@ public record NotifyProperties(String apiUrl,
     public NotifyProperties(String apiUrl,
                            String apiKey,
                            Map<String, String> templates,
-                           String emailReplyToId) {
+                           String emailReplyToId,
+                           Integer documentRetentionWeeks) {
 
         // Trimmed because all three arrive from a Helm environment map or a vault file, where a trailing newline
         // is invisible -- and a key with one on the end is a key Notify refuses for no visible reason. The
@@ -60,6 +74,10 @@ public record NotifyProperties(String apiUrl,
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.templates = templates == null ? Map.of() : Map.copyOf(templates);
         this.emailReplyToId = emailReplyToId == null ? "" : emailReplyToId.trim();
+        // Kept as it arrived, including a null and including a nonsense value: `retention()` is the one place that
+        // decides what counts as configured, so a zero written into a chart reads as "unset" in the Email tab and
+        // in the drain rather than as "Notify keeps it for no time at all".
+        this.documentRetentionWeeks = documentRetentionWeeks;
     }
 
     /**
@@ -79,8 +97,10 @@ public record NotifyProperties(String apiUrl,
      */
     @Override
     public String toString() {
-        return "NotifyProperties[apiUrl=%s, apiKey=%s, templates=%s, emailReplyToId=%s]"
-            .formatted(apiUrl, apiKey.isEmpty() ? "<unset>" : "<set>", templates, emailReplyToId);
+        return ("NotifyProperties[apiUrl=%s, apiKey=%s, templates=%s, emailReplyToId=%s, "
+            + "documentRetentionWeeks=%s]")
+            .formatted(apiUrl, apiKey.isEmpty() ? "<unset>" : "<set>", templates, emailReplyToId,
+                       documentRetentionWeeks);
     }
 
     /**
@@ -101,15 +121,58 @@ public record NotifyProperties(String apiUrl,
      * <p>For the Email tab: a template this answers false for is one a caseworker must be told about rather than
      * one whose preview mysteriously fails.
      *
-     * <p><strong>Per template, and asking two questions rather than one.</strong> A real template UUID is
+     * <p><strong>Per template, and asking three questions rather than one.</strong> A real template UUID is
      * necessary for any of them; a template that {@linkplain EmailTemplate#invitesReply() invites a reply} also
      * needs {@link #emailReplyToId()}, because Notify would otherwise send an email asking for an answer from an
      * address nobody reads -- and it would do it silently, since the client drops a blank reply-to rather than
      * refusing the send. Asked of the template rather than answered for the service so that a missing reply-to
      * says "this email cannot be sent yet" about the one email that needs it, and leaves the other alone.
+     *
+     * <p><strong>A template that carries a document also needs {@link #retention()}</strong>, for the same shape
+     * of reason: the drain cannot call {@code prepareUpload} without a period, and the number is the business's
+     * rather than this service's to invent. So the two forms-for-completion emails read unprovisioned in an
+     * environment that has their template UUIDs but no retention, and the tab says so instead of enqueueing a row
+     * the drain will refuse.
      */
     public boolean isProvisioned(EmailTemplate template) {
         return !UNPROVISIONED_TEMPLATE_ID.equals(templateId(template.key()))
-            && (!template.invitesReply() || !emailReplyToId.isBlank());
+            && (!template.invitesReply() || !emailReplyToId.isBlank())
+            && (template.documentKeys().isEmpty() || retention().isPresent());
+    }
+
+    /** The shortest retention Notify accepts. */
+    private static final int MIN_RETENTION_WEEKS = 1;
+
+    /** The longest retention Notify accepts, which its documentation states rather than the client enforcing. */
+    private static final int MAX_RETENTION_WEEKS = 78;
+
+    /**
+     * How long Notify should keep this service's documents available, or empty if nobody has said a usable number.
+     *
+     * <p><strong>Empty for a null and for anything outside {@value #MIN_RETENTION_WEEKS} to
+     * {@value #MAX_RETENTION_WEEKS} weeks</strong>, which is one rule rather than several readings of the same
+     * column: a chart that set {@code 0} would otherwise ask Notify to keep a deed for no time at all, and an
+     * applicant would follow a link to nothing. Out of range therefore means "unconfigured", which is the answer
+     * that makes the template read unprovisioned and the send be refused.
+     *
+     * <p><strong>The upper bound is here and not only at Notify</strong> because of what the send costs by the
+     * time Notify answers. {@code notifications-java-client} checks only the 2 MB size locally --
+     * {@link RetentionPeriodDuration#toString()} formats any number of weeks -- so {@code 104} would read as
+     * provisioned, the Email tab would offer the send, {@code CaseEmailService.send} would generate and
+     * permanently store the case's deed, and the drain would then get a 400 that
+     * {@code NotificationFailure.classify} calls {@code PERMANENT}: a terminal failure whose reason names a
+     * status code, on a case now holding a deed nobody was emailed. That is exactly the outcome the unset case is
+     * designed to avoid, and the bound is the only part of it that was missing.
+     *
+     * <p>Built here rather than held as a field so that {@link RetentionPeriodDuration} -- a library type with no
+     * {@code equals} -- does not become part of this record's identity, and so that the unit is stated once.
+     */
+    public Optional<RetentionPeriodDuration> retention() {
+        if (documentRetentionWeeks == null
+            || documentRetentionWeeks < MIN_RETENTION_WEEKS
+            || documentRetentionWeeks > MAX_RETENTION_WEEKS) {
+            return Optional.empty();
+        }
+        return Optional.of(new RetentionPeriodDuration(documentRetentionWeeks, ChronoUnit.WEEKS));
     }
 }

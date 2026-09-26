@@ -37,6 +37,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
@@ -46,14 +47,21 @@ import uk.gov.hmcts.reform.deedpoll.notify.EmailExclusionGroup;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailNotes;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailSlot;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailTemplate;
+import uk.gov.hmcts.reform.deedpoll.notify.FormsForCompletionPersonalisation;
 import uk.gov.hmcts.reform.deedpoll.notify.MissingDocumentsPersonalisation;
 import uk.gov.hmcts.reform.deedpoll.notify.StubNotify;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollNoteRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
@@ -141,6 +149,29 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
      */
     private static final String REPLY_TO_ID = "8a1c9b2e-0000-4000-8000-000000000042";
 
+    /** The adult forms email, whose send generates a deed and attaches it. */
+    private static final String FORMS_ADULT = EmailTemplate.FORMS_FOR_COMPLETION_ADULT.key();
+
+    /** The minor forms email, which the same case must never also be sent. */
+    private static final String FORMS_MINOR = EmailTemplate.FORMS_FOR_COMPLETION_MINOR.key();
+
+    /**
+     * Where ① sits in the availability list, read off the enum for the reason {@link #CHASE_INDEX} is.
+     */
+    private static final int FORMS_ADULT_INDEX = EmailTemplate.FORMS_FOR_COMPLETION_ADULT.ordinal();
+
+    /** And ②, which is declared after it. */
+    private static final int FORMS_MINOR_INDEX = EmailTemplate.FORMS_FOR_COMPLETION_MINOR.ordinal();
+
+    /**
+     * Where a generated deed's bytes go in this context.
+     *
+     * <p>A temporary directory rather than the shipped {@code data/documents}: the forms send really runs the
+     * generator and really writes a {@code .docx}, and a test that left one in the working tree would be a test
+     * that pollutes the repository.
+     */
+    private static final Path STORE_ROOT = temporaryStoreRoot();
+
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private static final StubIdam IDAM = new StubIdam();
@@ -160,6 +191,14 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         NOTIFY.stop();
     }
 
+    private static Path temporaryStoreRoot() {
+        try {
+            return Files.createTempDirectory("deed-poll-emails");
+        } catch (IOException failed) {
+            throw new UncheckedIOException("Could not create a temporary document store", failed);
+        }
+    }
+
     @DynamicPropertySource
     static void stubProperties(DynamicPropertyRegistry registry) {
         registry.add("idam.api.issuer-url", IDAM::issuerUrl);
@@ -176,7 +215,17 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         // ⑤ too, which needs the same reply-to for the same reason: it asks the applicant to send the missing
         // documents by replying. Registered so the journey below can be driven all the way to a drained send.
         registry.add("notify.templates.chase-missing-documents", () -> StubNotify.TEMPLATE_ID);
+        // ① and ②, which need a third thing as well as a UUID and the reply-to: a document retention period,
+        // without which isProvisioned reports them unprovisioned and the drain refuses to call prepareUpload.
+        registry.add("notify.templates." + EmailTemplate.FORMS_FOR_COMPLETION_ADULT.key(),
+                     () -> StubNotify.TEMPLATE_ID);
+        registry.add("notify.templates." + EmailTemplate.FORMS_FOR_COMPLETION_MINOR.key(),
+                     () -> StubNotify.TEMPLATE_ID);
+        registry.add("notify.document-retention-weeks", () -> StubNotify.RETENTION_WEEKS);
         registry.add("notify.email-reply-to-id", () -> REPLY_TO_ID);
+        // A temporary root, because a forms send really generates a deed and really writes its bytes. The shipped
+        // default is `data/documents` under the working directory, which would leave real .docx files in the repo.
+        registry.add("deedpoll.documents.local-store-root", STORE_ROOT::toString);
     }
 
     @Autowired
@@ -216,6 +265,16 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
     @Autowired
     private ReferenceCounterRepository referenceCounters;
 
+    /** Only to read back the deed a forms send generated, and to clear it between tests. */
+    @Autowired
+    private DeedPollSupportingDocumentRepository documents;
+
+    /**
+     * Only to clear the type row {@code DeedDocumentService} creates on first use.
+     */
+    @Autowired
+    private DeedPollSupportingDocumentTypeRepository documentTypes;
+
     @BeforeEach
     void setUp() {
         clearTables();
@@ -232,8 +291,29 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         notifications.deleteAll();
         referrals.deleteAll();
         notes.deleteAll();
+        // Before the cases, because a generated deed's row has a foreign key to its case -- and before the types,
+        // because it has one to those too.
+        documents.deleteAll();
+        documentTypes.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
+        clearStoredBlobs();
+    }
+
+    /**
+     * Empties the temporary store, so one test's deed cannot be what another finds.
+     *
+     * <p>Best-effort: the directory is a fresh temporary one per JVM, so a file left behind is noise rather than a
+     * cross-test dependency -- {@code DocumentService} already deletes a blob whose row it removes.
+     */
+    private void clearStoredBlobs() {
+        try (Stream<Path> blobs = Files.list(STORE_ROOT)) {
+            for (Path blob : blobs.toList()) {
+                Files.deleteIfExists(blob);
+            }
+        } catch (IOException ignored) {
+            // Nothing to clean, or a store this test run never wrote to.
+        }
     }
 
     @Nested
@@ -1313,6 +1393,208 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
     }
 
     /**
+     * The forms-for-completion journey, and the only place V20's index and the service's reading of it meet.
+     *
+     * <p><strong>What only this class can show.</strong>
+     * {@code CaseEmailServiceTest.FormsForCompletionEmails} states the rules against a mocked repository, and
+     * {@code NotificationRepositoryTest} proves the index refuses the row -- but neither joins them, and the join is
+     * where the cost of V19's target-less {@code ON CONFLICT} lands: a refused insert has to be <em>read</em> back,
+     * and if the read and the index disagree an ordinary conflict becomes a 500. So these drive real Postgres
+     * through the real routes.
+     *
+     * <p>They also generate a real deed, write its bytes through the real {@code DocumentStore} and hand it to
+     * {@link StubNotify} as a real {@code prepareUpload} -- which is the whole of notify-4a's Task 1 exercised from
+     * a caseworker's POST rather than from a unit.
+     */
+    @Nested
+    @DisplayName("the forms-for-completion journey")
+    class FormsForCompletion {
+
+        @Test
+        @DisplayName("offers an adult case the adult email only, generates its deed, and sends it as a download")
+        void theWholeJourney() throws Exception {
+            String caseId = typedCase("Adult");
+
+            // 1. Availability. Applicable and provisioned -- this context has the UUID, the reply-to and the
+            // retention period, which are the three things a template carrying a document needs. No slots at all.
+            authorised(get("/caseworker/cases/" + caseId + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].template").value(FORMS_ADULT))
+                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].applicable").value(true))
+                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].provisioned").value(true))
+                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].slots").isEmpty())
+                // And the minor one is listed, refused, and says which email to use instead.
+                .andExpect(jsonPath("$.availability[" + FORMS_MINOR_INDEX + "].applicable").value(false))
+                .andExpect(jsonPath("$.availability[" + FORMS_MINOR_INDEX + "].reason")
+                               .value(containsString("LOC020")));
+
+            // 2. Send. One row, one note, and one stored deed.
+            authorised(post(formsSendOf(caseId, FORMS_ADULT)), "{}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enqueued").value(true))
+                .andExpect(jsonPath("$.recipient").value(APPLICANT_EMAIL));
+
+            assertThat(notifications.count()).isOne();
+            Notification owed = notifications.findAll().getFirst();
+            assertThat(owed.getReferralId())
+                .as("case-driven: no judge, so no referral -- which is what puts the row inside V20's index")
+                .isNull();
+            assertThat(owed.getExclusionGroup())
+                .isEqualTo(EmailExclusionGroup.FORMS_FOR_COMPLETION.name());
+            assertThat(emailNotes(caseId))
+                .singleElement()
+                .satisfies(note -> assertThat(note.getNote())
+                    .isEqualTo(EmailNotes.sent(EmailTemplate.FORMS_FOR_COMPLETION_ADULT)));
+
+            // 3. The deed, generated once and stored as the case's own outgoing document with a name an applicant
+            // will recognise. The row's personalisation holds its id and not its bytes.
+            assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(caseId))
+                .singleElement()
+                .satisfies(deed -> {
+                    assertThat(deed.getDirection()).isEqualTo(DocumentDirection.Outgoing);
+                    assertThat(deed.getOriginalName()).startsWith("LOC020-change-of-name-deed-").endsWith(".docx");
+                    assertThat(owed.getPersonalisation())
+                        .containsEntry(FormsForCompletionPersonalisation.DEED_DOCUMENT, deed.getId());
+                });
+
+            // 4. What Notify was actually given: the deed as an upload rather than an id, with the confirmation
+            // step and the configured retention -- and a personalisation the row does NOT hold, which is the
+            // invariant the design rests on.
+            assertThat(NOTIFY.emailRequests()).hasSize(1);
+            Map<String, Object> sent = sentPersonalisation();
+            assertThat(sent.get(FormsForCompletionPersonalisation.DEED_DOCUMENT))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                .containsEntry("confirm_email_before_download", true)
+                .containsEntry("retention_period", StubNotify.RETENTION_WEEKS + " weeks")
+                .containsKey("file");
+            // The Gazette flag reaches Notify as a boolean, because the template's conditional tests it.
+            assertThat(sent).containsEntry(FormsForCompletionPersonalisation.PUBLISH_TO_LONDON_GAZETTE, true);
+            // The applicant's FORMER names, deliberately: the new name is not theirs until the deed is sealed.
+            assertThat(sent).containsEntry(FormsForCompletionPersonalisation.OLD_FORENAME, "Alex");
+
+            // 5. And the stored row is untouched by the send: still the document id, never the upload token.
+            assertThat(notifications.findAll().getFirst().getPersonalisation())
+                .containsEntry(FormsForCompletionPersonalisation.DEED_DOCUMENT,
+                               documents.findByDeedPollIdOrderByCreatedOnAsc(caseId).getFirst().getId());
+
+            // 6. The Emails tab names the deed the applicant was sent -- the only templates for which that list
+            // is not empty, so this is the one place a non-empty one is produced from documentKeys() at all. A
+            // rename of the personalisation key on one side only would leave it silently blank, and a caseworker
+            // asking "which deed did this applicant get" would be shown nothing.
+            String deedId = documents.findByDeedPollIdOrderByCreatedOnAsc(caseId).getFirst().getId();
+            authorised(get("/caseworker/cases/" + caseId + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.history[0].documents.length()").value(1))
+                .andExpect(jsonPath("$.history[0].documents[0].id").value(deedId))
+                // The recorded name, which is the document type's -- not the applicant-facing filename, which is
+                // the originalName the upload token carries.
+                .andExpect(jsonPath("$.history[0].documents[0].name")
+                               .value("LOC020 Change of name deed"));
+        }
+
+        @Test
+        @DisplayName("a second journey for the same forms email answers with the row already owed, not a 409")
+        void secondJourneyAnswersWithTheRowAlreadyOwed() throws Exception {
+            String caseId = typedCase("Adult");
+            authorised(post(formsSendOf(caseId, FORMS_ADULT)), "{}").andExpect(status().isOk());
+            String owed = notifications.findAll().getFirst().getId().toString();
+
+            // A different Idempotency-Key, so V19's key is not what refuses this -- V20's is, and the occupying row
+            // is THIS template. The service reads it back and answers with the first receipt: a case is owed one
+            // forms email, so this is not a second one, and a 409 would tell a caseworker their own email
+            // contradicted itself.
+            authorised(post(formsSendOf(caseId, FORMS_ADULT)), "{}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enqueued").value(false))
+                .andExpect(jsonPath("$.id").value(owed));
+
+            assertThat(notifications.count()).isOne();
+            assertThat(emailNotes(caseId)).as("one email owed, so one line on the timeline").hasSize(1);
+            // And one deed: the generator is not called again, so the bytes the applicant may already have signed
+            // are the bytes this service still holds.
+            assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(caseId)).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("the other forms email is a 409 naming the first, so one applicant swears one deed")
+        void theOtherFormsEmailIsRefusedNamingTheFirst() throws Exception {
+            // The contradictory route, reached the only way it can be: a case whose type was corrected between the
+            // two sends. Not reachable through availability, which refuses the wrong template on the type -- so
+            // this is the path the database has to settle rather than the tab.
+            String caseId = typedCase("Adult");
+            authorised(post(formsSendOf(caseId, FORMS_ADULT)), "{}").andExpect(status().isOk());
+            deedPollService.updateDeedPoll(caseId, DeedPollPatch.of(Map.of("type", "Minor")));
+
+            authorised(post(formsSendOf(caseId, FORMS_MINOR)), "{}")
+                .andExpect(status().isConflict())
+                // Naming which email and when, so a caseworker can act on it -- and in the case's words rather than
+                // the referral's, because no referral is involved and "one referral gets one of these" would be
+                // about nothing.
+                .andExpect(jsonPath("$.error")
+                               .value(containsString(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.displayName())))
+                .andExpect(jsonPath("$.error").value(containsString("this case")))
+                .andExpect(jsonPath("$.error").value(containsString("one deed")));
+
+            // Nothing added: one row, one note, one deed. The 409 is the index's answer read back, not an
+            // exception escaping the transaction -- which is what the target-less ON CONFLICT buys.
+            assertThat(notifications.count()).isOne();
+            assertThat(emailNotes(caseId)).hasSize(1);
+            assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(caseId)).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("refuses the wrong forms email for the case's type, and the right one once a signature is asked")
+        void refusesTheWrongTemplateAndTheRightOneTooLate() throws Exception {
+            String caseId = typedCase("AdultTransgender");
+
+            // The template is a path segment, so a caller can ask for an email the tab never offered. Presentation
+            // is not enforcement: an AdultTransgender applicant must never be sent a child's deed.
+            authorised(post(formsSendOf(caseId, FORMS_MINOR)), "{}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString("LOC020")));
+
+            // And once a signature has been requested, neither applies: sending is the request, so the case has
+            // already had its deed.
+            deedPollService.updateDeedPoll(caseId, DeedPollPatch.of(Map.of("signatureRequestedDate", RECEIVED)));
+            authorised(post(formsSendOf(caseId, FORMS_ADULT)), "{}")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString("signature requested date")));
+
+            assertThat(notifications.count()).isZero();
+            assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(caseId)).isEmpty();
+            assertThat(NOTIFY.emailRequests()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("offers a case with no type neither email, and a relinquishment its own reason")
+        void offersNeitherWhereNoDeedIsKnown() throws Exception {
+            // Nothing sets the type on a new case, so this is the state an application arrives in.
+            authorised(get("/caseworker/cases/" + newCase() + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].applicable").value(false))
+                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].reason")
+                               .value(containsString("type has not been established")))
+                // And no slot defaults for a template nothing applies to.
+                .andExpect(jsonPath("$.slotDefaults").isEmpty());
+
+            // The relinquishment gets its own sentence, because what a caseworker does about it is wait for
+            // somebody to identify its forms rather than set a type that is already right.
+            authorised(get("/caseworker/cases/" + typedCase("DeedOfRelinquishment") + "/emails"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.availability[" + FORMS_ADULT_INDEX + "].reason")
+                               .value(containsString("deed of relinquishment")));
+        }
+
+        /** The personalisation Notify was asked to send, read off the stub's recorded request. */
+        private Map<String, Object> sentPersonalisation() throws Exception {
+            String body = NOTIFY.emailRequests().getFirst().getBodyAsString();
+            TypeReference<Map<String, Object>> asMap = new TypeReference<>() {
+            };
+            return JSON.convertValue(JSON.readTree(body).get("personalisation"), asMap);
+        }
+    }
+
+    /**
      * The notes on a case that an email wrote, which are the notes whose text {@link EmailNotes} composes.
      *
      * <p>Filtered rather than counted, because the fixtures raise, claim and decide a referral and each of those
@@ -1328,6 +1610,26 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         return notes.findByDeedPollIdOrderByCreatedOnDesc(caseId).stream()
             .filter(note -> written.contains(note.getNote()))
             .toList();
+    }
+
+    private String formsSendOf(String caseId, String template) {
+        return "/caseworker/cases/" + caseId + "/emails/" + template;
+    }
+
+    /**
+     * A case whose type takes a deed and which has not had a signature requested, reached through the write path.
+     *
+     * <p>The type is patched rather than written onto the row, so the fixture is a case this service could really
+     * have produced -- and {@code signatureRequestedDate} is left alone, which is the column decision 9 keys the
+     * whole availability rule on.
+     */
+    private String typedCase(String type) {
+        String caseId = newCase();
+        deedPollService.updateDeedPoll(caseId, DeedPollPatch.of(Map.of("type", type)));
+        assertThat(deedPolls.findById(caseId).orElseThrow().getSignatureRequestedDate())
+            .as("the forms email is offered while no signature has been requested")
+            .isNull();
+        return caseId;
     }
 
     /** The personalisation Notify was asked to render, read off the stub's recorded request. */

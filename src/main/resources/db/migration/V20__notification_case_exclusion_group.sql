@@ -1,0 +1,57 @@
+-- Mutual exclusion between two emails that contradict each other on a case that has no referral.
+--
+-- V20 rather than a number reserved in a plan document. V19__notification_request_id.sql was already committed
+-- when this was written -- notify-4b says to take the next free number by listing the directory, confirm it, and
+-- say so, which this is. Nothing is left reserved: Flyway runs with out-of-order disabled, so a V19 appearing
+-- after V20 had been applied would fail every environment that applied V20, which is worse than a renumber.
+--
+-- WHY V15 CANNOT ANSWER THIS. V15's key is ("referralId", "exclusionGroup") and it is partial on
+-- "referralId" IS NOT NULL. The two forms-for-completion emails are CASE-driven: no judge has decided anything,
+-- the case's own state is what entitles them, and their rows carry a null "referralId" -- so V15's index never
+-- sees them and permits both. One applicant would then be sent LOC020 and LOC022, which are two different legal
+-- instruments to print, sign in front of two witnesses and swear, of which at most one is the deed the court will
+-- seal. Nothing downstream would notice, because both are valid deeds.
+--
+-- WHY WIDEN THE EXISTING MECHANISM RATHER THAN INVENT A SECOND ONE. The exclusion group already means "the set of
+-- emails one thing gets at most one of", it is already a stored column on every row, and the service already
+-- resolves a zero-row insert by reading the row that refused it. What changes here is only what "one thing" is
+-- scoped to. A different mechanism -- a check in the service, a second column, a table of incompatible pairs --
+-- would be a second answer to the same question, and two answers is how they come to disagree.
+--
+-- WHY THE PREDICATE NAMES THE GROUP INSTEAD OF COVERING EVERY NULL-REFERRAL ROW. Because the chase must stay
+-- repeatable. A case can sit in AwaitingFurtherDocs after one reminder and the caseworker may legitimately need
+-- to ask again, which is notify-3's decision 5 and the whole reason DOCUMENT_CHASE exists as a group of one that
+-- the database has no opinion about. An index over all null-referral rows would make the second chase impossible.
+--
+-- So the groups that ARE exclusive per case are named, positively, in an IN list. That direction is deliberate: a
+-- group added to EmailExclusionGroup without a migration is then NOT enforced -- which a test catches, because
+-- EmailExclusionGroup.exclusivePerCase() is held against this file's text in EmailExclusionGroupTest -- whereas an
+-- exclusion list ("exclusionGroup" <> 'DOCUMENT_CHASE') would silently make every new group exclusive, and the
+-- failure would be a legitimate second email refused in production.
+--
+-- V12's permanent-failure predicate is carried through verbatim, exactly as V15 leaves it. A row that Notify
+-- refused permanently does not occupy the slot -- Notify definitely sent nothing, and notify-1 task 7 deliberately
+-- permits a replacement -- while Pending, Sent, temporary, technical and verdict-less old rows all do, because any
+-- of those may already have reached Notify. IS DISTINCT FROM rather than <> because during a rolling deployment an
+-- older instance can still write a Failed row with no verdict, and NULL must mean "unknown and blocked" rather
+-- than falling through SQL's three-valued logic and disappearing from this index.
+--
+-- NO NEW COLUMN, and nothing to backfill: "deedPollId" and "exclusionGroup" both exist and are both NOT NULL.
+-- This migration is one index, so it is safe on a table with rows and safe during a rolling deployment -- an older
+-- instance's INSERT names both columns already, and no existing row can violate the key because no
+-- FORMS_FOR_COMPLETION row has ever been written.
+--
+-- NotificationRepository.enqueue infers this index with a bare ON CONFLICT DO NOTHING -- no target -- for the
+-- reason V19 records: three unique indexes can now refuse the row, and ON CONFLICT takes at most one inferred
+-- target, so naming any of them would leave the others raising a DataIntegrityViolationException at the
+-- caseworker's transaction. A zero-row answer therefore has a fourth possible cause, and
+-- CaseEmailService.resolveRefusedInsert reads for it in a defined order. NotificationRepository.findBlockingForCase
+-- repeats this predicate character for character, and a mismatch there makes the service unable to explain a
+-- refusal it caused.
+--
+-- Identifiers are quoted because they are mixed case, for the mechanical reason V6, V11, V15 and V19 give.
+CREATE UNIQUE INDEX "deedpoll_notification_case_exclusion_group_key"
+    ON "deedpoll_notification" ("deedPollId", "exclusionGroup")
+ WHERE "referralId" IS NULL
+   AND "exclusionGroup" IN ('FORMS_FOR_COMPLETION')
+   AND ("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT');

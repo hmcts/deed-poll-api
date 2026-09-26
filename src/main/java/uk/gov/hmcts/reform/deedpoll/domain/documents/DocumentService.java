@@ -255,10 +255,21 @@ public class DocumentService {
      * <p>404s on a row with no attached file, because a metadata-only row is a legitimate state and "this
      * document has no file yet" is a truer answer than an empty body.
      *
+     * <p><strong>A failure here must not roll back the caller's transaction, which is what
+     * {@code noRollbackFor} buys.</strong> This method writes nothing, so there is nothing of its own to roll
+     * back -- but without the attribute Spring's default marks a <em>participating</em> transaction
+     * rollback-only when it throws, and the caller's commit then fails whatever the caller did about the
+     * exception. {@code DocumentUploads} is the caller that made that reachable: it catches a missing blob and
+     * answers a retryable refusal, inside a drain that runs a whole batch in one transaction -- so a document
+     * that would not read took rows Notify had already accepted down with it and emailed those applicants
+     * again on the next drain, which is the hazard {@code CLAUDE.md} names for the drain's case note. Commit
+     * rather than rollback is the honest attribute for a read-only method; the one caller that needs a
+     * rollback on a failed read does not exist.
+     *
      * @throws NotFoundError if there is no such document, it belongs to another case, or it has no attached
      *     file
      */
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, noRollbackFor = Exception.class)
     public DocumentDownload downloadDocument(String deedPollId, String id) {
         DeedPollSupportingDocument document = findDocument(deedPollId, id);
         if (document.getStorageKey() == null || document.getStorageKey().isBlank()) {

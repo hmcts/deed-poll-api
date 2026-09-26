@@ -18,6 +18,7 @@ with one referral-outcome email per referral enforced by the database.
 | `master` / `origin/master` | notify-1, notify-5, notify-3 and **notify-3b** complete and merged in PRs #29, #30, #38 and #42, plus three small Notify fixes in #43, #44 and #45 — `applied_on_paper`, the measured JSON boolean, and never printing the API key |
 | `email-case-notes` | complete, filed in `plans/completed/`, **unmerged** — one case note when an email is enqueued and one when it terminally fails. **No contract delta**: no migration, no DTO field and no endpoint, so every count below except the test figures is the same as `master`'s |
 | `notify-6-chase-missing-documents` | complete, **unmerged**, four tasks done 2026-09-24/25 — the fifth email, the case-driven chase a caseworker may send more than once. **This one does have a contract delta**: migration **V19**, and a required `Idempotency-Key` UUID header on the send. Operation counts do not move (34 caseworker, 5 judicial) — a header is part of an operation, not one of its own. **Not stacked on `email-case-notes`**, so their test figures are never cumulative |
+| `notify-4b-generate-the-deed` | complete, filed in `plans/completed/`, **unmerged**, five tasks done 2026-09-25 — the two *Forms for completion* emails, the LOC020/LOC022 generator over the vendored `.docx` templates, and the deed stored once per case. **Contract delta**: migration **V20** (the case-scoped exclusion-group key), two new `EmailTemplate` members, and `NOTIFY_DOCUMENT_RETENTION_WEEKS`. Operation counts do not move (34 caseworker, 5 judicial) — the two emails are templates on an existing path, not new routes. **notify-4a's Task 1 landed inside it**: `DocumentUploads`, the drain-time Notify upload seam. The spike is discharged — no new library, JDK `java.util.zip` and `javax.xml`, docx4j and POI both measured and rejected |
 
 V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 adds the
 nullable rendered subject and plain-text body. Only a definite permanent refusal permits a replacement
@@ -27,16 +28,17 @@ row; its failed history remains unchanged when the replacement is sent.
 
 | | |
 |---|---|
-| Flyway migrations | **18 on `master`**, notify-3b having merged — V14 adds the nullable referral owner subjects, V15 the notification exclusion group, V16 the referral's four confirmation columns, V17 the case's `awaitingConfirmationSince` read-model and V18 the correction to V16's partial index. `email-case-notes` adds none; **`notify-6` adds V19**, the notification's non-null `requestId` with a per-row backfill and a `("deedPollId", "requestId")` unique index |
+| Flyway migrations | **18 on `master`**, notify-3b having merged — V14 adds the nullable referral owner subjects, V15 the notification exclusion group, V16 the referral's four confirmation columns, V17 the case's `awaitingConfirmationSince` read-model and V18 the correction to V16's partial index. `email-case-notes` adds none; **`notify-6` adds V19**, the notification's non-null `requestId` with a per-row backfill and a `("deedPollId", "requestId")` unique index; **`notify-4b` adds V20**, the partial `("deedPollId", "exclusionGroup")` key over the groups `EmailExclusionGroup.exclusivePerCase()` names — which is what stops one applicant being sent both deeds |
 | Caseworker endpoints | **34 across 21 paths** on `master`, over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures, and on `notify-6` re-asserts the 34 **inside the test that proves the new send header is published**, because a header is the kind of change that looks like it should have added an operation |
 | Judicial endpoints | **5**, `referrals-api-6` having merged — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
-| Tests | **2,729 on `notify-6`** — `test` 2,716 across 341 result files + `integration` 13 across 3, 0 failures / 0 errors / 0 skipped (measured 2026-09-25 from `build/test-results/` after `./gradlew build`, following the two review passes' four added tests: the referral in the request-id comparison, the chase's case isolation, and the two pinning that a send judges the missing address before the payload while a preview judges it not at all). `email-case-notes` reads **2,622** (2,610 + 12) and `master` read 2,580 + 12. The branches are not stacked, so figures from one are never cumulative with another's |
-| Docker-free CI | **1,739 unit tests on `notify-6`**, measured with `INTEGRATION_TESTS_ENABLED=false`; the other **977** are in **33** container-backed classes, notify-6 having added one (`NotificationRequestIdMigrationTest`). `email-case-notes` reads 1,657 of 2,610 in 32 classes. **82 of notify-6's 106 new unit tests run in CI** — the migration proof and the enqueue statement's conflict paths are the only rules Postgres alone can answer, and each has a container-free companion. `build.gradle` carries the history and instructs the next plan to re-measure |
-| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `notify-6` from cold, both with Docker and Docker-free (2026-09-25), on `email-case-notes` after its review (2026-09-24), and on `master` after notify-3b. **Wall clock is not a regression signal**: the same Docker build measured 35m 32s and 3m 58s on identical code, because container startup under this Docker configuration varies by an order of magnitude |
+| Tests | **2,935 on `notify-4b`** — `test` 2,922 across 361 result files + `integration` 13 across 3, 0 failures / 0 errors / 0 skipped (measured 2026-09-25 from `build/test-results/` after `./gradlew build`, following two review passes: the first added the XML-illegal-character rules, the storeDeed refusal, the sender's document short-circuit and the `application.yaml` template-key conformance; the second added the deed-type mis-filing refusal, the patched-direction refusal and Notify's 1–78-week retention range). `notify-6` reads **2,729** (2,716 + 13), `email-case-notes` **2,622** and `master` 2,580 + 12. The branches are not stacked, so figures from one are never cumulative with another's |
+| Docker-free CI | **1,923 unit tests on `notify-4b`** across 254 classes, measured with `INTEGRATION_TESTS_ENABLED=false`; the other **999** are in the container-backed classes, notify-4b having added two (`DeedDocumentServiceTest` and the forms nest of `CaseworkerEmailControllerTest` — the latter pre-existing as a class). `notify-6` reads 1,739 of 2,716 in 33 classes. Everything about the deed generator, the routing, the escaping and the exclusion-group flag runs in CI: the container-backed rules are the enqueue statement's conflict paths and the stored-once-per-case claim, and each has a container-free companion. `build.gradle` carries the history and instructs the next plan to re-measure |
+| `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `notify-4b` after its review, both with Docker and Docker-free (2026-09-25), on `notify-6` from cold (2026-09-25), on `email-case-notes` after its review (2026-09-24), and on `master` after notify-3b. **Wall clock is not a regression signal**: the same Docker build measured 35m 32s and 3m 58s on identical code, because container startup under this Docker configuration varies by an order of magnitude |
 
-**Twenty-three** plans are in [`plans/completed/`](plans/completed/) — the five added since this section was
-last rewritten are the saved-query publishing gate, notify-3, notify-3b, the email case notes and notify-6. The arc since plan 01: the domain gaps
+**Twenty-four** plans are in [`plans/completed/`](plans/completed/) — the six added since this section was
+last rewritten are the saved-query publishing gate, notify-3, notify-3b, the email case notes, notify-6 and
+notify-4b. The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
 then the original referrals feature in four completed plans — create/withdraw, claim/direction/close,
 `currentReferralState`, and the judicial surface — plus two CI plans and the ACR migration.
@@ -89,8 +91,12 @@ notify-5  what was sent, and when            case correspondence history   COMPL
 notify-3  request confirmation to proceed    three exclusive templates     COMPLETE (PR #38, merged)
 notify-3b track the applicant's reply                                      COMPLETE (PR #42, merged)
 notify-6  chase missing documents            case-driven, repeatable       COMPLETE (branch, unmerged)
-notify-4  generate the deed forms            needs a spike first
+notify-4a attach files to an email           the Notify upload seam        Task 1 COMPLETE (inside 4b); 2-3 open
+notify-4b generate the deed                  LOC020 and LOC022 from a case COMPLETE (branch, unmerged)
 ```
+
+`notify-4` was split into `notify-4a` (attaching a file to an email) and `notify-4b` (generating the deed); the
+single file no longer exists.
 
 **notify-5 before notify-4 is deliberate**, and it is notify-5's flag 4. notify-4 attaches legal documents
 to emails; shipping that while a permanent failure is still invisible means an applicant who never
@@ -105,11 +111,11 @@ Four things a session should hold before touching any of them:
 2. **notify-3 re-keys notify-1 task 7's index, which is now V12.** It must carry V12's null-safe
    permanent-failure predicate through unchanged rather than reconstructing it. Both plans carry the
    reciprocal note. Getting this wrong silently changes which rows the partial index covers.
-3. **notify-4's task 1 is a spike that is allowed to fail.** The deed templates the business supplied are
-   Dynamics 365 Word templates — 30 content controls bound by XPath to a custom XML part, no merge fields.
-   Whether docx4j can bind them is unproven. The fallback is Docmosis used for **conversion only**,
-   modelled on finrem's `DocumentConversionService`, which needs no CCD, CDAM, S2S or IDAM — none of
-   which this service has.
+3. **notify-4's spike ran, and the answer is no new library.** The deed templates the business supplied are
+   Dynamics 365 Word templates — 30 and 13 content controls bound by XPath to a custom XML part, no merge
+   fields. docx4j and Apache POI were both measured and rejected; `domain/deeds` writes the two changed zip
+   entries with the JDK's own `java.util.zip` and `javax.xml`, and the Docmosis fallback was not needed.
+   The output format is settled as `.docx`. See `plans/completed/notify-4b-generate-the-deed.md`.
 4. **notify-5 rests on one verified fact.** `SendEmailResponse` carries `getSubject()` and `getBody()`, so
    the rendered email comes back inside the send acceptance: history is exact at no extra Notify call and
    nothing against the rate limit. Confirmed with `javap` against `6.2.0-RELEASE`. If that turns out to be
@@ -203,23 +209,32 @@ What it does **not** give, and each of these is a real constraint on what a sess
 ## Open items that are Steve's, not a session's
 
 1. **`notify-0`** — create the GOV.UK Notify service, API key and templates; turn on **send a file by
-   email** (notify-4 needs it, and it is off by default); register and verify a monitored reply-to inbox
-   (three of four templates invite a reply); record the real rate limit and the real retention default.
+   email** (the two forms emails need it, and it is off by default); register and verify a monitored reply-to
+   inbox (four of the five declared templates invite a reply); record the real rate limit and the real retention
+   default. notify-4b hands over three more settings: `NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_ADULT`,
+   `NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_MINOR` and **`NOTIFY_DOCUMENT_RETENTION_WEEKS`**, which has no working
+   default because how long an applicant needs is a business decision — and which must be **1 to 78 weeks**, the
+   range Notify accepts and `NotifyProperties.retention` enforces, because anything else reads as unconfigured and
+   the Email tab greys the two forms emails out. `NOTIFY_EMAIL_REPLY_TO_ID` is already in the chart and serves
+   both.
    The checklist is `../deed-poll-admin/.business_context/NOTIFY_PROVISIONING_REQUEST.md`, corrected and
    merged 19 September. **All five Notify plans depend on this and none of them can be demonstrated
    without it.**
-2. **The five blank forms are not in `doc_templates/`.** LOC021, LOC023, LOC024, LOC027 and LOC028 are
-   named by the taxonomy and attached by notify-4, and nobody has supplied them. Two of the seven
-   documents (LOC020 adult, LOC022 minor) are generated and present; the other five are static and
-   missing. **notify-4 cannot finish without them.**
+2. **The five blank forms are not in `doc_templates/`, and no longer need to be.** LOC021, LOC023, LOC024,
+   LOC027 and LOC028 are named by the taxonomy, and notify-4b measured the answer: they are attached to the
+   **Notify template**, so this service never stores or sends them (notify-4b Task 4 note 1, quoted into
+   notify-4a Task 1's amendment). LOC020 and LOC022 are the two it generates, and both are vendored under
+   `src/main/resources/deed-templates/`. What remains outstanding for the forms emails is open item 1's
+   provisioning, not these files.
 3. **What `signatureRequestedDate` means.** `CaseState.deriveState` derives `AwaitingSignature` from it
    being non-null, so sending the forms-for-completion email *is* the signature request — but it is also
    patchable through `DeedPollPatch`, so a caseworker can set it by hand. notify-3b flag 1 and notify-4
    flag 2 ask the same question and should be answered together.
-4. **`DOCUMENT_STORE_ROOT` must not reach a deployed environment — and this is now urgent.** Local disk
-   does not survive AKS and replicas do not share a volume. It was tolerable while nothing wrote
-   documents; notify-4 generates deeds and stores them, so the gap becomes a data-loss gap. Real storage
-   is plan 03.
+4. **`DOCUMENT_STORE_ROOT` must not reach a deployed environment — and this is now actual, not prospective.**
+   Local disk does not survive AKS and replicas do not share a volume. It was tolerable while nothing wrote
+   documents; **notify-4b now generates deeds and stores them**, so on more than one replica the drain resolves
+   a deed from a pod that never wrote it and **either forms email fails to send at all**. Real storage is
+   plan 03.
 5. **The backend's `.internal` address does not exist.** `charts/deed-poll-api/values.yaml` sets
    `ingressHost` to `deed-poll-api-{env}.service.core-compute-{env}.internal`, which `deed-poll-admin`'s
    chart already expects. That name is created by a two-line entry in `backend_lb_config.yaml` in
@@ -257,7 +272,7 @@ Everything in [`plans/`](plans/) that is not in `completed/`, and why it is sitt
 
 | File | State |
 |---|---|
-| `notify-4-forms-for-completion.md` | **Blocked twice** — task 1 is an unproven spike, and five of the seven documents do not exist |
+| `notify-4a-attach-files-to-an-email.md` | **Partly landed.** Task 1 — the drain-time Notify upload seam, `DocumentUploads` and `ResolvedDocuments` — shipped inside `notify-4b`. Tasks 2 and 3 are open and both now **contradict what shipped**: Task 2 instructs declaring the relinquishment template ③′ now, and notify-4b deliberately did not (a relinquishment case is answered *inapplicable*, with `RELINQUISHMENT_HAS_ITS_OWN_FORMS` as the sentence); Task 3 rests on storing the five static forms, which notify-4b measured as Notify's and explicitly forbids. Read notify-4b's Task 4 before either |
 | `role-model-generalisation.md` | **Gated, and may not be needed.** A behaviour-preserving refactor of `boolean isAdmin` into capabilities. Gated on scope question Q0.1 and, preferably, on a first successful deployment — so that a failed deploy is unambiguously a deployment problem and not a 33-site refactor |
 | `role-based-access-findings.md` | Findings, not a plan. The measured inventory of what could be role-gated, so the business question is asked against a concrete list |
 | `role-based-access-questions-for-the-business.md` | **Resolved 2026-09-11**, never sent; the business's `.docx` answered it. Kept for the reasoning |
@@ -298,11 +313,12 @@ Writing plan 02 or 03 from guesses. Editing `src/test/resources/reference/` — 
 copy of the specification and the conformance tests read it as ground truth, so if one looks wrong, stop
 and report. Editing a committed Flyway migration — **including `V11__notifications.sql`, which is
 committed as V11 and V12**; **`V18` is the highest on `master`** (`notify-3b` took V16, V17 and V18) and
-**`V19` is the highest committed anywhere**, notify-6 having taken it, so the next plan takes **V20** — confirmed
+**`V20` is the highest committed anywhere** — notify-6 took V19 and notify-4b took V20, the case-scoped
+notification exclusion-group key — so the next plan takes **V21**, confirmed
 by listing `src/main/resources/db/migration` rather than by a number a plan named in advance. notify-6's
 Constraints section named V14 and the real answer was V19, which is exactly why the rule is "inspect, never
 reserve". **Do not reserve a number and jump ahead of it**: Flyway runs with
-out-of-order disabled, so a V19 arriving after V20 has been applied fails every environment that applied V20. Inventing
+out-of-order disabled, so a V20 arriving after V21 has been applied fails every environment that applied V21. Inventing
 an IDAM role name, a case type or a jurisdiction ID. Inferring the state of a Jenkins build from the code,
 rather than asking for the log.
 

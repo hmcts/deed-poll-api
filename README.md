@@ -72,7 +72,10 @@ both counts, so a route added without a row here is a count that stops agreeing 
 | POST | `/caseworker/cases/{id}/emails/{template}/preview` | What Notify would render for this case and these slots — writes nothing |
 | POST | `/caseworker/cases/{id}/emails/{template}` | Enqueue one — an outbox row and a case note inside the caseworker's transaction. Requires an **`Idempotency-Key`** UUID header; a repeat of one key answers **200** with `enqueued: false`, the same key used for different content is a **409**, and so is the email of the group that contradicts one already asked for |
 
-There are deliberately **no** case deletes, no document-type writes and no `validate` endpoint. The domain
+There are deliberately **no** case deletes, no document-type *endpoint* and no `validate` endpoint. The one
+writer of document types is `DeedDocumentService`, which creates the LOC020 and LOC022 rows the first time each
+deed is generated because no migration seeds them — so `GET /caseworker/document-types` can grow by two without
+anybody calling the API. The domain
 implements and tests them; nothing consumes them, and the sibling prototype's mistake was building an API
 for an imagined consumer. There is also no *duplicate* endpoint for a saved query: a client reads one and posts
 a new one with a new name, and there is no server-side invariant an endpoint would protect.
@@ -147,6 +150,31 @@ constraint. Its one slot, `documents_required`, is **required and pre-populated 
 cannot derive which documents are outstanding — so the compose form opens on an empty box and an empty body is a
 400 naming the slot; it is capped at 4,000 characters. The email invites a reply, so it reads **unprovisioned**
 unless both its template id and `NOTIFY_EMAIL_REPLY_TO_ID` are set.
+
+**A fourth and fifth email send the applicant the deed to sign, and they are the first that carry a file.**
+*Forms for completion* and *Forms for completion for a child* are offered while the case's `signatureRequestedDate`
+is null **and** the case's type routes to that email's deed — `Adult` and `AdultTransgender` take LOC020,
+`Minor` and `MinorTransgender` take LOC022, and `DeedOfRelinquishment` and an unknown or unset type are offered
+neither, each with its own sentence. They have **no slots**: there is nothing for a caseworker to write. Sending
+one deliberately does **not** set `signatureRequestedDate` — who should, and when, is a business question this
+service does not answer.
+
+They are **mutually exclusive per case** rather than per referral, which is V20's unique index: no judge is
+involved, so the rows carry no `referralId` and V15's key never sees them, and the second email is a **409**
+naming the first. That is the opposite of the chase, where a second reminder is legitimate. A case that already
+holds one deed and is asked for the other is refused too, in the deed's own words rather than the email's — the
+route is a case whose type was corrected after its first forms email failed permanently, and an applicant must
+not be sent a child's covering letter carrying an adult's deed.
+
+The deed reaches the applicant as a **GOV.UK Notify download link with a confirmation step**, not an attachment —
+the deed carries their name, address and email, so a URL anybody holding it could fetch is the wrong default. The
+five and four static forms the emails also name are attached to the **Notify template**, so this service neither
+stores nor sends them. Both emails invite a reply, so each reads **unprovisioned** unless its template id,
+`NOTIFY_EMAIL_REPLY_TO_ID` *and* `NOTIFY_DOCUMENT_RETENTION_WEEKS` are all set — the first emails to need three
+settings, and the retention has no working default because how long an applicant has to print, gather two
+witnesses and find a commissioner of oaths is not this service's number to guess. It has to be **1 to 78 weeks**,
+the range Notify accepts; anything else reads as unset, because the client checks only the 2 MB size locally and
+an out-of-range value would otherwise fail permanently at Notify after the deed had already been stored.
 
 **The send requires an `Idempotency-Key`, and the client has to make it mean something.** One compose journey
 mints one UUID and sends it with every retry of the final POST — a request that timed out, a double-click, a
@@ -319,14 +347,23 @@ unused — nothing here calls another CFT service yet, and the secret has a non-
 
 ## Documents and uploads
 
-Uploaded files go through the `DocumentStore` interface. The only implementation in this plan is
+Files go through the `DocumentStore` interface. The only implementation in this plan is
 `LocalFilesystemDocumentStore`: blobs keyed by a generated UUID under `DOCUMENT_STORE_ROOT`
 (default `data/documents`, gitignored) so a fresh checkout uploads without being configured first.
+
+**Not every document arrives from a caseworker.** Sending either *Forms for completion* email generates the
+case's deed and stores it through the same path, as an `Outgoing` document with an applicant-facing filename
+(`LOC020-change-of-name-deed-KBDP2026-00001.docx`) filed under a document type the service creates on first use.
+It is generated **once per case** and never again — an applicant signs the paper in wet ink, so the bytes the
+court holds and the paper in their hands cannot be allowed to differ — and it is written inside the send's own
+transaction, so a refused enqueue rolls the blob back with it.
 
 > **Development only, and it must not reach a deployed environment.** Pod disk is ephemeral, replicas
 > do not share a volume, and the chart declares none — a deployed environment running this loses every
 > uploaded file on the next restart and serves 404s from whichever replica did not receive the upload.
-> Real storage is CDAM, in plan 03, which adds an implementation beside this one.
+> Real storage is CDAM, in plan 03, which adds an implementation beside this one. Since the deed is stored
+> here too, this now **blocks sending either forms email** in a deployed environment rather than only risking
+> an applicant's own uploads: the drain would resolve the deed from whichever replica did not write it.
 
 The limits are **25 MB per file** and 26 MB per request, and they come from
 `UploadPolicy.MAX_UPLOAD_BYTES` rather than from a property — the same constant derives the refusal
@@ -334,6 +371,11 @@ message ("The file must be smaller than 25MB"), and a property an environment co
 let the limit being enforced and the limit being quoted to the caller drift apart. A consequence for
 operators: declaring `MultipartConfigElement` as a bean makes **`spring.servlet.multipart.max-file-size`
 inert**, so setting it changes nothing. Change the constant.
+
+A **second, smaller limit** applies to anything sent to an applicant: GOV.UK Notify accepts 2 MB, which is
+`DocumentUploads.MAX_UPLOAD_BYTES`, and a document over it is refused before `sendEmail` in a message naming the
+file and its size — the client's own 413 names neither, and the refusal is what a caseworker reads on the Emails
+tab.
 
 The accepted-type list is also `UploadPolicy`'s, and it is the client's *declared* MIME type, so treat
 it as hygiene rather than as a security control. A narrower list decides which types are served
