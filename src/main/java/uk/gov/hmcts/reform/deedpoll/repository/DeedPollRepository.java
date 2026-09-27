@@ -276,6 +276,27 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
     Optional<CcdCaseProjection> findCcdCaseProjection(@Param("reference") String reference);
 
     /**
+     * The same projection, by the record's id: what the linking operation submits to CCD, and whether the record
+     * exists at all.
+     */
+    @Query("""
+        select new uk.gov.hmcts.reform.deedpoll.repository.CcdCaseProjection(d.id, d.displayReference)
+          from DeedPoll d
+         where d.id = :id
+        """)
+    Optional<CcdCaseProjection> findCcdCaseProjectionById(@Param("id") String id);
+
+    /**
+     * The record's CCD case reference, or empty if it has none or does not exist.
+     *
+     * <p>The linking operation's one read of the binding, which is the truth about whether the record has a case:
+     * the handler writes it in the same transaction as the case itself. A fresh statement every time, never a copy
+     * held from before CCD was called.
+     */
+    @Query("select d.ccdCaseReference from DeedPoll d where d.id = :id and d.ccdCaseReference is not null")
+    Optional<String> findCcdCaseReference(@Param("id") String id);
+
+    /**
      * Recomputes the current referral state of many cases at once, from the referral table.
      *
      * <p><strong>For the stale-claim sweep, which is the one transition that moves many referrals in one

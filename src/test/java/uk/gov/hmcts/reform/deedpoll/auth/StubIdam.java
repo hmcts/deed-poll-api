@@ -21,6 +21,7 @@ import java.util.stream.Collectors;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
+import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 
 /**
@@ -109,6 +110,16 @@ public final class StubIdam {
               "roles": [%s]
             }
             """.formatted(subject, name, quotedRoles));
+    }
+
+    /**
+     * Answers the password grant on {@code POST /o/token} with {@link #accessToken()}, as IDAM answers a system
+     * user signing in. Call it after {@link #stubDefaults()}, which forgets it.
+     */
+    public void stubPasswordGrant() {
+        server.stubFor(post(urlPathEqualTo("/o/token")).willReturn(okJson("""
+            {"access_token": "%s", "token_type": "Bearer", "expires_in": 300}
+            """.formatted(accessToken()))));
     }
 
     /** The stub's own base URL, for stubbing a response that has to name it. */

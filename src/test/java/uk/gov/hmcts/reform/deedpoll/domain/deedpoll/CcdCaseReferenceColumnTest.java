@@ -164,6 +164,13 @@ class CcdCaseReferenceColumnTest extends AbstractPostgresContainerTest {
         createdCase("type", DeedPollType.Minor, "dateReceived", "2026-07-03T00:00:00.000Z",
                     "dateReturned", "2026-08-02T00:00:00.000Z");
         createdCase("type", DeedPollType.Adult, "dateReceived", "2026-07-04T00:00:00.000Z");
+        // The unpaged finders order by createdOn alone, and four saves in a loaded build can tie on it -- which
+        // compared two arbitrary orders, not the reference's effect. Apart by a minute each, the order is fixed.
+        jdbc.update("""
+            UPDATE "deedpoll_deedpoll" d SET "createdOn" = now() - make_interval(mins => n.rank::int)
+              FROM (SELECT "id", row_number() OVER (ORDER BY "id") AS rank FROM "deedpoll_deedpoll") n
+             WHERE d."id" = n."id"
+            """);
 
         Map<String, List<String>> before = snapshot();
 

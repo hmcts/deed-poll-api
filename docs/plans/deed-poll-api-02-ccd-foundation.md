@@ -397,8 +397,79 @@ unchanged. Docker `build`: test 3099 / 379 files, integration 13 / 3 files, all 
 - WireMock scenarios for: success; lost response after CCD committed; handler rollback; conflicting existing
   link; token expiry between start and submit; two workers racing on one deed poll.
 
-- [ ] the linking operation converges to one confirmed link or a visible repair item in every WireMock
+- [x] the linking operation converges to one confirmed link or a visible repair item in every WireMock
       scenario, never a second case, and the build is green
+
+Done 2026-09-27. `CcdLinkingService.link(deedPollId)` is deliberately not `@Transactional`. It opens or finds the
+record's live attempt and claims it through `CcdCreationAttempts`, which commits before CCD is called. It then gets
+the system user's token from `SystemUserTokens` and an S2S token from `ServiceAuthConfiguration`'s generator,
+through an `ObjectProvider`, so it is still the one source. It calls `startCase` and `submitCaseCreation` on
+`CoreCaseDataApi` with `linkDeedPoll`. It marks the attempt `Linked` only when `CcdLinkingRule.confirm` finds CCD's
+reference, case type and `deedPollId` equal to the record's committed binding. `reconcileOutstanding()` handles
+every expired claim, then every attempt awaiting confirmation. It snapshots both lists first, so a claim it takes
+over is read once, not twice.
+
+How each outcome of the submit is classified (`CcdLinkingRule.classify`):
+- A 4xx other than 404 or 408 is a refusal. The binding is read before anything else. If it holds a reference, the
+  attempt goes to `AwaitingConfirmation` and that reference is confirmed. If it is empty, nothing was created, so
+  the attempt is released to `Pending` until `max-attempts` claims have been used, then goes to `NeedsRepair`.
+- No response, a 404, a 408, a 5xx, or a response that will not decode is unknown. The attempt goes to
+  `AwaitingConfirmation` and is reconciled at once.
+- A failure before submission (credentials, IDAM, S2S, or `startCase`) created nothing, and is treated like a
+  refusal with an empty binding.
+
+Reconciliation reads the binding, then `getCase` for it. Confirmation gives `Linked`, and a contradiction gives
+`NeedsRepair` at once. Nothing bound, or CCD unreadable, waits `settle-after`, then becomes `NeedsRepair`.
+Reconciliation never releases an attempt, never clears a binding, and never starts an event. Failure detail is
+fixed prose plus an HTTP status or an exception class name, never a message (which for Feign quotes the body) and
+never a token.
+
+Decision (Task 4's deferral): the start-event token is not persisted. The evidence, from
+`apps/ccd/ccd-data-store-api`:
+- `EventTokenService.generateToken` sets no expiry claim, only `issuedAt`, so a token does not go stale on a clock.
+- A bad token is `EventTokenException`, which is `@ResponseStatus(FORBIDDEN)`. It is thrown before
+  `SubmitCaseTransaction` persists its pointer or calls us, so a 403 created nothing.
+- `IdempotencyKeyHolder` derives the key from the token (`UUID.nameUUIDFromBytes`). A persisted token would only be
+  worth anything for a resubmission, and the design never resubmits: an unknown outcome is settled by the binding,
+  which commits in the same transaction as `ccd.case_data`.
+
+Configuration, each with a non-working default:
+- `core_case_data.api.url` (`CCD_DATA_STORE_URL`, local stack's 4452).
+- `idam.client.id`/`secret`/`redirect_uri` (`IDAM_CLIENT_*`, empty).
+- `idam.system-user.username`/`password` (`DEED_POLL_SYSTEM_USERNAME`/`_PASSWORD`, empty; `SystemUserTokens`
+  refuses an empty one before IDAM is asked).
+- `deedpoll.ccd.linking.worker`/`lease`/`settle-after`/`max-attempts` (`HOSTNAME`, `CCD_LINKING_LEASE` PT5M,
+  `CCD_LINKING_SETTLE_AFTER` PT10M, `CCD_LINKING_MAX_ATTEMPTS` 3). `CcdLinkingProperties` refuses unsafe values.
+
+`CcdConfiguration` names `CoreCaseDataApi` in `@EnableFeignClients`, and `application.yaml` excludes
+`CoreCaseDataClientAutoConfiguration`. That auto-configuration scans the client's whole package and adds an
+unconditional `CoreCaseDataHealthIndicator`, which would put CCD into readiness. Repository additions:
+`findCcdCaseProjectionById`, `findCcdCaseReference`, `findExpiredClaims` and `findAwaitingConfirmation`. No
+migration.
+
+`CcdLinkingScenariosTest` runs against real Postgres. Its fake data-store is a WireMock `ResponseDefinitionTransformerV2`
+that calls back into `/ccd-persistence/cases` as `ccd_data`, with a per-token `Idempotency-Key`. So every case is a
+real binding and a real `ccd.case_data` row, counted from the table. The scenarios:
+- Success: as the system user with the leased S2S token.
+- Lost response after commit, with the first read answered 503: `AwaitingConfirmation`, then `Linked` on
+  reconciliation, with one submit.
+- Handler rollback: a trigger on `ccd.case_event` gives a 500. The attempt waits inside the window, then goes to
+  `NeedsRepair` once aged.
+- Conflicting existing link: an earlier submission lands, the second gets a 422, and the first is confirmed.
+- Token refused between start and submit: 403, `Pending`, then one fresh start and one case.
+- Two workers racing: one start, one `LINKED`, one case.
+- Also an expired claim, reconciled without a start, and a case shown under another case type, which goes to
+  `NeedsRepair`.
+
+The container-free companions are `CcdLinkingRuleTest`, `CcdLinkingServiceTest` (one per scenario, over an
+in-memory attempt that enforces `canMoveTo`) and `SystemUserTokensTest`. `StubS2s.lease` and
+`StubIdam.stubPasswordGrant` are new.
+
+Finding: `CcdCaseReferenceColumnTest.theCaseListIsUnchangedByTheReference` (Task 4) flaked in a full build. The
+unpaged finders order by `createdOn` alone, and four fast saves tied. The test now spaces the rows' `createdOn` a
+minute apart. The ported ordering is unchanged. Docker `build`: test 3137 / 383 files, integration 13 / 3 files,
+all green.
+
 
 ### Task 8: Prove it end to end in cftlib
 

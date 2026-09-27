@@ -46,6 +46,28 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
     Optional<CcdCreationAttempt> findLive(@Param("deedPollId") String deedPollId);
 
     /**
+     * The claims whose lease has run out, oldest first: the attempts reconciliation takes off their workers, because
+     * nobody knows how far each got.
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT *
+          FROM "deedpoll_ccdcreationattempt"
+         WHERE "status" = 'Claimed'
+           AND "leaseExpiresAt" < :now
+         ORDER BY "leaseExpiresAt"
+        """)
+    List<CcdCreationAttempt> findExpiredClaims(@Param("now") LocalDateTime now);
+
+    /** The attempts waiting for reconciliation to read them, longest-waiting first. */
+    @Query(nativeQuery = true, value = """
+        SELECT *
+          FROM "deedpoll_ccdcreationattempt"
+         WHERE "status" = 'AwaitingConfirmation'
+         ORDER BY "modifiedOn"
+        """)
+    List<CcdCreationAttempt> findAwaitingConfirmation();
+
+    /**
      * Opens a {@code Pending} attempt for a record, unless it already has a live one.
      *
      * <p><strong>{@code ON CONFLICT} names V22's partial index as its target, and that is deliberate.</strong> It

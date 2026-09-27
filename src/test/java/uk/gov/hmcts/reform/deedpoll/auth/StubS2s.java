@@ -6,6 +6,7 @@ import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 
 /**
@@ -45,6 +46,15 @@ public final class StubS2s {
             .atPriority(1)
             .withHeader("Authorization", equalTo("Bearer " + token))
             .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "text/plain").withBody(serviceName)));
+    }
+
+    /**
+     * Answers {@code POST /lease} -- the outbound half, which this service calls to mint its own token -- with
+     * {@code jwt}. The library decodes the lease to read its expiry, so it has to be a JWT.
+     */
+    public void lease(String jwt) {
+        server.stubFor(post(urlPathEqualTo("/lease"))
+            .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "text/plain").withBody(jwt)));
     }
 
     public String baseUrl() {

@@ -6,6 +6,7 @@ import org.springframework.cloud.openfeign.EnableFeignClients;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.FilterType;
+import uk.gov.hmcts.reform.ccd.client.CoreCaseDataApi;
 import uk.gov.hmcts.reform.idam.client.IdamApi;
 
 /**
@@ -30,15 +31,21 @@ import uk.gov.hmcts.reform.idam.client.IdamApi;
  * <p>{@link IdamApi} is registered because the SDK's {@code IdamService} resolves the user data-store forwards, and
  * {@code idam-java-client}'s {@code IdamClient} needs the Feign client to exist; nothing in this service calls it
  * directly. Its URL is {@code idam.api.url}.
+ *
+ * <p>{@link CoreCaseDataApi} is the linking operation's way into data-store, at {@code core_case_data.api.url}. It is
+ * registered here rather than by the client's own {@code CoreCaseDataClientAutoConfiguration}, which
+ * {@code application.yaml} excludes: that one is switched on by the same URL property and adds a health indicator
+ * calling data-store, and the unauthenticated {@code /health} aggregates every indicator -- so one data-store outage
+ * would read as this service being down.
  */
 @Configuration
-@EnableConfigurationProperties(CcdProperties.class)
+@EnableConfigurationProperties({CcdProperties.class, CcdLinkingProperties.class})
 @ComponentScan(
     basePackages = "uk.gov.hmcts.ccd.sdk",
     excludeFilters = {
         @ComponentScan.Filter(type = FilterType.CUSTOM, classes = AutoConfigurationExcludeFilter.class),
         @ComponentScan.Filter(type = FilterType.REGEX, pattern = "uk\\.gov\\.hmcts\\.ccd\\.sdk\\.(impl\\.)?json\\..*")
     })
-@EnableFeignClients(clients = IdamApi.class)
+@EnableFeignClients(clients = {IdamApi.class, CoreCaseDataApi.class})
 public class CcdConfiguration {
 }

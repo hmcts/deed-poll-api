@@ -9,6 +9,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.CcdCreationAttemptRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -50,6 +51,18 @@ public class CcdCreationAttempts {
     @Transactional(readOnly = true)
     public Optional<CcdCreationAttempt> live(String deedPollId) {
         return attempts.findLive(deedPollId);
+    }
+
+    /** The claims whose lease has run out, which reconciliation takes off their workers. */
+    @Transactional(readOnly = true)
+    public List<CcdCreationAttempt> expiredClaims() {
+        return attempts.findExpiredClaims(AuditClock.now());
+    }
+
+    /** The attempts waiting for reconciliation to read them. */
+    @Transactional(readOnly = true)
+    public List<CcdCreationAttempt> awaitingConfirmation() {
+        return attempts.findAwaitingConfirmation();
     }
 
     /**
