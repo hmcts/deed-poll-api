@@ -377,4 +377,12 @@ verified status separately. Historical retention periods remain unconfirmed.
 The identifiers, roles/system accounts and platform onboarding are still open inputs.
 Read the new plans' dependencies rather than inventing values. The September 22
 drop-CCD/synthetic-reference direction is historical and is not the implementation
-baseline for this work. Next step: review plan 02 and record confirmed onboarding inputs.
+baseline for this work. ~~Next step: review plan 02 and record confirmed onboarding inputs.~~
+
+**2026-09-27: plan 02 is reviewed and restructured for ralphex — nine `### Task N:` tasks, ready to run.**
+Onboarding moved out of the task list into a Dependencies section (Steve's; only Task 9's AAT smoke procedure
+waits on it), so Tasks 1–8 build on `DEED_POLL_PLACEHOLDER` against WireMock and a local cftlib. Settled with
+Steve: SDK **7.1.0** (what `pcs-api` runs), Spring Boot 3.5.16 first and alone, cftlib **local only**, the CCD
+reference **stored but not published** (the payment plan's amendment now owns publishing it), and the Task 3
+names. Baseline on `master` `09bab4c`: **2956** `test` + **13** `integration`, green — measured, and the first
+attempt died on a Gradle worker timeout, which the plan records. The onboarding inputs are still unconfirmed.
