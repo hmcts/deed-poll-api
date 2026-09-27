@@ -48,6 +48,18 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
         // would otherwise carry an update grant nobody asked for.
         builder.omitHistoryForRoles(DEED_POLL_SYSTEM);
 
+        // Definition store refuses an import whose search inputs, search results or work-basket results are empty
+        // (work-basket inputs alone may be). Nobody searches this case type, so each holds only the case reference,
+        // a metadata column that needs no case field and no grant. Found by the first cftlib import (plan 02, Task 8).
+        builder.searchInputFields().caseReferenceField();
+        builder.searchResultFields().caseReferenceField();
+        builder.workBasketResultFields().caseReferenceField();
+
+        // The SDK derives state grants from events, but gives a creating event's destination state none -- it grants
+        // a state change only where there is a state to leave -- and without one data-store answers every read of a
+        // Registered case 404. Stated here instead, and still only create and read. Also found by cftlib.
+        builder.grant(Registered, Permission.CR, DEED_POLL_SYSTEM);
+
         builder.decentralisedEvent(LINK_DEED_POLL, linkDeedPoll::submit)
             .initialState(Registered)
             .name("Link deed poll")

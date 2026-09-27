@@ -1,0 +1,39 @@
+# This service inside the in-process CFT stack (`./gradlew cftlibTest`). A profile, not environment variables, because
+# every cftlib service shares one JVM and one environment, and a key such as IDAM_CLIENT_ID would reach data-store too.
+#
+# None of these is a secret. They are fixed values the local simulators accept: cftlib stubs outbound S2S and IDAM
+# token requests, and parses inbound tokens without checking a signature. The CCD identifiers are deliberately not
+# here -- the placeholders in application.yaml apply, exactly as they would anywhere else.
+spring:
+  datasource:
+    # cftlib's shared Postgres, on its fixed port, with the database RSE_LIB_ADDITIONAL_DATABASES creates.
+    url: jdbc:postgresql://localhost:6432/deedpoll
+    username: postgres
+    password: postgres
+
+idam:
+  api:
+    # The IDAM simulator. Discovery and userinfo go to it; token decoding is cftlib's.
+    issuer-url: http://localhost:5062/o
+    audiences: deed_poll_api
+    url: http://localhost:5062
+  client:
+    id: deed_poll_api
+    secret: cftlib-simulator
+    redirect_uri: http://localhost:4550/oauth2/callback
+  # CftlibConfig creates this user with the system role; the simulator gives every user it creates this password.
+  system-user:
+    username: deed-poll-system@localhost
+    password: password
+  s2s-auth:
+    url: http://localhost:8489
+    # Base32 so the TOTP generator accepts it; the token it would sign is never requested, because cftlib stubs that.
+    totp-secret: AAAAAAAAAAAAAAAA
+
+core_case_data:
+  api:
+    url: http://localhost:4452
+
+deedpoll:
+  documents:
+    local-store-root: build/cftlib/documents

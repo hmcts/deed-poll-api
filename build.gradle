@@ -16,8 +16,12 @@ plugins {
     versions decentralised-runtime, which is why that dependency below carries no version of its own.
   */
   id 'hmcts.ccd.sdk' version '7.1.0'
-  // Pinned as pcs-api pins it, but not enabled until plan 02's Task 8 proves the case in cftlib.
-  // id 'com.github.hmcts.rse-cft-lib' version '0.19.2360'
+  /*
+    The in-process CFT stack -- CCD data, definition and user-profile stores, AM, and the IDAM and S2S simulators
+    -- that `cftlibTest` runs the linking operation against. Pinned as pcs-api pins it. Local only: nothing in
+    `build`, `check` or the Jenkinsfile runs `cftlibTest` (plan 02, Task 8).
+  */
+  id 'com.github.hmcts.rse-cft-lib' version '0.19.2377'
 }
 
 application {
@@ -68,6 +72,9 @@ configurations {
 
   smokeTestImplementation.extendsFrom testImplementation
   smokeTestRuntimeOnly.extendsFrom runtimeOnly
+
+  // The plugin's own cftlibTest configurations extend `implementation` only, as pcs-api found.
+  cftlibTestImplementation.extendsFrom testImplementation
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -180,6 +187,33 @@ tasks.register('smoke', Test) {
   group = "Verification"
   testClassesDirs = sourceSets.smokeTest.output.classesDirs
   classpath = sourceSets.smokeTest.runtimeClasspath
+}
+
+/*
+  The in-process CFT stack. Every service it starts shares this JVM and so this environment, which is why only the
+  settings data-store and the bootstrapper read are here. This service's own are in src/cftlib/resources'
+  application-cftlib.yaml, where no other service can pick them up. Local simulators throughout: cftlib stubs outbound
+  S2S and IDAM token requests, and parses inbound tokens without checking signatures.
+*/
+tasks.withType(uk.gov.hmcts.rse.CftlibExec).configureEach {
+  authMode = uk.gov.hmcts.rse.AuthMode.Local
+  environment 'RSE_LIB_ADDITIONAL_DATABASES', 'deedpoll'
+  /*
+    Data-store routes a case type to its persistence host by case-insensitive *prefix* of the case type id. The key is
+    `DEED` rather than the whole placeholder because Spring reads each underscore in an environment variable's name
+    as a property separator, so `..._DEED_POLL_PLACEHOLDER` would bind as `deed.poll.placeholder` and match nothing.
+  */
+  environment 'CCD_DECENTRALISED_CASE-TYPE-SERVICE-URLS_DEED', 'http://localhost:4550'
+  // Data-store's own default list, plus this service, which calls it as the linking operation.
+  environment 'DATA_STORE_S2S_AUTHORISED_SERVICES',
+    'ccd_gw,ccd_data,xui_webapp,aac_manage_case_assignment,ccd_case_document_am_api,am_role_assignment_service,deed_poll_api'
+}
+
+// Gradle's checkstyle plugin hangs every source set's task on `check`, which would compile the plugin's cftlib,
+// cftlibIDE and cftlibTest sets in every build. Left out so `build` is what it was; `checkstyleCftlibTest` still runs
+// by name.
+checkstyle {
+  sourceSets = project.sourceSets.matching { !it.name.startsWith('cftlib') }
 }
 
 jacocoTestReport {

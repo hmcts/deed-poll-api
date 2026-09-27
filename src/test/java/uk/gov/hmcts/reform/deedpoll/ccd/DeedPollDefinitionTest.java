@@ -122,6 +122,9 @@ class DeedPollDefinitionTest {
         grants.addAll(rows(caseType, "AuthorisationCaseField/DEED_POLL_SYSTEM.json"));
         grants.addAll(rows(caseType, "AuthorisationCaseState.json"));
 
+        // A creating event leaves its destination state ungranted in the SDK, and data-store then refuses every read.
+        assertThat(rows(caseType, "AuthorisationCaseState.json")).as("the one state is granted")
+            .singleElement().satisfies(row -> assertThat(row.get("CaseStateID").asText()).isEqualTo("Registered"));
         assertThat(grants).isNotEmpty().allSatisfy(grant -> {
             assertThat(grant.get("UserRole").asText()).isEqualTo("DEED_POLL_SYSTEM");
             assertThat(grant.get("CRUD").asText()).isEqualTo("CR");
@@ -132,6 +135,19 @@ class DeedPollDefinitionTest {
                 .containsExactly("DEED_POLL_SYSTEM.json");
         }
         assertThat(rows(caseType, "CaseRoles.json")).as("no case roles").isEmpty();
+    }
+
+    @Test
+    @DisplayName("the three layouts definition store refuses empty hold the case reference, and nothing else")
+    void layoutsDefinitionStoreRequires() throws IOException {
+        Path caseType = generate();
+
+        for (String layout : List.of("SearchInputFields.json", "SearchResultFields.json",
+            "WorkBasketResultFields.json")) {
+            assertThat(rows(caseType, layout)).as(layout).singleElement()
+                .satisfies(row -> assertThat(row.get("CaseFieldID").asText()).isEqualTo("[CASE_REFERENCE]"));
+        }
+        assertThat(rows(caseType, "WorkBasketInputFields.json")).as("the one layout that may be empty").isEmpty();
     }
 
     @Test

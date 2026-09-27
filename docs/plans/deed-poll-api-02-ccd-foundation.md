@@ -487,8 +487,77 @@ all green.
 - If cftlib does not fit this devcontainer (memory, Docker, Elasticsearch it expects), stop and record what it
   needs rather than working around it.
 
-- [ ] `./gradlew cftlibTest` creates, links and reads one case through the real CCD stack, `build` is unchanged
+- [x] `./gradlew cftlibTest` creates, links and reads one case through the real CCD stack, `build` is unchanged
       by the new source set, and the build is green
+
+Done 2026-09-27. The stack fits this devcontainer. The plugin is `com.github.hmcts.rse-cft-lib` **0.19.2377**, as
+`pcs-api` pins it. It creates the `cftlib`, `cftlibIDE` and `cftlibTest` source sets and the `cftlibTest` and
+`bootWithCCD` tasks. `cftlibTestImplementation` extends `testImplementation`, as `pcs-api` found it must. Neither
+task is on `check`. Gradle's checkstyle plugin would otherwise hang the three new source sets' checkstyle on
+`check`, so `checkstyle.sourceSets` leaves them out. `build --dry-run` names no cftlib task at all, and
+`checkstyleCftlib`/`checkstyleCftlibTest` pass when run by name. `AuthMode.Local`: the IDAM simulator is on 5062
+and S2S on 8489. Postgres (6432), Elasticsearch, the IDAM simulator and XUI come from cftlib's docker compose.
+Every image was already cached, which matters because the ACR token in `~/.docker/config.json` has expired.
+
+Configuration:
+- Every cftlib service shares one JVM and one environment. `build.gradle` therefore sets only what data-store and
+  the bootstrapper read: `RSE_LIB_ADDITIONAL_DATABASES=deedpoll`, `DATA_STORE_S2S_AUTHORISED_SERVICES` (data-store's
+  own default list plus `deed_poll_api`) and the routing.
+- Routing is `CCD_DECENTRALISED_CASE-TYPE-SERVICE-URLS_DEED=http://localhost:4550`. Data-store matches by
+  case-insensitive **prefix** of the case type id. Spring reads every underscore in an environment variable's name
+  as a separator, so `…_DEED_POLL_PLACEHOLDER` would bind as `deed.poll.placeholder` and route nothing.
+- This service's own settings are in the `cftlib` profile (`src/cftlib/resources/application-cftlib.yaml`), where
+  no other service can read them. None is a secret: they are simulator values, and the S2S secret is never used
+  because cftlib stubs outbound tokens.
+- The test also activates `development`, which is `PlainHttp`'s allowlisted name for a cleartext IDAM. There is no
+  yaml of that name, so it relaxes that one check and nothing else. The allowlist is unchanged.
+- `CftlibConfig` registers the user roles, creates the system user with the configured system role, creates its
+  profile, and generates and imports the definition. Every identifier is the configured placeholder.
+- `bootWithCCD` gets the same environment but is not given the `cftlib` profile. Running this service in it by
+  hand needs `SPRING_PROFILES_ACTIVE=cftlib,development`.
+
+`CcdLinkingCftlibTest` saves a record, calls `CcdLinkingService.link` and checks the following:
+- the result is `LINKED`;
+- the attempt is `Linked`;
+- `ccd.case_data` holds exactly one row for the reference;
+- data-store's `GET /cases/{ref}`, read as the system user, returns that reference, the case type, the
+  jurisdiction, `Registered`, the record's UUID and its display reference;
+- a second `link` returns `ALREADY_LINKED` and creates no second case.
+
+Findings. The first real import found three gaps in Task 3's definition that no WireMock test could have shown:
+- Definition store refuses an import whose SearchInputFields, SearchResultFields or WorkBasketResultFields are
+  empty ("At least one layout case field must be defined…"). WorkBasketInputFields may be empty.
+  SearchCasesResultFields may be too: cftlib's JSON reader supplies an empty sheet for any file that is missing.
+  Each of the three now holds only `[CASE_REFERENCE]`, a metadata column that needs no case field and no grant.
+- The SDK gave `Registered` no state grant. It derives state grants from events, but grants a state change only
+  where there is a state to leave, and a creating event has none. The case was created (201) and every read of it
+  answered 404, from `canAccessCaseStateWithCriteria`. It is now `builder.grant(Registered, CR, DEED_POLL_SYSTEM)`,
+  so the definition is still only create and read.
+- Data-store takes a pseudo role assignment's security classification from definition store's user-role table,
+  keyed on the **IDAM role's** name rather than the access profile's. With only `DEED_POLL_SYSTEM` registered, the
+  submission reached our `/ccd-persistence` and committed, and data-store then failed its own response with "null
+  SecurityClassification for role: DEED_POLL_SYSTEM" (a 502 to us). The linking operation correctly recorded
+  `AwaitingConfirmation`. `CftlibConfig` now registers both names as PUBLIC. **Onboarding must register the
+  confirmed system role as a user role in each environment's definition store** — one more item for the
+  Dependencies, for Task 9 to carry into the smoke procedure.
+
+`DeedPollDefinitionTest` gained `layoutsDefinitionStoreRequires` and a state-grant assertion, and the pinned JSON
+changed in four files.
+
+Memory, measured with the stack alone on the machine: other Gradle daemons stopped, no build or review running,
+and `free -m` sampled every 5 s.
+- Before: `free -h` showed 16 Gi total, 5.4 Gi used and 11 Gi available.
+- Peak while it ran: 9,393 MB used and 7,560 MB available.
+- The JVM side (Gradle plus the one cftlib JVM) is therefore about **3.6 GB**.
+- The four containers were already up from an earlier run, so they are inside that baseline. `docker stats` puts
+  them at about **1.5 GB**: Elasticsearch 895 MiB, XUI 310, IDAM simulator 256 and Postgres 56.
+- The whole stack is therefore about **5.1 GB**, close to Steve's recollection of 6 GB, and it fits this 16 GiB
+  devcontainer with 7 GB to spare.
+
+A warm `./gradlew cftlibTest` takes 1m 30s to 1m 45s, most of it spent booting the stack; data-store alone
+starts in 66 s. The containers and the `deedpoll` database outlive the run, which is why the test's display
+reference is unique per run. Docker `build`: test 3138 / 383 files (3,137 plus the layout test), integration
+13 / 3 files, all green.
 
 ### Task 9: Full validation and handoff
 
