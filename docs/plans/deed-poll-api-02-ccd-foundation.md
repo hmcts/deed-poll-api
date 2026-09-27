@@ -153,8 +153,34 @@ re-executed. Docker-free `build`: test 1956 / 256 files, all green, which equals
   Test both, the refusal with a caseworker token.
 - Record in this task what the SDK pulled in (dependency diff), and any version it forced.
 
-- [ ] the SDK is on the classpath, both Flyway histories run in the right order, no route is newly open, the
+- [x] the SDK is on the classpath, both Flyway histories run in the right order, no route is newly open, the
       published spec is unchanged, and the build is green
+
+Done 2026-09-27. The plugin lives on the HMCTS Azure Artifacts feed, so `settings.gradle` gained a
+`pluginManagement` block listing it after the portal, as `pcs-api` does. **Dependency diff** (`runtimeClasspath`,
+resolved): no existing module changed version, so the SDK forced nothing and Boot stays 3.5.16. It adds 38
+modules: `decentralised-runtime`, `ccd-config-generator` and `ccd-sdk-bom` 7.1.0, `rse-cft-lib:ccd-lib`
+0.19.2186, `core-case-data-store-client` 5.3.0, `idam-java-client` 3.0.5, `ccd-case-document-am-client` 1.59.2,
+Guava 33.7.1, Caffeine 3.2.4, OkHttp 4.12 (and Kotlin stdlib 1.9.25), `feign-okhttp`/`feign-httpclient` 13.6,
+Apache HttpClient 4.5.14, and `elasticsearch-java`/`elasticsearch-rest5-client` 9.5.4 with Jackson 3.1.0
+(`tools.jackson`) and OpenTelemetry. Two things to know:
+- The plugin itself declares `elasticsearch-java {strictly [9, 10)}`. That is a client library on the classpath,
+  not `ccd-runtime-indexing`; decision 3 still holds, and nothing configures or calls it.
+- Boot's BOM holds OpenTelemetry at 1.49.0 where `elasticsearch-java` asks for 1.63.0. Harmless while nothing
+  uses the ES client; revisit if indexing is ever adopted.
+
+Two findings shaped the code. `idam-java-client` registers `IdamClient` as auto-configuration and needs an
+`IdamApi` Feign client nothing declares, so `application.yaml` excludes it until the SDK's `IdamService` is the
+first caller. And the runtime refuses to start without a `CaseView` bean, so `uk.gov.hmcts.ccd.sdk` is **not yet
+component-scanned**: `/ccd-persistence/**` is not mapped today, only refused. `SecurityConfiguration.CCD_SDK_PATHS`
+denies `/ccd-persistence/**` and `/callbacks/**` to everybody, and `CcdSdkRoutesTest` (Docker-free, under
+`config-gen` + `test`) proves a caseworker's real stub-IDAM token gets 403 there, that `/noc/**` is unmapped, and
+that every route the SDK maps falls under the refused prefixes — vacuous today, and it starts biting the moment
+Task 3 or 6 adds the scan. `ConfigGenProfileTest` boots `config-gen` against an unreachable datasource and fails
+if this application defines a `FlywayMigrationStrategy`. `SdkMigrationOrderTest` (container) shows the `ccd`
+schema and its own history, `public` at V1–V20 with matching checksums, the SDK migrating first, and `validate`
+passing. `generateCCDConfig` runs under `SPRING_PROFILES_ACTIVE=config-gen`; with no `CCDConfig` yet it has
+nothing to write. The OpenAPI document is byte-identical to Task 1's (SHA-256 `0b6d6783…fac250e`).
 
 ### Task 3: The minimal case definition
 

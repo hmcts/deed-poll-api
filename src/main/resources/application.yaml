@@ -69,6 +69,12 @@ springdoc:
   writer-with-order-by-keys: true
 
 spring:
+  autoconfigure:
+    # idam-java-client, which decentralised-runtime brings, registers IdamClient as auto-configuration, and it
+    # needs an IdamApi Feign client that nothing here declares -- so the context would not start. Nothing calls
+    # it yet. The SDK's own IdamService is the first thing that will, once uk.gov.hmcts.ccd.sdk is scanned; that
+    # change removes this line and registers IdamApi in @EnableFeignClients, as pcs-api does. See plan 02 Task 2.
+    exclude: uk.gov.hmcts.reform.idam.client.IdamClient
   config:
     # Where the CNP java chart mounts the `deed-poll-{env}` vault -- `charts/deed-poll-api/values.yaml`
     # keys its `keyVaults` block on `deed-poll`, and the mount path follows that key. `optional:` so a

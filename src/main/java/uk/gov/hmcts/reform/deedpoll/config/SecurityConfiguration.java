@@ -76,6 +76,21 @@ public class SecurityConfiguration {
         "/favicon.ico"
     };
 
+    /**
+     * The routes the CCD SDK maps once {@code uk.gov.hmcts.ccd.sdk} is component-scanned, refused to everybody.
+     *
+     * <p>{@code /ccd-persistence/**} is where data-store posts a case event into the decentralised runtime, and
+     * {@code /callbacks/**} is the generator's callback controller, which a decentralised case type does not use.
+     * Under {@code anyRequest().authenticated()} alone, any valid IDAM token -- a caseworker's included -- could
+     * post an event straight into the SDK. Plan 02 Task 5 replaces the first with its real rule, S2S from
+     * {@code ccd_data} plus an authorised user; nothing is to be added beside it. {@code CcdSdkRoutesTest} fails if
+     * the SDK maps anything outside these two.
+     */
+    static final String[] CCD_SDK_PATHS = {
+        "/ccd-persistence/**",
+        "/callbacks/**"
+    };
+
     @Bean
     public IdamDiscovery idamDiscovery(IdamProperties properties, Environment environment) {
         return new IdamDiscovery(properties, environment);
@@ -110,6 +125,7 @@ public class SecurityConfiguration {
                 // forward as if it were a fresh request turns every 400 and 404 into a 401.
                 .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
                 .requestMatchers(PUBLIC_PATHS).permitAll()
+                .requestMatchers(CCD_SDK_PATHS).denyAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(resourceServer -> resourceServer
                 .jwt(jwt -> jwt

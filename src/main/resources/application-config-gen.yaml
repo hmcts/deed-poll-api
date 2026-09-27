@@ -1,0 +1,27 @@
+# The profile `./gradlew generateCCDConfig` runs under. The SDK's generator boots the whole application to find
+# its CCDConfig beans, and writing a definition must not need a database: nobody generating one should have to
+# start Postgres, and nothing here may migrate or read one. ConfigGenProfileTest boots this profile with no
+# database anywhere and holds all of that.
+spring:
+  datasource:
+    # Deliberately unreachable -- port 1 on loopback -- rather than the docker-compose default, so anything that
+    # does open a connection under this profile fails at once instead of quietly migrating a developer's database.
+    url: jdbc:postgresql://127.0.0.1:1/config-gen-has-no-database
+    username: config-gen
+    password: config-gen
+    hikari:
+      # The pool opens nothing until something asks it for a connection, and nothing should.
+      minimumIdle: 0
+  flyway:
+    # Off, which also turns off the SDK's DecentralisedFlywayAutoConfiguration: it is conditional on the same
+    # property, so neither history is touched.
+    enabled: false
+  jpa:
+    hibernate:
+      # `validate` reads the schema, which needs a connection. The running application still validates.
+      ddl-auto: none
+    properties:
+      hibernate:
+        # Without this Hibernate connects at start-up to discover the dialect. Stated instead, so it does not.
+        boot.allow_jdbc_metadata_access: false
+        dialect: org.hibernate.dialect.PostgreSQLDialect

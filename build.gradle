@@ -12,10 +12,11 @@ plugins {
   id 'uk.gov.hmcts.java' version '0.12.70'
 
   /*
-    Declared and pinned exactly as pcs-api pins them, but deliberately not enabled: plan 02
-    configures CCD and cftlib once the case type and jurisdiction have been onboarded.
+    The CCD SDK, pinned to the version pcs-api runs on this Boot and Java (plan 02, decision 2). Its BOM
+    versions decentralised-runtime, which is why that dependency below carries no version of its own.
   */
-  // id 'hmcts.ccd.sdk' version '6.36.0'
+  id 'hmcts.ccd.sdk' version '7.1.0'
+  // Pinned as pcs-api pins it, but not enabled until plan 02's Task 8 proves the case in cftlib.
   // id 'com.github.hmcts.rse-cft-lib' version '0.19.2360'
 }
 
@@ -29,6 +30,20 @@ java {
   toolchain {
     languageVersion = JavaLanguageVersion.of(21)
   }
+}
+
+ccd {
+  configDir = file('build/definitions')
+}
+
+/*
+  The SDK's generator boots the whole application to find its CCDConfig beans. `config-gen`
+  (src/main/resources/application-config-gen.yaml) boots it with Flyway off and nothing that opens a database
+  connection, so generating a definition needs no Postgres. There is no scheduler to switch off: this service
+  has none. Set here rather than left to the environment, as pcs-api sets it.
+*/
+tasks.named('generateCCDConfig') {
+  environment 'SPRING_PROFILES_ACTIVE', 'config-gen'
 }
 
 def configureSourceSet(String name) {
@@ -261,6 +276,14 @@ dependencies {
     and the template IDs are placeholders and every test talks to StubNotify. See docs/plans/notify-1.
   */
   implementation group: 'uk.gov.service.notify', name: 'notifications-java-client', version: '6.2.0-RELEASE'
+
+  /*
+    The decentralised CCD runtime: the /ccd-persistence API data-store calls back into, and the `ccd`-schema
+    migrations it runs before ours. No version -- the hmcts.ccd.sdk plugin's BOM supplies it. Deliberately
+    alone: no ccd-runtime-indexing, because nothing here searches CCD, and no ccd-servicebus-support (plan 02,
+    decisions 3 and 4).
+  */
+  implementation 'com.github.hmcts:decentralised-runtime'
 
   implementation group: 'org.flywaydb', name: 'flyway-core'
   runtimeOnly group: 'org.flywaydb', name: 'flyway-database-postgresql'
