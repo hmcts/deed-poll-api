@@ -1,10 +1,13 @@
 package uk.gov.hmcts.reform.deedpoll.repository;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -88,6 +91,69 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
          LIMIT :limit
         """)
     List<CcdCreationAttempt> findFirstAwaitingConfirmation(@Param("limit") int limit);
+
+    /**
+     * How many attempts are in each status, {@code Linked} included: the repair view's headline. A status no
+     * attempt is in is absent, and the caller fills it with zero.
+     *
+     * @return pairs of {@link CcdCreationAttemptStatus} and {@code Long}
+     */
+    @Query("select a.status, count(a) from CcdCreationAttempt a group by a.status")
+    List<Object[]> countByStatus();
+
+    /**
+     * One page of the attempts in any status but {@code excluded}, longest-unmoved first: the repair view's list, which
+     * excludes {@code Linked}.
+     *
+     * <p>The status is bound rather than written as a JPQL enum literal, because Hibernate renders that literal as a
+     * cast to the unquoted type name, which Postgres folds to lower case and cannot find.
+     *
+     * <p>{@code "modifiedOn"} and then the id, so the order is total and a page boundary is stable between two
+     * requests that change nothing. An offset rather than {@code findIdsDueForCcdLinking}'s keyset, because a person
+     * is paging a list here rather than a worker taking its head.
+     */
+    @Query(value = """
+        select new uk.gov.hmcts.reform.deedpoll.repository.CcdAttemptRow(
+                   a.id, a.deedPollId, d.displayReference, a.status, a.attempts, a.failureDetail, a.modifiedOn,
+                   a.submissionMayHaveReached)
+          from CcdCreationAttempt a
+          join DeedPoll d on d.id = a.deedPollId
+         where a.status <> :excluded
+         order by a.modifiedOn, a.id
+        """,
+        countQuery = """
+        select count(a)
+          from CcdCreationAttempt a
+         where a.status <> :excluded
+        """)
+    Page<CcdAttemptRow> findRowsOtherThan(@Param("excluded") CcdCreationAttemptStatus excluded, Pageable page);
+
+    /**
+     * {@link #findRowsOtherThan}, narrowed to one status. A statement of its own rather than an optional parameter,
+     * because Postgres cannot type a null bound against an enum column.
+     */
+    @Query(value = """
+        select new uk.gov.hmcts.reform.deedpoll.repository.CcdAttemptRow(
+                   a.id, a.deedPollId, d.displayReference, a.status, a.attempts, a.failureDetail, a.modifiedOn,
+                   a.submissionMayHaveReached)
+          from CcdCreationAttempt a
+          join DeedPoll d on d.id = a.deedPollId
+         where a.status = :status
+         order by a.modifiedOn, a.id
+        """,
+        countQuery = "select count(a) from CcdCreationAttempt a where a.status = :status")
+    Page<CcdAttemptRow> findRowsByStatus(@Param("status") CcdCreationAttemptStatus status, Pageable page);
+
+    /** One attempt as the repair view shows it, if it exists. */
+    @Query("""
+        select new uk.gov.hmcts.reform.deedpoll.repository.CcdAttemptRow(
+                   a.id, a.deedPollId, d.displayReference, a.status, a.attempts, a.failureDetail, a.modifiedOn,
+                   a.submissionMayHaveReached)
+          from CcdCreationAttempt a
+          join DeedPoll d on d.id = a.deedPollId
+         where a.id = :id
+        """)
+    Optional<CcdAttemptRow> findRowById(@Param("id") UUID id);
 
     /**
      * Opens a {@code Pending} attempt for a record, unless it already has a live one.
@@ -250,4 +316,59 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
              @Param("to") String to,
              @Param("failureDetail") String failureDetail,
              @Param("now") LocalDateTime now);
+
+    /**
+     * An admin's "reconcile again": {@code NeedsRepair -> AwaitingConfirmation}, attributed (plan 02b, decisions 8
+     * and 10).
+     *
+     * <p>Conditional on {@code NeedsRepair}, so of two admins acting at once exactly one moves it and the other gets
+     * {@code 0}. {@code "failureDetail"} is left as it stands: it is why the attempt needed repair, and the next
+     * reconciliation overwrites it with whatever it finds. {@code "modifiedOn"} moves, which restarts the settle
+     * window reconciliation measures from, so a repaired attempt gets the whole window again before it can return.
+     *
+     * @return 1 if this statement moved it, 0 if it was not {@code NeedsRepair}
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+        UPDATE "deedpoll_ccdcreationattempt"
+           SET "status" = 'AwaitingConfirmation',
+               "repairedById" = :repairedById,
+               "repairedOn" = :now,
+               "modifiedOn" = :now
+         WHERE "id" = :id
+           AND "status" = 'NeedsRepair'
+        """)
+    int reconcileAgain(@Param("id") UUID id,
+                       @Param("repairedById") String repairedById,
+                       @Param("now") LocalDateTime now);
+
+    /**
+     * An admin's "try again from scratch": {@code NeedsRepair -> Pending}, its tries reset and due now, attributed
+     * (plan 02b, decisions 8 and 10).
+     *
+     * <p><strong>Conditional on {@code "submissionMayHaveReached" = false} as well as the status</strong>, which is
+     * {@code CcdLinkingRule.mayRetryFromScratch} repeated in SQL, as the claim repeats {@code isDue}. The service
+     * asks the rule first and this statement refuses anyway, so an attempt that may have reached CCD is never sent
+     * back to {@code Pending}, whatever a caller read. The flag itself is not touched: it is the attempt's history.
+     *
+     * @return 1 if this statement moved it, 0 if it was not {@code NeedsRepair} or may have been submitted
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+        UPDATE "deedpoll_ccdcreationattempt"
+           SET "status" = 'Pending',
+               "claimedBy" = NULL,
+               "leaseExpiresAt" = NULL,
+               "attempts" = 0,
+               "notBefore" = :now,
+               "repairedById" = :repairedById,
+               "repairedOn" = :now,
+               "modifiedOn" = :now
+         WHERE "id" = :id
+           AND "status" = 'NeedsRepair'
+           AND "submissionMayHaveReached" = false
+        """)
+    int retryFromScratch(@Param("id") UUID id,
+                         @Param("repairedById") String repairedById,
+                         @Param("now") LocalDateTime now);
 }

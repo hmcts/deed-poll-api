@@ -14,7 +14,7 @@
  * The witness writes joined on the same test: the admin renders a case's witnesses and had no way to record
  * one, so the consumer arrived and the routes followed.
  *
- * <p>Seven controllers, one per written resource, plus one for the reads -- which share theirs because they are
+ * <p>One controller per written resource, plus one for the reads -- which share theirs because they are
  * one thing to a consumer, everything a caseworker screen needs before it can render:
  *
  * <ul>
@@ -33,6 +33,9 @@
  *       claiming a referral and recording a direction, are {@code ReferralService} transitions gated on
  *       {@code Role#JUDICIAL} with no route in this package at all: they belong to a judicial surface rather
  *       than to the caseworker one.</li>
+ *   <li>{@code CaseworkerCcdAttemptController} -- the CCD creation attempts that are not linked, and the two
+ *       ways out of {@code NeedsRepair}. Admins only, gated in {@code CcdAttemptRepairs}; the one route here about
+ *       this service's own plumbing rather than a case, which is why it sits beside the cases and not under one.</li>
  * </ul>
  *
  * <p><strong>Every route in this package is one of those bullets; there is no route here that no controller

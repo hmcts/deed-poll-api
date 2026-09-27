@@ -249,7 +249,25 @@ before changing anything.
   - the list's paging cap.
 - Regenerate the OpenAPI document and confirm the diff is only the new paths and schemas.
 
-- [ ] admins can see and safely repair attempts, nobody else can, no binding is written, and the build is green
+- [x] admins can see and safely repair attempts, nobody else can, no binding is written, and the build is green
+
+  After Task 4, with Docker: **3270** `test` in 395 files and **14** `integration`, all green. The service is
+  `ccd/CcdAttemptRepairs`, and `CaseworkerCcdAttemptController` is its controller. It checks the role, then the
+  subject, then the attempt: a caller who is not an admin gets a 403 before anything is read, and an id that is not
+  a UUID is a 404 that is not logged. Each move is one conditional statement in `CcdCreationAttemptRepository`
+  (`reconcileAgain`, `retryFromScratch`). The retry's `"submissionMayHaveReached" = false` condition is in the SQL as
+  well as in `CcdLinkingRule`. A lost race is answered by reading the attempt again, so the second of two admins
+  gets a 409 that says what the attempt is now. `CcdCreationAttempts.move` now refuses any move out of `NeedsRepair`,
+  so every exit from it is attributed. The status filter accepts the four live statuses. `Linked` is a 400 rather
+  than an empty page. The size is capped by `CasePaging` at 100. The response carries `canRetryFromScratch` in place
+  of the flag, and `tries` in place of `attempts`. `CcdAttemptDisclosureTest` holds the unpublished fields out of
+  the API surface and has the entity counterpart. `claimedBy` is checked on the repair types only, because a
+  referral already publishes a name under it. The OpenAPI diff is exactly the three paths and the three
+  `CcdAttempt*Response` schemas. `OpenAPIPublisherTest` counts them in their own `CCD_ATTEMPT_PATHS`, so the
+  caseworker count stays 34. The new controller test carries `@DirtiesContext(AFTER_CLASS)`: one more cached context
+  exhausted the unit JVM's 512 MB heap in a later ArchUnit import. The unfiltered list query binds `Linked` as a
+  parameter, because Hibernate writes a JPQL enum literal as a cast to an unquoted type name that Postgres cannot
+  find.
 
 ### Task 5: Prove it end to end in cftlib
 

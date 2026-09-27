@@ -7,7 +7,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdCreationAttempts;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
@@ -62,6 +65,9 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @BeforeEach
     @AfterEach
@@ -374,6 +380,138 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         attempts.claim(attempt.getId(), "worker-1", LEASE);
         attempts.move(attempt.getId(), Claimed, AwaitingConfirmation, null);
         return repository.findById(attempt.getId()).orElseThrow();
+    }
+
+    /** An attempt taken to NeedsRepair, with its submission flag set as asked, through the statements that do so. */
+    private CcdCreationAttempt needingRepair(String deedPollId, boolean submitted) {
+        CcdCreationAttempt attempt = opened(deedPollId);
+        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isTrue();
+        if (submitted) {
+            assertThat(attempts.recordSubmission(attempt.getId(), "worker-1", 1)).isTrue();
+        }
+        assertThat(attempts.move(attempt.getId(), Claimed, NeedsRepair, "CCD refused the submission (422)")).isTrue();
+        return repository.findById(attempt.getId()).orElseThrow();
+    }
+
+    @Test
+    @DisplayName("reconcile again moves only NeedsRepair, attributed, keeping why it needed repair")
+    void reconcileAgainIsConditionalAndAttributed() {
+        CcdCreationAttempt attempt = needingRepair(newCase(), true);
+
+        assertThat(attempts.reconcileAgain(attempt.getId(), "idam-admin")).isTrue();
+        assertThat(attempts.reconcileAgain(attempt.getId(), "idam-admin")).as("no longer NeedsRepair").isFalse();
+
+        CcdCreationAttempt repaired = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(repaired.getStatus()).isEqualTo(AwaitingConfirmation);
+        assertThat(repaired.getRepairedById()).isEqualTo("idam-admin");
+        assertThat(repaired.getRepairedOn()).isNotNull();
+        assertThat(repaired.getModifiedOn()).isAfterOrEqualTo(attempt.getModifiedOn());
+        assertThat(repaired.getFailureDetail()).isEqualTo("CCD refused the submission (422)");
+        assertThat(repaired.isSubmissionMayHaveReached()).isTrue();
+        assertThat(repaired.getOperationId()).isEqualTo(attempt.getOperationId());
+        assertThat(deedPolls.findById(attempt.getDeedPollId()).orElseThrow().getCcdCaseReference()).isNull();
+    }
+
+    @Test
+    @DisplayName("a retry from scratch resets the tries and is due now, attributed, keeping the operation id")
+    void retryFromScratchResets() {
+        CcdCreationAttempt attempt = needingRepair(newCase(), false);
+
+        assertThat(attempts.retryFromScratch(attempt.getId(), "idam-admin")).isTrue();
+        assertThat(attempts.retryFromScratch(attempt.getId(), "idam-admin")).as("no longer NeedsRepair").isFalse();
+
+        CcdCreationAttempt retried = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(retried.getStatus()).isEqualTo(Pending);
+        assertThat(retried.getAttempts()).isZero();
+        assertThat(retried.getNotBefore()).isNotNull().isBeforeOrEqualTo(AuditClock.now());
+        assertThat(retried.getClaimedBy()).isNull();
+        assertThat(retried.getLeaseExpiresAt()).isNull();
+        assertThat(retried.getRepairedById()).isEqualTo("idam-admin");
+        assertThat(retried.getRepairedOn()).isNotNull();
+        assertThat(retried.getOperationId()).isEqualTo(attempt.getOperationId());
+        assertThat(deedPolls.findById(attempt.getDeedPollId()).orElseThrow().getCcdCaseReference()).isNull();
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).as("due at once").isTrue();
+    }
+
+    @Test
+    @DisplayName("the statement itself refuses a retry from scratch once a submission may have reached CCD")
+    void retryFromScratchRefusedInSql() {
+        CcdCreationAttempt attempt = needingRepair(newCase(), true);
+
+        // The repository directly, past the service's own check: the SQL must refuse on its own.
+        Integer moved = new TransactionTemplate(transactionManager)
+            .execute(status -> repository.retryFromScratch(attempt.getId(), "idam-admin", AuditClock.now()));
+        assertThat(moved).isZero();
+
+        CcdCreationAttempt untouched = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(untouched.getStatus()).isEqualTo(NeedsRepair);
+        assertThat(untouched.getAttempts()).isEqualTo(1);
+        assertThat(untouched.getRepairedById()).isNull();
+    }
+
+    @Test
+    @DisplayName("a repair leaves a bound record's reference as it was")
+    void repairTouchesNoBinding() {
+        String deedPollId = newCase();
+        CcdCreationAttempt attempt = needingRepair(deedPollId, false);
+        jdbc.update("UPDATE \"deedpoll_deedpoll\" SET \"ccdCaseReference\" = ? WHERE \"id\" = ?", "1234567890123456",
+            deedPollId);
+
+        assertThat(attempts.retryFromScratch(attempt.getId(), "idam-admin")).isTrue();
+
+        assertThat(deedPolls.findById(deedPollId).orElseThrow().getCcdCaseReference()).isEqualTo("1234567890123456");
+    }
+
+    @Test
+    @DisplayName("concurrent repairs of one attempt make exactly one move")
+    void concurrentRepairsMakeOneMove() throws Exception {
+        CcdCreationAttempt attempt = needingRepair(newCase(), false);
+
+        List<Boolean> results = race(worker -> worker % 2 == 0
+            ? attempts.reconcileAgain(attempt.getId(), "idam-admin-" + worker)
+            : attempts.retryFromScratch(attempt.getId(), "idam-admin-" + worker));
+
+        assertThat(results).containsOnlyOnce(true);
+        assertThat(repository.findById(attempt.getId()).orElseThrow().getRepairedById()).startsWith("idam-admin-");
+    }
+
+    @Test
+    @DisplayName("the repair view reads counts per status, the unlinked attempts a page at a time, and one by id")
+    void theRepairViewReads() {
+        DeedPoll referenced = new DeedPoll();
+        referenced.setDisplayReference("KBDP2026-000042");
+        String first = deedPolls.save(referenced).getId();
+        CcdCreationAttempt repair = needingRepair(first, true);
+        CcdCreationAttempt pending = opened(newCase());
+        CcdCreationAttempt linked = opened(newCase());
+        assertThat(attempts.claim(linked.getId(), "worker-1", LEASE)).isTrue();
+        assertThat(attempts.move(linked.getId(), Claimed, Linked, null)).isTrue();
+
+        assertThat(attempts.countsByStatus())
+            .containsEntry(NeedsRepair, 1L)
+            .containsEntry(Pending, 1L)
+            .containsEntry(Linked, 1L)
+            .containsEntry(Claimed, 0L)
+            .containsEntry(AwaitingConfirmation, 0L);
+
+        var all = attempts.unlinked(Optional.empty(), PageRequest.of(0, 1));
+        assertThat(all.getTotalElements()).isEqualTo(2);
+        assertThat(all.getContent()).hasSize(1);
+        var second = attempts.unlinked(Optional.empty(), PageRequest.of(1, 1));
+        assertThat(List.of(all.getContent().get(0).id(), second.getContent().get(0).id()))
+            .containsExactlyInAnyOrder(repair.getId(), pending.getId());
+
+        var narrowed = attempts.unlinked(Optional.of(NeedsRepair), PageRequest.of(0, 10));
+        assertThat(narrowed.getContent()).singleElement().satisfies(row -> {
+            assertThat(row.id()).isEqualTo(repair.getId());
+            assertThat(row.displayReference()).isEqualTo("KBDP2026-000042");
+            assertThat(row.submissionMayHaveReached()).isTrue();
+            assertThat(row.attempts()).isEqualTo(1);
+        });
+        assertThat(attempts.unlinked(Optional.of(Linked), PageRequest.of(0, 10))
+                       .getContent()).extracting(CcdAttemptRow::id).containsExactly(linked.getId());
+        assertThat(attempts.row(pending.getId())).map(CcdAttemptRow::status).contains(Pending);
+        assertThat(attempts.row(UUID.randomUUID())).isEmpty();
     }
 
     @Test

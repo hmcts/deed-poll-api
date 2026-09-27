@@ -1,18 +1,23 @@
 package uk.gov.hmcts.reform.deedpoll.ccd;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
+import uk.gov.hmcts.reform.deedpoll.repository.CcdAttemptRow;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdCreationAttemptRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -148,9 +153,10 @@ public class CcdCreationAttempts {
      * @return true if this call moved it; false if it was no longer in {@code from}
      * @throws IllegalStateException if the rule does not allow {@code from -> to}, if {@code to} is
      *     {@code Claimed}, which only {@link #claim} may do, if the move is {@code Claimed -> Pending}, which only
-     *     {@link #release} may do because it sets when the attempt is next due, or if the move is
-     *     {@code NeedsRepair -> Pending}, whose condition -- nothing may have been submitted -- a status-only
-     *     statement cannot check
+     *     {@link #release} may do because it sets when the attempt is next due, or if {@code from} is
+     *     {@code NeedsRepair}, which only {@link #reconcileAgain} and {@link #retryFromScratch} may leave because
+     *     each records who repaired it -- and the retry's condition, that nothing may have been submitted, is one a
+     *     status-only statement cannot check
      */
     @Transactional
     public boolean move(UUID attemptId,
@@ -167,7 +173,14 @@ public class CcdCreationAttempts {
             // Legal only while submissionMayHaveReached is false (CcdLinkingRule.mayRetryFromScratch), and this
             // statement is conditional on the status alone -- so it would retry an attempt that may have reached CCD.
             throw new IllegalStateException(
-                "A retry from scratch must be conditional on nothing having been submitted");
+                "A retry from scratch is made through retryFromScratch(), which is conditional on nothing having "
+                    + "been submitted");
+        }
+        if (from == CcdCreationAttemptStatus.NeedsRepair) {
+            // Every way out of NeedsRepair is an admin's, and each is attributed (plan 02b, decision 10).
+            throw new IllegalStateException(
+                "An attempt leaves NeedsRepair through reconcileAgain() or retryFromScratch(), which record who "
+                    + "repaired it");
         }
         if (!from.canMoveTo(to)) {
             throw new IllegalStateException("A CCD creation attempt cannot move from " + from + " to " + to);
@@ -206,6 +219,72 @@ public class CcdCreationAttempts {
             .isPresent();
         return !bound && move(waiting.getId(), CcdCreationAttemptStatus.AwaitingConfirmation,
             CcdCreationAttemptStatus.NeedsRepair, failureDetail);
+    }
+
+    /**
+     * How many attempts are in each status, every status present and in lifecycle order -- zero for one no attempt
+     * is in, so the repair view's headline has the same shape however empty the ledger is.
+     */
+    @Transactional(readOnly = true)
+    public Map<CcdCreationAttemptStatus, Long> countsByStatus() {
+        Map<CcdCreationAttemptStatus, Long> counts = new EnumMap<>(CcdCreationAttemptStatus.class);
+        for (CcdCreationAttemptStatus status : CcdCreationAttemptStatus.values()) {
+            counts.put(status, 0L);
+        }
+        for (Object[] row : attempts.countByStatus()) {
+            counts.put((CcdCreationAttemptStatus) row[0], ((Number) row[1]).longValue());
+        }
+        return counts;
+    }
+
+    /**
+     * One page of the attempts that are not {@code Linked}, or of those in one status, longest-unmoved first.
+     *
+     * @param status one status to narrow to, or empty for every status but {@code Linked}
+     */
+    @Transactional(readOnly = true)
+    public Page<CcdAttemptRow> unlinked(Optional<CcdCreationAttemptStatus> status, Pageable page) {
+        return status.map(only -> attempts.findRowsByStatus(only, page))
+            .orElseGet(() -> attempts.findRowsOtherThan(CcdCreationAttemptStatus.Linked, page));
+    }
+
+    /** One attempt as the repair view shows it, if it exists. */
+    @Transactional(readOnly = true)
+    public Optional<CcdAttemptRow> row(UUID attemptId) {
+        return attempts.findRowById(attemptId);
+    }
+
+    /**
+     * Sends an attempt {@code NeedsRepair} back to reconciliation, recording who did (plan 02b, decision 8). The one
+     * way an attempt leaves {@code NeedsRepair} for {@code AwaitingConfirmation}, so no repair goes unattributed.
+     *
+     * @param repairedById the admin's IDAM subject; attribution only, never published or logged
+     * @return true if this call moved it; false if it was no longer {@code NeedsRepair}
+     */
+    @Transactional
+    public boolean reconcileAgain(UUID attemptId, String repairedById) {
+        return attempts.reconcileAgain(attemptId, attributed(repairedById), AuditClock.now()) == 1;
+    }
+
+    /**
+     * Sends an attempt {@code NeedsRepair} back to {@code Pending}, its tries reset and due now, recording who did --
+     * only if nothing may have been submitted (plan 02b, decision 8). The one way an attempt leaves
+     * {@code NeedsRepair} for {@code Pending}.
+     *
+     * @param repairedById the admin's IDAM subject; attribution only, never published or logged
+     * @return true if this call moved it; false if it was no longer {@code NeedsRepair}, or may have been submitted
+     */
+    @Transactional
+    public boolean retryFromScratch(UUID attemptId, String repairedById) {
+        return attempts.retryFromScratch(attemptId, attributed(repairedById), AuditClock.now()) == 1;
+    }
+
+    /** A repair with nobody to attribute it to is a wiring fault: the caller is an admin, and admins have subjects. */
+    private static String attributed(String repairedById) {
+        if (repairedById == null || repairedById.isBlank()) {
+            throw new IllegalArgumentException("A repair must say who made it");
+        }
+        return repairedById;
     }
 
     /** A failure detail cut to what the column holds, so a verbose upstream error cannot fail the write. */

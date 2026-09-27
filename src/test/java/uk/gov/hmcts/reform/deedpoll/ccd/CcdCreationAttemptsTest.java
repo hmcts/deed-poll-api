@@ -12,6 +12,8 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -93,6 +95,57 @@ class CcdCreationAttemptsTest {
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("nothing having been submitted");
         verifyNoInteractions(repository);
+    }
+
+    @Test
+    @DisplayName("NeedsRepair -> AwaitingConfirmation is refused here, because only reconcileAgain() attributes it")
+    void reconcileAgainIsNotAPlainMove() {
+        assertThat(NeedsRepair.canMoveTo(AwaitingConfirmation)).isTrue();
+
+        assertThatThrownBy(() -> attempts.move(ATTEMPT, NeedsRepair, AwaitingConfirmation, null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("reconcileAgain()");
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    @DisplayName("a repair with nobody to attribute it to is refused, and issues no statement")
+    void repairMustBeAttributed() {
+        for (String nobody : new String[] {null, "", "  "}) {
+            assertThatThrownBy(() -> attempts.reconcileAgain(ATTEMPT, nobody))
+                .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> attempts.retryFromScratch(ATTEMPT, nobody))
+                .isInstanceOf(IllegalArgumentException.class);
+        }
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    @DisplayName("each repair is one conditional statement, attributed, and reports whether it won")
+    void repairsAreConditionalAndAttributed() {
+        when(repository.reconcileAgain(eq(ATTEMPT), eq("idam-admin"), any())).thenReturn(1, 0);
+        when(repository.retryFromScratch(eq(ATTEMPT), eq("idam-admin"), any())).thenReturn(1, 0);
+
+        assertThat(attempts.reconcileAgain(ATTEMPT, "idam-admin")).isTrue();
+        assertThat(attempts.reconcileAgain(ATTEMPT, "idam-admin")).isFalse();
+        assertThat(attempts.retryFromScratch(ATTEMPT, "idam-admin")).isTrue();
+        assertThat(attempts.retryFromScratch(ATTEMPT, "idam-admin")).isFalse();
+        verify(repository, never()).move(any(), anyString(), anyString(), any(), any());
+    }
+
+    @Test
+    @DisplayName("the counts name every status, zero for one no attempt is in")
+    void countsNameEveryStatus() {
+        when(repository.countByStatus()).thenReturn(List.of(
+            new Object[] {NeedsRepair, 3L}, new Object[] {Linked, 12L}));
+
+        assertThat(attempts.countsByStatus())
+            .containsExactly(
+                Map.entry(Pending, 0L),
+                Map.entry(Claimed, 0L),
+                Map.entry(AwaitingConfirmation, 0L),
+                Map.entry(Linked, 12L),
+                Map.entry(NeedsRepair, 3L));
     }
 
     @Test
