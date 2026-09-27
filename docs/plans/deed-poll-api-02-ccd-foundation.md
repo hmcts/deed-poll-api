@@ -84,6 +84,13 @@ This was Task 0 of the draft. It is Steve's, it runs in parallel with Tasks 1–
   container-free companion where the rule can be expressed without a database, as the Notify plans did.
 - The SDK targets PostgreSQL 15 as a baseline; we run 16 (infra `pgsql_version = "16"`, tests
   `postgres:16-alpine`), as does `pcs-api`. Not a blocker; do not downgrade.
+- **Run every Gradle build in the foreground, never in the background** (added by Steve 2026-09-27, mid-run).
+  Give the Bash call its maximum timeout (`600000` ms); the full build takes about 6–7 minutes. A background
+  build ends your session, because you run non-interactively, and the next session starts a second build over
+  it, which deletes the first build's `build/test-results` and invalidates every count. That happened three
+  times in Task 2. Before starting any build, check that none is already running with
+  `pgrep -f 'gradlew|GradleWorkerMain'`. If one is, wait for it to finish rather than starting another. If a
+  build genuinely outlives the 10-minute cap, stop and record that; do not fall back to a background build.
 
 ## Validation Commands
 
@@ -202,8 +209,19 @@ nothing to write. The OpenAPI document is byte-identical to Task 1's (SHA-256 `0
 - A test over the generated JSON pins the case type, state, event, the two fields and the grants — and fails if
   anything else appears, since the point is a minimal definition and growth should be deliberate.
 
-- [ ] `./gradlew generateCCDConfig` produces the minimal definition from placeholders, a test pins its
+- [x] `./gradlew generateCCDConfig` produces the minimal definition from placeholders, a test pins its
       contents, and the build is green
+
+Done 2026-09-27. `CcdProperties` binds `deedpoll.ccd.{case-type-id,jurisdiction-id,system-role}`, each defaulting
+to `DEED_POLL_PLACEHOLDER` by environment variable and refusing a blank value. `DeedPollCaseType` is the
+`CCDConfig`: state `Registered`, decentralised event `linkDeedPoll` (whose handler throws until Task 6), fields
+`deedPollId`/`deedPollReference`, and `DEED_POLL_SYSTEM` granted `CR`. The configured IDAM role maps onto that
+profile as `idam:<role>` in `RoleToAccessProfiles`. `omitHistoryForRoles` keeps the SDK's `caseHistory` field
+ungranted, because the SDK would otherwise grant it CRU. `CcdConfiguration` registers only the SDK's generator
+package, not the whole SDK, so the runtime and `/ccd-persistence/**` still stay out until Task 6.
+`DeedPollDefinitionTest` (Docker-free, `config-gen`) holds the whole output against
+`src/test/resources/ccd-definition/`, and `SPRING_PROFILES_ACTIVE=config-gen ./gradlew generateCCDConfig` writes
+a `build/definitions` identical to it. Docker `build`: test 2977 / 367 files, integration 13 / 3 files, all green.
 
 ### Task 4: The CCD reference column and durable creation attempts
 

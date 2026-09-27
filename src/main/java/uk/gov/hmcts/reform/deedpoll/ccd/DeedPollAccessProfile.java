@@ -1,0 +1,42 @@
+package uk.gov.hmcts.reform.deedpoll.ccd;
+
+import uk.gov.hmcts.ccd.sdk.api.HasRole;
+import uk.gov.hmcts.ccd.sdk.api.Permission;
+
+import java.util.Set;
+
+/**
+ * The definition's access profiles: one, the actor the linking operation runs as.
+ *
+ * <p>An access profile is the definition's own name for a set of grants, not an IDAM role, so the name here is
+ * fixed and the IDAM role that maps onto it is {@link CcdProperties#systemRole()} -- configuration, because it has
+ * not been onboarded. {@link DeedPollCaseType} writes that mapping. The name is an implementation choice agreed
+ * 2026-09-27, not an onboarded identifier.
+ *
+ * <p>Every constant here gets an {@code AuthorisationCaseType} row with its {@link #getCaseTypePermissions()}, so a
+ * new one is a new grant on the whole case type -- which {@code DeedPollDefinitionTest} refuses until it is added to
+ * the pinned definition deliberately.
+ */
+public enum DeedPollAccessProfile implements HasRole {
+
+    /** Creates and reads; never updates or deletes, because the case is only ever linked. */
+    DEED_POLL_SYSTEM("DEED_POLL_SYSTEM", Permission.CR);
+
+    private final String role;
+    private final Set<Permission> caseTypePermissions;
+
+    DeedPollAccessProfile(String role, Set<Permission> caseTypePermissions) {
+        this.role = role;
+        this.caseTypePermissions = caseTypePermissions;
+    }
+
+    @Override
+    public String getRole() {
+        return role;
+    }
+
+    @Override
+    public String getCaseTypePermissions() {
+        return Permission.toString(caseTypePermissions);
+    }
+}

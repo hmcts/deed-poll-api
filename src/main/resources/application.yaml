@@ -214,10 +214,14 @@ notify:
 
 deedpoll:
   ccd:
-    # The one place a CCD case type is named, and deliberately not the real value: the case type and
-    # jurisdiction have not been onboarded, so anything else here would be a guess that plan 02 would
-    # then have to find and unpick. Nothing reads it yet -- it exists so no task has to invent one.
-    case-type-id: DEED_POLL_PLACEHOLDER
+    # The CCD identifiers this service is waiting on, and deliberately not the real values: the case type,
+    # jurisdiction and system role have not been onboarded, so anything else here would be a guess somebody
+    # would later have to find and unpick. CcdProperties reads all three and DeedPollCaseType writes them into
+    # the definition; a confirmed value is an environment variable, not a code change (plan 02, decision 5).
+    case-type-id: ${CCD_CASE_TYPE_ID:DEED_POLL_PLACEHOLDER}
+    jurisdiction-id: ${CCD_JURISDICTION_ID:DEED_POLL_PLACEHOLDER}
+    # The IDAM role the linking operation's system user holds, mapped onto the DEED_POLL_SYSTEM access profile.
+    system-role: ${CCD_SYSTEM_ROLE:DEED_POLL_PLACEHOLDER}
   referrals:
     # How long a judge's claim on a referral survives their inactivity before it goes back into the
     # shared pool. Measured from their last interaction with the referral, not from the claim, so a
