@@ -7,6 +7,7 @@ import uk.gov.hmcts.ccd.sdk.CCDDefinitionGenerator;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdProperties;
 import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile;
 import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollCaseState;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.rse.ccd.lib.api.CFTLib;
 import uk.gov.hmcts.rse.ccd.lib.api.CFTLibConfigurer;
 
@@ -23,9 +24,18 @@ import java.io.File;
  * <p>Only the system user is created, holding only the system role: the definition grants {@code DEED_POLL_SYSTEM}
  * and nobody else anything, and the IDAM role reaches that profile through the definition's
  * {@code RoleToAccessProfiles} row, which data-store reads from the role assignments it derives from IDAM roles.
+ *
+ * <p>One more user, {@link #ADMIN_USER}, calls this service rather than CCD: an admin caseworker, so a test can
+ * create a record, list the cases and repair an attempt over HTTP as a caseworker would. It holds no CCD role and has
+ * no profile, because nothing it does reaches data-store as that user.
  */
 @Component
 public class CftlibConfig implements CFTLibConfigurer {
+
+    /**
+     * An admin caseworker, holding {@link Role#DEEDPOLL_ADMIN} and nothing else.
+     */
+    public static final String ADMIN_USER = "deed-poll-admin@localhost";
 
     private static final File DEFINITIONS = new File("build/cftlib/definitions");
 
@@ -49,6 +59,7 @@ public class CftlibConfig implements CFTLibConfigurer {
         // Wherever the case type is onboarded, the same role has to be registered in that definition store.
         lib.createRoles(DeedPollAccessProfile.DEED_POLL_SYSTEM.getRole(), identifiers.systemRole());
         lib.createIdamUser(systemUser, identifiers.systemRole());
+        lib.createIdamUser(ADMIN_USER, Role.DEEDPOLL_ADMIN.claimValue());
         lib.createProfile(systemUser, identifiers.jurisdictionId(), identifiers.caseTypeId(),
             DeedPollCaseState.Registered.name());
 

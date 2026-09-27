@@ -278,7 +278,20 @@ before changing anything.
     the endpoint, then linked by the next sweep, with exactly one case in `ccd.case_data`.
 - Record the wall-clock time the sweep added to that list request.
 
-- [ ] both journeys pass in cftlib with one case per record, and the build is green
+- [x] both journeys pass in cftlib with one case per record, and the build is green
+
+  After Task 5: `cftlibTest` **3** tests, green, in about 1m 35s warm. The Docker `build` is unchanged at **3270**
+  `test` in 395 files and **14** `integration`, all green. Both journeys are in `CcdLinkingCftlibTest` and run over
+  HTTP as `CftlibConfig.ADMIN_USER`, a new simulator user holding only `caseworker-deedpoll-admin`. The sweep is on in
+  `application-cftlib.yaml` only. The SDK stores `{}` as each case's data, so "one case per record" is checked as
+  the placeholder case type's `ccd.case_data` row count growing by exactly one. The retry journey also checks that
+  the record kept a single attempt row. The stack's database outlives a run, so each journey first sweeps until
+  nothing is due, which makes its own record the head of the queue. **Sweep cost, measured over four runs:** a warm
+  list request that links one record takes **190–204 ms**, against **35–42 ms** with nothing to link, so each linked
+  record adds about 150–170 ms. The first list request in a fresh JVM takes **2.9–4.3 s**. That figure is cold
+  start (first Feign clients, first IDAM token, JIT), not the sweep's steady cost. With `max-records` at 2, a warm
+  sweep that links a full batch adds about a third of a second. The timings are printed with `System.out`, because
+  this service's log lines do not reach the `cftlibTest` console.
 
 ### Task 6: Full validation and handoff
 
