@@ -1,0 +1,12 @@
+[
+  {
+    "AccessProfiles": "DEED_POLL_SYSTEM",
+    "Authorisation": "",
+    "CaseAccessCategories": "",
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "Disabled": "N",
+    "LiveFrom": "01/01/2017",
+    "ReadOnly": "N",
+    "RoleName": "idam:DEED_POLL_PLACEHOLDER"
+  }
+]

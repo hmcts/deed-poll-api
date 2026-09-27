@@ -52,6 +52,22 @@ public final class IdamClaims {
     }
 
     /**
+     * Every role the claims name, spelt as IDAM spelt it -- including the ones {@link #userFromClaims} drops.
+     *
+     * <p><strong>Not in the reference</strong>, and deliberately not a way into {@link CurrentUser}. It has one
+     * reader, the CCD persistence chain. That chain must map a caller's IDAM roles onto the case definition's access
+     * profiles as data-store does, and the one role it maps is configuration, not a {@link Role} (plan 02,
+     * decision 5). The parsing is the same as for the roles {@link #userFromClaims} keeps, with blank entries
+     * removed.
+     */
+    public static List<String> roleNames(Map<String, ?> claims) {
+        return values(claims.get("roles"))
+            .map(value -> String.valueOf(value).trim())
+            .filter(value -> !value.isEmpty())
+            .toList();
+    }
+
+    /**
      * IDAM may send roles as an array or, on some configurations, a single comma-separated string. Both
      * are accepted because getting it wrong yields an empty role list, which fails closed but looks like
      * a permissions bug rather than a parsing one -- the expensive kind to diagnose.

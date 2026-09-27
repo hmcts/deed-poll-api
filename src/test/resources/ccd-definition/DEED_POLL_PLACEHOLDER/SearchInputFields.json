@@ -1,0 +1,9 @@
+[
+  {
+    "CaseFieldID": "[CASE_REFERENCE]",
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "DisplayOrder": 1,
+    "Label": "Case Number",
+    "LiveFrom": "01/01/2017"
+  }
+]

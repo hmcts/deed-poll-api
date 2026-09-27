@@ -1,5 +1,9 @@
 # Resume state — where the next session picks up
 
+**CCD foundation, 2026-09-27: plan 02 is complete** on branch `deed-poll-api-02-ccd-foundation`, not yet merged.
+Read [its section](#ccd-foundation--plan-02-complete-2026-09-27) before anything about CCD further down, all of
+which predates it.
+
 **CCD planning update, 2026-09-26:** read the
 [new integration-plan baseline](#ccd-planning-update--2026-09-26) below before using
 the older statements that plans 02/03 are unwritten.
@@ -15,6 +19,58 @@ notify-3, notify-3b, notify-6, notify-4b and notify-4c are all merged on `master
 the case-scoped correspondence read, return availability, history and slot defaults from the existing Email-tab
 GET, and pin the public wording and cross-case security boundary. notify-3 sends the confirmation email itself,
 with one referral-outcome email per referral enforced by the database.
+
+## CCD foundation — plan 02 complete, 2026-09-27
+
+[Plan 02](plans/completed/deed-poll-api-02-ccd-foundation.md), all nine tasks, on branch `deed-poll-api-02-ccd-foundation`
+(not merged). **Proved on placeholders, not onboarded**: every identifier is still `DEED_POLL_PLACEHOLDER`, nothing
+was imported, registered or deployed, and the linking operation is called by no real flow.
+
+What is built, in `ccd/` unless named:
+
+- Spring Boot **3.5.16**, the `hmcts.ccd.sdk` plugin **7.1.0** and `decentralised-runtime` from its BOM. No
+  indexing, Service Bus, NoC or Work Allocation. The SDK's `ccd`-schema migrations run before ours, under its own
+  history table; this application defines no `FlywayMigrationStrategy`, and `ConfigGenProfileTest` keeps it so.
+- The minimal definition: `DeedPollCaseType` — state `Registered`, event `linkDeedPoll`, fields `deedPollId` and
+  `deedPollReference`, `DEED_POLL_SYSTEM` granted create and read. `CcdProperties` reads the case type,
+  jurisdiction and system role. `SPRING_PROFILES_ACTIVE=config-gen ./gradlew generateCCDConfig` writes it with no
+  database, and `DeedPollDefinitionTest` pins it against `src/test/resources/ccd-definition/`.
+- **V21**: `deedpoll_deedpoll."ccdCaseReference"`, nullable, unique, 16 digits. It is not readable, patchable,
+  queryable or published. **V22**: `deedpoll_ccdcreationattempt`, with one live attempt per record, the ledger
+  the migration plan reuses (`CcdCreationAttempts`).
+- `/ccd-persistence/**` has its own chain. It admits S2S `ccd_data` only, plus an IDAM user holding the configured
+  system role. The caseworker and judicial namespaces still need no S2S.
+- `LinkDeedPollHandler` binds a reference atomically in the SDK's transaction, once, and never overwrites.
+  `DeedPollCaseView` composes the view from `CcdCaseProjection`.
+- `CcdLinkingService.link` claims, commits, then starts and submits through `CoreCaseDataApi` as the system user.
+  Recovery reads rather than retries. The start-event token is not persisted; the plan's Task 7 has the evidence.
+- **No repair operation exists yet.** `reconcileOutstanding` reads expired claims and `AwaitingConfirmation` only;
+  a `NeedsRepair` attempt — a contradiction, a binding never seen within the settle window, or every try refused —
+  stays live and blocks a fresh attempt until a person reads the record and CCD. The plan defines
+  `NeedsRepair → AwaitingConfirmation` and nothing yet performs it. V22 also says `operationId` proves ownership
+  of a submission; nothing carries it to CCD or checks it, so for now it is an identifier and no more.
+- `cftlibTest` (**local only**, not on `build`, `check` or the Jenkinsfile): `CcdLinkingCftlibTest` creates, links
+  and reads one case through the real in-process CCD stack. The stack needs about 5.1 GB and fits this
+  devcontainer.
+
+Final counts, measured 2026-09-27 from `build/test-results/` after deleting it, on the branch's last code:
+
+| Run | `test` | `integration` | Wall clock |
+|---|---|---|---|
+| `./gradlew build` (Docker) | **3138**, 0 failures / 0 errors / 0 skipped, 383 files | **13**, green, 3 files | 4m 42s |
+| `INTEGRATION_TESTS_ENABLED=false ./gradlew build` | **2093**, 0 / 0 / 0, 271 files | not run | 1m 17s |
+| `./gradlew cftlibTest` | 1 test, green | — | 1m 32s |
+
+Against the `master` baseline (`09bab4c`: Docker 2956 / 363, Docker-free 1956 / 256), that is **182** new tests
+in 20 result files. **137** of them are in 15 Docker-free files, and run in CI. The migration histories, the
+concurrent claims, the persistence submissions and the linking scenarios need real Postgres; each has a
+container-free companion.
+
+**What stands between this and AAT** is the plan's Dependencies section (Steve's), plus one item cftlib added: the
+confirmed system role must be registered as a **user role** in each environment's definition store.
+[`CCD-SMOKE.md`](CCD-SMOKE.md) is the operator-run procedure: the definition import, the provisioned identities,
+and create/read. It has not been run. **Its create/read step has no trigger yet**, because nothing calls
+`link`. Online submission or migration will supply one, or Steve decides on an operator-only entry point.
 
 ## Where the Notify work actually is — read this before anything else
 
@@ -268,9 +324,10 @@ What it does **not** give, and each of these is a real constraint on what a sess
 7. **A Docker-capable CNP agent** is the real fix for the CI gating, and is an external dependency —
    tracked in `cft-workspace/TRACKER.local.md` §4.
 
-## There is still no plan 02 or 03
+## There is still no plan 02 or 03 — historical
 
-Both remain deliberately unwritten, and for unchanged reasons:
+**Superseded twice**: both plans were written on 2026-09-26, and plan 02 was built on 2026-09-27 (see the CCD
+foundation section above). Plan 03 is written and not built. Kept for its reasoning about `doc-assembly`:
 
 - **Plan 02 — CCD.** `decentralised = true`, `CCDConfig`, `CaseView`, `/ccd-persistence/*`, the case-type
   definition. The case type and jurisdiction ID are **unconfirmed**; `deedpoll.ccd.case-type-id:
@@ -359,7 +416,7 @@ reference on the deed-poll record, followed by CDAM and Retain and Dispose. Draf
 now exist; the earlier statements that plans 02/03 are unwritten are superseded.
 No CCD/CDAM/payment integration was implemented or onboarded in this planning session.
 
-- [Plan 02: CCD foundation](plans/deed-poll-api-02-ccd-foundation.md)
+- [Plan 02: CCD foundation](plans/completed/deed-poll-api-02-ccd-foundation.md)
 - [Resumable CCD migration](plans/ccd-migration.md)
 - [Payment plan amendment](plans/fees-and-pay-1-ways-to-pay-card.md#amendment-2026-09-26--ccd-and-queue-admission)
 - [Plan 03: CDAM documents](plans/deed-poll-api-03-cdam-documents.md)

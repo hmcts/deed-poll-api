@@ -1,7 +1,7 @@
 # Unpaid online applications — reminder, recovery and expiry
 
 Status: draft for review, 2026-09-26. Depends on the amended
-[payment plan](fees-and-pay-1-ways-to-pay-card.md), [CCD foundation](deed-poll-api-02-ccd-foundation.md)
+[payment plan](fees-and-pay-1-ways-to-pay-card.md), [CCD foundation](completed/deed-poll-api-02-ccd-foundation.md)
 and Notify provisioning. Disposal depends on [retain and dispose](retain-and-dispose.md).
 
 ## Agreed lifecycle

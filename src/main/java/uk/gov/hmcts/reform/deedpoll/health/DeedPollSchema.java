@@ -32,8 +32,9 @@ public class DeedPollSchema {
     /**
      * Every table the deed-poll domain reads or writes: the six named by the {@code @@map}s in
      * {@code src/test/resources/reference/deed-poll.prisma}, plus the two saved-query tables,
-     * {@code deedpoll_referral} and {@code deedpoll_notification}, which have no reference model because
-     * saved queries, referrals and the notification outbox are new behaviour rather than a port.
+     * {@code deedpoll_referral}, {@code deedpoll_notification} and {@code deedpoll_ccdcreationattempt}, which have
+     * no reference model because saved queries, referrals, the notification outbox and CCD linking are new
+     * behaviour rather than a port.
      *
      * <p>Listed explicitly rather than derived, and the reference's reason for that survives the port even
      * though its own reason does not: Prisma has no runtime schema introspection, whereas Hibernate does know
@@ -58,7 +59,8 @@ public class DeedPollSchema {
         "deedpoll_savedquery",
         "deedpoll_savedqueryselection",
         "deedpoll_referral",
-        "deedpoll_notification"
+        "deedpoll_notification",
+        "deedpoll_ccdcreationattempt"
     );
 
     /**

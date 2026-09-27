@@ -163,4 +163,14 @@ class IdamClaimsTest {
 
         assertThat(IdamClaims.userFromClaims(claims("roles", roles)).roles()).containsExactly(Role.DEEDPOLL_ADMIN);
     }
+
+    @Test
+    @DisplayName("roleNames keeps every role as IDAM spelt it, including the ones userFromClaims drops")
+    void roleNamesKeepsUnknownRoles() {
+        // Not in the reference: the CCD persistence chain's one reader, which maps a configured role.
+        assertThat(IdamClaims.roleNames(claims("roles", List.of(" caseworker-civil ", ADMIN, "", "system-role"))))
+            .containsExactly("caseworker-civil", ADMIN, "system-role");
+        assertThat(IdamClaims.roleNames(claims("roles", "a, b"))).containsExactly("a", "b");
+        assertThat(IdamClaims.roleNames(claims())).isEmpty();
+    }
 }

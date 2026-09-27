@@ -87,7 +87,7 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
             .map(EntityType::getJavaType)
             .collect(Collectors.toSet());
 
-        // The six ported models, then the four that are not a port. Exact rather than "contains", because
+        // The six ported models, then the five that are not a port. Exact rather than "contains", because
         // validation is vacuous for an entity Hibernate never saw and an entity dropped from the scan would
         // otherwise stop being checked silently.
         assertThat(mapped).containsExactlyInAnyOrder(
@@ -100,7 +100,8 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
             SavedQuery.class,
             SavedQuerySelection.class,
             Referral.class,
-            Notification.class);
+            Notification.class,
+            CcdCreationAttempt.class);
     }
 
     @TestFactory

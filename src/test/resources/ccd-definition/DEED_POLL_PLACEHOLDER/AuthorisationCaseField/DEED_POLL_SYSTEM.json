@@ -1,0 +1,16 @@
+[
+  {
+    "CRUD": "CR",
+    "CaseFieldID": "deedPollId",
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "LiveFrom": "01/01/2017",
+    "UserRole": "DEED_POLL_SYSTEM"
+  },
+  {
+    "CRUD": "CR",
+    "CaseFieldID": "deedPollReference",
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "LiveFrom": "01/01/2017",
+    "UserRole": "DEED_POLL_SYSTEM"
+  }
+]

@@ -1,6 +1,6 @@
 # Plan 03 — CDAM document storage and case attachment
 
-Status: draft for review, 2026-09-26. Depends on [plan 02](deed-poll-api-02-ccd-foundation.md).
+Status: draft for review, 2026-09-26. Depends on [plan 02](completed/deed-poll-api-02-ccd-foundation.md).
 
 ## Outcome
 

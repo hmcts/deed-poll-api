@@ -2,7 +2,7 @@ plugins {
   id 'application'
   id 'jacoco'
   id 'io.spring.dependency-management' version '1.1.7'
-  id 'org.springframework.boot' version '3.5.5'
+  id 'org.springframework.boot' version '3.5.16'
   id 'com.github.ben-manes.versions' version '0.52.0'
   id 'org.sonarqube' version '6.3.1.5724'
   /*
@@ -12,11 +12,16 @@ plugins {
   id 'uk.gov.hmcts.java' version '0.12.70'
 
   /*
-    Declared and pinned exactly as pcs-api pins them, but deliberately not enabled: plan 02
-    configures CCD and cftlib once the case type and jurisdiction have been onboarded.
+    The CCD SDK, pinned to the version pcs-api runs on this Boot and Java (plan 02, decision 2). Its BOM
+    versions decentralised-runtime, which is why that dependency below carries no version of its own.
   */
-  // id 'hmcts.ccd.sdk' version '6.36.0'
-  // id 'com.github.hmcts.rse-cft-lib' version '0.19.2360'
+  id 'hmcts.ccd.sdk' version '7.1.0'
+  /*
+    The in-process CFT stack -- CCD data, definition and user-profile stores, AM, and the IDAM and S2S simulators
+    -- that `cftlibTest` runs the linking operation against. Pinned as pcs-api pins it. Local only: nothing in
+    `build`, `check` or the Jenkinsfile runs `cftlibTest` (plan 02, Task 8).
+  */
+  id 'com.github.hmcts.rse-cft-lib' version '0.19.2377'
 }
 
 application {
@@ -29,6 +34,20 @@ java {
   toolchain {
     languageVersion = JavaLanguageVersion.of(21)
   }
+}
+
+ccd {
+  configDir = file('build/definitions')
+}
+
+/*
+  The SDK's generator boots the whole application to find its CCDConfig beans. `config-gen`
+  (src/main/resources/application-config-gen.yaml) boots it with Flyway off and nothing that opens a database
+  connection, so generating a definition needs no Postgres. There is no scheduler to switch off: this service
+  has none. Set here rather than left to the environment, as pcs-api sets it.
+*/
+tasks.named('generateCCDConfig') {
+  environment 'SPRING_PROFILES_ACTIVE', 'config-gen'
 }
 
 def configureSourceSet(String name) {
@@ -53,6 +72,9 @@ configurations {
 
   smokeTestImplementation.extendsFrom testImplementation
   smokeTestRuntimeOnly.extendsFrom runtimeOnly
+
+  // The plugin's own cftlibTest configurations extend `implementation` only, as pcs-api found.
+  cftlibTestImplementation.extendsFrom testImplementation
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -167,6 +189,33 @@ tasks.register('smoke', Test) {
   classpath = sourceSets.smokeTest.runtimeClasspath
 }
 
+/*
+  The in-process CFT stack. Every service it starts shares this JVM and so this environment, which is why only the
+  settings data-store and the bootstrapper read are here. This service's own are in src/cftlib/resources'
+  application-cftlib.yaml, where no other service can pick them up. Local simulators throughout: cftlib stubs outbound
+  S2S and IDAM token requests, and parses inbound tokens without checking signatures.
+*/
+tasks.withType(uk.gov.hmcts.rse.CftlibExec).configureEach {
+  authMode = uk.gov.hmcts.rse.AuthMode.Local
+  environment 'RSE_LIB_ADDITIONAL_DATABASES', 'deedpoll'
+  /*
+    Data-store routes a case type to its persistence host by case-insensitive *prefix* of the case type id. The key is
+    `DEED` rather than the whole placeholder because Spring reads each underscore in an environment variable's name
+    as a property separator, so `..._DEED_POLL_PLACEHOLDER` would bind as `deed.poll.placeholder` and match nothing.
+  */
+  environment 'CCD_DECENTRALISED_CASE-TYPE-SERVICE-URLS_DEED', 'http://localhost:4550'
+  // Data-store's own default list, plus this service, which calls it as the linking operation.
+  environment 'DATA_STORE_S2S_AUTHORISED_SERVICES',
+    'ccd_gw,ccd_data,xui_webapp,aac_manage_case_assignment,ccd_case_document_am_api,am_role_assignment_service,deed_poll_api'
+}
+
+// Gradle's checkstyle plugin hangs every source set's task on `check`, which would compile the plugin's cftlib,
+// cftlibIDE and cftlibTest sets in every build. Left out so `build` is what it was; `checkstyleCftlibTest` still runs
+// by name.
+checkstyle {
+  sourceSets = project.sourceSets.matching { !it.name.startsWith('cftlib') }
+}
+
 jacocoTestReport {
   executionData(test, integration)
   reports {
@@ -261,6 +310,20 @@ dependencies {
     and the template IDs are placeholders and every test talks to StubNotify. See docs/plans/notify-1.
   */
   implementation group: 'uk.gov.service.notify', name: 'notifications-java-client', version: '6.2.0-RELEASE'
+
+  /*
+    The decentralised CCD runtime: the /ccd-persistence API data-store calls back into, and the `ccd`-schema
+    migrations it runs before ours. No version -- the hmcts.ccd.sdk plugin's BOM supplies it. Deliberately
+    alone: no ccd-runtime-indexing, because nothing here searches CCD, and no ccd-servicebus-support (plan 02,
+    decisions 3 and 4).
+  */
+  implementation 'com.github.hmcts:decentralised-runtime'
+  /*
+    Already on the runtime classpath through decentralised-runtime, at this version. Declared because
+    CcdConfiguration names its IdamApi in @EnableFeignClients -- the SDK's IdamService cannot wire without it --
+    and the SDK's BOM does not manage it. Pinned as pcs-api pins it, so the declaration changes nothing resolved.
+  */
+  implementation group: 'com.github.hmcts', name: 'idam-java-client', version: '3.0.5'
 
   implementation group: 'org.flywaydb', name: 'flyway-core'
   runtimeOnly group: 'org.flywaydb', name: 'flyway-database-postgresql'

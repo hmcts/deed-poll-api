@@ -304,9 +304,15 @@ class ReferralSecurityTest {
     @DisplayName("namespace separation")
     class NamespaceSeparation {
 
-        private static final JavaClasses CLASSES = new ClassFileImporter()
-            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
-            .importPackages("uk.gov.hmcts.reform.deedpoll");
+        /**
+         * Imported per rule and then dropped: a whole-codebase graph in a static field stays reachable for the
+         * whole test JVM, and several of them exhaust its heap.
+         */
+        private static JavaClasses mainClasses() {
+            return new ClassFileImporter()
+                .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+                .importPackages("uk.gov.hmcts.reform.deedpoll");
+        }
 
         /**
          * The unscoped finder the judicial pool needs is reachable from the judicial service and nowhere else.
@@ -326,7 +332,7 @@ class ReferralSecurityTest {
                     "a call to the unscoped pool finder",
                     (JavaMethodCall call) -> POOL.contains(call.getName())
                         && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
-                .check(CLASSES);
+                .check(mainClasses());
         }
 
         /**
@@ -347,7 +353,7 @@ class ReferralSecurityTest {
                     "a call to the owner-scoped personal finder",
                     (JavaMethodCall call) -> PERSONAL_LIST.contains(call.getName())
                         && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
-                .check(CLASSES);
+                .check(mainClasses());
         }
 
         /**
@@ -369,7 +375,7 @@ class ReferralSecurityTest {
                     "a call to the unscoped by-id finder",
                     (JavaMethodCall call) -> JUDICIAL_READ.contains(call.getName())
                         && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
-                .check(CLASSES);
+                .check(mainClasses());
         }
 
         /**
@@ -451,7 +457,7 @@ class ReferralSecurityTest {
                 .orShould().dependOnClassesThat().haveSimpleNameStartingWith("Referral")
                 .orShould().dependOnClassesThat().haveSimpleNameStartingWith("CreateReferral")
                 .allowEmptyShould(true)
-                .check(CLASSES);
+                .check(mainClasses());
         }
 
         @Test

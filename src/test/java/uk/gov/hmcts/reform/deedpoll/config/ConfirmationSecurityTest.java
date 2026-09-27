@@ -124,9 +124,15 @@ class ConfirmationSecurityTest {
 
     private static final String CITIZEN = "uk.gov.hmcts.reform.deedpoll.api.citizen";
 
-    private static final JavaClasses CLASSES = new ClassFileImporter()
-        .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
-        .importPackages("uk.gov.hmcts.reform.deedpoll");
+    /**
+     * Imported per rule and then dropped: a whole-codebase graph in a static field stays reachable for the
+     * whole test JVM, and several of them exhaust its heap.
+     */
+    private static JavaClasses mainClasses() {
+        return new ClassFileImporter()
+            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+            .importPackages("uk.gov.hmcts.reform.deedpoll");
+    }
 
     /**
      * The case column the waiting list is a {@code WHERE} clause over.
@@ -395,7 +401,7 @@ class ConfirmationSecurityTest {
                 .should().dependOnClassesThat().haveSimpleNameStartingWith("Confirmation")
                 .orShould().dependOnClassesThat().haveSimpleNameStartingWith("RecordConfirmation")
                 .allowEmptyShould(true)
-                .check(CLASSES);
+                .check(mainClasses());
         }
 
         @Test
@@ -416,7 +422,7 @@ class ConfirmationSecurityTest {
                 .that().areDeclaredInClassesThat().resideInAnyPackage(JUDICIAL + "..", CITIZEN + "..")
                 .should().haveNameMatching(forbidden)
                 .allowEmptyShould(true)
-                .check(CLASSES);
+                .check(mainClasses());
         }
 
         @Test

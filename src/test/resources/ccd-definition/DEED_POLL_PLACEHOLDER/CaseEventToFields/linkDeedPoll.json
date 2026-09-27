@@ -1,0 +1,26 @@
+[
+  {
+    "CaseEventID": "linkDeedPoll",
+    "CaseFieldID": "deedPollId",
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "DisplayContext": "MANDATORY",
+    "LiveFrom": "01/01/2017",
+    "PageColumnNumber": 1,
+    "PageDisplayOrder": 1,
+    "PageFieldDisplayOrder": 1,
+    "PageID": 1,
+    "ShowSummaryChangeOption": "Y"
+  },
+  {
+    "CaseEventID": "linkDeedPoll",
+    "CaseFieldID": "deedPollReference",
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "DisplayContext": "MANDATORY",
+    "LiveFrom": "01/01/2017",
+    "PageColumnNumber": 1,
+    "PageDisplayOrder": 1,
+    "PageFieldDisplayOrder": 2,
+    "PageID": 1,
+    "ShowSummaryChangeOption": "Y"
+  }
+]

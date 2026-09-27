@@ -4,18 +4,30 @@ import jakarta.servlet.DispatcherType;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.core.env.Environment;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import uk.gov.hmcts.reform.authorisation.ServiceAuthorisationApi;
+import uk.gov.hmcts.reform.authorisation.filters.ServiceAuthFilter;
+import uk.gov.hmcts.reform.authorisation.validators.ServiceAuthTokenValidator;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamAuthenticationConverter;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamDiscovery;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamJwtDecoder;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamProperties;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamUserInfoClient;
+import uk.gov.hmcts.reform.deedpoll.ccd.CcdCallerAuthenticationConverter;
+import uk.gov.hmcts.reform.deedpoll.ccd.CcdProperties;
+import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile;
+import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollRoleMapping;
+
+import java.util.List;
 
 /**
  * Authentication for the whole service: a forwarded IDAM access token, validated as a resource server.
@@ -31,6 +43,11 @@ import uk.gov.hmcts.reform.deedpoll.auth.IdamUserInfoClient;
  * failure mode of forgetting is silent. The allowlist is infrastructure only -- the Always-On root endpoint,
  * the probes and the published spec -- and every business route, {@code /caseworker/**} and later
  * {@code /citizen/**} alike, is authenticated because it is not on it.
+ *
+ * <p><strong>Two chains, and the second is narrow on purpose.</strong> {@code /ccd-persistence/**} is the one path
+ * not called by a person through a frontend. Data-store calls it, presenting its own S2S token and forwarding a
+ * user's, so it has a chain of its own ({@link #ccdPersistenceFilterChain}) that requires both. Every other path,
+ * that one's siblings included, is in {@link #securityFilterChain} and requires no S2S at all.
  *
  * <p>A consequence worth knowing: an unknown path answers 401 rather than 404, because authorisation happens
  * before routing. That is the right way round -- which paths exist is not something an unauthenticated caller
@@ -76,6 +93,38 @@ public class SecurityConfiguration {
         "/favicon.ico"
     };
 
+    /**
+     * Where data-store posts a case event into the decentralised runtime and reads a case back out of it. The one
+     * SDK path that is not refused: {@link #ccdPersistenceFilterChain} admits it for {@link #CCD_PERSISTENCE_CALLERS}
+     * with an authorised user, and nobody else (plan 02, Task 5).
+     */
+    static final String CCD_PERSISTENCE_PATH = "/ccd-persistence/**";
+
+    /**
+     * The only services that may call {@link #CCD_PERSISTENCE_PATH}: data-store, and nothing else.
+     *
+     * <p><strong>A constant, not {@code idam.s2s-authorised.services}.</strong> That property switches on the S2S
+     * library's own filter bean, which reads as a service-wide allowlist. Here it would be read as one, and widened
+     * the day some other namespace needed a caller. This allowlist belongs to one path, and its one member is the
+     * definition of that path. This service's own name is deliberately absent too. The linking operation reaches
+     * data-store through CCD's public API, never by posting to its own persistence controller (plan 02,
+     * decision 11), so a {@code deed_poll_api} token here is either a mistake or a way around data-store's checks.
+     */
+    static final List<String> CCD_PERSISTENCE_CALLERS = List.of("ccd_data");
+
+    /**
+     * The routes the CCD SDK maps that nobody may call.
+     *
+     * <p>{@code /callbacks/**} is the generator's callback controller, which a decentralised case type does not use.
+     * Under {@code anyRequest().authenticated()} alone, any valid IDAM token -- a caseworker's included -- could
+     * reach it. {@code /ccd-persistence/**} was refused here too until plan 02 Task 5 gave it its own chain, which
+     * replaced the refusal rather than sitting beside it. {@code CcdSdkRoutesTest} fails if the SDK maps anything
+     * outside this and {@link #CCD_PERSISTENCE_PATH}.
+     */
+    static final String[] CCD_SDK_PATHS = {
+        "/callbacks/**"
+    };
+
     @Bean
     public IdamDiscovery idamDiscovery(IdamProperties properties, Environment environment) {
         return new IdamDiscovery(properties, environment);
@@ -96,6 +145,59 @@ public class SecurityConfiguration {
         return new IdamAuthenticationConverter(userInfoClient);
     }
 
+    /**
+     * {@code /ccd-persistence/**}, and nothing else: S2S from data-store, then the user data-store forwards.
+     *
+     * <p>Ordered ahead of {@link #securityFilterChain}, which matches every request and so must come last.
+     * Everything that decides who may reach the path is in this chain and not in that one.
+     *
+     * <ul>
+     *   <li><strong>The service.</strong> The S2S library's {@link ServiceAuthFilter} answers a missing or
+     *       unverifiable {@code ServiceAuthorization} with 401, and a verified service outside
+     *       {@link #CCD_PERSISTENCE_CALLERS} with 403, before any user token is read. It is built here and
+     *       <em>not</em> declared as a bean. Boot registers every {@code Filter} bean on every path, which would
+     *       make the caseworker and judicial namespaces start requiring S2S.</li>
+     *   <li><strong>The user.</strong> The same {@link JwtDecoder} as everywhere else, so the token is checked
+     *       exactly as a caseworker's is. The caller must then hold an access profile the definition grants
+     *       something to, reached through the definition's own role mapping ({@link DeedPollRoleMapping}) rather
+     *       than a second list.</li>
+     * </ul>
+     */
+    @Bean
+    @Order(1)
+    @SuppressWarnings("PMD.SignatureDeclareThrowsException")
+    public SecurityFilterChain ccdPersistenceFilterChain(HttpSecurity http,
+                                                         JwtDecoder jwtDecoder,
+                                                         IdamUserInfoClient userInfoClient,
+                                                         CcdProperties ccdProperties,
+                                                         ServiceAuthorisationApi serviceAuthorisationApi)
+        throws Exception {
+
+        ServiceAuthFilter serviceAuthFilter = new ServiceAuthFilter(
+            new ServiceAuthTokenValidator(serviceAuthorisationApi), CCD_PERSISTENCE_CALLERS);
+        String[] grantedProfiles = DeedPollRoleMapping.granted().stream()
+            .map(DeedPollAccessProfile::getRole)
+            .toArray(String[]::new);
+
+        return http
+            // A path-pattern matcher stated outright, not securityMatcher(String). The string form builds an MVC
+            // matcher at once, and that needs the MVC introspector, which a context with no web server lacks.
+            .securityMatcher(PathPatternRequestMatcher.withDefaults().matcher(CCD_PERSISTENCE_PATH))
+            .addFilterBefore(serviceAuthFilter, BearerTokenAuthenticationFilter.class)
+            .authorizeHttpRequests(requests -> requests.anyRequest().hasAnyAuthority(grantedProfiles))
+            .oauth2ResourceServer(resourceServer -> resourceServer
+                .jwt(jwt -> jwt
+                    .decoder(jwtDecoder)
+                    .jwtAuthenticationConverter(new CcdCallerAuthenticationConverter(
+                        userInfoClient, DeedPollRoleMapping.from(ccdProperties)))))
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .csrf(AbstractHttpConfigurer::disable)
+            .httpBasic(AbstractHttpConfigurer::disable)
+            .formLogin(AbstractHttpConfigurer::disable)
+            .logout(AbstractHttpConfigurer::disable)
+            .build();
+    }
+
     @Bean
     @SuppressWarnings("PMD.SignatureDeclareThrowsException")
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
@@ -110,6 +212,7 @@ public class SecurityConfiguration {
                 // forward as if it were a fresh request turns every 400 and 404 into a 401.
                 .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
                 .requestMatchers(PUBLIC_PATHS).permitAll()
+                .requestMatchers(CCD_SDK_PATHS).denyAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(resourceServer -> resourceServer
                 .jwt(jwt -> jwt

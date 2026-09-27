@@ -1,6 +1,6 @@
 # CCD migration — bounded, resumable case linking
 
-Status: draft for review, 2026-09-26. Depends on [plan 02](deed-poll-api-02-ccd-foundation.md).
+Status: draft for review, 2026-09-26. Depends on [plan 02](completed/deed-poll-api-02-ccd-foundation.md).
 
 ## Outcome and scope
 
@@ -66,7 +66,7 @@ assign a new deed-poll display reference or start a seven-day deletion clock.
 
 ## Sources and related work
 
-- [Foundation](deed-poll-api-02-ccd-foundation.md) — the shared linking and recovery operation
+- [Foundation](completed/deed-poll-api-02-ccd-foundation.md) — the shared linking and recovery operation
 - [Current case entity](../../src/main/java/uk/gov/hmcts/reform/deedpoll/entity/DeedPoll.java)
 - [API scope gaps](scope-gap-questions.md) — existing migrated-record parity work
 - [CDAM](deed-poll-api-03-cdam-documents.md) — document migration has separate progress

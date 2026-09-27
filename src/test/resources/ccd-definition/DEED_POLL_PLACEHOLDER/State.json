@@ -1,0 +1,10 @@
+[
+  {
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "Description": "Registered",
+    "DisplayOrder": 1,
+    "ID": "Registered",
+    "LiveFrom": "01/01/2017",
+    "Name": "Registered"
+  }
+]
