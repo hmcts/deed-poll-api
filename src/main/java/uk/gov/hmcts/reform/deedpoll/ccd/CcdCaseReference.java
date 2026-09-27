@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.ccd;
 
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
@@ -38,5 +39,16 @@ public final class CcdCaseReference {
             throw new IllegalArgumentException("A CCD case reference is sixteen digits");
         }
         return reference;
+    }
+
+    /**
+     * The reference the SDK hands a handler or a view as a number, as this service stores it -- or empty if it is
+     * not one this service can store.
+     *
+     * <p>No padding: a number with fewer than sixteen digits has already lost whatever leading zeros it had, and
+     * inventing them would bind a reference CCD never issued.
+     */
+    public static Optional<String> of(Long reference) {
+        return Optional.ofNullable(reference).map(String::valueOf).filter(CcdCaseReference::isValid);
     }
 }

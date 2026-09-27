@@ -284,6 +284,12 @@ dependencies {
     decisions 3 and 4).
   */
   implementation 'com.github.hmcts:decentralised-runtime'
+  /*
+    Already on the runtime classpath through decentralised-runtime, at this version. Declared because
+    CcdConfiguration names its IdamApi in @EnableFeignClients -- the SDK's IdamService cannot wire without it --
+    and the SDK's BOM does not manage it. Pinned as pcs-api pins it, so the declaration changes nothing resolved.
+  */
+  implementation group: 'com.github.hmcts', name: 'idam-java-client', version: '3.0.5'
 
   implementation group: 'org.flywaydb', name: 'flyway-core'
   runtimeOnly group: 'org.flywaydb', name: 'flyway-database-postgresql'

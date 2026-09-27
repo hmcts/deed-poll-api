@@ -262,6 +262,20 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
     int bindCcdCaseReference(@Param("id") String id, @Param("reference") String reference);
 
     /**
+     * The record a CCD case reference is bound to, reduced to what the case shows of it.
+     *
+     * <p>The {@code CaseView}'s one read, and the submit handler's answer to "does another record already hold
+     * this reference?". At most one row, because V21 makes the column unique. JPQL reads a column the entity maps
+     * read-only as readily as any other; only writing it needs {@link #bindCcdCaseReference}.
+     */
+    @Query("""
+        select new uk.gov.hmcts.reform.deedpoll.repository.CcdCaseProjection(d.id, d.displayReference)
+          from DeedPoll d
+         where d.ccdCaseReference = :reference
+        """)
+    Optional<CcdCaseProjection> findCcdCaseProjection(@Param("reference") String reference);
+
+    /**
      * Recomputes the current referral state of many cases at once, from the referral table.
      *
      * <p><strong>For the stale-claim sweep, which is the one transition that moves many referrals in one

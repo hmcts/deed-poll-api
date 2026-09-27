@@ -102,9 +102,15 @@ class NotificationSecurityTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    private static final JavaClasses MAIN_CLASSES = new ClassFileImporter()
-        .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
-        .importPackages("uk.gov.hmcts.reform.deedpoll");
+    /**
+     * Imported per rule and then dropped: a whole-codebase graph in a static field stays reachable for the
+     * whole test JVM, and several of them exhaust its heap.
+     */
+    private static JavaClasses mainClasses() {
+        return new ClassFileImporter()
+            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+            .importPackages("uk.gov.hmcts.reform.deedpoll");
+    }
 
     private DeedPollRepository deedPolls;
 
@@ -419,7 +425,7 @@ class NotificationSecurityTest {
             .that().areDeclaredInClassesThat().resideInAPackage("uk.gov.hmcts.reform.deedpoll.api..")
             .should().haveName("requestId")
             .allowEmptyShould(true)
-            .check(MAIN_CLASSES);
+            .check(mainClasses());
 
         // The counterpart, so the rule above is not green because nothing stores one: the column exists, on the
         // entity, which is the only place it is meant to.
@@ -575,7 +581,7 @@ class NotificationSecurityTest {
         noClasses()
             .that().resideOutsideOfPackage("uk.gov.hmcts.reform.deedpoll.notify..")
             .should().dependOnClassesThat().haveFullyQualifiedName(NotificationClient.class.getName())
-            .check(MAIN_CLASSES);
+            .check(mainClasses());
     }
 
     /** What the enqueue statement answers, with every one of its ten arguments matched loosely. */

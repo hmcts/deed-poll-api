@@ -331,8 +331,53 @@ path. Task 6 must assert the real route behind this chain. The existing namespac
   including after the local record has since changed.
 - Container-free companions for the bind/refuse/conflict rule.
 
-- [ ] a `POST /ccd-persistence/cases` for a claimed attempt binds exactly once, a conflicting reference is
+- [x] a `POST /ccd-persistence/cases` for a claimed attempt binds exactly once, a conflicting reference is
       refused, a forged UUID is refused, writes roll back together, and the build is green
+
+Done 2026-09-27. `LinkDeedPollHandler.submit` is `@Transactional(propagation = MANDATORY)`, so it can only join the
+SDK's `CaseEventTransactionCoordinator` transaction. It checks the reference with `CcdCaseReference.of`, takes
+`findByIdForUpdate`, reads the live attempt and whichever record already holds the reference, and hands those facts
+to `CcdLinkRule.decide`. The rule has no database in it. Its outcomes are `BIND`, `ALREADY_BOUND` (a no-op), and five
+refusals in fixed prose: `MALFORMED_REFERENCE`, `NO_SUCH_RECORD`, `NO_ATTEMPT_IN_PROGRESS`,
+`RECORD_LINKED_ELSEWHERE` and `REFERENCE_TAKEN`. The attempt is checked before the binding. A refusal is a submit
+error, so data-store gets a 200 with an `errors` array, and nothing is written. The bind is conditional, and one that
+changes no row throws rather than reporting success.
+
+Deviation: the payload carries no operation id, so "for this operation" means the record's live attempt. That
+attempt must be `Claimed` or `AwaitingConfirmation`. Task 7 owns which attempt that is.
+
+`DeedPollCaseView` is the only `CaseView` bean. It composes `deedPollId` and `deedPollReference` from the new
+`CcdCaseProjection` record, read by `DeedPollRepository.findCcdCaseProjection`, and throws for a reference no record
+holds. `ccd.case_data.data` stays `{}`.
+
+Finding: scanning `uk.gov.hmcts.ccd.sdk` component-scanned the SDK's `@AutoConfiguration` classes. That added two
+unqualified `ObjectMapper` beans, and Jackson's `@Primary` mapper backed off. `CcdConfiguration` now excludes them
+with `AutoConfigurationExcludeFilter`. It also excludes `sdk.json` and `sdk.impl.json` by regex. `JsonCallbackBridge`
+needs `RequestMappingHandlerMapping`, which every `web-application-type=none` context lacks, and both packages serve
+only JSON-defined configs. The runtime's own `IdamClient` resolves the user for `ccd.case_event`'s audit columns.
+That needs `idam-java-client` declared, and `idam.api.url` set (`IDAM_API_URL`, with a localhost default).
+
+`CcdPersistenceSubmissionTest` runs against real Postgres through the SDK's controller, with WireMock IDAM and S2S.
+It covers:
+- binding a `Claimed` attempt and an `AwaitingConfirmation` attempt;
+- one bind across a replay and a new key;
+- a replay answering the stored snapshot after the record's display reference changed, while a `GET` answers the
+  new value;
+- a conflicting reference, a taken reference, and a forged UUID;
+- `Pending`, no attempt, and `NeedsRepair`, all refused.
+
+Rollback is proved twice:
+- the spied handler throws after its real bind has been observed inside the transaction;
+- a trigger refuses the SDK's `ccd.case_event` insert.
+
+Either way no bind, case row or event survives. The container-free companions are `CcdLinkRuleTest`,
+`LinkDeedPollHandlerTest` and `DeedPollCaseViewTest`. `CcdPersistenceSecurityTest` now asserts the real SDK route
+behind `ccdPersistenceFilterChain`: the chain admits data-store and the controller refuses the missing
+`Idempotency-Key` with 400, other services get 403, a caller with no S2S gets 401, and there is exactly one view.
+
+Finding: the first full build died with "Java heap space" inside `NotificationSecurityTest`'s static ArchUnit import.
+The four whole-codebase static `JavaClasses` fields are now per-rule `mainClasses()` methods, and the heap is
+unchanged. Docker `build`: test 3099 / 379 files, integration 13 / 3 files, all green.
 
 ### Task 7: The linking operation and its recovery
 

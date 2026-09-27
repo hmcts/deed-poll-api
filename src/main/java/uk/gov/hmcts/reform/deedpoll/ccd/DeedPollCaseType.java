@@ -4,10 +4,8 @@ import org.springframework.stereotype.Component;
 import uk.gov.hmcts.ccd.sdk.api.CCDConfig;
 import uk.gov.hmcts.ccd.sdk.api.ConfigBuilder;
 import uk.gov.hmcts.ccd.sdk.api.DecentralisedConfigBuilder;
-import uk.gov.hmcts.ccd.sdk.api.EventPayload;
 import uk.gov.hmcts.ccd.sdk.api.HasRole;
 import uk.gov.hmcts.ccd.sdk.api.Permission;
-import uk.gov.hmcts.ccd.sdk.api.callback.SubmitResponse;
 
 import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile.DEED_POLL_SYSTEM;
 import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollCaseState.Registered;
@@ -28,9 +26,11 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
     public static final String LINK_DEED_POLL = "linkDeedPoll";
 
     private final CcdProperties properties;
+    private final LinkDeedPollHandler linkDeedPoll;
 
-    public DeedPollCaseType(CcdProperties properties) {
+    public DeedPollCaseType(CcdProperties properties, LinkDeedPollHandler linkDeedPoll) {
         this.properties = properties;
+        this.linkDeedPoll = linkDeedPoll;
     }
 
     @Override
@@ -48,7 +48,7 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
         // would otherwise carry an update grant nobody asked for.
         builder.omitHistoryForRoles(DEED_POLL_SYSTEM);
 
-        builder.decentralisedEvent(LINK_DEED_POLL, this::linkDeedPoll)
+        builder.decentralisedEvent(LINK_DEED_POLL, linkDeedPoll::submit)
             .initialState(Registered)
             .name("Link deed poll")
             .description("Create the CCD case for an existing deed poll record")
@@ -56,14 +56,6 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
             .fields()
             .mandatory(DeedPollCaseData::getDeedPollId)
             .mandatory(DeedPollCaseData::getDeedPollReference);
-    }
-
-    /**
-     * Refuses every submission until plan 02 Task 6 binds the reference. Nothing can reach it before then:
-     * {@code /ccd-persistence/**} is not mapped until that task scans the runtime, and is admitted only to data-store.
-     */
-    private SubmitResponse<DeedPollCaseState> linkDeedPoll(EventPayload<DeedPollCaseData, DeedPollCaseState> payload) {
-        throw new UnsupportedOperationException(LINK_DEED_POLL + " has no submit handler yet (plan 02, Task 6)");
     }
 
     /**

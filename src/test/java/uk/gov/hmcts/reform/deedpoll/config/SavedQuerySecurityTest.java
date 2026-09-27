@@ -91,9 +91,15 @@ class SavedQuerySecurityTest {
     @DisplayName("namespace separation")
     class NamespaceSeparation {
 
-        private static final JavaClasses CLASSES = new ClassFileImporter()
-            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
-            .importPackages("uk.gov.hmcts.reform.deedpoll");
+        /**
+         * Imported per rule and then dropped: a whole-codebase graph in a static field stays reachable for the
+         * whole test JVM, and several of them exhaust its heap.
+         */
+        private static JavaClasses mainClasses() {
+            return new ClassFileImporter()
+                .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+                .importPackages("uk.gov.hmcts.reform.deedpoll");
+        }
 
         @Test
         @DisplayName("every saved-query route is a caseworker route, by its mapping and not by convention")
@@ -126,7 +132,7 @@ class SavedQuerySecurityTest {
                 .resideInAnyPackage("uk.gov.hmcts.reform.deedpoll.domain.savedqueries..")
                 .orShould().dependOnClassesThat().haveSimpleNameStartingWith("SavedQuery")
                 .allowEmptyShould(true)
-                .check(CLASSES);
+                .check(mainClasses());
         }
 
         @Test

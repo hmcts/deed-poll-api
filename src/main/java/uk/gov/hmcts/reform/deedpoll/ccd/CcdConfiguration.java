@@ -1,24 +1,44 @@
 package uk.gov.hmcts.reform.deedpoll.ccd;
 
+import org.springframework.boot.autoconfigure.AutoConfigurationExcludeFilter;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.cloud.openfeign.EnableFeignClients;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Import;
-import uk.gov.hmcts.ccd.sdk.CCDDefinitionGenerator;
+import org.springframework.context.annotation.FilterType;
+import uk.gov.hmcts.reform.idam.client.IdamApi;
 
 /**
- * Registers {@link CcdProperties} and the SDK's definition generator -- the generator only, not the SDK.
+ * Registers {@link CcdProperties} and the whole CCD SDK: the definition generator and the decentralised runtime.
  *
- * <p>{@code ./gradlew generateCCDConfig} boots this application and asks it for a {@link CCDDefinitionGenerator},
- * so the generator has to be a bean here. Scanning the whole of {@code uk.gov.hmcts.ccd.sdk}, as {@code pcs-api}
- * does, would also bring the decentralised runtime, which refuses to start without a {@code CaseView} and would map
- * {@code /ccd-persistence/**}. Both arrive with plan 02 Task 6, which replaces this narrow scan with the whole
- * package; until then the generator package and its entry point are all that is registered, and nothing the SDK
- * maps is reachable.
+ * <p>The runtime is what maps {@code /ccd-persistence/**}, which {@code SecurityConfiguration} admits to data-store
+ * alone, and it refuses to start without a {@code CaseView} -- {@link DeedPollCaseView} is ours. Scanning the whole
+ * of {@code uk.gov.hmcts.ccd.sdk}, as {@code pcs-api} does, also brings the generator's {@code /callbacks/**}
+ * controller, which nothing here uses and the security chain refuses to everybody.
+ *
+ * <p><strong>The scan skips the SDK's auto-configurations</strong>, as {@code @SpringBootApplication}'s own scan does.
+ * Scanned as ordinary configuration they are processed before Boot's, so the SDK's two {@code ObjectMapper} beans
+ * make Jackson's auto-configured one back off, and every unqualified {@code ObjectMapper} here becomes ambiguous.
+ * Left to their {@code AutoConfiguration.imports} they load after it, as the SDK intends.
+ *
+ * <p><strong>It also skips the SDK's JSON-definition support</strong> -- {@code JsonCCDConfigSupport} and the
+ * {@code JsonCallbackBridge} it needs, which is all of {@code sdk.json} and {@code sdk.impl.json}. They serve a case
+ * type defined in JSON rather than by a {@code CCDConfig}, which ours is not, and the bridge demands MVC's
+ * {@code RequestMappingHandlerMapping}, so every non-web context -- each {@code WebEnvironment.NONE} test -- would
+ * refuse to start for a feature nothing here uses.
+ *
+ * <p>{@link IdamApi} is registered because the SDK's {@code IdamService} resolves the user data-store forwards, and
+ * {@code idam-java-client}'s {@code IdamClient} needs the Feign client to exist; nothing in this service calls it
+ * directly. Its URL is {@code idam.api.url}.
  */
 @Configuration
 @EnableConfigurationProperties(CcdProperties.class)
-@Import(CCDDefinitionGenerator.class)
-@ComponentScan("uk.gov.hmcts.ccd.sdk.generator")
+@ComponentScan(
+    basePackages = "uk.gov.hmcts.ccd.sdk",
+    excludeFilters = {
+        @ComponentScan.Filter(type = FilterType.CUSTOM, classes = AutoConfigurationExcludeFilter.class),
+        @ComponentScan.Filter(type = FilterType.REGEX, pattern = "uk\\.gov\\.hmcts\\.ccd\\.sdk\\.(impl\\.)?json\\..*")
+    })
+@EnableFeignClients(clients = IdamApi.class)
 public class CcdConfiguration {
 }

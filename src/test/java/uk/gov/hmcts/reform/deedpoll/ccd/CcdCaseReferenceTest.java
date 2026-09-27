@@ -57,6 +57,17 @@ class CcdCaseReferenceTest {
     }
 
     @Test
+    @DisplayName("of reads the SDK's number as the stored string, and refuses what cannot be stored")
+    void ofReadsTheSdksNumber() {
+        assertThat(CcdCaseReference.of(1_234_567_890_123_456L)).contains("1234567890123456");
+        assertThat(CcdCaseReference.of(null)).isEmpty();
+        // Fifteen digits: a number cannot say whether it lost a leading zero, so none is invented.
+        assertThat(CcdCaseReference.of(234_567_890_123_456L)).isEmpty();
+        assertThat(CcdCaseReference.of(-1_234_567_890_123_456L)).isEmpty();
+        assertThat(CcdCaseReference.of(12_345_678_901_234_567L)).isEmpty();
+    }
+
+    @Test
     @DisplayName("PATTERN is the regular expression V21's CHECK states")
     void thePatternIsTheDatabaseRule() throws IOException {
         // Two statements of one rule. Held together by reading the migration, because a reference the service

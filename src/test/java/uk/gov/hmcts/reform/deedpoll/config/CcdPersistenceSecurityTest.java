@@ -7,19 +7,24 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.ccd.sdk.CaseView;
 import uk.gov.hmcts.reform.authorisation.filters.ServiceAuthFilter;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.auth.StubS2s;
+import uk.gov.hmcts.reform.deedpoll.ccd.CcdProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 
 import java.util.List;
@@ -29,7 +34,9 @@ import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -41,10 +48,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * as in {@link CcdSdkRoutesTest}: no database is needed, so Docker-free CI runs this. IDAM and S2S are both
  * WireMock.
  *
- * <p><strong>The success path reaches a stand-in, not the SDK's controller.</strong> The runtime is not
- * component-scanned until Task 6, because it refuses to start without a {@code CaseView}. So nothing is mapped
- * under the path yet, and {@link PersistenceStandIn} is. It echoes the authorities the chain granted, which is what
- * a real handler would be trusting. Task 6 adds the scan and asserts the SDK's own route behind this same chain.
+ * <p><strong>Two kinds of route are probed.</strong> The SDK's own {@code POST /ccd-persistence/cases} is asserted
+ * behind the chain without a database: a request the chain admits reaches the SDK's controller and is refused there
+ * for its missing {@code Idempotency-Key}, which is a 400 no filter produces. {@link PersistenceStandIn} stays for
+ * what the real route cannot show -- which access profiles the chain granted -- by echoing them.
  *
  * <p>The system role is set to a value that is not the placeholder, so a pass cannot come from a default. It proves
  * the chain reads the role from configuration, through the same mapping the definition writes.
@@ -88,6 +95,12 @@ class CcdPersistenceSecurityTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private ApplicationContext context;
+
+    @Autowired
+    private CcdProperties ccd;
 
     @BeforeEach
     void stubs() {
@@ -222,6 +235,42 @@ class CcdPersistenceSecurityTest {
 
         mockMvc.perform(get("/callbacks/about-to-submit").headers(headers(CCD_DATA, IDAM.accessToken())))
             .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("admits data-store with the system user through to the SDK's own POST /ccd-persistence/cases")
+    void admitsDataStoreToTheSdkRoute() throws Exception {
+        systemUser();
+
+        // A 400 for the missing Idempotency-Key is the SDK's controller answering: no filter in the chain produces it.
+        mockMvc.perform(sdkSubmission(headers(CCD_DATA, IDAM.accessToken())))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errors[0].field").value("Idempotency-Key"));
+    }
+
+    @Test
+    @DisplayName("refuses the SDK's own route to another service, and to a caller with no S2S token")
+    void refusesOthersTheSdkRoute() throws Exception {
+        systemUser();
+        HttpHeaders userOnly = new HttpHeaders();
+        userOnly.setBearerAuth(IDAM.accessToken());
+
+        mockMvc.perform(sdkSubmission(headers(XUI, IDAM.accessToken()))).andExpect(status().isForbidden());
+        mockMvc.perform(sdkSubmission(userOnly)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("the runtime has exactly one CaseView, and it answers for the configured case type")
+    void oneCaseViewForTheCaseType() {
+        String[] views = context.getBeanNamesForType(CaseView.class);
+
+        assertThat(views).hasSize(1);
+        CaseView<?, ?> view = context.getBean(views[0], CaseView.class);
+        assertThat(view.caseTypeIds()).containsExactly(ccd.caseTypeId());
+    }
+
+    private static MockHttpServletRequestBuilder sdkSubmission(HttpHeaders headers) {
+        return post("/ccd-persistence/cases").headers(headers).contentType(MediaType.APPLICATION_JSON).content("{}");
     }
 
     private static void systemUser() {

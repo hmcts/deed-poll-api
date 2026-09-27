@@ -149,7 +149,9 @@ class DeedPollDefinitionTest {
     @DisplayName("confirmed identifiers are configuration: other values change the definition, not the code")
     void identifiersComeFromConfiguration() throws IOException {
         CcdProperties confirmed = new CcdProperties("CONFIRMED_TYPE", "CONFIRMED_JURISDICTION", "confirmed-role");
-        new CCDDefinitionGenerator(List.<CCDConfig<?, ?, ?>>of(new DeedPollCaseType(confirmed)), writer)
+        // The generator reads the event and never invokes its handler, so the handler needs no repositories.
+        DeedPollCaseType definition = new DeedPollCaseType(confirmed, new LinkDeedPollHandler(null, null));
+        new CCDDefinitionGenerator(List.<CCDConfig<?, ?, ?>>of(definition), writer)
             .generateAllCaseTypesToJSON(output.toFile());
 
         Path caseType = output.resolve("CONFIRMED_TYPE");

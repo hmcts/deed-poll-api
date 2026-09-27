@@ -69,12 +69,6 @@ springdoc:
   writer-with-order-by-keys: true
 
 spring:
-  autoconfigure:
-    # idam-java-client, which decentralised-runtime brings, registers IdamClient as auto-configuration, and it
-    # needs an IdamApi Feign client that nothing here declares -- so the context would not start. Nothing calls
-    # it yet. The SDK's own IdamService is the first thing that will, once uk.gov.hmcts.ccd.sdk is scanned; that
-    # change removes this line and registers IdamApi in @EnableFeignClients, as pcs-api does. See plan 02 Task 2.
-    exclude: uk.gov.hmcts.reform.idam.client.IdamClient
   config:
     # Where the CNP java chart mounts the `deed-poll-{env}` vault -- `charts/deed-poll-api/values.yaml`
     # keys its `keyVaults` block on `deed-poll`, and the mount path follows that key. `optional:` so a
@@ -137,6 +131,11 @@ idam:
     # map, where a list would have to be JSON-encoded into a string. Empty means every token is
     # refused -- an unset value must not be the permissive case.
     audiences: ${IDAM_API_AUDIENCES:}
+    # IDAM's base URL, for the one caller that is not the resource server: the CCD SDK's IdamService, which
+    # resolves the user data-store forwards on /ccd-persistence/** through idam-java-client's /o/userinfo. The
+    # resource server discovers its endpoints from issuer-url instead. The default is a local stack's, and reaches
+    # nothing in a deployed environment, which sets IDAM_API_URL alongside IDAM_API_ISSUER_URL.
+    url: ${IDAM_API_URL:http://localhost:5000}
   s2s-auth:
     # Outbound service-to-service tokens. Configured but unused in plan 01: nothing here calls
     # another CFT service. The secret has no default, so a deployed environment that has not been
