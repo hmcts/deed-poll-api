@@ -1,7 +1,6 @@
 # Plan 02 — minimal decentralised CCD foundation
 
-Status: **restructured for ralphex and reviewed with Steve 2026-09-27; all four flags settled, ready to run.** No
-implementation tasks completed. The 2026-09-26 draft's design is unchanged; what changed is the shape — onboarding moved out of the task list into
+Status: **restructured for ralphex and reviewed with Steve 2026-09-27; all four flags settled, ready to run.** **All nine tasks complete 2026-09-27**; onboarding (Dependencies) still open. The 2026-09-26 draft's design is unchanged; what changed is the shape — onboarding moved out of the task list into
 [Dependencies](#dependencies--outside-this-plan-and-not-ralphex-work), the SDK work split into tasks one
 iteration can finish, and a Spring Boot bump added in front of it.
 
@@ -568,8 +567,34 @@ reference is unique per run. Docker `build`: test 3138 / 383 files (3,137 plus t
   strategy trap, decision 10's no-overwrite rule, and that a new CCD field must be added to the definition, the
   projection and the pinned JSON), and `DEED_POLL_PLACEHOLDER`'s comment in `application.yaml`.
 
-- [ ] counts recorded, the smoke procedure written, RESUME and CLAUDE.md describe the new code, and the build
+- [x] counts recorded, the smoke procedure written, RESUME and CLAUDE.md describe the new code, and the build
       is green
+
+Done 2026-09-27. Counted from `build/test-results/` after deleting it:
+
+| Run | `test` | `integration` | Wall clock |
+|---|---|---|---|
+| `./gradlew build` (Docker) | **3138**, 0 failures / 0 errors / 0 skipped, 383 files | **13**, green, 3 files | 4m 42s |
+| `INTEGRATION_TESTS_ENABLED=false ./gradlew build` | **2093**, 0 / 0 / 0, 271 files | not run | 1m 17s |
+| `./gradlew cftlibTest` | 1 test (`CcdLinkingCftlibTest`), green | — | 1m 32s |
+
+Against the baseline that is 182 tests in 20 files, 137 of them in 15 Docker-free files. `cftlibTest` ran with
+9.5 Gi available out of 16 Gi.
+
+The smoke procedure is [`docs/CCD-SMOKE.md`](../CCD-SMOKE.md). Step 0 maps each Dependency onto the variable or
+registration it becomes, and carries Task 8's two findings: routing keys on a prefix, and the system role must be
+registered as a user role. Then come the definition import, the provisioned-identity and S2S refusal checks, and
+create/read. Finding: **create/read has no trigger in AAT**. Nothing calls `CcdLinkingService.link`, by this
+plan's design, so the first plan that wires it in runs that step, or Steve decides on an operator-only entry
+point. The procedure says so rather than inventing one.
+
+The other changes:
+- `CLAUDE.md`: the overview, the layout (`ccd/`, the pinned definition, `src/cftlib*`), `cftlibTest` in Build
+  and test, and three new silent-breakage rules. They cover decision 6's strategy trap, decision 10's
+  write-once binding and read-not-retry recovery, and the three places a CCD field is declared.
+- `docs/RESUME.md`: a dated section with the counts and what stands between this and AAT, and the old "no plan 02
+  or 03" section marked historical.
+- `application.yaml`: the `DEED_POLL_PLACEHOLDER` comment points at the smoke procedure's onboarding table.
 
 ## Deliberately not in this plan
 

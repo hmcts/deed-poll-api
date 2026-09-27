@@ -243,6 +243,10 @@ deedpoll:
     # jurisdiction and system role have not been onboarded, so anything else here would be a guess somebody
     # would later have to find and unpick. CcdProperties reads all three and DeedPollCaseType writes them into
     # the definition; a confirmed value is an environment variable, not a code change (plan 02, decision 5).
+    # The same literal marks the Notify templates above, so one grep for DEED_POLL_PLACEHOLDER lists everything this
+    # service is waiting on. docs/CCD-SMOKE.md step 0 says where each confirmed value lands and what else onboarding
+    # must register beside it: data-store routes by a *prefix* of the case type id, and definition store needs the
+    # system role as a user role, or data-store fails its own response after we have committed the binding.
     case-type-id: ${CCD_CASE_TYPE_ID:DEED_POLL_PLACEHOLDER}
     jurisdiction-id: ${CCD_JURISDICTION_ID:DEED_POLL_PLACEHOLDER}
     # The IDAM role the linking operation's system user holds, mapped onto the DEED_POLL_SYSTEM access profile.

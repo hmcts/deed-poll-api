@@ -10,10 +10,11 @@ The Spring Boot 3 backend for deed poll case management, on Java 21 with Gradle.
 the TypeScript domain layer in the sibling repo `hmcts/deed-poll-admin` (`libs/deed-poll`), which is
 the specification. It replaces that repo's `apps/api`.
 
-There is **no implemented CCD or CDAM integration** here. Draft plans 02 and 03 were written on
-2026-09-26, alongside migration, unpaid-application and retention plans. Identifiers and external
-onboarding remain unconfirmed. See the dated update in `docs/RESUME.md` and `docs/plans/` for the
-agreed direction and dependencies; older statements that the plans are unwritten are historical.
+Plan 02 built a **minimal decentralised CCD foundation** (2026-09-27): one CCD case per deed-poll record, linked
+by the record's UUID, created through data-store's public API by one linking operation that nothing yet calls. The
+relational record stays authoritative; CCD holds a two-field projection. It is proven against WireMock and a local
+cftlib stack on placeholder identifiers only — **nothing is onboarded**, and `docs/CCD-SMOKE.md` is the AAT
+procedure that waits on it. There is **no CDAM integration** (plan 03). See `docs/RESUME.md` and `docs/plans/`.
 
 ## Layout
 
@@ -32,10 +33,14 @@ notify/DocumentUploads            turns the document ids frozen on an outbox row
                                   never rewritten, because a token expires and would be at rest in the database
 auth/                             IDAM resource-server wiring (transport)
 entity/, repository/              JPA over a Flyway-owned schema
+ccd/                             the decentralised CCD case type, its persistence handler and view, and the one
+                                  linking operation with its attempt ledger — NOT a port
 health/                          readiness that names the missing tables
 storage/                         LocalFilesystemDocumentStore — the seam CDAM replaces
 src/main/resources/deed-templates/  VENDORED Word templates: LOC020 and LOC022, plus their provenance
 src/test/resources/reference/    VENDORED specification: TypeScript source and Dataverse exports
+src/test/resources/ccd-definition/  the generated CCD definition, pinned — DeedPollDefinitionTest compares every file
+src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one end-to-end test; local only
 ```
 
 ## Rules that break things silently if ignored
@@ -62,8 +67,27 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
   is replaced with a space rather than written through. `DeedPollSchemas` validates these columns by length only,
   and the generator never parses its own output, so without that the deed would be stored, frozen onto a
   notification and emailed before anybody discovered Word would not open it.
-- **Never invent the CCD case type or jurisdiction ID.** They are unconfirmed. The single constant is
-  `deedpoll.ccd.case-type-id: DEED_POLL_PLACEHOLDER` in `application.yaml`.
+- **Never invent the CCD case type, jurisdiction ID or system role.** They are unconfirmed. Each is one key under
+  `deedpoll.ccd` in `application.yaml` defaulting to `DEED_POLL_PLACEHOLDER`, read only through `CcdProperties`,
+  so a grep for the literal lists every external identifier this service is waiting on.
+- **Never define a `FlywayMigrationStrategy`.** The SDK's `DecentralisedFlywayAutoConfiguration` supplies one that
+  runs its own `ccd`-schema migrations, with their own history table, before ours. A bean of ours replaces it
+  without an error, the `ccd` tables are never created, and data-store's first callback fails in whichever
+  environment first lacks them. `ConfigGenProfileTest` fails the build if one appears.
+- **The CCD binding is written once and never overwritten.** `LinkDeedPollHandler.submit` runs inside the SDK's
+  event transaction (`propagation = MANDATORY`), locks the record, and asks `CcdLinkRule.decide`: the same
+  reference again is a no-op, a different one is a refusal, and a UUID in the payload binds nothing unless the
+  record's live creation attempt is `Claimed` or `AwaitingConfirmation`. `ccdCaseReference` is mapped
+  `insertable = false, updatable = false`, and its only writer is `DeedPollRepository.bindCcdCaseReference`,
+  conditional on NULL. Recovery in `CcdLinkingService` is by **reading** the binding and CCD, never by clearing a
+  binding or starting a fresh event: a fresh start-event token mints a fresh idempotency key in data-store and can
+  create a second case for one record. What cannot be settled becomes `NeedsRepair`, visibly.
+- **A new CCD field is declared in three places, and the build names only one of them.** `DeedPollCaseData` and
+  its grants in `DeedPollCaseType`, the projection `DeedPollCaseView` composes from (`CcdCaseProjection`, read by
+  `DeedPollRepository`), and the pinned JSON under `src/test/resources/ccd-definition/`. `DeedPollDefinitionTest`
+  fails on the definition; a field left out of the view reads as null through CCD, and nothing fails unless `DeedPollCaseViewTest` is taught it.
+  Keep the definition minimal: `DEED_POLL_SYSTEM` is granted create and read and nothing else is granted
+  anything, and the test refuses growth that was not deliberate.
 - **No live calls to CCD, CDAM, IDAM or payments in any test.** WireMock only (`StubIdam`); there are
   no credentials.
 - **No secrets.** Everything by environment variable, with a non-working default.
@@ -222,6 +246,7 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
 ./gradlew test --tests "*Conformance*"     # the port against the vendored specification
 ./gradlew test --tests "*Security*"        # authentication and namespace separation
 ./gradlew integration                      # the integration source set alone
+./gradlew cftlibTest                       # the in-process CCD stack, end to end — local only, not in build
 ```
 
 `build.gradle` pins a **Java 21** toolchain; an older JDK fails before compiling. `-Werror` is on.
