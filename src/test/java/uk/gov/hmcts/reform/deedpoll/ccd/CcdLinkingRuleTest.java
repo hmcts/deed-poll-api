@@ -6,11 +6,13 @@ import feign.RetryableException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.CaseSeen;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.Confirmation;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.Next;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.SubmitFailure;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -96,6 +98,31 @@ class CcdLinkingRuleTest {
         assertThat(CcdLinkingRule.mayTryAgain(2, 3)).isTrue();
         assertThat(CcdLinkingRule.mayTryAgain(3, 3)).isFalse();
         assertThat(CcdLinkingRule.mayTryAgain(1, 1)).isFalse();
+    }
+
+    @ParameterizedTest
+    @EnumSource(CcdCreationAttemptStatus.class)
+    @DisplayName("an attempt that may have been submitted is never retried from scratch, in any status")
+    void mayHaveReachedRefusesARetryFromScratch(CcdCreationAttemptStatus status) {
+        // A fresh event after a possible submission mints a fresh idempotency key and can mint a second case.
+        assertThat(CcdLinkingRule.mayRetryFromScratch(status, true)).isFalse();
+    }
+
+    @ParameterizedTest
+    @EnumSource(CcdCreationAttemptStatus.class)
+    @DisplayName("with nothing submitted, only NeedsRepair may be retried from scratch")
+    void onlyNeedsRepairMayBeRetriedFromScratch(CcdCreationAttemptStatus status) {
+        assertThat(CcdLinkingRule.mayRetryFromScratch(status, false))
+            .isEqualTo(status == CcdCreationAttemptStatus.NeedsRepair);
+    }
+
+    @ParameterizedTest
+    @EnumSource(CcdCreationAttemptStatus.class)
+    @DisplayName("the rule never allows a move the transition table refuses")
+    void theRuleAgreesWithTheTransitionTable(CcdCreationAttemptStatus status) {
+        if (CcdLinkingRule.mayRetryFromScratch(status, false)) {
+            assertThat(status.canMoveTo(CcdCreationAttemptStatus.Pending)).isTrue();
+        }
     }
 
     @Test

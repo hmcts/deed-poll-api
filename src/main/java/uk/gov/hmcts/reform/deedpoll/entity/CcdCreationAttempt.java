@@ -65,6 +65,27 @@ public class CcdCreationAttempt {
     @Column(name = "failureDetail", length = MAX_FAILURE_DETAIL)
     private String failureDetail;
 
+    /**
+     * Whether {@code submitCaseCreation} may have been called for this attempt (V23). Once true it is never
+     * reset, and only while it is false may the attempt be retried from scratch; see
+     * {@code CcdLinkingRule.mayRetryFromScratch}. Rows that predate V23 were backfilled true.
+     */
+    @Column(name = "submissionMayHaveReached", nullable = false)
+    private boolean submissionMayHaveReached;
+
+    /**
+     * When a {@code Pending} attempt may next be claimed; null means now (V23).
+     */
+    @Column(name = "notBefore")
+    private LocalDateTime notBefore;
+
+    /** The IDAM subject of the admin who last repaired the attempt. Attribution only, never published. */
+    @Column(name = "repairedById")
+    private String repairedById;
+
+    @Column(name = "repairedOn")
+    private LocalDateTime repairedOn;
+
     @Column(name = "createdOn", nullable = false)
     private LocalDateTime createdOn;
 

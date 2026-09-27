@@ -85,6 +85,17 @@ class CcdCreationAttemptsTest {
     }
 
     @Test
+    @DisplayName("NeedsRepair -> Pending is refused here, because this statement cannot check nothing was submitted")
+    void retryFromScratchIsNotAPlainMove() {
+        assertThat(NeedsRepair.canMoveTo(Pending)).isTrue();
+
+        assertThatThrownBy(() -> attempts.move(ATTEMPT, NeedsRepair, Pending, null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("nothing having been submitted");
+        verifyNoInteractions(repository);
+    }
+
+    @Test
     @DisplayName("an allowed move is conditional on the status the caller saw, and reports whether it won")
     void anAllowedMoveIsConditional() {
         when(repository.move(eq(ATTEMPT), eq("Claimed"), eq("AwaitingConfirmation"), isNull(), any()))

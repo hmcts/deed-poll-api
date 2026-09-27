@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.ccd;
 
 import feign.FeignException;
 import feign.RetryableException;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -117,6 +118,23 @@ public final class CcdLinkingRule {
      */
     public static boolean mayTryAgain(int attempts, int maxAttempts) {
         return attempts < maxAttempts;
+    }
+
+    /**
+     * Whether an admin may send an attempt back to {@code Pending} to be tried again from scratch (plan 02b,
+     * decision 8): only from {@code NeedsRepair}, and only while nothing may have been submitted.
+     *
+     * <p>The condition {@code CcdCreationAttemptStatus} cannot state, because it is a fact about the row rather than
+     * the state. A retry from scratch starts a fresh event, whose fresh start-event token mints a fresh idempotency
+     * key in data-store, so once {@code submitCaseCreation} may have been called it could create a second case for
+     * one record. {@code submissionMayHaveReached} is committed before that call and never reset, and every row that
+     * predates it was backfilled true, so a true here refuses whatever else is known.
+     *
+     * @param status                   the attempt's status as last read
+     * @param submissionMayHaveReached whether {@code submitCaseCreation} may have been called for it
+     */
+    public static boolean mayRetryFromScratch(CcdCreationAttemptStatus status, boolean submissionMayHaveReached) {
+        return status == CcdCreationAttemptStatus.NeedsRepair && !submissionMayHaveReached;
     }
 
     /**

@@ -90,8 +90,9 @@ public class CcdCreationAttempts {
      * @param failureDetail what went wrong, or null to clear it; truncated to the column's bound, and never to be
      *     given a token, a credential or a response body
      * @return true if this call moved it; false if it was no longer in {@code from}
-     * @throws IllegalStateException if the rule does not allow {@code from -> to}, or {@code to} is
-     *     {@code Claimed}, which only {@link #claim} may do
+     * @throws IllegalStateException if the rule does not allow {@code from -> to}, if {@code to} is
+     *     {@code Claimed}, which only {@link #claim} may do, or if the move is {@code NeedsRepair -> Pending}, whose
+     *     condition -- nothing may have been submitted -- a status-only statement cannot check
      */
     @Transactional
     public boolean move(UUID attemptId,
@@ -100,6 +101,12 @@ public class CcdCreationAttempts {
                         String failureDetail) {
         if (to == CcdCreationAttemptStatus.Claimed) {
             throw new IllegalStateException("An attempt is claimed through claim(), which sets its lease");
+        }
+        if (from == CcdCreationAttemptStatus.NeedsRepair && to == CcdCreationAttemptStatus.Pending) {
+            // Legal only while submissionMayHaveReached is false (CcdLinkingRule.mayRetryFromScratch), and this
+            // statement is conditional on the status alone -- so it would retry an attempt that may have reached CCD.
+            throw new IllegalStateException(
+                "A retry from scratch must be conditional on nothing having been submitted");
         }
         if (!from.canMoveTo(to)) {
             throw new IllegalStateException("A CCD creation attempt cannot move from " + from + " to " + to);

@@ -148,8 +148,15 @@ before changing anything.
   - container-backed: the migration against real Postgres, covering the backfill of an existing row to `true`
     and the default for a new row.
 
-- [ ] baseline recorded, V23 applied with its backfill proved, the new edge and its condition tested, and the
+- [x] baseline recorded, V23 applied with its backfill proved, the new edge and its condition tested, and the
       build is green
+
+  Baseline, measured 2026-09-27 on this branch before any change: with Docker, **3150** `test` in 383 files and
+  **13** `integration`, all green; Docker-free (`INTEGRATION_TESTS_ENABLED=false`), **2103** `test` in 271 files
+  and no `integration`, all green. After Task 1, with Docker: **3170** `test` in 384 files and **13**
+  `integration`, all green. Also: `CcdCreationAttempts.move` now refuses `NeedsRepair -> Pending`, because its
+  statement is conditional on status alone; Task 4's retry needs its own statement conditional on
+  `submissionMayHaveReached = false`.
 
 ### Task 2: Record the submission, and wait before retrying
 
