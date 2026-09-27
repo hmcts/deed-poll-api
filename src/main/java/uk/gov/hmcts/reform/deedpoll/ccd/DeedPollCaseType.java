@@ -40,7 +40,8 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
         builder.caseType(properties.caseTypeId(), "Deed poll", "Deed poll change of name");
         builder.jurisdiction(properties.jurisdictionId(), "Deed poll", "Deed poll enrolment");
 
-        mapSystemRole(builder, properties.systemRole());
+        DeedPollRoleMapping.from(properties).byIdamRole().forEach((idamRole, profile) ->
+            mapIdamRole(builder, idamRole, profile));
 
         // The SDK adds a caseHistory viewer field and a History tab to every case type, and grants every role that
         // holds an event CRU on that field. A system actor reads no history, and "create and read, nothing else"
@@ -59,15 +60,15 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
 
     /**
      * Refuses every submission until plan 02 Task 6 binds the reference. Nothing can reach it before then:
-     * {@code /ccd-persistence/**} is neither mapped nor permitted.
+     * {@code /ccd-persistence/**} is not mapped until that task scans the runtime, and is admitted only to data-store.
      */
     private SubmitResponse<DeedPollCaseState> linkDeedPoll(EventPayload<DeedPollCaseData, DeedPollCaseState> payload) {
         throw new UnsupportedOperationException(LINK_DEED_POLL + " has no submit handler yet (plan 02, Task 6)");
     }
 
     /**
-     * Maps the configured IDAM role onto {@link DeedPollAccessProfile#DEED_POLL_SYSTEM} with a
-     * {@code RoleToAccessProfiles} row.
+     * Maps one IDAM role onto an access profile with a {@code RoleToAccessProfiles} row. The entries come from
+     * {@link DeedPollRoleMapping}, which the {@code /ccd-persistence/**} chain applies to its caller as well.
      *
      * <p>The row is keyed on a role outside the access-profile enum, which the SDK's model supports -- the row holds a
      * {@link HasRole} and reads only its name -- but its builder method is typed on the enum. Hence the raw call:
@@ -75,7 +76,7 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
      * {@code legacyIdamRole} writes it as {@code idam:<role>}, the form data-store gives an IDAM role.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static void mapSystemRole(ConfigBuilder<?, ?, ?> builder, String idamRole) {
+    private static void mapIdamRole(ConfigBuilder<?, ?, ?> builder, String idamRole, DeedPollAccessProfile profile) {
         HasRole role = new HasRole() {
             @Override
             public String getRole() {
@@ -89,6 +90,6 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
         };
         ((ConfigBuilder) builder).caseRoleToAccessProfile(role)
             .legacyIdamRole()
-            .accessProfiles(DEED_POLL_SYSTEM.getRole());
+            .accessProfiles(profile.getRole());
     }
 }

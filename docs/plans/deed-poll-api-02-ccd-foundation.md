@@ -287,8 +287,34 @@ package, locally, because a static whole-codebase ArchUnit import exhausted the 
   right service with no user, right service with an unauthorised user, and the success path reaching the SDK
   controller. The existing security tests for the other namespaces pass unchanged.
 
-- [ ] only `ccd_data` with an authorised user reaches the persistence API, the other namespaces are unchanged,
+- [x] only `ccd_data` with an authorised user reaches the persistence API, the other namespaces are unchanged,
       and the build is green
+
+Done 2026-09-27. The path has its own `@Order(1)` chain, `ccdPersistenceFilterChain`, matched by
+`PathPatternRequestMatcher`. The main chain's `denyAll()` now names only `/callbacks/**`. Finding: the
+`securityMatcher(String)` form builds an `MvcRequestMatcher` at once, and that needs `mvcHandlerMappingIntrospector`,
+which every `web-application-type=none` context lacks. It failed 346 tests before the switch.
+
+Deviation: the allowlist is the constant `SecurityConfiguration.CCD_PERSISTENCE_CALLERS` (`ccd_data` alone), not
+`idam.s2s-authorised.services`. Setting that property registers the library's `ServiceAuthFilter` as a bean, and
+Boot applies a `Filter` bean to every path, so the caseworker and judicial namespaces would start requiring S2S.
+The chain builds its own `ServiceAuthFilter` instead, ahead of the bearer filter. It answers 401 for a missing or
+unverifiable token and 403 for a verified service outside the list, `deed_poll_api` included, before any user
+token is read.
+
+The user token goes through the same `IdamJwtDecoder`. `CcdCallerAuthenticationConverter` reads the raw IDAM roles
+(`IdamClaims.roleNames`) because the system role is configuration and not a `Role`. It maps them through the new
+`DeedPollRoleMapping`, which `DeedPollCaseType` now uses to write its `RoleToAccessProfiles` row, so the definition
+and the chain share one mapping. The chain requires a profile the definition grants something to
+(`DeedPollRoleMapping.granted()`).
+
+`CcdPersistenceSecurityTest` (full context, WireMock IDAM and the new `StubS2s`) covers the five cases and more: an
+unprefixed service token, this service's own name, a foreign-key user token, the placeholder role, the profile
+name used as a role, callbacks still refused, and the caseworker and judicial namespaces needing no S2S. The SDK
+controller is not mapped until Task 6 scans the runtime, so the success path reaches a test stand-in under the
+path. Task 6 must assert the real route behind this chain. The existing namespace security tests are unchanged.
+`CcdSdkRoutesTest` now expects 401 rather than 403 for the persistence routes without S2S. Docker `build`: test
+3060 / 375 files, integration 13 / 3 files, all green.
 
 ### Task 6: The submit handler and the `CaseView`
 

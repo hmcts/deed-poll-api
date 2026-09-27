@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -36,10 +37,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * What the CCD SDK adds to this service's HTTP surface, and that none of it is open.
  *
  * <p>{@code /ccd-persistence/**} is where data-store posts a case event into the decentralised runtime. The
- * existing chain ends in {@code anyRequest().authenticated()}, so without an explicit refusal any valid IDAM token
- * could post an event straight into the SDK. {@link SecurityConfiguration#CCD_SDK_PATHS} is that refusal until
- * plan 02 Task 5 replaces it, and a caseworker's real token -- signed by the stub IDAM, resolved through userinfo
- * -- is what it has to refuse.
+ * existing chain ends in {@code anyRequest().authenticated()}, so a valid IDAM token alone must never be enough
+ * to post an event straight into the SDK. Plan 02 Task 5 gave the path its own chain requiring S2S from
+ * {@code ccd_data} (what gets through it is {@code CcdPersistenceSecurityTest}). This class asserts that a
+ * caseworker's real token -- signed by the stub IDAM, resolved through userinfo -- still gets nowhere on it.
+ * {@code /callbacks/**} stays refused to everybody by {@link SecurityConfiguration#CCD_SDK_PATHS}.
  *
  * <p>Booted under the {@code config-gen} profile, which needs no database, so Docker-free CI runs it -- plus
  * {@code test}, the only profile that accepts the stub IDAM's cleartext issuer. Which paths
@@ -47,8 +49,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>The SDK's components are not yet scanned -- the runtime refuses to start without a {@code CaseView}, which
  * arrives with the case definition -- so today the mapping assertions hold of an empty set. They are written for
- * the day the scan is added: every route the SDK maps must fall under the refused prefixes, and {@code /noc/**}
- * must stay unregistered (plan 02, decision 4).
+ * the day the scan is added: every route the SDK maps must fall under the refused or S2S-guarded prefixes, and
+ * {@code /noc/**} must stay unregistered (plan 02, decision 4).
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -89,10 +91,10 @@ class CcdSdkRoutesTest {
     }
 
     @Test
-    @DisplayName("refuses a caseworker's valid token on every persistence route")
+    @DisplayName("refuses a caseworker's valid token on every persistence route, because it carries no S2S")
     void refusesACaseworkerOnThePersistenceApi() throws Exception {
         for (MockHttpServletRequestBuilder request : persistenceRequests()) {
-            mockMvc.perform(request.headers(bearer(IDAM.accessToken()))).andExpect(status().isForbidden());
+            mockMvc.perform(request.headers(bearer(IDAM.accessToken()))).andExpect(status().isUnauthorized());
         }
     }
 
@@ -127,18 +129,19 @@ class CcdSdkRoutesTest {
     }
 
     @Test
-    @DisplayName("every route the SDK maps is one the chain refuses")
+    @DisplayName("every route the SDK maps is one the chains refuse or guard with S2S")
     void everySdkRouteIsRefused() {
         Map<RequestMappingInfo, HandlerMethod> sdkHandlers = handlerMapping.getHandlerMethods().entrySet().stream()
             .filter(entry -> entry.getValue().getBeanType().getName().startsWith(SDK_PACKAGE))
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-        List<String> refusedPrefixes = Arrays.stream(SecurityConfiguration.CCD_SDK_PATHS)
+        List<String> guardedPrefixes = Stream.concat(Arrays.stream(SecurityConfiguration.CCD_SDK_PATHS),
+                Stream.of(SecurityConfiguration.CCD_PERSISTENCE_PATH))
             .map(path -> path.substring(0, path.length() - "/**".length()))
             .toList();
 
         assertThat(patterns(sdkHandlers))
-            .as("a route the SDK maps outside SecurityConfiguration.CCD_SDK_PATHS is open to any IDAM token")
-            .allMatch(pattern -> refusedPrefixes.stream().anyMatch(pattern::startsWith));
+            .as("a route the SDK maps outside CCD_SDK_PATHS and CCD_PERSISTENCE_PATH is open to any IDAM token")
+            .allMatch(pattern -> guardedPrefixes.stream().anyMatch(pattern::startsWith));
     }
 
     private static List<MockHttpServletRequestBuilder> persistenceRequests() {

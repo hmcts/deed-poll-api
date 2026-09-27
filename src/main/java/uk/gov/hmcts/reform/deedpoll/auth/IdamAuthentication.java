@@ -6,6 +6,10 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 
+import java.util.Collection;
+import java.util.List;
+import java.util.stream.Stream;
+
 /**
  * An authenticated caller, as Spring Security holds them.
  *
@@ -26,7 +30,20 @@ public class IdamAuthentication extends AbstractAuthenticationToken {
     private final transient CurrentUser currentUser;
 
     public IdamAuthentication(Jwt token, CurrentUser currentUser) {
-        super(currentUser.roles().stream().map(Role::claimValue).map(SimpleGrantedAuthority::new).toList());
+        this(token, currentUser, List.of());
+    }
+
+    /**
+     * A caller who also holds the named CCD access profiles, as authorities beside their roles.
+     *
+     * <p>Only the {@code /ccd-persistence/**} chain builds one of these, from the case definition's own role
+     * mapping. An access profile is the definition's name for a set of grants, not a {@link Role}, so it is never
+     * reflected in {@link CurrentUser}, and nothing outside that chain can see it.
+     */
+    public IdamAuthentication(Jwt token, CurrentUser currentUser, Collection<String> accessProfiles) {
+        super(Stream.concat(currentUser.roles().stream().map(Role::claimValue), accessProfiles.stream())
+                  .map(SimpleGrantedAuthority::new)
+                  .toList());
         this.token = token;
         this.currentUser = currentUser;
         setAuthenticated(true);

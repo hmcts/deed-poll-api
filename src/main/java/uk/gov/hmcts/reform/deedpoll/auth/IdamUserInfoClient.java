@@ -57,13 +57,27 @@ public class IdamUserInfoClient {
      * @throws UnauthorizedError for anything the caller could fix by presenting a different token
      */
     public CurrentUser currentUser(String token, String subject) {
+        return IdamClaims.userFromClaims(claims(token, subject));
+    }
+
+    /**
+     * The userinfo claims for a validated token, checked against its subject just as {@link #currentUser} checks
+     * them, but not yet reduced.
+     *
+     * <p>Only for a caller that needs a role {@link IdamClaims#userFromClaims} would drop -- today that is the CCD
+     * persistence chain, which maps IDAM roles onto the case definition's access profiles. Any other reader
+     * should use {@link #currentUser}.
+     *
+     * @throws UnauthorizedError for anything the caller could fix by presenting a different token
+     */
+    public Map<String, Object> claims(String token, String subject) {
         Map<String, Object> claims = fetch(token);
 
         if (!Objects.equals(claims.get("sub"), subject)) {
             throw new UnauthorizedError("IDAM userinfo describes a different subject to the access token");
         }
 
-        return IdamClaims.userFromClaims(claims);
+        return claims;
     }
 
     private Map<String, Object> fetch(String token) {

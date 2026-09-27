@@ -41,11 +41,11 @@ class ServiceAuthConfigurationTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("registers no inbound S2S filter, because nothing calls this service service-to-service yet")
+    @DisplayName("registers no inbound S2S filter bean, so no namespace requires S2S by accident")
     void registersNoInboundFilter() {
-        // The library adds one only when `idam.s2s-authorised.services` is set. Leaving it unset is the
-        // decision, not an omission: a filter with an empty allowlist would refuse every caller, and one with
-        // a guessed allowlist would admit services nobody has agreed to.
+        // The library adds one, with a service-wide allowlist, only when `idam.s2s-authorised.services` is set.
+        // The one inbound S2S check, for /ccd-persistence/**, is built inside that path's own chain in
+        // SecurityConfiguration with a one-service allowlist, and is deliberately not a bean.
         assertThat(context.getBeanNamesForType(ServiceAuthFilter.class)).isEmpty();
     }
 }
