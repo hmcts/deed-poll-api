@@ -366,6 +366,10 @@ retained above. Implementation tasks remain unchecked.
   unpaged queries, totals, saved queries, reference-match shortcuts and every queue
   entry point; filtering only the rendered page is insufficient. Keep operational
   reconciliation access separate from the normal work queue, with explicit permissions.
+- Task 8 (added 2026-09-27): publish `ccdCaseReference` read-only in the caseworker contract,
+  with deed-poll-admin's spec refresh landing alongside it. Plan 02 stores the reference but
+  deliberately publishes it nowhere, so this plan is the first that changes the contract for
+  it — and the refresh is atomic in admin (`contract.test.ts`), so it cannot land api-only.
 
 ### Additional acceptance criteria
 
