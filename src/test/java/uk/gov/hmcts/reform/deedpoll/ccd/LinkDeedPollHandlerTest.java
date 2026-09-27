@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.ccd;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.LinkedMultiValueMap;
@@ -21,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -57,8 +59,20 @@ class LinkDeedPollHandlerTest {
         SubmitResponse<DeedPollCaseState> response = handler.submit(payload(REFERENCE, RECORD));
 
         assertThat(response.getErrors()).isNullOrEmpty();
-        verify(deedPolls).findByIdForUpdate(RECORD);
-        verify(deedPolls).bindCcdCaseReference(RECORD, "1234567890123456");
+        InOrder order = inOrder(deedPolls, attempts);
+        order.verify(deedPolls).findByIdForUpdate(RECORD);
+        order.verify(attempts).findLive(RECORD);
+        order.verify(deedPolls).bindCcdCaseReference(RECORD, "1234567890123456");
+    }
+
+    @Test
+    @DisplayName("refuses to bind over a different reference the record already holds")
+    void refusesARecordLinkedElsewhere() {
+        record("6543210987654321", CcdCreationAttemptStatus.AwaitingConfirmation);
+
+        assertThat(handler.submit(payload(REFERENCE, RECORD)).getErrors())
+            .containsExactly(CcdLinkRule.Outcome.RECORD_LINKED_ELSEWHERE.refusal());
+        verify(deedPolls, never()).bindCcdCaseReference(anyString(), anyString());
     }
 
     @Test

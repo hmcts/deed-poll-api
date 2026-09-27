@@ -89,16 +89,15 @@ public final class CcdLinkingRule {
         return agrees ? Confirmation.CONFIRMED : Confirmation.CONTRADICTED;
     }
 
-    /** What happens to an attempt next. */
+    /**
+     * What reconciliation does with an attempt {@code AwaitingConfirmation}. Never a release to {@code Pending}:
+     * after an unknown outcome a fresh start is how a record gets a second case.
+     */
     public enum Next {
         /**
          * Mark it {@code Linked}.
          */
         LINK,
-        /**
-         * Give the claim back as {@code Pending}, for a later claim to try from the start.
-         */
-        RELEASE,
         /**
          * Leave it {@code AwaitingConfirmation} for a later reconciliation to read again.
          */
@@ -111,12 +110,13 @@ public final class CcdLinkingRule {
 
     /**
      * After a refusal, or a failure before anything was submitted, with the binding read and absent: nothing was
-     * created, so the claim may be tried again from the start -- until it has used its attempts.
+     * created, so the claim may be given back as {@code Pending} and tried again from the start -- until it has
+     * used its attempts, when it is a repair item.
      *
      * @param attempts how many claims the attempt has had, this one included
      */
-    public static Next afterNothingCreated(int attempts, int maxAttempts) {
-        return attempts < maxAttempts ? Next.RELEASE : Next.REPAIR;
+    public static boolean mayTryAgain(int attempts, int maxAttempts) {
+        return attempts < maxAttempts;
     }
 
     /**

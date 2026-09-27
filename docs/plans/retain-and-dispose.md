@@ -1,7 +1,7 @@
 # Retain and Dispose — platform and local record lifecycle
 
 Status: draft for review, 2026-09-26. Depends on the
-[CCD foundation](deed-poll-api-02-ccd-foundation.md); document disposal depends on
+[CCD foundation](completed/deed-poll-api-02-ccd-foundation.md); document disposal depends on
 [CDAM](deed-poll-api-03-cdam-documents.md).
 
 ## Outcome and boundaries

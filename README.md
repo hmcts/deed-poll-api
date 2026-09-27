@@ -349,8 +349,32 @@ deleting a note, deleting a witness, and publishing or amending a *shared* saved
 > happened; until it does, `anyRequest().authenticated()` is the whole of the *transport's* authorisation
 > rule, and the three checks above live in the domain, where they hold for callers a route does not have.
 
-Outbound S2S (`IDAM_S2S_AUTH_URL`, `DEED_POLL_API_S2S_SECRET`, `S2S_SERVICE_NAME`) is wired but
-unused — nothing here calls another CFT service yet, and the secret has a non-working default.
+`/ccd-persistence/**` is the exception, with a chain of its own: it is where CCD's data-store calls this
+service back, so it admits an S2S token verified as `ccd_data` and nobody else, plus an IDAM user whose role
+is the configured `CCD_SYSTEM_ROLE`, mapped onto the `DEED_POLL_SYSTEM` access profile. The generator's
+`/callbacks/**` routes are refused to everybody. The caseworker and judicial namespaces still need no S2S.
+
+## CCD
+
+Each deed-poll record may be linked to one decentralised CCD case (plan 02): data-store holds a two-field
+projection, the relational record stays authoritative. The linking operation, `CcdLinkingService.link`, is
+called by nothing yet, and every identifier below that names CCD is an unconfirmed placeholder.
+[`docs/CCD-SMOKE.md`](docs/CCD-SMOKE.md) is the procedure for the first real environment.
+
+| Variable | Default | What it is |
+|---|---|---|
+| `CCD_CASE_TYPE_ID`, `CCD_JURISDICTION_ID`, `CCD_SYSTEM_ROLE` | `DEED_POLL_PLACEHOLDER` | the definition's identifiers, and the IDAM role data-store's calls must carry |
+| `CCD_DATA_STORE_URL` | `http://localhost:4452` | data-store, for the linking operation |
+| `IDAM_API_URL` | `http://localhost:5000` | IDAM's API, for the system user's password grant |
+| `IDAM_CLIENT_ID`, `IDAM_CLIENT_SECRET`, `IDAM_CLIENT_REDIRECT_URI` | empty | the OAuth client for that grant |
+| `DEED_POLL_SYSTEM_USERNAME`, `DEED_POLL_SYSTEM_PASSWORD` | empty | the system user; an empty one is refused |
+| `IDAM_S2S_AUTH_URL`, `DEED_POLL_API_S2S_SECRET`, `S2S_SERVICE_NAME` | `http://localhost:4502`, empty, `deed_poll_api` | outbound S2S, for calls to data-store |
+| `CCD_LINKING_LEASE`, `CCD_LINKING_SETTLE_AFTER`, `CCD_LINKING_MAX_ATTEMPTS` | `PT5M`, `PT10M`, `3` | how long a claim is held, how long an unknown outcome is waited on, how many refused tries |
+| `HOSTNAME` | `deed-poll-api` | who holds a claim; Kubernetes sets it to the pod's name |
+
+`CoreCaseDataClientAutoConfiguration` is excluded on purpose: it would add a health indicator calling
+data-store, and the unauthenticated `/health` aggregates every indicator, so a data-store outage would read as
+this service being down. `CcdConfiguration` registers the client instead.
 
 ## Documents and uploads
 
@@ -441,6 +465,25 @@ The project contains the following plugins:
     http://projects.spring.io/spring-boot/
 
     Reduces the amount of work needed to create a Spring application
+
+  * hmcts.ccd.sdk
+
+    https://github.com/hmcts/ccd-config-generator
+
+    The decentralised CCD SDK. Its BOM versions `decentralised-runtime`, and it adds the task that writes the
+    CCD definition with no database:
+
+    ```bash
+      SPRING_PROFILES_ACTIVE=config-gen ./gradlew generateCCDConfig
+    ```
+
+  * com.github.hmcts.rse-cft-lib
+
+    https://github.com/hmcts/rse-cft-lib
+
+    The in-process CFT stack that `./gradlew cftlibTest` runs the linking operation against. Local only: nothing
+    in `build`, `check` or the Jenkinsfile runs it. Both plugins and their dependencies resolve from HMCTS's
+    Azure Artifacts feed, declared in `settings.gradle` and `build.gradle`.
 
 
   * com.github.ben-manes.versions
@@ -551,12 +594,12 @@ There are two Kubernetes probes and they deliberately do not check the same thin
 ```
   {"status":"UP","components":{
     "db":{"status":"UP"},
-    "deedPollSchema":{"status":"UP","details":{"tables":8}},
+    "deedPollSchema":{"status":"UP","details":{"tables":11}},
     "readinessState":{"status":"UP"}}}
 ```
 
 It checks the database twice over: `db` is `DatabaseHealthIndicator` and `deedPollSchema` asks whether
-the eight deed-poll tables are actually there. A connection check alone passes against an unmigrated
+every table in `DeedPollSchema.DEED_POLL_TABLES` is actually there. A connection check alone passes against an unmigrated
 database, where the probe stays green while every request 500s.
 
 `db` is ours rather than Spring Boot's — `management.health.db.enabled` is `false` — because Boot's

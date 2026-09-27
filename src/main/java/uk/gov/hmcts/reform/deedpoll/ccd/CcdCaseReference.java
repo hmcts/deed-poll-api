@@ -30,18 +30,6 @@ public final class CcdCaseReference {
     }
 
     /**
-     * The value, if it is a reference this service can store.
-     *
-     * @throws IllegalArgumentException naming the rule, and not the value, which came from outside
-     */
-    public static String require(String reference) {
-        if (!isValid(reference)) {
-            throw new IllegalArgumentException("A CCD case reference is sixteen digits");
-        }
-        return reference;
-    }
-
-    /**
      * The reference the SDK hands a handler or a view as a number, as this service stores it -- or empty if it is
      * not one this service can store.
      *

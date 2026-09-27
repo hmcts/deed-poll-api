@@ -326,7 +326,7 @@ retained above. Implementation tasks remain unchecked.
 ### Resolved decisions
 
 1. A new online submission creates a deed-poll record before payment and uses the
-   [CCD foundation](deed-poll-api-02-ccd-foundation.md) to establish a real CCD reference
+   [CCD foundation](completed/deed-poll-api-02-ccd-foundation.md) to establish a real CCD reference
    before creating its Fees & Pay Service Request. This resolves stop gates 1 and 2's
    architecture questions. It does not claim CCD/payment onboarding is complete.
 2. New online submissions enter the normal caseworker work queue only after verified

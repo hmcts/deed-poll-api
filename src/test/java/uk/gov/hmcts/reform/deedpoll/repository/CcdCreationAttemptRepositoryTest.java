@@ -10,6 +10,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdCreationAttempts;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 
@@ -92,8 +93,6 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(attempt.getAttempts()).isZero();
         assertThat(attempt.getCreatedOn()).isNotNull();
         assertThat(attempt.getModifiedOn()).isNotNull();
-        assertThat(repository.findByOperationId(attempt.getOperationId())).map(CcdCreationAttempt::getId)
-            .contains(attempt.getId());
         assertThat(attempts.live(deedPollId)).map(CcdCreationAttempt::getId).contains(attempt.getId());
     }
 
@@ -195,6 +194,49 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         CcdCreationAttempt unchanged = repository.findById(attempt.getId()).orElseThrow();
         assertThat(unchanged.getStatus()).isEqualTo(AwaitingConfirmation);
         assertThat(unchanged.getFailureDetail()).isNull();
+    }
+
+    @Test
+    @DisplayName("an expired claim is taken for reconciliation, but a fresh claim in its place is not")
+    void takingAnExpiredClaimSparesAFreshOne() {
+        CcdCreationAttempt attempt = opened(newCase());
+        attempts.claim(attempt.getId(), "worker-1", LEASE);
+
+        // Read as expired by a reconciler that is slow to act on it; meanwhile the claim is live again.
+        assertThat(attempts.takeExpiredClaim(attempt.getId(), "expired")).isFalse();
+        assertThat(repository.findById(attempt.getId()).orElseThrow().getClaimedBy()).isEqualTo("worker-1");
+
+        jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"leaseExpiresAt\" = ? WHERE \"id\" = ?",
+            Timestamp.valueOf(AuditClock.now().minusMinutes(1)), attempt.getId());
+        assertThat(attempts.takeExpiredClaim(attempt.getId(), "expired")).isTrue();
+        CcdCreationAttempt taken = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(taken.getStatus()).isEqualTo(AwaitingConfirmation);
+        assertThat(taken.getClaimedBy()).isNull();
+        assertThat(taken.getLeaseExpiresAt()).isNull();
+        assertThat(taken.getFailureDetail()).isEqualTo("expired");
+    }
+
+    @Test
+    @DisplayName("an unbound attempt becomes a repair item, but not once its record is bound")
+    void repairIfUnboundReadsTheBinding() {
+        String unbound = newCase();
+        CcdCreationAttempt first = awaiting(unbound);
+        assertThat(attempts.repairIfUnbound(first, "nothing bound")).isTrue();
+        assertThat(repository.findById(first.getId()).orElseThrow().getStatus()).isEqualTo(NeedsRepair);
+
+        String bound = newCase();
+        CcdCreationAttempt second = awaiting(bound);
+        jdbc.update("UPDATE \"deedpoll_deedpoll\" SET \"ccdCaseReference\" = '1234567890123456' WHERE \"id\" = ?",
+            bound);
+        assertThat(attempts.repairIfUnbound(second, "nothing bound")).isFalse();
+        assertThat(repository.findById(second.getId()).orElseThrow().getStatus()).isEqualTo(AwaitingConfirmation);
+    }
+
+    private CcdCreationAttempt awaiting(String deedPollId) {
+        CcdCreationAttempt attempt = opened(deedPollId);
+        attempts.claim(attempt.getId(), "worker-1", LEASE);
+        attempts.move(attempt.getId(), Claimed, AwaitingConfirmation, null);
+        return repository.findById(attempt.getId()).orElseThrow();
     }
 
     @Test

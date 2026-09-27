@@ -92,22 +92,19 @@ class CcdLinkingRuleTest {
     @Test
     @DisplayName("nothing created goes round again until the attempts are used, then is a repair item")
     void afterNothingCreated() {
-        assertThat(CcdLinkingRule.afterNothingCreated(1, 3)).isEqualTo(Next.RELEASE);
-        assertThat(CcdLinkingRule.afterNothingCreated(2, 3)).isEqualTo(Next.RELEASE);
-        assertThat(CcdLinkingRule.afterNothingCreated(3, 3)).isEqualTo(Next.REPAIR);
-        assertThat(CcdLinkingRule.afterNothingCreated(1, 1)).isEqualTo(Next.REPAIR);
+        assertThat(CcdLinkingRule.mayTryAgain(1, 3)).isTrue();
+        assertThat(CcdLinkingRule.mayTryAgain(2, 3)).isTrue();
+        assertThat(CcdLinkingRule.mayTryAgain(3, 3)).isFalse();
+        assertThat(CcdLinkingRule.mayTryAgain(1, 1)).isFalse();
     }
 
     @Test
-    @DisplayName("reconciliation links on confirmation, repairs a contradiction at once, and never releases")
+    @DisplayName("reconciliation links on confirmation, repairs a contradiction at once, and otherwise waits")
     void reconciles() {
         for (boolean settled : new boolean[] {false, true}) {
             assertThat(CcdLinkingRule.reconcile(Optional.of(Confirmation.CONFIRMED), settled)).isEqualTo(Next.LINK);
             assertThat(CcdLinkingRule.reconcile(Optional.of(Confirmation.CONTRADICTED), settled))
                 .isEqualTo(Next.REPAIR);
-            assertThat(CcdLinkingRule.reconcile(Optional.of(Confirmation.NOT_BOUND), settled))
-                .isNotEqualTo(Next.RELEASE);
-            assertThat(CcdLinkingRule.reconcile(Optional.empty(), settled)).isNotEqualTo(Next.RELEASE);
         }
         assertThat(CcdLinkingRule.reconcile(Optional.of(Confirmation.NOT_BOUND), false)).isEqualTo(Next.WAIT);
         assertThat(CcdLinkingRule.reconcile(Optional.empty(), false)).isEqualTo(Next.WAIT);

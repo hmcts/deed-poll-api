@@ -272,7 +272,7 @@ Read first: decision 7, and the content draft's "How the right forms reach the r
       | # | Blocker | Owner | State on 2026-09-26 | Blocks |
       |---|---|---|---|---|
       | 1 | **AAT has no Notify key** (flag 1) | DTS platform reviewers of `hmcts/azure-access`; **Steve** chases, then writes the vault secret | azure-access#8111 open, review required | **Every** email in AAT, not only ① and ② |
-      | 2 | **The deed store is local pod disk** (flag 2) | **Steve / deed-poll team**: [plan 03](../deed-poll-api-03-cdam-documents.md) (CDAM), after [plan 02](../deed-poll-api-02-ccd-foundation.md) (CCD foundation) and CCD + CDAM onboarding | Both plans drafted, no tasks started; onboarding identifiers unconfirmed | ① and ② in any deployed environment |
+      | 2 | **The deed store is local pod disk** (flag 2) | **Steve / deed-poll team**: [plan 03](../deed-poll-api-03-cdam-documents.md) (CDAM), after [plan 02](deed-poll-api-02-ccd-foundation.md) (CCD foundation) and CCD + CDAM onboarding | Both plans drafted, no tasks started; onboarding identifiers unconfirmed | ① and ② in any deployed environment |
       | 3 | **② is missing LOC024** (Task 3) | **Steve**, who has asked the team for the file, then attaches it in the portal | Authored 2026-09-26 (`a2500c11-…`, v5); `((LOC024))` is typed, not attached | Every send of ②, and ②'s check page |
       | 4 | **The chart values** (decision 7) | **deed-poll team**, and only once 1 and 2 have cleared | Deliberately not set | Two lines: `NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_ADULT` / `_MINOR` and `NOTIFY_DOCUMENT_RETENTION_WEEKS: 26` |
       | 5 | **Relinquishment forms unknown** (flag 3) | **The Deed Poll office**, asked by Steve | Open | ③′ only (decision 4). **Does not block ① or ②** |

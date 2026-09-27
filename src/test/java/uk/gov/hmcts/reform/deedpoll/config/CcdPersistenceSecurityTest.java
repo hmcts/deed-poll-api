@@ -189,6 +189,18 @@ class CcdPersistenceSecurityTest {
     }
 
     @Test
+    @DisplayName("refuses a valid token IDAM will not resolve, or resolves to somebody else, with 401 and not 500")
+    void refusesAUserIdamWillNotResolve() throws Exception {
+        IDAM.stubUserInfoStatus(401);
+        mockMvc.perform(get(PROBE).headers(headers(CCD_DATA, IDAM.accessToken())))
+            .andExpect(status().isUnauthorized());
+
+        IDAM.stubUserInfo("somebody-else", "Deed Poll System", List.of("caseworker", SYSTEM_ROLE));
+        mockMvc.perform(get(PROBE).headers(headers(CCD_DATA, IDAM.accessToken())))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     @DisplayName("refuses a valid user the definition grants nothing to -- an admin caseworker included -- with 403")
     void refusesAnUnauthorisedUser() throws Exception {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of(Role.DEEDPOLL_ADMIN.claimValue()));

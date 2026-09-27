@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.ccd;
 
 import feign.FeignException;
 import feign.RetryableException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import uk.gov.hmcts.reform.authorisation.generators.AuthTokenGenerator;
@@ -12,7 +13,6 @@ import uk.gov.hmcts.reform.ccd.client.model.Event;
 import uk.gov.hmcts.reform.ccd.client.model.StartEventResponse;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.CaseSeen;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.Confirmation;
-import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.Next;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 
 import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus.AwaitingConfirmation;
 import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus.Claimed;
@@ -56,6 +57,7 @@ import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus
  * <p>Failure detail written onto an attempt is fixed prose plus an HTTP status or an exception's class name --
  * never a message, which for Feign quotes the response body, and never a token.
  */
+@Slf4j
 @Service
 public class CcdLinkingService {
 
@@ -139,6 +141,9 @@ public class CcdLinkingService {
     /**
      * Reconciles every attempt nobody is attending to: each expired claim, then each attempt awaiting confirmation.
      *
+     * <p>One attempt that cannot be read -- a database fault, say -- is logged and passed over, so that it does not
+     * keep every attempt behind it unread on every pass.
+     *
      * @return how many attempts were read
      */
     public int reconcileOutstanding() {
@@ -147,29 +152,44 @@ public class CcdLinkingService {
         List<CcdCreationAttempt> awaiting = attempts.awaitingConfirmation();
         int read = 0;
         for (CcdCreationAttempt expired : expiredClaims) {
-            takeFromExpiredClaim(expired);
-            read++;
+            read += readOne(expired, this::takeFromExpiredClaim);
         }
         for (CcdCreationAttempt waiting : awaiting) {
-            reconcile(waiting);
-            read++;
+            read += readOne(waiting, this::reconcile);
         }
         return read;
+    }
+
+    private static int readOne(CcdCreationAttempt attempt, Function<CcdCreationAttempt, Result> reading) {
+        try {
+            reading.apply(attempt);
+            return 1;
+        } catch (RuntimeException failure) {
+            // Fixed prose and the attempt's own id: the failure's message may quote a response body.
+            log.warn("Could not reconcile CCD creation attempt {}: {}", attempt.getId(),
+                failure.getClass().getSimpleName());
+            return 0;
+        }
     }
 
     private Result claimAndCreate(CcdCreationAttempt pending, CcdCaseProjection record) {
         if (!attempts.claim(pending.getId(), linking.worker(), linking.lease())) {
             return Result.IN_PROGRESS;
         }
-        int tries = attempts.live(record.deedPollId()).map(CcdCreationAttempt::getAttempts)
-            .orElse(pending.getAttempts() + 1);
+        // The claim matched only a Pending row and added exactly one.
+        int tries = pending.getAttempts() + 1;
 
         String user;
         String service;
-        StartEventResponse start;
         try {
             user = systemUser.accessToken();
             service = serviceTokens.getObject().generate();
+        } catch (RuntimeException failure) {
+            return nothingCreated(pending, tries,
+                "Failed before submission: " + describe("IDAM or S2S", failure));
+        }
+        StartEventResponse start;
+        try {
             start = ccd.startCase(user, service, identifiers.caseTypeId(), DeedPollCaseType.LINK_DEED_POLL);
         } catch (RuntimeException failure) {
             return nothingCreated(pending, tries, "Failed before submission: " + describe(failure));
@@ -208,7 +228,7 @@ public class CcdLinkingService {
     }
 
     private Result nothingCreated(CcdCreationAttempt claimed, int tries, String detail) {
-        return CcdLinkingRule.afterNothingCreated(tries, linking.maxAttempts()) == Next.RELEASE
+        return CcdLinkingRule.mayTryAgain(tries, linking.maxAttempts())
             ? moved(claimed, Claimed, Pending, detail, Result.RETRY_LATER)
             : moved(claimed, Claimed, NeedsRepair, detail + "; no attempts left", Result.NEEDS_REPAIR);
     }
@@ -217,14 +237,25 @@ public class CcdLinkingService {
         if (!attempts.move(claimed.getId(), Claimed, AwaitingConfirmation, detail)) {
             return current(claimed.getDeedPollId());
         }
-        return attempts.live(claimed.getDeedPollId())
-            .filter(attempt -> attempt.getStatus() == AwaitingConfirmation)
-            .map(this::reconcile)
-            .orElseGet(() -> current(claimed.getDeedPollId()));
+        return reconcileNow(claimed.getDeedPollId());
     }
 
     private Result takeFromExpiredClaim(CcdCreationAttempt claimed) {
-        return awaitConfirmation(claimed, "The claim's lease expired before its outcome was recorded");
+        if (!attempts.takeExpiredClaim(claimed.getId(),
+                "The claim's lease expired before its outcome was recorded")) {
+            return current(claimed.getDeedPollId());
+        }
+        return reconcileNow(claimed.getDeedPollId());
+    }
+
+    /**
+     * Reconciles the attempt this caller has just moved to {@code AwaitingConfirmation}, read afresh.
+     */
+    private Result reconcileNow(String deedPollId) {
+        return attempts.live(deedPollId)
+            .filter(attempt -> attempt.getStatus() == AwaitingConfirmation)
+            .map(this::reconcile)
+            .orElseGet(() -> current(deedPollId));
     }
 
     /**
@@ -243,21 +274,22 @@ public class CcdLinkingService {
         return switch (CcdLinkingRule.reconcile(confirmation, settled)) {
             case LINK -> moved(waiting, AwaitingConfirmation, Linked, null, Result.LINKED);
             case WAIT -> Result.AWAITING_CONFIRMATION;
-            case REPAIR -> moved(waiting, AwaitingConfirmation, NeedsRepair, repairDetail(confirmation),
-                Result.NEEDS_REPAIR);
-            case RELEASE -> throw new IllegalStateException("Reconciliation never releases an attempt");
+            case REPAIR -> repair(waiting, binding.isPresent(), confirmation.isPresent());
         };
     }
 
-    private static String repairDetail(Optional<Confirmation> confirmation) {
-        if (confirmation.isEmpty()) {
-            return "CCD could not be read to confirm the record's binding within the settle window";
+    private Result repair(CcdCreationAttempt waiting, boolean bound, boolean ccdRead) {
+        if (!bound) {
+            // Nothing bound when read -- but a late submission may be binding it now, so it is re-read under the lock.
+            return attempts.repairIfUnbound(waiting,
+                "No CCD case reference was bound to the record within the settle window")
+                ? Result.NEEDS_REPAIR
+                : current(waiting.getDeedPollId());
         }
-        return switch (confirmation.get()) {
-            case NOT_BOUND -> "No CCD case reference was bound to the record within the settle window";
-            case CONTRADICTED -> "CCD's case does not match the record's binding";
-            case CONFIRMED -> throw new IllegalStateException("A confirmed link is not a repair");
-        };
+        String detail = ccdRead
+            ? "CCD's case does not match the record's binding"
+            : "CCD could not be read to confirm the record's binding within the settle window";
+        return moved(waiting, AwaitingConfirmation, NeedsRepair, detail, Result.NEEDS_REPAIR);
     }
 
     /**
@@ -322,13 +354,22 @@ public class CcdLinkingService {
             Objects.toString(data.get("deedPollId"), null));
     }
 
-    /** A failure as fixed prose: the status CCD sent, or the kind of failure. Never its message. */
+    /** A failure CCD's API threw, as fixed prose. */
     static String describe(RuntimeException failure) {
+        return describe("CCD", failure);
+    }
+
+    /**
+     * A failure as fixed prose: the status {@code called} sent, or the kind of failure. Never its message.
+     *
+     * @param called what was being called, so that an IDAM or S2S fault is not reported as CCD's
+     */
+    static String describe(String called, RuntimeException failure) {
         if (failure instanceof RetryableException) {
-            return "no response from CCD";
+            return "no response from " + called;
         }
         if (failure instanceof FeignException feign && feign.status() > 0) {
-            return "CCD answered HTTP " + feign.status();
+            return called + " answered HTTP " + feign.status();
         }
         return failure.getClass().getSimpleName();
     }

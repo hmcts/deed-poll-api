@@ -28,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -55,6 +56,7 @@ class CcdLinkingServiceTest {
 
     private final AtomicReference<String> binding = new AtomicReference<>();
     private InMemoryAttempts attempts;
+    private DeedPollRepository deedPolls;
     private CoreCaseDataApi ccd;
     private SystemUserTokens systemUser;
     private CcdLinkingService linking;
@@ -63,7 +65,7 @@ class CcdLinkingServiceTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         attempts = new InMemoryAttempts();
-        DeedPollRepository deedPolls = mock(DeedPollRepository.class);
+        deedPolls = mock(DeedPollRepository.class);
         when(deedPolls.findCcdCaseProjectionById(RECORD))
             .thenReturn(Optional.of(new CcdCaseProjection(RECORD, "KBDP2026-000001")));
         when(deedPolls.findCcdCaseReference(RECORD)).thenAnswer(invocation -> Optional.ofNullable(binding.get()));
@@ -194,6 +196,132 @@ class CcdLinkingServiceTest {
     }
 
     @Test
+    @DisplayName("an IDAM refusal before submission is recorded as IDAM's or S2S's, never as CCD's")
+    void tokenFailureIsNotBlamedOnCcd() {
+        when(systemUser.accessToken()).thenThrow(answered(401));
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.RETRY_LATER);
+        assertThat(attempts.attempt.getFailureDetail())
+            .isEqualTo("Failed before submission: IDAM or S2S answered HTTP 401");
+        verify(ccd, never()).startCase(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("a case CCD reports created, with nothing bound to the record, is a repair item and not Linked")
+    void createdButNotBound() {
+        whenSubmitted(() -> ours(REFERENCE));
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.NEEDS_REPAIR);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(NeedsRepair);
+        assertThat(attempts.attempt.getFailureDetail())
+            .isEqualTo("CCD reported a case created, but no reference is bound to the record");
+    }
+
+    @Test
+    @DisplayName("a worker whose attempt reconciliation took mid-call reports the attempt's status, and sends nothing")
+    void workerThatLostItsAttemptReportsWhatItIsNow() {
+        whenSubmitted(() -> {
+            binding.set(String.valueOf(REFERENCE));
+            takenByReconciliation();
+            return ours(REFERENCE);
+        });
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(AwaitingConfirmation);
+        assertThat(attempts.attempt.getFailureDetail()).isEqualTo("taken by reconciliation");
+        verify(ccd, times(1)).startCase(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("a lost response to a worker that has lost its attempt too overwrites nothing, and sends nothing")
+    void lostResponseAfterTheAttemptWasTaken() {
+        whenSubmitted(() -> {
+            takenByReconciliation();
+            throw noResponse();
+        });
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(attempts.attempt.getFailureDetail()).isEqualTo("taken by reconciliation");
+        verify(ccd, times(1)).submitCaseCreation(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("a bound record whose case CCD will not show is a repair item once the settle window has passed")
+    void ccdUnreadablePastTheSettleWindow() {
+        whenSubmitted(() -> {
+            binding.set(String.valueOf(REFERENCE));
+            throw noResponse();
+        });
+        when(ccd.getCase(anyString(), anyString(), anyString())).thenThrow(answered(503));
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        attempts.attempt.setModifiedOn(AuditClock.now().minusDays(1));
+
+        assertThat(linking.reconcileOutstanding()).isOne();
+        assertThat(attempts.attempt.getStatus()).isEqualTo(NeedsRepair);
+        assertThat(attempts.attempt.getFailureDetail())
+            .isEqualTo("CCD could not be read to confirm the record's binding within the settle window");
+    }
+
+    @Test
+    @DisplayName("a record bound between reconciliation's read and its repair stays awaiting, to be linked next time")
+    void lateBindIsNotMarkedUnbound() {
+        whenSubmitted(() -> {
+            throw answered(500);
+        });
+        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        attempts.attempt.setModifiedOn(AuditClock.now().minusDays(1));
+        // Reconciliation reads nothing bound; a late submission binds the record before it can mark the repair.
+        when(deedPolls.findCcdCaseReference(RECORD)).thenAnswer(invocation -> {
+            Optional<String> read = Optional.ofNullable(binding.get());
+            binding.set(String.valueOf(REFERENCE));
+            return read;
+        });
+
+        assertThat(linking.reconcileOutstanding()).isOne();
+        assertThat(attempts.attempt.getStatus()).isEqualTo(AwaitingConfirmation);
+    }
+
+    @Test
+    @DisplayName("a record another worker opened first is left to that worker")
+    void losingTheOpen() {
+        attempts.openedByAnotherWorker = true;
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.IN_PROGRESS);
+        assertThat(attempts.attempt.getClaimedBy()).isEqualTo("worker-2");
+        verify(ccd, never()).startCase(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("an attempt reconciliation cannot read does not keep the rest of the pass from being read")
+    void oneUnreadableAttemptDoesNotStopThePass() {
+        whenSubmitted(() -> {
+            binding.set(String.valueOf(REFERENCE));
+            throw noResponse();
+        });
+        when(ccd.getCase(anyString(), anyString(), anyString())).thenThrow(answered(503));
+        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        // The same attempt listed twice stands for two: the first read fails outright, the second succeeds.
+        attempts.listedTwice = true;
+        when(deedPolls.findCcdCaseReference(RECORD))
+            .thenThrow(new IllegalStateException("database unavailable"))
+            .thenReturn(Optional.of(String.valueOf(REFERENCE)));
+        // doReturn, because when(ccd.getCase(...)) would call the stub above and throw its 503.
+        doReturn(ours(REFERENCE)).when(ccd).getCase(anyString(), anyString(), eq(String.valueOf(REFERENCE)));
+
+        assertThat(linking.reconcileOutstanding()).isOne();
+        assertThat(attempts.attempt.getStatus()).isEqualTo(Linked);
+    }
+
+    /** What reconciliation does to a claim it has read as expired, done while its worker is still talking to CCD. */
+    private void takenByReconciliation() {
+        attempts.attempt.setStatus(AwaitingConfirmation);
+        attempts.attempt.setClaimedBy(null);
+        attempts.attempt.setLeaseExpiresAt(null);
+        attempts.attempt.setFailureDetail("taken by reconciliation");
+    }
+
+    @Test
     @DisplayName("a case CCD reports that contradicts the binding is a repair item at once")
     void contradicted() {
         whenSubmitted(() -> {
@@ -235,13 +363,22 @@ class CcdLinkingServiceTest {
         return CaseDetails.builder().id(reference).caseTypeId(CASE_TYPE).data(Map.of("deedPollId", RECORD)).build();
     }
 
-    /** One record's attempts in memory, moving only as the real transition rule allows. */
-    private static final class InMemoryAttempts extends CcdCreationAttempts {
+    /**
+     * One record's attempts in memory, moving only as the real transition rule allows, and releasing a claim as
+     * the real statements do.
+     */
+    private final class InMemoryAttempts extends CcdCreationAttempts {
 
         private CcdCreationAttempt attempt;
 
+        /** The next open loses to another worker, which opens and claims the attempt first. */
+        private boolean openedByAnotherWorker;
+
+        /** Lists the one attempt awaiting confirmation twice, standing for two. */
+        private boolean listedTwice;
+
         InMemoryAttempts() {
-            super(null);
+            super(null, null);
         }
 
         @Override
@@ -254,12 +391,32 @@ class CcdLinkingServiceTest {
             attempt.setDeedPollId(deedPollId);
             attempt.setStatus(Pending);
             attempt.setModifiedOn(AuditClock.now());
-            return Optional.of(attempt);
+            if (openedByAnotherWorker) {
+                claim(attempt.getId(), "worker-2", Duration.ofMinutes(5));
+                return Optional.empty();
+            }
+            return Optional.of(snapshot());
         }
 
         @Override
         public Optional<CcdCreationAttempt> live(String deedPollId) {
-            return Optional.ofNullable(attempt).filter(found -> found.getStatus() != Linked);
+            return Optional.ofNullable(attempt).filter(found -> found.getStatus() != Linked).map(found -> snapshot());
+        }
+
+        /** What a read hands back: a detached copy, which a later conditional UPDATE leaves as it was. */
+        private CcdCreationAttempt snapshot() {
+            CcdCreationAttempt copy = new CcdCreationAttempt();
+            copy.setId(attempt.getId());
+            copy.setDeedPollId(attempt.getDeedPollId());
+            copy.setOperationId(attempt.getOperationId());
+            copy.setStatus(attempt.getStatus());
+            copy.setClaimedBy(attempt.getClaimedBy());
+            copy.setLeaseExpiresAt(attempt.getLeaseExpiresAt());
+            copy.setAttempts(attempt.getAttempts());
+            copy.setFailureDetail(attempt.getFailureDetail());
+            copy.setCreatedOn(attempt.getCreatedOn());
+            copy.setModifiedOn(attempt.getModifiedOn());
+            return copy;
         }
 
         @Override
@@ -270,7 +427,23 @@ class CcdLinkingServiceTest {
 
         @Override
         public List<CcdCreationAttempt> awaitingConfirmation() {
-            return live(RECORD).filter(found -> found.getStatus() == AwaitingConfirmation).stream().toList();
+            List<CcdCreationAttempt> awaiting =
+                live(RECORD).filter(found -> found.getStatus() == AwaitingConfirmation).stream().toList();
+            return listedTwice ? List.of(awaiting.get(0), awaiting.get(0)) : awaiting;
+        }
+
+        @Override
+        public boolean takeExpiredClaim(UUID attemptId, String failureDetail) {
+            if (attempt == null || attempt.getStatus() != Claimed
+                || !attempt.getLeaseExpiresAt().isBefore(AuditClock.now())) {
+                return false;
+            }
+            return move(attemptId, Claimed, AwaitingConfirmation, failureDetail);
+        }
+
+        @Override
+        public boolean repairIfUnbound(CcdCreationAttempt waiting, String failureDetail) {
+            return binding.get() == null && move(waiting.getId(), AwaitingConfirmation, NeedsRepair, failureDetail);
         }
 
         @Override
@@ -295,6 +468,8 @@ class CcdLinkingServiceTest {
                 return false;
             }
             attempt.setStatus(to);
+            attempt.setClaimedBy(null);
+            attempt.setLeaseExpiresAt(null);
             attempt.setFailureDetail(failureDetail);
             attempt.setModifiedOn(AuditClock.now());
             return true;

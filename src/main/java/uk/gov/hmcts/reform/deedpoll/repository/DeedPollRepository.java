@@ -248,7 +248,7 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
      * <p>Native SQL because the entity's mapping of this column is not updatable, which JPQL respects.
      * {@code clearAutomatically} so a copy of the case loaded earlier in the transaction is not read back stale.
      *
-     * @param reference sixteen digits, already checked by {@code CcdCaseReference.require}; V21's {@code CHECK}
+     * @param reference sixteen digits, already checked by {@code CcdCaseReference.of}; V21's {@code CHECK}
      *     refuses anything else
      * @return 1 if this statement bound it, 0 if the record is absent or already carries a reference
      */

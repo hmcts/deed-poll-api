@@ -70,6 +70,10 @@ src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one e
 - **Never invent the CCD case type, jurisdiction ID or system role.** They are unconfirmed. Each is one key under
   `deedpoll.ccd` in `application.yaml` defaulting to `DEED_POLL_PLACEHOLDER`, read only through `CcdProperties`,
   so a grep for the literal lists every external identifier this service is waiting on.
+- **Never remove the `CoreCaseDataClientAutoConfiguration` exclusion** in `application.yaml`. The client's own
+  auto-configuration adds a health indicator that calls data-store, and the unauthenticated `/health` aggregates
+  every indicator, so a data-store outage would read as this service being down. `CcdConfiguration` registers
+  `CoreCaseDataApi` instead.
 - **Never define a `FlywayMigrationStrategy`.** The SDK's `DecentralisedFlywayAutoConfiguration` supplies one that
   runs its own `ccd`-schema migrations, with their own history table, before ours. A bean of ours replaces it
   without an error, the `ccd` tables are never created, and data-store's first callback fails in whichever
@@ -88,8 +92,8 @@ src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one e
   fails on the definition; a field left out of the view reads as null through CCD, and nothing fails unless `DeedPollCaseViewTest` is taught it.
   Keep the definition minimal: `DEED_POLL_SYSTEM` is granted create and read and nothing else is granted
   anything, and the test refuses growth that was not deliberate.
-- **No live calls to CCD, CDAM, IDAM or payments in any test.** WireMock only (`StubIdam`); there are
-  no credentials.
+- **No live calls to CCD, CDAM, IDAM or payments in any test.** WireMock only (`StubIdam`, `StubS2s`); there are
+  no credentials. The one exception is `cftlibTest`, which runs CCD in-process on placeholders and is local only.
 - **No secrets.** Everything by environment variable, with a non-working default.
 - **A case note written from the outbox drain must be impossible to refuse.** `NotificationOutbox.drain` runs a
   whole batch in one `REQUIRES_NEW`, and the note the transition into `Failed` writes is not guarded — so a note
@@ -233,7 +237,9 @@ src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one e
 - **A new case column has to be declared in four places**, or the build fails somewhere that does not name the
   cause: a reader in `DeedPollFields` (readable / writable / queryable are three separate decisions — `CaseSort`
   admits only readable names and `CaseQuery` only queryable ones), both `CaseDetailResponse` and
-  `SavedCaseResponse`, and the shared `CaseResponseFields` test fixture.
+  `SavedCaseResponse`, and the shared `CaseResponseFields` test fixture. `DeedPollColumnsTest` checks the reverse: every
+  stored column has a reader or a written-down exemption, which is where a column that must never be published
+  (`ccdCaseReference`) goes.
 - **A controller test must boot the whole context.** A `@WebMvcTest` slice does not get
   `SecurityConfiguration` — its include list covers `SecurityFilterChain` beans, and a
   `@Configuration` that merely *declares* one is not itself one — so a slice asserts Boot's defaults
@@ -246,6 +252,7 @@ src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one e
 ./gradlew test --tests "*Conformance*"     # the port against the vendored specification
 ./gradlew test --tests "*Security*"        # authentication and namespace separation
 ./gradlew integration                      # the integration source set alone
+./gradlew generateCCDConfig                # the CCD definition, under SPRING_PROFILES_ACTIVE=config-gen
 ./gradlew cftlibTest                       # the in-process CCD stack, end to end — local only, not in build
 ```
 

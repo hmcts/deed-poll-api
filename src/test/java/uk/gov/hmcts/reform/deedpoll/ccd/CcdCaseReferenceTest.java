@@ -11,7 +11,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The format of a stored CCD case reference, and its agreement with the database's own statement of it.
@@ -25,8 +24,6 @@ class CcdCaseReferenceTest {
     @DisplayName("accepts sixteen digits, leading zeros included")
     void acceptsSixteenDigits(String reference) {
         assertThat(CcdCaseReference.isValid(reference)).isTrue();
-        // Returned exactly as given: a reference held as a number would have lost the leading zeros.
-        assertThat(CcdCaseReference.require(reference)).isEqualTo(reference);
     }
 
     @ParameterizedTest
@@ -44,16 +41,6 @@ class CcdCaseReferenceTest {
     @DisplayName("refuses anything but exactly sixteen ASCII digits")
     void refusesAnythingElse(String reference) {
         assertThat(CcdCaseReference.isValid(reference)).isFalse();
-        assertThatThrownBy(() -> CcdCaseReference.require(reference))
-            .isInstanceOf(IllegalArgumentException.class)
-            .hasMessage("A CCD case reference is sixteen digits");
-    }
-
-    @Test
-    @DisplayName("the refusal names the rule and never echoes the value")
-    void theRefusalDoesNotEchoTheValue() {
-        assertThatThrownBy(() -> CcdCaseReference.require("not-a-reference"))
-            .hasMessageNotContaining("not-a-reference");
     }
 
     @Test

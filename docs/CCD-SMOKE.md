@@ -1,7 +1,7 @@
 # CCD foundation — the operator-run AAT smoke procedure
 
 Written 2026-09-27 by plan 02's Task 9. **This is a procedure, not evidence: none of it has been run**, and none of
-it can be until every item in [plan 02's Dependencies](plans/deed-poll-api-02-ccd-foundation.md#dependencies--outside-this-plan-and-not-ralphex-work)
+it can be until every item in [plan 02's Dependencies](plans/completed/deed-poll-api-02-ccd-foundation.md#dependencies--outside-this-plan-and-not-ralphex-work)
 is done. What *has* been proved is the code, against WireMock and against the in-process cftlib stack
 (`./gradlew cftlibTest`, `CcdLinkingCftlibTest`), on placeholder identifiers throughout.
 
@@ -17,9 +17,11 @@ Each of these is onboarding and belongs to Steve; the plan's Dependencies sectio
 | Confirmed jurisdiction and case type id | `CCD_JURISDICTION_ID`, `CCD_CASE_TYPE_ID` (default `DEED_POLL_PLACEHOLDER`) |
 | The IDAM role the system user holds | `CCD_SYSTEM_ROLE` (default `DEED_POLL_PLACEHOLDER`) — mapped onto the `DEED_POLL_SYSTEM` access profile |
 | The system user and its password | `DEED_POLL_SYSTEM_USERNAME`, `DEED_POLL_SYSTEM_PASSWORD` (empty by default; `SystemUserTokens` refuses an empty one) |
+| IDAM's API, for the password grant | `IDAM_API_URL` (default `http://localhost:5000`), set alongside `IDAM_API_ISSUER_URL` |
 | An IDAM OAuth client for the password grant | `IDAM_CLIENT_ID`, `IDAM_CLIENT_SECRET`, `IDAM_CLIENT_REDIRECT_URI` |
 | `deed_poll_api` registered with S2S, secret in `deed-poll-aat` | `DEED_POLL_API_S2S_SECRET` |
 | Data-store's URL in the environment | `CCD_DATA_STORE_URL` (default is a local stack's 4452) |
+| The linking operation's timings, if the defaults do not suit | `CCD_LINKING_LEASE` (`PT5M`), `CCD_LINKING_SETTLE_AFTER` (`PT10M`), `CCD_LINKING_MAX_ATTEMPTS` (`3`); the claimant is `HOSTNAME` |
 | Data-store routes our case type to us | data-store's `ccd.decentralised.case-type-service-urls`, keyed on a **prefix of the case type id** |
 | `deed_poll_api` allowed to call data-store; `ccd_data` allowed to call us | data-store's S2S allowlist; ours is the constant `SecurityConfiguration.CCD_PERSISTENCE_CALLERS` |
 | The system role registered as a **user role** in definition store | definition store's user-role table, at `PUBLIC` |
@@ -87,8 +89,12 @@ When a trigger exists, for one deed-poll record that has no CCD reference:
    its display reference.
 4. Run the linking operation again for the same record. Expect `ALREADY_LINKED` and no second case in CCD.
 
-An attempt left in `AwaitingConfirmation` or `NeedsRepair` is the operation doing its job: read its bounded
-failure detail, fix the environment, and let `reconcileOutstanding()` settle it. **Never clear a binding or delete
+An attempt left in `AwaitingConfirmation` is the operation doing its job: read its bounded failure detail, fix the
+environment, and let `reconcileOutstanding()` settle it. That pass reads only expired claims and
+`AwaitingConfirmation`; **it never reads `NeedsRepair`**, and there is no repair operation yet. A `NeedsRepair`
+attempt stays live, so the record can be offered no fresh creation until somebody decides what it is, by reading
+the record's binding and CCD. The same holds for an attempt whose tries were all refused and nothing was created.
+**Never clear a binding or delete
 an attempt to make a retry happen** — a fresh start-event token mints a fresh idempotency key and can create a
 second case for one record.
 

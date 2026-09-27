@@ -28,9 +28,6 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
     /** Every attempt a record has had, oldest first -- its history, including the one that linked it. */
     List<CcdCreationAttempt> findByDeedPollIdOrderByCreatedOnAsc(String deedPollId);
 
-    /** The attempt an operation id names, which is how the persistence callback finds the attempt it serves. */
-    Optional<CcdCreationAttempt> findByOperationId(UUID operationId);
-
     /**
      * The record's one live attempt, if it has one.
      *
@@ -117,6 +114,31 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
               @Param("claimedBy") String claimedBy,
               @Param("now") LocalDateTime now,
               @Param("leaseUntil") LocalDateTime leaseUntil);
+
+    /**
+     * Takes an expired claim off its worker for reconciliation, if it is still a claim and still expired.
+     *
+     * <p>Not {@link #move}, whose only condition is the status: between reading an expired claim and moving it, its
+     * worker can release it to {@code Pending} and another can claim it under a fresh lease, and a move conditional
+     * on {@code Claimed} alone would take that live claim off a worker still talking to CCD.
+     *
+     * @return 1 if this statement took it, 0 if it was no longer an expired claim
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+        UPDATE "deedpoll_ccdcreationattempt"
+           SET "status" = 'AwaitingConfirmation',
+               "claimedBy" = NULL,
+               "leaseExpiresAt" = NULL,
+               "failureDetail" = :failureDetail,
+               "modifiedOn" = :now
+         WHERE "id" = :id
+           AND "status" = 'Claimed'
+           AND "leaseExpiresAt" < :now
+        """)
+    int takeExpiredClaim(@Param("id") UUID id,
+                         @Param("failureDetail") String failureDetail,
+                         @Param("now") LocalDateTime now);
 
     /**
      * Moves an attempt from the status the caller last saw to another, releasing any claim on it.

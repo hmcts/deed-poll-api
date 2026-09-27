@@ -22,7 +22,7 @@ with one referral-outcome email per referral enforced by the database.
 
 ## CCD foundation — plan 02 complete, 2026-09-27
 
-[Plan 02](plans/deed-poll-api-02-ccd-foundation.md), all nine tasks, on branch `deed-poll-api-02-ccd-foundation`
+[Plan 02](plans/completed/deed-poll-api-02-ccd-foundation.md), all nine tasks, on branch `deed-poll-api-02-ccd-foundation`
 (not merged). **Proved on placeholders, not onboarded**: every identifier is still `DEED_POLL_PLACEHOLDER`, nothing
 was imported, registered or deployed, and the linking operation is called by no real flow.
 
@@ -44,6 +44,11 @@ What is built, in `ccd/` unless named:
   `DeedPollCaseView` composes the view from `CcdCaseProjection`.
 - `CcdLinkingService.link` claims, commits, then starts and submits through `CoreCaseDataApi` as the system user.
   Recovery reads rather than retries. The start-event token is not persisted; the plan's Task 7 has the evidence.
+- **No repair operation exists yet.** `reconcileOutstanding` reads expired claims and `AwaitingConfirmation` only;
+  a `NeedsRepair` attempt — a contradiction, a binding never seen within the settle window, or every try refused —
+  stays live and blocks a fresh attempt until a person reads the record and CCD. The plan defines
+  `NeedsRepair → AwaitingConfirmation` and nothing yet performs it. V22 also says `operationId` proves ownership
+  of a submission; nothing carries it to CCD or checks it, so for now it is an identifier and no more.
 - `cftlibTest` (**local only**, not on `build`, `check` or the Jenkinsfile): `CcdLinkingCftlibTest` creates, links
   and reads one case through the real in-process CCD stack. The stack needs about 5.1 GB and fits this
   devcontainer.
@@ -411,7 +416,7 @@ reference on the deed-poll record, followed by CDAM and Retain and Dispose. Draf
 now exist; the earlier statements that plans 02/03 are unwritten are superseded.
 No CCD/CDAM/payment integration was implemented or onboarded in this planning session.
 
-- [Plan 02: CCD foundation](plans/deed-poll-api-02-ccd-foundation.md)
+- [Plan 02: CCD foundation](plans/completed/deed-poll-api-02-ccd-foundation.md)
 - [Resumable CCD migration](plans/ccd-migration.md)
 - [Payment plan amendment](plans/fees-and-pay-1-ways-to-pay-card.md#amendment-2026-09-26--ccd-and-queue-admission)
 - [Plan 03: CDAM documents](plans/deed-poll-api-03-cdam-documents.md)

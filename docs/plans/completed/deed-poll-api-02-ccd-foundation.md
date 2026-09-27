@@ -9,7 +9,7 @@ iteration can finish, and a Spring Boot bump added in front of it.
 Create one genuine CCD case for an existing deed-poll record, store its reference, and read the minimal case
 projection through CCD. The relational deed-poll record remains authoritative. This is the shared foundation
 for payment, document handling and migration — see the
-[programme overview](../../../deed-poll-documentation/plans/active/ccd-and-shared-services.md).
+[programme overview](../../../../deed-poll-documentation/plans/active/ccd-and-shared-services.md).
 
 **This plan is buildable before onboarding.** Every task runs on the existing `DEED_POLL_PLACEHOLDER` case type
 and a placeholder jurisdiction, against WireMock and — in Task 8 only — the in-process cftlib stack. It proves
@@ -74,7 +74,7 @@ This was Task 0 of the draft. It is Steve's, it runs in parallel with Tasks 1–
 
 ## Constraints
 
-- Everything in [`CLAUDE.md`](../../CLAUDE.md), and in particular: never edit a committed migration (the next
+- Everything in [`CLAUDE.md`](../../../CLAUDE.md), and in particular: never edit a committed migration (the next
   free one is **V21**); no live calls to CCD, IDAM or S2S in any test — WireMock only; no secrets, every
   credential by environment variable with a non-working default.
 - **Globally quoted identifiers and `PhysicalNamingStrategyStandardImpl` apply to every JPA entity.** Nothing in
@@ -581,7 +581,7 @@ Done 2026-09-27. Counted from `build/test-results/` after deleting it:
 Against the baseline that is 182 tests in 20 files, 137 of them in 15 Docker-free files. `cftlibTest` ran with
 9.5 Gi available out of 16 Gi.
 
-The smoke procedure is [`docs/CCD-SMOKE.md`](../CCD-SMOKE.md). Step 0 maps each Dependency onto the variable or
+The smoke procedure is [`docs/CCD-SMOKE.md`](../../CCD-SMOKE.md). Step 0 maps each Dependency onto the variable or
 registration it becomes, and carries Task 8's two findings: routing keys on a prefix, and the system role must be
 registered as a user role. Then come the definition import, the provisioned-identity and S2S refusal checks, and
 create/read. Finding: **create/read has no trigger in AAT**. Nothing calls `CcdLinkingService.link`, by this
@@ -616,7 +616,7 @@ The other changes:
    `pcs-api` runs its `cftlibTest` in GitHub Actions, which we no longer have.
 3. ~~**The reference is stored but not published.**~~ **Settled 2026-09-27: store only.** Publishing it changes
    the contract and admin's `contract.test.ts` makes every spec refresh atomic, so it moves to the
-   [payment plan's amendment](fees-and-pay-1-ways-to-pay-card.md#amendment-2026-09-26--ccd-and-queue-admission)
+   [payment plan's amendment](../fees-and-pay-1-ways-to-pay-card.md#amendment-2026-09-26--ccd-and-queue-admission)
    (its Task 8), which publishes it with admin's counterpart.
 4. ~~**Task 3's names are mine to choose and yours to veto.**~~ **Settled 2026-09-27:** `Registered`,
    `linkDeedPoll`, `deedPollId`/`deedPollReference`, `DEED_POLL_SYSTEM` — recorded in Task 3 as implementation

@@ -4,8 +4,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdCreationAttemptRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -28,9 +30,11 @@ import java.util.UUID;
 public class CcdCreationAttempts {
 
     private final CcdCreationAttemptRepository attempts;
+    private final DeedPollRepository deedPolls;
 
-    public CcdCreationAttempts(CcdCreationAttemptRepository attempts) {
+    public CcdCreationAttempts(CcdCreationAttemptRepository attempts, DeedPollRepository deedPolls) {
         this.attempts = attempts;
+        this.deedPolls = deedPolls;
     }
 
     /**
@@ -101,6 +105,39 @@ public class CcdCreationAttempts {
             throw new IllegalStateException("A CCD creation attempt cannot move from " + from + " to " + to);
         }
         return attempts.move(attemptId, from.name(), to.name(), bounded(failureDetail), AuditClock.now()) == 1;
+    }
+
+    /**
+     * Takes a claim whose lease has run out off its worker, to {@code AwaitingConfirmation}, since nobody knows how
+     * far it got.
+     *
+     * @return true if this call took it; false if it was no longer a claim, or its lease had been renewed by a
+     *     fresh claim
+     */
+    @Transactional
+    public boolean takeExpiredClaim(UUID attemptId, String failureDetail) {
+        return attempts.takeExpiredClaim(attemptId, bounded(failureDetail), AuditClock.now()) == 1;
+    }
+
+    /**
+     * Moves an attempt {@code AwaitingConfirmation} to {@code NeedsRepair} because nothing was bound -- unless,
+     * under the record's lock, something now is.
+     *
+     * <p><strong>The lock is the point.</strong> A submission that arrives late can be binding the record at this
+     * moment: {@link LinkDeedPollHandler} holds the record's row lock from its read of the attempt until its bind
+     * commits. Taking the same lock here orders the two. Either the bind committed first, and this reads it and
+     * moves nothing, or this committed first, and the handler reads {@code NeedsRepair} and refuses the bind.
+     * Without it, a record could hold a real case while its attempt says none was bound.
+     *
+     * @return true if this call moved it; false if the record is now bound or the attempt had moved on
+     */
+    @Transactional
+    public boolean repairIfUnbound(CcdCreationAttempt waiting, String failureDetail) {
+        boolean bound = deedPolls.findByIdForUpdate(waiting.getDeedPollId())
+            .map(DeedPoll::getCcdCaseReference)
+            .isPresent();
+        return !bound && move(waiting.getId(), CcdCreationAttemptStatus.AwaitingConfirmation,
+            CcdCreationAttemptStatus.NeedsRepair, failureDetail);
     }
 
     /** A failure detail cut to what the column holds, so a verbose upstream error cannot fail the write. */

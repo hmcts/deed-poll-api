@@ -5,8 +5,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdCreationAttemptRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -20,6 +22,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -44,12 +47,15 @@ class CcdCreationAttemptsTest {
 
     private CcdCreationAttemptRepository repository;
 
+    private DeedPollRepository deedPolls;
+
     private CcdCreationAttempts attempts;
 
     @BeforeEach
     void setUp() {
         repository = mock(CcdCreationAttemptRepository.class);
-        attempts = new CcdCreationAttempts(repository);
+        deedPolls = mock(DeedPollRepository.class);
+        attempts = new CcdCreationAttempts(repository, deedPolls);
     }
 
     @Test
@@ -169,5 +175,24 @@ class CcdCreationAttemptsTest {
         ArgumentCaptor<UUID> operationIds = ArgumentCaptor.forClass(UUID.class);
         verify(repository, times(2)).open(any(), anyString(), operationIds.capture(), any());
         assertThat(operationIds.getAllValues()).doesNotHaveDuplicates().doesNotContainNull();
+    }
+
+    @Test
+    @DisplayName("repairIfUnbound locks the record, and moves nothing once it is bound")
+    void repairIfUnboundReadsTheBindingUnderTheLock() {
+        CcdCreationAttempt waiting = new CcdCreationAttempt();
+        waiting.setId(ATTEMPT);
+        waiting.setDeedPollId("case-1");
+        DeedPoll bound = new DeedPoll();
+        bound.setCcdCaseReference("1234567890123456");
+        when(deedPolls.findByIdForUpdate("case-1")).thenReturn(Optional.of(bound));
+
+        assertThat(attempts.repairIfUnbound(waiting, "nothing bound")).isFalse();
+        verify(repository, never()).move(any(), anyString(), anyString(), any(), any());
+
+        when(deedPolls.findByIdForUpdate("case-1")).thenReturn(Optional.of(new DeedPoll()));
+        when(repository.move(eq(ATTEMPT), eq("AwaitingConfirmation"), eq("NeedsRepair"), eq("nothing bound"), any()))
+            .thenReturn(1);
+        assertThat(attempts.repairIfUnbound(waiting, "nothing bound")).isTrue();
     }
 }
