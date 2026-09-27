@@ -235,6 +235,33 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
     int writeAwaitingConfirmationSince(@Param("id") String id, @Param("since") LocalDateTime since);
 
     /**
+     * Binds a CCD case reference to a record that has none -- the column's only writer.
+     *
+     * <p><strong>Conditional on the column still being NULL, so it never overwrites</strong> (plan 02, decision
+     * 10). {@code 0} means the record is gone or already linked; the caller reads which, and treats the same
+     * reference again as a no-op and a different one as a conflict. The entity maps the column read-only, so no
+     * {@code save} can undo what this wrote.
+     *
+     * <p>{@code "modifiedOn"} is deliberately not stamped. A bind is not an edit of the application, and the case
+     * list sorts on the audit columns -- a null reference is not a state (decision 12), and neither is binding one.
+     *
+     * <p>Native SQL because the entity's mapping of this column is not updatable, which JPQL respects.
+     * {@code clearAutomatically} so a copy of the case loaded earlier in the transaction is not read back stale.
+     *
+     * @param reference sixteen digits, already checked by {@code CcdCaseReference.require}; V21's {@code CHECK}
+     *     refuses anything else
+     * @return 1 if this statement bound it, 0 if the record is absent or already carries a reference
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+        UPDATE "deedpoll_deedpoll"
+           SET "ccdCaseReference" = :reference
+         WHERE "id" = :id
+           AND "ccdCaseReference" IS NULL
+        """)
+    int bindCcdCaseReference(@Param("id") String id, @Param("reference") String reference);
+
+    /**
      * Recomputes the current referral state of many cases at once, from the referral table.
      *
      * <p><strong>For the stale-claim sweep, which is the one transition that moves many referrals in one

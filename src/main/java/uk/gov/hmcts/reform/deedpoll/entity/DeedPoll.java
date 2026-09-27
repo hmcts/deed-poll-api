@@ -371,6 +371,23 @@ public class DeedPoll {
     @Column(name = "awaitingConfirmationSince")
     private LocalDateTime awaitingConfirmationSince;
 
+    // --- The linked CCD case ---
+    // NOT part of the ported block, and not a field of the case in any sense a caller sees: it is the reference
+    // of the one CCD case linked to this record (plan 02, decision 7), sixteen digits held as a string, null
+    // until the linking operation binds it. See V21__ccd_case_reference.sql.
+    //
+    // insertable = false, updatable = false is what makes "never overwritten" structural rather than a
+    // convention. This entity has no dirty-column tracking, so every save writes the whole row back from what it
+    // read -- and a caseworker's patch that read the row before the bind would otherwise null the reference out.
+    // Its one writer is DeedPollRepository.bindCcdCaseReference, a single-column statement conditional on NULL.
+    //
+    // Deliberately absent from DeedPollFields, so it is not readable, writable, sortable or queryable, and from
+    // both case responses, so it is not published; DeedPollColumnsTest names it, beside the citizen-journey
+    // columns, as exempt from the rule that every stored column is declared there. Publishing it is the payment
+    // plan's decision.
+    @Column(name = "ccdCaseReference", length = 16, unique = true, insertable = false, updatable = false)
+    private String ccdCaseReference;
+
     // --- Return / refund ---
     @Column(name = "returnReason")
     private String returnReason;

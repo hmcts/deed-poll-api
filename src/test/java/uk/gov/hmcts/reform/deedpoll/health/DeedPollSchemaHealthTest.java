@@ -118,7 +118,8 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
             "deedpoll_savedquery",
             "deedpoll_savedqueryselection",
             "deedpoll_referral",
-            "deedpoll_notification"
+            "deedpoll_notification",
+            "deedpoll_ccdcreationattempt"
         );
 
         @Test

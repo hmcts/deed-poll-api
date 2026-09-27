@@ -241,8 +241,39 @@ a `build/definitions` identical to it. Docker `build`: test 2977 / 367 files, in
   the status transitions allowed and refused; concurrent claims on one deed poll yield exactly one winner
   (container-backed) with a container-free companion over the transition rule.
 
-- [ ] V21 and V22 exist, the reference cannot be patched or published, one live attempt per case is enforced,
+- [x] V21 and V22 exist, the reference cannot be patched or published, one live attempt per case is enforced,
       existing queue behaviour is unchanged, and the build is green
+
+Done 2026-09-27. Finding: nothing enforced the four-places rule from the entity inward. The response-field tests
+compare each DTO with `DeedPollFields.readAll`, so a column added to the entity alone failed no test. The new
+Docker-free `DeedPollColumnsTest` asserts that every `@Column` of `DeedPoll` is readable through `DeedPollFields`,
+apart from named exemptions. Those are the eleven citizen-journey columns, already excluded and now written down,
+and `ccdCaseReference`, the one exemption this task adds. The test also checks that every exemption is real,
+and that the reference cannot be patched, sorted, queried or found by search. An ArchUnit rule over `api..`
+keeps it out of every DTO.
+
+V21 adds `varchar(16)` with a UNIQUE constraint and `CHECK (~ '^[0-9]{16}$')`. `CcdCaseReference.PATTERN` is
+held to that CHECK by reading the migration. The entity maps the column `insertable = false, updatable = false`,
+so a save cannot write a stale null over it. Its only writer is `DeedPollRepository.bindCcdCaseReference`, which
+is conditional on NULL and binds once.
+
+V22 adds `deedpoll_ccdcreationattempt` with the `CcdCreationAttemptStatus` enum and a lease CHECK on `Claimed`.
+The unique index `live_key` covers `("deedPollId") WHERE "status" <> 'Linked'`. `NeedsRepair` is live: an
+unknown outcome must block a second creation. The transitions are:
+- Pending → Claimed
+- Claimed → Pending, AwaitingConfirmation, Linked or NeedsRepair
+- AwaitingConfirmation → Linked or NeedsRepair
+- NeedsRepair → AwaitingConfirmation
+- Linked is terminal
+
+Nothing after submission returns to Pending or Claimed. `CcdCreationAttempts` is the single ledger that Task 7
+and the migration plan share: `open` (`ON CONFLICT` on the live index), `claim` (conditional, and it counts the
+try) and `move` (conditional on `from`, with failure detail bounded to 1000). No start-event token is stored.
+
+Container tests show one winner among 8 concurrent claims and among 8 concurrent opens. They also show the list
+filters, finders and paged totals are identical before and after references are bound (decision 12). Docker
+`build`: test 3042 / 373 files, integration 13 / 3 files, all green. `DeedPollColumnsTest` imports only the api
+package, locally, because a static whole-codebase ArchUnit import exhausted the default 512 MB test heap.
 
 ### Task 5: Secure `/ccd-persistence/**`
 
