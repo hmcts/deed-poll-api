@@ -11,15 +11,18 @@ the TypeScript domain layer in the sibling repo `hmcts/deed-poll-admin` (`libs/d
 the specification. It replaces that repo's `apps/api`.
 
 Plan 02 built a **minimal decentralised CCD foundation** (2026-09-27): one CCD case per deed-poll record, linked
-by the record's UUID, created through data-store's public API by one linking operation that nothing yet calls. The
-relational record stays authoritative; CCD holds a two-field projection. It is proven against WireMock and a local
+by the record's UUID, created through data-store's public API by one linking operation. Plan 02b (2026-09-27)
+calls it from a sweep on the case list request, **switched off by default**, and gives admins two repair moves out of
+`NeedsRepair` under `/caseworker/ccd-attempts`. The relational record stays authoritative; CCD holds a two-field
+projection. It is proven against WireMock and a local
 cftlib stack on placeholder identifiers only — **nothing is onboarded**, and `docs/CCD-SMOKE.md` is the AAT
 procedure that waits on it. There is **no CDAM integration** (plan 03). See `docs/RESUME.md` and `docs/plans/`.
 
 ## Layout
 
 ```
-api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations across 21 paths
+api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations across 21 paths, plus the admin-only
+                                  /caseworker/ccd-attempts (3 operations, counted apart as CCD_ATTEMPT_PATHS)
 api/judicial/{controller,dto}     the judicial surface — 5 operations, keyed on the referral, never on the case
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
@@ -33,8 +36,9 @@ notify/DocumentUploads            turns the document ids frozen on an outbox row
                                   never rewritten, because a token expires and would be at rest in the database
 auth/                             IDAM resource-server wiring (transport)
 entity/, repository/              JPA over a Flyway-owned schema
-ccd/                             the decentralised CCD case type, its persistence handler and view, and the one
-                                  linking operation with its attempt ledger — NOT a port
+ccd/                             the decentralised CCD case type, its persistence handler and view, the one
+                                  linking operation with its attempt ledger, the case-list sweep that calls it, and
+                                  the admin repairs (CcdAttemptRepairs) — NOT a port
 health/                          readiness that names the missing tables
 storage/                         LocalFilesystemDocumentStore — the seam CDAM replaces
 src/main/resources/deed-templates/  VENDORED Word templates: LOC020 and LOC022, plus their provenance
@@ -86,6 +90,27 @@ src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one e
   conditional on NULL. Recovery in `CcdLinkingService` is by **reading** the binding and CCD, never by clearing a
   binding or starting a fresh event: a fresh start-event token mints a fresh idempotency key in data-store and can
   create a second case for one record. What cannot be settled becomes `NeedsRepair`, visibly.
+- **The linking sweep is off by default, and turning it on before onboarding fails every record.**
+  `CCD_LINKING_SWEEP_ENABLED` defaults to `false`, and while it is false the case list calls nothing in `ccd/`.
+  Every identifier is still `DEED_POLL_PLACEHOLDER`, so in an environment that is not onboarded every attempt is
+  refused before submission. Each list request then spends a try on the oldest unlinked records, and within
+  `CCD_LINKING_MAX_ATTEMPTS` tries each one is `NeedsRepair`. Nothing is created, so an admin can retry them all
+  from scratch, but only one at a time. Switching it on is the last step of `docs/CCD-SMOKE.md`'s preconditions,
+  not a default to flip in yaml.
+- **`submissionMayHaveReached` is committed before `submitCaseCreation`, and is never reset.** It is the only thing
+  that makes `POST /caseworker/ccd-attempts/{id}/retry` safe. `CcdCreationAttempts.recordSubmission` writes it, and
+  only ever writes true, on the worker's own `Claimed` row after `startCase`. If that write matches nothing, the
+  claim was lost and nothing is submitted. A submission path that calls CCD before the write, or a statement that
+  sets the flag back to false (including the retry itself), lets an admin re-send something that may already have
+  created a case. The retry's SQL repeats the `= false` condition that `CcdLinkingRule.mayRetryFromScratch` states,
+  so a stale read cannot slip past it. V23 backfilled existing rows to true for the same reason.
+- **The case list request links records, so a new caller of the sweep must be outside any transaction.**
+  `CaseworkerReadController.cases` calls `CcdLinkingSweep.sweep()` after the response is computed and after
+  `outbox.drain()`. The sweep commits each claim before CCD is called, and data-store's callback has to read that
+  claim and lock the record. Inside a caller's transaction the claim is not yet committed, so the callback
+  cannot see it and binds nothing. `sweep()` throws `IllegalStateException` when a transaction is active, rather
+  than logging it away. The sweep never throws anything else into the list: CCD failures are logged in fixed prose,
+  by exception class name only. The repair endpoints are non-transactional for the same reason.
 - **A new CCD field is declared in three places, and the build names only one of them.** `DeedPollCaseData` and
   its grants in `DeedPollCaseType`, the projection `DeedPollCaseView` composes from (`CcdCaseProjection`, read by
   `DeedPollRepository`), and the pinned JSON under `src/test/resources/ccd-definition/`. `DeedPollDefinitionTest`

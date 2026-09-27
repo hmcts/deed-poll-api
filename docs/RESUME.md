@@ -1,6 +1,10 @@
 # Resume state — where the next session picks up
 
-**CCD foundation, 2026-09-27: plan 02 is complete** on branch `deed-poll-api-02-ccd-foundation`, not yet merged.
+**CCD linking lifecycle, 2026-09-27: plan 02b is complete** on branch `deed-poll-api-02b-ccd-linking-lifecycle`,
+not yet merged. Read [its section](#ccd-linking-lifecycle--plan-02b-complete-2026-09-27) first. Plan 02 is merged
+on `master` (`3430346`, PR #63), so its section below is history, updated by 02b where the two disagree.
+
+**CCD foundation, 2026-09-27: plan 02 is complete** and merged (`3430346`).
 Read [its section](#ccd-foundation--plan-02-complete-2026-09-27) before anything about CCD further down, all of
 which predates it.
 
@@ -20,10 +24,63 @@ the case-scoped correspondence read, return availability, history and slot defau
 GET, and pin the public wording and cross-case security boundary. notify-3 sends the confirmation email itself,
 with one referral-outcome email per referral enforced by the database.
 
+## CCD linking lifecycle — plan 02b complete, 2026-09-27
+
+[Plan 02b](plans/deed-poll-api-02b-ccd-linking-lifecycle.md), all six tasks, on branch
+`deed-poll-api-02b-ccd-linking-lifecycle` (not merged). **Still proved on placeholders, and still not onboarded.**
+The sweep ships switched off, so in every deployed environment nothing calls the linking operation yet.
+
+What it adds, in `ccd/` unless named:
+
+- **V23** on `deedpoll_ccdcreationattempt`: `submissionMayHaveReached` (existing rows backfilled `true`, new rows
+  `false`), `notBefore`, `repairedById` and `repairedOn`. `CcdCreationAttemptStatus` gains the conditional edge
+  `NeedsRepair -> Pending`. Its condition is `CcdLinkingRule.mayRetryFromScratch`.
+- `CcdLinkingService` commits `submissionMayHaveReached = true` on its own `Claimed` row before
+  `submitCaseCreation`, and submits nothing if that write matches nothing. A released attempt waits
+  `CCD_LINKING_RETRY_AFTER` × tries (`notBefore`), and `claim` refuses a row that is not due.
+- `CcdLinkingSweep`, called from `GET /caseworker/cases` after `outbox.drain()`, outside any transaction:
+  `CCD_LINKING_SWEEP_ENABLED` (default `false`), at most `CCD_LINKING_SWEEP_MAX_RECORDS` (2) links and
+  `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` (5) reconciliations, and it stops at the first `RETRY_LATER` or exception.
+  It never throws into the list. `POST /caseworker/cases` does not link. Feign timeouts are now 5 s connect and
+  10 s read, for every Feign client.
+- `CcdAttemptRepairs` and `/caseworker/ccd-attempts`, for `caseworker-deedpoll-admin` only:
+  - `GET` returns the counts and a page of unlinked attempts;
+  - `POST …/reconciliation` moves `NeedsRepair -> AwaitingConfirmation`;
+  - `POST …/retry` moves `NeedsRepair -> Pending`, and only while `canRetryFromScratch` is true.
+
+  Each move is one conditional statement, and neither calls CCD or writes a binding. Each is attributed and logged
+  without the admin's identity. The OpenAPI document gains exactly those three paths and three schemas. **The admin
+  screen is a follow-up plan in deed-poll-admin**, whose spec refresh must carry them.
+- `cftlibTest` has two new journeys: a record created and then linked by the next list request, and a
+  `NeedsRepair` attempt retried from scratch and then linked by the next sweep, one case each. A warm list request
+  that links one record costs about 150–170 ms more than one with nothing to link. The first list request in a
+  fresh JVM takes about 3 s, which is cold start and not the sweep's steady cost.
+
+Final counts, measured 2026-09-27 from `build/test-results/` after `cleanTest cleanIntegration`, on the branch's
+last code:
+
+| Run | `test` | `integration` | Wall clock |
+|---|---|---|---|
+| `./gradlew cleanTest cleanIntegration build` (Docker) | **3270**, 0 failures / 0 errors / 0 skipped, 395 files | **14**, green, 3 files | 5m 53s |
+| `INTEGRATION_TESTS_ENABLED=false ./gradlew cleanTest cleanIntegration build` | **2187**, 0 / 0 / 0, 278 files | not run | 1m 17s |
+| `./gradlew cftlibTest` | **3** tests, green | — | 1m 26s |
+
+Against Task 1's baseline on this branch before any change (Docker 3150 / 383 and 13 integration; Docker-free
+2103 / 271; `cftlibTest` 1), that is **120** new `test` tests in 12 result files, one new `integration` test and
+two new `cftlibTest` journeys. **84** of the new tests are in 7 Docker-free files, and run in CI. V23's backfill,
+the keyset selection, the concurrent repairs and the WireMock linking scenarios need real Postgres. Each has a
+container-free companion.
+
+**What stands between this and AAT** is unchanged: plan 02's Dependencies (Steve's), the system role registered as
+a definition-store user role, and then `CCD_LINKING_SWEEP_ENABLED=true`, which is the switch. [`CCD-SMOKE.md`](CCD-SMOKE.md)
+step 3 now has its trigger, a case list request with the sweep switched on, and a repair procedure. It has not been
+run. The chart lists no CCD or linking variables, so none was added there. Whoever onboards adds all of them
+together.
+
 ## CCD foundation — plan 02 complete, 2026-09-27
 
-[Plan 02](plans/completed/deed-poll-api-02-ccd-foundation.md), all nine tasks, on branch `deed-poll-api-02-ccd-foundation`
-(not merged). **Proved on placeholders, not onboarded**: every identifier is still `DEED_POLL_PLACEHOLDER`, nothing
+[Plan 02](plans/completed/deed-poll-api-02-ccd-foundation.md), all nine tasks, merged to `master` as `3430346` from
+`deed-poll-api-02-ccd-foundation`. **Proved on placeholders, not onboarded**: every identifier is still `DEED_POLL_PLACEHOLDER`, nothing
 was imported, registered or deployed, and the linking operation is called by no real flow.
 
 What is built, in `ccd/` unless named:
@@ -44,7 +101,7 @@ What is built, in `ccd/` unless named:
   `DeedPollCaseView` composes the view from `CcdCaseProjection`.
 - `CcdLinkingService.link` claims, commits, then starts and submits through `CoreCaseDataApi` as the system user.
   Recovery reads rather than retries. The start-event token is not persisted; the plan's Task 7 has the evidence.
-- **No repair operation exists yet.** `reconcileOutstanding` reads expired claims and `AwaitingConfirmation` only;
+- **No repair operation exists yet** (superseded: plan 02b adds `/caseworker/ccd-attempts`). `reconcileOutstanding` reads expired claims and `AwaitingConfirmation` only;
   a `NeedsRepair` attempt — a contradiction, a binding never seen within the settle window, or every try refused —
   stays live and blocks a fresh attempt until a person reads the record and CCD. The plan defines
   `NeedsRepair → AwaitingConfirmation` and nothing yet performs it. V22 also says `operationId` proves ownership
@@ -69,8 +126,8 @@ container-free companion.
 **What stands between this and AAT** is the plan's Dependencies section (Steve's), plus one item cftlib added: the
 confirmed system role must be registered as a **user role** in each environment's definition store.
 [`CCD-SMOKE.md`](CCD-SMOKE.md) is the operator-run procedure: the definition import, the provisioned identities,
-and create/read. It has not been run. **Its create/read step has no trigger yet**, because nothing calls
-`link`. Online submission or migration will supply one, or Steve decides on an operator-only entry point.
+and create/read. It has not been run. **Its create/read step had no trigger**, because nothing called `link`. Plan 02b supplied one: a case list
+request with `CCD_LINKING_SWEEP_ENABLED=true`.
 
 ## Where the Notify work actually is — read this before anything else
 

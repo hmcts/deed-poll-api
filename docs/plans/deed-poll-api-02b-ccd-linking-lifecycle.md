@@ -305,7 +305,16 @@ before changing anything.
   - the case list request links records, and a new caller of the sweep must be outside any transaction.
 - Update `docs/RESUME.md`, and add the chart's new env vars if the chart lists the linking ones.
 
-- [ ] counts recorded, the smoke procedure and CLAUDE.md describe the new code, and the build is green
+- [x] counts recorded, the smoke procedure and CLAUDE.md describe the new code, and the build is green
+
+  Final, measured 2026-09-27 from `build/test-results/`: with Docker, **3270** `test` in 395 files and **14**
+  `integration`, all green (5m 53s); Docker-free, **2187** `test` in 278 files and no `integration`, all green
+  (1m 17s); `cftlibTest` **3**, green (1m 26s). Against Task 1's baseline (3150 / 383 and 13; Docker-free 2103 / 271;
+  `cftlibTest` 1), that is **120** new `test` tests in 12 files, **84** of them Docker-free in 7 files, one new
+  `integration` test and two new `cftlibTest` journeys. `CCD-SMOKE.md` step 3 now has the sweep as its trigger and
+  a repair procedure. `CLAUDE.md` has the three rules. `RESUME.md` has a 02b section, and now records plan 02 as
+  merged. The chart lists no CCD or linking variables, so none was added.
+
 
 ## Deliberately not in this plan
 
