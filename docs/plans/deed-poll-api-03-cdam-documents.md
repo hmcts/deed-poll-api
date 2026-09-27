@@ -2,6 +2,19 @@
 
 Status: draft for review, 2026-09-26. Depends on [plan 02](completed/deed-poll-api-02-ccd-foundation.md).
 
+**Decision 2026-09-27 (Steve): link first, not on demand.** Document code only ever handles a record that already
+has a CCD case, and refuses one that does not ("case not ready"). It never calls the linking operation itself.
+So this plan now also depends on:
+- [plan 02b](deed-poll-api-02b-ccd-linking-lifecycle.md). Its sweep links every record with a null reference,
+  whether new, existing or imported, and it gives `NeedsRepair` the way out that plan 02 left manual-only.
+
+It does **not** depend on [ccd-migration](ccd-migration.md), which is now Dataverse ingestion only.
+
+Chosen for cleaner code: CCD failures stay out of the caseworker's request path, and they are handled in batch
+with an operator view. The rejected alternative was linking on demand inside the upload request: documents
+would reach CDAM sooner, but the request path would be messier. Dataverse documents are unaffected by this
+choice; they move by this plan's document migration either way.
+
 ## Outcome
 
 Replace the development filesystem store with CDAM-backed document handling. Uploads,
