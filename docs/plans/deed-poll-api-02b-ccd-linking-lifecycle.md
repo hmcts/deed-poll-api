@@ -175,8 +175,15 @@ before changing anything.
 
   Each needs a container-free companion in `CcdLinkingServiceTest`.
 
-- [ ] the flag is committed before every submission and only then, released attempts wait `notBefore`, and the
+- [x] the flag is committed before every submission and only then, released attempts wait `notBefore`, and the
       build is green
+
+  After Task 2, with Docker: **3184** `test` in 384 files and **13** `integration`, all green. The flag write
+  (`CcdCreationAttemptRepository.recordSubmission`) is conditional on `Claimed`, this worker, this claim's try count
+  and an unexpired lease. It does not compare `leaseExpiresAt`, which is stored to the millisecond. The try count is
+  what tells two claims by the same pod apart. The release is its own statement (`release`), and `move` now refuses
+  `Claimed -> Pending` as well, so no release can forget `notBefore`. `CCD_LINKING_RETRY_AFTER` is in the README and
+  `CCD-SMOKE.md` tables; the chart lists no linking variables.
 
 ### Task 3: The sweep, off by default
 

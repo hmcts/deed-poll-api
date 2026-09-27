@@ -7,7 +7,7 @@ import java.time.Duration;
 /**
  * How the linking operation paces itself: {@code deedpoll.ccd.linking}.
  *
- * <p>None of the three is an external identifier, so none is a placeholder; each has a working default in
+ * <p>None of the five is an external identifier, so none is a placeholder; each has a working default in
  * {@code application.yaml}, and a value that would make the operation unsafe refuses to start instead.
  *
  * @param worker      who holds a claim, for attribution and diagnosis -- the pod's name in a deployment, never a
@@ -20,9 +20,16 @@ import java.time.Duration;
  *                    service's persistence API and committed its binding
  * @param maxAttempts how many claims an attempt gets for refusals that created nothing, before it becomes
  *                    {@code NeedsRepair} rather than going round again
+ * @param retryAfter  how long an attempt released after a refusal waits before its next claim, for each claim it
+ *                    has had: long enough that a sweep on every list request does not spend all its tries on one
+ *                    CCD outage
  */
 @ConfigurationProperties(prefix = "deedpoll.ccd.linking")
-public record CcdLinkingProperties(String worker, Duration lease, Duration settleAfter, int maxAttempts) {
+public record CcdLinkingProperties(String worker,
+                                   Duration lease,
+                                   Duration settleAfter,
+                                   int maxAttempts,
+                                   Duration retryAfter) {
 
     public CcdLinkingProperties {
         if (worker == null || worker.isBlank()) {
@@ -31,6 +38,7 @@ public record CcdLinkingProperties(String worker, Duration lease, Duration settl
         worker = worker.trim();
         requirePositive("lease", lease);
         requirePositive("settle-after", settleAfter);
+        requirePositive("retry-after", retryAfter);
         if (maxAttempts < 1) {
             throw new IllegalArgumentException("deedpoll.ccd.linking.max-attempts must be at least 1");
         }

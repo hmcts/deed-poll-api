@@ -70,10 +70,11 @@ public class CcdCreationAttempts {
     }
 
     /**
-     * Takes a {@code Pending} attempt for one worker for the length of a lease.
+     * Takes a {@code Pending} attempt for one worker for the length of a lease, if it is due.
      *
      * @param worker who holds it, for attribution and diagnosis -- a worker name, never a user's
-     * @return true if this worker now holds it; false if another took it, or it was no longer {@code Pending}
+     * @return true if this worker now holds it; false if another took it, it was no longer {@code Pending}, or its
+     *     {@code notBefore} has not yet passed
      */
     @Transactional
     public boolean claim(UUID attemptId, String worker, Duration lease) {
@@ -85,14 +86,46 @@ public class CcdCreationAttempts {
     }
 
     /**
+     * Commits, before {@code submitCaseCreation} is called, that this worker's submission may reach CCD -- if the
+     * claim is still this worker's (plan 02b, decision 9).
+     *
+     * <p>The one write of {@code submissionMayHaveReached}, and it only ever writes true. A caller that gets false
+     * has lost its claim, and must submit nothing: whoever holds the attempt now decides what happens to it.
+     *
+     * @param attempts the try this worker's claim made it, which identifies the claim
+     * @return true if the flag is committed and the worker may submit
+     */
+    @Transactional
+    public boolean recordSubmission(UUID attemptId, String worker, int attempts) {
+        return this.attempts.recordSubmission(attemptId, worker, attempts, AuditClock.now()) == 1;
+    }
+
+    /**
+     * Gives a claim that created nothing back as {@code Pending}, due again at {@code notBefore} (plan 02b, decision
+     * 6). The only way an attempt goes from {@code Claimed} back to {@code Pending}.
+     *
+     * @param failureDetail what went wrong; bounded as {@link #move} bounds it
+     * @return true if this call released it; false if it was no longer {@code Claimed}
+     */
+    @Transactional
+    public boolean release(UUID attemptId, String failureDetail, LocalDateTime notBefore) {
+        if (notBefore == null) {
+            throw new IllegalArgumentException("A released attempt must say when it is next due");
+        }
+        return attempts.release(attemptId, bounded(failureDetail), notBefore, AuditClock.now()) == 1;
+    }
+
+    /**
      * Moves an attempt on, from the status the caller last saw it in.
      *
      * @param failureDetail what went wrong, or null to clear it; truncated to the column's bound, and never to be
      *     given a token, a credential or a response body
      * @return true if this call moved it; false if it was no longer in {@code from}
      * @throws IllegalStateException if the rule does not allow {@code from -> to}, if {@code to} is
-     *     {@code Claimed}, which only {@link #claim} may do, or if the move is {@code NeedsRepair -> Pending}, whose
-     *     condition -- nothing may have been submitted -- a status-only statement cannot check
+     *     {@code Claimed}, which only {@link #claim} may do, if the move is {@code Claimed -> Pending}, which only
+     *     {@link #release} may do because it sets when the attempt is next due, or if the move is
+     *     {@code NeedsRepair -> Pending}, whose condition -- nothing may have been submitted -- a status-only
+     *     statement cannot check
      */
     @Transactional
     public boolean move(UUID attemptId,
@@ -101,6 +134,9 @@ public class CcdCreationAttempts {
                         String failureDetail) {
         if (to == CcdCreationAttemptStatus.Claimed) {
             throw new IllegalStateException("An attempt is claimed through claim(), which sets its lease");
+        }
+        if (from == CcdCreationAttemptStatus.Claimed && to == CcdCreationAttemptStatus.Pending) {
+            throw new IllegalStateException("A claim is released through release(), which sets when it is next due");
         }
         if (from == CcdCreationAttemptStatus.NeedsRepair && to == CcdCreationAttemptStatus.Pending) {
             // Legal only while submissionMayHaveReached is false (CcdLinkingRule.mayRetryFromScratch), and this

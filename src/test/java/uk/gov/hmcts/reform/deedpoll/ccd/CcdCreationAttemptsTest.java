@@ -96,6 +96,44 @@ class CcdCreationAttemptsTest {
     }
 
     @Test
+    @DisplayName("Claimed -> Pending is refused here, because only release() says when the attempt is next due")
+    void releaseIsNotAPlainMove() {
+        assertThat(Claimed.canMoveTo(Pending)).isTrue();
+
+        assertThatThrownBy(() -> attempts.move(ATTEMPT, Claimed, Pending, null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("release()");
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    @DisplayName("a release must say when the attempt is next due, and bounds its detail like a move")
+    void releaseSetsWhenNextDue() {
+        assertThatThrownBy(() -> attempts.release(ATTEMPT, "refused", null))
+            .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(repository);
+
+        LocalDateTime due = LocalDateTime.of(2026, 9, 27, 12, 5);
+        String verbose = "x".repeat(CcdCreationAttempt.MAX_FAILURE_DETAIL + 1);
+        when(repository.release(eq(ATTEMPT), anyString(), eq(due), any())).thenReturn(1, 0);
+
+        assertThat(attempts.release(ATTEMPT, verbose, due)).isTrue();
+        assertThat(attempts.release(ATTEMPT, verbose, due)).isFalse();
+        verify(repository, times(2)).release(eq(ATTEMPT), eq("x".repeat(CcdCreationAttempt.MAX_FAILURE_DETAIL)),
+            eq(due), any(LocalDateTime.class));
+    }
+
+    @Test
+    @DisplayName("the submission flag is written for this worker's claim at this try, and reports whether it held")
+    void recordSubmissionIsConditionalOnTheClaim() {
+        when(repository.recordSubmission(eq(ATTEMPT), eq("worker-1"), eq(2), any())).thenReturn(1);
+
+        assertThat(attempts.recordSubmission(ATTEMPT, "worker-1", 2)).isTrue();
+        assertThat(attempts.recordSubmission(ATTEMPT, "worker-1", 1)).isFalse();
+        assertThat(attempts.recordSubmission(ATTEMPT, "worker-2", 2)).isFalse();
+    }
+
+    @Test
     @DisplayName("an allowed move is conditional on the status the caller saw, and reports whether it won")
     void anAllowedMoveIsConditional() {
         when(repository.move(eq(ATTEMPT), eq("Claimed"), eq("AwaitingConfirmation"), isNull(), any()))

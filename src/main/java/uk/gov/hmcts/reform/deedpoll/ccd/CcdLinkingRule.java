@@ -4,6 +4,8 @@ import feign.FeignException;
 import feign.RetryableException;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -118,6 +120,26 @@ public final class CcdLinkingRule {
      */
     public static boolean mayTryAgain(int attempts, int maxAttempts) {
         return attempts < maxAttempts;
+    }
+
+    /**
+     * When an attempt released after a refusal is next due (plan 02b, decision 6): {@code retryAfter} for each claim
+     * it has had, so a CCD that keeps refusing is asked less and less often, and never twice in one sweep.
+     *
+     * @param attempts how many claims the attempt has had, this one included
+     */
+    public static LocalDateTime nextDue(LocalDateTime now, Duration retryAfter, int attempts) {
+        return now.plus(retryAfter.multipliedBy(Math.max(1, attempts)));
+    }
+
+    /**
+     * Whether a {@code Pending} attempt may be claimed now. {@code CcdCreationAttemptRepository.claim} repeats this
+     * predicate in SQL, so that the service's answer and the statement's cannot disagree.
+     *
+     * @param notBefore the attempt's {@code notBefore}; null means due now
+     */
+    public static boolean isDue(LocalDateTime notBefore, LocalDateTime now) {
+        return notBefore == null || !notBefore.isAfter(now);
     }
 
     /**

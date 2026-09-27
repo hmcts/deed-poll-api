@@ -261,6 +261,8 @@ deedpoll:
       settle-after: ${CCD_LINKING_SETTLE_AFTER:PT10M}
       # Claims an attempt gets for refusals that created nothing.
       max-attempts: ${CCD_LINKING_MAX_ATTEMPTS:3}
+      # How long a refused attempt waits before its next claim, multiplied by the claims it has had.
+      retry-after: ${CCD_LINKING_RETRY_AFTER:PT5M}
   referrals:
     # How long a judge's claim on a referral survives their inactivity before it goes back into the
     # shared pool. Measured from their last interaction with the referral, not from the claim, so a

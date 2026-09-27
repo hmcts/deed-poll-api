@@ -15,6 +15,8 @@ import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.SubmitFailure;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Optional;
 
@@ -89,6 +91,29 @@ class CcdLinkingRuleTest {
     void unboundIsNotBound() {
         assertThat(CcdLinkingRule.confirm(RECORD, CASE_TYPE, Optional.empty(),
             new CaseSeen(Optional.of(REFERENCE), CASE_TYPE, RECORD))).isEqualTo(Confirmation.NOT_BOUND);
+    }
+
+    @Test
+    @DisplayName("a released attempt waits retry-after for each claim it has had")
+    void releasedAttemptsWaitLongerEachTime() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 27, 12, 0);
+        Duration five = Duration.ofMinutes(5);
+
+        assertThat(CcdLinkingRule.nextDue(now, five, 1)).isEqualTo(now.plusMinutes(5));
+        assertThat(CcdLinkingRule.nextDue(now, five, 2)).isEqualTo(now.plusMinutes(10));
+        // Never now: a count that somehow read zero still waits one interval.
+        assertThat(CcdLinkingRule.nextDue(now, five, 0)).isEqualTo(now.plusMinutes(5));
+    }
+
+    @Test
+    @DisplayName("an attempt with no notBefore is due now; one with a notBefore is due from that moment on")
+    void dueness() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 27, 12, 0);
+
+        assertThat(CcdLinkingRule.isDue(null, now)).isTrue();
+        assertThat(CcdLinkingRule.isDue(now.minusNanos(1), now)).isTrue();
+        assertThat(CcdLinkingRule.isDue(now, now)).isTrue();
+        assertThat(CcdLinkingRule.isDue(now.plusNanos(1), now)).isFalse();
     }
 
     @Test

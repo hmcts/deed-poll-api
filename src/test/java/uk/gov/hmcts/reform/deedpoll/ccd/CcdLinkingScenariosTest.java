@@ -69,7 +69,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * Plan 02, Task 7: the linking operation against a fake CCD data-store, in every scenario the plan names -- success;
  * a lost response after CCD committed; a handler rollback; a conflicting existing link; a token refused between
  * start and submit; two workers racing on one record -- plus an expired claim and a case CCD shows under the wrong
- * case type. Each ends in one confirmed link or a visible {@code NeedsRepair}, and never a second case.
+ * case type. Each ends in one confirmed link or a visible {@code NeedsRepair}, and never a second case. Plan 02b,
+ * Task 2 adds the submission flag and the wait: a failure before submission leaves it false, anything submitted
+ * leaves it true, a claim lost before it is written submits nothing, and a released attempt waits for its
+ * {@code notBefore}.
  *
  * <p>The fake is WireMock on the outside, so the operation talks to it over HTTP through the real
  * {@code CoreCaseDataApi}, the real system-user password grant and the real S2S generator. On the inside it does
@@ -190,6 +193,7 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
 
         assertThat(status(record)).isEqualTo(CcdCreationAttemptStatus.Linked);
         assertThat(boundReference(record)).isNotNull();
+        assertThat(submissionMayHaveReached(record)).isTrue();
         assertThat(cases()).isOne();
         assertThat(FAKE.starts.get()).isOne();
         assertThat(FAKE.submits.get()).isOne();
@@ -213,6 +217,7 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
         assertThat(linking.link(record)).isEqualTo(Result.AWAITING_CONFIRMATION);
         assertThat(status(record)).isEqualTo(CcdCreationAttemptStatus.AwaitingConfirmation);
         assertThat(boundReference(record)).isNotNull();
+        assertThat(submissionMayHaveReached(record)).isTrue();
 
         // CCD can be read again; reconciliation confirms what the binding said, and nothing was started twice.
         assertThat(linking.reconcileOutstanding()).isOne();
@@ -278,7 +283,7 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("a token refused between start and submit created nothing, so the next claim starts again, once")
+    @DisplayName("a token refused between start and submit created nothing, so the next due claim starts again, once")
     void tokenExpiryBetweenStartAndSubmit() {
         String record = record();
         FAKE.expired.add("token-1");
@@ -288,7 +293,17 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
         assertThat(detail(record)).isEqualTo("Submission refused: CCD answered HTTP 403");
         assertThat(boundReference(record)).isNull();
         assertThat(cases()).isZero();
+        assertThat(submissionMayHaveReached(record)).isTrue();
+        assertThat(jdbc.queryForObject("""
+            SELECT "notBefore" > now() AT TIME ZONE 'UTC' + interval '4 minutes'
+              FROM "deedpoll_ccdcreationattempt" WHERE "deedPollId" = ?
+            """, Boolean.class, record)).isTrue();
 
+        // Released with notBefore set: not claimed again, and nothing sent, until it is due.
+        assertThat(linking.link(record)).isEqualTo(Result.RETRY_LATER);
+        assertThat(FAKE.starts.get()).isOne();
+
+        makeDue(record);
         assertThat(linking.link(record)).isEqualTo(Result.LINKED);
         assertThat(FAKE.starts.get()).isEqualTo(2);
         assertThat(cases()).isOne();
@@ -296,6 +311,57 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
         assertThat(jdbc.queryForObject("""
             SELECT attempts FROM "deedpoll_ccdcreationattempt" WHERE "deedPollId" = ?
             """, Integer.class, record)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("an IDAM failure before submission is released, and never marks the attempt as possibly submitted")
+    void idamFailureLeavesTheFlagFalse() {
+        String record = record();
+        IDAM.server().stubFor(com.github.tomakehurst.wiremock.client.WireMock.post(urlPathEqualTo("/o/token"))
+            .willReturn(aResponse().withStatus(500)));
+
+        assertThat(linking.link(record)).isEqualTo(Result.RETRY_LATER);
+
+        assertThat(status(record)).isEqualTo(CcdCreationAttemptStatus.Pending);
+        assertThat(detail(record)).startsWith("Failed before submission: ");
+        assertThat(submissionMayHaveReached(record)).isFalse();
+        assertThat(FAKE.starts.get()).isZero();
+        assertThat(FAKE.submits.get()).isZero();
+    }
+
+    @Test
+    @DisplayName("a refused start is released, and never marks the attempt as possibly submitted")
+    void startCaseFailureLeavesTheFlagFalse() {
+        String record = record();
+        FAKE.startStatus = 503;
+
+        assertThat(linking.link(record)).isEqualTo(Result.RETRY_LATER);
+
+        assertThat(status(record)).isEqualTo(CcdCreationAttemptStatus.Pending);
+        assertThat(detail(record)).isEqualTo("Failed before submission: CCD answered HTTP 503");
+        assertThat(submissionMayHaveReached(record)).isFalse();
+        assertThat(FAKE.starts.get()).isOne();
+        assertThat(FAKE.submits.get()).isZero();
+    }
+
+    @Test
+    @DisplayName("a claim lost between the start and the flag write submits nothing, and leaves the flag false")
+    void claimLostBeforeTheFlagSubmitsNothing() {
+        String record = record();
+        // What reconciliation does to a claim it reads as expired, done while the worker waits on startCase.
+        FAKE.duringStart = () -> jdbc.update("""
+            UPDATE "deedpoll_ccdcreationattempt"
+               SET status = 'AwaitingConfirmation', "claimedBy" = NULL, "leaseExpiresAt" = NULL
+             WHERE "deedPollId" = ?
+            """, record);
+
+        assertThat(linking.link(record)).isEqualTo(Result.AWAITING_CONFIRMATION);
+
+        assertThat(FAKE.starts.get()).isOne();
+        assertThat(FAKE.submits.get()).isZero();
+        assertThat(submissionMayHaveReached(record)).isFalse();
+        assertThat(boundReference(record)).isNull();
+        assertThat(cases()).isZero();
     }
 
     @Test
@@ -389,6 +455,21 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
             """, String.class, record);
     }
 
+    private boolean submissionMayHaveReached(String record) {
+        return jdbc.queryForObject("""
+            SELECT "submissionMayHaveReached" FROM "deedpoll_ccdcreationattempt" WHERE "deedPollId" = ?
+             ORDER BY "createdOn" DESC LIMIT 1
+            """, Boolean.class, record);
+    }
+
+    /** Puts a released attempt's notBefore behind it, as waiting out retry-after would. */
+    private void makeDue(String record) {
+        jdbc.update("""
+            UPDATE "deedpoll_ccdcreationattempt" SET "notBefore" = "notBefore" - interval '1 day'
+             WHERE "deedPollId" = ?
+            """, record);
+    }
+
     /** Puts the record's attempt a day past its last move, and so past the settle window. */
     private void ageAttempt(String record) {
         jdbc.update("""
@@ -434,6 +515,11 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
 
         volatile boolean loseSubmitResponse;
         volatile Duration startDelay = Duration.ZERO;
+        /** A status to answer every start with instead of a token, or 0 to answer normally. */
+        volatile int startStatus;
+        /** Runs as each start is answered: whatever happens to the attempt while its worker waits on CCD. */
+        volatile Runnable duringStart = () -> {
+        };
         volatile String caseTypeShown;
         volatile Consumer<String> beforeSubmit = deedPollId -> {
         };
@@ -454,6 +540,9 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
             serviceAuthorisation.set(null);
             loseSubmitResponse = false;
             startDelay = Duration.ZERO;
+            startStatus = 0;
+            duringStart = () -> {
+            };
             caseTypeShown = null;
             beforeSubmit = deedPollId -> {
             };
@@ -489,8 +578,12 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
         private ResponseDefinition start(Request request) throws InterruptedException {
             authorisation.set(request.getHeader("Authorization"));
             serviceAuthorisation.set(request.getHeader(ServiceAuthFilter.AUTHORISATION));
-            int n = starts.incrementAndGet();
+            final int n = starts.incrementAndGet();
             Thread.sleep(startDelay.toMillis());
+            duringStart.run();
+            if (startStatus != 0) {
+                return answer(startStatus, "{}");
+            }
             return answer(200, """
                 {"token": "token-%d", "event_id": "%s", "case_details": null}
                 """.formatted(n, DeedPollCaseType.LINK_DEED_POLL));

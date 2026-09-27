@@ -30,7 +30,6 @@ import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus
 import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus.Claimed;
 import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus.Linked;
 import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus.NeedsRepair;
-import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus.Pending;
 
 /**
  * The one API-owned linking operation: creates the CCD case for an existing deed-poll record and confirms the link
@@ -70,7 +69,8 @@ public class CcdLinkingService {
         /** Another worker holds the record's attempt. */
         IN_PROGRESS,
         /**
-         * Nothing was created and the attempt is {@code Pending} again, for a later call.
+         * Nothing was created and the attempt is {@code Pending} again, for a later call -- or it already was, and
+         * is not due until its {@code notBefore}, and this call sent nothing.
          */
         RETRY_LATER,
         /** The outcome is not yet known; a later reconciliation reads it again. */
@@ -130,7 +130,10 @@ public class CcdLinkingService {
         }
         CcdCreationAttempt attempt = live.get();
         return switch (attempt.getStatus()) {
-            case Pending -> claimAndCreate(attempt, record.get());
+            // Not due: released after a refusal, and waiting out retry-after. The claim would refuse it too.
+            case Pending -> CcdLinkingRule.isDue(attempt.getNotBefore(), AuditClock.now())
+                ? claimAndCreate(attempt, record.get())
+                : Result.RETRY_LATER;
             case Claimed -> leaseExpired(attempt) ? takeFromExpiredClaim(attempt) : Result.IN_PROGRESS;
             case AwaitingConfirmation -> reconcile(attempt);
             case NeedsRepair -> Result.NEEDS_REPAIR;
@@ -174,7 +177,8 @@ public class CcdLinkingService {
 
     private Result claimAndCreate(CcdCreationAttempt pending, CcdCaseProjection record) {
         if (!attempts.claim(pending.getId(), linking.worker(), linking.lease())) {
-            return Result.IN_PROGRESS;
+            // Another worker took it, or it was released again and is not yet due: say which.
+            return current(pending.getDeedPollId());
         }
         // The claim matched only a Pending row and added exactly one.
         int tries = pending.getAttempts() + 1;
@@ -195,6 +199,11 @@ public class CcdLinkingService {
             return nothingCreated(pending, tries, "Failed before submission: " + describe(failure));
         }
 
+        // Committed before the call, and only if the claim is still ours (plan 02b, decision 9): from here on the
+        // attempt may have reached CCD, so it may never be retried from scratch. A lost claim submits nothing.
+        if (!attempts.recordSubmission(pending.getId(), linking.worker(), tries)) {
+            return current(pending.getDeedPollId());
+        }
         CaseDetails created;
         try {
             created = ccd.submitCaseCreation(user, service, identifiers.caseTypeId(), content(record, start));
@@ -228,9 +237,13 @@ public class CcdLinkingService {
     }
 
     private Result nothingCreated(CcdCreationAttempt claimed, int tries, String detail) {
-        return CcdLinkingRule.mayTryAgain(tries, linking.maxAttempts())
-            ? moved(claimed, Claimed, Pending, detail, Result.RETRY_LATER)
-            : moved(claimed, Claimed, NeedsRepair, detail + "; no attempts left", Result.NEEDS_REPAIR);
+        if (!CcdLinkingRule.mayTryAgain(tries, linking.maxAttempts())) {
+            return moved(claimed, Claimed, NeedsRepair, detail + "; no attempts left", Result.NEEDS_REPAIR);
+        }
+        return attempts.release(claimed.getId(), detail,
+                CcdLinkingRule.nextDue(AuditClock.now(), linking.retryAfter(), tries))
+            ? Result.RETRY_LATER
+            : current(claimed.getDeedPollId());
     }
 
     private Result awaitConfirmation(CcdCreationAttempt claimed, String detail) {
