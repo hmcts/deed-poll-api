@@ -22,6 +22,7 @@ Each of these is onboarding and belongs to Steve; the plan's Dependencies sectio
 | `deed_poll_api` registered with S2S, secret in `deed-poll-aat` | `DEED_POLL_API_S2S_SECRET` |
 | Data-store's URL in the environment | `CCD_DATA_STORE_URL` (default is a local stack's 4452) |
 | The linking operation's timings, if the defaults do not suit | `CCD_LINKING_LEASE` (`PT5M`), `CCD_LINKING_SETTLE_AFTER` (`PT10M`), `CCD_LINKING_MAX_ATTEMPTS` (`3`), `CCD_LINKING_RETRY_AFTER` (`PT5M`, times the tries so far); the claimant is `HOSTNAME` |
+| The case list request's linking sweep | `CCD_LINKING_SWEEP_ENABLED` (`false`; set `true` only once everything above is in place), `CCD_LINKING_SWEEP_MAX_RECORDS` (`2`), `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` (`5`) |
 | Data-store routes our case type to us | data-store's `ccd.decentralised.case-type-service-urls`, keyed on a **prefix of the case type id** |
 | `deed_poll_api` allowed to call data-store; `ccd_data` allowed to call us | data-store's S2S allowlist; ours is the constant `SecurityConfiguration.CCD_PERSISTENCE_CALLERS` |
 | The system role registered as a **user role** in definition store | definition store's user-role table, at `PUBLIC` |

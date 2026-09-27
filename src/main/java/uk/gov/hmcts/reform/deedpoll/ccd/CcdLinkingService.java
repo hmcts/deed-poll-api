@@ -33,7 +33,8 @@ import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus
 
 /**
  * The one API-owned linking operation: creates the CCD case for an existing deed-poll record and confirms the link
- * (plan 02, decision 11). Online submission and the migration backfill both call it; nothing in this plan does.
+ * (plan 02, decision 11). {@link CcdLinkingSweep} calls it from the case list request (plan 02b), which links
+ * caseworker-created, existing and imported records alike; online submission will call it too.
  *
  * <p><strong>Deliberately not {@code @Transactional}, and no caller may wrap it in a transaction</strong> (decision
  * 9). The claim is committed by {@link CcdCreationAttempts} before CCD is called, because data-store calls back into
@@ -161,6 +162,23 @@ public class CcdLinkingService {
             read += readOne(waiting, this::reconcile);
         }
         return read;
+    }
+
+    /**
+     * Reconciles one attempt from {@link CcdCreationAttempts#outstanding}: takes an expired claim off its worker, or
+     * reads an attempt awaiting confirmation. The linking sweep's bounded counterpart of
+     * {@link #reconcileOutstanding}, and unlike it this lets a failure through, because the sweep stops on one.
+     *
+     * <p>A claim is taken only while it is still expired, by {@code takeExpiredClaim}'s own condition, so an attempt
+     * read before another worker claimed it afresh is left to that worker. Any other status reports what the
+     * attempt says now and sends nothing.
+     */
+    public Result reconcileOne(CcdCreationAttempt outstanding) {
+        return switch (outstanding.getStatus()) {
+            case Claimed -> takeFromExpiredClaim(outstanding);
+            case AwaitingConfirmation -> reconcile(outstanding);
+            case Pending, NeedsRepair, Linked -> current(outstanding.getDeedPollId());
+        };
     }
 
     private static int readOne(CcdCreationAttempt attempt, Function<CcdCreationAttempt, Result> reading) {

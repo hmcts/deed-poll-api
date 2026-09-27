@@ -280,6 +280,95 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(repository.findById(second.getId()).orElseThrow().getStatus()).isEqualTo(AwaitingConfirmation);
     }
 
+    @Test
+    @DisplayName("the sweep selects unlinked records with no live attempt or a due Pending one, oldest first")
+    void dueForLinkingSelectsOnlyDueWork() {
+        String bound = caseCreatedDaysAgo(9);
+        jdbc.update("UPDATE \"deedpoll_deedpoll\" SET \"ccdCaseReference\" = '1234567890123456' WHERE \"id\" = ?",
+            bound);
+        final String fresh = caseCreatedDaysAgo(8);
+        String notDue = caseCreatedDaysAgo(7);
+        CcdCreationAttempt waiting = opened(notDue);
+        attempts.claim(waiting.getId(), "worker-1", LEASE);
+        attempts.release(waiting.getId(), "refused", AuditClock.now().plusMinutes(5));
+        String due = caseCreatedDaysAgo(6);
+        CcdCreationAttempt released = opened(due);
+        attempts.claim(released.getId(), "worker-1", LEASE);
+        attempts.release(released.getId(), "refused", AuditClock.now().minusSeconds(1));
+        String claimed = caseCreatedDaysAgo(5);
+        attempts.claim(opened(claimed).getId(), "worker-1", LEASE);
+        awaiting(caseCreatedDaysAgo(4));
+        CcdCreationAttempt stuck = awaiting(caseCreatedDaysAgo(3));
+        attempts.move(stuck.getId(), AwaitingConfirmation, NeedsRepair, "stuck");
+        String opened = caseCreatedDaysAgo(2);
+        opened(opened);
+        String newest = caseCreatedDaysAgo(1);
+
+        assertThat(attempts.dueForLinking(10)).containsExactly(fresh, due, opened, newest);
+        assertThat(attempts.dueForLinking(2)).containsExactly(fresh, due);
+    }
+
+    @Test
+    @DisplayName("linking rows while a sweep runs skips none: the selection is always the head, never an offset")
+    void dueForLinkingNeverSkips() {
+        String first = caseCreatedDaysAgo(3);
+        String second = caseCreatedDaysAgo(2);
+        String third = caseCreatedDaysAgo(1);
+        assertThat(attempts.dueForLinking(2)).containsExactly(first, second);
+
+        // The first is claimed by this sweep; a second page by offset would now start at nothing.
+        attempts.claim(opened(first).getId(), "worker-1", LEASE);
+        assertThat(attempts.dueForLinking(2)).containsExactly(second, third);
+
+        // The second is bound by another pod's sweep: the third is next, not skipped.
+        jdbc.update("UPDATE \"deedpoll_deedpoll\" SET \"ccdCaseReference\" = '1234567890123456' WHERE \"id\" = ?",
+            second);
+        assertThat(attempts.dueForLinking(2)).containsExactly(third);
+    }
+
+    @Test
+    @DisplayName("ties on createdOn are broken by id, so the order is total and repeatable")
+    void dueForLinkingBreaksTiesById() {
+        String one = caseCreatedDaysAgo(1);
+        String other = caseCreatedDaysAgo(1);
+        jdbc.update("UPDATE \"deedpoll_deedpoll\" SET \"createdOn\" = (SELECT \"createdOn\" FROM \"deedpoll_deedpoll\""
+            + " WHERE \"id\" = ?) WHERE \"id\" = ?", one, other);
+
+        assertThat(attempts.dueForLinking(2)).containsExactly(one.compareTo(other) < 0
+            ? new String[] {one, other} : new String[] {other, one});
+    }
+
+    @Test
+    @DisplayName("the sweep's outstanding attempts are the expired claims first, then those awaiting, bounded")
+    void outstandingIsBounded() {
+        CcdCreationAttempt olderWait = awaiting(newCase());
+        jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"modifiedOn\" = ? WHERE \"id\" = ?",
+            Timestamp.valueOf(AuditClock.now().minusHours(1)), olderWait.getId());
+        final CcdCreationAttempt newerWait = awaiting(newCase());
+        CcdCreationAttempt expired = opened(newCase());
+        attempts.claim(expired.getId(), "worker-1", LEASE);
+        jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"leaseExpiresAt\" = ? WHERE \"id\" = ?",
+            Timestamp.valueOf(AuditClock.now().minusMinutes(1)), expired.getId());
+        attempts.claim(opened(newCase()).getId(), "worker-1", LEASE);
+
+        assertThat(attempts.outstanding(5)).extracting(CcdCreationAttempt::getId)
+            .containsExactly(expired.getId(), olderWait.getId(), newerWait.getId());
+        assertThat(attempts.outstanding(2)).extracting(CcdCreationAttempt::getId)
+            .containsExactly(expired.getId(), olderWait.getId());
+        assertThat(attempts.outstanding(1)).extracting(CcdCreationAttempt::getId)
+            .containsExactly(expired.getId());
+    }
+
+    /**
+     * A record whose createdOn is {@code days} ago, so the sweep's order is the test's to choose.
+     */
+    private String caseCreatedDaysAgo(int days) {
+        String id = newCase();
+        jdbc.update("UPDATE \"deedpoll_deedpoll\" SET \"createdOn\" = ? WHERE \"id\" = ?",
+            Timestamp.valueOf(AuditClock.now().minusDays(days)), id);
+        return id;
+    }
+
     private CcdCreationAttempt awaiting(String deedPollId) {
         CcdCreationAttempt attempt = opened(deedPollId);
         attempts.claim(attempt.getId(), "worker-1", LEASE);

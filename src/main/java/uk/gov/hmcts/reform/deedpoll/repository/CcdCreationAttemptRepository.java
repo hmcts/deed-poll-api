@@ -65,6 +65,31 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
     List<CcdCreationAttempt> findAwaitingConfirmation();
 
     /**
+     * {@link #findExpiredClaims}, the first {@code limit} of them: the linking sweep's bounded share.
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT *
+          FROM "deedpoll_ccdcreationattempt"
+         WHERE "status" = 'Claimed'
+           AND "leaseExpiresAt" < :now
+         ORDER BY "leaseExpiresAt"
+         LIMIT :limit
+        """)
+    List<CcdCreationAttempt> findFirstExpiredClaims(@Param("now") LocalDateTime now, @Param("limit") int limit);
+
+    /**
+     * {@link #findAwaitingConfirmation}, the first {@code limit} of them: the linking sweep's bounded share.
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT *
+          FROM "deedpoll_ccdcreationattempt"
+         WHERE "status" = 'AwaitingConfirmation'
+         ORDER BY "modifiedOn"
+         LIMIT :limit
+        """)
+    List<CcdCreationAttempt> findFirstAwaitingConfirmation(@Param("limit") int limit);
+
+    /**
      * Opens a {@code Pending} attempt for a record, unless it already has a live one.
      *
      * <p><strong>{@code ON CONFLICT} names V22's partial index as its target, and that is deliberate.</strong> It

@@ -370,6 +370,7 @@ called by nothing yet, and every identifier below that names CCD is an unconfirm
 | `DEED_POLL_SYSTEM_USERNAME`, `DEED_POLL_SYSTEM_PASSWORD` | empty | the system user; an empty one is refused |
 | `IDAM_S2S_AUTH_URL`, `DEED_POLL_API_S2S_SECRET`, `S2S_SERVICE_NAME` | `http://localhost:4502`, empty, `deed_poll_api` | outbound S2S, for calls to data-store |
 | `CCD_LINKING_LEASE`, `CCD_LINKING_SETTLE_AFTER`, `CCD_LINKING_MAX_ATTEMPTS`, `CCD_LINKING_RETRY_AFTER` | `PT5M`, `PT10M`, `3`, `PT5M` | how long a claim is held, how long an unknown outcome is waited on, how many refused tries, how long a refused try waits (times the tries so far) |
+| `CCD_LINKING_SWEEP_ENABLED`, `CCD_LINKING_SWEEP_MAX_RECORDS`, `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` | `false`, `2`, `5` | whether the case list request links records to CCD cases -- off until onboarding, because before it every attempt ends `NeedsRepair` -- and how many records it links and outstanding attempts it reads per request |
 | `HOSTNAME` | `deed-poll-api` | who holds a claim; Kubernetes sets it to the pod's name |
 
 `CoreCaseDataClientAutoConfiguration` is excluded on purpose: it would add a health indicator calling

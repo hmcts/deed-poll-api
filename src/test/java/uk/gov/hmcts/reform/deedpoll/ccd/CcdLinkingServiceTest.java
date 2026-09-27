@@ -25,6 +25,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -385,6 +386,68 @@ class CcdLinkingServiceTest {
 
         assertThat(linking.reconcileOutstanding()).isOne();
         assertThat(attempts.attempt.getStatus()).isEqualTo(Linked);
+    }
+
+    @Test
+    @DisplayName("reconcileOne: an expired claim is taken to reconciliation and read, starting nothing")
+    void reconcileOneTakesAnExpiredClaim() {
+        attempts.open(RECORD);
+        attempts.claim(attempts.attempt.getId(), "worker-2", Duration.ofMinutes(5));
+        attempts.attempt.setLeaseExpiresAt(AuditClock.now().minusMinutes(1));
+
+        assertThat(linking.reconcileOne(attempts.live(RECORD).orElseThrow()))
+            .isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(AwaitingConfirmation);
+        verify(ccd, never()).startCase(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("reconcileOne: an attempt awaiting confirmation is confirmed against the binding and CCD")
+    void reconcileOneConfirms() {
+        whenSubmitted(() -> {
+            binding.set(String.valueOf(REFERENCE));
+            throw noResponse();
+        });
+        when(ccd.getCase(anyString(), anyString(), anyString())).thenThrow(answered(503));
+        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        doReturn(ours(REFERENCE)).when(ccd).getCase(anyString(), anyString(), eq(String.valueOf(REFERENCE)));
+
+        assertThat(linking.reconcileOne(attempts.live(RECORD).orElseThrow())).isEqualTo(Result.LINKED);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(Linked);
+    }
+
+    @Test
+    @DisplayName("reconcileOne: a claim read as expired but claimed afresh since is left to its worker")
+    void reconcileOneLeavesAFreshClaim() {
+        attempts.open(RECORD);
+        attempts.claim(attempts.attempt.getId(), "worker-2", Duration.ofMinutes(5));
+        CcdCreationAttempt readAsExpired = attempts.live(RECORD).orElseThrow();
+        readAsExpired.setLeaseExpiresAt(AuditClock.now().minusMinutes(1));
+
+        assertThat(linking.reconcileOne(readAsExpired)).isEqualTo(Result.IN_PROGRESS);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(Claimed);
+        assertThat(attempts.attempt.getClaimedBy()).isEqualTo("worker-2");
+    }
+
+    @Test
+    @DisplayName("reconcileOne: a failure is let through for the sweep to stop on, unlike reconcileOutstanding")
+    void reconcileOneLetsAFailureThrough() {
+        attempts.open(RECORD);
+        attempts.attempt.setStatus(AwaitingConfirmation);
+        when(deedPolls.findCcdCaseReference(RECORD)).thenThrow(new IllegalStateException("database unavailable"));
+
+        CcdCreationAttempt waiting = attempts.live(RECORD).orElseThrow();
+        assertThatThrownBy(() -> linking.reconcileOne(waiting)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    @DisplayName("reconcileOne: an attempt in any other status is reported as it is now, and CCD is not called")
+    void reconcileOneLeavesTheRestAlone() {
+        attempts.open(RECORD);
+
+        assertThat(linking.reconcileOne(attempts.live(RECORD).orElseThrow())).isEqualTo(Result.RETRY_LATER);
+        verify(ccd, never()).startCase(anyString(), anyString(), anyString(), anyString());
+        verify(ccd, never()).getCase(anyString(), anyString(), anyString());
     }
 
     /** Puts a released attempt's notBefore behind it, as time passing would. */

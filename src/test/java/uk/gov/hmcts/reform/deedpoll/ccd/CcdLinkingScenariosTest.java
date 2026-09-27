@@ -72,7 +72,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * case type. Each ends in one confirmed link or a visible {@code NeedsRepair}, and never a second case. Plan 02b,
  * Task 2 adds the submission flag and the wait: a failure before submission leaves it false, anything submitted
  * leaves it true, a claim lost before it is written submits nothing, and a released attempt waits for its
- * {@code notBefore}.
+ * {@code notBefore}. Task 3 adds the sweep, switched on here: the case list request links at most
+ * {@code max-records}, is not blocked by a stuck record, stops after one failure in an outage, and two at once make
+ * one case per record.
  *
  * <p>The fake is WireMock on the outside, so the operation talks to it over HTTP through the real
  * {@code CoreCaseDataApi}, the real system-user password grant and the real S2S generator. On the inside it does
@@ -133,6 +135,8 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
         registry.add("idam.system-user.password", () -> "not-a-real-password");
         registry.add("core_case_data.api.url", DATA_STORE::baseUrl);
         registry.add("deedpoll.ccd.system-role", () -> SYSTEM_ROLE);
+        // On here, and only in tests: the sweep scenarios drive linking through the case list request.
+        registry.add("deedpoll.ccd.linking.sweep.enabled", () -> "true");
     }
 
     @Autowired
@@ -430,6 +434,118 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
         assertThat(boundReference(record)).isNotNull();
         assertThat(cases()).isOne();
         assertThat(FAKE.starts.get()).isOne();
+    }
+
+    @Test
+    @DisplayName("sweep: one list request links at most max-records records, oldest first")
+    void sweepLinksAtMostMaxRecords() throws Exception {
+        String oldest = unlinkedRecord(3);
+        String middle = unlinkedRecord(2);
+        final String newest = unlinkedRecord(1);
+
+        listCases();
+
+        assertThat(status(oldest)).isEqualTo(CcdCreationAttemptStatus.Linked);
+        assertThat(status(middle)).isEqualTo(CcdCreationAttemptStatus.Linked);
+        assertThat(attemptRepository.findByDeedPollIdOrderByCreatedOnAsc(newest)).isEmpty();
+        assertThat(boundReference(newest)).isNull();
+        assertThat(cases()).isEqualTo(2);
+
+        listCases();
+        assertThat(status(newest)).isEqualTo(CcdCreationAttemptStatus.Linked);
+        assertThat(cases()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("sweep: a NeedsRepair record at the head of the queue does not block the one behind it")
+    void sweepIsNotBlockedByAStuckHead() throws Exception {
+        String stuck = unlinkedRecord(2);
+        assertThat(attempts.open(stuck)).isPresent();
+        jdbc.update("""
+            UPDATE "deedpoll_ccdcreationattempt" SET "status" = 'NeedsRepair' WHERE "deedPollId" = ?
+            """, stuck);
+        String next = unlinkedRecord(1);
+
+        listCases();
+
+        assertThat(status(next)).isEqualTo(CcdCreationAttemptStatus.Linked);
+        assertThat(status(stuck)).isEqualTo(CcdCreationAttemptStatus.NeedsRepair);
+        assertThat(cases()).isOne();
+    }
+
+    @Test
+    @DisplayName("sweep: a CCD outage stops it after one failed call, and the list still answers 200 with its body")
+    void sweepStopsOnAnOutage() throws Exception {
+        String first = unlinkedRecord(2);
+        final String second = unlinkedRecord(1);
+        FAKE.startStatus = 503;
+
+        String answered = listCases();
+
+        assertThat(FAKE.starts.get()).isOne();
+        assertThat(status(first)).isEqualTo(CcdCreationAttemptStatus.Pending);
+        assertThat(detail(first)).isEqualTo("Failed before submission: CCD answered HTTP 503");
+        assertThat(attemptRepository.findByDeedPollIdOrderByCreatedOnAsc(second)).isEmpty();
+        assertThat(cases()).isZero();
+
+        // The first is waiting out retry-after, so the second is the head now -- and CCD is still down.
+        assertThat(listCases()).isEqualTo(answered);
+        assertThat(FAKE.starts.get()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("sweep: two list requests at once make one case per record")
+    void concurrentSweepsMakeOneCasePerRecord() throws Exception {
+        String first = unlinkedRecord(2);
+        final String second = unlinkedRecord(1);
+        // Long enough that both requests select both records before either has claimed anything.
+        FAKE.startDelay = Duration.ofMillis(300);
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<String>> lists = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                lists.add(pool.submit(() -> {
+                    go.await();
+                    return listCases();
+                }));
+            }
+            go.countDown();
+            for (Future<String> list : lists) {
+                list.get(60, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(status(first)).isEqualTo(CcdCreationAttemptStatus.Linked);
+        assertThat(status(second)).isEqualTo(CcdCreationAttemptStatus.Linked);
+        assertThat(attemptRepository.findByDeedPollIdOrderByCreatedOnAsc(first)).hasSize(1);
+        assertThat(attemptRepository.findByDeedPollIdOrderByCreatedOnAsc(second)).hasSize(1);
+        assertThat(cases()).isEqualTo(2);
+        assertThat(FAKE.submits.get()).isEqualTo(2);
+    }
+
+    /**
+     * GET /caseworker/cases as a caseworker, which must answer 200; its body.
+     */
+    private String listCases() throws Exception {
+        MvcResult result = mockMvc.perform(get("/caseworker/cases")
+                .header("Authorization", "Bearer " + IDAM.accessToken()))
+            .andReturn();
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+        return result.getResponse().getContentAsString();
+    }
+
+    /**
+     * A record with no attempt and no binding, created {@code days} ago, which the sweep has to find itself.
+     */
+    private String unlinkedRecord(int days) {
+        String id = deedPolls.save(new DeedPoll()).getId();
+        jdbc.update("UPDATE deedpoll_deedpoll SET \"displayReference\" = ?, \"createdOn\" = now() - make_interval("
+            + "days => ?) WHERE id = ?", "KBDP2026-%06d".formatted(DISPLAY_SERIALS.getAndIncrement()), days, id);
+        return id;
     }
 
     private String record() {

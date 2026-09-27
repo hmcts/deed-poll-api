@@ -11,6 +11,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -67,6 +68,30 @@ public class CcdCreationAttempts {
     @Transactional(readOnly = true)
     public List<CcdCreationAttempt> awaitingConfirmation() {
         return attempts.findAwaitingConfirmation();
+    }
+
+    /**
+     * The next records to link, at most {@code limit}: unlinked, with no live attempt or a due {@code Pending} one,
+     * oldest first and always from the head (plan 02b, decision 5).
+     */
+    @Transactional(readOnly = true)
+    public List<String> dueForLinking(int limit) {
+        return deedPolls.findIdsDueForCcdLinking(AuditClock.now(), limit);
+    }
+
+    /**
+     * At most {@code limit} attempts nobody is attending to: the expired claims first, then the attempts awaiting
+     * confirmation, each longest-waiting first -- the order {@link CcdLinkingService#reconcileOutstanding} reads
+     * the whole of both in.
+     */
+    @Transactional(readOnly = true)
+    public List<CcdCreationAttempt> outstanding(int limit) {
+        List<CcdCreationAttempt> outstanding =
+            new ArrayList<>(attempts.findFirstExpiredClaims(AuditClock.now(), limit));
+        if (outstanding.size() < limit) {
+            outstanding.addAll(attempts.findFirstAwaitingConfirmation(limit - outstanding.size()));
+        }
+        return outstanding;
     }
 
     /**

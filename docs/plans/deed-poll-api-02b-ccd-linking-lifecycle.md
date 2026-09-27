@@ -210,8 +210,22 @@ before changing anything.
   - a CCD outage stops the sweep after one failure, and the list still returns 200 with the same body;
   - two list requests at once make one case per record.
 
-- [ ] the list request sweeps when switched on and never otherwise, bounded, fail-fast, never skipping, never
+- [x] the list request sweeps when switched on and never otherwise, bounded, fail-fast, never skipping, never
       breaking the list, and the build is green
+
+  After Task 3, with Docker: **3215** `test` in 386 files and **13** `integration`, all green. Latency budget:
+  nothing set Feign timeouts before, so OpenFeign's defaults applied (10 s connect, 60 s read). They are now
+  `spring.cloud.openfeign.client.config.default` **connect-timeout 5000 ms, read-timeout 10000 ms**, for every Feign
+  client: `CoreCaseDataApi`, `IdamApi` and S2S's `ServiceAuthorisationApi`, which are all on the sweep's path.
+  `CcdLinkingSweepTest` holds both at 10 s or less. Reconciliation is bounded without changing
+  `reconcileOutstanding()`. `CcdCreationAttempts.outstanding(limit)` returns expired claims first, then attempts
+  awaiting confirmation. `CcdLinkingService.reconcileOne` reconciles one of them and, unlike the unbounded pass,
+  lets a failure through so the sweep can stop on it. Selection is `DeedPollRepository.findIdsDueForCcdLinking`:
+  always the head of `("createdOn", "id")` with `LIMIT` and no offset, which is what "keyset" means here, because
+  linking removes a row from the set. The sweep throws `IllegalStateException` if called inside a transaction,
+  since that is a wiring fault rather than a CCD failure. The sweep scenarios run in `CcdLinkingScenariosTest`,
+  where the switch is on. `CcdLinkingSweepDisabledTest` boots the committed default and spies on the service and
+  the ledger. The three new env vars are in the README and `CCD-SMOKE.md` tables.
 
 ### Task 4: The repair endpoints
 

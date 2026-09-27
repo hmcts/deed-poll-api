@@ -11,6 +11,7 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseDetailResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseListResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DocumentTypeResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.FieldRulesResponse;
+import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingSweep;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
@@ -37,8 +38,8 @@ import java.util.List;
  *
  * <p><strong>One of them writes, and it is the case list.</strong> It drains the notification outbox after it has
  * answered, which is how an owed email gets sent in a service with no scheduler -- {@link #cases} has the argument
- * and {@code NotificationOutbox} has the rest of it. Nothing about the response depends on it, and the read itself
- * is still read-only.
+ * and {@code NotificationOutbox} has the rest of it. When it is switched on, it then links a few records to CCD
+ * cases, for the same reason. Nothing about the response depends on either, and the read itself is still read-only.
  *
  * <p>Every method here resolves parameters, calls a domain service and maps the result. There is no
  * {@code if (found == null)} branch anywhere: the services report absence by throwing {@code NotFoundError},
@@ -62,13 +63,20 @@ public class CaseworkerReadController {
      */
     private final NotificationOutbox outbox;
 
+    /**
+     * Injected so the case list can link records to CCD cases -- see {@link #cases} for why a read does that.
+     */
+    private final CcdLinkingSweep linkingSweep;
+
     public CaseworkerReadController(DeedPollService deedPolls,
                                     DocumentTypeService documentTypes,
-                                    NotificationOutbox outbox) {
+                                    NotificationOutbox outbox,
+                                    CcdLinkingSweep linkingSweep) {
 
         this.deedPolls = deedPolls;
         this.documentTypes = documentTypes;
         this.outbox = outbox;
+        this.linkingSweep = linkingSweep;
     }
 
     /**
@@ -138,6 +146,19 @@ public class CaseworkerReadController {
      * failure in the drain also cannot spoil a response that has already been computed.
      * {@code CaseworkerEmailController} drains after its send for the related but stronger reason recorded there:
      * inside the enqueueing transaction the drain would not see the row it was meant to send.
+     *
+     * <p><strong>It also links records to CCD cases, when that is switched on, and that is the same decision
+     * again.</strong> Every record needs a CCD case, and with no scheduler nothing would notice one that has none,
+     * so {@code CcdLinkingSweep} hangs off the most frequent caseworker request, as the drain does: it links the
+     * oldest few unlinked records and reads the oldest few attempts whose outcome is outstanding. That is how a
+     * record gets its case at all -- {@code POST /caseworker/cases} deliberately does not link, so that CCD's
+     * latency and CCD's failures stay out of the create, and a new record is linked by the next list request,
+     * which in practice is the caseworker who created it returning to the list. The same holds for a record that
+     * predates linking and for an imported one. It runs after the drain and, like it, outside any transaction and
+     * after the response is computed: the sweep commits each claim before calling CCD, so a transaction around it
+     * would hide that claim from data-store's callback, and a sweep that fails is logged and cannot spoil the
+     * list. It is bounded and stops at the first sign CCD is unwell, so an outage costs this request one failed
+     * call, and the Feign timeouts in {@code application.yaml} cap what that call can cost.
      */
     @GetMapping("/cases")
     public CaseListResponse cases(
@@ -154,6 +175,7 @@ public class CaseworkerReadController {
             CasePaging.parse(single("page", parameters.get("page")), single("size", parameters.get("size"))));
         CaseListResponse response = CaseListResponse.of(resolved, results);
         outbox.drain();
+        linkingSweep.sweep();
         return response;
     }
 
