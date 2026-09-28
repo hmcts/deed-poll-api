@@ -121,6 +121,17 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/judicial/referrals/{referralId}/direction"
     );
 
+    /**
+     * The admins' view of the CCD creation attempts and its two repairs (plan 02b, task 4), counted apart from
+     * {@link #CASEWORKER_PATHS} for the reason the judicial routes are: the caseworker count is a number the README
+     * and the resume notes state, and these three operations are an admin's, gated on {@code Role.DEEDPOLL_ADMIN}.
+     */
+    private static final List<String> CCD_ATTEMPT_PATHS = List.of(
+        "/caseworker/ccd-attempts",
+        "/caseworker/ccd-attempts/{attemptId}/reconciliation",
+        "/caseworker/ccd-attempts/{attemptId}/retry"
+    );
+
     private static final ObjectMapper JSON = new ObjectMapper();
 
     @Autowired
@@ -194,6 +205,46 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
+     * The three CCD attempt operations -- the list and the two repairs -- and what their schemas never carry.
+     *
+     * <p>The schema half is the disclosure rule on the published contract: {@code deed-poll-admin} generates its
+     * client from this document, so a field named here would reach every admin's browser. Whether a submission may
+     * have reached CCD is published only as its consequence, {@code canRetryFromScratch}.
+     */
+    @DisplayName("Documents the three CCD attempt operations, and no field an attempt keeps to itself")
+    @Test
+    void documentsTheCcdAttemptOperations() throws Exception {
+        JsonNode document = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                              .andExpect(status().isOk())
+                                              .andReturn()
+                                              .getResponse()
+                                              .getContentAsByteArray());
+        JsonNode paths = document.get("paths");
+
+        assertThat(paths.fieldNames()).toIterable().containsAll(CCD_ATTEMPT_PATHS);
+        assertThat(paths.get("/caseworker/ccd-attempts").fieldNames()).toIterable().containsExactly("get");
+        assertThat(paths.get("/caseworker/ccd-attempts/{attemptId}/reconciliation").fieldNames()).toIterable()
+            .containsExactly("post");
+        assertThat(paths.get("/caseworker/ccd-attempts/{attemptId}/retry").fieldNames()).toIterable()
+            .containsExactly("post");
+        assertThat(CASEWORKER_PATHS).doesNotContainAnyElementsOf(CCD_ATTEMPT_PATHS);
+
+        JsonNode schemas = document.get("components").get("schemas");
+        for (String schema : List.of("CcdAttemptListResponse", "CcdAttemptResponse", "CcdAttemptCountResponse")) {
+            assertThat(schemas.has(schema)).as(schema).isTrue();
+            List<String> properties = new ArrayList<>();
+            schemas.get(schema).get("properties").fieldNames().forEachRemaining(properties::add);
+            assertThat(properties).as(schema).doesNotContainAnyElementsOf(List.of(
+                "claimedBy", "leaseExpiresAt", "operationId", "submissionMayHaveReached", "repairedById",
+                "provenNothingCreated", "repairedOn", "notBefore"));
+        }
+        List<String> row = new ArrayList<>();
+        schemas.get("CcdAttemptResponse").get("properties").fieldNames().forEachRemaining(row::add);
+        assertThat(row).containsExactlyInAnyOrder("id", "deedPollId", "displayReference", "status", "tries",
+            "failureDetail", "modifiedOn", "canRetryFromScratch");
+    }
+
+    /**
      * Every documented path belongs to a list this class names -- so a route added outside both fails here.
      *
      * <p><strong>Added because the two counts above cannot see an addition.</strong> Each sums the operations of
@@ -221,6 +272,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
         List<String> known = new ArrayList<>(CASEWORKER_PATHS);
         known.addAll(JUDICIAL_PATHS);
+        known.addAll(CCD_ATTEMPT_PATHS);
         known.add("/");
 
         assertThat(documented)

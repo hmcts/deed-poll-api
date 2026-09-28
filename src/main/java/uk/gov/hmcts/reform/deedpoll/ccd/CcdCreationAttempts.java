@@ -1,18 +1,25 @@
 package uk.gov.hmcts.reform.deedpoll.ccd;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
+import uk.gov.hmcts.reform.deedpoll.repository.CcdAttemptRow;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdCreationAttemptRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.UUID;
 
 /**
@@ -70,18 +77,129 @@ public class CcdCreationAttempts {
     }
 
     /**
-     * Takes a {@code Pending} attempt for one worker for the length of a lease.
+     * The next records to link, at most {@code limit}: unlinked, with no live attempt or a due {@code Pending} one,
+     * oldest first and always from the head (plan 02b, decision 5).
+     */
+    @Transactional(readOnly = true)
+    public List<String> dueForLinking(int limit) {
+        return deedPolls.findIdsDueForCcdLinking(AuditClock.now(), limit);
+    }
+
+    /**
+     * At most {@code limit} attempts nobody is attending to: the expired claims first, then the attempts awaiting
+     * confirmation, each longest-waiting first -- the order {@link CcdLinkingService#reconcileOutstanding} reads
+     * the whole of both in.
+     */
+    @Transactional(readOnly = true)
+    public List<CcdCreationAttempt> outstanding(int limit) {
+        List<CcdCreationAttempt> outstanding =
+            new ArrayList<>(attempts.findFirstExpiredClaims(AuditClock.now(), limit));
+        if (outstanding.size() < limit) {
+            outstanding.addAll(attempts.findFirstAwaitingConfirmation(limit - outstanding.size()));
+        }
+        return outstanding;
+    }
+
+    /**
+     * Takes a {@code Pending} attempt for one worker for the length of a lease, if it is due.
+     *
+     * <p>The try is read back from the row the claim holds, not added to a count the caller read earlier, because
+     * that read may be stale -- another worker's claim released since, or an admin's retry from scratch, moves it --
+     * and every later move of this claim is keyed on the try.
      *
      * @param worker who holds it, for attribution and diagnosis -- a worker name, never a user's
-     * @return true if this worker now holds it; false if another took it, or it was no longer {@code Pending}
+     * @return the try this claim made it, if this worker now holds it; empty if another took it, it was no longer
+     *     {@code Pending}, or its {@code notBefore} has not yet passed
      */
     @Transactional
-    public boolean claim(UUID attemptId, String worker, Duration lease) {
+    public OptionalInt claim(UUID attemptId, String worker, Duration lease) {
         if (lease.isNegative() || lease.isZero()) {
             throw new IllegalArgumentException("A claim's lease must be positive");
         }
         LocalDateTime now = AuditClock.now();
-        return attempts.claim(attemptId, worker, now, now.plus(lease)) == 1;
+        if (attempts.claim(attemptId, worker, now, now.plus(lease)) != 1) {
+            return OptionalInt.empty();
+        }
+        return OptionalInt.of(attempts.findTryOfClaim(attemptId, worker).orElseThrow(
+            () -> new IllegalStateException("A claim this transaction made is not there to read")));
+    }
+
+    /**
+     * Commits, before {@code submitCaseCreation} is called, that this worker's submission may reach CCD -- if the
+     * claim is still this worker's (plan 02b, decision 9).
+     *
+     * <p>The one write of {@code submissionMayHaveReached}, and it only ever writes true. A caller that gets false
+     * has lost its claim, and must submit nothing: whoever holds the attempt now decides what happens to it.
+     *
+     * @param attempts the try this worker's claim made it, which identifies the claim
+     * @return true if the flag is committed and the worker may submit
+     */
+    @Transactional
+    public boolean recordSubmission(UUID attemptId, String worker, int attempts) {
+        return this.attempts.recordSubmission(attemptId, worker, attempts, AuditClock.now()) == 1;
+    }
+
+    /**
+     * Gives a claim that created nothing back as {@code Pending}, due again at {@code notBefore} (plan 02b, decision
+     * 6). The only way an attempt goes from {@code Claimed} back to {@code Pending}.
+     *
+     * <p>Conditional on the claim being this worker's at this try, as {@link #recordSubmission} is: a worker that
+     * stalled past its lease, across an admin's retry, must not hand back somebody else's fresh claim, whose
+     * submission may already have bound the record -- and a bound record is never due for linking again.
+     *
+     * @param attempts the try this worker's claim made it, which identifies the claim
+     * @param failureDetail what went wrong; bounded as {@link #move} bounds it
+     * @return true if this call released it; false if it was no longer this worker's claim
+     */
+    @Transactional
+    public boolean release(UUID attemptId, String worker, int attempts, String failureDetail,
+                           LocalDateTime notBefore) {
+        if (notBefore == null) {
+            throw new IllegalArgumentException("A released attempt must say when it is next due");
+        }
+        return this.attempts.release(attemptId, worker, attempts, bounded(failureDetail), notBefore,
+            AuditClock.now()) == 1;
+    }
+
+    /**
+     * Moves this worker's own claim on from {@code Claimed}, as {@link #move} would, but only while the claim is
+     * still this worker's at this try -- conditional as {@link #release} and {@link #recordSubmission} are.
+     *
+     * @param attempts the try this worker's claim made it, which identifies the claim
+     * @param failureDetail what went wrong, or null to clear it; bounded as {@link #move} bounds it
+     * @return true if this call moved it; false if it was no longer this worker's claim
+     * @throws IllegalStateException if the rule does not allow {@code Claimed -> to}, or if {@code to} is
+     *     {@code Pending}, which only {@link #release} may do
+     */
+    @Transactional
+    public boolean moveClaim(UUID attemptId, String worker, int attempts, CcdCreationAttemptStatus to,
+                             String failureDetail) {
+        if (to == CcdCreationAttemptStatus.Pending) {
+            throw new IllegalStateException("A claim is released through release(), which sets when it is next due");
+        }
+        if (!CcdCreationAttemptStatus.Claimed.canMoveTo(to)) {
+            throw new IllegalStateException("A CCD creation attempt cannot move from Claimed to " + to);
+        }
+        return this.attempts.moveClaim(attemptId, worker, attempts, to.name(), bounded(failureDetail),
+            AuditClock.now()) == 1;
+    }
+
+    /**
+     * Moves this worker's own claim, which created nothing and has no tries left, to {@code NeedsRepair}, recording
+     * that nothing the attempt submitted created a case (plan 02b, decision 9 as amended; V24). The one write of
+     * {@code provenNothingCreated} as true, and conditional on the claim as {@link #moveClaim} is.
+     *
+     * <p>Only for a claim whose caller knows nothing was created: refused with nothing bound, or failed before
+     * submitting. Any other way into {@code NeedsRepair} goes through {@link #moveClaim} or {@link #move}, which leave
+     * the fact false, so an attempt that may have created a case is never retried from scratch.
+     *
+     * @param attempts the try this worker's claim made it, which identifies the claim
+     * @param failureDetail what went wrong; bounded as {@link #move} bounds it
+     * @return true if this call moved it; false if it was no longer this worker's claim
+     */
+    @Transactional
+    public boolean exhaust(UUID attemptId, String worker, int attempts, String failureDetail) {
+        return this.attempts.exhaust(attemptId, worker, attempts, bounded(failureDetail), AuditClock.now()) == 1;
     }
 
     /**
@@ -90,8 +208,12 @@ public class CcdCreationAttempts {
      * @param failureDetail what went wrong, or null to clear it; truncated to the column's bound, and never to be
      *     given a token, a credential or a response body
      * @return true if this call moved it; false if it was no longer in {@code from}
-     * @throws IllegalStateException if the rule does not allow {@code from -> to}, or {@code to} is
-     *     {@code Claimed}, which only {@link #claim} may do
+     * @throws IllegalStateException if the rule does not allow {@code from -> to}, if {@code to} is
+     *     {@code Claimed}, which only {@link #claim} may do, if the move is {@code Claimed -> Pending}, which only
+     *     {@link #release} may do because it sets when the attempt is next due, or if {@code from} is
+     *     {@code NeedsRepair}, which only {@link #reconcileAgain} and {@link #retryFromScratch} may leave because
+     *     each records who repaired it -- and the retry's condition, that nothing may have been submitted, is one a
+     *     status-only statement cannot check
      */
     @Transactional
     public boolean move(UUID attemptId,
@@ -100,6 +222,16 @@ public class CcdCreationAttempts {
                         String failureDetail) {
         if (to == CcdCreationAttemptStatus.Claimed) {
             throw new IllegalStateException("An attempt is claimed through claim(), which sets its lease");
+        }
+        if (from == CcdCreationAttemptStatus.Claimed && to == CcdCreationAttemptStatus.Pending) {
+            throw new IllegalStateException("A claim is released through release(), which sets when it is next due");
+        }
+        if (from == CcdCreationAttemptStatus.NeedsRepair) {
+            // Every way out of NeedsRepair is an admin's, and each is attributed (plan 02b, decision 10). The retry is
+            // also conditional on nothing having been submitted, which this statement, keyed on status alone, is not.
+            throw new IllegalStateException(
+                "An attempt leaves NeedsRepair through reconcileAgain() or retryFromScratch(), which record who "
+                    + "repaired it, and the retry is also conditional on nothing having been submitted");
         }
         if (!from.canMoveTo(to)) {
             throw new IllegalStateException("A CCD creation attempt cannot move from " + from + " to " + to);
@@ -138,6 +270,73 @@ public class CcdCreationAttempts {
             .isPresent();
         return !bound && move(waiting.getId(), CcdCreationAttemptStatus.AwaitingConfirmation,
             CcdCreationAttemptStatus.NeedsRepair, failureDetail);
+    }
+
+    /**
+     * How many attempts are in each status, every status present and in lifecycle order -- zero for one no attempt
+     * is in, so the repair view's headline has the same shape however empty the ledger is.
+     */
+    @Transactional(readOnly = true)
+    public Map<CcdCreationAttemptStatus, Long> countsByStatus() {
+        Map<CcdCreationAttemptStatus, Long> counts = new EnumMap<>(CcdCreationAttemptStatus.class);
+        for (CcdCreationAttemptStatus status : CcdCreationAttemptStatus.values()) {
+            counts.put(status, 0L);
+        }
+        for (Object[] row : attempts.countByStatus()) {
+            counts.put((CcdCreationAttemptStatus) row[0], ((Number) row[1]).longValue());
+        }
+        return counts;
+    }
+
+    /**
+     * One page of the attempts that are not {@code Linked}, or of those in one status, longest-unmoved first.
+     *
+     * @param status one status to narrow to, or empty for every status but {@code Linked}
+     */
+    @Transactional(readOnly = true)
+    public Page<CcdAttemptRow> unlinked(Optional<CcdCreationAttemptStatus> status, Pageable page) {
+        return status.map(only -> attempts.findRowsByStatus(only, page))
+            .orElseGet(() -> attempts.findRowsOtherThan(CcdCreationAttemptStatus.Linked, page));
+    }
+
+    /** One attempt as the repair view shows it, if it exists. */
+    @Transactional(readOnly = true)
+    public Optional<CcdAttemptRow> row(UUID attemptId) {
+        return attempts.findRowById(attemptId);
+    }
+
+    /**
+     * Sends an attempt {@code NeedsRepair} back to reconciliation, recording who did (plan 02b, decision 8). The one
+     * way an attempt leaves {@code NeedsRepair} for {@code AwaitingConfirmation}, so no repair goes unattributed.
+     *
+     * @param repairedById the admin's IDAM subject; attribution only, never published or logged
+     * @return true if this call moved it; false if it was no longer {@code NeedsRepair}
+     */
+    @Transactional
+    public boolean reconcileAgain(UUID attemptId, String repairedById) {
+        return attempts.reconcileAgain(attemptId, attributed(repairedById), AuditClock.now()) == 1;
+    }
+
+    /**
+     * Sends an attempt {@code NeedsRepair} back to {@code Pending}, its tries reset and due now, recording who did --
+     * only if nothing may have been submitted, or it is proven that nothing submitted created a case (plan 02b,
+     * decision 8, and decision 9 as amended). The one way an attempt leaves {@code NeedsRepair} for {@code Pending},
+     * and the one that clears {@code provenNothingCreated}, which the fresh run of claims must earn again.
+     *
+     * @param repairedById the admin's IDAM subject; attribution only, never published or logged
+     * @return true if this call moved it; false if it was no longer {@code NeedsRepair}, or may have created a case
+     */
+    @Transactional
+    public boolean retryFromScratch(UUID attemptId, String repairedById) {
+        return attempts.retryFromScratch(attemptId, attributed(repairedById), AuditClock.now()) == 1;
+    }
+
+    /** A repair with nobody to attribute it to is a wiring fault: the caller is an admin, and admins have subjects. */
+    private static String attributed(String repairedById) {
+        if (repairedById == null || repairedById.isBlank()) {
+            throw new IllegalArgumentException("A repair must say who made it");
+        }
+        return repairedById;
     }
 
     /** A failure detail cut to what the column holds, so a verbose upstream error cannot fail the write. */

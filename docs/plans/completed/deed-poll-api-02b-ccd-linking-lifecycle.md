@@ -1,9 +1,9 @@
 # Plan 02b — CCD linking lifecycle: link at creation, and a way out of `NeedsRepair`
 
-Status: **ready for ralphex, 2026-09-27: every decision and all three flags settled with Steve.** Depends on [plan 02](completed/deed-poll-api-02-ccd-foundation.md),
-which built the linking operation and left it uncalled. Comes before [plan 03](deed-poll-api-03-cdam-documents.md),
+Status: **complete 2026-09-27 — all six tasks done on branch `deed-poll-api-02b-ccd-linking-lifecycle`, not yet merged; every decision and all three flags settled with Steve beforehand.** Onboarding is still open, so the sweep stays off and every identifier is a placeholder. Depends on [plan 02](deed-poll-api-02-ccd-foundation.md),
+which built the linking operation and left it uncalled. Comes before [plan 03](../deed-poll-api-03-cdam-documents.md),
 whose "link first" decision (Steve, 2026-09-27) means document code only ever sees a record that already has a
-CCD case. It also absorbs the linking half of [ccd-migration](ccd-migration.md), which is now Dataverse
+CCD case. It also absorbs the linking half of [ccd-migration](../ccd-migration.md), which is now Dataverse
 ingestion only.
 
 ## Overview
@@ -65,6 +65,13 @@ The sweep ships **switched off**, and switching it on is part of onboarding.
    nothing. Existing rows are backfilled **true**, the conservative value: a row nobody can vouch for is never
    retried from scratch. The column is never reset, not even by a retry from scratch, because "may have reached"
    is about the attempt's history, and a retry is allowed only while it is false.
+   **Amended 2026-09-28 (Steve):** the review found that a refused submission sets the flag too. So an attempt
+   whose tries ran out on refusals, with nothing bound, was stuck in `NeedsRepair`. V24 adds
+   `provenNothingCreated`, which is set only by the statement that moves such a claim to `NeedsRepair`. A retry is
+   now allowed while the flag is false **or** that fact is true. Reconciliation keeps the fact; the retry clears it.
+   The flag itself is still never reset. It is sound because a release is the only automatic way back to
+   `Pending`. So every earlier try of such an attempt also created nothing, and that is the evidence the automatic
+   path already acts on.
 10. **Repairs are attributed.** V23 adds `repairedById` (the IDAM subject, following V14's `claimedById`) and
     `repairedOn`. Neither is published in a DTO or a log line. No case note is written: this is a technical state,
     not part of the case's timeline (Steve, 2026-09-27). **Every repair is logged** at INFO, in fixed prose: the
@@ -86,7 +93,7 @@ The sweep ships **switched off**, and switching it on is part of onboarding.
 
 ## Constraints
 
-- Everything in [`CLAUDE.md`](../../CLAUDE.md), in particular:
+- Everything in [`CLAUDE.md`](../../../CLAUDE.md), in particular:
   - never edit a committed migration (the next free one is **V23**);
   - no live calls to CCD, IDAM or S2S in any test — WireMock only;
   - no secrets;
@@ -148,8 +155,15 @@ before changing anything.
   - container-backed: the migration against real Postgres, covering the backfill of an existing row to `true`
     and the default for a new row.
 
-- [ ] baseline recorded, V23 applied with its backfill proved, the new edge and its condition tested, and the
+- [x] baseline recorded, V23 applied with its backfill proved, the new edge and its condition tested, and the
       build is green
+
+  Baseline, measured 2026-09-27 on this branch before any change: with Docker, **3150** `test` in 383 files and
+  **13** `integration`, all green; Docker-free (`INTEGRATION_TESTS_ENABLED=false`), **2103** `test` in 271 files
+  and no `integration`, all green. After Task 1, with Docker: **3170** `test` in 384 files and **13**
+  `integration`, all green. Also: `CcdCreationAttempts.move` now refuses `NeedsRepair -> Pending`, because its
+  statement is conditional on status alone; Task 4's retry needs its own statement conditional on
+  `submissionMayHaveReached = false`.
 
 ### Task 2: Record the submission, and wait before retrying
 
@@ -168,8 +182,15 @@ before changing anything.
 
   Each needs a container-free companion in `CcdLinkingServiceTest`.
 
-- [ ] the flag is committed before every submission and only then, released attempts wait `notBefore`, and the
+- [x] the flag is committed before every submission and only then, released attempts wait `notBefore`, and the
       build is green
+
+  After Task 2, with Docker: **3184** `test` in 384 files and **13** `integration`, all green. The flag write
+  (`CcdCreationAttemptRepository.recordSubmission`) is conditional on `Claimed`, this worker, this claim's try count
+  and an unexpired lease. It does not compare `leaseExpiresAt`, which is stored to the millisecond. The try count is
+  what tells two claims by the same pod apart. The release is its own statement (`release`), and `move` now refuses
+  `Claimed -> Pending` as well, so no release can forget `notBefore`. `CCD_LINKING_RETRY_AFTER` is in the README and
+  `CCD-SMOKE.md` tables; the chart lists no linking variables.
 
 ### Task 3: The sweep, off by default
 
@@ -196,8 +217,22 @@ before changing anything.
   - a CCD outage stops the sweep after one failure, and the list still returns 200 with the same body;
   - two list requests at once make one case per record.
 
-- [ ] the list request sweeps when switched on and never otherwise, bounded, fail-fast, never skipping, never
+- [x] the list request sweeps when switched on and never otherwise, bounded, fail-fast, never skipping, never
       breaking the list, and the build is green
+
+  After Task 3, with Docker: **3215** `test` in 386 files and **13** `integration`, all green. Latency budget:
+  nothing set Feign timeouts before, so OpenFeign's defaults applied (10 s connect, 60 s read). They are now
+  `spring.cloud.openfeign.client.config.default` **connect-timeout 5000 ms, read-timeout 10000 ms**, for every Feign
+  client: `CoreCaseDataApi`, `IdamApi` and S2S's `ServiceAuthorisationApi`, which are all on the sweep's path.
+  `CcdLinkingSweepTest` holds both at 10 s or less. Reconciliation is bounded without changing
+  `reconcileOutstanding()`. `CcdCreationAttempts.outstanding(limit)` returns expired claims first, then attempts
+  awaiting confirmation. `CcdLinkingService.reconcileOne` reconciles one of them and, unlike the unbounded pass,
+  lets a failure through so the sweep can stop on it. Selection is `DeedPollRepository.findIdsDueForCcdLinking`:
+  always the head of `("createdOn", "id")` with `LIMIT` and no offset, which is what "keyset" means here, because
+  linking removes a row from the set. The sweep throws `IllegalStateException` if called inside a transaction,
+  since that is a wiring fault rather than a CCD failure. The sweep scenarios run in `CcdLinkingScenariosTest`,
+  where the switch is on. `CcdLinkingSweepDisabledTest` boots the committed default and spies on the service and
+  the ledger. The three new env vars are in the README and `CCD-SMOKE.md` tables.
 
 ### Task 4: The repair endpoints
 
@@ -221,7 +256,25 @@ before changing anything.
   - the list's paging cap.
 - Regenerate the OpenAPI document and confirm the diff is only the new paths and schemas.
 
-- [ ] admins can see and safely repair attempts, nobody else can, no binding is written, and the build is green
+- [x] admins can see and safely repair attempts, nobody else can, no binding is written, and the build is green
+
+  After Task 4, with Docker: **3270** `test` in 395 files and **14** `integration`, all green. The service is
+  `ccd/CcdAttemptRepairs`, and `CaseworkerCcdAttemptController` is its controller. It checks the role, then the
+  subject, then the attempt: a caller who is not an admin gets a 403 before anything is read, and an id that is not
+  a UUID is a 404 that is not logged. Each move is one conditional statement in `CcdCreationAttemptRepository`
+  (`reconcileAgain`, `retryFromScratch`). The retry's `"submissionMayHaveReached" = false` condition is in the SQL as
+  well as in `CcdLinkingRule`. A lost race is answered by reading the attempt again, so the second of two admins
+  gets a 409 that says what the attempt is now. `CcdCreationAttempts.move` now refuses any move out of `NeedsRepair`,
+  so every exit from it is attributed. The status filter accepts the four live statuses. `Linked` is a 400 rather
+  than an empty page. The size is capped by `CasePaging` at 100. The response carries `canRetryFromScratch` in place
+  of the flag, and `tries` in place of `attempts`. `CcdAttemptDisclosureTest` holds the unpublished fields out of
+  the API surface and has the entity counterpart. `claimedBy` is checked on the repair types only, because a
+  referral already publishes a name under it. The OpenAPI diff is exactly the three paths and the three
+  `CcdAttempt*Response` schemas. `OpenAPIPublisherTest` counts them in their own `CCD_ATTEMPT_PATHS`, so the
+  caseworker count stays 34. The new controller test carries `@DirtiesContext(AFTER_CLASS)`: one more cached context
+  exhausted the unit JVM's 512 MB heap in a later ArchUnit import. The unfiltered list query binds `Linked` as a
+  parameter, because Hibernate writes a JPQL enum literal as a cast to an unquoted type name that Postgres cannot
+  find.
 
 ### Task 5: Prove it end to end in cftlib
 
@@ -232,7 +285,20 @@ before changing anything.
     the endpoint, then linked by the next sweep, with exactly one case in `ccd.case_data`.
 - Record the wall-clock time the sweep added to that list request.
 
-- [ ] both journeys pass in cftlib with one case per record, and the build is green
+- [x] both journeys pass in cftlib with one case per record, and the build is green
+
+  After Task 5: `cftlibTest` **3** tests, green, in about 1m 35s warm. The Docker `build` is unchanged at **3270**
+  `test` in 395 files and **14** `integration`, all green. Both journeys are in `CcdLinkingCftlibTest` and run over
+  HTTP as `CftlibConfig.ADMIN_USER`, a new simulator user holding only `caseworker-deedpoll-admin`. The sweep is on in
+  `application-cftlib.yaml` only. The SDK stores `{}` as each case's data, so "one case per record" is checked as
+  the placeholder case type's `ccd.case_data` row count growing by exactly one. The retry journey also checks that
+  the record kept a single attempt row. The stack's database outlives a run, so each journey first sweeps until
+  nothing is due, which makes its own record the head of the queue. **Sweep cost, measured over four runs:** a warm
+  list request that links one record takes **190–204 ms**, against **35–42 ms** with nothing to link, so each linked
+  record adds about 150–170 ms. The first list request in a fresh JVM takes **2.9–4.3 s**. That figure is cold
+  start (first Feign clients, first IDAM token, JIT), not the sweep's steady cost. With `max-records` at 2, a warm
+  sweep that links a full batch adds about a third of a second. The timings are printed with `System.out`, because
+  this service's log lines do not reach the `cftlibTest` console.
 
 ### Task 6: Full validation and handoff
 
@@ -246,7 +312,16 @@ before changing anything.
   - the case list request links records, and a new caller of the sweep must be outside any transaction.
 - Update `docs/RESUME.md`, and add the chart's new env vars if the chart lists the linking ones.
 
-- [ ] counts recorded, the smoke procedure and CLAUDE.md describe the new code, and the build is green
+- [x] counts recorded, the smoke procedure and CLAUDE.md describe the new code, and the build is green
+
+  Final, measured 2026-09-27 from `build/test-results/`: with Docker, **3270** `test` in 395 files and **14**
+  `integration`, all green (5m 53s); Docker-free, **2187** `test` in 278 files and no `integration`, all green
+  (1m 17s); `cftlibTest` **3**, green (1m 26s). Against Task 1's baseline (3150 / 383 and 13; Docker-free 2103 / 271;
+  `cftlibTest` 1), that is **120** new `test` tests in 12 files, **84** of them Docker-free in 7 files, one new
+  `integration` test and two new `cftlibTest` journeys. `CCD-SMOKE.md` step 3 now has the sweep as its trigger and
+  a repair procedure. `CLAUDE.md` has the three rules. `RESUME.md` has a 02b section, and now records plan 02 as
+  merged. The chart lists no CCD or linking variables, so none was added.
+
 
 ## Deliberately not in this plan
 
@@ -254,8 +329,8 @@ before changing anything.
   payment plan's.
 - A manual bind, unbind or replacement of `ccdCaseReference`.
 - The admin screen; publishing `ccdCaseReference` (the payment plan's Task 8).
-- Dataverse ingestion: [ccd-migration](ccd-migration.md). Its imported records are linked by this plan's sweep.
-- Documents and CDAM: [plan 03](deed-poll-api-03-cdam-documents.md).
+- Dataverse ingestion: [ccd-migration](../ccd-migration.md). Its imported records are linked by this plan's sweep.
+- Documents and CDAM: [plan 03](../deed-poll-api-03-cdam-documents.md).
 
 ---
 

@@ -43,19 +43,28 @@ class SystemUserTokensTest {
     }
 
     @Test
-    @DisplayName("the linking properties refuse a blank worker, a non-positive duration and no attempts")
+    @DisplayName("the linking properties refuse a blank worker, a non-positive or missing duration and no attempts")
     void linkingPropertiesRefuseUnsafeValues() {
         Duration minute = Duration.ofMinutes(1);
-        assertThatThrownBy(() -> new CcdLinkingProperties(" ", minute, minute, 1))
+        assertThatThrownBy(() -> new CcdLinkingProperties(" ", minute, minute, 1, minute))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CcdLinkingProperties("w", Duration.ZERO, minute, 1))
+        assertThatThrownBy(() -> new CcdLinkingProperties("w", Duration.ZERO, minute, 1, minute))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CcdLinkingProperties("w", minute, minute.negated(), 1))
+        assertThatThrownBy(() -> new CcdLinkingProperties("w", minute, minute.negated(), 1, minute))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CcdLinkingProperties("w", minute, null, 1))
+        assertThatThrownBy(() -> new CcdLinkingProperties("w", minute, null, 1, minute))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CcdLinkingProperties("w", minute, minute, 0))
+        assertThatThrownBy(() -> new CcdLinkingProperties("w", minute, minute, 0, minute))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThat(new CcdLinkingProperties(" pod-1 ", minute, minute, 1).worker()).isEqualTo("pod-1");
+        assertThatThrownBy(() -> new CcdLinkingProperties("w", minute, minute, 1, Duration.ZERO))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CcdLinkingProperties("w", minute, minute, 1, null))
+            .isInstanceOf(IllegalArgumentException.class);
+        // A claimant is the name, a separator and a UUID, and has to fit V22's 200-character "claimedBy".
+        assertThatThrownBy(() -> new CcdLinkingProperties("w".repeat(164), minute, minute, 1, minute))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThat(CcdLinkingService.claimant(
+            new CcdLinkingProperties("w".repeat(163), minute, minute, 1, minute).worker())).hasSize(200);
+        assertThat(new CcdLinkingProperties(" pod-1 ", minute, minute, 1, minute).worker()).isEqualTo("pod-1");
     }
 }

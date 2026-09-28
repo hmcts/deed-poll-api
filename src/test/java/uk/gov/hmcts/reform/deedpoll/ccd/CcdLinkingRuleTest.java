@@ -6,13 +6,17 @@ import feign.RetryableException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.CaseSeen;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.Confirmation;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.Next;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule.SubmitFailure;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Optional;
 
@@ -90,12 +94,75 @@ class CcdLinkingRuleTest {
     }
 
     @Test
+    @DisplayName("a released attempt waits retry-after for each claim it has had")
+    void releasedAttemptsWaitLongerEachTime() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 27, 12, 0);
+        Duration five = Duration.ofMinutes(5);
+
+        assertThat(CcdLinkingRule.nextDue(now, five, 1)).isEqualTo(now.plusMinutes(5));
+        assertThat(CcdLinkingRule.nextDue(now, five, 2)).isEqualTo(now.plusMinutes(10));
+        // Never now: a count that somehow read zero still waits one interval.
+        assertThat(CcdLinkingRule.nextDue(now, five, 0)).isEqualTo(now.plusMinutes(5));
+    }
+
+    @Test
+    @DisplayName("an attempt with no notBefore is due now; one with a notBefore is due from that moment on")
+    void dueness() {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 27, 12, 0);
+
+        assertThat(CcdLinkingRule.isDue(null, now)).isTrue();
+        assertThat(CcdLinkingRule.isDue(now.minusNanos(1), now)).isTrue();
+        assertThat(CcdLinkingRule.isDue(now, now)).isTrue();
+        assertThat(CcdLinkingRule.isDue(now.plusNanos(1), now)).isFalse();
+    }
+
+    @Test
     @DisplayName("nothing created goes round again until the attempts are used, then is a repair item")
     void afterNothingCreated() {
         assertThat(CcdLinkingRule.mayTryAgain(1, 3)).isTrue();
         assertThat(CcdLinkingRule.mayTryAgain(2, 3)).isTrue();
         assertThat(CcdLinkingRule.mayTryAgain(3, 3)).isFalse();
         assertThat(CcdLinkingRule.mayTryAgain(1, 1)).isFalse();
+    }
+
+    @ParameterizedTest
+    @EnumSource(CcdCreationAttemptStatus.class)
+    @DisplayName("an attempt that may have been submitted, with nothing proven, is never retried from scratch")
+    void mayHaveReachedRefusesARetryFromScratch(CcdCreationAttemptStatus status) {
+        // A fresh event after a possible submission mints a fresh idempotency key and can mint a second case.
+        assertThat(CcdLinkingRule.mayRetryFromScratch(status, true, false)).isFalse();
+    }
+
+    @ParameterizedTest
+    @EnumSource(CcdCreationAttemptStatus.class)
+    @DisplayName("with nothing submitted, only NeedsRepair may be retried from scratch")
+    void onlyNeedsRepairMayBeRetriedFromScratch(CcdCreationAttemptStatus status) {
+        assertThat(CcdLinkingRule.mayRetryFromScratch(status, false, false))
+            .isEqualTo(status == CcdCreationAttemptStatus.NeedsRepair);
+    }
+
+    @ParameterizedTest
+    @EnumSource(CcdCreationAttemptStatus.class)
+    @DisplayName("proven to have created nothing, a submitted attempt may be retried, from NeedsRepair only")
+    void provenNothingCreatedOpensARetryFromScratch(CcdCreationAttemptStatus status) {
+        // The attempt that ran out of tries on refusals: the flag is true because every try was submitted.
+        assertThat(CcdLinkingRule.mayRetryFromScratch(status, true, true))
+            .isEqualTo(status == CcdCreationAttemptStatus.NeedsRepair);
+        assertThat(CcdLinkingRule.mayRetryFromScratch(status, false, true))
+            .isEqualTo(status == CcdCreationAttemptStatus.NeedsRepair);
+    }
+
+    @ParameterizedTest
+    @EnumSource(CcdCreationAttemptStatus.class)
+    @DisplayName("the rule never allows a move the transition table refuses")
+    void theRuleAgreesWithTheTransitionTable(CcdCreationAttemptStatus status) {
+        for (boolean submitted : new boolean[] {false, true}) {
+            for (boolean proven : new boolean[] {false, true}) {
+                if (CcdLinkingRule.mayRetryFromScratch(status, submitted, proven)) {
+                    assertThat(status.canMoveTo(CcdCreationAttemptStatus.Pending)).isTrue();
+                }
+            }
+        }
     }
 
     @Test

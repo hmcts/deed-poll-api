@@ -359,7 +359,7 @@ class CcdPersistenceSubmissionTest extends AbstractPostgresContainerTest {
             "KBDP2026-%06d".formatted(DISPLAY_SERIALS.getAndIncrement()), id);
         CcdCreationAttempt attempt = attempts.open(id).orElseThrow();
         if (status != CcdCreationAttemptStatus.Pending) {
-            assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isTrue();
+            assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isPresent();
         }
         switch (status) {
             case AwaitingConfirmation ->

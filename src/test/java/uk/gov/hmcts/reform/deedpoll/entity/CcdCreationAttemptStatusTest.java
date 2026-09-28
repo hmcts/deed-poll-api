@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 
 import java.io.IOException;
@@ -40,7 +41,7 @@ class CcdCreationAttemptStatusTest {
         Pending, EnumSet.of(Claimed),
         Claimed, EnumSet.of(Pending, AwaitingConfirmation, Linked, NeedsRepair),
         AwaitingConfirmation, EnumSet.of(Linked, NeedsRepair),
-        NeedsRepair, EnumSet.of(AwaitingConfirmation),
+        NeedsRepair, EnumSet.of(AwaitingConfirmation, Pending),
         Linked, EnumSet.noneOf(CcdCreationAttemptStatus.class));
 
     @Test
@@ -84,8 +85,9 @@ class CcdCreationAttemptStatusTest {
     void nothingAfterSubmissionReturnsToACreation() {
         // Recovery is by reading, not retrying: a fresh start-event token mints a fresh idempotency key, and a
         // second creation is how one record gets two CCD cases. Reachability, not just the direct edges, so a
-        // route through NeedsRepair cannot reopen one either.
-        Set<CcdCreationAttemptStatus> reachable = reachableFrom(AwaitingConfirmation);
+        // route through NeedsRepair cannot reopen one either. AwaitingConfirmation means a submission may have
+        // been made, so the walk takes the one conditional edge only where the rule allows it with that fact set.
+        Set<CcdCreationAttemptStatus> reachable = reachableFrom(AwaitingConfirmation, true);
 
         assertThat(reachable).doesNotContain(Pending, Claimed);
         assertThat(reachable).contains(Linked, NeedsRepair);
@@ -123,15 +125,52 @@ class CcdCreationAttemptStatusTest {
             .containsExactlyElementsOf(Arrays.stream(CcdCreationAttemptStatus.values()).map(Enum::name).toList());
     }
 
+    @Test
+    @DisplayName("NeedsRepair -> Pending is the only conditional edge, and the only way back to Pending but Claimed's")
+    void theOnlyConditionalEdgeIsTheRetryFromScratch() {
+        // Every edge into Pending but Claimed's -- whose caller asserts nothing was submitted -- has to be gated on
+        // submissionMayHaveReached and provenNothingCreated, or an attempt that may have created a case could be
+        // started again.
+        for (CcdCreationAttemptStatus from : CcdCreationAttemptStatus.values()) {
+            if (from != Claimed && from.canMoveTo(Pending)) {
+                assertThat(from).isEqualTo(NeedsRepair);
+                assertThat(CcdLinkingRule.mayRetryFromScratch(from, true, false)).as("refused once submitted")
+                    .isFalse();
+                assertThat(CcdLinkingRule.mayRetryFromScratch(from, false, false)).as("allowed before").isTrue();
+                assertThat(CcdLinkingRule.mayRetryFromScratch(from, true, true)).as("allowed once proven").isTrue();
+            }
+        }
+    }
+
     private static Set<CcdCreationAttemptStatus> reachableFrom(CcdCreationAttemptStatus start) {
+        return reachableFrom(start, false);
+    }
+
+    /**
+     * Every status reachable from {@code start}, taking the conditional {@code NeedsRepair -> Pending} edge only
+     * where {@link CcdLinkingRule#mayRetryFromScratch} allows it for {@code submissionMayHaveReached}, with nothing
+     * proven.
+     */
+    private static Set<CcdCreationAttemptStatus> reachableFrom(CcdCreationAttemptStatus start,
+                                                               boolean submissionMayHaveReached) {
         Set<CcdCreationAttemptStatus> seen = EnumSet.noneOf(CcdCreationAttemptStatus.class);
-        Deque<CcdCreationAttemptStatus> todo = new ArrayDeque<>(start.successors());
+        Deque<CcdCreationAttemptStatus> todo = new ArrayDeque<>(edgesFrom(start, submissionMayHaveReached));
         while (!todo.isEmpty()) {
             CcdCreationAttemptStatus next = todo.pop();
             if (seen.add(next)) {
-                todo.addAll(next.successors());
+                todo.addAll(edgesFrom(next, submissionMayHaveReached));
             }
         }
         return seen;
+    }
+
+    private static Set<CcdCreationAttemptStatus> edgesFrom(CcdCreationAttemptStatus from,
+                                                           boolean submissionMayHaveReached) {
+        Set<CcdCreationAttemptStatus> edges = EnumSet.noneOf(CcdCreationAttemptStatus.class);
+        edges.addAll(from.successors());
+        if (from == NeedsRepair && !CcdLinkingRule.mayRetryFromScratch(from, submissionMayHaveReached, false)) {
+            edges.remove(Pending);
+        }
+        return edges;
     }
 }

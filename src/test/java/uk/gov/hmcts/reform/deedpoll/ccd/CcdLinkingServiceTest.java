@@ -21,10 +21,12 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -79,7 +81,8 @@ class CcdLinkingServiceTest {
         when(serviceTokens.getObject()).thenReturn(s2s);
         linking = new CcdLinkingService(attempts, deedPolls, ccd, systemUser, serviceTokens,
             new CcdProperties(CASE_TYPE, "DEED_POLL_PLACEHOLDER", "system-role"),
-            new CcdLinkingProperties("worker-1", Duration.ofMinutes(5), Duration.ofMinutes(10), 3));
+            new CcdLinkingProperties("worker-1", Duration.ofMinutes(5), Duration.ofMinutes(10), 3,
+                Duration.ofMinutes(5)));
     }
 
     @Test
@@ -93,6 +96,7 @@ class CcdLinkingServiceTest {
         assertThat(linking.link(RECORD)).isEqualTo(Result.LINKED);
 
         assertThat(attempts.attempt.getStatus()).isEqualTo(Linked);
+        assertThat(attempts.attempt.isSubmissionMayHaveReached()).isTrue();
         verify(ccd).submitCaseCreation(eq("Bearer system-user"), eq("Bearer s2s"), eq(CASE_TYPE), any());
         assertThat(linking.link(RECORD)).isEqualTo(Result.ALREADY_LINKED);
         verify(ccd, times(1)).startCase(anyString(), anyString(), anyString(), anyString());
@@ -108,6 +112,7 @@ class CcdLinkingServiceTest {
         when(ccd.getCase(anyString(), anyString(), eq(String.valueOf(REFERENCE)))).thenReturn(ours(REFERENCE));
 
         assertThat(linking.link(RECORD)).isEqualTo(Result.LINKED);
+        assertThat(attempts.attempt.isSubmissionMayHaveReached()).isTrue();
 
         verify(ccd, times(1)).submitCaseCreation(anyString(), anyString(), anyString(), any());
         verify(ccd, times(1)).startCase(anyString(), anyString(), anyString(), anyString());
@@ -120,13 +125,16 @@ class CcdLinkingServiceTest {
             throw answered(500);
         });
 
-        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
+        assertThat(attempts.attempt.isSubmissionMayHaveReached()).isTrue();
         assertThat(attempts.attempt.getFailureDetail()).isEqualTo("Submission outcome unknown: CCD answered HTTP 500");
         assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
 
         attempts.attempt.setModifiedOn(AuditClock.now().minusDays(1));
         assertThat(linking.reconcileOutstanding()).isOne();
         assertThat(attempts.attempt.getStatus()).isEqualTo(NeedsRepair);
+        // The outcome was never known, so nothing proves the submission created nothing: no retry from scratch.
+        assertThat(attempts.attempt.isProvenNothingCreated()).isFalse();
         verify(ccd, times(1)).startCase(anyString(), anyString(), anyString(), anyString());
         verify(ccd, never()).getCase(anyString(), anyString(), anyString());
     }
@@ -146,18 +154,39 @@ class CcdLinkingServiceTest {
     }
 
     @Test
-    @DisplayName("a refused token with nothing bound goes round again, until the attempts are used")
+    @DisplayName("a refused token with nothing bound goes round again once due, until the attempts are used")
     void tokenExpiry() {
         whenSubmitted(() -> {
             throw answered(403);
         });
 
+        LocalDateTime before = AuditClock.now();
         assertThat(linking.link(RECORD)).isEqualTo(Result.RETRY_LATER);
         assertThat(attempts.attempt.getStatus()).isEqualTo(Pending);
+        assertThat(attempts.attempt.getNotBefore()).isBetween(before.plusMinutes(5), AuditClock.now().plusMinutes(5));
+        // Sent, then refused: it may have reached CCD, and the flag says so even though it went round again.
+        assertThat(attempts.attempt.isSubmissionMayHaveReached()).isTrue();
+
+        // Not yet due: nothing is claimed and nothing is sent.
         assertThat(linking.link(RECORD)).isEqualTo(Result.RETRY_LATER);
+        assertThat(attempts.attempt.getAttempts()).isOne();
+        verify(ccd, times(1)).startCase(anyString(), anyString(), anyString(), anyString());
+
+        makeDue();
+        before = AuditClock.now();
+        assertThat(linking.link(RECORD)).isEqualTo(Result.RETRY_LATER);
+        // The second release waits twice as long.
+        assertThat(attempts.attempt.getNotBefore())
+            .isBetween(before.plusMinutes(10), AuditClock.now().plusMinutes(10));
+        makeDue();
         assertThat(linking.link(RECORD)).isEqualTo(Result.NEEDS_REPAIR);
         assertThat(attempts.attempt.getFailureDetail())
             .isEqualTo("Submission refused: CCD answered HTTP 403; no attempts left");
+        // Every try was refused with nothing bound, so the admin may still start it again from scratch.
+        assertThat(attempts.attempt.isSubmissionMayHaveReached()).isTrue();
+        assertThat(attempts.attempt.isProvenNothingCreated()).isTrue();
+        assertThat(CcdLinkingRule.mayRetryFromScratch(NeedsRepair, true, attempts.attempt.isProvenNothingCreated()))
+            .isTrue();
         assertThat(linking.link(RECORD)).isEqualTo(Result.NEEDS_REPAIR);
         verify(ccd, times(3)).startCase(anyString(), anyString(), anyString(), anyString());
     }
@@ -192,7 +221,147 @@ class CcdLinkingServiceTest {
 
         assertThat(linking.link(RECORD)).isEqualTo(Result.RETRY_LATER);
         assertThat(attempts.attempt.getFailureDetail()).isEqualTo("Failed before submission: IllegalStateException");
+        assertThat(attempts.attempt.isSubmissionMayHaveReached()).isFalse();
+        assertThat(attempts.attempt.getNotBefore()).isAfter(AuditClock.now());
         verify(ccd, never()).submitCaseCreation(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("a refused start created nothing and submitted nothing, so the flag stays false")
+    void startCaseRefused() {
+        when(ccd.startCase(anyString(), anyString(), anyString(), anyString())).thenThrow(answered(503));
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.RETRY_LATER);
+        assertThat(attempts.attempt.getFailureDetail()).isEqualTo("Failed before submission: CCD answered HTTP 503");
+        assertThat(attempts.attempt.isSubmissionMayHaveReached()).isFalse();
+        verify(ccd, never()).submitCaseCreation(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("a refused start whose claim was taken meanwhile releases nothing, and reports the attempt's status")
+    void refusedStartOnALostClaimReleasesNothing() {
+        when(ccd.startCase(anyString(), anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            takenByReconciliation();
+            throw answered(503);
+        });
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(AwaitingConfirmation);
+        assertThat(attempts.attempt.getFailureDetail()).isEqualTo("taken by reconciliation");
+        verify(ccd, never()).submitCaseCreation(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("a stalled worker whose attempt was retried and claimed afresh by its own pod releases nothing")
+    void staleWorkerCannotReleaseAFreshClaimAtTheSameTry() {
+        String[] fresh = new String[1];
+        when(ccd.startCase(anyString(), anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            // Taken by reconciliation, repaired, retried from scratch -- tries back to zero -- and claimed again by
+            // another thread of this pod, so at the same try and under the same worker name.
+            takenByReconciliation();
+            attempts.attempt.setStatus(NeedsRepair);
+            attempts.attempt.setStatus(Pending);
+            attempts.attempt.setAttempts(0);
+            fresh[0] = CcdLinkingService.claimant("worker-1");
+            attempts.claim(attempts.attempt.getId(), fresh[0], Duration.ofMinutes(5));
+            throw answered(503);
+        });
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.IN_PROGRESS);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(Claimed);
+        assertThat(attempts.attempt.getClaimedBy()).isEqualTo(fresh[0]).startsWith("worker-1#");
+        assertThat(attempts.attempt.getAttempts()).isOne();
+    }
+
+    @Test
+    @DisplayName("a stalled worker on its last try, whose attempt was retried and claimed afresh, repairs nothing")
+    void staleWorkerOnItsLastTryCannotRepairAFreshClaim() {
+        attempts.open(RECORD);
+        attempts.attempt.setAttempts(2);
+        String[] fresh = new String[1];
+        when(ccd.startCase(anyString(), anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            // Its third and last try stalls; meanwhile the attempt is taken, repaired, retried from scratch and
+            // claimed again by another worker, which has now claimed its third try too.
+            takenByReconciliation();
+            attempts.attempt.setStatus(NeedsRepair);
+            attempts.attempt.setStatus(Pending);
+            attempts.attempt.setAttempts(2);
+            fresh[0] = CcdLinkingService.claimant("worker-2");
+            attempts.claim(attempts.attempt.getId(), fresh[0], Duration.ofMinutes(5));
+            throw answered(503);
+        });
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.IN_PROGRESS);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(Claimed);
+        assertThat(attempts.attempt.getClaimedBy()).isEqualTo(fresh[0]);
+        assertThat(attempts.attempt.getFailureDetail()).isEqualTo("taken by reconciliation");
+        assertThat(attempts.attempt.getAttempts()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("a claim on a stale read keys its release on the try the claim made, not on the try it read")
+    void claimOnAStaleReadUsesTheClaimedTry() {
+        attempts.open(RECORD);
+        // Read at no tries; before this worker claims it, another claims it and releases it, due at once.
+        attempts.beforeNextClaim = () -> attempts.attempt.setAttempts(1);
+        when(ccd.startCase(anyString(), anyString(), anyString(), anyString())).thenThrow(answered(503));
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.RETRY_LATER);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(Pending);
+        assertThat(attempts.attempt.getAttempts()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("a submission with no answer ends a sweep even when reconciliation repaired the claim meanwhile")
+    void unansweredSubmissionOnARepairedClaimStillReportsCcdUnanswered() {
+        whenSubmitted(() -> {
+            takenByReconciliation();
+            attempts.attempt.setStatus(NeedsRepair);
+            throw noResponse();
+        });
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(NeedsRepair);
+    }
+
+    @Test
+    @DisplayName("a claim lost between the start and the flag write submits nothing, and records nothing")
+    void claimLostBeforeTheFlagSubmitsNothing() {
+        when(ccd.startCase(anyString(), anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            takenByReconciliation();
+            return StartEventResponse.builder().token("token-1").build();
+        });
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(attempts.attempt.isSubmissionMayHaveReached()).isFalse();
+        assertThat(attempts.attempt.getFailureDetail()).isEqualTo("taken by reconciliation");
+        verify(ccd, never()).submitCaseCreation(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("a claim whose lease ran out before the flag write submits nothing")
+    void expiredLeaseBeforeTheFlagSubmitsNothing() {
+        when(ccd.startCase(anyString(), anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            attempts.attempt.setLeaseExpiresAt(AuditClock.now().minusSeconds(1));
+            return StartEventResponse.builder().token("token-1").build();
+        });
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.IN_PROGRESS);
+        assertThat(attempts.attempt.isSubmissionMayHaveReached()).isFalse();
+        verify(ccd, never()).submitCaseCreation(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("a Pending attempt that is not yet due is left alone: no claim, no try counted, nothing sent")
+    void notYetDueIsNotClaimed() {
+        attempts.open(RECORD);
+        attempts.attempt.setNotBefore(AuditClock.now().plusMinutes(1));
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.RETRY_LATER);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(Pending);
+        assertThat(attempts.attempt.getAttempts()).isZero();
+        verify(systemUser, never()).accessToken();
+        verify(ccd, never()).startCase(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -203,6 +372,7 @@ class CcdLinkingServiceTest {
         assertThat(linking.link(RECORD)).isEqualTo(Result.RETRY_LATER);
         assertThat(attempts.attempt.getFailureDetail())
             .isEqualTo("Failed before submission: IDAM or S2S answered HTTP 401");
+        assertThat(attempts.attempt.isSubmissionMayHaveReached()).isFalse();
         verify(ccd, never()).startCase(anyString(), anyString(), anyString(), anyString());
     }
 
@@ -215,6 +385,7 @@ class CcdLinkingServiceTest {
         assertThat(attempts.attempt.getStatus()).isEqualTo(NeedsRepair);
         assertThat(attempts.attempt.getFailureDetail())
             .isEqualTo("CCD reported a case created, but no reference is bound to the record");
+        assertThat(attempts.attempt.isProvenNothingCreated()).as("a case was reported created").isFalse();
     }
 
     @Test
@@ -240,7 +411,7 @@ class CcdLinkingServiceTest {
             throw noResponse();
         });
 
-        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
         assertThat(attempts.attempt.getFailureDetail()).isEqualTo("taken by reconciliation");
         verify(ccd, times(1)).submitCaseCreation(anyString(), anyString(), anyString(), any());
     }
@@ -254,13 +425,32 @@ class CcdLinkingServiceTest {
         });
         when(ccd.getCase(anyString(), anyString(), anyString())).thenThrow(answered(503));
 
-        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
         attempts.attempt.setModifiedOn(AuditClock.now().minusDays(1));
 
-        assertThat(linking.reconcileOutstanding()).isOne();
+        // Still CCD_UNANSWERED, though a person now has it: the read failed, and a sweep must stop on that.
+        assertThat(linking.reconcileOne(attempts.attempt)).isEqualTo(Result.CCD_UNANSWERED);
         assertThat(attempts.attempt.getStatus()).isEqualTo(NeedsRepair);
         assertThat(attempts.attempt.getFailureDetail())
             .isEqualTo("CCD could not be read to confirm the record's binding within the settle window");
+    }
+
+    @Test
+    @DisplayName("an unreadable CCD past the settle window stops the sweep even when another pod repairs first")
+    void ccdUnreadablePastTheSettleWindowLosingTheRepair() {
+        whenSubmitted(() -> {
+            binding.set(String.valueOf(REFERENCE));
+            throw noResponse();
+        });
+        when(ccd.getCase(anyString(), anyString(), anyString())).thenThrow(answered(503));
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
+        attempts.attempt.setModifiedOn(AuditClock.now().minusDays(1));
+        CcdCreationAttempt read = attempts.live(RECORD).orElseThrow();
+        // Another pod's reconciliation read the same attempt and moved it first.
+        attempts.move(read.getId(), AwaitingConfirmation, NeedsRepair, "another pod's repair");
+
+        assertThat(linking.reconcileOne(read)).isEqualTo(Result.CCD_UNANSWERED);
+        assertThat(attempts.attempt.getFailureDetail()).isEqualTo("another pod's repair");
     }
 
     @Test
@@ -269,7 +459,7 @@ class CcdLinkingServiceTest {
         whenSubmitted(() -> {
             throw answered(500);
         });
-        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
         attempts.attempt.setModifiedOn(AuditClock.now().minusDays(1));
         // Reconciliation reads nothing bound; a late submission binds the record before it can mark the repair.
         when(deedPolls.findCcdCaseReference(RECORD)).thenAnswer(invocation -> {
@@ -300,7 +490,7 @@ class CcdLinkingServiceTest {
             throw noResponse();
         });
         when(ccd.getCase(anyString(), anyString(), anyString())).thenThrow(answered(503));
-        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
         // The same attempt listed twice stands for two: the first read fails outright, the second succeeds.
         attempts.listedTwice = true;
         when(deedPolls.findCcdCaseReference(RECORD))
@@ -311,6 +501,73 @@ class CcdLinkingServiceTest {
 
         assertThat(linking.reconcileOutstanding()).isOne();
         assertThat(attempts.attempt.getStatus()).isEqualTo(Linked);
+    }
+
+    @Test
+    @DisplayName("reconcileOne: an expired claim is taken to reconciliation and read, starting nothing")
+    void reconcileOneTakesAnExpiredClaim() {
+        attempts.open(RECORD);
+        attempts.claim(attempts.attempt.getId(), "worker-2", Duration.ofMinutes(5));
+        attempts.attempt.setLeaseExpiresAt(AuditClock.now().minusMinutes(1));
+
+        assertThat(linking.reconcileOne(attempts.live(RECORD).orElseThrow()))
+            .isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(AwaitingConfirmation);
+        verify(ccd, never()).startCase(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("reconcileOne: an attempt awaiting confirmation is confirmed against the binding and CCD")
+    void reconcileOneConfirms() {
+        whenSubmitted(() -> {
+            binding.set(String.valueOf(REFERENCE));
+            throw noResponse();
+        });
+        when(ccd.getCase(anyString(), anyString(), anyString())).thenThrow(answered(503));
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
+        doReturn(ours(REFERENCE)).when(ccd).getCase(anyString(), anyString(), eq(String.valueOf(REFERENCE)));
+
+        assertThat(linking.reconcileOne(attempts.live(RECORD).orElseThrow())).isEqualTo(Result.LINKED);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(Linked);
+    }
+
+    @Test
+    @DisplayName("reconcileOne: a claim read as expired but claimed afresh since is left to its worker")
+    void reconcileOneLeavesAFreshClaim() {
+        attempts.open(RECORD);
+        attempts.claim(attempts.attempt.getId(), "worker-2", Duration.ofMinutes(5));
+        CcdCreationAttempt readAsExpired = attempts.live(RECORD).orElseThrow();
+        readAsExpired.setLeaseExpiresAt(AuditClock.now().minusMinutes(1));
+
+        assertThat(linking.reconcileOne(readAsExpired)).isEqualTo(Result.IN_PROGRESS);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(Claimed);
+        assertThat(attempts.attempt.getClaimedBy()).isEqualTo("worker-2");
+    }
+
+    @Test
+    @DisplayName("reconcileOne: a failure is let through for the sweep to stop on, unlike reconcileOutstanding")
+    void reconcileOneLetsAFailureThrough() {
+        attempts.open(RECORD);
+        attempts.attempt.setStatus(AwaitingConfirmation);
+        when(deedPolls.findCcdCaseReference(RECORD)).thenThrow(new IllegalStateException("database unavailable"));
+
+        CcdCreationAttempt waiting = attempts.live(RECORD).orElseThrow();
+        assertThatThrownBy(() -> linking.reconcileOne(waiting)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    @DisplayName("reconcileOne: an attempt in any other status is reported as it is now, and CCD is not called")
+    void reconcileOneLeavesTheRestAlone() {
+        attempts.open(RECORD);
+
+        assertThat(linking.reconcileOne(attempts.live(RECORD).orElseThrow())).isEqualTo(Result.RETRY_LATER);
+        verify(ccd, never()).startCase(anyString(), anyString(), anyString(), anyString());
+        verify(ccd, never()).getCase(anyString(), anyString(), anyString());
+    }
+
+    /** Puts a released attempt's notBefore behind it, as time passing would. */
+    private void makeDue() {
+        attempts.attempt.setNotBefore(AuditClock.now().minusSeconds(1));
     }
 
     /** What reconciliation does to a claim it has read as expired, done while its worker is still talking to CCD. */
@@ -377,6 +634,9 @@ class CcdLinkingServiceTest {
         /** Lists the one attempt awaiting confirmation twice, standing for two. */
         private boolean listedTwice;
 
+        /** Runs once, just before the next claim: what another worker did after the caller read the attempt. */
+        private Runnable beforeNextClaim;
+
         InMemoryAttempts() {
             super(null, null);
         }
@@ -414,6 +674,9 @@ class CcdLinkingServiceTest {
             copy.setLeaseExpiresAt(attempt.getLeaseExpiresAt());
             copy.setAttempts(attempt.getAttempts());
             copy.setFailureDetail(attempt.getFailureDetail());
+            copy.setSubmissionMayHaveReached(attempt.isSubmissionMayHaveReached());
+            copy.setProvenNothingCreated(attempt.isProvenNothingCreated());
+            copy.setNotBefore(attempt.getNotBefore());
             copy.setCreatedOn(attempt.getCreatedOn());
             copy.setModifiedOn(attempt.getModifiedOn());
             return copy;
@@ -447,16 +710,64 @@ class CcdLinkingServiceTest {
         }
 
         @Override
-        public boolean claim(UUID attemptId, String worker, Duration lease) {
-            if (attempt == null || attempt.getStatus() != Pending) {
-                return false;
+        public OptionalInt claim(UUID attemptId, String worker, Duration lease) {
+            if (beforeNextClaim != null) {
+                Runnable meanwhile = beforeNextClaim;
+                beforeNextClaim = null;
+                meanwhile.run();
             }
             LocalDateTime now = AuditClock.now();
+            if (attempt == null || attempt.getStatus() != Pending
+                || !CcdLinkingRule.isDue(attempt.getNotBefore(), now)) {
+                return OptionalInt.empty();
+            }
             attempt.setStatus(Claimed);
             attempt.setClaimedBy(worker);
             attempt.setLeaseExpiresAt(now.plus(lease));
             attempt.setAttempts(attempt.getAttempts() + 1);
             attempt.setModifiedOn(now);
+            return OptionalInt.of(attempt.getAttempts());
+        }
+
+        @Override
+        public boolean recordSubmission(UUID attemptId, String worker, int tries) {
+            if (attempt == null || attempt.getStatus() != Claimed || !worker.equals(attempt.getClaimedBy())
+                || attempt.getAttempts() != tries || !attempt.getLeaseExpiresAt().isAfter(AuditClock.now())) {
+                return false;
+            }
+            attempt.setSubmissionMayHaveReached(true);
+            return true;
+        }
+
+        @Override
+        public boolean release(UUID attemptId, String worker, int tries, String failureDetail,
+                               LocalDateTime notBefore) {
+            assertThat(notBefore).isNotNull();
+            if (attempt == null || !worker.equals(attempt.getClaimedBy()) || attempt.getAttempts() != tries
+                || !move(attemptId, Claimed, Pending, failureDetail)) {
+                return false;
+            }
+            attempt.setNotBefore(notBefore);
+            return true;
+        }
+
+        @Override
+        public boolean moveClaim(UUID attemptId, String worker, int tries, CcdCreationAttemptStatus to,
+                                 String failureDetail) {
+            assertThat(to).isNotEqualTo(Pending);
+            if (attempt == null || !worker.equals(attempt.getClaimedBy()) || attempt.getAttempts() != tries) {
+                return false;
+            }
+            return move(attemptId, Claimed, to, failureDetail);
+        }
+
+        @Override
+        public boolean exhaust(UUID attemptId, String worker, int tries, String failureDetail) {
+            if (attempt == null || !worker.equals(attempt.getClaimedBy()) || attempt.getAttempts() != tries
+                || !move(attemptId, Claimed, NeedsRepair, failureDetail)) {
+                return false;
+            }
+            attempt.setProvenNothingCreated(true);
             return true;
         }
 

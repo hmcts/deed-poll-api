@@ -1,6 +1,6 @@
 # CCD foundation — the operator-run AAT smoke procedure
 
-Written 2026-09-27 by plan 02's Task 9. **This is a procedure, not evidence: none of it has been run**, and none of
+Written 2026-09-27 by plan 02's Task 9, and step 3 rewritten the same day by plan 02b's Task 6. **This is a procedure, not evidence: none of it has been run**, and none of
 it can be until every item in [plan 02's Dependencies](plans/completed/deed-poll-api-02-ccd-foundation.md#dependencies--outside-this-plan-and-not-ralphex-work)
 is done. What *has* been proved is the code, against WireMock and against the in-process cftlib stack
 (`./gradlew cftlibTest`, `CcdLinkingCftlibTest`), on placeholder identifiers throughout.
@@ -21,7 +21,8 @@ Each of these is onboarding and belongs to Steve; the plan's Dependencies sectio
 | An IDAM OAuth client for the password grant | `IDAM_CLIENT_ID`, `IDAM_CLIENT_SECRET`, `IDAM_CLIENT_REDIRECT_URI` |
 | `deed_poll_api` registered with S2S, secret in `deed-poll-aat` | `DEED_POLL_API_S2S_SECRET` |
 | Data-store's URL in the environment | `CCD_DATA_STORE_URL` (default is a local stack's 4452) |
-| The linking operation's timings, if the defaults do not suit | `CCD_LINKING_LEASE` (`PT5M`), `CCD_LINKING_SETTLE_AFTER` (`PT10M`), `CCD_LINKING_MAX_ATTEMPTS` (`3`); the claimant is `HOSTNAME` |
+| The linking operation's timings, if the defaults do not suit | `CCD_LINKING_LEASE` (`PT5M`), `CCD_LINKING_SETTLE_AFTER` (`PT10M`), `CCD_LINKING_MAX_ATTEMPTS` (`3`), `CCD_LINKING_RETRY_AFTER` (`PT5M`, times the tries so far); the claimant is `HOSTNAME` |
+| The case list request's linking sweep | `CCD_LINKING_SWEEP_ENABLED` (`false`; set `true` only once everything above is in place), `CCD_LINKING_SWEEP_MAX_RECORDS` (`2`), `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` (`5`), `CCD_LINKING_SWEEP_MAX_DURATION` (`PT15S`) |
 | Data-store routes our case type to us | data-store's `ccd.decentralised.case-type-service-urls`, keyed on a **prefix of the case type id** |
 | `deed_poll_api` allowed to call data-store; `ccd_data` allowed to call us | data-store's S2S allowlist; ours is the constant `SecurityConfiguration.CCD_PERSISTENCE_CALLERS` |
 | The system role registered as a **user role** in definition store | definition store's user-role table, at `PUBLIC` |
@@ -74,29 +75,59 @@ With the service deployed on the confirmed configuration:
 
 ## 3. Create and read one case
 
-**This step has no trigger yet.** `CcdLinkingService.link(deedPollId)` is the only way a case is created, and by
-the plan's design nothing calls it: online submission and migration wire it in their own plans. There is
-deliberately no HTTP endpoint for it. Until one of those lands, either the first of them runs this step, or Steve
-decides on an operator-only entry point — which would be a new, secured route and its own change.
+**The trigger is the case list request** (plan 02b). `POST /caseworker/cases` does not link; the next
+`GET /caseworker/cases` does, through `CcdLinkingSweep`, once `CCD_LINKING_SWEEP_ENABLED=true`. Switch it on only
+after steps 1 and 2 answered as written: with the sweep on and onboarding incomplete, every attempt fails before
+submission, and each list request drives the head of the queue towards `NeedsRepair`, `CCD_LINKING_MAX_ATTEMPTS`
+tries at a time. The sweep links at most `CCD_LINKING_SWEEP_MAX_RECORDS` records per request, oldest first, so
+records that already existed are linked first. There is still no HTTP endpoint that links a named record.
 
-When a trigger exists, for one deed-poll record that has no CCD reference:
+With the sweep switched on, for one deed-poll record that has no CCD reference:
 
-1. Run the linking operation once. Expect `LINKED`.
+1. Create it with `POST /caseworker/cases`, or pick an existing unlinked record, then request `GET /caseworker/cases`
+   as any caseworker until that record is at the head of the queue and linked. Expect the list itself to answer
+   exactly as it would with the sweep off. A failure is logged at WARN in fixed prose and never reaches the response.
 2. Its creation attempt (`deedpoll_ccdcreationattempt`) is `Linked`, and `deedpoll_deedpoll."ccdCaseReference"`
-   holds a 16-digit reference.
+   holds a 16-digit reference. As an admin, `GET /caseworker/ccd-attempts` shows the same thing without database
+   access: the record no longer appears in the page, and the `Linked` count has grown by one.
 3. Read `GET {data-store}/cases/{reference}` as the system user. Expect the same reference, the confirmed case type
    and jurisdiction, state `Registered`, `deedPollId` equal to the record's UUID and `deedPollReference` equal to
    its display reference.
-4. Run the linking operation again for the same record. Expect `ALREADY_LINKED` and no second case in CCD.
+4. Request the list again. Expect no second case in CCD: a linked record is never selected again.
 
 An attempt left in `AwaitingConfirmation` is the operation doing its job: read its bounded failure detail, fix the
-environment, and let `reconcileOutstanding()` settle it. That pass reads only expired claims and
-`AwaitingConfirmation`; **it never reads `NeedsRepair`**, and there is no repair operation yet. A `NeedsRepair`
-attempt stays live, so the record can be offered no fresh creation until somebody decides what it is, by reading
-the record's binding and CCD. The same holds for an attempt whose tries were all refused and nothing was created.
-**Never clear a binding or delete
-an attempt to make a retry happen** — a fresh start-event token mints a fresh idempotency key and can create a
-second case for one record.
+environment, and let later list requests settle it. Each sweep reconciles at most
+`CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` expired claims and `AwaitingConfirmation` attempts. **It never reads
+`NeedsRepair`.** A `NeedsRepair` attempt stays live and blocks a fresh creation for its record, but it no longer
+blocks the queue. A released `Pending` attempt waits `CCD_LINKING_RETRY_AFTER` times its tries before the next one.
+
+### Repairing an attempt
+
+These endpoints need a caseworker holding `caseworker-deedpoll-admin`. Anyone else gets a 403. Neither move calls
+CCD or writes a binding. Each is one conditional statement from `NeedsRepair`, and the next list request does the
+rest.
+
+1. `GET /caseworker/ccd-attempts[?status=NeedsRepair&page=&size=]`. Expect the counts per status and a page of
+   attempts that are not `Linked`, each with its bounded `failureDetail` and `canRetryFromScratch`. `status=Linked`
+   is a 400.
+2. Read the record and CCD before choosing a move:
+   - `POST /caseworker/ccd-attempts/{attemptId}/reconciliation` (`NeedsRepair -> AwaitingConfirmation`) is always
+     open. Use it once the environment is fixed, so that the next sweep reads the binding and CCD again.
+   - `POST /caseworker/ccd-attempts/{attemptId}/retry` (`NeedsRepair -> Pending`, tries reset) is open only while
+     `canRetryFromScratch` is true. That means either nothing was ever submitted to CCD for this attempt, or every
+     try was refused with nothing bound (its `failureDetail` ends `no attempts left`). Otherwise it is a 409 that
+     says so. Use reconciliation instead.
+   - **An attempt that ran out of tries on refused submissions is retryable** (V24, 2026-09-28). Fix the cause of
+     the refusals first, or the retry spends its tries the same way. Reconciling it first does not close the retry.
+     After a retry, a submission whose outcome is unknown makes the attempt non-retryable again, and that is
+     deliberate.
+3. Expect a 200 with the attempt as it now stands. An attempt that is not `NeedsRepair` is a 409, including the
+   second of two admins acting at once. An unknown id is a 404. Every move, made or refused, is logged at INFO with
+   the attempt id and without the admin's identity.
+
+**Never clear a binding or delete an attempt to make a retry happen.** A fresh start-event token mints a fresh
+idempotency key and can create a second case for one record. `retry` is safe only because it is refused whenever a
+submission may have reached CCD.
 
 ## 4. Record the result
 

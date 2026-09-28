@@ -18,6 +18,13 @@ import java.util.Set;
  * may have reached CCD, nothing may go back to {@link #Pending}, because a fresh start-event token mints a fresh
  * idempotency key and can mint a second case. From there an attempt ends {@link #Linked} or waits, visibly, as
  * {@link #NeedsRepair}.
+ *
+ * <p><strong>One edge is conditional, and its condition is not here.</strong> {@code NeedsRepair -> Pending} is an
+ * admin's "try again from scratch" (plan 02b), and it is legal only while the attempt's
+ * {@code submissionMayHaveReached} is false or its {@code provenNothingCreated} is true -- facts about the row, not
+ * the state, so an enum of states cannot hold them. {@code CcdLinkingRule.mayRetryFromScratch} states the whole
+ * condition; {@link #canMoveTo} says only that the edge exists. That keeps the principle true: an attempt that may
+ * have created a case still never gets back to {@link #Pending}.
  */
 public enum CcdCreationAttemptStatus {
 
@@ -39,8 +46,10 @@ public enum CcdCreationAttemptStatus {
 
     /**
      * Reconciliation could not settle it. Still live, deliberately: it may already have created a CCD case, so a
-     * second attempt beside it is how a record gets two. A person resolves it by sending it back to
-     * reconciliation, never by opening another.
+     * second attempt beside it is how a record gets two. A person resolves it by moving THIS attempt on -- back to
+     * reconciliation, or, only if nothing may have been submitted, back to {@link #Pending} to be tried again from
+     * scratch -- never by opening another. Retrying the same attempt is not opening another, and a second live
+     * attempt stays impossible: {@code V22}'s partial unique index refuses one.
      */
     NeedsRepair;
 
@@ -59,10 +68,14 @@ public enum CcdCreationAttemptStatus {
     /**
      * The states an attempt in this state may move to.
      *
-     * <p>{@code Claimed -> Pending} is the one step backwards, and it is legal only because the caller asserts
+     * <p>{@code Claimed -> Pending} is one step backwards, and it is legal only because the caller asserts
      * that nothing was submitted: a claim that failed before {@code submitCaseCreation} -- no IDAM token, no S2S
      * token, a refused {@code startCase} -- has created nothing and may be tried again. A claim that expired is not
      * that caller, since nobody knows how far it got, so it goes to {@link #AwaitingConfirmation}.
+     *
+     * <p>{@code NeedsRepair -> Pending} is the other, and it is conditional: legal only while nothing may have been
+     * submitted or it is proven that nothing submitted created a case, which {@code CcdLinkingRule.mayRetryFromScratch}
+     * decides and this method cannot.
      *
      * @return the legal targets, empty for {@link #Linked}
      */
@@ -71,7 +84,7 @@ public enum CcdCreationAttemptStatus {
             case Pending -> EnumSet.of(Claimed);
             case Claimed -> EnumSet.of(Pending, AwaitingConfirmation, Linked, NeedsRepair);
             case AwaitingConfirmation -> EnumSet.of(Linked, NeedsRepair);
-            case NeedsRepair -> EnumSet.of(AwaitingConfirmation);
+            case NeedsRepair -> EnumSet.of(AwaitingConfirmation, Pending);
             case Linked -> EnumSet.noneOf(CcdCreationAttemptStatus.class);
         };
     }

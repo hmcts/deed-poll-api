@@ -5,7 +5,7 @@ Status: draft for review, 2026-09-26. Depends on [plan 02](completed/deed-poll-a
 **Decision 2026-09-27 (Steve): link first, not on demand.** Document code only ever handles a record that already
 has a CCD case, and refuses one that does not ("case not ready"). It never calls the linking operation itself.
 So this plan now also depends on:
-- [plan 02b](deed-poll-api-02b-ccd-linking-lifecycle.md). Its sweep links every record with a null reference,
+- [plan 02b](completed/deed-poll-api-02b-ccd-linking-lifecycle.md). Its sweep links every record with a null reference,
   whether new, existing or imported, and it gives `NeedsRepair` the way out that plan 02 left manual-only.
 
 It does **not** depend on [ccd-migration](ccd-migration.md), which is now Dataverse ingestion only.

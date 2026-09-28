@@ -39,7 +39,7 @@ import uk.gov.hmcts.reform.idam.client.IdamApi;
  * would read as this service being down.
  */
 @Configuration
-@EnableConfigurationProperties({CcdProperties.class, CcdLinkingProperties.class})
+@EnableConfigurationProperties({CcdProperties.class, CcdLinkingProperties.class, CcdLinkingSweepProperties.class})
 @ComponentScan(
     basePackages = "uk.gov.hmcts.ccd.sdk",
     excludeFilters = {

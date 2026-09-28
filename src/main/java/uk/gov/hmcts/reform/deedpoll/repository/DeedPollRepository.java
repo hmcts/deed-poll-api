@@ -297,6 +297,34 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
     Optional<String> findCcdCaseReference(@Param("id") String id);
 
     /**
+     * The next records the linking sweep should link, oldest first: no reference bound, and either no live attempt
+     * or a {@code Pending} one that is due (plan 02b, decision 5).
+     *
+     * <p><strong>Always the head of the queue, never an offset into it.</strong> The order is the unique key
+     * {@code ("createdOn", "id")}, and linking a record takes it out of this set -- its claim makes its attempt
+     * {@code Claimed}, its bind fills the reference -- so the first {@code limit} rows are always the next work, and
+     * a row linked while a sweep runs cannot shift another past the page boundary, as an offset would. An attempt
+     * {@code Claimed}, {@code AwaitingConfirmation} or {@code NeedsRepair} is excluded, so a stuck record cannot sit
+     * at the head and hold back everything behind it; reconciliation, or an admin, is what moves those.
+     *
+     * <p>The due predicate is {@code CcdLinkingRule.isDue}'s, as the claim repeats it. The live-attempt predicate
+     * is V22's partial index's.
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT d."id"
+          FROM "deedpoll_deedpoll" d
+          LEFT JOIN "deedpoll_ccdcreationattempt" a
+                 ON a."deedPollId" = d."id"
+                AND a."status" <> 'Linked'
+         WHERE d."ccdCaseReference" IS NULL
+           AND (a."id" IS NULL
+                OR (a."status" = 'Pending' AND (a."notBefore" IS NULL OR a."notBefore" <= :now)))
+         ORDER BY d."createdOn", d."id"
+         LIMIT :limit
+        """)
+    List<String> findIdsDueForCcdLinking(@Param("now") LocalDateTime now, @Param("limit") int limit);
+
+    /**
      * Recomputes the current referral state of many cases at once, from the referral table.
      *
      * <p><strong>For the stale-claim sweep, which is the one transition that moves many referrals in one

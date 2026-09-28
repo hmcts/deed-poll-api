@@ -35,5 +35,11 @@ core_case_data:
     url: http://localhost:4452
 
 deedpoll:
+  ccd:
+    linking:
+      sweep:
+        # On here and nowhere else (plan 02b, Task 5). The stack registers the placeholders, so the case list can link
+        # records against it; anywhere not onboarded, an enabled sweep would drive every record into NeedsRepair.
+        enabled: true
   documents:
     local-store-root: build/cftlib/documents

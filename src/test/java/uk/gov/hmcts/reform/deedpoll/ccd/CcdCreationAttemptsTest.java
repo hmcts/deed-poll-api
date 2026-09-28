@@ -12,6 +12,8 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -85,6 +87,127 @@ class CcdCreationAttemptsTest {
     }
 
     @Test
+    @DisplayName("NeedsRepair -> Pending is refused here, because this statement cannot check nothing was submitted")
+    void retryFromScratchIsNotAPlainMove() {
+        assertThat(NeedsRepair.canMoveTo(Pending)).isTrue();
+
+        assertThatThrownBy(() -> attempts.move(ATTEMPT, NeedsRepair, Pending, null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("nothing having been submitted");
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    @DisplayName("NeedsRepair -> AwaitingConfirmation is refused here, because only reconcileAgain() attributes it")
+    void reconcileAgainIsNotAPlainMove() {
+        assertThat(NeedsRepair.canMoveTo(AwaitingConfirmation)).isTrue();
+
+        assertThatThrownBy(() -> attempts.move(ATTEMPT, NeedsRepair, AwaitingConfirmation, null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("reconcileAgain()");
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    @DisplayName("a repair with nobody to attribute it to is refused, and issues no statement")
+    void repairMustBeAttributed() {
+        for (String nobody : new String[] {null, "", "  "}) {
+            assertThatThrownBy(() -> attempts.reconcileAgain(ATTEMPT, nobody))
+                .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> attempts.retryFromScratch(ATTEMPT, nobody))
+                .isInstanceOf(IllegalArgumentException.class);
+        }
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    @DisplayName("each repair is one conditional statement, attributed, and reports whether it won")
+    void repairsAreConditionalAndAttributed() {
+        when(repository.reconcileAgain(eq(ATTEMPT), eq("idam-admin"), any())).thenReturn(1, 0);
+        when(repository.retryFromScratch(eq(ATTEMPT), eq("idam-admin"), any())).thenReturn(1, 0);
+
+        assertThat(attempts.reconcileAgain(ATTEMPT, "idam-admin")).isTrue();
+        assertThat(attempts.reconcileAgain(ATTEMPT, "idam-admin")).isFalse();
+        assertThat(attempts.retryFromScratch(ATTEMPT, "idam-admin")).isTrue();
+        assertThat(attempts.retryFromScratch(ATTEMPT, "idam-admin")).isFalse();
+        verify(repository, never()).move(any(), anyString(), anyString(), any(), any());
+    }
+
+    @Test
+    @DisplayName("the counts name every status, zero for one no attempt is in")
+    void countsNameEveryStatus() {
+        when(repository.countByStatus()).thenReturn(List.of(
+            new Object[] {NeedsRepair, 3L}, new Object[] {Linked, 12L}));
+
+        assertThat(attempts.countsByStatus())
+            .containsExactly(
+                Map.entry(Pending, 0L),
+                Map.entry(Claimed, 0L),
+                Map.entry(AwaitingConfirmation, 0L),
+                Map.entry(Linked, 12L),
+                Map.entry(NeedsRepair, 3L));
+    }
+
+    @Test
+    @DisplayName("Claimed -> Pending is refused here, because only release() says when the attempt is next due")
+    void releaseIsNotAPlainMove() {
+        assertThat(Claimed.canMoveTo(Pending)).isTrue();
+
+        assertThatThrownBy(() -> attempts.move(ATTEMPT, Claimed, Pending, null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("release()");
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    @DisplayName("a release must say when the attempt is next due, and bounds its detail like a move")
+    void releaseSetsWhenNextDue() {
+        assertThatThrownBy(() -> attempts.release(ATTEMPT, "worker-1", 1, "refused", null))
+            .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(repository);
+
+        LocalDateTime due = LocalDateTime.of(2026, 9, 27, 12, 5);
+        String verbose = "x".repeat(CcdCreationAttempt.MAX_FAILURE_DETAIL + 1);
+        when(repository.release(eq(ATTEMPT), eq("worker-1"), eq(1), anyString(), eq(due), any()))
+            .thenReturn(1, 0);
+
+        assertThat(attempts.release(ATTEMPT, "worker-1", 1, verbose, due)).isTrue();
+        assertThat(attempts.release(ATTEMPT, "worker-1", 1, verbose, due)).isFalse();
+        verify(repository, times(2)).release(eq(ATTEMPT), eq("worker-1"), eq(1),
+            eq("x".repeat(CcdCreationAttempt.MAX_FAILURE_DETAIL)),
+            eq(due), any(LocalDateTime.class));
+    }
+
+    @Test
+    @DisplayName("the submission flag is written for this worker's claim at this try, and reports whether it held")
+    void recordSubmissionIsConditionalOnTheClaim() {
+        when(repository.recordSubmission(eq(ATTEMPT), eq("worker-1"), eq(2), any())).thenReturn(1);
+
+        assertThat(attempts.recordSubmission(ATTEMPT, "worker-1", 2)).isTrue();
+        assertThat(attempts.recordSubmission(ATTEMPT, "worker-1", 1)).isFalse();
+        assertThat(attempts.recordSubmission(ATTEMPT, "worker-2", 2)).isFalse();
+    }
+
+    @Test
+    @DisplayName("a worker moves its own claim on only at this try, never back to Pending, and bounds its detail")
+    void moveClaimIsConditionalOnTheClaim() {
+        assertThatThrownBy(() -> attempts.moveClaim(ATTEMPT, "worker-1", 1, Pending, null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("release()");
+        assertThatThrownBy(() -> attempts.moveClaim(ATTEMPT, "worker-1", 1, Claimed, null))
+            .isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(repository);
+
+        String verbose = "x".repeat(CcdCreationAttempt.MAX_FAILURE_DETAIL + 1);
+        when(repository.moveClaim(eq(ATTEMPT), eq("worker-1"), eq(2), eq("NeedsRepair"),
+            eq("x".repeat(CcdCreationAttempt.MAX_FAILURE_DETAIL)), any())).thenReturn(1);
+
+        assertThat(attempts.moveClaim(ATTEMPT, "worker-1", 2, NeedsRepair, verbose)).isTrue();
+        assertThat(attempts.moveClaim(ATTEMPT, "worker-1", 1, NeedsRepair, verbose)).isFalse();
+        assertThat(attempts.moveClaim(ATTEMPT, "worker-2", 2, NeedsRepair, verbose)).isFalse();
+    }
+
+    @Test
     @DisplayName("an allowed move is conditional on the status the caller saw, and reports whether it won")
     void anAllowedMoveIsConditional() {
         when(repository.move(eq(ATTEMPT), eq("Claimed"), eq("AwaitingConfirmation"), isNull(), any()))
@@ -143,8 +266,9 @@ class CcdCreationAttemptsTest {
     @DisplayName("a claim's lease runs from the moment it is taken")
     void claimLeaseRunsFromNow() {
         when(repository.claim(eq(ATTEMPT), eq("worker-1"), any(), any())).thenReturn(1);
+        when(repository.findTryOfClaim(ATTEMPT, "worker-1")).thenReturn(Optional.of(3));
 
-        assertThat(attempts.claim(ATTEMPT, "worker-1", Duration.ofMinutes(5))).isTrue();
+        assertThat(attempts.claim(ATTEMPT, "worker-1", Duration.ofMinutes(5))).hasValue(3);
 
         ArgumentCaptor<LocalDateTime> now = ArgumentCaptor.forClass(LocalDateTime.class);
         ArgumentCaptor<LocalDateTime> until = ArgumentCaptor.forClass(LocalDateTime.class);

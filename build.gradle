@@ -159,6 +159,11 @@ test {
       excludeTags 'requires-docker'
     }
   }
+
+  // Gradle's default of 512m no longer fits one worker's cached Spring contexts plus ArchUnit's class
+  // import: V24's tests tipped it into "Java heap space" in NotificationSecurityTest on two consecutive
+  // runs (2026-09-28), with 3,290 tests passing on the commit before.
+  maxHeapSize = '1g'
 }
 
 tasks.register('functional', Test) {

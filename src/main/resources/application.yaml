@@ -122,6 +122,17 @@ spring:
     # A caseworker request must not hold a database connection open for the whole of view
     # rendering; every fetch the response needs is done in the service layer.
     open-in-view: false
+  cloud:
+    openfeign:
+      client:
+        config:
+          # Every Feign client: CoreCaseDataApi, IdamApi and the S2S ServiceAuthorisationApi, which are the three
+          # conversations one linking attempt holds. Unset, OpenFeign waits 10 s to connect and 60 s to read, and
+          # the linking sweep runs on the case list request (plan 02b), so one unresponsive data-store would hold a
+          # caseworker's list for a minute. 10 s is the ceiling Steve settled for any one call.
+          default:
+            connect-timeout: 5000
+            read-timeout: 10000
 
 idam:
   api:
@@ -261,6 +272,18 @@ deedpoll:
       settle-after: ${CCD_LINKING_SETTLE_AFTER:PT10M}
       # Claims an attempt gets for refusals that created nothing.
       max-attempts: ${CCD_LINKING_MAX_ATTEMPTS:3}
+      # How long a refused attempt waits before its next claim, multiplied by the claims it has had.
+      retry-after: ${CCD_LINKING_RETRY_AFTER:PT5M}
+      # The case list request links records as a side effect -- see CcdLinkingSweepProperties. Off until onboarding:
+      # before it, every attempt fails before submission, and an enabled sweep turns every record NeedsRepair.
+      sweep:
+        enabled: ${CCD_LINKING_SWEEP_ENABLED:false}
+        # Records one list request may link, and outstanding attempts it may then read. Each is a wait on CCD.
+        max-records: ${CCD_LINKING_SWEEP_MAX_RECORDS:2}
+        max-reconciliations: ${CCD_LINKING_SWEEP_MAX_RECONCILIATIONS:5}
+        # How long one sweep may run before it starts nothing more. The counts bound the calls; this bounds a CCD or
+        # IDAM that answers each one slowly but inside the Feign timeouts, which fails nothing and so stops nothing.
+        max-duration: ${CCD_LINKING_SWEEP_MAX_DURATION:PT15S}
   referrals:
     # How long a judge's claim on a referral survives their inactivity before it goes back into the
     # shared pool. Measured from their last interaction with the referral, not from the claim, so a

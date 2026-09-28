@@ -24,17 +24,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.UUID;
 import java.util.function.Function;
 
 import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus.AwaitingConfirmation;
 import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus.Claimed;
 import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus.Linked;
 import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus.NeedsRepair;
-import static uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus.Pending;
 
 /**
  * The one API-owned linking operation: creates the CCD case for an existing deed-poll record and confirms the link
- * (plan 02, decision 11). Online submission and the migration backfill both call it; nothing in this plan does.
+ * (plan 02, decision 11). {@link CcdLinkingSweep} calls it from the case list request (plan 02b), which links
+ * caseworker-created, existing and imported records alike; online submission will call it too.
  *
  * <p><strong>Deliberately not {@code @Transactional}, and no caller may wrap it in a transaction</strong> (decision
  * 9). The claim is committed by {@link CcdCreationAttempts} before CCD is called, because data-store calls back into
@@ -70,11 +72,19 @@ public class CcdLinkingService {
         /** Another worker holds the record's attempt. */
         IN_PROGRESS,
         /**
-         * Nothing was created and the attempt is {@code Pending} again, for a later call.
+         * Nothing was created and the attempt is {@code Pending} again, for a later call -- or it already was, and
+         * is not due until its {@code notBefore}, and this call sent nothing.
          */
         RETRY_LATER,
         /** The outcome is not yet known; a later reconciliation reads it again. */
         AWAITING_CONFIRMATION,
+        /**
+         * As {@code AWAITING_CONFIRMATION}, because a call to CCD failed: a submission whose outcome is unknown, or a
+         * read that could not confirm the binding. Apart from it because it says CCD is unwell, which ends a sweep.
+         * Also what a failed read past the settle window answers, although that attempt is now {@code NeedsRepair}:
+         * answered as {@code NEEDS_REPAIR}, it would let one sweep read every bound attempt during one CCD outage.
+         */
+        CCD_UNANSWERED,
         /** A person has to settle it. */
         NEEDS_REPAIR,
         /** No record has this id. */
@@ -82,6 +92,11 @@ public class CcdLinkingService {
     }
 
     static final String EVENT_SUMMARY = "Link deed poll";
+
+    /**
+     * Between the worker's name and the claim's own token in {@code "claimedBy"}.
+     */
+    static final String CLAIM_SEPARATOR = "#";
 
     private final CcdCreationAttempts attempts;
     private final DeedPollRepository deedPolls;
@@ -130,7 +145,10 @@ public class CcdLinkingService {
         }
         CcdCreationAttempt attempt = live.get();
         return switch (attempt.getStatus()) {
-            case Pending -> claimAndCreate(attempt, record.get());
+            // Not due: released after a refusal, and waiting out retry-after. The claim would refuse it too.
+            case Pending -> CcdLinkingRule.isDue(attempt.getNotBefore(), AuditClock.now())
+                ? claimAndCreate(attempt, record.get())
+                : Result.RETRY_LATER;
             case Claimed -> leaseExpired(attempt) ? takeFromExpiredClaim(attempt) : Result.IN_PROGRESS;
             case AwaitingConfirmation -> reconcile(attempt);
             case NeedsRepair -> Result.NEEDS_REPAIR;
@@ -160,6 +178,23 @@ public class CcdLinkingService {
         return read;
     }
 
+    /**
+     * Reconciles one attempt from {@link CcdCreationAttempts#outstanding}: takes an expired claim off its worker, or
+     * reads an attempt awaiting confirmation. The linking sweep's bounded counterpart of
+     * {@link #reconcileOutstanding}, and unlike it this lets a failure through, because the sweep stops on one.
+     *
+     * <p>A claim is taken only while it is still expired, by {@code takeExpiredClaim}'s own condition, so an attempt
+     * read before another worker claimed it afresh is left to that worker. Any other status reports what the
+     * attempt says now and sends nothing.
+     */
+    public Result reconcileOne(CcdCreationAttempt outstanding) {
+        return switch (outstanding.getStatus()) {
+            case Claimed -> takeFromExpiredClaim(outstanding);
+            case AwaitingConfirmation -> reconcile(outstanding);
+            case Pending, NeedsRepair, Linked -> current(outstanding.getDeedPollId());
+        };
+    }
+
     private static int readOne(CcdCreationAttempt attempt, Function<CcdCreationAttempt, Result> reading) {
         try {
             reading.apply(attempt);
@@ -173,11 +208,16 @@ public class CcdLinkingService {
     }
 
     private Result claimAndCreate(CcdCreationAttempt pending, CcdCaseProjection record) {
-        if (!attempts.claim(pending.getId(), linking.worker(), linking.lease())) {
-            return Result.IN_PROGRESS;
+        // Unique to this claim, so it alone identifies it: the try count does not, because an admin's retry from
+        // scratch resets it, and the worker's name does not, because every thread in a pod shares it.
+        String claimant = claimant(linking.worker());
+        OptionalInt claimed = attempts.claim(pending.getId(), claimant, linking.lease());
+        if (claimed.isEmpty()) {
+            // Another worker took it, or it was released again and is not yet due: say which.
+            return current(pending.getDeedPollId());
         }
-        // The claim matched only a Pending row and added exactly one.
-        int tries = pending.getAttempts() + 1;
+        // Read back from the claim, not added to pending's count, which a release or a reset since may have moved.
+        int tries = claimed.getAsInt();
 
         String user;
         String service;
@@ -185,32 +225,38 @@ public class CcdLinkingService {
             user = systemUser.accessToken();
             service = serviceTokens.getObject().generate();
         } catch (RuntimeException failure) {
-            return nothingCreated(pending, tries,
+            return nothingCreated(pending, claimant, tries,
                 "Failed before submission: " + describe("IDAM or S2S", failure));
         }
         StartEventResponse start;
         try {
             start = ccd.startCase(user, service, identifiers.caseTypeId(), DeedPollCaseType.LINK_DEED_POLL);
         } catch (RuntimeException failure) {
-            return nothingCreated(pending, tries, "Failed before submission: " + describe(failure));
+            return nothingCreated(pending, claimant, tries, "Failed before submission: " + describe(failure));
         }
 
+        // Committed before the call, and only if the claim is still ours (plan 02b, decision 9): from here on the
+        // attempt may have reached CCD, so it may never be retried from scratch. A lost claim submits nothing.
+        if (!attempts.recordSubmission(pending.getId(), claimant, tries)) {
+            return current(pending.getDeedPollId());
+        }
         CaseDetails created;
         try {
             created = ccd.submitCaseCreation(user, service, identifiers.caseTypeId(), content(record, start));
         } catch (RuntimeException failure) {
             return switch (CcdLinkingRule.classify(failure)) {
-                case REFUSED -> afterRefusal(pending, tries, failure);
-                case UNKNOWN -> awaitConfirmation(pending, "Submission outcome unknown: " + describe(failure));
+                case REFUSED -> afterRefusal(pending, claimant, tries, failure);
+                case UNKNOWN ->
+                    afterNoAnswer(pending, claimant, tries, "Submission outcome unknown: " + describe(failure));
             };
         }
 
         Optional<String> binding = deedPolls.findCcdCaseReference(record.deedPollId());
         return switch (CcdLinkingRule.confirm(record.deedPollId(), identifiers.caseTypeId(), binding, seen(created))) {
-            case CONFIRMED -> moved(pending, Claimed, Linked, null, Result.LINKED);
-            case NOT_BOUND -> moved(pending, Claimed, NeedsRepair,
+            case CONFIRMED -> claimMoved(pending, claimant, tries, Linked, null, Result.LINKED);
+            case NOT_BOUND -> claimMoved(pending, claimant, tries, NeedsRepair,
                 "CCD reported a case created, but no reference is bound to the record", Result.NEEDS_REPAIR);
-            case CONTRADICTED -> moved(pending, Claimed, NeedsRepair,
+            case CONTRADICTED -> claimMoved(pending, claimant, tries, NeedsRepair,
                 "CCD reported a case that does not match the record's binding", Result.NEEDS_REPAIR);
         };
     }
@@ -219,22 +265,30 @@ public class CcdLinkingService {
      * CCD refused the submission. The binding is read before anything else: a record bound by an earlier
      * submission is confirmed rather than sent again, and only a record with nothing bound goes round again.
      */
-    private Result afterRefusal(CcdCreationAttempt claimed, int tries, RuntimeException failure) {
+    private Result afterRefusal(CcdCreationAttempt claimed, String claimant, int tries, RuntimeException failure) {
         String detail = "Submission refused: " + describe(failure);
         if (deedPolls.findCcdCaseReference(claimed.getDeedPollId()).isPresent()) {
-            return awaitConfirmation(claimed, detail);
+            return awaitConfirmation(claimed, claimant, tries, detail);
         }
-        return nothingCreated(claimed, tries, detail);
+        return nothingCreated(claimed, claimant, tries, detail);
     }
 
-    private Result nothingCreated(CcdCreationAttempt claimed, int tries, String detail) {
-        return CcdLinkingRule.mayTryAgain(tries, linking.maxAttempts())
-            ? moved(claimed, Claimed, Pending, detail, Result.RETRY_LATER)
-            : moved(claimed, Claimed, NeedsRepair, detail + "; no attempts left", Result.NEEDS_REPAIR);
+    private Result nothingCreated(CcdCreationAttempt claimed, String claimant, int tries, String detail) {
+        if (!CcdLinkingRule.mayTryAgain(tries, linking.maxAttempts())) {
+            // Recorded as proven to have created nothing (V24), so an admin can still retry from scratch: every try
+            // came here, and a refusal sets submissionMayHaveReached as surely as a lost answer does.
+            return attempts.exhaust(claimed.getId(), claimant, tries, detail + "; no attempts left")
+                ? Result.NEEDS_REPAIR
+                : current(claimed.getDeedPollId());
+        }
+        return attempts.release(claimed.getId(), claimant, tries, detail,
+                CcdLinkingRule.nextDue(AuditClock.now(), linking.retryAfter(), tries))
+            ? Result.RETRY_LATER
+            : current(claimed.getDeedPollId());
     }
 
-    private Result awaitConfirmation(CcdCreationAttempt claimed, String detail) {
-        if (!attempts.move(claimed.getId(), Claimed, AwaitingConfirmation, detail)) {
+    private Result awaitConfirmation(CcdCreationAttempt claimed, String claimant, int tries, String detail) {
+        if (!attempts.moveClaim(claimed.getId(), claimant, tries, AwaitingConfirmation, detail)) {
             return current(claimed.getDeedPollId());
         }
         return reconcileNow(claimed.getDeedPollId());
@@ -273,7 +327,10 @@ public class CcdLinkingService {
 
         return switch (CcdLinkingRule.reconcile(confirmation, settled)) {
             case LINK -> moved(waiting, AwaitingConfirmation, Linked, null, Result.LINKED);
-            case WAIT -> Result.AWAITING_CONFIRMATION;
+            // A bound record whose case CCD would not show: the read failed, not the record.
+            case WAIT -> binding.isPresent() && confirmation.isEmpty()
+                ? Result.CCD_UNANSWERED
+                : Result.AWAITING_CONFIRMATION;
             case REPAIR -> repair(waiting, binding.isPresent(), confirmation.isPresent());
         };
     }
@@ -286,10 +343,15 @@ public class CcdLinkingService {
                 ? Result.NEEDS_REPAIR
                 : current(waiting.getDeedPollId());
         }
-        String detail = ccdRead
-            ? "CCD's case does not match the record's binding"
-            : "CCD could not be read to confirm the record's binding within the settle window";
-        return moved(waiting, AwaitingConfirmation, NeedsRepair, detail, Result.NEEDS_REPAIR);
+        if (ccdRead) {
+            return moved(waiting, AwaitingConfirmation, NeedsRepair,
+                "CCD's case does not match the record's binding", Result.NEEDS_REPAIR);
+        }
+        // A person settles it, but the read failed, so a sweep must hear that CCD is unwell and stop -- whoever's move
+        // won: a concurrent reconciliation that moved it first changes nothing about what this caller's read found.
+        attempts.move(waiting.getId(), AwaitingConfirmation, NeedsRepair,
+            "CCD could not be read to confirm the record's binding within the settle window");
+        return Result.CCD_UNANSWERED;
     }
 
     /**
@@ -305,12 +367,52 @@ public class CcdLinkingService {
         }
     }
 
+    /**
+     * Who holds one claim: the worker's name, for diagnosis, and a token no other claim has, for identity. It fits
+     * {@code "claimedBy"} because {@link CcdLinkingProperties} bounds the name.
+     */
+    static String claimant(String worker) {
+        return worker + CLAIM_SEPARATOR + UUID.randomUUID();
+    }
+
+    /**
+     * A submission got no answer: the claim moves to {@code AwaitingConfirmation} and is read at once. The result is
+     * {@code CCD_UNANSWERED}, so that a sweep stops, unless this caller's own read of CCD answered otherwise. A lost
+     * race reads nothing, so whatever the attempt says now -- another caller moved it to {@code NeedsRepair}, say,
+     * while this one stalled -- changes nothing about what this call met.
+     */
+    private Result afterNoAnswer(CcdCreationAttempt claimed, String claimant, int tries, String detail) {
+        if (!attempts.moveClaim(claimed.getId(), claimant, tries, AwaitingConfirmation, detail)) {
+            return Result.CCD_UNANSWERED;
+        }
+        return attempts.live(claimed.getDeedPollId())
+            .filter(attempt -> attempt.getStatus() == AwaitingConfirmation)
+            .map(this::reconcile)
+            .filter(result -> result != Result.AWAITING_CONFIRMATION)
+            .orElse(Result.CCD_UNANSWERED);
+    }
+
     private Result moved(CcdCreationAttempt attempt,
                          CcdCreationAttemptStatus from,
                          CcdCreationAttemptStatus to,
                          String detail,
                          Result result) {
         return attempts.move(attempt.getId(), from, to, detail) ? result : current(attempt.getDeedPollId());
+    }
+
+    /**
+     * As {@link #moved}, out of this worker's own claim: every move a worker makes out of {@code Claimed} is keyed on
+     * its claim, so one stalled past its lease cannot settle a fresh claim granted since.
+     */
+    private Result claimMoved(CcdCreationAttempt claimed,
+                              String claimant,
+                              int tries,
+                              CcdCreationAttemptStatus to,
+                              String detail,
+                              Result result) {
+        return attempts.moveClaim(claimed.getId(), claimant, tries, to, detail)
+            ? result
+            : current(claimed.getDeedPollId());
     }
 
     /** What the record's attempt says now, for a caller whose own move lost a race. */

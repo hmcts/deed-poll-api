@@ -7,7 +7,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdCreationAttempts;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
@@ -16,6 +19,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 
 import java.sql.Timestamp;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -62,6 +66,9 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @BeforeEach
     @AfterEach
@@ -115,7 +122,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         CcdCreationAttempt attempt = opened(deedPollId);
         assertThat(attempts.open(deedPollId)).as("Pending").isEmpty();
 
-        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isTrue();
+        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isPresent();
         assertThat(attempts.open(deedPollId)).as("Claimed").isEmpty();
 
         assertThat(attempts.move(attempt.getId(), Claimed, AwaitingConfirmation, null)).isTrue();
@@ -155,8 +162,8 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
     void claimIsExclusive() {
         CcdCreationAttempt attempt = opened(newCase());
 
-        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isTrue();
-        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isFalse();
+        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isPresent();
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isEmpty();
 
         CcdCreationAttempt claimed = repository.findById(attempt.getId()).orElseThrow();
         assertThat(claimed.getStatus()).isEqualTo(Claimed);
@@ -166,19 +173,103 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("a released claim can be taken again, and the second try is counted too")
+    @DisplayName("a released claim can be taken again once due, and the second try is counted too")
     void releasedClaimCountsAgain() {
         CcdCreationAttempt attempt = opened(newCase());
         attempts.claim(attempt.getId(), "worker-1", LEASE);
 
-        assertThat(attempts.move(attempt.getId(), Claimed, Pending, "CCD unavailable")).isTrue();
+        assertThat(attempts.release(attempt.getId(), "worker-1", 1, "CCD unavailable",
+            AuditClock.now().minusSeconds(1))).isTrue();
         CcdCreationAttempt released = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(released.getStatus()).isEqualTo(Pending);
         assertThat(released.getClaimedBy()).isNull();
         assertThat(released.getLeaseExpiresAt()).isNull();
         assertThat(released.getFailureDetail()).isEqualTo("CCD unavailable");
+        assertThat(released.getNotBefore()).isNotNull();
 
-        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isTrue();
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isPresent();
         assertThat(repository.findById(attempt.getId()).orElseThrow().getAttempts()).isEqualTo(2);
+        // A release is from Claimed only, so a second one changes nothing.
+        assertThat(attempts.release(attempt.getId(), "worker-2", 2, "stale", AuditClock.now())).isTrue();
+        assertThat(attempts.release(attempt.getId(), "worker-2", 2, "stale again", AuditClock.now())).isFalse();
+    }
+
+    @Test
+    @DisplayName("a release is only for the claim's own worker at its own try, so a stale worker frees no fresh claim")
+    void releaseIsConditionalOnTheClaim() {
+        CcdCreationAttempt attempt = opened(newCase());
+        UUID id = attempt.getId();
+        attempts.claim(id, "worker-2", LEASE);
+
+        assertThat(attempts.release(id, "worker-1", 1, "stale", AuditClock.now())).as("another worker").isFalse();
+        assertThat(attempts.release(id, "worker-2", 2, "stale", AuditClock.now())).as("another try").isFalse();
+        CcdCreationAttempt held = repository.findById(id).orElseThrow();
+        assertThat(held.getStatus()).isEqualTo(Claimed);
+        assertThat(held.getClaimedBy()).isEqualTo("worker-2");
+
+        assertThat(attempts.release(id, "worker-2", 1, "refused", AuditClock.now())).isTrue();
+    }
+
+    @Test
+    @DisplayName("a worker's move out of Claimed is only for its own claim at its own try, and releases the claim")
+    void moveClaimIsConditionalOnTheClaim() {
+        CcdCreationAttempt attempt = opened(newCase());
+        UUID id = attempt.getId();
+        attempts.claim(id, "worker-2", LEASE);
+
+        assertThat(attempts.moveClaim(id, "worker-1", 1, NeedsRepair, "stale")).as("another worker").isFalse();
+        assertThat(attempts.moveClaim(id, "worker-2", 2, NeedsRepair, "stale")).as("another try").isFalse();
+        assertThat(repository.findById(id).orElseThrow().getStatus()).isEqualTo(Claimed);
+
+        assertThat(attempts.moveClaim(id, "worker-2", 1, NeedsRepair, "no attempts left")).isTrue();
+        CcdCreationAttempt repaired = repository.findById(id).orElseThrow();
+        assertThat(repaired.getStatus()).isEqualTo(NeedsRepair);
+        assertThat(repaired.getClaimedBy()).isNull();
+        assertThat(repaired.getLeaseExpiresAt()).isNull();
+        assertThat(repaired.getFailureDetail()).isEqualTo("no attempts left");
+    }
+
+    @Test
+    @DisplayName("a released attempt is not claimed before its notBefore, and is claimed once it has passed")
+    void releasedAttemptWaits() {
+        CcdCreationAttempt attempt = opened(newCase());
+        attempts.claim(attempt.getId(), "worker-1", LEASE);
+        attempts.release(attempt.getId(), "worker-1", 1, "refused", AuditClock.now().plusMinutes(5));
+
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isEmpty();
+        CcdCreationAttempt waiting = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(waiting.getStatus()).isEqualTo(Pending);
+        assertThat(waiting.getAttempts()).isOne();
+
+        jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"notBefore\" = ? WHERE \"id\" = ?",
+            Timestamp.valueOf(AuditClock.now().minusSeconds(1)), attempt.getId());
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isPresent();
+    }
+
+    @Test
+    @DisplayName("the submission flag is written only for the claim's own worker, at its own try, under a live lease")
+    void recordSubmissionIsConditional() {
+        CcdCreationAttempt attempt = opened(newCase());
+        UUID id = attempt.getId();
+        assertThat(attempts.recordSubmission(id, "worker-1", 1)).as("not claimed").isFalse();
+        attempts.claim(id, "worker-1", LEASE);
+
+        assertThat(attempts.recordSubmission(id, "worker-2", 1)).as("another worker").isFalse();
+        assertThat(attempts.recordSubmission(id, "worker-1", 2)).as("another try").isFalse();
+        assertThat(repository.findById(id).orElseThrow().isSubmissionMayHaveReached()).isFalse();
+
+        assertThat(attempts.recordSubmission(id, "worker-1", 1)).isTrue();
+        assertThat(repository.findById(id).orElseThrow().isSubmissionMayHaveReached()).isTrue();
+
+        // Released, the flag stays: it records the attempt's history, and nothing resets it.
+        attempts.release(id, "worker-1", 1, "refused", AuditClock.now().minusSeconds(1));
+        assertThat(repository.findById(id).orElseThrow().isSubmissionMayHaveReached()).isTrue();
+        attempts.claim(id, "worker-1", LEASE);
+        assertThat(repository.findById(id).orElseThrow().isSubmissionMayHaveReached()).isTrue();
+
+        jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"leaseExpiresAt\" = ? WHERE \"id\" = ?",
+            Timestamp.valueOf(AuditClock.now().minusSeconds(1)), id);
+        assertThat(attempts.recordSubmission(id, "worker-1", 2)).as("an expired lease").isFalse();
     }
 
     @Test
@@ -232,6 +323,95 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(repository.findById(second.getId()).orElseThrow().getStatus()).isEqualTo(AwaitingConfirmation);
     }
 
+    @Test
+    @DisplayName("the sweep selects unlinked records with no live attempt or a due Pending one, oldest first")
+    void dueForLinkingSelectsOnlyDueWork() {
+        String bound = caseCreatedDaysAgo(9);
+        jdbc.update("UPDATE \"deedpoll_deedpoll\" SET \"ccdCaseReference\" = '1234567890123456' WHERE \"id\" = ?",
+            bound);
+        final String fresh = caseCreatedDaysAgo(8);
+        String notDue = caseCreatedDaysAgo(7);
+        CcdCreationAttempt waiting = opened(notDue);
+        attempts.claim(waiting.getId(), "worker-1", LEASE);
+        attempts.release(waiting.getId(), "worker-1", 1, "refused", AuditClock.now().plusMinutes(5));
+        String due = caseCreatedDaysAgo(6);
+        CcdCreationAttempt released = opened(due);
+        attempts.claim(released.getId(), "worker-1", LEASE);
+        attempts.release(released.getId(), "worker-1", 1, "refused", AuditClock.now().minusSeconds(1));
+        String claimed = caseCreatedDaysAgo(5);
+        attempts.claim(opened(claimed).getId(), "worker-1", LEASE);
+        awaiting(caseCreatedDaysAgo(4));
+        CcdCreationAttempt stuck = awaiting(caseCreatedDaysAgo(3));
+        attempts.move(stuck.getId(), AwaitingConfirmation, NeedsRepair, "stuck");
+        String opened = caseCreatedDaysAgo(2);
+        opened(opened);
+        String newest = caseCreatedDaysAgo(1);
+
+        assertThat(attempts.dueForLinking(10)).containsExactly(fresh, due, opened, newest);
+        assertThat(attempts.dueForLinking(2)).containsExactly(fresh, due);
+    }
+
+    @Test
+    @DisplayName("linking rows while a sweep runs skips none: the selection is always the head, never an offset")
+    void dueForLinkingNeverSkips() {
+        String first = caseCreatedDaysAgo(3);
+        String second = caseCreatedDaysAgo(2);
+        String third = caseCreatedDaysAgo(1);
+        assertThat(attempts.dueForLinking(2)).containsExactly(first, second);
+
+        // The first is claimed by this sweep; a second page by offset would now start at nothing.
+        attempts.claim(opened(first).getId(), "worker-1", LEASE);
+        assertThat(attempts.dueForLinking(2)).containsExactly(second, third);
+
+        // The second is bound by another pod's sweep: the third is next, not skipped.
+        jdbc.update("UPDATE \"deedpoll_deedpoll\" SET \"ccdCaseReference\" = '1234567890123456' WHERE \"id\" = ?",
+            second);
+        assertThat(attempts.dueForLinking(2)).containsExactly(third);
+    }
+
+    @Test
+    @DisplayName("ties on createdOn are broken by id, so the order is total and repeatable")
+    void dueForLinkingBreaksTiesById() {
+        String one = caseCreatedDaysAgo(1);
+        String other = caseCreatedDaysAgo(1);
+        jdbc.update("UPDATE \"deedpoll_deedpoll\" SET \"createdOn\" = (SELECT \"createdOn\" FROM \"deedpoll_deedpoll\""
+            + " WHERE \"id\" = ?) WHERE \"id\" = ?", one, other);
+
+        assertThat(attempts.dueForLinking(2)).containsExactly(one.compareTo(other) < 0
+            ? new String[] {one, other} : new String[] {other, one});
+    }
+
+    @Test
+    @DisplayName("the sweep's outstanding attempts are the expired claims first, then those awaiting, bounded")
+    void outstandingIsBounded() {
+        CcdCreationAttempt olderWait = awaiting(newCase());
+        jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"modifiedOn\" = ? WHERE \"id\" = ?",
+            Timestamp.valueOf(AuditClock.now().minusHours(1)), olderWait.getId());
+        final CcdCreationAttempt newerWait = awaiting(newCase());
+        CcdCreationAttempt expired = opened(newCase());
+        attempts.claim(expired.getId(), "worker-1", LEASE);
+        jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"leaseExpiresAt\" = ? WHERE \"id\" = ?",
+            Timestamp.valueOf(AuditClock.now().minusMinutes(1)), expired.getId());
+        attempts.claim(opened(newCase()).getId(), "worker-1", LEASE);
+
+        assertThat(attempts.outstanding(5)).extracting(CcdCreationAttempt::getId)
+            .containsExactly(expired.getId(), olderWait.getId(), newerWait.getId());
+        assertThat(attempts.outstanding(2)).extracting(CcdCreationAttempt::getId)
+            .containsExactly(expired.getId(), olderWait.getId());
+        assertThat(attempts.outstanding(1)).extracting(CcdCreationAttempt::getId)
+            .containsExactly(expired.getId());
+    }
+
+    /**
+     * A record whose createdOn is {@code days} ago, so the sweep's order is the test's to choose.
+     */
+    private String caseCreatedDaysAgo(int days) {
+        String id = newCase();
+        jdbc.update("UPDATE \"deedpoll_deedpoll\" SET \"createdOn\" = ? WHERE \"id\" = ?",
+            Timestamp.valueOf(AuditClock.now().minusDays(days)), id);
+        return id;
+    }
+
     private CcdCreationAttempt awaiting(String deedPollId) {
         CcdCreationAttempt attempt = opened(deedPollId);
         attempts.claim(attempt.getId(), "worker-1", LEASE);
@@ -239,12 +419,242 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         return repository.findById(attempt.getId()).orElseThrow();
     }
 
+    /** An attempt taken to NeedsRepair, with its submission flag set as asked, through the statements that do so. */
+    private CcdCreationAttempt needingRepair(String deedPollId, boolean submitted) {
+        CcdCreationAttempt attempt = opened(deedPollId);
+        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isPresent();
+        if (submitted) {
+            assertThat(attempts.recordSubmission(attempt.getId(), "worker-1", 1)).isTrue();
+        }
+        assertThat(attempts.move(attempt.getId(), Claimed, NeedsRepair, "CCD refused the submission (422)")).isTrue();
+        return repository.findById(attempt.getId()).orElseThrow();
+    }
+
+    @Test
+    @DisplayName("reconcile again moves only NeedsRepair, attributed, keeping why it needed repair")
+    void reconcileAgainIsConditionalAndAttributed() {
+        CcdCreationAttempt attempt = needingRepair(newCase(), true);
+        // A day unmoved, as an attempt waiting for a person is: the repair has to move it, not merely not move it back.
+        jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"modifiedOn\" = \"modifiedOn\" - interval '1 day' "
+            + "WHERE \"id\" = ?", attempt.getId());
+        LocalDateTime aged = repository.findById(attempt.getId()).orElseThrow().getModifiedOn();
+
+        assertThat(attempts.reconcileAgain(attempt.getId(), "idam-admin")).isTrue();
+        assertThat(attempts.reconcileAgain(attempt.getId(), "idam-admin")).as("no longer NeedsRepair").isFalse();
+
+        CcdCreationAttempt repaired = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(repaired.getStatus()).isEqualTo(AwaitingConfirmation);
+        assertThat(repaired.getRepairedById()).isEqualTo("idam-admin");
+        assertThat(repaired.getRepairedOn()).isNotNull();
+        assertThat(repaired.getModifiedOn()).as("the settle window restarts").isAfter(aged.plusHours(23));
+        assertThat(repaired.getFailureDetail()).isEqualTo("CCD refused the submission (422)");
+        assertThat(repaired.isSubmissionMayHaveReached()).isTrue();
+        assertThat(repaired.getOperationId()).isEqualTo(attempt.getOperationId());
+        assertThat(deedPolls.findById(attempt.getDeedPollId()).orElseThrow().getCcdCaseReference()).isNull();
+    }
+
+    @Test
+    @DisplayName("a retry from scratch resets the tries and is due now, attributed, keeping the operation id")
+    void retryFromScratchResets() {
+        CcdCreationAttempt attempt = needingRepair(newCase(), false);
+
+        assertThat(attempts.retryFromScratch(attempt.getId(), "idam-admin")).isTrue();
+        assertThat(attempts.retryFromScratch(attempt.getId(), "idam-admin")).as("no longer NeedsRepair").isFalse();
+
+        CcdCreationAttempt retried = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(retried.getStatus()).isEqualTo(Pending);
+        assertThat(retried.getAttempts()).isZero();
+        assertThat(retried.getNotBefore()).isNotNull().isBeforeOrEqualTo(AuditClock.now());
+        assertThat(retried.getClaimedBy()).isNull();
+        assertThat(retried.getLeaseExpiresAt()).isNull();
+        assertThat(retried.getRepairedById()).isEqualTo("idam-admin");
+        assertThat(retried.getRepairedOn()).isNotNull();
+        assertThat(retried.getOperationId()).isEqualTo(attempt.getOperationId());
+        assertThat(deedPolls.findById(attempt.getDeedPollId()).orElseThrow().getCcdCaseReference()).isNull();
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).as("due at once").isPresent();
+    }
+
+    @Test
+    @DisplayName("the statement itself refuses a retry from scratch once a submission may have reached CCD")
+    void retryFromScratchRefusedInSql() {
+        CcdCreationAttempt attempt = needingRepair(newCase(), true);
+
+        // The repository directly, past the service's own check: the SQL must refuse on its own.
+        Integer moved = new TransactionTemplate(transactionManager)
+            .execute(status -> repository.retryFromScratch(attempt.getId(), "idam-admin", AuditClock.now()));
+        assertThat(moved).isZero();
+
+        CcdCreationAttempt untouched = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(untouched.getStatus()).isEqualTo(NeedsRepair);
+        assertThat(untouched.getAttempts()).isEqualTo(1);
+        assertThat(untouched.getRepairedById()).isNull();
+    }
+
+    @Test
+    @DisplayName("exhausting is only for the claim's own worker at its own try, and records that nothing was created")
+    void exhaustIsConditionalOnTheClaim() {
+        CcdCreationAttempt attempt = opened(newCase());
+        UUID id = attempt.getId();
+        attempts.claim(id, "worker-2", LEASE);
+        attempts.recordSubmission(id, "worker-2", 1);
+
+        assertThat(attempts.exhaust(id, "worker-1", 1, "stale")).as("another worker").isFalse();
+        assertThat(attempts.exhaust(id, "worker-2", 2, "stale")).as("another try").isFalse();
+        assertThat(repository.findById(id).orElseThrow().isProvenNothingCreated()).isFalse();
+
+        assertThat(attempts.exhaust(id, "worker-2", 1, "Submission refused: 422; no attempts left")).isTrue();
+        CcdCreationAttempt exhausted = repository.findById(id).orElseThrow();
+        assertThat(exhausted.getStatus()).isEqualTo(NeedsRepair);
+        assertThat(exhausted.getClaimedBy()).isNull();
+        assertThat(exhausted.getLeaseExpiresAt()).isNull();
+        assertThat(exhausted.getFailureDetail()).isEqualTo("Submission refused: 422; no attempts left");
+        assertThat(exhausted.isSubmissionMayHaveReached()).isTrue();
+        assertThat(exhausted.isProvenNothingCreated()).isTrue();
+        assertThat(attempts.exhaust(id, "worker-2", 1, "again")).as("no longer Claimed").isFalse();
+    }
+
+    @Test
+    @DisplayName("no other way into NeedsRepair records that nothing was created")
+    void onlyExhaustProvesNothingCreated() {
+        assertThat(needingRepair(newCase(), true).isProvenNothingCreated()).as("move").isFalse();
+
+        CcdCreationAttempt claimed = opened(newCase());
+        attempts.claim(claimed.getId(), "worker-1", LEASE);
+        attempts.moveClaim(claimed.getId(), "worker-1", 1, NeedsRepair, "contradicted");
+        assertThat(repository.findById(claimed.getId()).orElseThrow().isProvenNothingCreated()).as("moveClaim")
+            .isFalse();
+
+        CcdCreationAttempt waiting = awaiting(newCase());
+        attempts.repairIfUnbound(waiting, "nothing bound");
+        assertThat(repository.findById(waiting.getId()).orElseThrow().isProvenNothingCreated()).as("repairIfUnbound")
+            .isFalse();
+    }
+
+    @Test
+    @DisplayName("an attempt that ran out of tries on refusals may be retried from scratch, which clears the proof")
+    void retryFromScratchOpenOnceProvenAndClearsIt() {
+        CcdCreationAttempt attempt = exhausted(newCase());
+
+        // The repository directly: the SQL must allow it on its own, as it refuses on its own.
+        Integer moved = new TransactionTemplate(transactionManager)
+            .execute(status -> repository.retryFromScratch(attempt.getId(), "idam-admin", AuditClock.now()));
+        assertThat(moved).isOne();
+
+        CcdCreationAttempt retried = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(retried.getStatus()).isEqualTo(Pending);
+        assertThat(retried.getAttempts()).isZero();
+        assertThat(retried.isSubmissionMayHaveReached()).as("the attempt's history").isTrue();
+        assertThat(retried.isProvenNothingCreated()).as("the fresh run must earn its own").isFalse();
+
+        // The fresh run's outcome is unknown this time: nothing proves it, so the flag refuses the second retry.
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).hasValue(1);
+        assertThat(attempts.moveClaim(attempt.getId(), "worker-2", 1, AwaitingConfirmation, "unknown")).isTrue();
+        assertThat(attempts.repairIfUnbound(repository.findById(attempt.getId()).orElseThrow(), "unbound")).isTrue();
+        assertThat(attempts.retryFromScratch(attempt.getId(), "idam-admin")).isFalse();
+        assertThat(repository.findById(attempt.getId()).orElseThrow().getStatus()).isEqualTo(NeedsRepair);
+    }
+
+    @Test
+    @DisplayName("reconcile again keeps the proof, so an admin who reconciled first can still retry")
+    void reconcileAgainKeepsTheProof() {
+        CcdCreationAttempt attempt = exhausted(newCase());
+
+        assertThat(attempts.reconcileAgain(attempt.getId(), "idam-admin")).isTrue();
+        assertThat(repository.findById(attempt.getId()).orElseThrow().isProvenNothingCreated()).isTrue();
+        // Reconciliation finds nothing bound and gives it back, still proven.
+        assertThat(attempts.repairIfUnbound(repository.findById(attempt.getId()).orElseThrow(), "unbound")).isTrue();
+        CcdCreationAttempt back = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(back.getStatus()).isEqualTo(NeedsRepair);
+        assertThat(back.isProvenNothingCreated()).isTrue();
+
+        assertThat(attempts.retryFromScratch(attempt.getId(), "idam-admin")).isTrue();
+    }
+
+    /** An attempt that ran out of tries on a refused submission: submitted, then exhausted by its own worker. */
+    private CcdCreationAttempt exhausted(String deedPollId) {
+        CcdCreationAttempt attempt = opened(deedPollId);
+        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isPresent();
+        assertThat(attempts.recordSubmission(attempt.getId(), "worker-1", 1)).isTrue();
+        assertThat(attempts.exhaust(attempt.getId(), "worker-1", 1, "Submission refused: 422; no attempts left"))
+            .isTrue();
+        return repository.findById(attempt.getId()).orElseThrow();
+    }
+
+    @Test
+    @DisplayName("a repair leaves a bound record's reference as it was")
+    void repairTouchesNoBinding() {
+        String deedPollId = newCase();
+        CcdCreationAttempt attempt = needingRepair(deedPollId, false);
+        jdbc.update("UPDATE \"deedpoll_deedpoll\" SET \"ccdCaseReference\" = ? WHERE \"id\" = ?", "1234567890123456",
+            deedPollId);
+
+        assertThat(attempts.retryFromScratch(attempt.getId(), "idam-admin")).isTrue();
+
+        assertThat(deedPolls.findById(deedPollId).orElseThrow().getCcdCaseReference()).isEqualTo("1234567890123456");
+    }
+
+    @Test
+    @DisplayName("concurrent repairs of one attempt make exactly one move")
+    void concurrentRepairsMakeOneMove() throws Exception {
+        CcdCreationAttempt attempt = needingRepair(newCase(), false);
+
+        List<Boolean> results = race(worker -> worker % 2 == 0
+            ? attempts.reconcileAgain(attempt.getId(), "idam-admin-" + worker)
+            : attempts.retryFromScratch(attempt.getId(), "idam-admin-" + worker));
+
+        assertThat(results).containsOnlyOnce(true);
+        assertThat(repository.findById(attempt.getId()).orElseThrow().getRepairedById()).startsWith("idam-admin-");
+    }
+
+    @Test
+    @DisplayName("the repair view reads counts per status, the unlinked attempts a page at a time, and one by id")
+    void theRepairViewReads() {
+        DeedPoll referenced = new DeedPoll();
+        referenced.setDisplayReference("KBDP2026-000042");
+        String first = deedPolls.save(referenced).getId();
+        CcdCreationAttempt repair = needingRepair(first, true);
+        final CcdCreationAttempt pending = opened(newCase());
+        CcdCreationAttempt linked = opened(newCase());
+        // The repair item has waited longest, so it heads the list.
+        jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"modifiedOn\" = \"modifiedOn\" - interval '1 day' "
+            + "WHERE \"id\" = ?", repair.getId());
+        assertThat(attempts.claim(linked.getId(), "worker-1", LEASE)).isPresent();
+        assertThat(attempts.move(linked.getId(), Claimed, Linked, null)).isTrue();
+
+        assertThat(attempts.countsByStatus())
+            .containsEntry(NeedsRepair, 1L)
+            .containsEntry(Pending, 1L)
+            .containsEntry(Linked, 1L)
+            .containsEntry(Claimed, 0L)
+            .containsEntry(AwaitingConfirmation, 0L);
+
+        var all = attempts.unlinked(Optional.empty(), PageRequest.of(0, 1));
+        assertThat(all.getTotalElements()).isEqualTo(2);
+        assertThat(all.getContent()).hasSize(1);
+        var second = attempts.unlinked(Optional.empty(), PageRequest.of(1, 1));
+        assertThat(List.of(all.getContent().get(0).id(), second.getContent().get(0).id()))
+            .containsExactly(repair.getId(), pending.getId());
+
+        var narrowed = attempts.unlinked(Optional.of(NeedsRepair), PageRequest.of(0, 10));
+        assertThat(narrowed.getContent()).singleElement().satisfies(row -> {
+            assertThat(row.id()).isEqualTo(repair.getId());
+            assertThat(row.displayReference()).isEqualTo("KBDP2026-000042");
+            assertThat(row.submissionMayHaveReached()).isTrue();
+            assertThat(row.provenNothingCreated()).isFalse();
+            assertThat(row.attempts()).isEqualTo(1);
+        });
+        assertThat(attempts.unlinked(Optional.of(Linked), PageRequest.of(0, 10))
+                       .getContent()).extracting(CcdAttemptRow::id).containsExactly(linked.getId());
+        assertThat(attempts.row(pending.getId())).map(CcdAttemptRow::status).contains(Pending);
+        assertThat(attempts.row(UUID.randomUUID())).isEmpty();
+    }
+
     @Test
     @DisplayName("concurrent claims on one attempt yield exactly one winner")
     void concurrentClaimsYieldOneWinner() throws Exception {
         CcdCreationAttempt attempt = opened(newCase());
 
-        List<Boolean> results = race(worker -> attempts.claim(attempt.getId(), "worker-" + worker, LEASE));
+        List<Boolean> results = race(worker -> attempts.claim(attempt.getId(), "worker-" + worker, LEASE).isPresent());
 
         assertThat(results).containsOnlyOnce(true);
         CcdCreationAttempt claimed = repository.findById(attempt.getId()).orElseThrow();
@@ -300,7 +710,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
 
         // Through the service the same text is written, cut to fit.
         attempts.claim(attempt.getId(), "worker-1", LEASE);
-        assertThat(attempts.move(attempt.getId(), Claimed, Pending, tooLong)).isTrue();
+        assertThat(attempts.release(attempt.getId(), "worker-1", 1, tooLong, AuditClock.now())).isTrue();
         assertThat(repository.findById(attempt.getId()).orElseThrow().getFailureDetail())
             .hasSize(CcdCreationAttempt.MAX_FAILURE_DETAIL);
     }
