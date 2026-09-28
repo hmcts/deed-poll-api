@@ -138,7 +138,33 @@ changing anything.
   - where cftlib reads CDAM's service-to-case-type permissions, so Task 5 can add the placeholder.
 - Add nothing to `src/` in this task.
 
-- [ ] baseline recorded, `CDAM-SEQUENCE.md` written with citations, the attach stage and the dm-store override
+**Recorded 2026-09-28**, on this branch at `b2d594e` (master plus this plan; no `src/` change since `b2679fe`),
+counted from `build/test-results/`:
+
+| Run | `test` | `integration` | Result |
+|---|---|---|---|
+| `./gradlew cleanTest cleanIntegration build` | **3304** | **14** | all green, 0 failures, 0 errors, 0 skipped (4m 46s) |
+| `INTEGRATION_TESTS_ENABLED=false ./gradlew cleanTest cleanIntegration build` | **2208** | not run | all green, 0 failures, 0 errors, 0 skipped (1m 18s) |
+
+**The answers, in [`docs/CDAM-SEQUENCE.md`](../CDAM-SEQUENCE.md):**
+- **Attach is data-store's**, on the decentralised path too. It calls `attachToCase` before it calls
+  `/ccd-persistence`, on creation and on every event, using the `document_hash` in the event payload. Then it
+  strips the hash before the data reaches us. This service never calls `attachToCase` and needs no ATTACH.
+- **The dm-store URL can be overridden without patching cftlib.** Decision 2's premise, that cftlib points CDAM at
+  AAT's dm-store, holds only in AAT auth mode. This service runs `authMode = Local`, where cftlib leaves
+  `DM_STORE_BASE_URL` unset and CDAM defaults to `localhost:4506`. Set it on the `cftlibTest` task's environment,
+  or run the stub on 4506. Decision 2 stands.
+- **To be handled in later tasks:**
+  - CDAM's service permissions are replaced, not appended to (Task 5). The whole `authServices` list, including
+    `ccd_data`, goes in through environment variables. That is inferred, not yet proven.
+  - `deed_poll_api` must be added to CDAM's S2S allow-list in cftlib.
+  - Data-store's `ccd.document.url.pattern` expects a `dm-store:8080` host, so the stub's hrefs must match it
+    (Task 6).
+  - A download needs the system user's role granted READ on the document field (Task 5).
+- **Limits:** CDAM 1024 MB with no MIME check; dm-store 500/1024, detected-type whitelist covering all six of
+  ours. Not tighter than `UploadPolicy`'s 25 MB. Nothing to flag.
+
+- [x] baseline recorded, `CDAM-SEQUENCE.md` written with citations, the attach stage and the dm-store override
       answered (or flagged), and the build is green
 
 ### Task 2: Evolve the seam
