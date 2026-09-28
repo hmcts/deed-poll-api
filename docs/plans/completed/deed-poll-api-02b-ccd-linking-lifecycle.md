@@ -1,9 +1,9 @@
 # Plan 02b — CCD linking lifecycle: link at creation, and a way out of `NeedsRepair`
 
-Status: **ready for ralphex, 2026-09-27: every decision and all three flags settled with Steve.** Depends on [plan 02](completed/deed-poll-api-02-ccd-foundation.md),
-which built the linking operation and left it uncalled. Comes before [plan 03](deed-poll-api-03-cdam-documents.md),
+Status: **complete 2026-09-27 — all six tasks done on branch `deed-poll-api-02b-ccd-linking-lifecycle`, not yet merged; every decision and all three flags settled with Steve beforehand.** Onboarding is still open, so the sweep stays off and every identifier is a placeholder. Depends on [plan 02](deed-poll-api-02-ccd-foundation.md),
+which built the linking operation and left it uncalled. Comes before [plan 03](../deed-poll-api-03-cdam-documents.md),
 whose "link first" decision (Steve, 2026-09-27) means document code only ever sees a record that already has a
-CCD case. It also absorbs the linking half of [ccd-migration](ccd-migration.md), which is now Dataverse
+CCD case. It also absorbs the linking half of [ccd-migration](../ccd-migration.md), which is now Dataverse
 ingestion only.
 
 ## Overview
@@ -86,7 +86,7 @@ The sweep ships **switched off**, and switching it on is part of onboarding.
 
 ## Constraints
 
-- Everything in [`CLAUDE.md`](../../CLAUDE.md), in particular:
+- Everything in [`CLAUDE.md`](../../../CLAUDE.md), in particular:
   - never edit a committed migration (the next free one is **V23**);
   - no live calls to CCD, IDAM or S2S in any test — WireMock only;
   - no secrets;
@@ -322,8 +322,8 @@ before changing anything.
   payment plan's.
 - A manual bind, unbind or replacement of `ccdCaseReference`.
 - The admin screen; publishing `ccdCaseReference` (the payment plan's Task 8).
-- Dataverse ingestion: [ccd-migration](ccd-migration.md). Its imported records are linked by this plan's sweep.
-- Documents and CDAM: [plan 03](deed-poll-api-03-cdam-documents.md).
+- Dataverse ingestion: [ccd-migration](../ccd-migration.md). Its imported records are linked by this plan's sweep.
+- Documents and CDAM: [plan 03](../deed-poll-api-03-cdam-documents.md).
 
 ---
 

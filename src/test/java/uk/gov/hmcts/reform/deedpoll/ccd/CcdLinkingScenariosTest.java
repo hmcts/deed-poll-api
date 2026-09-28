@@ -29,6 +29,8 @@ import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.auth.StubS2s;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingService.Result;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
@@ -96,6 +98,8 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
     private static final String CCD_DATA = "ccd-data-s2s-token";
     private static final long REFERENCES_BASE = 1_700_000_000_000_000L;
     private static final AtomicLong DISPLAY_SERIALS = new AtomicLong(1);
+    private static final CurrentUser ADMIN =
+        CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "An Admin", "idam-admin");
 
     private static final StubIdam IDAM = new StubIdam();
     private static final StubS2s S2S = new StubS2s();
@@ -150,6 +154,9 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private CcdCreationAttempts attempts;
+
+    @Autowired
+    private CcdAttemptRepairs repairs;
 
     @Autowired
     private CcdCreationAttemptRepository attemptRepository;
@@ -218,7 +225,7 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
         FAKE.loseSubmitResponse = true;
         FAKE.unreadable.set(1);
 
-        assertThat(linking.link(record)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(record)).isEqualTo(Result.CCD_UNANSWERED);
         assertThat(status(record)).isEqualTo(CcdCreationAttemptStatus.AwaitingConfirmation);
         assertThat(boundReference(record)).isNotNull();
         assertThat(submissionMayHaveReached(record)).isTrue();
@@ -247,7 +254,7 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
               FOR EACH ROW EXECUTE FUNCTION refuse_case_event_for_test()
             """);
         try {
-            assertThat(linking.link(record)).isEqualTo(Result.AWAITING_CONFIRMATION);
+            assertThat(linking.link(record)).isEqualTo(Result.CCD_UNANSWERED);
         } finally {
             jdbc.execute("DROP TRIGGER refuse_case_event ON ccd.case_event");
             jdbc.execute("DROP FUNCTION refuse_case_event_for_test()");
@@ -491,6 +498,60 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
         // The first is waiting out retry-after, so the second is the head now -- and CCD is still down.
         assertThat(listCases()).isEqualTo(answered);
         assertThat(FAKE.starts.get()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("sweep: a bound case CCD cannot read stops reconciliation after one read, and settles nothing")
+    void sweepReconciliationStopsOnAnUnreadableCase() throws Exception {
+        String first = record();
+        final String second = record();
+        FAKE.loseSubmitResponse = true;
+        FAKE.unreadable.set(Integer.MAX_VALUE);
+        assertThat(linking.link(first)).isEqualTo(Result.CCD_UNANSWERED);
+        assertThat(linking.link(second)).isEqualTo(Result.CCD_UNANSWERED);
+        FAKE.reads.set(0);
+
+        listCases();
+
+        assertThat(FAKE.reads.get()).isOne();
+        assertThat(status(first)).isEqualTo(CcdCreationAttemptStatus.AwaitingConfirmation);
+        assertThat(status(second)).isEqualTo(CcdCreationAttemptStatus.AwaitingConfirmation);
+    }
+
+    @Test
+    @DisplayName("an admin's reconciliation of a bound record is linked by the next list request, starting nothing")
+    void reconcileAgainIsLinkedByTheNextListRequest() throws Exception {
+        String record = record();
+        FAKE.loseSubmitResponse = true;
+        FAKE.unreadable.set(Integer.MAX_VALUE);
+        assertThat(linking.link(record)).isEqualTo(Result.CCD_UNANSWERED);
+        ageAttempt(record);
+        assertThat(linking.reconcileOutstanding()).isOne();
+        assertThat(status(record)).isEqualTo(CcdCreationAttemptStatus.NeedsRepair);
+
+        FAKE.unreadable.set(0);
+        repairs.reconcileAgain(attempts.live(record).orElseThrow().getId().toString(), ADMIN);
+        listCases();
+
+        assertThat(status(record)).isEqualTo(CcdCreationAttemptStatus.Linked);
+        assertThat(FAKE.starts.get()).isOne();
+        assertThat(cases()).isOne();
+    }
+
+    @Test
+    @DisplayName("an admin's reconciliation restarts the settle window: an unbound record waits, not straight back")
+    void reconcileAgainRestartsTheSettleWindow() {
+        String record = record();
+        jdbc.update("""
+            UPDATE "deedpoll_ccdcreationattempt" SET "status" = 'NeedsRepair' WHERE "deedPollId" = ?
+            """, record);
+        ageAttempt(record);
+
+        repairs.reconcileAgain(attempts.live(record).orElseThrow().getId().toString(), ADMIN);
+        assertThat(linking.reconcileOutstanding()).isOne();
+
+        assertThat(status(record)).isEqualTo(CcdCreationAttemptStatus.AwaitingConfirmation);
+        assertThat(FAKE.starts.get()).isZero();
     }
 
     @Test

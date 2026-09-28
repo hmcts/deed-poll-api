@@ -169,18 +169,12 @@ public class CcdCreationAttempts {
         if (from == CcdCreationAttemptStatus.Claimed && to == CcdCreationAttemptStatus.Pending) {
             throw new IllegalStateException("A claim is released through release(), which sets when it is next due");
         }
-        if (from == CcdCreationAttemptStatus.NeedsRepair && to == CcdCreationAttemptStatus.Pending) {
-            // Legal only while submissionMayHaveReached is false (CcdLinkingRule.mayRetryFromScratch), and this
-            // statement is conditional on the status alone -- so it would retry an attempt that may have reached CCD.
-            throw new IllegalStateException(
-                "A retry from scratch is made through retryFromScratch(), which is conditional on nothing having "
-                    + "been submitted");
-        }
         if (from == CcdCreationAttemptStatus.NeedsRepair) {
-            // Every way out of NeedsRepair is an admin's, and each is attributed (plan 02b, decision 10).
+            // Every way out of NeedsRepair is an admin's, and each is attributed (plan 02b, decision 10). The retry is
+            // also conditional on nothing having been submitted, which this statement, keyed on status alone, is not.
             throw new IllegalStateException(
                 "An attempt leaves NeedsRepair through reconcileAgain() or retryFromScratch(), which record who "
-                    + "repaired it");
+                    + "repaired it, and the retry is also conditional on nothing having been submitted");
         }
         if (!from.canMoveTo(to)) {
             throw new IllegalStateException("A CCD creation attempt cannot move from " + from + " to " + to);

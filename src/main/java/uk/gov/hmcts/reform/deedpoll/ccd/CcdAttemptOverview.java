@@ -4,7 +4,6 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
@@ -29,10 +28,8 @@ public record CcdAttemptOverview(Map<CcdCreationAttemptStatus, Long> counts,
                                  int totalPages) {
 
     public CcdAttemptOverview {
-        // Not new EnumMap<>(counts), which refuses an empty map that is not already an EnumMap.
-        Map<CcdCreationAttemptStatus, Long> ordered = new EnumMap<>(CcdCreationAttemptStatus.class);
-        ordered.putAll(counts);
-        counts = Collections.unmodifiableMap(ordered);
+        // Already every status in lifecycle order: CcdCreationAttempts.countsByStatus is the one place that does that.
+        counts = Collections.unmodifiableMap(counts);
         attempts = List.copyOf(attempts);
     }
 

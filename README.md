@@ -32,8 +32,9 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 ## The API surface
 
 Thirty-four caseworker operations across twenty-one paths, plus five judicial ones on a namespace of their
-own (below). `/swagger-ui.html` is the authority; this table is the map — and `OpenAPIPublisherTest` asserts
-both counts, so a route added without a row here is a count that stops agreeing with the spec.
+own (below), and three admin-only CCD-attempt ones (see [Repairing attempts](#repairing-attempts)).
+`/swagger-ui.html` is the authority; this table is the map — and `OpenAPIPublisherTest` asserts each count,
+so a route added without a row here is a count that stops agreeing with the spec.
 
 | Method | Path | What it does |
 |---|---|---|
@@ -340,14 +341,15 @@ so that an unconfigured environment refuses every token** rather than trusting a
 
 Roles come from `/o/userinfo`, not from the token — an IDAM access token carries no roles at all — and
 the lookup is deliberately uncached, so a role removed in IDAM is gone from the next request. The one
-role modelled is `caseworker-deedpoll-admin`, and it gates four things: whether `privacy` is editable,
-deleting a note, deleting a witness, and publishing or amending a *shared* saved query.
+role modelled is `caseworker-deedpoll-admin`, and it gates five things: whether `privacy` is editable,
+deleting a note, deleting a witness, publishing or amending a *shared* saved query, and the
+`/caseworker/ccd-attempts` list and repairs.
 
 > **No route is gated as a route.** Every authenticated principal reaches the whole caseworker surface,
 > because the only role name confirmed with IDAM is the admin one and gating everything on it would lock
 > out ordinary caseworkers. Naming a non-admin caseworker role is part of the IDAM onboarding that has not
 > happened; until it does, `anyRequest().authenticated()` is the whole of the *transport's* authorisation
-> rule, and the three checks above live in the domain, where they hold for callers a route does not have.
+> rule, and the checks above live in the domain, where they hold for callers a route does not have.
 
 `/ccd-persistence/**` is the exception, with a chain of its own: it is where CCD's data-store calls this
 service back, so it admits an S2S token verified as `ccd_data` and nobody else, plus an IDAM user whose role
@@ -357,9 +359,13 @@ is the configured `CCD_SYSTEM_ROLE`, mapped onto the `DEED_POLL_SYSTEM` access p
 ## CCD
 
 Each deed-poll record may be linked to one decentralised CCD case (plan 02): data-store holds a two-field
-projection, the relational record stays authoritative. The linking operation, `CcdLinkingService.link`, is
-called by nothing yet, and every identifier below that names CCD is an unconfirmed placeholder.
-[`docs/CCD-SMOKE.md`](docs/CCD-SMOKE.md) is the procedure for the first real environment.
+projection, the relational record stays authoritative. The linking operation, `CcdLinkingService.link`, is called
+by `CcdLinkingSweep` after every `GET /caseworker/cases` has computed its answer — at most
+`CCD_LINKING_SWEEP_MAX_RECORDS` of the oldest unlinked records, then at most `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS`
+outstanding attempts, stopping at the first call CCD refuses or does not answer, and never changing the response
+(plan 02b). **It is off by default** (`CCD_LINKING_SWEEP_ENABLED=false`), so in every deployed environment nothing
+calls it yet, and every identifier below that names CCD is an unconfirmed placeholder. `POST /caseworker/cases`
+does not link. [`docs/CCD-SMOKE.md`](docs/CCD-SMOKE.md) is the procedure for the first real environment.
 
 | Variable | Default | What it is |
 |---|---|---|
@@ -376,6 +382,20 @@ called by nothing yet, and every identifier below that names CCD is an unconfirm
 `CoreCaseDataClientAutoConfiguration` is excluded on purpose: it would add a health indicator calling
 data-store, and the unauthenticated `/health` aggregates every indicator, so a data-store outage would read as
 this service being down. `CcdConfiguration` registers the client instead.
+
+### Repairing attempts
+
+Three admin-only operations under `/caseworker/ccd-attempts`, counted apart from the caseworker surface as
+`CCD_ATTEMPT_PATHS`. Each needs `caseworker-deedpoll-admin` (403 otherwise), and neither move calls CCD or writes a
+binding: the next case-list sweep does the rest.
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/caseworker/ccd-attempts` | Counts per status for the whole ledger, and a page of the attempts that are not `Linked`, longest-unmoved first. `status` narrows the page to one live status (`Linked` or anything else is a 400); `page` and `size` as the case list's, 25 by default and never more than 100 |
+| POST | `/caseworker/ccd-attempts/{attemptId}/reconciliation` | Reconcile again: `NeedsRepair -> AwaitingConfirmation`, restarting the settle window |
+| POST | `/caseworker/ccd-attempts/{attemptId}/retry` | Try again from scratch: `NeedsRepair -> Pending`, its tries reset — a 409 unless `canRetryFromScratch`, because an attempt that may have reached CCD could create a second case |
+
+An unknown id is a 404, and an attempt that is not `NeedsRepair` a 409.
 
 ## Documents and uploads
 

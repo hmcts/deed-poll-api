@@ -19,6 +19,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 
 import java.sql.Timestamp;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -397,6 +398,10 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
     @DisplayName("reconcile again moves only NeedsRepair, attributed, keeping why it needed repair")
     void reconcileAgainIsConditionalAndAttributed() {
         CcdCreationAttempt attempt = needingRepair(newCase(), true);
+        // A day unmoved, as an attempt waiting for a person is: the repair has to move it, not merely not move it back.
+        jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"modifiedOn\" = \"modifiedOn\" - interval '1 day' "
+            + "WHERE \"id\" = ?", attempt.getId());
+        LocalDateTime aged = repository.findById(attempt.getId()).orElseThrow().getModifiedOn();
 
         assertThat(attempts.reconcileAgain(attempt.getId(), "idam-admin")).isTrue();
         assertThat(attempts.reconcileAgain(attempt.getId(), "idam-admin")).as("no longer NeedsRepair").isFalse();
@@ -405,7 +410,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(repaired.getStatus()).isEqualTo(AwaitingConfirmation);
         assertThat(repaired.getRepairedById()).isEqualTo("idam-admin");
         assertThat(repaired.getRepairedOn()).isNotNull();
-        assertThat(repaired.getModifiedOn()).isAfterOrEqualTo(attempt.getModifiedOn());
+        assertThat(repaired.getModifiedOn()).as("the settle window restarts").isAfter(aged.plusHours(23));
         assertThat(repaired.getFailureDetail()).isEqualTo("CCD refused the submission (422)");
         assertThat(repaired.isSubmissionMayHaveReached()).isTrue();
         assertThat(repaired.getOperationId()).isEqualTo(attempt.getOperationId());
@@ -482,8 +487,11 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         referenced.setDisplayReference("KBDP2026-000042");
         String first = deedPolls.save(referenced).getId();
         CcdCreationAttempt repair = needingRepair(first, true);
-        CcdCreationAttempt pending = opened(newCase());
+        final CcdCreationAttempt pending = opened(newCase());
         CcdCreationAttempt linked = opened(newCase());
+        // The repair item has waited longest, so it heads the list.
+        jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"modifiedOn\" = \"modifiedOn\" - interval '1 day' "
+            + "WHERE \"id\" = ?", repair.getId());
         assertThat(attempts.claim(linked.getId(), "worker-1", LEASE)).isTrue();
         assertThat(attempts.move(linked.getId(), Claimed, Linked, null)).isTrue();
 
@@ -499,7 +507,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(all.getContent()).hasSize(1);
         var second = attempts.unlinked(Optional.empty(), PageRequest.of(1, 1));
         assertThat(List.of(all.getContent().get(0).id(), second.getContent().get(0).id()))
-            .containsExactlyInAnyOrder(repair.getId(), pending.getId());
+            .containsExactly(repair.getId(), pending.getId());
 
         var narrowed = attempts.unlinked(Optional.of(NeedsRepair), PageRequest.of(0, 10));
         assertThat(narrowed.getContent()).singleElement().satisfies(row -> {

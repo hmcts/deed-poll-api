@@ -217,8 +217,11 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
      * <p>Conditional on the claim being this worker's and still live: {@code Claimed}, by this worker, at this try,
      * under a lease that has not run out. The try count stands for the claim, because every claim adds one, so a
      * worker whose attempt was taken off it and claimed again -- even by another thread in the same pod, which
-     * shares the worker name -- matches nothing. {@code "leaseExpiresAt"} itself is not compared: it is stored to
-     * the millisecond and the service holds it to the nanosecond.
+     * shares the worker name -- matches nothing. The one exception is an admin's retry from scratch, which resets
+     * the count: a worker stalled past its lease across that retry could match a fresh claim at the same try. What
+     * stops that becoming a second case is the binding, written once by {@code LinkDeedPollHandler}.
+     * {@code "leaseExpiresAt"} itself is not compared: it is stored to the millisecond and the service holds it to the
+     * nanosecond.
      *
      * <p>Only ever set to true. The flag is about the attempt's history, so nothing resets it.
      *

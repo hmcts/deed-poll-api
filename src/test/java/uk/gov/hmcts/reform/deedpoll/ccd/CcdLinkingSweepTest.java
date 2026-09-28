@@ -120,21 +120,45 @@ class CcdLinkingSweepTest {
         verify(linking, never()).link(anyString());
     }
 
-    @Test
-    @DisplayName("reconciliation stops at RETRY_LATER or an exception, as linking does")
-    void reconciliationStopsToo() {
+    @ParameterizedTest
+    @EnumSource(value = Result.class, names = {"RETRY_LATER", "CCD_UNANSWERED"})
+    @DisplayName("reconciliation stops at RETRY_LATER or CCD_UNANSWERED, as linking does")
+    void reconciliationStopsToo(Result unwell) {
         when(attempts.dueForLinking(2)).thenReturn(List.of());
         CcdCreationAttempt first = attempt();
         CcdCreationAttempt second = attempt();
         when(attempts.outstanding(5)).thenReturn(List.of(first, second));
-        when(linking.reconcileOne(first)).thenReturn(Result.RETRY_LATER);
+        when(linking.reconcileOne(first)).thenReturn(unwell);
 
         sweep(true).sweep();
-        verify(linking, never()).reconcileOne(second);
 
-        when(linking.reconcileOne(first)).thenThrow(new IllegalStateException("database unavailable"));
-        assertThatCode(() -> sweep(true).sweep()).doesNotThrowAnyException();
         verify(linking, never()).reconcileOne(second);
+    }
+
+    @Test
+    @DisplayName("reconciliation stops at an exception, and it is not thrown into the list response")
+    void reconciliationStopsAtAnException() {
+        when(attempts.dueForLinking(2)).thenReturn(List.of());
+        CcdCreationAttempt first = attempt();
+        CcdCreationAttempt second = attempt();
+        when(attempts.outstanding(5)).thenReturn(List.of(first, second));
+        when(linking.reconcileOne(first)).thenThrow(new IllegalStateException("database unavailable"));
+
+        assertThatCode(() -> sweep(true).sweep()).doesNotThrowAnyException();
+
+        verify(linking, never()).reconcileOne(second);
+    }
+
+    @Test
+    @DisplayName("a submission CCD did not answer stops the sweep: no further link and no reconciliation")
+    void unansweredStopsTheSweep() {
+        when(attempts.dueForLinking(2)).thenReturn(List.of("first", "second"));
+        when(linking.link("first")).thenReturn(Result.CCD_UNANSWERED);
+
+        sweep(true).sweep();
+
+        verify(linking, never()).link("second");
+        verify(attempts, never()).outstanding(anyInt());
     }
 
     @Test
@@ -153,9 +177,10 @@ class CcdLinkingSweepTest {
 
     @ParameterizedTest
     @EnumSource(Result.class)
-    @DisplayName("only RETRY_LATER says CCD is unwell (decision 4)")
+    @DisplayName("only RETRY_LATER and CCD_UNANSWERED say CCD is unwell (decision 4)")
     void stopRule(Result result) {
-        assertThat(CcdLinkingSweep.stopsTheSweep(result)).isEqualTo(result == Result.RETRY_LATER);
+        assertThat(CcdLinkingSweep.stopsTheSweep(result))
+            .isEqualTo(result == Result.RETRY_LATER || result == Result.CCD_UNANSWERED);
     }
 
     @Test

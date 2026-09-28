@@ -26,7 +26,7 @@ with one referral-outcome email per referral enforced by the database.
 
 ## CCD linking lifecycle — plan 02b complete, 2026-09-27
 
-[Plan 02b](plans/deed-poll-api-02b-ccd-linking-lifecycle.md), all six tasks, on branch
+[Plan 02b](plans/completed/deed-poll-api-02b-ccd-linking-lifecycle.md), all six tasks, on branch
 `deed-poll-api-02b-ccd-linking-lifecycle` (not merged). **Still proved on placeholders, and still not onboarded.**
 The sweep ships switched off, so in every deployed environment nothing calls the linking operation yet.
 
@@ -40,9 +40,9 @@ What it adds, in `ccd/` unless named:
   `CCD_LINKING_RETRY_AFTER` × tries (`notBefore`), and `claim` refuses a row that is not due.
 - `CcdLinkingSweep`, called from `GET /caseworker/cases` after `outbox.drain()`, outside any transaction:
   `CCD_LINKING_SWEEP_ENABLED` (default `false`), at most `CCD_LINKING_SWEEP_MAX_RECORDS` (2) links and
-  `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` (5) reconciliations, and it stops at the first `RETRY_LATER` or exception.
-  It never throws into the list. `POST /caseworker/cases` does not link. Feign timeouts are now 5 s connect and
-  10 s read, for every Feign client.
+  `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` (5) reconciliations, and it stops at the first `RETRY_LATER`,
+  `CCD_UNANSWERED` or exception. It never throws into the list. `POST /caseworker/cases` does not link. Feign
+  timeouts are now 5 s connect and 10 s read, for every Feign client.
 - `CcdAttemptRepairs` and `/caseworker/ccd-attempts`, for `caseworker-deedpoll-admin` only:
   - `GET` returns the counts and a page of unlinked attempts;
   - `POST …/reconciliation` moves `NeedsRepair -> AwaitingConfirmation`;
@@ -166,7 +166,7 @@ caseworker completion, lifecycle case notes and the judge's own worklist (PRs #3
 what was outstanding until they were moved here.
 
 **The original referrals backend is merged, and business testing reopened one rule, which is now closed.**
-[`plans/referrals-api-4-caseworker-completion.md`](plans/referrals-api-4-caseworker-completion.md) is
+[`plans/referrals-api-4-caseworker-completion.md`](plans/completed/referrals-api-4-caseworker-completion.md) is
 **complete on branch `referrals-api-4`, not yet merged**: a `Decided` referral can no longer be withdrawn,
 and the existing `Decided → Closed` caseworker action is untouched. The authority is a second enum predicate,
 `ReferralState.canBeWithdrawn()` (`Open || Claimed`), added *beside* `isTerminal()` rather than narrowing it —
@@ -175,7 +175,7 @@ guard and `currentReferralState`, letting a case raise a second referral beside 
 delta**: no migration, no enum member, no DTO, 33 caseworker and 4 judicial operations unchanged, which
 `OpenAPIPublisherTest` passing untouched is the evidence for. Its companion admin plan adds the missing
 closure journey — the API half is already there.
-[`plans/referrals-api-5-lifecycle-case-notes.md`](plans/referrals-api-5-lifecycle-case-notes.md) is
+[`plans/referrals-api-5-lifecycle-case-notes.md`](plans/completed/referrals-api-5-lifecycle-case-notes.md) is
 **complete on branch `referrals-api-5`, not yet merged**, and records claim, direction and closure in the
 existing case Notes timeline: every successful transition now writes exactly one note, composed in
 `ReferralNotes` and authored by whoever caused it — the judge on a claim or a direction, the caseworker on a
@@ -186,7 +186,7 @@ delta**: no migration, no DTO, no endpoint, 33 caseworker and 4 judicial operati
 regenerating the spec from `master` into a throwaway worktree and byte-diffing it, identical at 56,771 bytes.
 That 56,771 is now the baseline `referrals-api-6`'s delta was measured against: **57,495 bytes**, the difference
 being one path with one GET and one schema, with the rest of the document identical key for key.
-[`plans/referrals-api-6-judicial-my-referrals.md`](plans/referrals-api-6-judicial-my-referrals.md) is
+[`plans/referrals-api-6-judicial-my-referrals.md`](plans/completed/referrals-api-6-judicial-my-referrals.md) is
 **complete on branch `referrals-api-6`, not yet merged**, and adds the missing judge-owned `Claimed`/`Decided`
 worklist — `GET /judicial/referrals/mine` — after migrating ownership from display names to stable IDAM subjects,
 which is what makes a personal list safe to publish at all: keyed on a name it would have enumerated a namesake's

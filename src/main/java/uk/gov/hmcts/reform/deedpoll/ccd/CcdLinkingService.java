@@ -76,6 +76,11 @@ public class CcdLinkingService {
         RETRY_LATER,
         /** The outcome is not yet known; a later reconciliation reads it again. */
         AWAITING_CONFIRMATION,
+        /**
+         * As {@code AWAITING_CONFIRMATION}, because a call to CCD failed: a submission whose outcome is unknown, or a
+         * read that could not confirm the binding. Apart from it because it says CCD is unwell, which ends a sweep.
+         */
+        CCD_UNANSWERED,
         /** A person has to settle it. */
         NEEDS_REPAIR,
         /** No record has this id. */
@@ -228,7 +233,8 @@ public class CcdLinkingService {
         } catch (RuntimeException failure) {
             return switch (CcdLinkingRule.classify(failure)) {
                 case REFUSED -> afterRefusal(pending, tries, failure);
-                case UNKNOWN -> awaitConfirmation(pending, "Submission outcome unknown: " + describe(failure));
+                case UNKNOWN -> unanswered(
+                    awaitConfirmation(pending, "Submission outcome unknown: " + describe(failure)));
             };
         }
 
@@ -304,7 +310,10 @@ public class CcdLinkingService {
 
         return switch (CcdLinkingRule.reconcile(confirmation, settled)) {
             case LINK -> moved(waiting, AwaitingConfirmation, Linked, null, Result.LINKED);
-            case WAIT -> Result.AWAITING_CONFIRMATION;
+            // A bound record whose case CCD would not show: the read failed, not the record.
+            case WAIT -> binding.isPresent() && confirmation.isEmpty()
+                ? Result.CCD_UNANSWERED
+                : Result.AWAITING_CONFIRMATION;
             case REPAIR -> repair(waiting, binding.isPresent(), confirmation.isPresent());
         };
     }
@@ -334,6 +343,13 @@ public class CcdLinkingService {
         } catch (RuntimeException unreadable) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * A result reached after a CCD call failed: still awaiting confirmation is {@code CCD_UNANSWERED}.
+     */
+    private static Result unanswered(Result result) {
+        return result == Result.AWAITING_CONFIRMATION ? Result.CCD_UNANSWERED : result;
     }
 
     private Result moved(CcdCreationAttempt attempt,

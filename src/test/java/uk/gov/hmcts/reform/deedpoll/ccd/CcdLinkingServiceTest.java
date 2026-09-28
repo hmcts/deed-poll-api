@@ -124,7 +124,7 @@ class CcdLinkingServiceTest {
             throw answered(500);
         });
 
-        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
         assertThat(attempts.attempt.isSubmissionMayHaveReached()).isTrue();
         assertThat(attempts.attempt.getFailureDetail()).isEqualTo("Submission outcome unknown: CCD answered HTTP 500");
         assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
@@ -230,6 +230,20 @@ class CcdLinkingServiceTest {
     }
 
     @Test
+    @DisplayName("a refused start whose claim was taken meanwhile releases nothing, and reports the attempt's status")
+    void refusedStartOnALostClaimReleasesNothing() {
+        when(ccd.startCase(anyString(), anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            takenByReconciliation();
+            throw answered(503);
+        });
+
+        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(attempts.attempt.getStatus()).isEqualTo(AwaitingConfirmation);
+        assertThat(attempts.attempt.getFailureDetail()).isEqualTo("taken by reconciliation");
+        verify(ccd, never()).submitCaseCreation(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
     @DisplayName("a claim lost between the start and the flag write submits nothing, and records nothing")
     void claimLostBeforeTheFlagSubmitsNothing() {
         when(ccd.startCase(anyString(), anyString(), anyString(), anyString())).thenAnswer(invocation -> {
@@ -315,7 +329,7 @@ class CcdLinkingServiceTest {
             throw noResponse();
         });
 
-        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
         assertThat(attempts.attempt.getFailureDetail()).isEqualTo("taken by reconciliation");
         verify(ccd, times(1)).submitCaseCreation(anyString(), anyString(), anyString(), any());
     }
@@ -329,7 +343,7 @@ class CcdLinkingServiceTest {
         });
         when(ccd.getCase(anyString(), anyString(), anyString())).thenThrow(answered(503));
 
-        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
         attempts.attempt.setModifiedOn(AuditClock.now().minusDays(1));
 
         assertThat(linking.reconcileOutstanding()).isOne();
@@ -344,7 +358,7 @@ class CcdLinkingServiceTest {
         whenSubmitted(() -> {
             throw answered(500);
         });
-        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
         attempts.attempt.setModifiedOn(AuditClock.now().minusDays(1));
         // Reconciliation reads nothing bound; a late submission binds the record before it can mark the repair.
         when(deedPolls.findCcdCaseReference(RECORD)).thenAnswer(invocation -> {
@@ -375,7 +389,7 @@ class CcdLinkingServiceTest {
             throw noResponse();
         });
         when(ccd.getCase(anyString(), anyString(), anyString())).thenThrow(answered(503));
-        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
         // The same attempt listed twice stands for two: the first read fails outright, the second succeeds.
         attempts.listedTwice = true;
         when(deedPolls.findCcdCaseReference(RECORD))
@@ -409,7 +423,7 @@ class CcdLinkingServiceTest {
             throw noResponse();
         });
         when(ccd.getCase(anyString(), anyString(), anyString())).thenThrow(answered(503));
-        assertThat(linking.link(RECORD)).isEqualTo(Result.AWAITING_CONFIRMATION);
+        assertThat(linking.link(RECORD)).isEqualTo(Result.CCD_UNANSWERED);
         doReturn(ours(REFERENCE)).when(ccd).getCase(anyString(), anyString(), eq(String.valueOf(REFERENCE)));
 
         assertThat(linking.reconcileOne(attempts.live(RECORD).orElseThrow())).isEqualTo(Result.LINKED);

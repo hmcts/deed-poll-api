@@ -267,6 +267,30 @@ class CcdAttemptRepairsTest {
             assertThat(logged()).containsExactly(
                 "CCD creation attempt " + ATTEMPT + ": repair NeedsRepair -> AwaitingConfirmation refused (409)");
         }
+
+        @Test
+        @DisplayName("an attempt that left NeedsRepair and came back to it meanwhile is a 409 saying to reload")
+        void movedMeanwhile() {
+            reads(row(NeedsRepair, false), row(NeedsRepair, false));
+            when(attempts.reconcileAgain(ATTEMPT, ADMIN_SUBJECT)).thenReturn(false);
+
+            assertThatThrownBy(() -> repairs.reconcileAgain(ATTEMPT.toString(), ADMIN))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage(CcdAttemptRepairs.MOVED_MEANWHILE);
+        }
+
+        @Test
+        @DisplayName("an attempt gone between the read and the write is a 404")
+        void goneMeanwhile() {
+            when(attempts.row(ATTEMPT)).thenReturn(Optional.of(row(NeedsRepair, false))).thenReturn(Optional.empty());
+            when(attempts.reconcileAgain(ATTEMPT, ADMIN_SUBJECT)).thenReturn(false);
+
+            assertThatThrownBy(() -> repairs.reconcileAgain(ATTEMPT.toString(), ADMIN))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage(CcdAttemptRepairs.NOT_FOUND);
+            assertThat(logged()).containsExactly(
+                "CCD creation attempt " + ATTEMPT + ": repair NeedsRepair -> AwaitingConfirmation refused (404)");
+        }
     }
 
     @Nested

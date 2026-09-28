@@ -1,7 +1,7 @@
 # CCD migration — Dataverse ingestion
 
 Status: draft for review, 2026-09-26. **Cut down on 2026-09-27 (Steve, Q5 (a)).** The linking half moved to
-[plan 02b](deed-poll-api-02b-ccd-linking-lifecycle.md). Its sweep, driven by traffic, links every record with a
+[plan 02b](completed/deed-poll-api-02b-ccd-linking-lifecycle.md). Its sweep, driven by traffic, links every record with a
 null CCD reference, whether it was created by a caseworker, already existed, or was imported. This plan now covers
 Dataverse ingestion only, and it no longer blocks [plan 03](deed-poll-api-03-cdam-documents.md). It is still
 blocked on the inputs below, which the business owes. Depends on plan 02b.
@@ -68,7 +68,7 @@ import nor the CCD backfill may:
 ## Sources and related work
 
 - [Foundation](completed/deed-poll-api-02-ccd-foundation.md): the shared linking and recovery operation.
-- [Plan 02b](deed-poll-api-02b-ccd-linking-lifecycle.md): the sweep that links imported records, and repair.
+- [Plan 02b](completed/deed-poll-api-02b-ccd-linking-lifecycle.md): the sweep that links imported records, and repair.
 - [Current case entity](../../src/main/java/uk/gov/hmcts/reform/deedpoll/entity/DeedPoll.java).
 - [API scope gaps](scope-gap-questions.md): the existing parity work for migrated records.
 - [CDAM](deed-poll-api-03-cdam-documents.md): the document migration, which tracks its progress separately.

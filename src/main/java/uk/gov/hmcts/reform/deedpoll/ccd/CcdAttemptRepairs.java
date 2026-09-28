@@ -55,7 +55,8 @@ public class CcdAttemptRepairs {
     /** What a retry from scratch is told when the attempt may already have reached CCD. */
     static final String MAY_HAVE_REACHED = "This attempt may already have reached CCD, so trying it again from scratch "
         + "could create a second case for the record. Send it back to reconciliation instead: that reads CCD first, "
-        + "and links the record if its case exists.";
+        + "and links the record if its case exists. If nothing is bound to the record, reconciliation cannot link "
+        + "it, and it returns here once the settle window has passed.";
 
     /**
      * What a repair is told when the attempt moved, and came back to {@code NeedsRepair}, while it was being made.
