@@ -1,6 +1,8 @@
 package uk.gov.hmcts.reform.deedpoll.config;
 
+import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.domain.properties.HasName;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 import jakarta.persistence.EntityManager;
@@ -59,6 +61,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import static com.tngtech.archunit.lang.conditions.ArchConditions.have;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noFields;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -411,16 +414,18 @@ class ConfirmationSecurityTest {
             // LocalDateTime called awaitingConfirmationSince: neither names a type this service owns. A judicial
             // DTO is a record, so its components are its fields, and this is the rule that keeps the read-through
             // to a case's papers from growing one.
-            String forbidden = "(?i).*confirmation.*";
+            // A containment test rather than a (?i).*confirmation.* regex, which backtracks on every name it misses.
+            DescribedPredicate<HasName> forbidden = DescribedPredicate.describe(
+                "name mentioning confirmation", named -> mentionsConfirmation(named.getName()));
 
-            // The pattern matches the names it is written about, asserted before the rule that uses it: a regex
+            // The test matches the names it is written about, asserted before the rule that uses it: a test
             // that matched nothing would make the rule below pass whatever a judicial DTO published.
             assertThat(List.of("confirmationRecordedBy", WAIT_COLUMN, "daysAwaitingConfirmation"))
-                .allMatch(name -> name.matches(forbidden));
+                .allMatch(ConfirmationSecurityTest::mentionsConfirmation);
 
             noFields()
                 .that().areDeclaredInClassesThat().resideInAnyPackage(JUDICIAL + "..", CITIZEN + "..")
-                .should().haveNameMatching(forbidden)
+                .should(have(forbidden))
                 .allowEmptyShould(true)
                 .check(mainClasses());
         }
@@ -585,5 +590,9 @@ class ConfirmationSecurityTest {
             assertThat(ListFilters.filterFor("awaitingConfirmation").defaultSort())
                 .contains(ListFilters.LONGEST_WAIT_FIRST);
         }
+    }
+
+    private static boolean mentionsConfirmation(String name) {
+        return name.toLowerCase(Locale.ROOT).contains("confirmation");
     }
 }

@@ -123,6 +123,7 @@ class DeploymentChartConformanceTest {
         String applicationYaml = read(APPLICATION_YAML);
 
         assertThat(environment().keySet())
+            .isNotEmpty()
             .allSatisfy(name -> assertThat(applicationYaml)
                 .as("the chart sets %s, which application.yaml never reads", name)
                 .contains("${" + name));

@@ -123,8 +123,7 @@ class CcdPersistenceSubmissionTest extends AbstractPostgresContainerTest {
     @MockitoSpyBean
     private LinkDeedPollHandler handler;
 
-    @BeforeEach
-    void stubs() {
+    private void stubs() {
         IDAM.stubDefaults();
         // The SDK writes the uid and the two names onto ccd.case_event, so the system user needs all three.
         IDAM.stubUserInfoBody("""
@@ -142,8 +141,17 @@ class CcdPersistenceSubmissionTest extends AbstractPostgresContainerTest {
     }
 
     @BeforeEach
+    void setUp() {
+        clearTables();
+        stubs();
+    }
+
     @AfterEach
-    void clearTables() {
+    void tearDown() {
+        clearTables();
+    }
+
+    private void clearTables() {
         jdbc.execute("TRUNCATE ccd.case_data CASCADE");
         attemptRepository.deleteAll();
         deedPolls.deleteAll();

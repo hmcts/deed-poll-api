@@ -172,8 +172,17 @@ class CaseworkerDocumentControllerTest extends AbstractPostgresContainerTest {
     }
 
     @BeforeEach
+    void setUp() throws IOException {
+        clearTables();
+        resetIdam();
+    }
+
     @AfterEach
-    void clearTables() throws IOException {
+    void tearDown() throws IOException {
+        clearTables();
+    }
+
+    private void clearTables() throws IOException {
         documents.deleteAll();
         types.deleteAll();
         deedPolls.deleteAll();
@@ -191,8 +200,7 @@ class CaseworkerDocumentControllerTest extends AbstractPostgresContainerTest {
         }
     }
 
-    @BeforeEach
-    void resetIdam() {
+    private void resetIdam() {
         IDAM.stubDefaults();
     }
 

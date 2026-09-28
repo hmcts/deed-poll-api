@@ -279,7 +279,7 @@ class DetailViewTest {
                     .referToMasterChoice(ReferToMaster.No)
                     .build()));
 
-            assertThat(tabs).extracting(DetailTab::id).doesNotContain("referral");
+            assertThat(tabs).extracting(DetailTab::id).isNotEmpty().doesNotContain("referral");
         }
 
         @Test
@@ -371,6 +371,7 @@ class DetailViewTest {
                 .flatMap(tab -> tab.sections().stream())
                 .map(DetailSection::label)
                 .toList())
+                .isNotEmpty()
                 .doesNotContain("Nationality");
         }
 

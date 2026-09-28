@@ -48,7 +48,7 @@ class DeedDocumentTypesTest {
             .map(DeedDocumentTypes::name)
             .toList();
 
-        assertThat(others).doesNotContain(DeedDocumentTypes.name(template));
+        assertThat(others).isNotEmpty().doesNotContain(DeedDocumentTypes.name(template));
     }
 
     @Test
@@ -84,6 +84,7 @@ class DeedDocumentTypesTest {
         // has no safe default. Both absences are decisions, so they are asserted rather than left to be
         // noticed as a gap.
         assertThat(everyListing)
+            .isNotEmpty()
             .doesNotContain(DeedPollType.DeedOfRelinquishment)
             .doesNotContain(DeedPollType.Unknown);
     }

@@ -30,9 +30,6 @@ final class DeedFilename {
     /** Everything that is not a letter, a digit or a hyphen becomes a separator. */
     private static final String NOT_FILENAME_SAFE = "[^A-Za-z0-9]+";
 
-    /** A separator at either end, which a slug should not keep. */
-    private static final String LEADING_OR_TRAILING_SEPARATOR = "^-+|-+$";
-
     private static final String SEPARATOR = "-";
 
     private DeedFilename() {
@@ -62,7 +59,12 @@ final class DeedFilename {
         if (value == null) {
             return "";
         }
-        return value.replaceAll(NOT_FILENAME_SAFE, SEPARATOR)
-            .replaceAll(LEADING_OR_TRAILING_SEPARATOR, "");
+        String slug = value.replaceAll(NOT_FILENAME_SAFE, SEPARATOR);
+        // A separator at either end is one a slug should not keep. The replacement collapses every run into one,
+        // so there is at most one at each end, and trimming it by hand rather than with a second, anchored regex
+        // keeps a long run of separators from costing a scan per position.
+        int start = slug.startsWith(SEPARATOR) ? SEPARATOR.length() : 0;
+        int end = slug.endsWith(SEPARATOR) ? slug.length() - SEPARATOR.length() : slug.length();
+        return start < end ? slug.substring(start, end) : "";
     }
 }

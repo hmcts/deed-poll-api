@@ -79,15 +79,23 @@ class CcdLinkingSweepDisabledTest extends AbstractPostgresContainerTest {
     @MockitoSpyBean
     private CcdCreationAttempts attempts;
 
-    @BeforeEach
-    void stubs() {
+    private void stubs() {
         IDAM.stubDefaults();
         DATA_STORE.resetRequests();
     }
 
     @BeforeEach
+    void setUp() {
+        clearTables();
+        stubs();
+    }
+
     @AfterEach
-    void clearTables() {
+    void tearDown() {
+        clearTables();
+    }
+
+    private void clearTables() {
         attemptRepository.deleteAll();
         deedPolls.deleteAll();
     }

@@ -10,6 +10,7 @@ import java.net.URISyntaxException;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -50,7 +51,7 @@ public class IdamDiscovery {
      */
     private final ReentrantLock discovering = new ReentrantLock();
 
-    private volatile IdamMetadata cached;
+    private final AtomicReference<IdamMetadata> cached = new AtomicReference<>();
 
     public IdamDiscovery(IdamProperties properties, Environment environment) {
         this(properties, environment, IdamHttp.restClient());
@@ -86,13 +87,13 @@ public class IdamDiscovery {
      * escapes the bearer-token filter unmapped -- for a request that can now be served without touching IDAM.
      */
     public IdamMetadata metadata() {
-        IdamMetadata existing = cached;
+        IdamMetadata existing = cached.get();
         if (existing != null) {
             return existing;
         }
 
         if (!awaitTurnToDiscover()) {
-            IdamMetadata discovered = cached;
+            IdamMetadata discovered = cached.get();
             if (discovered != null) {
                 return discovered;
             }
@@ -101,10 +102,10 @@ public class IdamDiscovery {
                     + WAIT_FOR_DISCOVERY.toMillis() + "ms");
         }
         try {
-            if (cached == null) {
-                cached = discover();
+            if (cached.get() == null) {
+                cached.set(discover());
             }
-            return cached;
+            return cached.get();
         } finally {
             discovering.unlock();
         }

@@ -172,8 +172,7 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
     @Autowired
     private JdbcTemplate jdbc;
 
-    @BeforeEach
-    void stubs() {
+    private void stubs() {
         IDAM.stubDefaults();
         IDAM.stubUserInfoBody("""
             {
@@ -193,8 +192,17 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
     }
 
     @BeforeEach
+    void setUp() {
+        clearTables();
+        stubs();
+    }
+
     @AfterEach
-    void clearTables() {
+    void tearDown() {
+        clearTables();
+    }
+
+    private void clearTables() {
         jdbc.execute("TRUNCATE ccd.case_data CASCADE");
         attemptRepository.deleteAll();
         deedPolls.deleteAll();

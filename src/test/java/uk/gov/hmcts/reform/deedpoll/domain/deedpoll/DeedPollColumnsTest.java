@@ -129,6 +129,7 @@ class DeedPollColumnsTest {
         assertThat(Stream.of(CaseDetailResponse.class, SavedCaseResponse.class)
                        .flatMap(type -> Arrays.stream(type.getRecordComponents()))
                        .map(RecordComponent::getName))
+            .isNotEmpty()
             .doesNotContain(REFERENCE);
 
         // Only the API packages, and imported here rather than held in a static field: the rule is about nothing
