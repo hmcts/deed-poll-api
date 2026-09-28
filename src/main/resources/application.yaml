@@ -281,6 +281,9 @@ deedpoll:
         # Records one list request may link, and outstanding attempts it may then read. Each is a wait on CCD.
         max-records: ${CCD_LINKING_SWEEP_MAX_RECORDS:2}
         max-reconciliations: ${CCD_LINKING_SWEEP_MAX_RECONCILIATIONS:5}
+        # How long one sweep may run before it starts nothing more. The counts bound the calls; this bounds a CCD or
+        # IDAM that answers each one slowly but inside the Feign timeouts, which fails nothing and so stops nothing.
+        max-duration: ${CCD_LINKING_SWEEP_MAX_DURATION:PT15S}
   referrals:
     # How long a judge's claim on a referral survives their inactivity before it goes back into the
     # shared pool. Measured from their last interaction with the referral, not from the claim, so a

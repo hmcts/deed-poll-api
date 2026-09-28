@@ -12,6 +12,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingService.Result;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -33,6 +34,8 @@ import static org.mockito.Mockito.when;
  */
 class CcdLinkingSweepTest {
 
+    private static final Duration BUDGET = Duration.ofSeconds(15);
+
     private CcdLinkingService linking;
     private CcdCreationAttempts attempts;
 
@@ -43,7 +46,7 @@ class CcdLinkingSweepTest {
     }
 
     private CcdLinkingSweep sweep(boolean enabled) {
-        return new CcdLinkingSweep(new CcdLinkingSweepProperties(enabled, 2, 5), linking, attempts);
+        return new CcdLinkingSweep(new CcdLinkingSweepProperties(enabled, 2, 5, BUDGET), linking, attempts);
     }
 
     @Test
@@ -162,6 +165,44 @@ class CcdLinkingSweepTest {
     }
 
     @Test
+    @DisplayName("once max-duration has passed it starts nothing more: a slow CCD that answers in time fails nothing")
+    void maxDurationStopsTheSweep() {
+        when(attempts.dueForLinking(2)).thenReturn(List.of("a", "b"));
+        long[] now = {0};
+        when(linking.link("a")).thenAnswer(call -> {
+            now[0] += BUDGET.toNanos();
+            return Result.LINKED;
+        });
+
+        new CcdLinkingSweep(new CcdLinkingSweepProperties(true, 2, 5, BUDGET), linking, attempts, () -> now[0])
+            .sweep();
+
+        verify(linking).link("a");
+        verify(linking, never()).link("b");
+        verify(attempts, never()).outstanding(anyInt());
+    }
+
+    @Test
+    @DisplayName("max-duration is checked before each reconciliation too")
+    void maxDurationStopsReconciliation() {
+        when(attempts.dueForLinking(2)).thenReturn(List.of());
+        CcdCreationAttempt first = attempt();
+        CcdCreationAttempt second = attempt();
+        when(attempts.outstanding(5)).thenReturn(List.of(first, second));
+        long[] now = {0};
+        when(linking.reconcileOne(first)).thenAnswer(call -> {
+            now[0] += BUDGET.toNanos();
+            return Result.AWAITING_CONFIRMATION;
+        });
+
+        new CcdLinkingSweep(new CcdLinkingSweepProperties(true, 2, 5, BUDGET), linking, attempts, () -> now[0])
+            .sweep();
+
+        verify(linking).reconcileOne(first);
+        verify(linking, never()).reconcileOne(second);
+    }
+
+    @Test
     @DisplayName("inside a transaction it refuses, before it selects anything: that is a wiring fault")
     void refusesInsideATransaction() {
         TransactionSynchronizationManager.setActualTransactionActive(true);
@@ -184,16 +225,18 @@ class CcdLinkingSweepTest {
     }
 
     @Test
-    @DisplayName("max-records and max-reconciliations below 1 refuse to start")
+    @DisplayName("counts below 1 and a max-duration that is not positive refuse to start")
     void refusesBoundsBelowOne() {
-        assertThatThrownBy(() -> new CcdLinkingSweepProperties(true, 0, 5))
+        assertThatThrownBy(() -> new CcdLinkingSweepProperties(true, 0, 5, BUDGET))
             .hasMessageContaining("max-records");
-        assertThatThrownBy(() -> new CcdLinkingSweepProperties(true, 2, 0))
+        assertThatThrownBy(() -> new CcdLinkingSweepProperties(true, 2, 0, BUDGET))
             .hasMessageContaining("max-reconciliations");
+        assertThatThrownBy(() -> new CcdLinkingSweepProperties(true, 2, 5, Duration.ZERO))
+            .hasMessageContaining("max-duration");
     }
 
     @Test
-    @DisplayName("the committed defaults: off, 2 records and 5 reconciliations, and no Feign call over 10 s")
+    @DisplayName("the committed defaults: off, 2 records, 5 reconciliations and 15 s, and no Feign call over 10 s")
     void committedDefaults() {
         new ApplicationContextRunner()
             .withUserConfiguration(SweepProperties.class)
@@ -203,6 +246,7 @@ class CcdLinkingSweepTest {
                 assertThat(properties.enabled()).isFalse();
                 assertThat(properties.maxRecords()).isEqualTo(2);
                 assertThat(properties.maxReconciliations()).isEqualTo(5);
+                assertThat(properties.maxDuration()).isEqualTo(BUDGET);
 
                 // The sweep holds a list request for as long as its CCD calls take, so they are bounded.
                 String feign = "spring.cloud.openfeign.client.config.default.";

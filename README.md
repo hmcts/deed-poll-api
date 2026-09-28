@@ -362,7 +362,7 @@ Each deed-poll record may be linked to one decentralised CCD case (plan 02): dat
 projection, the relational record stays authoritative. The linking operation, `CcdLinkingService.link`, is called
 by `CcdLinkingSweep` after every `GET /caseworker/cases` has computed its answer — at most
 `CCD_LINKING_SWEEP_MAX_RECORDS` of the oldest unlinked records, then at most `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS`
-outstanding attempts, stopping at the first call CCD refuses or does not answer, and never changing the response
+outstanding attempts, stopping at the first call CCD refuses or does not answer or once `CCD_LINKING_SWEEP_MAX_DURATION` has passed, and never changing the response
 (plan 02b). **It is off by default** (`CCD_LINKING_SWEEP_ENABLED=false`), so in every deployed environment nothing
 calls it yet, and every identifier below that names CCD is an unconfirmed placeholder. `POST /caseworker/cases`
 does not link. [`docs/CCD-SMOKE.md`](docs/CCD-SMOKE.md) is the procedure for the first real environment.
@@ -376,7 +376,7 @@ does not link. [`docs/CCD-SMOKE.md`](docs/CCD-SMOKE.md) is the procedure for the
 | `DEED_POLL_SYSTEM_USERNAME`, `DEED_POLL_SYSTEM_PASSWORD` | empty | the system user; an empty one is refused |
 | `IDAM_S2S_AUTH_URL`, `DEED_POLL_API_S2S_SECRET`, `S2S_SERVICE_NAME` | `http://localhost:4502`, empty, `deed_poll_api` | outbound S2S, for calls to data-store |
 | `CCD_LINKING_LEASE`, `CCD_LINKING_SETTLE_AFTER`, `CCD_LINKING_MAX_ATTEMPTS`, `CCD_LINKING_RETRY_AFTER` | `PT5M`, `PT10M`, `3`, `PT5M` | how long a claim is held, how long an unknown outcome is waited on, how many refused tries, how long a refused try waits (times the tries so far) |
-| `CCD_LINKING_SWEEP_ENABLED`, `CCD_LINKING_SWEEP_MAX_RECORDS`, `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` | `false`, `2`, `5` | whether the case list request links records to CCD cases -- off until onboarding, because before it every attempt ends `NeedsRepair` -- and how many records it links and outstanding attempts it reads per request |
+| `CCD_LINKING_SWEEP_ENABLED`, `CCD_LINKING_SWEEP_MAX_RECORDS`, `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS`, `CCD_LINKING_SWEEP_MAX_DURATION` | `false`, `2`, `5`, `PT15S` | whether the case list request links records to CCD cases -- off until onboarding, because before it every attempt ends `NeedsRepair` -- how many records it links and outstanding attempts it reads per request, and how long it may run before it starts nothing more |
 | `HOSTNAME` | `deed-poll-api` | who holds a claim; Kubernetes sets it to the pod's name |
 
 `CoreCaseDataClientAutoConfiguration` is excluded on purpose: it would add a health indicator calling

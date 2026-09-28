@@ -41,7 +41,7 @@ What it adds, in `ccd/` unless named:
 - `CcdLinkingSweep`, called from `GET /caseworker/cases` after `outbox.drain()`, outside any transaction:
   `CCD_LINKING_SWEEP_ENABLED` (default `false`), at most `CCD_LINKING_SWEEP_MAX_RECORDS` (2) links and
   `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` (5) reconciliations, and it stops at the first `RETRY_LATER`,
-  `CCD_UNANSWERED` or exception. It never throws into the list. `POST /caseworker/cases` does not link. Feign
+  `CCD_UNANSWERED` or exception, or once `CCD_LINKING_SWEEP_MAX_DURATION` (`PT15S`) has passed. It never throws into the list. `POST /caseworker/cases` does not link. Feign
   timeouts are now 5 s connect and 10 s read, for every Feign client.
 - `CcdAttemptRepairs` and `/caseworker/ccd-attempts`, for `caseworker-deedpoll-admin` only:
   - `GET` returns the counts and a page of unlinked attempts;
@@ -380,6 +380,17 @@ What it does **not** give, and each of these is a real constraint on what a sess
    HelmRelease are also outstanding, and Jenkins folder configuration is unconfirmed.
 7. **A Docker-capable CNP agent** is the real fix for the CI gating, and is an external dependency —
    tracked in `cft-workspace/TRACKER.local.md` §4.
+8. **An attempt whose tries ran out on refused submissions has no way out of `NeedsRepair`** (found in review,
+   2026-09-28). `submissionMayHaveReached` is set before every `submitCaseCreation` and never reset (plan 02b,
+   decision 9). A 4xx that CCD refuses with nothing bound releases the attempt to `Pending` automatically, but once
+   `CCD_LINKING_MAX_ATTEMPTS` is used up it lands in `NeedsRepair` with the flag true. `retry` is then a 409, and
+   `reconciliation` finds nothing bound and returns it to `NeedsRepair` after the settle window. The live attempt
+   also blocks a fresh one, so the record can be linked only by hand-written SQL. Likely causes are a 403 from a
+   stale token, a 422 from the handler, or a record with no display reference. **Deciding this is Steve's call**,
+   because either fix changes decision 9. One option is a V24 fact, written by the same statement that moves an
+   exhausted, refused-and-unbound attempt to `NeedsRepair`, which `mayRetryFromScratch` also accepts. The automatic
+   path already trusts the same evidence when it re-sends after a refusal. Either way, add a
+   `CcdLinkingScenariosTest` scenario that runs out of tries on refusals and then tries both repair moves.
 
 ## There is still no plan 02 or 03 — historical
 

@@ -158,7 +158,8 @@ public class CaseworkerReadController {
      * after the response is computed: the sweep commits each claim before calling CCD, so a transaction around it
      * would hide that claim from data-store's callback, and a sweep that fails is logged and cannot spoil the
      * list. It is bounded and stops at the first sign CCD is unwell, so an outage costs this request one failed
-     * call, and the Feign timeouts in {@code application.yaml} cap what that call can cost.
+     * call, and the Feign timeouts in {@code application.yaml} cap what that call can cost; {@code max-duration}
+     * bounds a CCD that answers every call slowly but in time.
      */
     @GetMapping("/cases")
     public CaseListResponse cases(

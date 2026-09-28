@@ -22,7 +22,7 @@ Each of these is onboarding and belongs to Steve; the plan's Dependencies sectio
 | `deed_poll_api` registered with S2S, secret in `deed-poll-aat` | `DEED_POLL_API_S2S_SECRET` |
 | Data-store's URL in the environment | `CCD_DATA_STORE_URL` (default is a local stack's 4452) |
 | The linking operation's timings, if the defaults do not suit | `CCD_LINKING_LEASE` (`PT5M`), `CCD_LINKING_SETTLE_AFTER` (`PT10M`), `CCD_LINKING_MAX_ATTEMPTS` (`3`), `CCD_LINKING_RETRY_AFTER` (`PT5M`, times the tries so far); the claimant is `HOSTNAME` |
-| The case list request's linking sweep | `CCD_LINKING_SWEEP_ENABLED` (`false`; set `true` only once everything above is in place), `CCD_LINKING_SWEEP_MAX_RECORDS` (`2`), `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` (`5`) |
+| The case list request's linking sweep | `CCD_LINKING_SWEEP_ENABLED` (`false`; set `true` only once everything above is in place), `CCD_LINKING_SWEEP_MAX_RECORDS` (`2`), `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` (`5`), `CCD_LINKING_SWEEP_MAX_DURATION` (`PT15S`) |
 | Data-store routes our case type to us | data-store's `ccd.decentralised.case-type-service-urls`, keyed on a **prefix of the case type id** |
 | `deed_poll_api` allowed to call data-store; `ccd_data` allowed to call us | data-store's S2S allowlist; ours is the constant `SecurityConfiguration.CCD_PERSISTENCE_CALLERS` |
 | The system role registered as a **user role** in definition store | definition store's user-role table, at `PUBLIC` |
@@ -116,6 +116,10 @@ rest.
    - `POST /caseworker/ccd-attempts/{attemptId}/retry` (`NeedsRepair -> Pending`, tries reset) is open only while
      `canRetryFromScratch` is true, meaning nothing was ever submitted to CCD for this attempt. Otherwise it is a 409
      that says so. Use reconciliation instead.
+   - **Neither move helps an attempt that ran out of tries on refused submissions.** Its flag is true, so `retry`
+     is a 409. Nothing is bound, so `reconciliation` returns it to `NeedsRepair` after the settle window. Its
+     `failureDetail` ends `no attempts left`, and `canRetryFromScratch` is false. This is `RESUME.md`'s open item 8.
+     Stop and report it rather than editing the row.
 3. Expect a 200 with the attempt as it now stands. An attempt that is not `NeedsRepair` is a 409, including the
    second of two admins acting at once. An unknown id is a 404. Every move, made or refused, is logged at INFO with
    the attempt id and without the admin's identity.

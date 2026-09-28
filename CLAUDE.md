@@ -103,7 +103,9 @@ src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one e
   claim was lost and nothing is submitted. A submission path that calls CCD before the write, or a statement that
   sets the flag back to false (including the retry itself), lets an admin re-send something that may already have
   created a case. The retry's SQL repeats the `= false` condition that `CcdLinkingRule.mayRetryFromScratch` states,
-  so a stale read cannot slip past it. V23 backfilled existing rows to true for the same reason.
+  so a stale read cannot slip past it. V23 backfilled existing rows to true for the same reason. The price is a dead
+  end: an attempt whose tries ran out on refused submissions is `NeedsRepair` with the flag true, so neither repair
+  move links it (`docs/RESUME.md` open item 8, undecided). Do not work round it by resetting the flag.
 - **The case list request links records, so a new caller of the sweep must be outside any transaction.**
   `CaseworkerReadController.cases` calls `CcdLinkingSweep.sweep()` after the response is computed and after
   `outbox.drain()`. The sweep commits each claim before CCD is called, and data-store's callback has to read that
