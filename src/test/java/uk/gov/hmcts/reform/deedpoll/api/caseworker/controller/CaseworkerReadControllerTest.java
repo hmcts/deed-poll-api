@@ -141,8 +141,17 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
     private ObjectMapper mapper;
 
     @BeforeEach
+    void setUp() {
+        clearTables();
+        resetIdam();
+    }
+
     @AfterEach
-    void clearTables() {
+    void tearDown() {
+        clearTables();
+    }
+
+    private void clearTables() {
         documents.deleteAll();
         documentTypes.deleteAll();
         notes.deleteAll();
@@ -151,8 +160,7 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
         referenceCounters.deleteAll();
     }
 
-    @BeforeEach
-    void resetIdam() {
+    private void resetIdam() {
         IDAM.stubDefaults();
     }
 

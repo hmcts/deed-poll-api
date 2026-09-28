@@ -116,15 +116,23 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
     private ReferenceCounterRepository referenceCounters;
 
     @BeforeEach
+    void setUp() {
+        clearTables();
+        resetIdam();
+    }
+
     @AfterEach
-    void clearTables() {
+    void tearDown() {
+        clearTables();
+    }
+
+    private void clearTables() {
         witnesses.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
     }
 
-    @BeforeEach
-    void resetIdam() {
+    private void resetIdam() {
         IDAM.stubDefaults();
     }
 
@@ -649,7 +657,7 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
 
         @BeforeEach
         void administrator() {
-            // After the outer resetIdam(), which restores the non-admin default -- JUnit runs the enclosing
+            // After the outer setUp(), which restores the non-admin default -- JUnit runs the enclosing
             // class's callbacks first, so this overrides it rather than racing it.
             IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
         }

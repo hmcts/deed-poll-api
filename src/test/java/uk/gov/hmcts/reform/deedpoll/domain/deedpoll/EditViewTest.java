@@ -323,7 +323,7 @@ class EditViewTest {
                     .toList();
 
                 for (FieldDef candidate : readOnly) {
-                    assertThat(names).doesNotContain(candidate.name());
+                    assertThat(names).isNotEmpty().doesNotContain(candidate.name());
                 }
             }
         }

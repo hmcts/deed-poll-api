@@ -10,6 +10,8 @@ import org.springframework.security.oauth2.jwt.JwtTimestampValidator;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamDiscovery.IdamMetadata;
 
+import java.util.concurrent.atomic.AtomicReference;
+
 /**
  * Validates a forwarded IDAM access token: signature, issuer, audience, expiry and kind.
  *
@@ -34,7 +36,7 @@ public class IdamJwtDecoder implements JwtDecoder {
     private final IdamDiscovery discovery;
     private final IdamProperties properties;
 
-    private volatile JwtDecoder delegate;
+    private final AtomicReference<JwtDecoder> delegate = new AtomicReference<>();
 
     public IdamJwtDecoder(IdamDiscovery discovery, IdamProperties properties) {
         this.discovery = discovery;
@@ -61,7 +63,7 @@ public class IdamJwtDecoder implements JwtDecoder {
      * latency in front of every request.
      */
     private JwtDecoder delegate() {
-        JwtDecoder existing = delegate;
+        JwtDecoder existing = delegate.get();
         if (existing != null) {
             return existing;
         }
@@ -69,10 +71,10 @@ public class IdamJwtDecoder implements JwtDecoder {
         IdamMetadata metadata = discovery.metadata();
 
         synchronized (this) {
-            if (delegate == null) {
-                delegate = build(metadata);
+            if (delegate.get() == null) {
+                delegate.set(build(metadata));
             }
-            return delegate;
+            return delegate.get();
         }
     }
 

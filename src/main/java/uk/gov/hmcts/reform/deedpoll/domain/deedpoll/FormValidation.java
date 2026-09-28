@@ -2,7 +2,8 @@ package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 
-import java.time.LocalDate;
+import java.time.YearMonth;
+import java.time.temporal.ChronoField;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -117,13 +118,9 @@ public final class FormValidation {
         if (yearValue < YEAR_LOWER_BOUND) {
             return false;
         }
-        try {
-            LocalDate.of(yearValue, monthValue, dayOfMonth);
-            return true;
-        } catch (java.time.DateTimeException notARealDate) {
-            // The reference composes the date and compares the parts back; a strict construction says
-            // the same thing about the same inputs, and says it without a rollover to undo.
-            return false;
-        }
+        // The reference composes the date and compares the parts back; asking the month whether it has the day
+        // says the same thing about the same inputs, and says it without a rollover to undo.
+        return ChronoField.MONTH_OF_YEAR.range().isValidIntValue(monthValue)
+            && YearMonth.of(yearValue, monthValue).isValidDay(dayOfMonth);
     }
 }

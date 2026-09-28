@@ -132,8 +132,18 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
     }
 
     @BeforeEach
+    void setUp() throws IOException {
+        clearTables();
+        captureLogs();
+    }
+
     @AfterEach
-    void clearTables() throws IOException {
+    void tearDown() throws IOException {
+        releaseLogs();
+        clearTables();
+    }
+
+    private void clearTables() throws IOException {
         documents.deleteAll();
         types.deleteAll();
         deedPolls.deleteAll();
@@ -150,15 +160,13 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
         Files.deleteIfExists(STORE_ROOT);
     }
 
-    @BeforeEach
-    void captureLogs() {
+    private void captureLogs() {
         logs = new ListAppender<>();
         logs.start();
         ((Logger) LoggerFactory.getLogger(DocumentService.class)).addAppender(logs);
     }
 
-    @AfterEach
-    void releaseLogs() {
+    private void releaseLogs() {
         ((Logger) LoggerFactory.getLogger(DocumentService.class)).detachAppender(logs);
         logs.stop();
     }

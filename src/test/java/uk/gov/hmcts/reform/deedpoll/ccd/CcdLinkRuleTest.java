@@ -121,6 +121,7 @@ class CcdLinkRuleTest {
     @DisplayName("every refusal is fixed prose, and the two outcomes that proceed carry none")
     void refusalsAreFixedProse() {
         assertThat(Arrays.stream(Outcome.values()).filter(Outcome::refused))
+            .isNotEmpty()
             .allSatisfy(outcome -> assertThat(outcome.refusal())
                 .isNotBlank()
                 .doesNotContain(RECORD)

@@ -119,16 +119,24 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
     private ObjectMapper objectMapper;
 
     @BeforeEach
+    void setUp() {
+        clearTables();
+        resetIdam();
+    }
+
     @AfterEach
-    void clearTables() {
+    void tearDown() {
+        clearTables();
+    }
+
+    private void clearTables() {
         notes.deleteAll();
         witnesses.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
     }
 
-    @BeforeEach
-    void resetIdam() {
+    private void resetIdam() {
         IDAM.stubDefaults();
     }
 

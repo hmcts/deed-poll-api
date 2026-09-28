@@ -1,11 +1,12 @@
 package uk.gov.hmcts.reform.deedpoll.health;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -69,19 +70,19 @@ public class DeedPollSchema {
      * {@code ccd} schema to the same database, and a check that looked in the wrong one would be worse than no
      * check at all.
      *
-     * <p>An {@code in (...)} list of placeholders where the reference binds a Postgres array to {@code any()}.
-     * Same query, and still fully parameterised: the placeholders are generated from the list's own size, so
-     * no table name is ever interpolated into SQL.
+     * <p>A named {@code in (:tables)} list where the reference binds a Postgres array to {@code any()}. Same
+     * query, and fully parameterised: the template expands the one parameter into a placeholder per table, so
+     * no table name is ever interpolated into SQL, and the statement is a constant rather than a format.
      */
     private static final String MISSING_TABLES_SQL = """
         select table_name from information_schema.tables
-        where table_schema = current_schema() and table_name in (%s)
-        """.formatted(String.join(", ", Collections.nCopies(DEED_POLL_TABLES.size(), "?")));
+        where table_schema = current_schema() and table_name in (:tables)
+        """;
 
-    private final JdbcTemplate jdbcTemplate;
+    private final NamedParameterJdbcTemplate jdbcTemplate;
 
     public DeedPollSchema(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+        this.jdbcTemplate = new NamedParameterJdbcTemplate(jdbcTemplate);
     }
 
     /**
@@ -96,7 +97,7 @@ public class DeedPollSchema {
      */
     public List<String> missingDeedPollTables() {
         Set<String> present = new HashSet<>(
-            jdbcTemplate.queryForList(MISSING_TABLES_SQL, String.class, DEED_POLL_TABLES.toArray()));
+            jdbcTemplate.queryForList(MISSING_TABLES_SQL, Map.of("tables", DEED_POLL_TABLES), String.class));
 
         // Filtered from our own list rather than trusting the rows: a row for something that is not ours must
         // not be read as satisfying one of ours. The bound `in` list should make that impossible, which is why

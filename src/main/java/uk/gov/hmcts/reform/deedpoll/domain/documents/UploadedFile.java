@@ -1,5 +1,8 @@
 package uk.gov.hmcts.reform.deedpoll.domain.documents;
 
+import java.util.Arrays;
+import java.util.Objects;
+
 /**
  * The parts of an uploaded file this domain needs.
  *
@@ -21,5 +24,26 @@ public record UploadedFile(byte[] content, String originalName, String mimeType,
     /** A file whose recorded size is its actual length, which is the only honest pairing. */
     public static UploadedFile of(byte[] content, String originalName, String mimeType) {
         return new UploadedFile(content, originalName, mimeType, content.length);
+    }
+
+    /** Equal when the bytes are, rather than when the array is the same object, which is a record's default. */
+    @Override
+    public boolean equals(Object other) {
+        return other instanceof UploadedFile that
+            && size == that.size
+            && Objects.equals(originalName, that.originalName)
+            && Objects.equals(mimeType, that.mimeType)
+            && Arrays.equals(content, that.content);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(Arrays.hashCode(content), originalName, mimeType, size);
+    }
+
+    /** The length rather than the bytes: a whole upload in a log line helps nobody. */
+    @Override
+    public String toString() {
+        return "UploadedFile[originalName=" + originalName + ", mimeType=" + mimeType + ", size=" + size + "]";
     }
 }

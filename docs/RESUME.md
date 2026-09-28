@@ -4,8 +4,16 @@
 PR #65). Read [its section](#ccd-linking-lifecycle--plan-02b-complete-2026-09-27) first. Plan 02 is merged
 on `master` (`3430346`, PR #63), so its section below is history, updated by 02b where the two disagree.
 
-**Master's red build was the OWASP gate, fixed by PR #68 (`da79005`, 2026-09-28).** Jenkins showed only "This
-commit cannot be built". The console log showed `dependencyCheckAggregate` failing on 56 CVEs, because plan 02's
+**Master's red build had two causes: the OWASP gate and the SonarCloud quality gate.** Jenkins showed only
+"This commit cannot be built". The OWASP gate was fixed by PR #68 (`da79005`, 2026-09-28), but builds #44 and #45
+still failed, on "Pipeline aborted due to quality gate failure: ERROR". That line was in the first log too. Sonar
+rated new-code security D and reliability C against a limit of A. The `sonar-quality-gate` branch fixes the code
+issues. The rest (two CSRF-disabled chains, both stateless bearer-token APIs, and the deliberate 25 MB upload
+limit) must be marked safe in SonarCloud. The Sonar gate is measured by
+`api/qualitygates/project_status?projectKey=uk.gov.hmcts.reform:deed-poll-api`, which the devcontainer can
+reach, so check it before blaming anything else.
+
+**The OWASP half:** the console log showed `dependencyCheckAggregate` failing on 56 CVEs, because plan 02's
 Boot 3.5.16 upgrade moved every dependency off the exact versions the temporary suppressions in
 `config/owasp/suppressions.xml` were pinned to. The CCD runtime also added Jackson 3, Kotlin and OpenTelemetry,
 which had no suppressions. #68 suppresses exactly those 56 CVEs at the versions now in use. **Every temporary

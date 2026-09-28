@@ -158,7 +158,7 @@ class DataverseSchemaConformanceTest {
         List<String> related = DataverseArtifacts.loadRelationships(TableDir.DEEDPOLL).stream()
             .filter(relationship -> "One-to-many".equals(relationship.relationshipType()))
             .map(RelationshipRow::relatedTable)
-            .filter(table -> table.matches(".*(Supporting Document|Witness|Note).*"))
+            .filter(table -> List.of("Supporting Document", "Witness", "Note").stream().anyMatch(table::contains))
             .sorted()
             .toList();
 
