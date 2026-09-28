@@ -34,7 +34,7 @@ The stub encodes our reading of dm-store's contract. The published spec
 4. A manual Gradle task compares the copy of the spec with `cnp-api-docs` and reports differences. It isn't
    scheduled, because api has no nightly pipeline. A `Jenkinsfile_nightly` would be separate work.
 
-**Decision 2026-09-28 (Steve): split into three plans, each mergeable on its own.**
+**Decision 2026-09-28 (Steve): split into three plans, each mergeable on its own.** 03a is written: [deed-poll-api-03a-cdam-core-round-trip.md](deed-poll-api-03a-cdam-core-round-trip.md).
 - **03a, core round trip:** the `DocumentStore` seam, document states, the projection field and document event,
   upload, attach and download, the WireMock dm-store and its guards, and config and the runbook.
 - **03b, callers:** generated LOC020/LOC022 deeds, Notify's drain-time retrieval, and pre-case staging, retry and
