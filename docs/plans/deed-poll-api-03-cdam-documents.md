@@ -15,6 +15,50 @@ with an operator view. The rejected alternative was linking on demand inside the
 would reach CDAM sooner, but the request path would be messier. Dataverse documents are unaffected by this
 choice; they move by this plan's document migration either way.
 
+**Decision 2026-09-28 (Steve): the cftlib tests use a WireMock dm-store, with real CDAM and CCD.** cftlib runs
+CDAM in-process but points it at AAT's dm-store (`DM_STORE_BASE_URL` in `LibRunner.java`). Tests make no live
+calls, so `DM_STORE_BASE_URL` points at a stub of dm-store's API instead. The hash token, the attach step and the
+CCD-backed permission check stay real. Rejected: a containerised dm-store (plus Postgres and Azurite), which is too
+heavy on top of cftlib's ~5.1 GB peak, and stubbing CDAM, which would prove none of the attach or permission rules.
+
+The stub encodes our reading of dm-store's contract. The published spec
+(`cnp-api-docs/docs/specs/document-management-store-app.json`, "2-beta") types almost every response as a bare
+`object`, so the spec alone can't pin the response bodies CDAM reads. Four guards against divergence:
+1. The stub records the cftlib version it was built against (`0.19.2377`, which also pins CDAM) and the spec
+   commit. A unit test fails when the cftlib plugin version in `build.gradle` changes and the recorded value
+   doesn't.
+2. A copy of the spec lives in test resources. A unit test checks that every request the stub accepts
+   exists in it: method, path, required headers and multipart fields.
+3. The operator-run AAT round-trip also captures dm-store's real response bodies, and the stub is built from
+   those captures, not from guesswork.
+4. A manual Gradle task compares the copy of the spec with `cnp-api-docs` and reports differences. It isn't
+   scheduled, because api has no nightly pipeline. A `Jenkinsfile_nightly` would be separate work.
+
+**Decision 2026-09-28 (Steve): split into three plans, each mergeable on its own.**
+- **03a, core round trip:** the `DocumentStore` seam, document states, the projection field and document event,
+  upload, attach and download, the WireMock dm-store and its guards, and config and the runbook.
+- **03b, callers:** generated LOC020/LOC022 deeds, Notify's drain-time retrieval, and pre-case staging, retry and
+  expiry.
+- **03c, migration:** the bounded migration of existing documents. It's kept separate because it is coupled to
+  Dataverse ingestion timing.
+
+**Decision 2026-09-28 (Steve): build 03a on `DEED_POLL_PLACEHOLDER`, as plan 02 was.** The jurisdiction, case
+type and S2S identity are still unconfirmed. Onboarding goes in a Dependencies section, not the task list, and only
+the operator-run AAT round-trip, which is also the capture of dm-store's real responses, waits on it. In cftlib the
+placeholder has to be added to CDAM's service-to-case-type permissions as well as CCD's. Onboarding gains a
+CDAM permissions entry. The "real confirmed" wording in the next section applies to that round-trip, not to the
+build.
+
+**Decision 2026-09-28 (Steve): a caseworker's delete is a CDAM soft delete.** The row and the case's document
+reference go, and after the commit the api calls CDAM's `DELETE /cases/documents/{id}` with `permanent=false` (the
+default, `CaseDocumentAmController.java:353`). A failed call is logged with both ids and does not fail the delete,
+the same as today's best-effort blob cleanup. `permanent=true` is never sent: permanent removal belongs to the
+[retention plan](retain-and-dispose.md). Recovery is laborious, since only the dm-store team can restore a
+soft-deleted document, but it is more than the current filesystem delete allows. A task must prove that a
+soft-deleted document can no longer be downloaded. Rejected: keeping the row as a local soft delete with our own
+restore path. Nobody has asked for undelete, so that's a new state every document read must filter, built ahead of
+need.
+
 ## Outcome
 
 Replace the development filesystem store with CDAM-backed document handling. Uploads,
