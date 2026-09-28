@@ -4,10 +4,14 @@
 PR #65). Read [its section](#ccd-linking-lifecycle--plan-02b-complete-2026-09-27) first. Plan 02 is merged
 on `master` (`3430346`, PR #63), so its section below is history, updated by 02b where the two disagree.
 
-**The master build for `24c8d97` is not green.** Its unit-test check-run passed (2,208), but Jenkins set
-`continuous-integration/jenkins/branch` to `error`, "This commit cannot be built", at 06:26:53Z on 2026-09-28. The
-cause is unknown until someone reads the Jenkins console log, which cannot be reached from the devcontainer. Do not
-diagnose it from the status alone. **Plan 03 (CDAM)** is next after that.
+**Master's red build was the OWASP gate, fixed by PR #68 (`da79005`, 2026-09-28).** Jenkins showed only "This
+commit cannot be built". The console log showed `dependencyCheckAggregate` failing on 56 CVEs, because plan 02's
+Boot 3.5.16 upgrade moved every dependency off the exact versions the temporary suppressions in
+`config/owasp/suppressions.xml` were pinned to. The CCD runtime also added Jackson 3, Kotlin and OpenTelemetry,
+which had no suppressions. #68 suppresses exactly those 56 CVEs at the versions now in use. **Every temporary
+suppression expires on 2026-10-16**, and the gate fails again that day unless the date is extended. Upgrading
+individual versions instead of suppressing is deferred to the end of development. Any future Boot upgrade will need
+the suppressions re-pinned. **Plan 03 (CDAM)** is next.
 
 **CCD foundation, 2026-09-27: plan 02 is complete** and merged (`3430346`).
 Read [its section](#ccd-foundation--plan-02-complete-2026-09-27) before anything about CCD further down, all of
