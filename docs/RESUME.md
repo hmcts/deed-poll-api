@@ -24,7 +24,7 @@ proper rewrite, and **its test figures are per-branch measurements from before t
 rather than quote them. **Read this before restarting the loop.**
 
 The rule this file exists to serve: **it must describe today, or it actively misleads.** notify-1, notify-5,
-notify-3, notify-3b, notify-6, notify-4b and notify-4c are all merged on `master`; notify-4a is filed too, with ②'s LOC024 still to attach. notify-5's four tasks capture the exact subject and plain-text body, provide
+notify-3, notify-3b, notify-6, notify-4b and notify-4c are all merged on `master`; notify-4a is filed too, and ②'s LOC024 was attached on 2026-09-28 (template v9). notify-5's four tasks capture the exact subject and plain-text body, provide
 the case-scoped correspondence read, return availability, history and slot defaults from the existing Email-tab
 GET, and pin the public wording and cross-case security boundary. notify-3 sends the confirmation email itself,
 with one referral-outcome email per referral enforced by the database.
@@ -141,7 +141,7 @@ request with `CCD_LINKING_SWEEP_ENABLED=true`.
 | Where | What is there |
 |---|---|
 | `master` / `origin/master` | **Everything.** notify-1, -5, -3 and -3b (PRs #29, #30, #38, #42), the three small Notify fixes (#43–#45: `applied_on_paper`, the measured JSON boolean, never printing the API key), the email case notes (#46, #48), notify-6 (#49, #50), the 4a/4b split (#51), notify-4b (#52) and notify-4c (#54). No Notify work sits on an unmerged branch |
-| [`plans/completed/notify-4a-attach-files-to-an-email.md`](plans/completed/notify-4a-attach-files-to-an-email.md) | **filed as complete 2026-09-26**, the last of the series. **All five tasks are ticked** (#56–#58): ① was sent for real, local admin → local api → real Notify, on 2026-09-26. The one item still open is ②'s LOC024 attachment (Steve's), and Task 5 is the handover table of what stands between ① / ② and AAT |
+| [`plans/completed/notify-4a-attach-files-to-an-email.md`](plans/completed/notify-4a-attach-files-to-an-email.md) | **filed as complete 2026-09-26**, the last of the series. **All five tasks are ticked** (#56–#58): ① was sent for real, local admin → local api → real Notify, on 2026-09-26. ②'s LOC024, its last open item, was attached on 2026-09-28 and read back from v9 as `((LOC024.pdf))`. Task 5 is the handover table of what stands between ① / ② and AAT |
 | `charts/deed-poll-api/values.yaml` | sets the ③ `b2cb5754-…`, ④ `a58c5a8c-…` (#59) and ⑤ `a67e7dd1-…` template ids and `NOTIFY_EMAIL_REPLY_TO_ID`. ① and ② are **deliberately not set** (4a's decision 7) until the deed has a durable store |
 
 V11 creates the outbox, V12 persists a machine-readable failure verdict, and V13 adds the
@@ -216,7 +216,7 @@ notify-3b track the applicant's reply                                      COMPL
 notify-6  chase missing documents            case-driven, repeatable       COMPLETE (PR #50)
 notify-4b generate the deed                  LOC020 and LOC022 from a case COMPLETE (PR #52)
 notify-4c preview attachments, forms notes   split out of 4a               COMPLETE (PR #54)
-notify-4a attach files to an email           the Notify upload seam        COMPLETE (#56–#58); ②'s LOC024 still to attach
+notify-4a attach files to an email           the Notify upload seam        COMPLETE (#56–#58); ②'s LOC024 attached 2026-09-28
 ```
 
 **Every template is authored on the non-prod Notify service**, and each was read back through
@@ -227,7 +227,7 @@ notify-4a attach files to an email           the Notify upload seam        COMPL
 ④ request-confirmation-to-proceed  a58c5a8c-7727-4d1f-af08-4953d9f3d33e   in the chart (2026-09-26, two previews)
 ⑤ chase-missing-documents          a67e7dd1-0f8c-4366-a1de-ca5fbc24ec98   in the chart
 ① forms-for-completion-adult       91a89945-bfa6-4423-86f5-be6f1c782aa5   sent for real locally; not in the chart
-② forms-for-completion-minor       a2500c11-b282-48c3-a196-9f5700d13c91   LOC024 not attached yet; not in the chart
+② forms-for-completion-minor       a2500c11-b282-48c3-a196-9f5700d13c91   LOC024 attached 2026-09-28 (v9); not in the chart
 ```
 
 The drafts behind them are in deed-poll-admin's `.business_context/notify-templates/`.
