@@ -122,7 +122,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         CcdCreationAttempt attempt = opened(deedPollId);
         assertThat(attempts.open(deedPollId)).as("Pending").isEmpty();
 
-        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isTrue();
+        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isPresent();
         assertThat(attempts.open(deedPollId)).as("Claimed").isEmpty();
 
         assertThat(attempts.move(attempt.getId(), Claimed, AwaitingConfirmation, null)).isTrue();
@@ -162,8 +162,8 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
     void claimIsExclusive() {
         CcdCreationAttempt attempt = opened(newCase());
 
-        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isTrue();
-        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isFalse();
+        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isPresent();
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isEmpty();
 
         CcdCreationAttempt claimed = repository.findById(attempt.getId()).orElseThrow();
         assertThat(claimed.getStatus()).isEqualTo(Claimed);
@@ -178,7 +178,8 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         CcdCreationAttempt attempt = opened(newCase());
         attempts.claim(attempt.getId(), "worker-1", LEASE);
 
-        assertThat(attempts.release(attempt.getId(), "CCD unavailable", AuditClock.now().minusSeconds(1))).isTrue();
+        assertThat(attempts.release(attempt.getId(), "worker-1", 1, "CCD unavailable",
+            AuditClock.now().minusSeconds(1))).isTrue();
         CcdCreationAttempt released = repository.findById(attempt.getId()).orElseThrow();
         assertThat(released.getStatus()).isEqualTo(Pending);
         assertThat(released.getClaimedBy()).isNull();
@@ -186,11 +187,46 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(released.getFailureDetail()).isEqualTo("CCD unavailable");
         assertThat(released.getNotBefore()).isNotNull();
 
-        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isTrue();
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isPresent();
         assertThat(repository.findById(attempt.getId()).orElseThrow().getAttempts()).isEqualTo(2);
         // A release is from Claimed only, so a second one changes nothing.
-        assertThat(attempts.release(attempt.getId(), "stale", AuditClock.now())).isTrue();
-        assertThat(attempts.release(attempt.getId(), "stale again", AuditClock.now())).isFalse();
+        assertThat(attempts.release(attempt.getId(), "worker-2", 2, "stale", AuditClock.now())).isTrue();
+        assertThat(attempts.release(attempt.getId(), "worker-2", 2, "stale again", AuditClock.now())).isFalse();
+    }
+
+    @Test
+    @DisplayName("a release is only for the claim's own worker at its own try, so a stale worker frees no fresh claim")
+    void releaseIsConditionalOnTheClaim() {
+        CcdCreationAttempt attempt = opened(newCase());
+        UUID id = attempt.getId();
+        attempts.claim(id, "worker-2", LEASE);
+
+        assertThat(attempts.release(id, "worker-1", 1, "stale", AuditClock.now())).as("another worker").isFalse();
+        assertThat(attempts.release(id, "worker-2", 2, "stale", AuditClock.now())).as("another try").isFalse();
+        CcdCreationAttempt held = repository.findById(id).orElseThrow();
+        assertThat(held.getStatus()).isEqualTo(Claimed);
+        assertThat(held.getClaimedBy()).isEqualTo("worker-2");
+
+        assertThat(attempts.release(id, "worker-2", 1, "refused", AuditClock.now())).isTrue();
+    }
+
+    @Test
+    @DisplayName("a worker's move out of Claimed is only for its own claim at its own try, and releases the claim")
+    void moveClaimIsConditionalOnTheClaim() {
+        CcdCreationAttempt attempt = opened(newCase());
+        UUID id = attempt.getId();
+        attempts.claim(id, "worker-2", LEASE);
+
+        assertThat(attempts.moveClaim(id, "worker-1", 1, NeedsRepair, "stale")).as("another worker").isFalse();
+        assertThat(attempts.moveClaim(id, "worker-2", 2, NeedsRepair, "stale")).as("another try").isFalse();
+        assertThat(repository.findById(id).orElseThrow().getStatus()).isEqualTo(Claimed);
+
+        assertThat(attempts.moveClaim(id, "worker-2", 1, NeedsRepair, "no attempts left")).isTrue();
+        CcdCreationAttempt repaired = repository.findById(id).orElseThrow();
+        assertThat(repaired.getStatus()).isEqualTo(NeedsRepair);
+        assertThat(repaired.getClaimedBy()).isNull();
+        assertThat(repaired.getLeaseExpiresAt()).isNull();
+        assertThat(repaired.getFailureDetail()).isEqualTo("no attempts left");
     }
 
     @Test
@@ -198,16 +234,16 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
     void releasedAttemptWaits() {
         CcdCreationAttempt attempt = opened(newCase());
         attempts.claim(attempt.getId(), "worker-1", LEASE);
-        attempts.release(attempt.getId(), "refused", AuditClock.now().plusMinutes(5));
+        attempts.release(attempt.getId(), "worker-1", 1, "refused", AuditClock.now().plusMinutes(5));
 
-        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isFalse();
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isEmpty();
         CcdCreationAttempt waiting = repository.findById(attempt.getId()).orElseThrow();
         assertThat(waiting.getStatus()).isEqualTo(Pending);
         assertThat(waiting.getAttempts()).isOne();
 
         jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"notBefore\" = ? WHERE \"id\" = ?",
             Timestamp.valueOf(AuditClock.now().minusSeconds(1)), attempt.getId());
-        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isTrue();
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).isPresent();
     }
 
     @Test
@@ -226,7 +262,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(repository.findById(id).orElseThrow().isSubmissionMayHaveReached()).isTrue();
 
         // Released, the flag stays: it records the attempt's history, and nothing resets it.
-        attempts.release(id, "refused", AuditClock.now().minusSeconds(1));
+        attempts.release(id, "worker-1", 1, "refused", AuditClock.now().minusSeconds(1));
         assertThat(repository.findById(id).orElseThrow().isSubmissionMayHaveReached()).isTrue();
         attempts.claim(id, "worker-1", LEASE);
         assertThat(repository.findById(id).orElseThrow().isSubmissionMayHaveReached()).isTrue();
@@ -297,11 +333,11 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         String notDue = caseCreatedDaysAgo(7);
         CcdCreationAttempt waiting = opened(notDue);
         attempts.claim(waiting.getId(), "worker-1", LEASE);
-        attempts.release(waiting.getId(), "refused", AuditClock.now().plusMinutes(5));
+        attempts.release(waiting.getId(), "worker-1", 1, "refused", AuditClock.now().plusMinutes(5));
         String due = caseCreatedDaysAgo(6);
         CcdCreationAttempt released = opened(due);
         attempts.claim(released.getId(), "worker-1", LEASE);
-        attempts.release(released.getId(), "refused", AuditClock.now().minusSeconds(1));
+        attempts.release(released.getId(), "worker-1", 1, "refused", AuditClock.now().minusSeconds(1));
         String claimed = caseCreatedDaysAgo(5);
         attempts.claim(opened(claimed).getId(), "worker-1", LEASE);
         awaiting(caseCreatedDaysAgo(4));
@@ -386,7 +422,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
     /** An attempt taken to NeedsRepair, with its submission flag set as asked, through the statements that do so. */
     private CcdCreationAttempt needingRepair(String deedPollId, boolean submitted) {
         CcdCreationAttempt attempt = opened(deedPollId);
-        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isTrue();
+        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isPresent();
         if (submitted) {
             assertThat(attempts.recordSubmission(attempt.getId(), "worker-1", 1)).isTrue();
         }
@@ -435,7 +471,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(retried.getRepairedOn()).isNotNull();
         assertThat(retried.getOperationId()).isEqualTo(attempt.getOperationId());
         assertThat(deedPolls.findById(attempt.getDeedPollId()).orElseThrow().getCcdCaseReference()).isNull();
-        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).as("due at once").isTrue();
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).as("due at once").isPresent();
     }
 
     @Test
@@ -492,7 +528,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         // The repair item has waited longest, so it heads the list.
         jdbc.update("UPDATE \"deedpoll_ccdcreationattempt\" SET \"modifiedOn\" = \"modifiedOn\" - interval '1 day' "
             + "WHERE \"id\" = ?", repair.getId());
-        assertThat(attempts.claim(linked.getId(), "worker-1", LEASE)).isTrue();
+        assertThat(attempts.claim(linked.getId(), "worker-1", LEASE)).isPresent();
         assertThat(attempts.move(linked.getId(), Claimed, Linked, null)).isTrue();
 
         assertThat(attempts.countsByStatus())
@@ -527,7 +563,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
     void concurrentClaimsYieldOneWinner() throws Exception {
         CcdCreationAttempt attempt = opened(newCase());
 
-        List<Boolean> results = race(worker -> attempts.claim(attempt.getId(), "worker-" + worker, LEASE));
+        List<Boolean> results = race(worker -> attempts.claim(attempt.getId(), "worker-" + worker, LEASE).isPresent());
 
         assertThat(results).containsOnlyOnce(true);
         CcdCreationAttempt claimed = repository.findById(attempt.getId()).orElseThrow();
@@ -583,7 +619,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
 
         // Through the service the same text is written, cut to fit.
         attempts.claim(attempt.getId(), "worker-1", LEASE);
-        assertThat(attempts.release(attempt.getId(), tooLong, AuditClock.now())).isTrue();
+        assertThat(attempts.release(attempt.getId(), "worker-1", 1, tooLong, AuditClock.now())).isTrue();
         assertThat(repository.findById(attempt.getId()).orElseThrow().getFailureDetail())
             .hasSize(CcdCreationAttempt.MAX_FAILURE_DETAIL);
     }

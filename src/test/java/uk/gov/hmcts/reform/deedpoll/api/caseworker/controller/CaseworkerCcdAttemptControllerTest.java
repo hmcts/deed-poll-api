@@ -328,7 +328,7 @@ class CaseworkerCcdAttemptControllerTest extends AbstractPostgresContainerTest {
 
     private CcdCreationAttempt needingRepair(boolean submitted) {
         CcdCreationAttempt attempt = opened();
-        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isTrue();
+        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isPresent();
         if (submitted) {
             assertThat(attempts.recordSubmission(attempt.getId(), "worker-1", 1)).isTrue();
         }

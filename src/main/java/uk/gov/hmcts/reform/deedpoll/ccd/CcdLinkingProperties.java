@@ -31,11 +31,20 @@ public record CcdLinkingProperties(String worker,
                                    int maxAttempts,
                                    Duration retryAfter) {
 
+    /**
+     * V22's {@code "claimedBy"} is 200 characters, and a claim adds a separator and a 36-character token.
+     */
+    static final int MAX_WORKER_LENGTH = 200 - 37;
+
     public CcdLinkingProperties {
         if (worker == null || worker.isBlank()) {
             throw new IllegalArgumentException("deedpoll.ccd.linking.worker must be set");
         }
         worker = worker.trim();
+        if (worker.length() > MAX_WORKER_LENGTH) {
+            throw new IllegalArgumentException(
+                "deedpoll.ccd.linking.worker must be at most " + MAX_WORKER_LENGTH + " characters");
+        }
         requirePositive("lease", lease);
         requirePositive("settle-after", settleAfter);
         requirePositive("retry-after", retryAfter);

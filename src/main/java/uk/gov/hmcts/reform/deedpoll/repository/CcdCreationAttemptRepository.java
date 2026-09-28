@@ -212,16 +212,30 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
               @Param("leaseUntil") LocalDateTime leaseUntil);
 
     /**
+     * The try one claim made the attempt, read back by {@link #claim}'s caller in the same transaction, whose UPDATE
+     * still holds the row. The count the caller read before claiming may be stale: a claim released since, or an
+     * admin's retry from scratch, moves it.
+     *
+     * @return the try, or empty if the attempt is not {@code Claimed} by this claimant
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT "attempts"
+          FROM "deedpoll_ccdcreationattempt"
+         WHERE "id" = :id
+           AND "status" = 'Claimed'
+           AND "claimedBy" = :claimedBy
+        """)
+    Optional<Integer> findTryOfClaim(@Param("id") UUID id, @Param("claimedBy") String claimedBy);
+
+    /**
      * Records, before {@code submitCaseCreation} is called, that this worker's submission may reach CCD (V23).
      *
      * <p>Conditional on the claim being this worker's and still live: {@code Claimed}, by this worker, at this try,
-     * under a lease that has not run out. The try count stands for the claim, because every claim adds one, so a
-     * worker whose attempt was taken off it and claimed again -- even by another thread in the same pod, which
-     * shares the worker name -- matches nothing. The one exception is an admin's retry from scratch, which resets
-     * the count: a worker stalled past its lease across that retry could match a fresh claim at the same try. What
-     * stops that becoming a second case is the binding, written once by {@code LinkDeedPollHandler}.
-     * {@code "leaseExpiresAt"} itself is not compared: it is stored to the millisecond and the service holds it to the
-     * nanosecond.
+     * under a lease that has not run out. {@code "claimedBy"} is the claimant {@code CcdLinkingService} mints for
+     * each claim -- the worker's name and a fresh token -- so a worker whose attempt was taken off it and claimed
+     * again, even by another thread in the same pod or at the same try after an admin's retry from scratch reset
+     * the count, matches nothing. {@code "leaseExpiresAt"} itself is not compared: it is stored to the millisecond
+     * and the service holds it to the nanosecond.
      *
      * <p>Only ever set to true. The flag is about the attempt's history, so nothing resets it.
      *
@@ -249,7 +263,12 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
      * <p>Not {@link #move}, because a release has to say when the attempt is next due, and a release that forgot
      * would be claimed again by the very next call -- which, while CCD is refusing, spends every try at once.
      *
-     * @return 1 if this statement released it, 0 if it was no longer {@code Claimed}
+     * <p>Keyed on the claim by claimant and try, as {@link #recordSubmission} is, so a worker whose claim was taken
+     * off it and granted afresh -- to the same pod, even at the same try -- cannot release the fresh one. The lease
+     * is not compared: it is the row's, not the caller's, and a worker whose own lease lapsed unnoticed may still say
+     * that it created nothing.
+     *
+     * @return 1 if this statement released it, 0 if it was no longer this worker's claim at this try
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(nativeQuery = true, value = """
@@ -262,8 +281,12 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
                "modifiedOn" = :now
          WHERE "id" = :id
            AND "status" = 'Claimed'
+           AND "claimedBy" = :claimedBy
+           AND "attempts" = :attempts
         """)
     int release(@Param("id") UUID id,
+                @Param("claimedBy") String claimedBy,
+                @Param("attempts") int attempts,
                 @Param("failureDetail") String failureDetail,
                 @Param("notBefore") LocalDateTime notBefore,
                 @Param("now") LocalDateTime now);
@@ -292,6 +315,36 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
     int takeExpiredClaim(@Param("id") UUID id,
                          @Param("failureDetail") String failureDetail,
                          @Param("now") LocalDateTime now);
+
+    /**
+     * Moves this worker's own claim on from {@code Claimed}, releasing it.
+     *
+     * <p>Keyed on the claim by claimant and try, as {@link #release} is, and for the same reason: a worker stalled
+     * past its lease, across reconciliation and an admin's retry, must not settle somebody else's fresh claim --
+     * whose submission, if its callback then read {@code NeedsRepair}, would create a case that nothing binds.
+     *
+     * @param failureDetail what went wrong, already bounded by the caller, or null to clear it
+     * @return 1 if this statement moved it, 0 if it was no longer this worker's claim at this try
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+        UPDATE "deedpoll_ccdcreationattempt"
+           SET "status" = CAST(:to AS "CcdCreationAttemptStatus"),
+               "claimedBy" = NULL,
+               "leaseExpiresAt" = NULL,
+               "failureDetail" = :failureDetail,
+               "modifiedOn" = :now
+         WHERE "id" = :id
+           AND "status" = 'Claimed'
+           AND "claimedBy" = :claimedBy
+           AND "attempts" = :attempts
+        """)
+    int moveClaim(@Param("id") UUID id,
+                  @Param("claimedBy") String claimedBy,
+                  @Param("attempts") int attempts,
+                  @Param("to") String to,
+                  @Param("failureDetail") String failureDetail,
+                  @Param("now") LocalDateTime now);
 
     /**
      * Moves an attempt from the status the caller last saw to another, releasing any claim on it.

@@ -162,17 +162,19 @@ class CcdCreationAttemptsTest {
     @Test
     @DisplayName("a release must say when the attempt is next due, and bounds its detail like a move")
     void releaseSetsWhenNextDue() {
-        assertThatThrownBy(() -> attempts.release(ATTEMPT, "refused", null))
+        assertThatThrownBy(() -> attempts.release(ATTEMPT, "worker-1", 1, "refused", null))
             .isInstanceOf(IllegalArgumentException.class);
         verifyNoInteractions(repository);
 
         LocalDateTime due = LocalDateTime.of(2026, 9, 27, 12, 5);
         String verbose = "x".repeat(CcdCreationAttempt.MAX_FAILURE_DETAIL + 1);
-        when(repository.release(eq(ATTEMPT), anyString(), eq(due), any())).thenReturn(1, 0);
+        when(repository.release(eq(ATTEMPT), eq("worker-1"), eq(1), anyString(), eq(due), any()))
+            .thenReturn(1, 0);
 
-        assertThat(attempts.release(ATTEMPT, verbose, due)).isTrue();
-        assertThat(attempts.release(ATTEMPT, verbose, due)).isFalse();
-        verify(repository, times(2)).release(eq(ATTEMPT), eq("x".repeat(CcdCreationAttempt.MAX_FAILURE_DETAIL)),
+        assertThat(attempts.release(ATTEMPT, "worker-1", 1, verbose, due)).isTrue();
+        assertThat(attempts.release(ATTEMPT, "worker-1", 1, verbose, due)).isFalse();
+        verify(repository, times(2)).release(eq(ATTEMPT), eq("worker-1"), eq(1),
+            eq("x".repeat(CcdCreationAttempt.MAX_FAILURE_DETAIL)),
             eq(due), any(LocalDateTime.class));
     }
 
@@ -184,6 +186,25 @@ class CcdCreationAttemptsTest {
         assertThat(attempts.recordSubmission(ATTEMPT, "worker-1", 2)).isTrue();
         assertThat(attempts.recordSubmission(ATTEMPT, "worker-1", 1)).isFalse();
         assertThat(attempts.recordSubmission(ATTEMPT, "worker-2", 2)).isFalse();
+    }
+
+    @Test
+    @DisplayName("a worker moves its own claim on only at this try, never back to Pending, and bounds its detail")
+    void moveClaimIsConditionalOnTheClaim() {
+        assertThatThrownBy(() -> attempts.moveClaim(ATTEMPT, "worker-1", 1, Pending, null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("release()");
+        assertThatThrownBy(() -> attempts.moveClaim(ATTEMPT, "worker-1", 1, Claimed, null))
+            .isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(repository);
+
+        String verbose = "x".repeat(CcdCreationAttempt.MAX_FAILURE_DETAIL + 1);
+        when(repository.moveClaim(eq(ATTEMPT), eq("worker-1"), eq(2), eq("NeedsRepair"),
+            eq("x".repeat(CcdCreationAttempt.MAX_FAILURE_DETAIL)), any())).thenReturn(1);
+
+        assertThat(attempts.moveClaim(ATTEMPT, "worker-1", 2, NeedsRepair, verbose)).isTrue();
+        assertThat(attempts.moveClaim(ATTEMPT, "worker-1", 1, NeedsRepair, verbose)).isFalse();
+        assertThat(attempts.moveClaim(ATTEMPT, "worker-2", 2, NeedsRepair, verbose)).isFalse();
     }
 
     @Test
@@ -245,8 +266,9 @@ class CcdCreationAttemptsTest {
     @DisplayName("a claim's lease runs from the moment it is taken")
     void claimLeaseRunsFromNow() {
         when(repository.claim(eq(ATTEMPT), eq("worker-1"), any(), any())).thenReturn(1);
+        when(repository.findTryOfClaim(ATTEMPT, "worker-1")).thenReturn(Optional.of(3));
 
-        assertThat(attempts.claim(ATTEMPT, "worker-1", Duration.ofMinutes(5))).isTrue();
+        assertThat(attempts.claim(ATTEMPT, "worker-1", Duration.ofMinutes(5))).hasValue(3);
 
         ArgumentCaptor<LocalDateTime> now = ArgumentCaptor.forClass(LocalDateTime.class);
         ArgumentCaptor<LocalDateTime> until = ArgumentCaptor.forClass(LocalDateTime.class);

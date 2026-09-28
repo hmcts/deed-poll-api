@@ -411,7 +411,7 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
     void expiredClaimIsReconciled() {
         String record = record();
         CcdCreationAttempt attempt = attempts.live(record).orElseThrow();
-        assertThat(attempts.claim(attempt.getId(), "a-worker-that-died", Duration.ofMinutes(5))).isTrue();
+        assertThat(attempts.claim(attempt.getId(), "a-worker-that-died", Duration.ofMinutes(5))).isPresent();
         jdbc.update("""
             UPDATE "deedpoll_ccdcreationattempt" SET "leaseExpiresAt" = "leaseExpiresAt" - interval '1 day'
              WHERE id = ?

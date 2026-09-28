@@ -60,6 +60,11 @@ class SystemUserTokensTest {
             .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CcdLinkingProperties("w", minute, minute, 1, null))
             .isInstanceOf(IllegalArgumentException.class);
+        // A claimant is the name, a separator and a UUID, and has to fit V22's 200-character "claimedBy".
+        assertThatThrownBy(() -> new CcdLinkingProperties("w".repeat(164), minute, minute, 1, minute))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThat(CcdLinkingService.claimant(
+            new CcdLinkingProperties("w".repeat(163), minute, minute, 1, minute).worker())).hasSize(200);
         assertThat(new CcdLinkingProperties(" pod-1 ", minute, minute, 1, minute).worker()).isEqualTo("pod-1");
     }
 }

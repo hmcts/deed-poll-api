@@ -19,6 +19,7 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.UUID;
 
 /**
@@ -102,17 +103,25 @@ public class CcdCreationAttempts {
     /**
      * Takes a {@code Pending} attempt for one worker for the length of a lease, if it is due.
      *
+     * <p>The try is read back from the row the claim holds, not added to a count the caller read earlier, because
+     * that read may be stale -- another worker's claim released since, or an admin's retry from scratch, moves it --
+     * and every later move of this claim is keyed on the try.
+     *
      * @param worker who holds it, for attribution and diagnosis -- a worker name, never a user's
-     * @return true if this worker now holds it; false if another took it, it was no longer {@code Pending}, or its
-     *     {@code notBefore} has not yet passed
+     * @return the try this claim made it, if this worker now holds it; empty if another took it, it was no longer
+     *     {@code Pending}, or its {@code notBefore} has not yet passed
      */
     @Transactional
-    public boolean claim(UUID attemptId, String worker, Duration lease) {
+    public OptionalInt claim(UUID attemptId, String worker, Duration lease) {
         if (lease.isNegative() || lease.isZero()) {
             throw new IllegalArgumentException("A claim's lease must be positive");
         }
         LocalDateTime now = AuditClock.now();
-        return attempts.claim(attemptId, worker, now, now.plus(lease)) == 1;
+        if (attempts.claim(attemptId, worker, now, now.plus(lease)) != 1) {
+            return OptionalInt.empty();
+        }
+        return OptionalInt.of(attempts.findTryOfClaim(attemptId, worker).orElseThrow(
+            () -> new IllegalStateException("A claim this transaction made is not there to read")));
     }
 
     /**
@@ -134,15 +143,45 @@ public class CcdCreationAttempts {
      * Gives a claim that created nothing back as {@code Pending}, due again at {@code notBefore} (plan 02b, decision
      * 6). The only way an attempt goes from {@code Claimed} back to {@code Pending}.
      *
+     * <p>Conditional on the claim being this worker's at this try, as {@link #recordSubmission} is: a worker that
+     * stalled past its lease, across an admin's retry, must not hand back somebody else's fresh claim, whose
+     * submission may already have bound the record -- and a bound record is never due for linking again.
+     *
+     * @param attempts the try this worker's claim made it, which identifies the claim
      * @param failureDetail what went wrong; bounded as {@link #move} bounds it
-     * @return true if this call released it; false if it was no longer {@code Claimed}
+     * @return true if this call released it; false if it was no longer this worker's claim
      */
     @Transactional
-    public boolean release(UUID attemptId, String failureDetail, LocalDateTime notBefore) {
+    public boolean release(UUID attemptId, String worker, int attempts, String failureDetail,
+                           LocalDateTime notBefore) {
         if (notBefore == null) {
             throw new IllegalArgumentException("A released attempt must say when it is next due");
         }
-        return attempts.release(attemptId, bounded(failureDetail), notBefore, AuditClock.now()) == 1;
+        return this.attempts.release(attemptId, worker, attempts, bounded(failureDetail), notBefore,
+            AuditClock.now()) == 1;
+    }
+
+    /**
+     * Moves this worker's own claim on from {@code Claimed}, as {@link #move} would, but only while the claim is
+     * still this worker's at this try -- conditional as {@link #release} and {@link #recordSubmission} are.
+     *
+     * @param attempts the try this worker's claim made it, which identifies the claim
+     * @param failureDetail what went wrong, or null to clear it; bounded as {@link #move} bounds it
+     * @return true if this call moved it; false if it was no longer this worker's claim
+     * @throws IllegalStateException if the rule does not allow {@code Claimed -> to}, or if {@code to} is
+     *     {@code Pending}, which only {@link #release} may do
+     */
+    @Transactional
+    public boolean moveClaim(UUID attemptId, String worker, int attempts, CcdCreationAttemptStatus to,
+                             String failureDetail) {
+        if (to == CcdCreationAttemptStatus.Pending) {
+            throw new IllegalStateException("A claim is released through release(), which sets when it is next due");
+        }
+        if (!CcdCreationAttemptStatus.Claimed.canMoveTo(to)) {
+            throw new IllegalStateException("A CCD creation attempt cannot move from Claimed to " + to);
+        }
+        return this.attempts.moveClaim(attemptId, worker, attempts, to.name(), bounded(failureDetail),
+            AuditClock.now()) == 1;
     }
 
     /**
