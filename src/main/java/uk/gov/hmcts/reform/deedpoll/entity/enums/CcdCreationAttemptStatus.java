@@ -21,10 +21,10 @@ import java.util.Set;
  *
  * <p><strong>One edge is conditional, and its condition is not here.</strong> {@code NeedsRepair -> Pending} is an
  * admin's "try again from scratch" (plan 02b), and it is legal only while the attempt's
- * {@code submissionMayHaveReached} is false -- a fact about the row, not the state, so an enum of states cannot
- * hold it. {@code CcdLinkingRule.mayRetryFromScratch} states the whole condition; {@link #canMoveTo} says only
- * that the edge exists. That keeps the principle true: an attempt that may have been submitted still never gets
- * back to {@link #Pending}.
+ * {@code submissionMayHaveReached} is false or its {@code provenNothingCreated} is true -- facts about the row, not
+ * the state, so an enum of states cannot hold them. {@code CcdLinkingRule.mayRetryFromScratch} states the whole
+ * condition; {@link #canMoveTo} says only that the edge exists. That keeps the principle true: an attempt that may
+ * have created a case still never gets back to {@link #Pending}.
  */
 public enum CcdCreationAttemptStatus {
 
@@ -74,7 +74,8 @@ public enum CcdCreationAttemptStatus {
      * that caller, since nobody knows how far it got, so it goes to {@link #AwaitingConfirmation}.
      *
      * <p>{@code NeedsRepair -> Pending} is the other, and it is conditional: legal only while nothing may have been
-     * submitted, which {@code CcdLinkingRule.mayRetryFromScratch} decides and this method cannot.
+     * submitted or it is proven that nothing submitted created a case, which {@code CcdLinkingRule.mayRetryFromScratch}
+     * decides and this method cannot.
      *
      * @return the legal targets, empty for {@link #Linked}
      */

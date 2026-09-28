@@ -103,9 +103,16 @@ src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one e
   claim was lost and nothing is submitted. A submission path that calls CCD before the write, or a statement that
   sets the flag back to false (including the retry itself), lets an admin re-send something that may already have
   created a case. The retry's SQL repeats the `= false` condition that `CcdLinkingRule.mayRetryFromScratch` states,
-  so a stale read cannot slip past it. V23 backfilled existing rows to true for the same reason. The price is a dead
-  end: an attempt whose tries ran out on refused submissions is `NeedsRepair` with the flag true, so neither repair
-  move links it (`docs/RESUME.md` open item 8, undecided). Do not work round it by resetting the flag.
+  so a stale read cannot slip past it. V23 backfilled existing rows to true for the same reason. Do not reset the
+  flag to unstick an attempt.
+- **`provenNothingCreated` (V24) is the flag's one exception, and it has exactly one writer of true.** A refused
+  submission sets the flag too, so an attempt whose tries ran out on refusals would otherwise be stuck.
+  `CcdCreationAttempts.exhaust` moves such a claim to `NeedsRepair` and sets the fact. It is called only from
+  `CcdLinkingService.nothingCreated`, when the tries are used up. `retryFromScratch` accepts either condition, in
+  `mayRetryFromScratch` and in its SQL. `reconcileAgain` keeps the fact, because reconciliation never submits.
+  `retryFromScratch` clears it: the fresh run of claims must earn its own. It is safe only because `release` and
+  that retry are the only ways back to `Pending`. A new path into `NeedsRepair` must not set it, and a new way back
+  to `Pending` would make it unsound.
 - **The case list request links records, so a new caller of the sweep must be outside any transaction.**
   `CaseworkerReadController.cases` calls `CcdLinkingSweep.sweep()` after the response is computed and after
   `outbox.drain()`. The sweep commits each claim before CCD is called, and data-store's callback has to read that

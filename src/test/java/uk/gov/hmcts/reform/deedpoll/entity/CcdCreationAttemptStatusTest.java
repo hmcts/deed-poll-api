@@ -129,12 +129,15 @@ class CcdCreationAttemptStatusTest {
     @DisplayName("NeedsRepair -> Pending is the only conditional edge, and the only way back to Pending but Claimed's")
     void theOnlyConditionalEdgeIsTheRetryFromScratch() {
         // Every edge into Pending but Claimed's -- whose caller asserts nothing was submitted -- has to be gated on
-        // submissionMayHaveReached, or an attempt that may have reached CCD could be started again.
+        // submissionMayHaveReached and provenNothingCreated, or an attempt that may have created a case could be
+        // started again.
         for (CcdCreationAttemptStatus from : CcdCreationAttemptStatus.values()) {
             if (from != Claimed && from.canMoveTo(Pending)) {
                 assertThat(from).isEqualTo(NeedsRepair);
-                assertThat(CcdLinkingRule.mayRetryFromScratch(from, true)).as("refused once submitted").isFalse();
-                assertThat(CcdLinkingRule.mayRetryFromScratch(from, false)).as("allowed before").isTrue();
+                assertThat(CcdLinkingRule.mayRetryFromScratch(from, true, false)).as("refused once submitted")
+                    .isFalse();
+                assertThat(CcdLinkingRule.mayRetryFromScratch(from, false, false)).as("allowed before").isTrue();
+                assertThat(CcdLinkingRule.mayRetryFromScratch(from, true, true)).as("allowed once proven").isTrue();
             }
         }
     }
@@ -145,7 +148,8 @@ class CcdCreationAttemptStatusTest {
 
     /**
      * Every status reachable from {@code start}, taking the conditional {@code NeedsRepair -> Pending} edge only
-     * where {@link CcdLinkingRule#mayRetryFromScratch} allows it for {@code submissionMayHaveReached}.
+     * where {@link CcdLinkingRule#mayRetryFromScratch} allows it for {@code submissionMayHaveReached}, with nothing
+     * proven.
      */
     private static Set<CcdCreationAttemptStatus> reachableFrom(CcdCreationAttemptStatus start,
                                                                boolean submissionMayHaveReached) {
@@ -164,7 +168,7 @@ class CcdCreationAttemptStatusTest {
                                                            boolean submissionMayHaveReached) {
         Set<CcdCreationAttemptStatus> edges = EnumSet.noneOf(CcdCreationAttemptStatus.class);
         edges.addAll(from.successors());
-        if (from == NeedsRepair && !CcdLinkingRule.mayRetryFromScratch(from, submissionMayHaveReached)) {
+        if (from == NeedsRepair && !CcdLinkingRule.mayRetryFromScratch(from, submissionMayHaveReached, false)) {
             edges.remove(Pending);
         }
         return edges;

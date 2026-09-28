@@ -236,7 +236,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             schemas.get(schema).get("properties").fieldNames().forEachRemaining(properties::add);
             assertThat(properties).as(schema).doesNotContainAnyElementsOf(List.of(
                 "claimedBy", "leaseExpiresAt", "operationId", "submissionMayHaveReached", "repairedById",
-                "repairedOn", "notBefore"));
+                "provenNothingCreated", "repairedOn", "notBefore"));
         }
         List<String> row = new ArrayList<>();
         schemas.get("CcdAttemptResponse").get("properties").fieldNames().forEachRemaining(row::add);

@@ -144,19 +144,28 @@ public final class CcdLinkingRule {
 
     /**
      * Whether an admin may send an attempt back to {@code Pending} to be tried again from scratch (plan 02b,
-     * decision 8): only from {@code NeedsRepair}, and only while nothing may have been submitted.
+     * decision 8): only from {@code NeedsRepair}, and only while nothing may have been submitted or it is proven that
+     * nothing submitted created a case (decision 9 as amended 2026-09-28).
      *
      * <p>The condition {@code CcdCreationAttemptStatus} cannot state, because it is a fact about the row rather than
      * the state. A retry from scratch starts a fresh event, whose fresh start-event token mints a fresh idempotency
      * key in data-store, so once {@code submitCaseCreation} may have been called it could create a second case for
      * one record. {@code submissionMayHaveReached} is committed before that call and never reset, and every row that
-     * predates it was backfilled true, so a true here refuses whatever else is known.
+     * predates it was backfilled true.
+     *
+     * <p>A refused submission sets that flag too, so on its own it would trap an attempt that ran out of tries on
+     * refusals. {@code provenNothingCreated} is the way out: set only when such a claim reaches {@code NeedsRepair},
+     * on the evidence the automatic path already acts on when it releases a claim to be sent again, and cleared by the
+     * retry this opens. Without it, a true flag refuses whatever else is known.
      *
      * @param status                   the attempt's status as last read
      * @param submissionMayHaveReached whether {@code submitCaseCreation} may have been called for it
+     * @param provenNothingCreated     whether it is proven that nothing it submitted created a case
      */
-    public static boolean mayRetryFromScratch(CcdCreationAttemptStatus status, boolean submissionMayHaveReached) {
-        return status == CcdCreationAttemptStatus.NeedsRepair && !submissionMayHaveReached;
+    public static boolean mayRetryFromScratch(CcdCreationAttemptStatus status,
+                                              boolean submissionMayHaveReached,
+                                              boolean provenNothingCreated) {
+        return status == CcdCreationAttemptStatus.NeedsRepair && (!submissionMayHaveReached || provenNothingCreated);
     }
 
     /**

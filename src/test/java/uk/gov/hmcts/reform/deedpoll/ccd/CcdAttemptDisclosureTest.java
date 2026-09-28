@@ -35,7 +35,8 @@ class CcdAttemptDisclosureTest {
      * display name under that name, so the worker is held out of the repair view's own types in {@link #WORKER}.
      */
     private static final List<String> UNPUBLISHED = List.of(
-        "leaseExpiresAt", "operationId", "submissionMayHaveReached", "repairedById", "repairedOn", "notBefore");
+        "leaseExpiresAt", "operationId", "submissionMayHaveReached", "provenNothingCreated", "repairedById",
+        "repairedOn", "notBefore");
 
     /** The worker that holds an attempt: a pod name, which the repair view's types never carry. */
     private static final String WORKER = "claimedBy";

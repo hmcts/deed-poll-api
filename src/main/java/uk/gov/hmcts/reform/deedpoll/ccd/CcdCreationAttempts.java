@@ -185,6 +185,24 @@ public class CcdCreationAttempts {
     }
 
     /**
+     * Moves this worker's own claim, which created nothing and has no tries left, to {@code NeedsRepair}, recording
+     * that nothing the attempt submitted created a case (plan 02b, decision 9 as amended; V24). The one write of
+     * {@code provenNothingCreated} as true, and conditional on the claim as {@link #moveClaim} is.
+     *
+     * <p>Only for a claim whose caller knows nothing was created: refused with nothing bound, or failed before
+     * submitting. Any other way into {@code NeedsRepair} goes through {@link #moveClaim} or {@link #move}, which leave
+     * the fact false, so an attempt that may have created a case is never retried from scratch.
+     *
+     * @param attempts the try this worker's claim made it, which identifies the claim
+     * @param failureDetail what went wrong; bounded as {@link #move} bounds it
+     * @return true if this call moved it; false if it was no longer this worker's claim
+     */
+    @Transactional
+    public boolean exhaust(UUID attemptId, String worker, int attempts, String failureDetail) {
+        return this.attempts.exhaust(attemptId, worker, attempts, bounded(failureDetail), AuditClock.now()) == 1;
+    }
+
+    /**
      * Moves an attempt on, from the status the caller last saw it in.
      *
      * @param failureDetail what went wrong, or null to clear it; truncated to the column's bound, and never to be
@@ -301,11 +319,12 @@ public class CcdCreationAttempts {
 
     /**
      * Sends an attempt {@code NeedsRepair} back to {@code Pending}, its tries reset and due now, recording who did --
-     * only if nothing may have been submitted (plan 02b, decision 8). The one way an attempt leaves
-     * {@code NeedsRepair} for {@code Pending}.
+     * only if nothing may have been submitted, or it is proven that nothing submitted created a case (plan 02b,
+     * decision 8, and decision 9 as amended). The one way an attempt leaves {@code NeedsRepair} for {@code Pending},
+     * and the one that clears {@code provenNothingCreated}, which the fresh run of claims must earn again.
      *
      * @param repairedById the admin's IDAM subject; attribution only, never published or logged
-     * @return true if this call moved it; false if it was no longer {@code NeedsRepair}, or may have been submitted
+     * @return true if this call moved it; false if it was no longer {@code NeedsRepair}, or may have created a case
      */
     @Transactional
     public boolean retryFromScratch(UUID attemptId, String repairedById) {

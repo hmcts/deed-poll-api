@@ -67,11 +67,19 @@ public class CcdCreationAttempt {
 
     /**
      * Whether {@code submitCaseCreation} may have been called for this attempt (V23). Once true it is never
-     * reset, and only while it is false may the attempt be retried from scratch; see
-     * {@code CcdLinkingRule.mayRetryFromScratch}. Rows that predate V23 were backfilled true.
+     * reset. While it is false, or {@link #provenNothingCreated} is true, the attempt may be retried from scratch;
+     * see {@code CcdLinkingRule.mayRetryFromScratch}. Rows that predate V23 were backfilled true.
      */
     @Column(name = "submissionMayHaveReached", nullable = false)
     private boolean submissionMayHaveReached;
+
+    /**
+     * Whether it is proven that nothing this attempt submitted created a case (V24): set only when a claim that
+     * created nothing ran out of tries, kept by "reconcile again", cleared by "retry from scratch". While it is true
+     * a retry from scratch is open whatever {@link #submissionMayHaveReached} says. Never published.
+     */
+    @Column(name = "provenNothingCreated", nullable = false)
+    private boolean provenNothingCreated;
 
     /**
      * When a {@code Pending} attempt may next be claimed; null means now (V23).

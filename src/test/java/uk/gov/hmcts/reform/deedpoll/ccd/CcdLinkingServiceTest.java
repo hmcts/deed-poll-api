@@ -133,6 +133,8 @@ class CcdLinkingServiceTest {
         attempts.attempt.setModifiedOn(AuditClock.now().minusDays(1));
         assertThat(linking.reconcileOutstanding()).isOne();
         assertThat(attempts.attempt.getStatus()).isEqualTo(NeedsRepair);
+        // The outcome was never known, so nothing proves the submission created nothing: no retry from scratch.
+        assertThat(attempts.attempt.isProvenNothingCreated()).isFalse();
         verify(ccd, times(1)).startCase(anyString(), anyString(), anyString(), anyString());
         verify(ccd, never()).getCase(anyString(), anyString(), anyString());
     }
@@ -180,6 +182,11 @@ class CcdLinkingServiceTest {
         assertThat(linking.link(RECORD)).isEqualTo(Result.NEEDS_REPAIR);
         assertThat(attempts.attempt.getFailureDetail())
             .isEqualTo("Submission refused: CCD answered HTTP 403; no attempts left");
+        // Every try was refused with nothing bound, so the admin may still start it again from scratch.
+        assertThat(attempts.attempt.isSubmissionMayHaveReached()).isTrue();
+        assertThat(attempts.attempt.isProvenNothingCreated()).isTrue();
+        assertThat(CcdLinkingRule.mayRetryFromScratch(NeedsRepair, true, attempts.attempt.isProvenNothingCreated()))
+            .isTrue();
         assertThat(linking.link(RECORD)).isEqualTo(Result.NEEDS_REPAIR);
         verify(ccd, times(3)).startCase(anyString(), anyString(), anyString(), anyString());
     }
@@ -378,6 +385,7 @@ class CcdLinkingServiceTest {
         assertThat(attempts.attempt.getStatus()).isEqualTo(NeedsRepair);
         assertThat(attempts.attempt.getFailureDetail())
             .isEqualTo("CCD reported a case created, but no reference is bound to the record");
+        assertThat(attempts.attempt.isProvenNothingCreated()).as("a case was reported created").isFalse();
     }
 
     @Test
@@ -667,6 +675,7 @@ class CcdLinkingServiceTest {
             copy.setAttempts(attempt.getAttempts());
             copy.setFailureDetail(attempt.getFailureDetail());
             copy.setSubmissionMayHaveReached(attempt.isSubmissionMayHaveReached());
+            copy.setProvenNothingCreated(attempt.isProvenNothingCreated());
             copy.setNotBefore(attempt.getNotBefore());
             copy.setCreatedOn(attempt.getCreatedOn());
             copy.setModifiedOn(attempt.getModifiedOn());
@@ -750,6 +759,16 @@ class CcdLinkingServiceTest {
                 return false;
             }
             return move(attemptId, Claimed, to, failureDetail);
+        }
+
+        @Override
+        public boolean exhaust(UUID attemptId, String worker, int tries, String failureDetail) {
+            if (attempt == null || !worker.equals(attempt.getClaimedBy()) || attempt.getAttempts() != tries
+                || !move(attemptId, Claimed, NeedsRepair, failureDetail)) {
+                return false;
+            }
+            attempt.setProvenNothingCreated(true);
+            return true;
         }
 
         @Override

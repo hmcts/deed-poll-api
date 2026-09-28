@@ -65,6 +65,13 @@ The sweep ships **switched off**, and switching it on is part of onboarding.
    nothing. Existing rows are backfilled **true**, the conservative value: a row nobody can vouch for is never
    retried from scratch. The column is never reset, not even by a retry from scratch, because "may have reached"
    is about the attempt's history, and a retry is allowed only while it is false.
+   **Amended 2026-09-28 (Steve):** the review found that a refused submission sets the flag too. So an attempt
+   whose tries ran out on refusals, with nothing bound, was stuck in `NeedsRepair`. V24 adds
+   `provenNothingCreated`, which is set only by the statement that moves such a claim to `NeedsRepair`. A retry is
+   now allowed while the flag is false **or** that fact is true. Reconciliation keeps the fact; the retry clears it.
+   The flag itself is still never reset. It is sound because a release is the only automatic way back to
+   `Pending`. So every earlier try of such an attempt also created nothing, and that is the evidence the automatic
+   path already acts on.
 10. **Repairs are attributed.** V23 adds `repairedById` (the IDAM subject, following V14's `claimedById`) and
     `repairedOn`. Neither is published in a DTO or a log line. No case note is written: this is a technical state,
     not part of the case's timeline (Steve, 2026-09-27). **Every repair is logged** at INFO, in fixed prose: the

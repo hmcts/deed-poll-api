@@ -12,8 +12,9 @@ import java.util.UUID;
  * carries the worker, the lease, the operation id and the repairer, and none of those is published (plan 02b,
  * decision 11). Selecting only what may be shown means nothing else is loaded to answer the list.
  *
- * <p>{@code submissionMayHaveReached} is here because the domain needs it to answer whether a retry from scratch is
- * allowed, and it stops there: {@code CcdAttemptSummary} carries the answer, not the flag.
+ * <p>{@code submissionMayHaveReached} and {@code provenNothingCreated} are here because the domain needs them to
+ * answer whether a retry from scratch is allowed, and they stop there: {@code CcdAttemptSummary} carries the answer,
+ * not the facts.
  *
  * @param id                       the attempt
  * @param deedPollId               the record it is for
@@ -23,6 +24,7 @@ import java.util.UUID;
  * @param failureDetail            what last went wrong, in fixed prose, or null
  * @param modifiedOn               when it last moved
  * @param submissionMayHaveReached whether {@code submitCaseCreation} may have been called for it
+ * @param provenNothingCreated     whether it is proven that nothing it submitted created a case (V24)
  */
 public record CcdAttemptRow(UUID id,
                             String deedPollId,
@@ -31,5 +33,6 @@ public record CcdAttemptRow(UUID id,
                             int attempts,
                             String failureDetail,
                             LocalDateTime modifiedOn,
-                            boolean submissionMayHaveReached) {
+                            boolean submissionMayHaveReached,
+                            boolean provenNothingCreated) {
 }

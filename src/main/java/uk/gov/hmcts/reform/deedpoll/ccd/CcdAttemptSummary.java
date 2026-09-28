@@ -12,9 +12,9 @@ import java.util.UUID;
  *
  * <p><strong>What is not here is the point.</strong> Not the worker or the lease, which are the linking operation's
  * bookkeeping; not the operation id, which is the attempt's identity towards CCD; not the repairer, whose IDAM subject
- * is attribution only; and not {@code submissionMayHaveReached} itself. The flag is replaced by the one question an
- * admin needs answered, {@link #canRetryFromScratch}, which {@link CcdLinkingRule#mayRetryFromScratch} answers -- so
- * the view and the refusal cannot disagree.
+ * is attribution only; and not {@code submissionMayHaveReached} or {@code provenNothingCreated} themselves. The facts
+ * are replaced by the one question an admin needs answered, {@link #canRetryFromScratch}, which
+ * {@link CcdLinkingRule#mayRetryFromScratch} answers -- so the view and the refusal cannot disagree.
  *
  * @param id                  the attempt, which the two repair routes address
  * @param deedPollId          the record it is for
@@ -44,7 +44,8 @@ public record CcdAttemptSummary(UUID id,
             row.attempts(),
             row.failureDetail(),
             row.modifiedOn(),
-            CcdLinkingRule.mayRetryFromScratch(row.status(), row.submissionMayHaveReached()));
+            CcdLinkingRule.mayRetryFromScratch(row.status(), row.submissionMayHaveReached(),
+                row.provenNothingCreated()));
     }
 
     /** Each row, in order. */

@@ -28,8 +28,9 @@ import java.util.stream.Collectors;
  *   <li><strong>Reconcile again</strong>, {@code NeedsRepair -> AwaitingConfirmation}: always open. The next sweep
  *       reads the binding and CCD, and links the record or, after the settle window, gives it back.</li>
  *   <li><strong>Try again from scratch</strong>, {@code NeedsRepair -> Pending}: open only while nothing may have
- *       been submitted ({@link CcdLinkingRule#mayRetryFromScratch}), because a fresh start after a submission is how
- *       one record gets two cases.</li>
+ *       been submitted, or it is proven that nothing submitted created a case
+ *       ({@link CcdLinkingRule#mayRetryFromScratch}), because a fresh start after a submission that may have created
+ *       one is how one record gets two cases.</li>
  * </ul>
  *
  * <p><strong>Neither move calls CCD, and neither touches the binding.</strong> There is no manual bind: nothing here
@@ -115,12 +116,12 @@ public class CcdAttemptRepairs {
 
     /**
      * Sends an attempt {@code NeedsRepair} back to {@code Pending} to be tried again from scratch, if nothing may have
-     * been submitted.
+     * been submitted or it is proven that nothing submitted created a case.
      *
      * @return the attempt as it now stands
      * @throws uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError unless the caller is an admin
      * @throws NotFoundError  for an unknown id
-     * @throws ConflictError  if the attempt is not {@code NeedsRepair}, or may already have reached CCD
+     * @throws ConflictError  if the attempt is not {@code NeedsRepair}, or may already have created a case in CCD
      */
     public CcdAttemptSummary retryFromScratch(String attemptId, CurrentUser caller) {
         caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
@@ -181,7 +182,8 @@ public class CcdAttemptRepairs {
     }
 
     private static void requireNothingSubmitted(CcdAttemptRow row) {
-        if (!CcdLinkingRule.mayRetryFromScratch(row.status(), row.submissionMayHaveReached())) {
+        if (!CcdLinkingRule.mayRetryFromScratch(row.status(), row.submissionMayHaveReached(),
+            row.provenNothingCreated())) {
             throw refused(row.id(), RETRY_FROM_SCRATCH, "409", new ConflictError(MAY_HAVE_REACHED));
         }
     }

@@ -115,7 +115,7 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
     @Query(value = """
         select new uk.gov.hmcts.reform.deedpoll.repository.CcdAttemptRow(
                    a.id, a.deedPollId, d.displayReference, a.status, a.attempts, a.failureDetail, a.modifiedOn,
-                   a.submissionMayHaveReached)
+                   a.submissionMayHaveReached, a.provenNothingCreated)
           from CcdCreationAttempt a
           join DeedPoll d on d.id = a.deedPollId
          where a.status <> :excluded
@@ -135,7 +135,7 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
     @Query(value = """
         select new uk.gov.hmcts.reform.deedpoll.repository.CcdAttemptRow(
                    a.id, a.deedPollId, d.displayReference, a.status, a.attempts, a.failureDetail, a.modifiedOn,
-                   a.submissionMayHaveReached)
+                   a.submissionMayHaveReached, a.provenNothingCreated)
           from CcdCreationAttempt a
           join DeedPoll d on d.id = a.deedPollId
          where a.status = :status
@@ -148,7 +148,7 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
     @Query("""
         select new uk.gov.hmcts.reform.deedpoll.repository.CcdAttemptRow(
                    a.id, a.deedPollId, d.displayReference, a.status, a.attempts, a.failureDetail, a.modifiedOn,
-                   a.submissionMayHaveReached)
+                   a.submissionMayHaveReached, a.provenNothingCreated)
           from CcdCreationAttempt a
           join DeedPoll d on d.id = a.deedPollId
          where a.id = :id
@@ -347,6 +347,39 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
                   @Param("now") LocalDateTime now);
 
     /**
+     * Moves this worker's own claim, which created nothing and has no tries left, to {@code NeedsRepair}, recording
+     * that nothing the attempt submitted created a case (V24).
+     *
+     * <p>Keyed on the claim by claimant and try, as {@link #moveClaim} and {@link #release} are. The one statement
+     * that sets {@code "provenNothingCreated"}: its caller has just been refused with nothing bound, or failed before
+     * submitting, and every earlier try of the attempt ended in a {@link #release} -- the only way back to
+     * {@code Pending} but {@link #retryFromScratch}, which clears the fact. So the proof covers the whole attempt, and
+     * it is the evidence the automatic path already acts on when it releases a claim to be sent again.
+     *
+     * @param failureDetail what went wrong, already bounded by the caller
+     * @return 1 if this statement moved it, 0 if it was no longer this worker's claim at this try
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+        UPDATE "deedpoll_ccdcreationattempt"
+           SET "status" = 'NeedsRepair',
+               "claimedBy" = NULL,
+               "leaseExpiresAt" = NULL,
+               "failureDetail" = :failureDetail,
+               "provenNothingCreated" = true,
+               "modifiedOn" = :now
+         WHERE "id" = :id
+           AND "status" = 'Claimed'
+           AND "claimedBy" = :claimedBy
+           AND "attempts" = :attempts
+        """)
+    int exhaust(@Param("id") UUID id,
+                @Param("claimedBy") String claimedBy,
+                @Param("attempts") int attempts,
+                @Param("failureDetail") String failureDetail,
+                @Param("now") LocalDateTime now);
+
+    /**
      * Moves an attempt from the status the caller last saw to another, releasing any claim on it.
      *
      * <p>Conditional on {@code from}, so a caller whose view is stale -- another worker moved the attempt first --
@@ -379,8 +412,10 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
      *
      * <p>Conditional on {@code NeedsRepair}, so of two admins acting at once exactly one moves it and the other gets
      * {@code 0}. {@code "failureDetail"} is left as it stands: it is why the attempt needed repair, and the next
-     * reconciliation overwrites it with whatever it finds. {@code "modifiedOn"} moves, which restarts the settle
-     * window reconciliation measures from, so a repaired attempt gets the whole window again before it can return.
+     * reconciliation overwrites it with whatever it finds. So is {@code "provenNothingCreated"} (V24): reconciliation
+     * never submits, so it cannot disprove the fact, and clearing it would trap an attempt whose admin reconciled
+     * first. {@code "modifiedOn"} moves, which restarts the settle window reconciliation measures from, so a repaired
+     * attempt gets the whole window again before it can return.
      *
      * @return 1 if this statement moved it, 0 if it was not {@code NeedsRepair}
      */
@@ -402,12 +437,16 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
      * An admin's "try again from scratch": {@code NeedsRepair -> Pending}, its tries reset and due now, attributed
      * (plan 02b, decisions 8 and 10).
      *
-     * <p><strong>Conditional on {@code "submissionMayHaveReached" = false} as well as the status</strong>, which is
-     * {@code CcdLinkingRule.mayRetryFromScratch} repeated in SQL, as the claim repeats {@code isDue}. The service
-     * asks the rule first and this statement refuses anyway, so an attempt that may have reached CCD is never sent
-     * back to {@code Pending}, whatever a caller read. The flag itself is not touched: it is the attempt's history.
+     * <p><strong>Conditional on {@code "submissionMayHaveReached" = false} or {@code "provenNothingCreated" = true}, as
+     * well as the status</strong>, which is {@code CcdLinkingRule.mayRetryFromScratch} repeated in SQL, as the claim
+     * repeats {@code isDue}. The service asks the rule first and this statement refuses anyway, so an attempt that may
+     * have created a case is never sent back to {@code Pending}, whatever a caller read.
      *
-     * @return 1 if this statement moved it, 0 if it was not {@code NeedsRepair} or may have been submitted
+     * <p>{@code "submissionMayHaveReached"} is not touched: it is the attempt's history. {@code "provenNothingCreated"}
+     * is cleared, because it speaks for the claims made so far, and the run of claims this starts must earn its own:
+     * after an unknown outcome in that run, a stale proof would open a second retry that could create a second case.
+     *
+     * @return 1 if this statement moved it, 0 if it was not {@code NeedsRepair} or may have created a case
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(nativeQuery = true, value = """
@@ -417,12 +456,13 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
                "leaseExpiresAt" = NULL,
                "attempts" = 0,
                "notBefore" = :now,
+               "provenNothingCreated" = false,
                "repairedById" = :repairedById,
                "repairedOn" = :now,
                "modifiedOn" = :now
          WHERE "id" = :id
            AND "status" = 'NeedsRepair'
-           AND "submissionMayHaveReached" = false
+           AND ("submissionMayHaveReached" = false OR "provenNothingCreated" = true)
         """)
     int retryFromScratch(@Param("id") UUID id,
                          @Param("repairedById") String repairedById,

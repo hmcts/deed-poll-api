@@ -93,8 +93,13 @@ class CcdAttemptRepairsTest {
     }
 
     private static CcdAttemptRow row(CcdCreationAttemptStatus status, boolean submissionMayHaveReached) {
+        return row(status, submissionMayHaveReached, false);
+    }
+
+    private static CcdAttemptRow row(CcdCreationAttemptStatus status, boolean submissionMayHaveReached,
+                                     boolean provenNothingCreated) {
         return new CcdAttemptRow(ATTEMPT, "record-1", "KBDP2026-000001", status, 3, "CCD refused the submission (422)",
-            LocalDateTime.of(2026, 9, 27, 12, 0), submissionMayHaveReached);
+            LocalDateTime.of(2026, 9, 27, 12, 0), submissionMayHaveReached, provenNothingCreated);
     }
 
     private void reads(CcdAttemptRow... rows) {
@@ -175,6 +180,7 @@ class CcdAttemptRepairsTest {
             assertThat(overview.total()).isEqualTo(2);
             assertThat(overview.totalPages()).isEqualTo(2);
             assertThat(CcdAttemptSummary.of(mayNot).canRetryFromScratch()).isFalse();
+            assertThat(CcdAttemptSummary.of(row(NeedsRepair, true, true)).canRetryFromScratch()).isTrue();
         }
 
         @ParameterizedTest
@@ -308,6 +314,19 @@ class CcdAttemptRepairsTest {
             assertThat(moved.status()).isEqualTo(Pending);
             assertThat(logged()).containsExactly(
                 "CCD creation attempt " + ATTEMPT + ": repair NeedsRepair -> Pending made");
+            assertNoIdentityLogged();
+        }
+
+        @Test
+        @DisplayName("moves an attempt that ran out of tries on refusals, submitted but proven to have created nothing")
+        void movesWhatIsProvenToHaveCreatedNothing() {
+            reads(row(NeedsRepair, true, true), row(Pending, true));
+            when(attempts.retryFromScratch(ATTEMPT, ADMIN_SUBJECT)).thenReturn(true);
+
+            CcdAttemptSummary moved = repairs.retryFromScratch(ATTEMPT.toString(), ADMIN);
+
+            assertThat(moved.status()).isEqualTo(Pending);
+            verify(attempts).retryFromScratch(ATTEMPT, ADMIN_SUBJECT);
             assertNoIdentityLogged();
         }
 

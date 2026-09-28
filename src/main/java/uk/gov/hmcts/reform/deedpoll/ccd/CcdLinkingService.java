@@ -275,8 +275,11 @@ public class CcdLinkingService {
 
     private Result nothingCreated(CcdCreationAttempt claimed, String claimant, int tries, String detail) {
         if (!CcdLinkingRule.mayTryAgain(tries, linking.maxAttempts())) {
-            return claimMoved(claimed, claimant, tries, NeedsRepair, detail + "; no attempts left",
-                Result.NEEDS_REPAIR);
+            // Recorded as proven to have created nothing (V24), so an admin can still retry from scratch: every try
+            // came here, and a refusal sets submissionMayHaveReached as surely as a lost answer does.
+            return attempts.exhaust(claimed.getId(), claimant, tries, detail + "; no attempts left")
+                ? Result.NEEDS_REPAIR
+                : current(claimed.getDeedPollId());
         }
         return attempts.release(claimed.getId(), claimant, tries, detail,
                 CcdLinkingRule.nextDue(AuditClock.now(), linking.retryAfter(), tries))

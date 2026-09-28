@@ -114,12 +114,13 @@ rest.
    - `POST /caseworker/ccd-attempts/{attemptId}/reconciliation` (`NeedsRepair -> AwaitingConfirmation`) is always
      open. Use it once the environment is fixed, so that the next sweep reads the binding and CCD again.
    - `POST /caseworker/ccd-attempts/{attemptId}/retry` (`NeedsRepair -> Pending`, tries reset) is open only while
-     `canRetryFromScratch` is true, meaning nothing was ever submitted to CCD for this attempt. Otherwise it is a 409
-     that says so. Use reconciliation instead.
-   - **Neither move helps an attempt that ran out of tries on refused submissions.** Its flag is true, so `retry`
-     is a 409. Nothing is bound, so `reconciliation` returns it to `NeedsRepair` after the settle window. Its
-     `failureDetail` ends `no attempts left`, and `canRetryFromScratch` is false. This is `RESUME.md`'s open item 8.
-     Stop and report it rather than editing the row.
+     `canRetryFromScratch` is true. That means either nothing was ever submitted to CCD for this attempt, or every
+     try was refused with nothing bound (its `failureDetail` ends `no attempts left`). Otherwise it is a 409 that
+     says so. Use reconciliation instead.
+   - **An attempt that ran out of tries on refused submissions is retryable** (V24, 2026-09-28). Fix the cause of
+     the refusals first, or the retry spends its tries the same way. Reconciling it first does not close the retry.
+     After a retry, a submission whose outcome is unknown makes the attempt non-retryable again, and that is
+     deliberate.
 3. Expect a 200 with the attempt as it now stands. An attempt that is not `NeedsRepair` is a 409, including the
    second of two admins acting at once. An unknown id is a 404. Every move, made or refused, is logged at INFO with
    the attempt id and without the admin's identity.

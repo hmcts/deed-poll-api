@@ -65,7 +65,8 @@ public class CaseworkerCcdAttemptController {
 
     /**
      * Try again from scratch: {@code NeedsRepair -> Pending}, its tries reset. Open only while nothing may have been
-     * submitted to CCD, which the list publishes as {@code canRetryFromScratch}.
+     * submitted to CCD, or it is proven that nothing submitted created a case, which the list publishes as
+     * {@code canRetryFromScratch}.
      *
      * <p>200 with the attempt as it now stands.
      */

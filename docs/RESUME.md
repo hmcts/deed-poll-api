@@ -35,6 +35,8 @@ What it adds, in `ccd/` unless named:
 - **V23** on `deedpoll_ccdcreationattempt`: `submissionMayHaveReached` (existing rows backfilled `true`, new rows
   `false`), `notBefore`, `repairedById` and `repairedOn`. `CcdCreationAttemptStatus` gains the conditional edge
   `NeedsRepair -> Pending`. Its condition is `CcdLinkingRule.mayRetryFromScratch`.
+- **V24** adds `provenNothingCreated`, so an attempt that ran out of tries on refusals can still be retried from
+  scratch (open item 8).
 - `CcdLinkingService` commits `submissionMayHaveReached = true` on its own `Claimed` row before
   `submitCaseCreation`, and submits nothing if that write matches nothing. A released attempt waits
   `CCD_LINKING_RETRY_AFTER` × tries (`notBefore`), and `claim` refuses a row that is not due.
@@ -380,7 +382,11 @@ What it does **not** give, and each of these is a real constraint on what a sess
    HelmRelease are also outstanding, and Jenkins folder configuration is unconfirmed.
 7. **A Docker-capable CNP agent** is the real fix for the CI gating, and is an external dependency —
    tracked in `cft-workspace/TRACKER.local.md` §4.
-8. **An attempt whose tries ran out on refused submissions has no way out of `NeedsRepair`** (found in review,
+8. **Resolved 2026-09-28: Steve chose the V24 fact.** `V24__ccd_attempt_proven_nothing_created.sql` adds
+   `provenNothingCreated`. It is set only by `CcdCreationAttempts.exhaust`, kept by reconciliation, and cleared by
+   the retry. `mayRetryFromScratch` accepts it as well as a false flag. `CcdLinkingScenariosTest` covers both
+   repair moves on such an attempt, and a retry that ends in an unknown outcome. The original finding follows.
+   **An attempt whose tries ran out on refused submissions had no way out of `NeedsRepair`** (found in review,
    2026-09-28). `submissionMayHaveReached` is set before every `submitCaseCreation` and never reset (plan 02b,
    decision 9). A 4xx that CCD refuses with nothing bound releases the attempt to `Pending` automatically, but once
    `CCD_LINKING_MAX_ATTEMPTS` is used up it lands in `NeedsRepair` with the flag true. `retry` is then a 409, and

@@ -491,6 +491,96 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("exhausting is only for the claim's own worker at its own try, and records that nothing was created")
+    void exhaustIsConditionalOnTheClaim() {
+        CcdCreationAttempt attempt = opened(newCase());
+        UUID id = attempt.getId();
+        attempts.claim(id, "worker-2", LEASE);
+        attempts.recordSubmission(id, "worker-2", 1);
+
+        assertThat(attempts.exhaust(id, "worker-1", 1, "stale")).as("another worker").isFalse();
+        assertThat(attempts.exhaust(id, "worker-2", 2, "stale")).as("another try").isFalse();
+        assertThat(repository.findById(id).orElseThrow().isProvenNothingCreated()).isFalse();
+
+        assertThat(attempts.exhaust(id, "worker-2", 1, "Submission refused: 422; no attempts left")).isTrue();
+        CcdCreationAttempt exhausted = repository.findById(id).orElseThrow();
+        assertThat(exhausted.getStatus()).isEqualTo(NeedsRepair);
+        assertThat(exhausted.getClaimedBy()).isNull();
+        assertThat(exhausted.getLeaseExpiresAt()).isNull();
+        assertThat(exhausted.getFailureDetail()).isEqualTo("Submission refused: 422; no attempts left");
+        assertThat(exhausted.isSubmissionMayHaveReached()).isTrue();
+        assertThat(exhausted.isProvenNothingCreated()).isTrue();
+        assertThat(attempts.exhaust(id, "worker-2", 1, "again")).as("no longer Claimed").isFalse();
+    }
+
+    @Test
+    @DisplayName("no other way into NeedsRepair records that nothing was created")
+    void onlyExhaustProvesNothingCreated() {
+        assertThat(needingRepair(newCase(), true).isProvenNothingCreated()).as("move").isFalse();
+
+        CcdCreationAttempt claimed = opened(newCase());
+        attempts.claim(claimed.getId(), "worker-1", LEASE);
+        attempts.moveClaim(claimed.getId(), "worker-1", 1, NeedsRepair, "contradicted");
+        assertThat(repository.findById(claimed.getId()).orElseThrow().isProvenNothingCreated()).as("moveClaim")
+            .isFalse();
+
+        CcdCreationAttempt waiting = awaiting(newCase());
+        attempts.repairIfUnbound(waiting, "nothing bound");
+        assertThat(repository.findById(waiting.getId()).orElseThrow().isProvenNothingCreated()).as("repairIfUnbound")
+            .isFalse();
+    }
+
+    @Test
+    @DisplayName("an attempt that ran out of tries on refusals may be retried from scratch, which clears the proof")
+    void retryFromScratchOpenOnceProvenAndClearsIt() {
+        CcdCreationAttempt attempt = exhausted(newCase());
+
+        // The repository directly: the SQL must allow it on its own, as it refuses on its own.
+        Integer moved = new TransactionTemplate(transactionManager)
+            .execute(status -> repository.retryFromScratch(attempt.getId(), "idam-admin", AuditClock.now()));
+        assertThat(moved).isOne();
+
+        CcdCreationAttempt retried = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(retried.getStatus()).isEqualTo(Pending);
+        assertThat(retried.getAttempts()).isZero();
+        assertThat(retried.isSubmissionMayHaveReached()).as("the attempt's history").isTrue();
+        assertThat(retried.isProvenNothingCreated()).as("the fresh run must earn its own").isFalse();
+
+        // The fresh run's outcome is unknown this time: nothing proves it, so the flag refuses the second retry.
+        assertThat(attempts.claim(attempt.getId(), "worker-2", LEASE)).hasValue(1);
+        assertThat(attempts.moveClaim(attempt.getId(), "worker-2", 1, AwaitingConfirmation, "unknown")).isTrue();
+        assertThat(attempts.repairIfUnbound(repository.findById(attempt.getId()).orElseThrow(), "unbound")).isTrue();
+        assertThat(attempts.retryFromScratch(attempt.getId(), "idam-admin")).isFalse();
+        assertThat(repository.findById(attempt.getId()).orElseThrow().getStatus()).isEqualTo(NeedsRepair);
+    }
+
+    @Test
+    @DisplayName("reconcile again keeps the proof, so an admin who reconciled first can still retry")
+    void reconcileAgainKeepsTheProof() {
+        CcdCreationAttempt attempt = exhausted(newCase());
+
+        assertThat(attempts.reconcileAgain(attempt.getId(), "idam-admin")).isTrue();
+        assertThat(repository.findById(attempt.getId()).orElseThrow().isProvenNothingCreated()).isTrue();
+        // Reconciliation finds nothing bound and gives it back, still proven.
+        assertThat(attempts.repairIfUnbound(repository.findById(attempt.getId()).orElseThrow(), "unbound")).isTrue();
+        CcdCreationAttempt back = repository.findById(attempt.getId()).orElseThrow();
+        assertThat(back.getStatus()).isEqualTo(NeedsRepair);
+        assertThat(back.isProvenNothingCreated()).isTrue();
+
+        assertThat(attempts.retryFromScratch(attempt.getId(), "idam-admin")).isTrue();
+    }
+
+    /** An attempt that ran out of tries on a refused submission: submitted, then exhausted by its own worker. */
+    private CcdCreationAttempt exhausted(String deedPollId) {
+        CcdCreationAttempt attempt = opened(deedPollId);
+        assertThat(attempts.claim(attempt.getId(), "worker-1", LEASE)).isPresent();
+        assertThat(attempts.recordSubmission(attempt.getId(), "worker-1", 1)).isTrue();
+        assertThat(attempts.exhaust(attempt.getId(), "worker-1", 1, "Submission refused: 422; no attempts left"))
+            .isTrue();
+        return repository.findById(attempt.getId()).orElseThrow();
+    }
+
+    @Test
     @DisplayName("a repair leaves a bound record's reference as it was")
     void repairTouchesNoBinding() {
         String deedPollId = newCase();
@@ -550,6 +640,7 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
             assertThat(row.id()).isEqualTo(repair.getId());
             assertThat(row.displayReference()).isEqualTo("KBDP2026-000042");
             assertThat(row.submissionMayHaveReached()).isTrue();
+            assertThat(row.provenNothingCreated()).isFalse();
             assertThat(row.attempts()).isEqualTo(1);
         });
         assertThat(attempts.unlinked(Optional.of(Linked), PageRequest.of(0, 10))

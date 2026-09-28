@@ -192,6 +192,7 @@ class CaseworkerCcdAttemptControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.attempts[?(@.id == '" + repair.getId() + "')].canRetryFromScratch")
                                .value(false))
                 .andExpect(jsonPath("$.attempts[0]", not(hasKey("submissionMayHaveReached"))))
+                .andExpect(jsonPath("$.attempts[0]", not(hasKey("provenNothingCreated"))))
                 .andExpect(jsonPath("$.attempts[0]", not(hasKey("claimedBy"))))
                 .andExpect(jsonPath("$.attempts[0]", not(hasKey("operationId"))))
                 .andExpect(jsonPath("$.attempts[0]", not(hasKey("leaseExpiresAt"))))
