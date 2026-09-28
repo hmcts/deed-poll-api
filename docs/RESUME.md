@@ -1,8 +1,13 @@
 # Resume state — where the next session picks up
 
-**CCD linking lifecycle, 2026-09-27: plan 02b is complete** on branch `deed-poll-api-02b-ccd-linking-lifecycle`,
-not yet merged. Read [its section](#ccd-linking-lifecycle--plan-02b-complete-2026-09-27) first. Plan 02 is merged
+**CCD linking lifecycle, 2026-09-27: plan 02b is complete** and merged to `master` on 2026-09-28 (`24c8d97`,
+PR #65). Read [its section](#ccd-linking-lifecycle--plan-02b-complete-2026-09-27) first. Plan 02 is merged
 on `master` (`3430346`, PR #63), so its section below is history, updated by 02b where the two disagree.
+
+**The master build for `24c8d97` is not green.** Its unit-test check-run passed (2,208), but Jenkins set
+`continuous-integration/jenkins/branch` to `error`, "This commit cannot be built", at 06:26:53Z on 2026-09-28. The
+cause is unknown until someone reads the Jenkins console log, which cannot be reached from the devcontainer. Do not
+diagnose it from the status alone. **Plan 03 (CDAM)** is next after that.
 
 **CCD foundation, 2026-09-27: plan 02 is complete** and merged (`3430346`).
 Read [its section](#ccd-foundation--plan-02-complete-2026-09-27) before anything about CCD further down, all of
@@ -27,7 +32,7 @@ with one referral-outcome email per referral enforced by the database.
 ## CCD linking lifecycle — plan 02b complete, 2026-09-27
 
 [Plan 02b](plans/completed/deed-poll-api-02b-ccd-linking-lifecycle.md), all six tasks, on branch
-`deed-poll-api-02b-ccd-linking-lifecycle` (not merged). **Still proved on placeholders, and still not onboarded.**
+`deed-poll-api-02b-ccd-linking-lifecycle`, merged to `master` as `24c8d97` (PR #65). **Still proved on placeholders, and still not onboarded.**
 The sweep ships switched off, so in every deployed environment nothing calls the linking operation yet.
 
 What it adds, in `ccd/` unless named:
@@ -147,7 +152,7 @@ row; its failed history remains unchanged when the replacement is sent.
 
 | | |
 |---|---|
-| Flyway migrations | **20 on `master`** (V1–V20), notify-6 and notify-4b having merged. Earlier wording, kept for the per-migration detail — V14 adds the nullable referral owner subjects, V15 the notification exclusion group, V16 the referral's four confirmation columns, V17 the case's `awaitingConfirmationSince` read-model and V18 the correction to V16's partial index. `email-case-notes` adds none; **`notify-6` adds V19**, the notification's non-null `requestId` with a per-row backfill and a `("deedPollId", "requestId")` unique index; **`notify-4b` adds V20**, the partial `("deedPollId", "exclusionGroup")` key over the groups `EmailExclusionGroup.exclusivePerCase()` names — which is what stops one applicant being sent both deeds |
+| Flyway migrations | **24 on `master`** (V1–V24): plan 02 added V21 (`ccdCaseReference`) and V22 (the creation-attempt ledger), and plan 02b added V23 and V24 (see its section above). Earlier wording, kept for the per-migration detail — V14 adds the nullable referral owner subjects, V15 the notification exclusion group, V16 the referral's four confirmation columns, V17 the case's `awaitingConfirmationSince` read-model and V18 the correction to V16's partial index. `email-case-notes` adds none; **`notify-6` adds V19**, the notification's non-null `requestId` with a per-row backfill and a `("deedPollId", "requestId")` unique index; **`notify-4b` adds V20**, the partial `("deedPollId", "exclusionGroup")` key over the groups `EmailExclusionGroup.exclusivePerCase()` names — which is what stops one applicant being sent both deeds |
 | Caseworker endpoints | **34 across 21 paths** on `master`, over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures, and on `notify-6` re-asserts the 34 **inside the test that proves the new send header is published**, because a header is the kind of change that looks like it should have added an operation |
 | Judicial endpoints | **5**, `referrals-api-6` having merged — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
@@ -155,9 +160,9 @@ row; its failed history remains unchanged when the replacement is sent.
 | Docker-free CI | **1,923 unit tests on `notify-4b`** across 254 classes, measured with `INTEGRATION_TESTS_ENABLED=false`; the other **999** are in the container-backed classes, notify-4b having added two (`DeedDocumentServiceTest` and the forms nest of `CaseworkerEmailControllerTest` — the latter pre-existing as a class). `notify-6` reads 1,739 of 2,716 in 33 classes. Everything about the deed generator, the routing, the escaping and the exclusion-group flag runs in CI: the container-backed rules are the enqueue statement's conflict paths and the stored-once-per-case claim, and each has a container-free companion. `build.gradle` carries the history and instructs the next plan to re-measure |
 | `./gradlew build` | green with `TESTCONTAINERS_RYUK_DISABLED=true` exported — on `notify-4b` after its review, both with Docker and Docker-free (2026-09-25), on `notify-6` from cold (2026-09-25), on `email-case-notes` after its review (2026-09-24), and on `master` after notify-3b. **Wall clock is not a regression signal**: the same Docker build measured 35m 32s and 3m 58s on identical code, because container startup under this Docker configuration varies by an order of magnitude |
 
-**Twenty-five** plans are in [`plans/completed/`](plans/completed/) — the seven added since this section was
+**Twenty-eight** plans are in [`plans/completed/`](plans/completed/). The ten added since this section was
 last rewritten are the saved-query publishing gate, notify-3, notify-3b, the email case notes, notify-6,
-notify-4b and notify-4c. The arc since plan 01: the domain gaps
+notify-4b, notify-4c, notify-4a, and CCD plans 02 and 02b. The arc since plan 01: the domain gaps
 (notes, witnesses, the enrolment witness-count gate), case query and paging, saved queries and search,
 then the original referrals feature in four completed plans — create/withdraw, claim/direction/close,
 `currentReferralState`, and the judicial surface — plus two CI plans and the ACR migration.
@@ -169,7 +174,7 @@ what was outstanding until they were moved here.
 
 **The original referrals backend is merged, and business testing reopened one rule, which is now closed.**
 [`plans/referrals-api-4-caseworker-completion.md`](plans/completed/referrals-api-4-caseworker-completion.md) is
-**complete on branch `referrals-api-4`, not yet merged**: a `Decided` referral can no longer be withdrawn,
+**complete and merged** (PR #33): a `Decided` referral can no longer be withdrawn,
 and the existing `Decided → Closed` caseworker action is untouched. The authority is a second enum predicate,
 `ReferralState.canBeWithdrawn()` (`Open || Claimed`), added *beside* `isTerminal()` rather than narrowing it —
 narrowing `isTerminal()` is the plausible-looking mistake, and would also have moved the one-live-referral
@@ -178,7 +183,7 @@ delta**: no migration, no enum member, no DTO, 33 caseworker and 4 judicial oper
 `OpenAPIPublisherTest` passing untouched is the evidence for. Its companion admin plan adds the missing
 closure journey — the API half is already there.
 [`plans/referrals-api-5-lifecycle-case-notes.md`](plans/completed/referrals-api-5-lifecycle-case-notes.md) is
-**complete on branch `referrals-api-5`, not yet merged**, and records claim, direction and closure in the
+**complete and merged** (PR #35), and records claim, direction and closure in the
 existing case Notes timeline: every successful transition now writes exactly one note, composed in
 `ReferralNotes` and authored by whoever caused it — the judge on a claim or a direction, the caseworker on a
 raise, a withdrawal or a closure, and the service account only on an inactivity lapse, which no person did. A
@@ -189,7 +194,7 @@ regenerating the spec from `master` into a throwaway worktree and byte-diffing i
 That 56,771 is now the baseline `referrals-api-6`'s delta was measured against: **57,495 bytes**, the difference
 being one path with one GET and one schema, with the rest of the document identical key for key.
 [`plans/referrals-api-6-judicial-my-referrals.md`](plans/completed/referrals-api-6-judicial-my-referrals.md) is
-**complete on branch `referrals-api-6`, not yet merged**, and adds the missing judge-owned `Claimed`/`Decided`
+**complete and merged** (PR #36), and adds the missing judge-owned `Claimed`/`Decided`
 worklist — `GET /judicial/referrals/mine` — after migrating ownership from display names to stable IDAM subjects,
 which is what makes a personal list safe to publish at all: keyed on a name it would have enumerated a namesake's
 referrals instead of requiring one of their ids. `V14` adds nullable `claimedById`/`decidedById`, nothing is
