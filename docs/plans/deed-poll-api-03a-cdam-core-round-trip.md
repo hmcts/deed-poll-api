@@ -189,7 +189,8 @@ counted from `build/test-results/`:
   - `storageState varchar(…)`, not null. Existing rows are backfilled `Local`;
   - `cdamDocumentId uuid`, nullable;
   - `cdamHashToken varchar(…)`, nullable. Transient, per decision 8, and the column comment says so;
-  - `storageAttemptedOn timestamp(3)`, nullable.
+  - `storageAttemptedOn timestamp(3)`, nullable;
+  - `storageUploadAttempts smallint`, not null, default 0. How many uploads this row has sent, capped at 2 (flag 2).
 - A `DocumentStorageState` enum, modelled on `CcdCreationAttemptStatus`, with an explicit `successors()` table:
   - `Local`: on the filesystem store, terminal;
   - `UploadPending`: claimed, nothing sent yet;
@@ -199,7 +200,11 @@ counted from `build/test-results/`:
   - `Attached`: terminal for this plan, and the only state a download serves from CDAM;
   - `Failed`: definitely nothing stored.
 - **Recovery rule:**
-  - an uncertain upload is never retried by uploading again;
+  - an uncertain upload is retried **once**, automatically, as a fresh upload within the same request, while the
+    bytes are still buffered (flag 2, Steve 2026-09-29). `UploadUncertain` is committed first, then
+    `UploadUncertain -> UploadPending` is allowed only while `storageUploadAttempts < 2`. If the first attempt did
+    land, its copy is never attached, so it expires on CDAM's upload TTL (`CDAM-SEQUENCE.md` section 1, default
+    1 day). A second uncertain outcome stays `UploadUncertain` and is never uploaded again;
   - an uncertain attach is retried, because attaching is idempotent for the same document and case (confirm this
     in Task 1's sequence, and if it isn't, stop and flag it);
   - a document still `UploadUncertain` is reported as needing attention. It is never served and never reported
@@ -228,6 +233,9 @@ counted from `build/test-results/`:
 - Tests, all WireMock (no cftlib):
   - each happy path;
   - each lost response lands in its uncertain state;
+  - one lost upload response, then a retry that succeeds, ends `Uploaded` with the retry's id and exactly two
+    uploads sent;
+  - two lost upload responses end `UploadUncertain` with exactly two uploads sent, and no third;
   - "case not ready" sends nothing;
   - a document owned by another record is refused before CDAM is called;
   - `permanent=true` is never sent;
@@ -297,7 +305,7 @@ counted from `build/test-results/`:
   the dm-store team can restore a soft-deleted document.
 - `CLAUDE.md`, with at least these rules, which would otherwise break silently:
   - the hash token is transient, and must never be logged or projected;
-  - never upload again from `UploadUncertain`;
+  - an uncertain upload is retried exactly once, in the same request, and never again after that;
   - never send `permanent=true`;
   - the CDAM store is off by default, and switching it on before onboarding refuses every upload.
 - Record the final counts, Docker and Docker-free, and the `cftlibTest` count, against Task 1's baseline. Update
@@ -318,13 +326,14 @@ counted from `build/test-results/`:
 
 ## Flags for Steve
 
-1. **The CDAM store ships off, and the filesystem store stays the default.** It's the same approach as the 02b sweep:
+1. **The CDAM store ships off, and the filesystem store stays the default.** **Agreed by Steve 2026-09-29.** It's the same approach as the 02b sweep:
    switching it on before onboarding would refuse every upload. It also means a deployed environment keeps
    writing to pod storage until onboarding. Plan 03's "configure deployed environments to require the intended
    backend" is met by Task 8's startup refusal, not by removing the filesystem store.
-2. **An uncertain upload is parked, not retried.** CDAM can't be searched by our id, so there's no safe way to
-   tell whether a lost upload landed. Task 3 parks it as `UploadUncertain` and reports it. The caseworker uploads
-   the file again as a new document. The alternative, trying to find the orphan in CDAM, would need an API CDAM
-   doesn't offer.
-3. **The client is pinned at 1.59.2, not 2.0.0**, because 2.0.0 needs Boot 4 (decision 6). Moving to it becomes
+2. **An uncertain upload is retried once, then parked.** **Steve chose this on 2026-09-29**, over parking on the
+   first uncertain outcome. The duplicate it risks is harmless: a copy that did land is never attached, so it
+   expires on CDAM's upload TTL (`CDAM-SEQUENCE.md` section 1). The retry happens within the request, while the
+   bytes are still buffered. A second uncertain outcome is parked as `UploadUncertain` and reported, and the
+   caseworker uploads the file again as a new document. Task 3 carries the rule.
+3. **The client is pinned at 1.59.2, not 2.0.0** (**agreed by Steve 2026-09-29**), because 2.0.0 needs Boot 4 (decision 6). Moving to it becomes
    part of any future Boot 4 upgrade.
