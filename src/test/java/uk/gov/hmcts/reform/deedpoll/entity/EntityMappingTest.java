@@ -19,6 +19,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MaritalStatus;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Nationality;
@@ -239,6 +240,12 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
             assertThat(reloadedDocument.getDocumentType().getName()).isEqualTo("Birth certificate");
             assertThat(reloadedDocument.getDocumentType().getApplicableMaritalStatuses()).containsExactly(1, 2);
             assertThat(reloadedDocument.getDocumentType().getApplicableTypes()).containsExactly(3, 4);
+            // V25's columns, as a row written by the filesystem store leaves them.
+            assertThat(reloadedDocument.getStorageState()).isEqualTo(DocumentStorageState.Local);
+            assertThat(reloadedDocument.getStorageUploadAttempts()).isZero();
+            assertThat(reloadedDocument.getCdamDocumentId()).isNull();
+            assertThat(reloadedDocument.getCdamHashToken()).isNull();
+            assertThat(reloadedDocument.getStorageAttemptedOn()).isNull();
         });
 
         assertThat(entityManager.find(ReferenceCounter.class, 2026).getLastSerial()).isEqualTo(41);

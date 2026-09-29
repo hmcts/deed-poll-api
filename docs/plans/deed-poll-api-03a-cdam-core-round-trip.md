@@ -219,7 +219,16 @@ the row's storage key. Only `DocumentService.uploadDocument` changed among calle
   - container-free: the transition table, and that nothing moves out of `Attached` or `Local`;
   - container-backed: the migration and its backfill against real Postgres.
 
-- [ ] V25 applied with its backfill proved, the state table and recovery rule tested, and the build is green
+**Done 2026-09-29.** V25 adds the five columns, with CHECKs for the known states, the upload cap of 2, the hash token
+held exactly while `Uploaded` or `AttachUncertain`, and a CDAM id on every state that says CDAM holds the document.
+The `storageState` default stays `Local` so that a pre-V25 instance, which only writes to the filesystem, inserts an
+honest row during a rolling deployment. `DocumentStorageState` carries the table; `storage/DocumentStorageRule` the
+conditional re-upload (`mayUploadAgain`) and `mayAttach`. Attach idempotency is confirmed in `CDAM-SEQUENCE.md`
+section 2, so nothing to flag. `DocumentStorageStateTest` (container-free) and `DocumentStorageMigrationTest`
+(Postgres) are new; `SdkMigrationOrderTest` now expects V1 to V25. `./gradlew cleanTest cleanIntegration build`:
+**3346** `test` (3313 plus 33 new) and **14** `integration`, all green.
+
+- [x] V25 applied with its backfill proved, the state table and recovery rule tested, and the build is green
 
 ### Task 4: The CDAM store
 

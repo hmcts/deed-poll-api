@@ -18,8 +18,10 @@ import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 /**
  * A supporting document on a case: {@code deedpoll_supportingdocument}, ported from the
@@ -69,6 +71,26 @@ public class DeedPollSupportingDocument {
 
     @Column(name = "sizeBytes")
     private Integer sizeBytes;
+
+    // Where the document's remote storage has got to (V25). varchar in the database, not a Postgres enum type, so
+    // plain STRING rather than NAMED_ENUM. Local until a CDAM store says otherwise.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "storageState", length = 32, nullable = false)
+    private DocumentStorageState storageState = DocumentStorageState.Local;
+
+    // A storage reference only: never published in a response (plan 03a, decision 7).
+    @Column(name = "cdamDocumentId")
+    private UUID cdamDocumentId;
+
+    // TRANSIENT (plan 03a, decision 8): held only while Uploaded or AttachUncertain, and never logged or projected.
+    @Column(name = "cdamHashToken", length = 64)
+    private String cdamHashToken;
+
+    @Column(name = "storageAttemptedOn")
+    private LocalDateTime storageAttemptedOn;
+
+    @Column(name = "storageUploadAttempts", nullable = false)
+    private short storageUploadAttempts;
 
     @Column(name = "createdOn", nullable = false)
     private LocalDateTime createdOn;
