@@ -6,6 +6,10 @@ Depends on [plan 02](completed/deed-poll-api-02-ccd-foundation.md) and
 [plan 02b](completed/deed-poll-api-02b-ccd-linking-lifecycle.md), both merged. Followed by 03b (callers: generated
 LOC020/LOC022 deeds, Notify's drain-time retrieval, pre-case staging) and 03c (migration of existing documents).
 
+**Completion amendment, 2026-09-29:** all eight tasks are implemented and locally verified on
+`deed-poll-api-03a-cdam-core-round-trip`. Tasks 6–8 and their final counts are recorded below. CDAM remains off
+by default; no live onboarding or AAT smoke has been performed. The earlier draft and decisions remain as history.
+
 ## Overview
 
 Supporting documents live on the pod's filesystem today (`LocalFilesystemDocumentStore`), behind a seam that takes
@@ -352,7 +356,21 @@ Handoffs:
   `../platops/cnp-api-docs` and reports differences. If that clone is absent, it says so and does nothing else.
 - Guards 1 and 2 are unit tests and run in `build`. Guard 4 is run once here and its output recorded.
 
-- [ ] the stub serves CDAM's calls, guards 1 and 2 run in `build`, the drift task runs and reports, and the build
+**Done 2026-09-29.** `StubDmStore` is a shared test fixture under `src/dmStoreStub/java`, compiled into `test` and
+`cftlibTest` only. It retains uploaded bytes and metadata across API contexts, applies the attach's metadata/TTL
+patch and hides soft-deleted documents. It registers only the six operations CDAM uses. `StubDmStoreContractTest`
+checks the same operation table against the verbatim spec copied from cnp-api-docs at
+`6d8040564754e7f8db60f146370a37ae8d6e1eba`, and pins cftlib 0.19.2377 against `build.gradle`.
+`src/test/resources/dm-store-contract.md` records source provenance for every response shape. It also records three
+published-spec discrepancies explicitly: user-roles on the two reads and classification on the binary read are
+marked required in OpenAPI, but CDAM sends neither and dm-store binds a header map. The guard checks those exact
+exceptions rather than silently dropping required-header checks. AAT capture remains outstanding.
+
+`./gradlew cleanTest cleanIntegration build checkDmStoreSpecDrift --no-watch-fs`: **3443** `test` and **14**
+`integration`, zero failures/errors/skips, **5m 6s**. The drift task reported **no differences**. The first attempt
+failed Checkstyle's variable-distance rule; fixed by making the UUID local final. No test failure was suppressed.
+
+- [x] the stub serves CDAM's calls, guards 1 and 2 run in `build`, the drift task runs and reports, and the build
       is green
 
 ### Task 7: Prove it end to end in cftlib
@@ -369,7 +387,35 @@ Handoffs:
 - Write `docs/CDAM-SMOKE.md`, the operator-run AAT round trip. It covers the same journey plus capturing
   dm-store's real response bodies for guard 3, and the onboarding it needs first. Do not run it.
 
-- [ ] every journey passes in cftlib against real CDAM and CCD with no live calls, the smoke procedure is written,
+**Implementation and cftlib proof, 2026-09-29.** `DocumentCdamCftlibTest` runs six journeys beside the three existing
+linking tests. The first uploads a synthetic PDF over HTTP, proves CDAM's metadata carries the CCD reference and
+no TTL, proves the local hash is cleared, downloads the original bytes and checks the CCD view and event snapshot.
+The next replaces the API context and downloads again from the same dm-store. The READ-denial journey temporarily
+imports the generated local definition without case-type READ (restored in `finally`), so the caller passes the
+persistence gate but real CCD refuses the document. A successful download after restoration proves it was a
+permission denial rather than a broken store. The pinned definition is unchanged. The last journeys prove
+cross-case/pre-link refusal, and removal from both live CCD and its event snapshot before CDAM returns 404.
+
+**Correction to the task's HTTP wording:** no document-delete HTTP endpoint exists, so deletion uses the existing
+domain method; all public create/upload/download flows and the CDAM post-delete probe use HTTP. No endpoint added.
+**Additional finding:** a completely unmapped staff user is blocked by our persistence gate's 403, which data-store
+wraps as 500 and CDAM as 502. A separate sixth test pins that limitation; it is not accepted as proof of CCD READ
+denial, and the production gate is not relaxed. The recovery guide and smoke procedure record it.
+
+`./gradlew checkstyleCftlibTest cftlibTest --no-watch-fs`: **9 tests, zero failures/errors/skips**, fresh XML under
+`build/test-results/cftlibTest`, **2m 1s**. Upload plus attachment: **1948 ms**. Earlier runs caught the test fixture's
+unsupported text/plain upload (changed to PDF), a Checkstyle local-variable issue, and the unmapped-user error
+wrapping above. The smoke procedure is prepared, **not run**; AAT captures remain outside this plan's execution.
+The final full build is recorded with Task 8 below.
+
+**Final local-only rerun:** inspection found cftlib's unrelated bundled Work Allocation service contacting
+LaunchDarkly with its default invalid key. The test JVM now routes non-loopback HTTP(S) to a closed loopback proxy;
+local CFT services still connect directly. The final log confirms LaunchDarkly's attempts stop at `127.0.0.1:1`.
+No CCD/CDAM/auth decision is stubbed by this setting. `checkstyleCftlibTest cftlibTest --no-watch-fs` then passed
+**9 tests, zero failures/errors/skips**, with fresh XML, in **2m 17s**; upload plus attachment took **1852 ms**.
+These are single local fixture timings, not a production latency estimate.
+
+- [x] every journey passes in cftlib against real CDAM and CCD with no live calls, the smoke procedure is written,
       and the build is green
 
 ### Task 8: Configuration, runbook and handoff
@@ -390,7 +436,33 @@ Handoffs:
 - Record the final counts, Docker and Docker-free, and the `cftlibTest` count, against Task 1's baseline. Update
   `docs/RESUME.md`.
 
-- [ ] configuration validated, runbook and CLAUDE.md written, counts recorded, and the build is green
+**Implementation and build evidence, 2026-09-29.** `CdamOnboarding` runs only when CDAM is selected. It refuses
+malformed/non-HTTP URLs, credentials/query/fragment in the URL, the local default, and any of the three placeholder
+CCD identifiers. Only `test` or `cftlib` with a loopback URL may keep placeholders; the filesystem default does
+not require CDAM onboarding. This validates configuration, not live credentials or platform permissions.
+`DocumentStorageMetrics` publishes one gauge per state with only the bounded `state` tag, reading current row
+counts on scrape. `CdamOnboardingTest` and `DocumentStorageMetricsTest` add 14 container-free tests.
+
+The chart explicitly keeps `DOCUMENT_STORE=filesystem` and a placeholder CDAM endpoint. The README documents the
+switch, endpoint, metrics and staff-access dependency. `CDAM-RECOVERY.md` covers all seven states, the two-send
+upload cap, absent replay endpoints, best-effort event/delete failures and dm-store-only restoration. It corrects
+Task 3's shorthand: `Failed` can follow an attach refusal after the binary was stored; it does not prove absence.
+`CLAUDE.md` carries the transient-token, retry, soft-delete, rollout and shared-fixture rules.
+
+Final full builds were counted from fresh XML after `cleanTest cleanIntegration`, with zero failures/errors/skips:
+
+| Run | `test` | `integration` | Wall clock |
+|---|---|---|---|
+| `./gradlew cleanTest cleanIntegration build checkDmStoreSpecDrift --no-watch-fs` | **3457**, 414 files | **14**, 3 files | **5m 5s** |
+| `INTEGRATION_TESTS_ENABLED=false ./gradlew cleanTest cleanIntegration build --no-watch-fs` | **2339**, 294 files | not run; no stale XML | **1m 31s** |
+
+Against Task 1's baseline, that is **153** new `test` tests, **131** of them Docker-free, and unchanged 14
+integration tests. Against the Task 5 handoff, Tasks 6–8 add **19** `test` tests and **6** cftlib journeys
+(nine total including the three linking journeys). The spec-drift task again reported **no differences**.
+An initial final-build attempt caught a test compile error because this Micrometer registry is not
+`AutoCloseable`; explicit `finally` cleanup fixed it before the successful runs above. No test was disabled.
+
+- [x] configuration validated, runbook and CLAUDE.md written, counts recorded, and the build is green
 
 ## Deliberately not in this plan
 

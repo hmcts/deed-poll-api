@@ -326,3 +326,32 @@ overloads of the reads (`:57-81`).
 - The unit of dm-store's `sizelimit` values.
 - The published specs in `platops/cnp-api-docs` (`6d804056`) were not read for this document; Task 6 copies
   `document-management-store-app.json` from there for guard 2.
+
+## Local runtime verification — 2026-09-29, plan 03a tasks 6–7
+
+`DocumentCdamCftlibTest` now runs against real CCD and CDAM in cftlib 0.19.2377, with WireMock only for dm-store.
+Nine cftlib tests pass, including the existing three linking tests. This establishes locally that the environment
+override replaces CDAM's service permissions correctly, data-store attaches before our persistence handler,
+attachment clears the remote TTL and local hash, and downloads survive replacement of the API context. Upload plus
+attachment took **1852 ms** in the final recorded run (a local fixture measurement, not a production estimate).
+Both the live case view and stored event snapshots show the add
+and subsequent removal; CDAM returns 404 after the soft delete.
+
+Correction to section 0's earlier download note: the implemented download uses **the caller's token**, not the
+system user's. The reader fixture holds the existing system profile locally; production staff permissions are
+still an onboarding dependency. To prove CCD's READ check itself, the test temporarily imports a generated local
+definition without case-type READ, verifies refusal through real CDAM, restores the original definition in a
+`finally` block, and proves the same download works again. No pinned/production grant changes.
+
+An entirely unmapped staff user exposes a separate limitation: our persistence gate returns 403, data-store wraps
+that as 500, and CDAM returns 502. The binary is not fetched. A separate test records this rather than accepting
+502 as proof of CCD READ denial. See `CDAM-RECOVERY.md`.
+
+The pinned OpenAPI copy and its three required-header discrepancies are documented in
+`src/test/resources/dm-store-contract.md`. These results are not AAT verification; environment limits, real
+onboarding and the response captures in `CDAM-SMOKE.md` remain outstanding.
+
+The cftlib test JVM routes non-loopback HTTP(S) to a closed loopback proxy. This also prevents its bundled WA
+service's otherwise unused LaunchDarkly client from making live calls; expected startup warnings name
+`127.0.0.1:1`. Local CFT services remain directly reachable. Final suite: nine tests, zero failures/errors/skips,
+**2m 17s**, with fresh XML in `build/test-results/cftlibTest`.

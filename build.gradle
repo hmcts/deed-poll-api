@@ -63,6 +63,33 @@ def configureSourceSet(String name) {
 
 ['smokeTest', 'integrationTest', 'functionalTest'].each { configureSourceSet(it) }
 
+// Compile only this shared fixture into cftlibTest: including test.output would make cftlib's package scan run
+// the entire unit suite inside the CFT stack. The fixture is never part of the application artifact.
+sourceSets.test.java.srcDir 'src/dmStoreStub/java'
+sourceSets.cftlibTest.java.srcDir 'src/dmStoreStub/java'
+
+// cftlib 0.19.2377 runs ConsoleLauncher rather than Gradle Test. Keep fresh XML evidence for this suite too.
+tasks.named('cftlibTest') {
+  // The bundled WA service starts a LaunchDarkly client even though these journeys do not use WA. Keep
+  // non-loopback HTTP(S) on a closed local proxy so that client cannot contact the live service. All CFT
+  // dependencies below use loopback; this affects the test JVM only, not Gradle dependency resolution.
+  jvmArgs '-Dhttp.proxyHost=127.0.0.1', '-Dhttp.proxyPort=1',
+    '-Dhttps.proxyHost=127.0.0.1', '-Dhttps.proxyPort=1', '-Dhttp.nonProxyHosts=localhost|127.*|[::1]'
+  doFirst {
+    delete layout.buildDirectory.dir('test-results/cftlibTest')
+    def manifest = file('build/cftlib/libTest')
+    def lines = manifest.readLines('UTF-8')
+    if (!lines[0].startsWith('org.junit.platform.console.ConsoleLauncher ')) {
+      throw new GradleException('Unexpected cftlib test manifest; review the report configuration')
+    }
+    def reportArgument = '--reports-dir=build/test-results/cftlibTest'
+    if (!lines[0].contains(reportArgument)) {
+      lines[0] += ' ' + reportArgument
+      manifest.setText(lines.join('\n') + '\n', 'UTF-8')
+    }
+  }
+}
+
 configurations {
   functionalTestImplementation.extendsFrom testImplementation
   functionalTestRuntimeOnly.extendsFrom runtimeOnly
@@ -203,6 +230,10 @@ tasks.register('smoke', Test) {
 tasks.withType(uk.gov.hmcts.rse.CftlibExec).configureEach {
   authMode = uk.gov.hmcts.rse.AuthMode.Local
   environment 'RSE_LIB_ADDITIONAL_DATABASES', 'deedpoll'
+  // The only dm-store CDAM may reach in the local stack. DocumentCdamCftlibTest owns this WireMock server.
+  environment 'DM_STORE_BASE_URL', 'http://localhost:4506'
+  // The document test imports a local definition without READ, then restores it. Keep that cache wait bounded.
+  environment 'DEFAULT_CACHE_TTL_SEC', '1'
   /*
     Data-store routes a case type to its persistence host by case-insensitive *prefix* of the case type id. The key is
     `DEED` rather than the whole placeholder because Spring reads each underscore in an environment variable's name
@@ -242,6 +273,26 @@ tasks.withType(uk.gov.hmcts.rse.CftlibExec).configureEach {
 // by name.
 checkstyle {
   sourceSets = project.sourceSets.matching { !it.name.startsWith('cftlib') }
+}
+
+// Manual guard: the pinned spec stays reviewable even when the workspace clone is unavailable.
+tasks.register('checkDmStoreSpecDrift') {
+  group = 'Verification'
+  description = 'Compares the pinned dm-store OpenAPI document with the local cnp-api-docs clone'
+  doLast {
+    def upstream = file('../platops/cnp-api-docs/docs/specs/document-management-store-app.json')
+    if (!upstream.exists()) {
+      logger.lifecycle('cnp-api-docs clone absent; dm-store spec comparison not performed')
+      return
+    }
+    def pinned = file('src/test/resources/dm-store-openapi.json')
+    if (java.util.Arrays.equals(pinned.bytes, upstream.bytes)) {
+      logger.lifecycle('dm-store OpenAPI: no differences from the pinned copy')
+    } else {
+      exec { commandLine 'diff', '-u', pinned.absolutePath, upstream.absolutePath; ignoreExitValue = true }
+      throw new GradleException('dm-store OpenAPI drift: review the diff and update the stub and provenance together')
+    }
+  }
 }
 
 jacocoTestReport {

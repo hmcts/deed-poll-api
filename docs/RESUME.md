@@ -1,5 +1,45 @@
 # Resume state — where the next session picks up
 
+**CDAM core round trip, 2026-09-29: plan 03a is complete locally** on branch
+`deed-poll-api-03a-cdam-core-round-trip`; all eight tasks are implemented. Read
+[plan 03a](plans/deed-poll-api-03a-cdam-core-round-trip.md) and the notes here before the older plan-03-next
+statements below. **Nothing is onboarded. CDAM remains off by default.**
+
+The supporting-document round trip uses real CCD/CDAM in cftlib with a source-derived WireMock dm-store. Six new
+journeys prove upload/attachment, restart/download, CCD READ refusal, the separately recorded unmapped-user
+failure, cross-case/pre-link refusal, and domain deletion including CCD's event snapshot and CDAM's subsequent
+404. There is still no document-delete HTTP endpoint. The stub's pinned OpenAPI, version/header/multipart guards
+and manual `checkDmStoreSpecDrift` task are in place; the spec comparison reports no differences.
+
+`CdamOnboarding` refuses local/default CDAM endpoints and placeholder CCD identifiers when CDAM is enabled,
+except local `test`/`cftlib` profiles against loopback. The chart remains on `filesystem`. The bounded
+`deedpoll.documents.storage` metric counts rows by state without IDs or tokens. Recovery, rollout and deletion
+limits are in [CDAM-RECOVERY.md](CDAM-RECOVERY.md); [CDAM-SMOKE.md](CDAM-SMOKE.md) is prepared, **not run**.
+
+Final validation, measured from fresh XML on 2026-09-29, with **zero failures/errors/skips**:
+
+| Run | Result | Wall clock |
+|---|---|---|
+| Docker full build and spec drift | **3457** `test` (414 files), **14** `integration` (3 files); no spec differences | **5m 5s** |
+| Docker-free full build | **2339** `test` (294 files); integration not run and old XML cleared | **1m 31s** |
+| `checkstyleCftlibTest cftlibTest` | **9** tests; upload plus attachment **1852 ms** | **2m 17s** |
+
+Against plan 03a Task 1: +153 tests, +131 Docker-free, unchanged 14 integration; cftlib has six new journeys
+beside the existing three. The final cftlib test JVM routes non-loopback HTTP(S) to a closed loopback proxy to
+prevent the bundled WA service's unused LaunchDarkly client from contacting the live service. Its expected
+connection warnings name `127.0.0.1:1`; local CCD/CDAM and auth simulators remain directly reachable.
+
+Next work and limits:
+
+- **03b:** generated deeds, Notify retrieval and pre-case staging. **03c:** existing-file migration. 03a alone
+  is not a production storage cutover; enabling it now leaves those callers/migration unfinished.
+- Agree/onboard the real identifiers, S2S permissions and staff CCD access profile, then run the operator smoke
+  and replace source-derived dm-store bodies with sanitised AAT captures. The local reader uses the existing
+  system profile only as a fixture; do not grant that role to real staff to make downloads work.
+- An entirely unmapped staff user reaches CDAM but the persistence 403 is wrapped by data-store as 500 and CDAM
+  as **502**. No binary is read. This needs a staff-access/upstream-error follow-up; do not relax the persistence
+  gate or map every 502 to forbidden. The genuine CCD READ-denial journey is independently proved.
+
 **CCD linking lifecycle, 2026-09-27: plan 02b is complete** and merged to `master` on 2026-09-28 (`24c8d97`,
 PR #65). Read [its section](#ccd-linking-lifecycle--plan-02b-complete-2026-09-27) first. Plan 02 is merged
 on `master` (`3430346`, PR #63), so its section below is history, updated by 02b where the two disagree.

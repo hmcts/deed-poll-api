@@ -41,14 +41,27 @@ ccd/                             the decentralised CCD case type, its persistenc
                                   linking operation with its attempt ledger, the case-list sweep that calls it, and
                                   the admin repairs (CcdAttemptRepairs) — NOT a port
 health/                          readiness that names the missing tables
-storage/                         LocalFilesystemDocumentStore — the seam CDAM replaces
+storage/                         filesystem/CDAM stores, remote progress, onboarding guard and state metrics
 src/main/resources/deed-templates/  VENDORED Word templates: LOC020 and LOC022, plus their provenance
 src/test/resources/reference/    VENDORED specification: TypeScript source and Dataverse exports
 src/test/resources/ccd-definition/  the generated CCD definition, pinned — DeedPollDefinitionTest compares every file
-src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one end-to-end test; local only
+src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/document journeys; local only
 ```
 
 ## Rules that break things silently if ignored
+
+- **The CDAM hash token is transient.** Keep it only while `Uploaded`/`AttachUncertain`; never log, project or
+  publish it. An uncertain upload gets exactly one fresh upload within the same request (two sends total), then
+  stays uncertain. There is no background retry or operator resume endpoint in 03a. Never send `permanent=true`:
+  caseworker cleanup is a soft delete, and only the dm-store team can arrange restoration.
+- **CDAM ships off by default.** `CdamOnboarding` refuses unconfirmed CCD identifiers and local/default CDAM
+  endpoints when CDAM is enabled; only `test`/`cftlib` against loopback permit placeholders. These are local test
+  profiles, never deployment profiles. The configuration check cannot prove external onboarding or staff access.
+  Generated deeds and Notify retrieval are still 03b, existing-file migration is 03c; do not enable CDAM as a
+  production cutover on 03a alone. Read `docs/CDAM-RECOVERY.md` before acting on an uncertain document.
+- **cftlib stubs only dm-store.** Its fixture is compiled from `src/dmStoreStub/java` into `test` and `cftlibTest`;
+  never add the whole `test.output` to cftlib's classpath, because its package scan would run the entire unit suite
+  inside the CFT stack. Update the pinned spec, response provenance and stub together after a verified change.
 
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks

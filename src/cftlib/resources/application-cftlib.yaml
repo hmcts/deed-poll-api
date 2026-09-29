@@ -42,4 +42,5 @@ deedpoll:
         # records against it; anywhere not onboarded, an enabled sweep would drive every record into NeedsRepair.
         enabled: true
   documents:
+    store: cdam
     local-store-root: build/cftlib/documents

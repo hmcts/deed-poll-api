@@ -399,9 +399,28 @@ An unknown id is a 404, and an attempt that is not `NeedsRepair` a 409.
 
 ## Documents and uploads
 
-Files go through the `DocumentStore` interface. The only implementation in this plan is
-`LocalFilesystemDocumentStore`: blobs keyed by a generated UUID under `DOCUMENT_STORE_ROOT`
-(default `data/documents`, gitignored) so a fresh checkout uploads without being configured first.
+Files go through the `DocumentStore` interface. `LocalFilesystemDocumentStore` remains the default, with blobs
+under `DOCUMENT_STORE_ROOT`. Plan 03a adds `CdamDocumentStore`: upload as the system user, attach through a CCD
+document event, download under the caller's own token and best-effort soft delete. The case must already be linked;
+an upload against an unlinked case returns 409. Only `Attached` rows are downloadable on CDAM.
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `DOCUMENT_STORE` | `filesystem` | Exactly `filesystem` or `cdam`; any other value refuses startup |
+| `DOCUMENT_STORE_ROOT` | `data/documents` | Local development directory, gitignored |
+| `CASE_DOCUMENT_AM_URL` | `http://localhost:4455` (chart: placeholder) | CDAM endpoint; local/default values are refused when CDAM is enabled outside local tests |
+| `DOCUMENT_URL_BASE` | `http://dm-store:8080` | Reference URL base accepted by data-store's document URL validator; not a binary download destination |
+
+CDAM also requires confirmed `CCD_CASE_TYPE_ID`, `CCD_JURISDICTION_ID` and `CCD_SYSTEM_ROLE`, plus the system-user
+and S2S credentials used by linking. Startup rejects placeholder identifiers with CDAM enabled. Local `test` and
+`cftlib` profiles can use placeholders only against loopback CDAM. Staff need CCD read permissions on the case and
+document field; an authenticated API user does not automatically have these permissions.
+
+See [the AAT procedure](docs/CDAM-SMOKE.md) and [storage recovery](docs/CDAM-RECOVERY.md).
+`deedpoll_documents_storage{state="…"}` exposes counts without identifiers or tokens. The full local round trip
+runs under `./gradlew cftlibTest`, with real CCD/CDAM and a WireMock dm-store. Its source-derived contract and
+limitations are in `src/test/resources/dm-store-contract.md`; `./gradlew checkDmStoreSpecDrift` checks the pinned
+spec against the workspace's cnp-api-docs clone.
 
 **Not every document arrives from a caseworker.** Sending either *Forms for completion* email generates the
 case's deed and stores it through the same path, as an `Outgoing` document with an applicant-facing filename
@@ -413,9 +432,9 @@ transaction, so a refused enqueue rolls the blob back with it.
 > **Development only, and it must not reach a deployed environment.** Pod disk is ephemeral, replicas
 > do not share a volume, and the chart declares none — a deployed environment running this loses every
 > uploaded file on the next restart and serves 404s from whichever replica did not receive the upload.
-> Real storage is CDAM, in plan 03, which adds an implementation beside this one. Since the deed is stored
-> here too, this now **blocks sending either forms email** in a deployed environment rather than only risking
-> an applicant's own uploads: the drain would resolve the deed from whichever replica did not write it.
+> CDAM supporting-document storage is implemented in 03a. Generated deeds and Notify retrieval on CDAM remain
+> 03b; migration of filesystem documents is 03c. **03a alone is not a production storage cutover**: deeds still
+> depend on filesystem storage, and switching the backend does not migrate existing files.
 
 The limits are **25 MB per file** and 26 MB per request, and they come from
 `UploadPolicy.MAX_UPLOAD_BYTES` rather than from a property — the same constant derives the refusal
@@ -706,4 +725,3 @@ There is no need to remove postgres and java or similar core images.
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
-

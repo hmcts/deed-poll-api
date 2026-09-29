@@ -31,6 +31,9 @@ import java.util.Optional;
  */
 public interface DeedPollSupportingDocumentRepository extends JpaRepository<DeedPollSupportingDocument, String> {
 
+    /** Aggregate operational metric; never loads document metadata or tokens. */
+    long countByStorageState(DocumentStorageState state);
+
     /** Every document on one case, oldest first. */
     List<DeedPollSupportingDocument> findByDeedPollIdOrderByCreatedOnAsc(String deedPollId);
 

@@ -16,9 +16,9 @@ import java.io.InputStream;
  * storage is CDAM, in plan 03, and it is a different shape: content is uploaded to a document store that
  * returns a document id and a hash token, and downloads go through it rather than through this service's own
  * filesystem. Porting the reference's local implementation as the production one would have to be undone.
- * So there is an interface, and behind it exactly one implementation --
- * {@code LocalFilesystemDocumentStore}, for development -- and nothing else. Plan 03 adds a CDAM
- * implementation beside it rather than editing anything above it.
+ * The implementations are {@code LocalFilesystemDocumentStore}, the development default, and
+ * {@code CdamDocumentStore}, selected explicitly after onboarding. The row's state identifies which store owns
+ * its bytes; selecting a new store does not migrate existing rows.
  *
  * <p>The reference's own comment says the same thing about its local storage from the other direction: local
  * disk does not survive AKS, because pods are ephemeral and replicas do not share a volume. The local
@@ -39,8 +39,8 @@ public interface DocumentStore {
     /**
      * Opens a stream over a stored blob.
      *
-     * <p>The caller closes it. Returning a stream rather than a byte array is what keeps a 25 MB download
-     * off the heap, and it is the shape CDAM's own response has.
+     * <p>The caller closes it. The filesystem implementation streams; the current CDAM client buffers the remote
+     * response before returning this stream. The upload policy bounds it to 25 MB.
      *
      * @throws NotFoundError if the key is unknown to this store
      */
