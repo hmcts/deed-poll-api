@@ -192,14 +192,22 @@ public class DocumentService {
      * while its bytes were permanently gone: a row that renders as downloadable and 404s for ever. Of the
      * two failure modes only the orphaned blob is recoverable, so that is the one this keeps.
      *
+     * <p><strong>On a remote store, the document also comes off the CCD case first</strong> (plan 03a, task 5):
+     * {@link RemoteDocumentUploads#removal} reads, inside this transaction, what the case keeps, and its work runs
+     * after the commit ahead of the unlink. It is best effort on the same reasoning, and makes no remote call before
+     * the commit.
+     *
      * @throws NotFoundError if there is no such document, or it belongs to another case
      */
     @Transactional
     public void removeDocument(String deedPollId, String id) {
         DeedPollSupportingDocument document = findDocument(deedPollId, id);
         String storageKey = locator(document);
+        RemoteDocumentUploads remote = remoteUploads.getIfAvailable();
+        Runnable removal = remote == null ? () -> {
+        } : remote.removal(document);
         documents.delete(document);
-        removeBlobOnceTheDeleteCommits(id, storageKey);
+        removeBlobOnceTheDeleteCommits(id, storageKey, removal);
     }
 
     /** Uploads a file with the form's own options, which is the shape a multipart request arrives in. */
@@ -322,14 +330,16 @@ public class DocumentService {
      * turned a completed delete into a 500, the caller retried and got a 404, and had no way to tell the
      * delete had in fact worked. Both ids are logged so the orphan can be found.
      */
-    private void removeBlobOnceTheDeleteCommits(String id, String storageKey) {
+    private void removeBlobOnceTheDeleteCommits(String id, String storageKey, Runnable removal) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            removal.run();
             unlink(id, storageKey);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
+                removal.run();
                 unlink(id, storageKey);
             }
         });

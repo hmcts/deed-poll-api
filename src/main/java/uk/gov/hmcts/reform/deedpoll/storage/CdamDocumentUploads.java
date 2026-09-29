@@ -7,13 +7,17 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import uk.gov.hmcts.reform.deedpoll.ccd.CaseDocumentsEvent;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule;
+import uk.gov.hmcts.reform.deedpoll.ccd.SupportingDocumentReference;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentOwner;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.RemoteDocumentUploads;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.StorageReceipt;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -32,7 +36,8 @@ import java.util.UUID;
  *   <li>Attach: the case's document event, carrying the hash, which data-store attaches with. {@code Attached} clears
  *       the token. A refusal, or an event that never reached the submission, is {@code Failed} from {@code Uploaded}
  *       -- the case cannot carry the document -- and a lost answer is {@code AttachUncertain}, which is retried once,
- *       because CDAM skips a document already attached to the same case.</li>
+ *       because CDAM skips a document already attached to the same case. The event's handler makes the move to
+ *       {@code Attached} itself, inside the event's transaction, so every failure reads the row first.</li>
  * </ol>
  *
  * <p>Log lines name the document and the state and are otherwise fixed prose: never the token, never a message from
@@ -102,17 +107,29 @@ public class CdamDocumentUploads implements RemoteDocumentUploads {
         }
     }
 
+    /**
+     * Submits the event, and reads the row after any failure before deciding anything: the event's handler moves the
+     * row to {@code Attached} inside the event's own transaction (task 5), so a row that says so is an answer that
+     * got lost on the way back, not a failure, whatever the exception said.
+     */
     private DeedPollSupportingDocument attach(DocumentStorageStates.Claim claim) {
         for (int submission = 1; submission <= MAX_ATTACH_SUBMISSIONS; submission++) {
             try {
                 event.submit(claim.caseReference(), states.references(claim));
-            } catch (CaseDocumentsEvent.NotSubmitted notSubmitted) {
-                throw notAttached(claim, notSubmitted.getMessage());
             } catch (RuntimeException failure) {
-                if (CcdLinkingRule.classify(failure) == CcdLinkingRule.SubmitFailure.REFUSED) {
-                    throw notAttached(claim, "CCD refused the event");
+                DocumentStorageState state = states.stateOf(claim);
+                if (state == DocumentStorageState.Attached) {
+                    LOG.info("Document {} attached to its CCD case; the event's answer was lost ({})",
+                        claim.documentId(), failure.getClass().getSimpleName());
+                    return states.attached(claim);
                 }
-                if (states.stateOf(claim) == DocumentStorageState.Uploaded) {
+                if (failure instanceof CaseDocumentsEvent.NotSubmitted) {
+                    throw notAttached(claim, state, failure.getMessage());
+                }
+                if (CcdLinkingRule.classify(failure) == CcdLinkingRule.SubmitFailure.REFUSED) {
+                    throw notAttached(claim, state, "CCD refused the event");
+                }
+                if (state == DocumentStorageState.Uploaded) {
                     states.attachUncertain(claim);
                 }
                 LOG.warn("Attach of document {} uncertain after submission {} ({})", claim.documentId(), submission,
@@ -128,11 +145,43 @@ public class CdamDocumentUploads implements RemoteDocumentUploads {
     }
 
     /**
+     * Takes a deleted document off its CCD case: the event again, with every attached document but this one, so the
+     * event's snapshot and data-store's search index stop carrying it (task 5).
+     *
+     * <p>The list is read now, inside the delete's transaction; the event is sent by the returned work, which the
+     * caller runs once that transaction commits. Nothing for a row the case never carried. Best effort, like the soft
+     * delete it goes ahead of: the row is gone either way, and the view composes the case's documents from the rows,
+     * so a lost event leaves only the snapshot and the index stale until the next one. Logged by exception class
+     * alone.
+     */
+    @Override
+    public Runnable removal(DeedPollSupportingDocument document) {
+        Optional<String> caseReference = DocumentOwner.of(document.getDeedPoll()).ccdCaseReference();
+        if (document.getStorageState() != DocumentStorageState.Attached || caseReference.isEmpty()) {
+            return () -> {
+            };
+        }
+        String documentId = document.getId();
+        List<SupportingDocumentReference> remaining =
+            states.referencesWithout(document.getDeedPoll().getId(), documentId);
+        return () -> {
+            try {
+                event.submit(caseReference.get(), remaining);
+                LOG.info("Deleted document {} taken off its CCD case", documentId);
+            } catch (RuntimeException failure) {
+                LOG.warn("Deleted document {} but could not take it off its CCD case ({})", documentId,
+                    failure.getClass().getSimpleName());
+            }
+        };
+    }
+
+    /**
      * The attach did not happen from this attempt. From {@code Uploaded} nothing reached the case, so the row is
      * {@code Failed}; from {@code AttachUncertain} an earlier submission may have, so the row keeps that state.
      */
-    private UpstreamFailureError notAttached(DocumentStorageStates.Claim claim, String why) {
-        if (states.stateOf(claim) == DocumentStorageState.Uploaded) {
+    private UpstreamFailureError notAttached(DocumentStorageStates.Claim claim, DocumentStorageState state,
+                                             String why) {
+        if (state == DocumentStorageState.Uploaded) {
             states.failed(claim);
             LOG.warn("Attach of document {} not made; now Failed: {}", claim.documentId(), why);
             return new UpstreamFailureError(ATTACH_REFUSED);

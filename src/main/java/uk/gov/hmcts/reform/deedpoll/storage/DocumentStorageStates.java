@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.storage;
 
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.ccd.SupportingDocumentReference;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
@@ -155,16 +156,57 @@ public class DocumentStorageStates {
      * The case carries the document: the token goes, and the row's storage key becomes the CDAM id, which is what
      * makes the row read as having a file.
      *
+     * <p>Already {@code Attached} is an answer, not an illegal move: {@link #attachedOnTheCase} makes this move inside
+     * the event's own transaction, so by the time the event's answer arrives -- or fails to -- the row is usually
+     * there already.
+     *
      * @return the row, with its type loaded for the response
      */
     @Transactional
     public DeedPollSupportingDocument attached(Claim claim) {
-        DeedPollSupportingDocument row = move(claim, DocumentStorageState.Attached, attached -> {
-            attached.setCdamHashToken(null);
-            attached.setStorageKey(attached.getCdamDocumentId().toString());
-        });
+        DeedPollSupportingDocument row = lock(claim);
+        if (row.getStorageState() != DocumentStorageState.Attached) {
+            attach(row);
+        }
         row.getDocumentType().getName();
         return row;
+    }
+
+    /**
+     * Moves a document the case's document event names to {@code Attached}, inside that event's transaction (plan 03a,
+     * task 5).
+     *
+     * <p>Data-store attaches every document carrying a hash in CDAM <em>before</em> it calls this service's
+     * persistence endpoint (docs/CDAM-SEQUENCE.md section 2), so by the time the event's handler runs, CDAM holds the
+     * attachment. Making the move here, in the transaction that writes the event, means the SDK's snapshot of the event
+     * shows the document, and a lost answer to the event leaves a row that already says it is attached -- recovery by
+     * reading, as plan 02's linking operation recovers.
+     *
+     * <p>Only a row of this case, in a state that may be attached, whose CDAM id is the one the item names: the id in a
+     * payload is compared with the row's and never written (decision 7). Anything else -- a document the case already
+     * carries, one deleted since, a URL that names another document -- is left alone, because the view composes the
+     * case's documents from the rows and a payload item is not truth.
+     *
+     * @return whether the row moved
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean attachedOnTheCase(String deedPollId, String documentId, UUID cdamDocumentId) {
+        Optional<DeedPollSupportingDocument> found = documents.findByIdAndDeedPollIdForUpdate(documentId, deedPollId);
+        if (found.isEmpty()) {
+            return false;
+        }
+        DeedPollSupportingDocument row = found.get();
+        if (!DocumentStorageRule.mayAttach(row.getStorageState()) || !cdamDocumentId.equals(row.getCdamDocumentId())) {
+            return false;
+        }
+        attach(row);
+        return true;
+    }
+
+    private static void attach(DeedPollSupportingDocument row) {
+        move(row, DocumentStorageState.Attached);
+        row.setCdamHashToken(null);
+        row.setStorageKey(row.getCdamDocumentId().toString());
     }
 
     /** The row's state as it stands. */
@@ -200,6 +242,22 @@ public class DocumentStorageStates {
         }
         references.add(reference(row, Optional.of(row.getCdamHashToken())));
         return references;
+    }
+
+    /**
+     * What the case's document event sets after a delete: every {@code Attached} document the case carries but the one
+     * being deleted, oldest first, none with a token.
+     *
+     * <p>Read inside the delete's own transaction, which is why it is {@code MANDATORY}: the event is sent once that
+     * transaction commits, and the list is the one the delete saw.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public List<SupportingDocumentReference> referencesWithout(String deedPollId, String documentId) {
+        return documents.findByDeedPollIdAndStorageStateOrderByCreatedOnAsc(deedPollId, DocumentStorageState.Attached)
+            .stream()
+            .filter(attached -> !attached.getId().equals(documentId))
+            .map(attached -> reference(attached, Optional.empty()))
+            .toList();
     }
 
     private static SupportingDocumentReference reference(DeedPollSupportingDocument row, Optional<String> hashToken) {

@@ -81,8 +81,8 @@ class DeedPollDefinitionTest {
     }
 
     @Test
-    @DisplayName("one state, Registered, and one event, linkDeedPoll, that creates a case into it")
-    void oneStateAndOneEvent() throws IOException {
+    @DisplayName("one state, Registered; linkDeedPoll creates a case into it, and the document event runs on it")
+    void oneStateAndTwoEvents() throws IOException {
         Path caseType = generate();
 
         assertThat(rows(caseType, "State.json")).extracting(row -> row.get("ID").asText())
@@ -94,26 +94,38 @@ class DeedPollDefinitionTest {
         });
         try (Stream<Path> events = Files.list(caseType.resolve("CaseEvent"))) {
             assertThat(events).extracting(path -> path.getFileName().toString())
-                .containsExactly("linkDeedPoll.json");
+                .containsExactlyInAnyOrder("linkDeedPoll.json", CaseDocumentsEvent.EVENT_ID + ".json");
         }
+        assertThat(rows(caseType, "CaseEvent/" + CaseDocumentsEvent.EVENT_ID + ".json")).singleElement()
+            .satisfies(row -> assertThat(row.get("PostConditionState").asText()).isEqualTo("Registered"));
     }
 
     @Test
-    @DisplayName("the two fields are the link and the display reference, and the event requires both")
-    void twoFields() throws IOException {
+    @DisplayName("three fields: the link and the display reference, which linking requires, and the documents")
+    void threeFields() throws IOException {
         Path caseType = generate();
 
         assertThat(rows(caseType, "CaseField.json")).extracting(row -> row.get("ID").asText())
             // caseHistory is the SDK's own viewer field, which it adds to every case type; nobody is granted it.
-            .containsExactly("caseHistory", "deedPollId", "deedPollReference");
+            .containsExactly("caseHistory", "deedPollId", "deedPollReference", CaseDocumentsEvent.FIELD);
         assertThat(rows(caseType, "CaseEventToFields/linkDeedPoll.json"))
             .extracting(row -> row.get("CaseFieldID").asText() + ":" + row.get("DisplayContext").asText())
             .containsExactly("deedPollId:MANDATORY", "deedPollReference:MANDATORY");
+        assertThat(rows(caseType, "CaseEventToFields/" + CaseDocumentsEvent.EVENT_ID + ".json"))
+            .extracting(row -> row.get("CaseFieldID").asText() + ":" + row.get("DisplayContext").asText())
+            .containsExactly(CaseDocumentsEvent.FIELD + ":OPTIONAL");
+        assertThat(rows(caseType, "CaseField.json"))
+            .filteredOn(row -> row.get("ID").asText().equals(CaseDocumentsEvent.FIELD)).singleElement()
+            .satisfies(row -> {
+                assertThat(row.get("FieldType").asText()).isEqualTo("Collection");
+                assertThat(row.get("FieldTypeParameter").asText()).isEqualTo("Document");
+            });
     }
 
     @Test
-    @DisplayName("DEED_POLL_SYSTEM is granted create and read, and nothing else is granted anything")
-    void onlyTheSystemProfileIsGrantedAndOnlyCreateAndRead() throws IOException {
+    @DisplayName("DEED_POLL_SYSTEM holds what its two events need, D only on the documents field, and nobody else"
+        + " is granted anything")
+    void onlyTheSystemProfileIsGrantedAndOnlyWhatItsEventsNeed() throws IOException {
         Path caseType = generate();
 
         List<JsonNode> grants = new ArrayList<>();
@@ -125,10 +137,19 @@ class DeedPollDefinitionTest {
         // A creating event leaves its destination state ungranted in the SDK, and data-store then refuses every read.
         assertThat(rows(caseType, "AuthorisationCaseState.json")).as("the one state is granted")
             .singleElement().satisfies(row -> assertThat(row.get("CaseStateID").asText()).isEqualTo("Registered"));
-        assertThat(grants).isNotEmpty().allSatisfy(grant -> {
-            assertThat(grant.get("UserRole").asText()).isEqualTo("DEED_POLL_SYSTEM");
-            assertThat(grant.get("CRUD").asText()).isEqualTo("CR");
-        });
+        assertThat(grants).isNotEmpty()
+            .allSatisfy(grant -> assertThat(grant.get("UserRole").asText()).isEqualTo("DEED_POLL_SYSTEM"));
+        // Update on the case type and the state: data-store checks both before any event on an existing case.
+        assertThat(crud(caseType, "AuthorisationCaseType.json", "CaseTypeID"))
+            .containsOnly(Map.entry(PLACEHOLDER, "CRU"));
+        assertThat(crud(caseType, "AuthorisationCaseState.json", "CaseStateID"))
+            .containsOnly(Map.entry("Registered", "CRU"));
+        assertThat(crud(caseType, "AuthorisationCaseEvent/AuthorisationCaseEvent.json", "CaseEventID")).containsOnly(
+            Map.entry(DeedPollCaseType.LINK_DEED_POLL, "CR"), Map.entry(CaseDocumentsEvent.EVENT_ID, "CRU"));
+        // Delete only where a collection item is taken away, and not on the event, which would carry it to the state.
+        assertThat(crud(caseType, "AuthorisationCaseField/DEED_POLL_SYSTEM.json", "CaseFieldID")).containsOnly(
+            Map.entry("deedPollId", "CR"), Map.entry("deedPollReference", "CR"),
+            Map.entry(CaseDocumentsEvent.FIELD, "CRUD"));
         try (Stream<Path> fieldGrants = Files.list(caseType.resolve("AuthorisationCaseField"))) {
             assertThat(fieldGrants).extracting(path -> path.getFileName().toString())
                 .as("one field-grant file per granted profile")
@@ -166,7 +187,8 @@ class DeedPollDefinitionTest {
     void identifiersComeFromConfiguration() throws IOException {
         CcdProperties confirmed = new CcdProperties("CONFIRMED_TYPE", "CONFIRMED_JURISDICTION", "confirmed-role");
         // The generator reads the event and never invokes its handler, so the handler needs no repositories.
-        DeedPollCaseType definition = new DeedPollCaseType(confirmed, new LinkDeedPollHandler(null, null));
+        DeedPollCaseType definition = new DeedPollCaseType(confirmed, new LinkDeedPollHandler(null, null),
+            new SupportingDocumentsHandler(null, null));
         new CCDDefinitionGenerator(List.<CCDConfig<?, ?, ?>>of(definition), writer)
             .generateAllCaseTypesToJSON(output.toFile());
 
@@ -192,6 +214,15 @@ class DeedPollDefinitionTest {
     private Path generate() {
         generator.generateAllCaseTypesToJSON(output.toFile());
         return output.resolve(PLACEHOLDER);
+    }
+
+    /** Each row's CRUD, keyed on the column that names what it grants. */
+    private static Map<String, String> crud(Path caseType, String file, String key) throws IOException {
+        Map<String, String> grants = new TreeMap<>();
+        for (JsonNode row : rows(caseType, file)) {
+            grants.put(row.get(key).asText(), row.get("CRUD").asText());
+        }
+        return grants;
     }
 
     private static List<JsonNode> rows(Path caseType, String file) throws IOException {

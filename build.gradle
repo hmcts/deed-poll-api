@@ -212,6 +212,29 @@ tasks.withType(uk.gov.hmcts.rse.CftlibExec).configureEach {
   // Data-store's own default list, plus this service, which calls it as the linking operation.
   environment 'DATA_STORE_S2S_AUTHORISED_SERVICES',
     'ccd_gw,ccd_data,xui_webapp,aac_manage_case_assignment,ccd_case_document_am_api,am_role_assignment_service,deed_poll_api'
+  // CDAM's own default list, plus this service, which uploads, downloads and soft-deletes (plan 03a, task 5).
+  environment 'CASE_DOCUMENT_S2S_AUTHORISED_SERVICES',
+    'ccd_case_document_am_api,ccd_gw,xui_webapp,ccd_data,bulk_scan_processor,em_npa_app,fprl_dgs_api,' +
+      'dg_docassembly_api,cmc_claim_store,civil_service,civil_general_applications,bulk_scan_orchestrator,' +
+      'ethos_repl_service,et_cos,nfdiv_case_api,divorce_frontend,pcs_api,finrem_citizen_ui,deed_poll_api'
+  /*
+    CDAM's service-to-case-type permissions come from its classpath `service_config.json`, which cftlib gives no way to
+    extend (docs/CDAM-SEQUENCE.md section 7). Environment variables outrank that file, but Spring binds a list from the
+    one highest source that holds it, so these REPLACE the whole list: `ccd_data`, which data-store attaches with, is
+    declared again, and nothing else is. `deed_poll_api` gets create, read and update on the placeholders, and never
+    attach, which is data-store's.
+  */
+  environment 'AUTHSERVICES_0_ID', 'ccd_data'
+  environment 'AUTHSERVICES_0_CASETYPEID_0', '*'
+  environment 'AUTHSERVICES_0_JURISDICTIONID', '*'
+  environment 'AUTHSERVICES_0_PERMISSIONS_0', 'ATTACH'
+  environment 'AUTHSERVICES_0_PERMISSIONS_1', 'READ'
+  environment 'AUTHSERVICES_1_ID', 'deed_poll_api'
+  environment 'AUTHSERVICES_1_CASETYPEID_0', 'DEED_POLL_PLACEHOLDER'
+  environment 'AUTHSERVICES_1_JURISDICTIONID', 'DEED_POLL_PLACEHOLDER'
+  environment 'AUTHSERVICES_1_PERMISSIONS_0', 'CREATE'
+  environment 'AUTHSERVICES_1_PERMISSIONS_1', 'READ'
+  environment 'AUTHSERVICES_1_PERMISSIONS_2', 'UPDATE'
 }
 
 // Gradle's checkstyle plugin hangs every source set's task on `check`, which would compile the plugin's cftlib,

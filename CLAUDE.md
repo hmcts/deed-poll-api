@@ -13,10 +13,11 @@ the specification. It replaces that repo's `apps/api`.
 Plan 02 built a **minimal decentralised CCD foundation** (2026-09-27): one CCD case per deed-poll record, linked
 by the record's UUID, created through data-store's public API by one linking operation. Plan 02b (2026-09-27)
 calls it from a sweep on the case list request, **switched off by default**, and gives admins two repair moves out of
-`NeedsRepair` under `/caseworker/ccd-attempts`. The relational record stays authoritative; CCD holds a two-field
-projection. It is proven against WireMock and a local
-cftlib stack on placeholder identifiers only — **nothing is onboarded**, and `docs/CCD-SMOKE.md` is the AAT
-procedure that waits on it. There is **no CDAM integration** (plan 03). See `docs/RESUME.md` and `docs/plans/`.
+`NeedsRepair` under `/caseworker/ccd-attempts`. The relational record stays authoritative; CCD holds a projection of
+it. It is proven against WireMock and a local cftlib stack on placeholder identifiers only — **nothing is
+onboarded**, and `docs/CCD-SMOKE.md` is the AAT procedure that waits on it. Plan 03a adds CDAM uploads behind
+`deedpoll.documents.store` (the filesystem stays the default), attached to the case by its document event. See
+`docs/RESUME.md` and `docs/plans/`.
 
 ## Layout
 
@@ -121,11 +122,20 @@ src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one e
   than logging it away. The sweep never throws anything else into the list: CCD failures are logged in fixed prose,
   by exception class name only. The repair endpoints are non-transactional for the same reason.
 - **A new CCD field is declared in three places, and the build names only one of them.** `DeedPollCaseData` and
-  its grants in `DeedPollCaseType`, the projection `DeedPollCaseView` composes from (`CcdCaseProjection`, read by
-  `DeedPollRepository`), and the pinned JSON under `src/test/resources/ccd-definition/`. `DeedPollDefinitionTest`
-  fails on the definition; a field left out of the view reads as null through CCD, and nothing fails unless `DeedPollCaseViewTest` is taught it.
-  Keep the definition minimal: `DEED_POLL_SYSTEM` is granted create and read and nothing else is granted
-  anything, and the test refuses growth that was not deliberate.
+  its grants in `DeedPollCaseType`, the projection `DeedPollCaseView` composes from (`CcdCaseProjection` and
+  `CcdDocumentProjection`, read by `DeedPollRepository` and `DeedPollSupportingDocumentRepository`), and the pinned
+  JSON under `src/test/resources/ccd-definition/`. `DeedPollDefinitionTest` fails on the definition; a field left out
+  of the view reads as null through CCD, and nothing fails unless `DeedPollCaseViewTest` is taught it.
+  Keep the definition minimal: `DEED_POLL_SYSTEM` is the only profile granted anything — CR on `linkDeedPoll` and its
+  two fields, CRU on the case type, the state and `updateSupportingDocuments`, and D on `supportingDocuments` alone,
+  through `SupportingDocumentsAccess`, because data-store checks D for a removed collection item and a D on the event
+  would be carried onto the state. The test refuses growth that was not deliberate.
+- **The case's documents are its `Attached` rows, and the document event's handler is what attaches them.**
+  `SupportingDocumentsHandler` moves a row to `Attached` inside the event's transaction (`attachedOnTheCase`, only
+  when the payload URL's id equals the row's `cdamDocumentId`), so the SDK's snapshot shows it and a lost answer is
+  settled by reading the row: `CdamDocumentUploads` reads `stateOf` after **every** failure before calling anything
+  `Failed` or uncertain. The view never projects the hash token and never projects a non-`Attached` row. A delete sends
+  the event again with the rest, after the commit and ahead of the soft delete, best effort.
 - **No live calls to CCD, CDAM, IDAM or payments in any test.** WireMock only (`StubIdam`, `StubS2s`); there are
   no credentials. The one exception is `cftlibTest`, which runs CCD in-process on placeholders and is local only.
 - **No secrets.** Everything by environment variable, with a non-working default.

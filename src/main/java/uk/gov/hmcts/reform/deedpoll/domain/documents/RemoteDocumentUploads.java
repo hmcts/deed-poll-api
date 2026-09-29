@@ -23,4 +23,12 @@ public interface RemoteDocumentUploads {
      *     its answer was lost; the row records which
      */
     DeedPollSupportingDocument upload(DocumentUpload upload);
+
+    /**
+     * What the store needs done once the delete of this row commits, beyond removing the file: read now, inside the
+     * delete's transaction, and run after it commits, ahead of the file's removal.
+     *
+     * @return work that never throws; it does nothing when there is nothing to do
+     */
+    Runnable removal(DeedPollSupportingDocument document);
 }

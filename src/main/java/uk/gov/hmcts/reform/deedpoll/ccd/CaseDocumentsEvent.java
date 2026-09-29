@@ -22,8 +22,12 @@ import java.util.Map;
  * document is submitting this event with the document in it, hash and all; and because CDAM skips a document already
  * attached to the same case, submitting it again after a lost answer is safe.
  *
- * <p>The event and the field are registered in the case type by plan 03a's Task 5, alongside {@code linkDeedPoll}.
- * Until then an environment's definition does not have them, which is one more reason the CDAM store is off.
+ * <p>The event and the field are registered in {@link DeedPollCaseType} alongside {@code linkDeedPoll} (plan 03a,
+ * task 5), and {@link SupportingDocumentsHandler} is its submit handler. An environment that has not imported that
+ * definition has neither, which is one more reason the CDAM store is off.
+ *
+ * <p>The payload is what data-store attaches with and checks grants against, and nothing more: the case's documents as
+ * CCD shows them come from {@link DeedPollCaseView}, composed from the rows, like every other field.
  *
  * <p><strong>Two kinds of failure, told apart by type.</strong> {@link NotSubmitted} means nothing reached the
  * submission -- the tokens or the start failed -- so the case cannot carry the document from this attempt. Anything
@@ -33,11 +37,13 @@ import java.util.Map;
 @Component
 public class CaseDocumentsEvent {
 
-    /** The event that sets the case's supporting documents. Task 5 registers it. */
+    /**
+     * The event that sets the case's supporting documents, registered in {@link DeedPollCaseType}.
+     */
     public static final String EVENT_ID = "updateSupportingDocuments";
 
     /**
-     * The case field holding the documents: a collection of the SDK's {@code Document}. Task 5 registers it.
+     * The case field holding the documents: a collection of the SDK's {@code Document}, {@link DeedPollCaseData}'s.
      */
     public static final String FIELD = "supportingDocuments";
 
@@ -106,10 +112,10 @@ public class CaseDocumentsEvent {
      * against its pattern and CDAM reads its id from.
      */
     private Map<String, Object> item(SupportingDocumentReference document) {
-        String url = properties.documentUrlBase() + "/documents/" + document.cdamDocumentId();
         Map<String, Object> value = new LinkedHashMap<>();
-        value.put("document_url", url);
-        value.put("document_binary_url", url + "/binary");
+        value.put("document_url", CaseDocumentUrls.url(properties.documentUrlBase(), document.cdamDocumentId()));
+        value.put("document_binary_url",
+            CaseDocumentUrls.binaryUrl(properties.documentUrlBase(), document.cdamDocumentId()));
         value.put("document_filename", document.filename());
         document.hashToken().ifPresent(token -> value.put("document_hash", token));
         Map<String, Object> item = new LinkedHashMap<>();

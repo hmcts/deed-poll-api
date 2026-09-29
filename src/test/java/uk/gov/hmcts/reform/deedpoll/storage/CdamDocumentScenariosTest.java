@@ -25,9 +25,13 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.transaction.support.TransactionTemplate;
+import uk.gov.hmcts.ccd.sdk.CaseViewRequest;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.auth.StubS2s;
 import uk.gov.hmcts.reform.deedpoll.ccd.CaseDocumentsEvent;
+import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollCaseData;
+import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollCaseState;
+import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollCaseView;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
@@ -168,6 +172,9 @@ class CdamDocumentScenariosTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private TransactionTemplate transactions;
+
+    @Autowired
+    private DeedPollCaseView caseView;
 
     private ListAppender<ILoggingEvent> logs;
 
@@ -441,6 +448,76 @@ class CdamDocumentScenariosTest extends AbstractPostgresContainerTest {
             .withQueryParam("permanent", equalTo("false")));
         assertThat(logs.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
             .contains(documentId).contains(FIRST.toString()));
+    }
+
+    @Test
+    @DisplayName("a delete takes the document off the case by event, with what the case keeps, before the soft delete")
+    void deleteSendsTheEvent() throws Exception {
+        String record = linkedRecord();
+        uploadAnswers(FIRST);
+        upload(record).andExpect(status().isCreated());
+        uploadAnswers(RETRY);
+        upload(record).andExpect(status().isCreated());
+        String first = documents.findAll().stream().filter(d -> FIRST.equals(d.getCdamDocumentId())).findFirst()
+            .orElseThrow().getId();
+        String reference = deedPolls.findById(record).orElseThrow().getCcdCaseReference();
+        DATA_STORE.resetRequests();
+
+        documentService.removeDocument(record, first);
+
+        DATA_STORE.verify(1, postRequestedFor(urlPathEqualTo("/cases/" + reference + "/events"))
+            .withRequestBody(containing("/documents/" + RETRY))
+            .withRequestBody(notContaining(FIRST.toString()))
+            .withRequestBody(notContaining("document_hash")));
+        CDAM.verify(1, deleteRequestedFor(urlPathEqualTo("/cases/documents/" + FIRST))
+            .withQueryParam("permanent", equalTo("false")));
+        assertThat(documents.findAll()).extracting(DeedPollSupportingDocument::getCdamDocumentId)
+            .containsExactly(RETRY);
+    }
+
+    @Test
+    @DisplayName("a delete whose event data-store refuses still deletes the row and soft-deletes the file")
+    void deleteEventIsBestEffort() throws Exception {
+        String record = linkedRecord();
+        uploadAnswers(FIRST);
+        upload(record).andExpect(status().isCreated());
+        String documentId = onlyRow().getId();
+        DATA_STORE.stubFor(post(urlPathMatching("/cases/[0-9]+/events"))
+            .willReturn(aResponse().withStatus(422).withBody("{\"message\": \"" + HASH + "\"}")));
+
+        documentService.removeDocument(record, documentId);
+
+        assertThat(documents.findAll()).isEmpty();
+        CDAM.verify(1, deleteRequestedFor(urlPathEqualTo("/cases/documents/" + FIRST))
+            .withQueryParam("permanent", equalTo("false")));
+        assertThat(logs.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
+            .contains(documentId).contains("could not take it off its CCD case"));
+    }
+
+    @Test
+    @DisplayName("the case view, over real rows, carries the attached document and no Failed or uncertain one")
+    void theViewCarriesOnlyAttachedRows() throws Exception {
+        String record = linkedRecord();
+        uploadAnswers(FIRST);
+        upload(record).andExpect(status().isCreated());
+        CDAM.stubFor(post(urlPathEqualTo("/cases/documents")).willReturn(aResponse().withStatus(400)));
+        upload(record).andExpect(status().isBadGateway());
+        uploadAnswers(RETRY);
+        DATA_STORE.stubFor(post(urlPathMatching("/cases/[0-9]+/events"))
+            .willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
+        upload(record).andExpect(status().isBadGateway());
+        assertThat(documents.findAll()).extracting(DeedPollSupportingDocument::getStorageState)
+            .containsExactlyInAnyOrder(DocumentStorageState.Attached, DocumentStorageState.Failed,
+                DocumentStorageState.AttachUncertain);
+        long reference = Long.parseLong(deedPolls.findById(record).orElseThrow().getCcdCaseReference());
+
+        DeedPollCaseData data = caseView.getCase(new CaseViewRequest<>(reference, DeedPollCaseState.Registered));
+
+        assertThat(data.getSupportingDocuments()).singleElement().satisfies(item -> {
+            assertThat(item.getValue().getUrl()).endsWith("/documents/" + FIRST);
+            assertThat(item.getValue().getHashToken()).isNull();
+        });
+        assertThat(String.valueOf(data.getSupportingDocuments())).doesNotContain(HASH).doesNotContain(RETRY.toString());
     }
 
     private void uploadAnswers(UUID id) {

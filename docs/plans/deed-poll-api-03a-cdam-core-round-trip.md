@@ -301,7 +301,44 @@ Handoffs:
     token is ever projected;
   - snapshot tests updated.
 
-- [ ] the case carries its attached documents, add and remove each go through the event, cftlib grants the
+**Done 2026-09-29.** `DeedPollCaseData.supportingDocuments` is a `List<ListValue<Document>>`, and
+`updateSupportingDocuments` is registered beside `linkDeedPoll` with `SupportingDocumentsHandler` as its handler.
+`DeedPollCaseView` builds the field from `CcdDocumentProjection` (the row id, CDAM id and filename, and no column for
+a token), which reads `Attached` rows only, oldest first. It is null when there are none, so an unlinked-to-CDAM case
+reads exactly as before. The URLs are stated once, in `ccd/CaseDocumentUrls`, and the event and the view share them.
+**The handler attaches.** Data-store attaches in CDAM before it calls `/ccd-persistence`, so the handler moves each
+named row to `Attached` inside the event's transaction (`DocumentStorageStates.attachedOnTheCase`, `MANDATORY`). It
+does so only from `Uploaded`/`AttachUncertain`, and only when the payload URL's id equals the row's `cdamDocumentId`,
+which is compared and never written. The SDK's snapshot, loaded after the handler, shows the document.
+`CdamDocumentUploads` now reads the row after every failure, and a row already `Attached` is the answer rather than
+`Failed` or uncertain. `attached` is idempotent. **Grants, found by reading data-store:** an event on an existing case
+needs U on the case type and on the state, and a removed collection item needs D on the field. So `DEED_POLL_SYSTEM`
+is CRU on the case type, the state and the new event; CR on `linkDeedPoll` and its two fields, unchanged; and CRUD on
+`supportingDocuments` alone. D comes from `SupportingDocumentsAccess`, because a D on the event would be unioned onto
+the state. **Delete:** `RemoteDocumentUploads.removal` reads the remaining `Attached` references inside the delete's
+transaction. After the commit, and ahead of the soft delete, it sends the event with them, best effort, logging only
+the document id and the exception class. It sends nothing for a row the case never carried, and nothing on the
+filesystem store. **cftlib:** `build.gradle` adds `deed_poll_api` to `CASE_DOCUMENT_S2S_AUTHORISED_SERVICES` and
+replaces CDAM's `authServices` list by environment. The replacement re-declares `ccd_data` (ATTACH, READ) and grants
+`deed_poll_api` CREATE, READ and UPDATE on the placeholder pair (docs/CDAM-SEQUENCE.md section 7). `./gradlew
+cftlibTest` is green, the new definition imports, and CDAM starts with the overrides. No cftlib test calls CDAM yet,
+so the permissions themselves are first exercised by Task 7. The pinned definition gains the event, its field
+mapping, the field, and the two grant rows; the case-type and state grants go from CR to CRU. `DeedPollDefinitionTest`'s
+named tests state each grant. New tests:
+- `DeedPollCaseViewTest` (+5): projection, no token, only `Attached` in the query, the URLs match the event's, absent
+  when empty.
+- `SupportingDocumentsHandlerTest`, `CaseDocumentUrlsTest` and `DocumentStorageStatesTest`, all container-free.
+- `CdamDocumentUploadsTest` (+5): a lost or refused answer after the handler attached, and removal.
+- `CdamDocumentScenariosTest` (+3): the delete event over WireMock, its best-effort failure, and the view over real
+  rows carrying one `Attached` document and no `Failed` or `AttachUncertain` one.
+
+`./gradlew cleanTest cleanIntegration build`: **3438** `test` (3406 plus 32 new) and **14** `integration`, all green.
+Handoffs:
+- The grants are the minimum data-store needs for this service's own actor. A caseworker profile reading documents
+  through XUI would be a new profile and a new pinned grant.
+- No HTTP delete endpoint still, as Task 4 recorded.
+
+- [x] the case carries its attached documents, add and remove each go through the event, cftlib grants the
       placeholder its CDAM permissions, and the build is green
 
 ### Task 6: The WireMock dm-store and its guards

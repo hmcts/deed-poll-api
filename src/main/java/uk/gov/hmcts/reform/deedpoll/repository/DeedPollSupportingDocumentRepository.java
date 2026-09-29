@@ -66,6 +66,22 @@ public interface DeedPollSupportingDocumentRepository extends JpaRepository<Deed
     List<DeedPollSupportingDocument> findByDeedPollIdAndStorageStateOrderByCreatedOnAsc(String deedPollId,
                                                                                         DocumentStorageState state);
 
+    /**
+     * What the case's CCD view shows of its documents: the {@code Attached} ones, oldest first (plan 03a, task 5).
+     *
+     * <p>Only {@code Attached}, so nothing uncertain, failed or on the filesystem store is ever put on the case, and a
+     * projection, so the hash token is never read.
+     */
+    @Query("""
+        select new uk.gov.hmcts.reform.deedpoll.repository.CcdDocumentProjection(
+                   d.id, d.cdamDocumentId, d.originalName)
+          from DeedPollSupportingDocument d
+         where d.deedPoll.id = :deedPollId
+           and d.storageState = uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState.Attached
+         order by d.createdOn asc, d.id asc
+        """)
+    List<CcdDocumentProjection> findCcdDocumentProjections(@Param("deedPollId") String deedPollId);
+
     /** How many documents, across every case, reference the given type. */
     long countByDocumentTypeId(String documentTypeId);
 }

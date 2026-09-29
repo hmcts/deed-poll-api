@@ -22,5 +22,14 @@
     "Label": "Deed poll reference",
     "LiveFrom": "01/01/2017",
     "SecurityClassification": "Public"
+  },
+  {
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "FieldType": "Collection",
+    "FieldTypeParameter": "Document",
+    "ID": "supportingDocuments",
+    "Label": "Supporting documents",
+    "LiveFrom": "01/01/2017",
+    "SecurityClassification": "Public"
   }
 ]

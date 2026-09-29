@@ -13,6 +13,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentToStore;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.StorageReceipt;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 
@@ -26,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -225,6 +227,85 @@ class CdamDocumentUploadsTest {
     }
 
     @Test
+    @DisplayName("a lost answer to an event the handler committed is Attached, from one submission and never uncertain")
+    void lostAnswerAfterTheHandlerAttached() {
+        when(store.save(any())).thenReturn(receipt(CDAM_ID));
+        doAnswer(invocation -> {
+            row.attachedByTheHandler();
+            throw noResponse();
+        }).when(event).submit(any(), anyList());
+
+        uploads.upload(upload());
+
+        assertThat(row.state).isEqualTo(Attached);
+        assertThat(row.history).doesNotContain(AttachUncertain, Failed);
+        verify(event, times(1)).submit(any(), anyList());
+    }
+
+    @Test
+    @DisplayName("whatever the failure says, a row the handler attached is not failed: the row is read first")
+    void theRowOutranksTheFailure() {
+        when(store.save(any())).thenReturn(receipt(CDAM_ID));
+        doAnswer(invocation -> {
+            row.attachedByTheHandler();
+            throw answered(422);
+        }).when(event).submit(any(), anyList());
+
+        uploads.upload(upload());
+
+        assertThat(row.state).isEqualTo(Attached);
+        assertThat(row.history).doesNotContain(Failed);
+    }
+
+    @Test
+    @DisplayName("a delete of an attached document reads what the case keeps now, and sends the event only when run")
+    void removalSendsTheRemainingDocuments() {
+        Runnable removal = uploads.removal(document(DocumentStorageState.Attached, CASE));
+
+        assertThat(row.removedFrom).isEqualTo("record-1/document-1");
+        verifyNoInteractions(event);
+        removal.run();
+        verify(event).submit(org.mockito.ArgumentMatchers.eq(CASE), org.mockito.ArgumentMatchers.argThat(
+            (List<SupportingDocumentReference> refs) -> refs.size() == 1 && refs.get(0).id().equals("document-2")
+                && refs.get(0).hashToken().isEmpty()));
+    }
+
+    @Test
+    @DisplayName("a delete's event that fails is swallowed: the delete has happened either way")
+    void removalIsBestEffort() {
+        doThrow(noResponse()).when(event).submit(any(), anyList());
+
+        uploads.removal(document(DocumentStorageState.Attached, CASE)).run();
+
+        verify(event).submit(any(), anyList());
+    }
+
+    @Test
+    @DisplayName("a delete of a row the case never carried, or on a record with no case, sends nothing")
+    void removalOfWhatTheCaseNeverCarried() {
+        for (DocumentStorageState state : DocumentStorageState.values()) {
+            if (state != DocumentStorageState.Attached) {
+                uploads.removal(document(state, CASE)).run();
+            }
+        }
+        uploads.removal(document(DocumentStorageState.Attached, null)).run();
+
+        assertThat(row.removedFrom).isNull();
+        verifyNoInteractions(event);
+    }
+
+    private static DeedPollSupportingDocument document(DocumentStorageState state, String caseReference) {
+        DeedPoll parent = new DeedPoll();
+        parent.setId("record-1");
+        parent.setCcdCaseReference(caseReference);
+        DeedPollSupportingDocument document = new DeedPollSupportingDocument();
+        document.setId("document-1");
+        document.setDeedPoll(parent);
+        document.setStorageState(state);
+        return document;
+    }
+
+    @Test
     @DisplayName("an upload inside a transaction is refused before anything is claimed")
     void refusedInsideATransaction() {
         TransactionSynchronizationManager.setActualTransactionActive(true);
@@ -249,6 +330,7 @@ class CdamDocumentUploadsTest {
         String token;
         final List<DocumentStorageState> history = new ArrayList<>();
         final List<List<SupportingDocumentReference>> submitted = new ArrayList<>();
+        String removedFrom;
 
         Row() {
             super(null, null, null);
@@ -312,8 +394,21 @@ class CdamDocumentUploadsTest {
 
         @Override
         public DeedPollSupportingDocument attached(Claim claim) {
-            move(Attached);
+            if (state != Attached) {
+                move(Attached);
+            }
             return new DeedPollSupportingDocument();
+        }
+
+        /** What the event's handler does inside the event's transaction, before the answer is lost or refused. */
+        void attachedByTheHandler() {
+            move(Attached);
+        }
+
+        @Override
+        public List<SupportingDocumentReference> referencesWithout(String deedPollId, String documentId) {
+            removedFrom = deedPollId + "/" + documentId;
+            return List.of(new SupportingDocumentReference("document-2", RETRY_ID, "marriage.pdf", Optional.empty()));
         }
 
         @Override
