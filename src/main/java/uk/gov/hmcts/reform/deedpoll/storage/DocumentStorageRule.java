@@ -1,6 +1,9 @@
 package uk.gov.hmcts.reform.deedpoll.storage;
 
+import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
+
+import java.util.Optional;
 
 /**
  * The recovery rule for a document's remote storage, where it depends on the row rather than the state (plan 03a,
@@ -14,6 +17,13 @@ public final class DocumentStorageRule {
      * {@code DocumentStorageStateTest} holds the two together.
      */
     public static final int MAX_UPLOAD_ATTEMPTS = 2;
+
+    /**
+     * The refusal an upload to a record with no CCD case gets from the CDAM store (plan 03a, decision 1: link first).
+     * Fixed prose, and the same sentence the published OpenAPI document gives for the 409.
+     */
+    public static final String CASE_NOT_READY =
+        "This case is not ready for documents yet, because it has no CCD case. Try again once it has been linked.";
 
     private DocumentStorageRule() {
     }
@@ -42,5 +52,18 @@ public final class DocumentStorageRule {
      */
     public static boolean mayAttach(DocumentStorageState state) {
         return state == DocumentStorageState.Uploaded || state == DocumentStorageState.AttachUncertain;
+    }
+
+    /**
+     * The record's CCD case reference, which a CDAM upload is filed under, or the "case not ready" refusal.
+     *
+     * <p>Asked before a row is written or anything is sent, so a refused upload leaves nothing behind. It never
+     * calls the linking operation: staging an upload that arrives before its case exists is plan 03b's.
+     *
+     * @throws ConflictError if the record has no CCD case yet
+     */
+    public static String requireCaseReady(Optional<String> ccdCaseReference) {
+        return ccdCaseReference.filter(reference -> !reference.isBlank())
+            .orElseThrow(() -> new ConflictError(CASE_NOT_READY));
     }
 }

@@ -7,6 +7,7 @@ import io.swagger.v3.oas.models.PathItem;
 import io.swagger.v3.oas.models.Paths;
 import io.swagger.v3.oas.models.media.Schema;
 import org.junit.jupiter.api.Test;
+import uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageRule;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -63,6 +64,8 @@ class OpenAPIWriteBodiesTest {
         assertThat(upload.getRequestBody().getRequired()).isTrue();
         assertThat(upload.getRequestBody().getContent())
             .containsKey("multipart/form-data");
+        assertThat(upload.getResponses().get("409").getDescription())
+            .isEqualTo(DocumentStorageRule.CASE_NOT_READY);
     }
 
     private OpenAPI openApiWithWriteSchemas() {

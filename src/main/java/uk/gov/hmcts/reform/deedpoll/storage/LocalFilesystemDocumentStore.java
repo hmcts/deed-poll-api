@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.storage;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentStore;
@@ -26,8 +27,13 @@ import java.util.UUID;
  * <p>The root path mirrors the reference's convention: a directory named by configuration, gitignored,
  * defaulting to {@code data/documents} under the working directory so that a checkout runs without being
  * configured first.
+ *
+ * <p>The default store: chosen when {@code deedpoll.documents.store} is {@code filesystem} or unset, and absent when
+ * it is {@code cdam}. {@link DocumentStoreProperties} refuses any other value at startup.
  */
 @Component
+@ConditionalOnProperty(name = DocumentStoreProperties.STORE, havingValue = DocumentStoreProperties.FILESYSTEM,
+    matchIfMissing = true)
 public class LocalFilesystemDocumentStore implements DocumentStore {
 
     private final Path root;

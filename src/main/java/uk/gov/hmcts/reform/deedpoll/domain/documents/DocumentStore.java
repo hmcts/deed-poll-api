@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.domain.documents;
 
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 
 import java.io.InputStream;
 
@@ -52,4 +53,16 @@ public interface DocumentStore {
      * and the reference relies on this so that deleting such a row does not have to special-case it.
      */
     void delete(String storageKey);
+
+    /**
+     * Whether this store holds the bytes of a row in the given state, and so may be asked to {@link #open} it.
+     *
+     * <p>A row records which store wrote it by its state: {@code Local} for the filesystem store, {@code Attached}
+     * for CDAM (plan 03a). An environment switched from one store to the other keeps the rows the first one wrote,
+     * and handing such a row's key to the other store would read a path as a CDAM id or the reverse. So a row in a
+     * state this store does not serve has no file here, and {@code DocumentService} says so rather than asking.
+     */
+    default boolean serves(DocumentStorageState state) {
+        return state == DocumentStorageState.Local;
+    }
 }

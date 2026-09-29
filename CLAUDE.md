@@ -179,10 +179,13 @@ src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one e
   failure the generate-once rule exists to prevent. Refusing costs one correction; a sworn deed cannot be undone.
 - **A read-only `@Transactional` method that throws still poisons its caller's transaction**, unless it says
   otherwise. Spring's default marks a *participating* transaction rollback-only, so the caller's `catch` decides
-  nothing and its commit fails anyway. That is why `DocumentService.downloadDocument` carries
-  `noRollbackFor = Exception.class`: `DocumentUploads` catches an unreadable document and answers a retryable
-  refusal inside the drain's single transaction, and without it one missing blob rolled back rows Notify had
-  already accepted and emailed those applicants again on the next drain.
+  nothing and its commit fails anyway. `DocumentUploads` catches an unreadable document and answers a retryable
+  refusal inside the drain's single transaction, and once one missing blob rolled back rows Notify had already
+  accepted and emailed those applicants again on the next drain. `DocumentService.downloadDocument` therefore
+  carries no `@Transactional` at all: its read is a `TransactionTemplate` callback that returns an empty answer
+  rather than throwing, and every refusal and the store call come after it. That shape is also what keeps a CDAM
+  download (a remote call) out of a transaction of its own. Putting the annotation back, or throwing inside the
+  callback, reintroduces the double email.
 
 ## Conventions worth knowing before writing code
 

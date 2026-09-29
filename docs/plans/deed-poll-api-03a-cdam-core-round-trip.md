@@ -256,7 +256,34 @@ section 2, so nothing to flag. `DocumentStorageStateTest` (container-free) and `
   - `permanent=true` is never sent;
   - the hash token appears in no log line, which needs a log-capture test.
 
-- [ ] the CDAM store uploads, attaches, streams and soft-deletes behind the switch, every failure lands in a
+**Done 2026-09-29.** `DocumentStoreProperties` reads the switch and refuses anything but `filesystem` or `cdam` at
+startup; `DocumentStoreConfiguration` registers `CaseDocumentClientApi` only under `cdam`, and the filesystem store
+stays the default, unchanged. `storage/CdamDocumentStore` uploads `RESTRICTED` as the system user, streams as the
+caller, and soft-deletes (`permanent=false`, the only value it can send). `storage/CdamDocumentUploads` runs the
+states through `DocumentStorageStates`, one committed transaction per move, with every remote call outside them
+(it throws if a transaction is active). The attach is `ccd/CaseDocumentsEvent`, which data-store resolves by
+`document_hash` (Task 1). A 4xx upload is `Failed`; a lost or unreadable one is `UploadUncertain`, re-sent once
+under `mayUploadAgain`. A refused attach is `Failed`; a lost one is `AttachUncertain` with the token kept, retried
+once. "Case not ready" is a 409 in `DocumentStorageRule.CASE_NOT_READY`'s words, published on the upload in
+OpenAPI. `DocumentService.downloadDocument` now reads its row in a read-only `TransactionTemplate` and calls the
+store after the read, so a CDAM download is outside any transaction (CLAUDE.md's rule is rewritten to match).
+**Found and fixed:** the CDAM library's OkHttp client silently re-sent a reset upload, so two decided sends were
+four on the wire. `storage/NoConnectionRetry`, a Feign `Capability` applied to that client by name in
+`application.yaml`, replaces it with one that does not retry, and `resetUploadIsNotRepeatedByTheClient` pins it.
+New tests: `CdamDocumentStoreTest`, `CdamDocumentUploadsTest`, `CaseDocumentsEventTest`, `DocumentStorePropertiesTest`
+and `NoConnectionRetryTest` (all container-free), and `CdamDocumentScenariosTest` (WireMock CDAM and data-store,
+real Postgres), whose `@AfterEach` checks every captured log line and exception message for the hash token.
+`./gradlew cleanTest cleanIntegration build`: **3406** `test` (3346 plus 60 new) and **14** `integration`, all green.
+Handoffs:
+- Task 5 must register the event `updateSupportingDocuments` and the field `supportingDocuments` in the case type,
+  and make `removeDocument` take the item off the CCD collection; today it deletes the row and soft-deletes only.
+- 03b owns deeds and the Notify drain on CDAM: `DeedDocumentService.storeDeed` uploads inside a transaction,
+  which the remote path refuses, so under `cdam` a deed cannot be generated yet.
+- The CDAM download is buffered in memory, not streamed through; fine within the 2 MB Notify ceiling and the upload
+  limit, but worth revisiting if either grows.
+- There is no document delete HTTP endpoint; `removeDocument` is reachable only through `DocumentService`.
+
+- [x] the CDAM store uploads, attaches, streams and soft-deletes behind the switch, every failure lands in a
       defined state, and the build is green
 
 ### Task 5: The projection field and the document event

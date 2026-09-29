@@ -1,10 +1,13 @@
 package uk.gov.hmcts.reform.deedpoll.domain.documents;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
@@ -40,8 +43,9 @@ import java.util.Optional;
  * that a document is expected before it arrives. So {@link #downloadDocument} 404s on a row with no attached
  * file, and {@code DocumentsView} renders such a row as not downloadable rather than linking to that 404.
  *
- * <p>The blob itself lives behind {@link DocumentStore}. Real storage is CDAM, in plan 03; the only
- * implementation in this plan is the local filesystem, for development.
+ * <p>The blob itself lives behind {@link DocumentStore}: the local filesystem by default, for development, or CDAM
+ * (plan 03a) when {@code deedpoll.documents.store} is {@code cdam}. A CDAM upload is not one step inside a
+ * transaction, so it goes through {@link RemoteDocumentUploads} instead; see {@link #uploadDocument}.
  *
  * <p>The service returns entities, not view models, exactly as the reference does. Formatting is
  * {@link DocumentsView}'s job, and the caseworker API maps to its own DTOs.
@@ -50,27 +54,37 @@ import java.util.Optional;
 @Service
 public class DocumentService {
     /**
-     * The direction an upload gets when the caller does not say: an applicant-supplied document.
-     *
-     * <p>The reference defaults the same way, and the reason is which way round the traffic mostly goes --
-     * the court receives far more than it sends, and a default that is wrong for the rarer case is corrected
-     * by a caseworker who has to think about direction anyway when sending something out.
+     * The 404 for a row whose bytes another store wrote: an environment switched between stores keeps the rows the
+     * first one wrote, and this store cannot read them. See {@link DocumentStore#serves}.
      */
-    private static final DocumentDirection DEFAULT_DIRECTION = DocumentDirection.Incoming;
+    static final String NOT_IN_THIS_STORE = "This document's file is held in a store this service no longer uses";
 
     private final DeedPollRepository deedPolls;
     private final DeedPollSupportingDocumentRepository documents;
     private final DeedPollSupportingDocumentTypeRepository types;
     private final DocumentStore store;
+    private final ObjectProvider<RemoteDocumentUploads> remoteUploads;
+    private final TransactionTemplate inTransaction;
+    private final TransactionTemplate readOnly;
 
     public DocumentService(DeedPollRepository deedPolls,
                            DeedPollSupportingDocumentRepository documents,
                            DeedPollSupportingDocumentTypeRepository types,
-                           DocumentStore store) {
+                           DocumentStore store,
+                           ObjectProvider<RemoteDocumentUploads> remoteUploads,
+                           PlatformTransactionManager transactions) {
         this.deedPolls = deedPolls;
         this.documents = documents;
         this.types = types;
         this.store = store;
+        this.remoteUploads = remoteUploads;
+        // PROPAGATION_REQUIRED, the @Transactional default: a filesystem upload joins a caller's transaction, as
+        // DeedDocumentService.storeDeed's, exactly as it did when the method carried the annotation.
+        this.inTransaction = new TransactionTemplate(transactions);
+        // The download's read. It joins a caller's transaction too, and is never handed an exception to mark it
+        // rollback-only with: see downloadDocument.
+        this.readOnly = new TransactionTemplate(transactions);
+        this.readOnly.setReadOnly(true);
     }
 
     /**
@@ -183,28 +197,27 @@ public class DocumentService {
     @Transactional
     public void removeDocument(String deedPollId, String id) {
         DeedPollSupportingDocument document = findDocument(deedPollId, id);
-        String storageKey = document.getStorageKey();
+        String storageKey = locator(document);
         documents.delete(document);
         removeBlobOnceTheDeleteCommits(id, storageKey);
     }
 
     /** Uploads a file with the form's own options, which is the shape a multipart request arrives in. */
-    @Transactional
     public DeedPollSupportingDocument uploadDocument(String deedPollId, UploadFormInput form, UploadedFile file) {
         return uploadDocument(deedPollId, form.documentTypeId(), file, form.name(), form.direction());
     }
 
     /** Uploads a file, taking the default direction and the file's own name. */
-    @Transactional
     public DeedPollSupportingDocument uploadDocument(String deedPollId, String documentTypeId, UploadedFile file) {
         return uploadDocument(deedPollId, documentTypeId, file, Optional.empty(), Optional.empty());
     }
 
     /**
-     * Stores a file and records its metadata row in one step.
+     * Stores a file and records its metadata row.
      *
-     * <p>The blob is written first, then the row records the returned storage key plus the original filename,
-     * declared MIME type and size. Both the case and the type are checked before anything is stored, so a bad
+     * <p><strong>On the filesystem store, in one step.</strong> The blob is written first, then the row records the
+     * returned storage key plus the original filename, declared MIME type and size, in one transaction -- the
+     * caller's, when there is one. Both the case and the type are checked before anything is stored, so a bad
      * request does not leave an orphaned blob behind.
      *
      * <p><strong>A rollback after the blob is written removes it.</strong> Checking the case and the type up
@@ -215,14 +228,15 @@ public class DocumentService {
      * registered against the transaction and is best-effort in the same way and for the same reason: a failed
      * unlink is logged with the key, never allowed to replace the error that caused the rollback.
      *
-     * <p>The stored name is the caller's, capped at the column's 100 characters, falling back to the file's own
-     * name when the caller gives none or gives an empty one -- the reference's {@code ||} rather than
-     * {@code ??}, because an empty name in the grid is no more use than no name at all.
+     * <p><strong>On a remote store, through {@link RemoteDocumentUploads}</strong>, which commits the row before it
+     * calls out and commits again after, and refuses to run inside a transaction. That is why this method carries no
+     * {@code @Transactional} of its own: the filesystem path opens (or joins) one here, and the remote path must not
+     * be given one. A caller that already holds a transaction -- {@code DeedDocumentService.storeDeed} -- therefore
+     * works on the filesystem store only; moving generated deeds onto CDAM is plan 03b's.
      *
      * @throws InvalidInputError if there is no file
      * @throws NotFoundError if there is no such case, or no such document type
      */
-    @Transactional
     public DeedPollSupportingDocument uploadDocument(String deedPollId,
                                                     String documentTypeId,
                                                     UploadedFile file,
@@ -231,23 +245,23 @@ public class DocumentService {
         if (file == null) {
             throw new InvalidInputError("Select a file to upload");
         }
-        DeedPoll parent = requireCase(deedPollId);
-        DeedPollSupportingDocumentType type = requireType(documentTypeId);
+        DocumentUpload upload = DocumentUpload.of(deedPollId, documentTypeId, file, name, direction);
+        RemoteDocumentUploads remote = remoteUploads.getIfAvailable();
+        if (remote != null) {
+            return remote.upload(upload);
+        }
+        return inTransaction.execute(status -> storeAndRecord(upload));
+    }
 
-        String storageKey = store.save(
-            new DocumentToStore(file.content(), file.originalName(), file.mimeType(), DocumentOwner.of(parent))
-        ).storageKey();
+    private DeedPollSupportingDocument storeAndRecord(DocumentUpload upload) {
+        DeedPoll parent = requireCase(upload.deedPollId());
+        DeedPollSupportingDocumentType type = requireType(upload.documentTypeId());
+
+        String storageKey = store.save(upload.toStore(DocumentOwner.of(parent))).storageKey();
         removeBlobIfTheWriteDoesNotCommit(storageKey);
 
-        DeedPollSupportingDocument document = new DeedPollSupportingDocument();
-        document.setDeedPoll(parent);
-        document.setDocumentType(type);
-        document.setDirection(direction.orElse(DEFAULT_DIRECTION));
-        document.setName(cap(name.filter(given -> !given.isEmpty()).orElse(file.originalName())));
+        DeedPollSupportingDocument document = upload.newRow(parent, type);
         document.setStorageKey(storageKey);
-        document.setOriginalName(file.originalName());
-        document.setMimeType(file.mimeType());
-        document.setSizeBytes(file.size());
         return documents.save(document);
     }
 
@@ -255,29 +269,46 @@ public class DocumentService {
      * A document's metadata plus a stream over its blob.
      *
      * <p>404s on a row with no attached file, because a metadata-only row is a legitimate state and "this
-     * document has no file yet" is a truer answer than an empty body.
+     * document has no file yet" is a truer answer than an empty body. The same for a row this store does not serve:
+     * on CDAM that is every row not yet {@code Attached}, so an upload whose answer was lost is never served, and a
+     * row the filesystem store wrote before the switch is not handed to CDAM as if its key were a CDAM id.
      *
-     * <p><strong>A failure here must not roll back the caller's transaction, which is what
-     * {@code noRollbackFor} buys.</strong> This method writes nothing, so there is nothing of its own to roll
-     * back -- but without the attribute Spring's default marks a <em>participating</em> transaction
-     * rollback-only when it throws, and the caller's commit then fails whatever the caller did about the
-     * exception. {@code DocumentUploads} is the caller that made that reachable: it catches a missing blob and
-     * answers a retryable refusal, inside a drain that runs a whole batch in one transaction -- so a document
-     * that would not read took rows Notify had already accepted down with it and emailed those applicants
-     * again on the next drain, which is the hazard {@code CLAUDE.md} names for the drain's case note. Commit
-     * rather than rollback is the honest attribute for a read-only method; the one caller that needs a
-     * rollback on a failed read does not exist.
+     * <p><strong>The row is found by both ids before the store is asked</strong>, so a document belonging to another
+     * case is a 404 here and CDAM is never called for it. CDAM then applies its own permission check to the caller,
+     * whose token the CDAM store sends.
+     *
+     * <p><strong>The store is opened after the read, never inside it</strong> (plan 03a): a CDAM download is a remote
+     * call, and a remote call must not hold a database transaction open. A caller that brings its own transaction
+     * still holds it -- the Notify drain does, and moving its documents onto CDAM is plan 03b's.
+     *
+     * <p><strong>A failure here must not roll back the caller's transaction.</strong> This method writes nothing,
+     * so there is nothing of its own to roll back -- but a <em>participating</em> transactional boundary that
+     * throws marks the caller's transaction rollback-only, and the caller's commit then fails whatever the caller
+     * did about the exception. So the method carries no {@code @Transactional}, and the read inside it returns an
+     * empty answer rather than throwing: every refusal is raised outside any boundary of this service's own. (It was
+     * {@code noRollbackFor = Exception.class} until the store call had to leave the transaction.)
+     * {@code DocumentUploads} is the caller that made that reachable: it catches a missing blob and answers a
+     * retryable refusal, inside a drain that runs a whole batch in one transaction -- so a document that would not
+     * read took rows Notify had already accepted down with it and emailed those applicants again on the next
+     * drain, which is the hazard {@code CLAUDE.md} names for the drain's case note.
      *
      * @throws NotFoundError if there is no such document, it belongs to another case, or it has no attached
      *     file
      */
-    @Transactional(readOnly = true, noRollbackFor = Exception.class)
     public DocumentDownload downloadDocument(String deedPollId, String id) {
-        DeedPollSupportingDocument document = findDocument(deedPollId, id);
+        DeedPollSupportingDocument document = readOnly.execute(status ->
+                documents.findByIdAndDeedPollId(id, deedPollId).map(found -> {
+                    initialiseType(found);
+                    return found;
+                }))
+            .orElseThrow(() -> new NotFoundError("Document " + id + " not found"));
         if (document.getStorageKey() == null || document.getStorageKey().isBlank()) {
             throw new NotFoundError("This document has no attached file");
         }
-        return new DocumentDownload(document, store.open(document.getStorageKey()));
+        if (!store.serves(document.getStorageState())) {
+            throw new NotFoundError(NOT_IN_THIS_STORE);
+        }
+        return new DocumentDownload(document, store.open(locator(document)));
     }
 
     /**
@@ -347,6 +378,21 @@ public class DocumentService {
         });
     }
 
+    /**
+     * What the store is given to open or delete a row's bytes by: the CDAM document id when CDAM holds them, and the
+     * storage key otherwise.
+     *
+     * <p>Never the storage key for a CDAM row, although an {@code Attached} row carries its CDAM id there too: the
+     * key is patchable through {@link #updateDocument}, and a CDAM id must never be taken from a request (plan 03a,
+     * decision 7). The id column is written by the CDAM store alone. A row that never reached CDAM has no id, so a
+     * delete of one that was only claimed asks the store to remove nothing.
+     */
+    private static String locator(DeedPollSupportingDocument document) {
+        return document.getCdamDocumentId() != null
+            ? document.getCdamDocumentId().toString()
+            : document.getStorageKey();
+    }
+
     private DeedPoll requireCase(String deedPollId) {
         return deedPolls.findById(deedPollId)
             .orElseThrow(() -> new NotFoundError("DeedPoll " + deedPollId + " not found"));
@@ -355,15 +401,6 @@ public class DocumentService {
     private DeedPollSupportingDocumentType requireType(String documentTypeId) {
         return types.findById(documentTypeId)
             .orElseThrow(() -> new NotFoundError("Document type " + documentTypeId + " not found"));
-    }
-
-    /**
-     * The reference's {@code .slice(0, 100)}: the column's width, applied rather than left to fail.
-     */
-    private static String cap(String name) {
-        return name.length() <= DocumentSchemas.MAX_NAME_LENGTH
-            ? name
-            : name.substring(0, DocumentSchemas.MAX_NAME_LENGTH);
     }
 
     /**

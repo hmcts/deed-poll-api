@@ -1,7 +1,12 @@
 package uk.gov.hmcts.reform.deedpoll.repository;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 
 import java.util.Collection;
 import java.util.List;
@@ -44,6 +49,22 @@ public interface DeedPollSupportingDocumentRepository extends JpaRepository<Deed
      */
     Optional<DeedPollSupportingDocument> findFirstByDeedPollIdAndDocumentTypeNameInOrderByCreatedOnAsc(
         String deedPollId, Collection<String> documentTypeNames);
+
+    /**
+     * One document of one case, locked for the rest of the transaction: the CDAM store's state moves (plan 03a).
+     *
+     * <p>Case-scoped like every other finder. Each move is its own short transaction that reads the row under this
+     * lock and nothing else first, so the persistence context holds no earlier snapshot of it -- the caveat
+     * {@code ReferralRepository.findByIdAndDeedPollIdForUpdate} records does not arise.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select d from DeedPollSupportingDocument d where d.id = :id and d.deedPoll.id = :deedPollId")
+    Optional<DeedPollSupportingDocument> findByIdAndDeedPollIdForUpdate(@Param("id") String id,
+                                                                       @Param("deedPollId") String deedPollId);
+
+    /** Every document on one case in the given storage state, oldest first. */
+    List<DeedPollSupportingDocument> findByDeedPollIdAndStorageStateOrderByCreatedOnAsc(String deedPollId,
+                                                                                        DocumentStorageState state);
 
     /** How many documents, across every case, reference the given type. */
     long countByDocumentTypeId(String documentTypeId);

@@ -12,6 +12,8 @@ import io.swagger.v3.oas.models.media.ObjectSchema;
 import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.media.StringSchema;
 import io.swagger.v3.oas.models.parameters.RequestBody;
+import io.swagger.v3.oas.models.responses.ApiResponse;
+import io.swagger.v3.oas.models.responses.ApiResponses;
 import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -31,6 +33,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailSlot;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailSlots;
+import uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageRule;
 
 import java.util.Arrays;
 import java.util.LinkedHashSet;
@@ -656,6 +659,13 @@ public class OpenAPIWriteBodies {
             .content(new Content().addMediaType(
                 org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE,
                 new MediaType().schema(form))));
+
+        // Only the CDAM store refuses this, and only for a record not yet linked to a CCD case (plan 03a, task 4).
+        // The same sentence the refusal carries, so the document and the refusal cannot drift.
+        ApiResponses responses = upload.getResponses() == null ? new ApiResponses() : upload.getResponses();
+        ApiResponse notReady = responses.get("409") == null ? new ApiResponse() : responses.get("409");
+        responses.addApiResponse("409", notReady.description(DocumentStorageRule.CASE_NOT_READY));
+        upload.setResponses(responses);
     }
 
     private Schema<?> schema(OpenAPI openApi, String name) {

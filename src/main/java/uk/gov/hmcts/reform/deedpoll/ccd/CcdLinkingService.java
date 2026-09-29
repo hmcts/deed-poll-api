@@ -466,7 +466,7 @@ public class CcdLinkingService {
      *
      * @param called what was being called, so that an IDAM or S2S fault is not reported as CCD's
      */
-    static String describe(String called, RuntimeException failure) {
+    public static String describe(String called, RuntimeException failure) {
         if (failure instanceof RetryableException) {
             return "no response from " + called;
         }
