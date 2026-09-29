@@ -5,13 +5,16 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentOwner;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentStore;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentToStore;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -39,6 +42,9 @@ class LocalFilesystemDocumentStoreTest {
 
     private static final byte[] CONTENT = "a scanned certificate".getBytes(StandardCharsets.UTF_8);
 
+    private static final DocumentOwner OWNER =
+        new DocumentOwner("6f1c5f2e-0000-4000-8000-00000000000a", Optional.empty());
+
     @TempDir
     private Path root;
 
@@ -52,7 +58,7 @@ class LocalFilesystemDocumentStoreTest {
     @Test
     @DisplayName("returns the bytes it was given, unchanged")
     void returnsTheBytesItWasGiven() throws IOException {
-        String key = store.save(CONTENT);
+        String key = save(CONTENT);
 
         try (InputStream stream = store.open(key)) {
             assertThat(stream.readAllBytes()).isEqualTo(CONTENT);
@@ -66,7 +72,7 @@ class LocalFilesystemDocumentStoreTest {
         // that required the directory to exist would fail on a developer's first upload.
         assertThat(root.resolve("documents")).doesNotExist();
 
-        store.save(CONTENT);
+        save(CONTENT);
 
         assertThat(root.resolve("documents")).isDirectory();
     }
@@ -74,7 +80,7 @@ class LocalFilesystemDocumentStoreTest {
     @Test
     @DisplayName("gives each file its own key, so two uploads of one filename do not collide")
     void givesEachFileItsOwnKey() {
-        assertThat(store.save(CONTENT)).isNotEqualTo(store.save(CONTENT));
+        assertThat(save(CONTENT)).isNotEqualTo(save(CONTENT));
     }
 
     @Test
@@ -87,7 +93,7 @@ class LocalFilesystemDocumentStoreTest {
     @Test
     @DisplayName("deletes a stored blob")
     void deletesAStoredBlob() {
-        String key = store.save(CONTENT);
+        String key = save(CONTENT);
 
         store.delete(key);
 
@@ -100,7 +106,7 @@ class LocalFilesystemDocumentStoreTest {
         // DocumentService.removeDocument calls delete unconditionally, including for a metadata-only row whose
         // storageKey is null. If that threw, deleting such a row would log a cleanup failure that had not
         // happened.
-        String key = store.save(CONTENT);
+        String key = save(CONTENT);
         store.delete(key);
 
         assertThatCode(() -> store.delete(key)).doesNotThrowAnyException();
@@ -132,12 +138,30 @@ class LocalFilesystemDocumentStoreTest {
     @DisplayName("keeps blobs separate from each other")
     void keepsBlobsSeparate() throws IOException {
         byte[] other = "a different document".getBytes(StandardCharsets.UTF_8);
-        String first = store.save(CONTENT);
-        String second = store.save(other);
+        String first = save(CONTENT);
+        String second = save(other);
 
         try (InputStream firstStream = store.open(first); InputStream secondStream = store.open(second)) {
             assertThat(firstStream.readAllBytes()).isEqualTo(CONTENT);
             assertThat(secondStream.readAllBytes()).isEqualTo(other);
         }
+    }
+
+    @Test
+    @DisplayName("ignores the filename, type and owner it is told")
+    void ignoresTheContextItIsTold() throws IOException {
+        DocumentToStore bare = new DocumentToStore(CONTENT, null, null, new DocumentOwner("a-case", Optional.empty()));
+
+        String key = store.save(bare).storageKey();
+
+        assertThat(key).doesNotContain("a-case");
+        try (InputStream stream = store.open(key)) {
+            assertThat(stream.readAllBytes()).isEqualTo(CONTENT);
+        }
+    }
+
+    /** Saves bytes for an owner this store has no use for, and answers the key. */
+    private String save(byte[] content) {
+        return store.save(new DocumentToStore(content, "certificate.pdf", "application/pdf", OWNER)).storageKey();
     }
 }

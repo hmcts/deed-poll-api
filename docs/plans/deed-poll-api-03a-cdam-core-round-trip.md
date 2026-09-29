@@ -180,7 +180,13 @@ counted from `build/test-results/`:
 - Tests: the existing document, deed and Notify tests must pass unchanged, apart from call sites. Add one test per
   new value type, including that `toString` never prints content.
 
-- [ ] the seam carries filename, type and case context, every caller is adapted with no change in behaviour, and
+**Done 2026-09-29.** `save(DocumentToStore)` answers a `StorageReceipt`; `DocumentToStore` carries the content,
+filename, MIME type and a `DocumentOwner` (record id, optional `ccdCaseReference`). `open` and `delete` keep taking
+the row's storage key. Only `DocumentService.uploadDocument` changed among callers; `DeedDocumentService`,
+`DocumentUploads` and the controller are untouched. `./gradlew cleanTest cleanIntegration build`: **3313** `test`
+(the baseline's 3304 plus 9 new) and **14** `integration`, all green.
+
+- [x] the seam carries filename, type and case context, every caller is adapted with no change in behaviour, and
       the build is green
 
 ### Task 3: V25, and the document states

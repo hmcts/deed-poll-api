@@ -26,12 +26,14 @@ import java.io.InputStream;
 public interface DocumentStore {
 
     /**
-     * Persists bytes under a fresh storage key and returns it.
+     * Persists a document under a fresh storage key and returns what its row should record.
      *
      * <p>The key is the store's to choose: a caller must treat it as opaque, so that a store which keys by
      * something other than a path can be dropped in without the metadata rows meaning something different.
+     * The store is told the filename, type and owning record, and may ignore any of them -- the filesystem store
+     * ignores all three.
      */
-    String save(byte[] content);
+    StorageReceipt save(DocumentToStore document);
 
     /**
      * Opens a stream over a stored blob.

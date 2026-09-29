@@ -234,7 +234,9 @@ public class DocumentService {
         DeedPoll parent = requireCase(deedPollId);
         DeedPollSupportingDocumentType type = requireType(documentTypeId);
 
-        String storageKey = store.save(file.content());
+        String storageKey = store.save(
+            new DocumentToStore(file.content(), file.originalName(), file.mimeType(), DocumentOwner.of(parent))
+        ).storageKey();
         removeBlobIfTheWriteDoesNotCommit(storageKey);
 
         DeedPollSupportingDocument document = new DeedPollSupportingDocument();
