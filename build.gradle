@@ -63,6 +63,33 @@ def configureSourceSet(String name) {
 
 ['smokeTest', 'integrationTest', 'functionalTest'].each { configureSourceSet(it) }
 
+// Compile only this shared fixture into cftlibTest: including test.output would make cftlib's package scan run
+// the entire unit suite inside the CFT stack. The fixture is never part of the application artifact.
+sourceSets.test.java.srcDir 'src/dmStoreStub/java'
+sourceSets.cftlibTest.java.srcDir 'src/dmStoreStub/java'
+
+// cftlib 0.19.2377 runs ConsoleLauncher rather than Gradle Test. Keep fresh XML evidence for this suite too.
+tasks.named('cftlibTest') {
+  // The bundled WA service starts a LaunchDarkly client even though these journeys do not use WA. Keep
+  // non-loopback HTTP(S) on a closed local proxy so that client cannot contact the live service. All CFT
+  // dependencies below use loopback; this affects the test JVM only, not Gradle dependency resolution.
+  jvmArgs '-Dhttp.proxyHost=127.0.0.1', '-Dhttp.proxyPort=1',
+    '-Dhttps.proxyHost=127.0.0.1', '-Dhttps.proxyPort=1', '-Dhttp.nonProxyHosts=localhost|127.*|[::1]'
+  doFirst {
+    delete layout.buildDirectory.dir('test-results/cftlibTest')
+    def manifest = file('build/cftlib/libTest')
+    def lines = manifest.readLines('UTF-8')
+    if (!lines[0].startsWith('org.junit.platform.console.ConsoleLauncher ')) {
+      throw new GradleException('Unexpected cftlib test manifest; review the report configuration')
+    }
+    def reportArgument = '--reports-dir=build/test-results/cftlibTest'
+    if (!lines[0].contains(reportArgument)) {
+      lines[0] += ' ' + reportArgument
+      manifest.setText(lines.join('\n') + '\n', 'UTF-8')
+    }
+  }
+}
+
 configurations {
   functionalTestImplementation.extendsFrom testImplementation
   functionalTestRuntimeOnly.extendsFrom runtimeOnly
@@ -203,6 +230,10 @@ tasks.register('smoke', Test) {
 tasks.withType(uk.gov.hmcts.rse.CftlibExec).configureEach {
   authMode = uk.gov.hmcts.rse.AuthMode.Local
   environment 'RSE_LIB_ADDITIONAL_DATABASES', 'deedpoll'
+  // The only dm-store CDAM may reach in the local stack. DocumentCdamCftlibTest owns this WireMock server.
+  environment 'DM_STORE_BASE_URL', 'http://localhost:4506'
+  // The document test imports a local definition without READ, then restores it. Keep that cache wait bounded.
+  environment 'DEFAULT_CACHE_TTL_SEC', '1'
   /*
     Data-store routes a case type to its persistence host by case-insensitive *prefix* of the case type id. The key is
     `DEED` rather than the whole placeholder because Spring reads each underscore in an environment variable's name
@@ -212,6 +243,29 @@ tasks.withType(uk.gov.hmcts.rse.CftlibExec).configureEach {
   // Data-store's own default list, plus this service, which calls it as the linking operation.
   environment 'DATA_STORE_S2S_AUTHORISED_SERVICES',
     'ccd_gw,ccd_data,xui_webapp,aac_manage_case_assignment,ccd_case_document_am_api,am_role_assignment_service,deed_poll_api'
+  // CDAM's own default list, plus this service, which uploads, downloads and soft-deletes (plan 03a, task 5).
+  environment 'CASE_DOCUMENT_S2S_AUTHORISED_SERVICES',
+    'ccd_case_document_am_api,ccd_gw,xui_webapp,ccd_data,bulk_scan_processor,em_npa_app,fprl_dgs_api,' +
+      'dg_docassembly_api,cmc_claim_store,civil_service,civil_general_applications,bulk_scan_orchestrator,' +
+      'ethos_repl_service,et_cos,nfdiv_case_api,divorce_frontend,pcs_api,finrem_citizen_ui,deed_poll_api'
+  /*
+    CDAM's service-to-case-type permissions come from its classpath `service_config.json`, which cftlib gives no way to
+    extend (docs/CDAM-SEQUENCE.md section 7). Environment variables outrank that file, but Spring binds a list from the
+    one highest source that holds it, so these REPLACE the whole list: `ccd_data`, which data-store attaches with, is
+    declared again, and nothing else is. `deed_poll_api` gets create, read and update on the placeholders, and never
+    attach, which is data-store's.
+  */
+  environment 'AUTHSERVICES_0_ID', 'ccd_data'
+  environment 'AUTHSERVICES_0_CASETYPEID_0', '*'
+  environment 'AUTHSERVICES_0_JURISDICTIONID', '*'
+  environment 'AUTHSERVICES_0_PERMISSIONS_0', 'ATTACH'
+  environment 'AUTHSERVICES_0_PERMISSIONS_1', 'READ'
+  environment 'AUTHSERVICES_1_ID', 'deed_poll_api'
+  environment 'AUTHSERVICES_1_CASETYPEID_0', 'DEED_POLL_PLACEHOLDER'
+  environment 'AUTHSERVICES_1_JURISDICTIONID', 'DEED_POLL_PLACEHOLDER'
+  environment 'AUTHSERVICES_1_PERMISSIONS_0', 'CREATE'
+  environment 'AUTHSERVICES_1_PERMISSIONS_1', 'READ'
+  environment 'AUTHSERVICES_1_PERMISSIONS_2', 'UPDATE'
 }
 
 // Gradle's checkstyle plugin hangs every source set's task on `check`, which would compile the plugin's cftlib,
@@ -219,6 +273,26 @@ tasks.withType(uk.gov.hmcts.rse.CftlibExec).configureEach {
 // by name.
 checkstyle {
   sourceSets = project.sourceSets.matching { !it.name.startsWith('cftlib') }
+}
+
+// Manual guard: the pinned spec stays reviewable even when the workspace clone is unavailable.
+tasks.register('checkDmStoreSpecDrift') {
+  group = 'Verification'
+  description = 'Compares the pinned dm-store OpenAPI document with the local cnp-api-docs clone'
+  doLast {
+    def upstream = file('../platops/cnp-api-docs/docs/specs/document-management-store-app.json')
+    if (!upstream.exists()) {
+      logger.lifecycle('cnp-api-docs clone absent; dm-store spec comparison not performed')
+      return
+    }
+    def pinned = file('src/test/resources/dm-store-openapi.json')
+    if (java.util.Arrays.equals(pinned.bytes, upstream.bytes)) {
+      logger.lifecycle('dm-store OpenAPI: no differences from the pinned copy')
+    } else {
+      exec { commandLine 'diff', '-u', pinned.absolutePath, upstream.absolutePath; ignoreExitValue = true }
+      throw new GradleException('dm-store OpenAPI drift: review the diff and update the stub and provenance together')
+    }
+  }
 }
 
 jacocoTestReport {
@@ -329,6 +403,20 @@ dependencies {
     and the SDK's BOM does not manage it. Pinned as pcs-api pins it, so the declaration changes nothing resolved.
   */
   implementation group: 'com.github.hmcts', name: 'idam-java-client', version: '3.0.5'
+  /*
+    The CDAM client (plan 03a, decision 6): 1.59.2 is the Boot 3 line, as data-store, bulk-scan, et and adoption pin
+    it; 2.0.0 is built on Boot 4.1. Only DocumentStoreConfiguration registers its CaseDocumentClientApi, and only when
+    deedpoll.documents.store is cdam. Its own auto-configuration is listed in spring.factories alone, which Boot 3
+    no longer reads, so it never loads and needs no exclusion -- excluding a class Boot does not know as an
+    auto-configuration fails startup.
+  */
+  implementation group: 'com.github.hmcts', name: 'ccd-case-document-am-client', version: '1.59.2'
+  /*
+    Already on the runtime classpath through the CDAM client, at this version. Declared because NoConnectionRetry
+    builds the OkHttp client the CDAM client's own FeignSupportConfig would otherwise supply with OkHttp's silent
+    retry on a connection failure -- which re-sends an upload this service never decided to send.
+  */
+  implementation group: 'io.github.openfeign', name: 'feign-okhttp', version: '13.6'
 
   implementation group: 'org.flywaydb', name: 'flyway-core'
   runtimeOnly group: 'org.flywaydb', name: 'flyway-database-postgresql'

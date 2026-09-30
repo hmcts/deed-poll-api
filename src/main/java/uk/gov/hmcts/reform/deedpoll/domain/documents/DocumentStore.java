@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.domain.documents;
 
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 
 import java.io.InputStream;
 
@@ -15,9 +16,9 @@ import java.io.InputStream;
  * storage is CDAM, in plan 03, and it is a different shape: content is uploaded to a document store that
  * returns a document id and a hash token, and downloads go through it rather than through this service's own
  * filesystem. Porting the reference's local implementation as the production one would have to be undone.
- * So there is an interface, and behind it exactly one implementation --
- * {@code LocalFilesystemDocumentStore}, for development -- and nothing else. Plan 03 adds a CDAM
- * implementation beside it rather than editing anything above it.
+ * The implementations are {@code LocalFilesystemDocumentStore}, the development default, and
+ * {@code CdamDocumentStore}, selected explicitly after onboarding. The row's state identifies which store owns
+ * its bytes; selecting a new store does not migrate existing rows.
  *
  * <p>The reference's own comment says the same thing about its local storage from the other direction: local
  * disk does not survive AKS, because pods are ephemeral and replicas do not share a volume. The local
@@ -26,18 +27,20 @@ import java.io.InputStream;
 public interface DocumentStore {
 
     /**
-     * Persists bytes under a fresh storage key and returns it.
+     * Persists a document under a fresh storage key and returns what its row should record.
      *
      * <p>The key is the store's to choose: a caller must treat it as opaque, so that a store which keys by
      * something other than a path can be dropped in without the metadata rows meaning something different.
+     * The store is told the filename, type and owning record, and may ignore any of them -- the filesystem store
+     * ignores all three.
      */
-    String save(byte[] content);
+    StorageReceipt save(DocumentToStore document);
 
     /**
      * Opens a stream over a stored blob.
      *
-     * <p>The caller closes it. Returning a stream rather than a byte array is what keeps a 25 MB download
-     * off the heap, and it is the shape CDAM's own response has.
+     * <p>The caller closes it. The filesystem implementation streams; the current CDAM client buffers the remote
+     * response before returning this stream. The upload policy bounds it to 25 MB.
      *
      * @throws NotFoundError if the key is unknown to this store
      */
@@ -50,4 +53,16 @@ public interface DocumentStore {
      * and the reference relies on this so that deleting such a row does not have to special-case it.
      */
     void delete(String storageKey);
+
+    /**
+     * Whether this store holds the bytes of a row in the given state, and so may be asked to {@link #open} it.
+     *
+     * <p>A row records which store wrote it by its state: {@code Local} for the filesystem store, {@code Attached}
+     * for CDAM (plan 03a). An environment switched from one store to the other keeps the rows the first one wrote,
+     * and handing such a row's key to the other store would read a path as a CDAM id or the reverse. So a row in a
+     * state this store does not serve has no file here, and {@code DocumentService} says so rather than asking.
+     */
+    default boolean serves(DocumentStorageState state) {
+        return state == DocumentStorageState.Local;
+    }
 }

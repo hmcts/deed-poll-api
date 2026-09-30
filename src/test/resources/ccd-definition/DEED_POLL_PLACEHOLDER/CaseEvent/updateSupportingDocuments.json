@@ -1,0 +1,17 @@
+[
+  {
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "Description": "Set the documents CDAM holds for this deed poll record",
+    "DisplayOrder": 2,
+    "EndButtonLabel": "Save and continue",
+    "ID": "updateSupportingDocuments",
+    "LiveFrom": "01/01/2017",
+    "Name": "Update supporting documents",
+    "PostConditionState": "Registered",
+    "PreConditionState(s)": "*",
+    "Publish": "N",
+    "SecurityClassification": "Public",
+    "ShowEventNotes": "N",
+    "ShowSummary": "N"
+  }
+]

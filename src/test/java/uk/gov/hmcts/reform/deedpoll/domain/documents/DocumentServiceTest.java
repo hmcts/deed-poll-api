@@ -370,7 +370,8 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
         assertThat(saved.getOriginalName()).isEqualTo("birth.pdf");
         assertThat(saved.getMimeType()).isEqualTo("application/pdf");
         assertThat(saved.getSizeBytes()).isEqualTo(3);
-        verify(store).save(FILE.content());
+        verify(store).save(new DocumentToStore(
+            FILE.content(), "birth.pdf", "application/pdf", new DocumentOwner(caseId, Optional.empty())));
     }
 
     @Test

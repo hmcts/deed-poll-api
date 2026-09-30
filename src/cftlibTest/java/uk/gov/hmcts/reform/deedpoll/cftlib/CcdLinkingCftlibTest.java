@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import uk.gov.hmcts.reform.authorisation.generators.AuthTokenGenerator;
 import uk.gov.hmcts.reform.ccd.client.CoreCaseDataApi;
@@ -60,6 +61,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 // yaml of that name exists, so it relaxes that one check and nothing else.
 @ActiveProfiles({"cftlib", "development"})
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class CcdLinkingCftlibTest extends CftlibTest {
 
     private final HttpClient http = HttpClient.newHttpClient();

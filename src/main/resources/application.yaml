@@ -133,6 +133,12 @@ spring:
           default:
             connect-timeout: 5000
             read-timeout: 10000
+          # The CDAM client (registered only when deedpoll.documents.store is cdam). Its library's default OkHttp
+          # client re-sends a request whose connection failed, an upload included; NoConnectionRetry replaces it
+          # with one that does not, so every upload sent is one CdamDocumentUploads decided to send.
+          case-document-am-client-api:
+            capabilities:
+              - uk.gov.hmcts.reform.deedpoll.storage.NoConnectionRetry
 
 idam:
   api:
@@ -248,6 +254,12 @@ core_case_data:
     # environment.
     url: ${CCD_DATA_STORE_URL:http://localhost:4452}
 
+case_document_am:
+  # CDAM, which the cdam document store uploads to, downloads from and soft-deletes in (CaseDocumentClientApi). The
+  # key is the client library's own spelling. Read only when deedpoll.documents.store is cdam; the default is a local
+  # stack's and reaches nothing in a deployed environment.
+  url: ${CASE_DOCUMENT_AM_URL:http://localhost:4455}
+
 deedpoll:
   ccd:
     # The CCD identifiers this service is waiting on, and deliberately not the real values: the case type,
@@ -299,6 +311,15 @@ deedpoll:
     # not survive AKS, because pods are ephemeral and replicas do not share a volume. Real
     # storage is CDAM, in plan 03, which adds an implementation beside the local one.
     local-store-root: ${DOCUMENT_STORE_ROOT:data/documents}
+    # Which store holds a supporting document's bytes: filesystem (LocalFilesystemDocumentStore, the default) or
+    # cdam (CdamDocumentStore, plan 03a). Anything else refuses to start. cdam is switched on only after onboarding:
+    # every CCD identifier is still DEED_POLL_PLACEHOLDER, and an upload to a record with no CCD case is refused as
+    # "case not ready". Generated deeds and Notify's download links stay filesystem-only until plan 03b.
+    store: ${DOCUMENT_STORE:filesystem}
+    # The dm-store base a document's URL is written under in the case's document event. Data-store refuses a
+    # document URL outside its ccd.document.url.pattern, whose default host is dm-store:8080, and CDAM reads only the
+    # last 36 characters as the document id (docs/CDAM-SEQUENCE.md section 1). Read only by the cdam store.
+    document-url-base: ${DOCUMENT_URL_BASE:http://dm-store:8080}
 
 azure:
   application-insights:

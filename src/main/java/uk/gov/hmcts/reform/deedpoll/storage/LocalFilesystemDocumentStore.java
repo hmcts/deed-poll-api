@@ -1,9 +1,12 @@
 package uk.gov.hmcts.reform.deedpoll.storage;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentStore;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentToStore;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.StorageReceipt;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -24,8 +27,13 @@ import java.util.UUID;
  * <p>The root path mirrors the reference's convention: a directory named by configuration, gitignored,
  * defaulting to {@code data/documents} under the working directory so that a checkout runs without being
  * configured first.
+ *
+ * <p>The default store: chosen when {@code deedpoll.documents.store} is {@code filesystem} or unset, and absent when
+ * it is {@code cdam}. {@link DocumentStoreProperties} refuses any other value at startup.
  */
 @Component
+@ConditionalOnProperty(name = DocumentStoreProperties.STORE, havingValue = DocumentStoreProperties.FILESYSTEM,
+    matchIfMissing = true)
 public class LocalFilesystemDocumentStore implements DocumentStore {
 
     private final Path root;
@@ -39,20 +47,21 @@ public class LocalFilesystemDocumentStore implements DocumentStore {
      *
      * <p>The key is a UUID rather than the file's own name: two applicants uploading {@code birth.pdf} must
      * not collide, and a caller-supplied name in a path is how a traversal gets in. The original name is
-     * kept in the metadata row instead, which is what the download's {@code Content-Disposition} uses.
+     * kept in the metadata row instead, which is what the download's {@code Content-Disposition} uses. For the
+     * same reason the filename, type and owner the seam carries are ignored: a directory has no use for them.
      */
     @Override
-    public String save(byte[] content) {
+    public StorageReceipt save(DocumentToStore document) {
         String key = UUID.randomUUID().toString();
         try {
             Files.createDirectories(root);
-            Files.write(pathForKey(key), content);
+            Files.write(pathForKey(key), document.content());
         } catch (IOException failed) {
             // Unchecked, because a caller cannot do anything useful about a full disk and the interface
             // should not make every consumer of a future CDAM store declare an IOException it cannot throw.
             throw new UncheckedIOException("Could not store document " + key, failed);
         }
-        return key;
+        return new StorageReceipt(key);
     }
 
     @Override

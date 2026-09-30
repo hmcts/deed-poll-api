@@ -13,10 +13,11 @@ the specification. It replaces that repo's `apps/api`.
 Plan 02 built a **minimal decentralised CCD foundation** (2026-09-27): one CCD case per deed-poll record, linked
 by the record's UUID, created through data-store's public API by one linking operation. Plan 02b (2026-09-27)
 calls it from a sweep on the case list request, **switched off by default**, and gives admins two repair moves out of
-`NeedsRepair` under `/caseworker/ccd-attempts`. The relational record stays authoritative; CCD holds a two-field
-projection. It is proven against WireMock and a local
-cftlib stack on placeholder identifiers only — **nothing is onboarded**, and `docs/CCD-SMOKE.md` is the AAT
-procedure that waits on it. There is **no CDAM integration** (plan 03). See `docs/RESUME.md` and `docs/plans/`.
+`NeedsRepair` under `/caseworker/ccd-attempts`. The relational record stays authoritative; CCD holds a projection of
+it. It is proven against WireMock and a local cftlib stack on placeholder identifiers only — **nothing is
+onboarded**, and `docs/CCD-SMOKE.md` is the AAT procedure that waits on it. Plan 03a adds CDAM uploads behind
+`deedpoll.documents.store` (the filesystem stays the default), attached to the case by its document event. See
+`docs/RESUME.md` and `docs/plans/`.
 
 ## Layout
 
@@ -40,14 +41,27 @@ ccd/                             the decentralised CCD case type, its persistenc
                                   linking operation with its attempt ledger, the case-list sweep that calls it, and
                                   the admin repairs (CcdAttemptRepairs) — NOT a port
 health/                          readiness that names the missing tables
-storage/                         LocalFilesystemDocumentStore — the seam CDAM replaces
+storage/                         filesystem/CDAM stores, remote progress, onboarding guard and state metrics
 src/main/resources/deed-templates/  VENDORED Word templates: LOC020 and LOC022, plus their provenance
 src/test/resources/reference/    VENDORED specification: TypeScript source and Dataverse exports
 src/test/resources/ccd-definition/  the generated CCD definition, pinned — DeedPollDefinitionTest compares every file
-src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one end-to-end test; local only
+src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/document journeys; local only
 ```
 
 ## Rules that break things silently if ignored
+
+- **The CDAM hash token is transient.** Keep it only while `Uploaded`/`AttachUncertain`; never log, project or
+  publish it. An uncertain upload gets exactly one fresh upload within the same request (two sends total), then
+  stays uncertain. There is no background retry or operator resume endpoint in 03a. Never send `permanent=true`:
+  caseworker cleanup is a soft delete, and only the dm-store team can arrange restoration.
+- **CDAM ships off by default.** `CdamOnboarding` refuses unconfirmed CCD identifiers and local/default CDAM
+  endpoints when CDAM is enabled; only `test`/`cftlib` against loopback permit placeholders. These are local test
+  profiles, never deployment profiles. The configuration check cannot prove external onboarding or staff access.
+  Generated deeds and Notify retrieval are still 03b, existing-file migration is 03c; do not enable CDAM as a
+  production cutover on 03a alone. Read `docs/CDAM-RECOVERY.md` before acting on an uncertain document.
+- **cftlib stubs only dm-store.** Its fixture is compiled from `src/dmStoreStub/java` into `test` and `cftlibTest`;
+  never add the whole `test.output` to cftlib's classpath, because its package scan would run the entire unit suite
+  inside the CFT stack. Update the pinned spec, response provenance and stub together after a verified change.
 
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks
@@ -121,11 +135,20 @@ src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one e
   than logging it away. The sweep never throws anything else into the list: CCD failures are logged in fixed prose,
   by exception class name only. The repair endpoints are non-transactional for the same reason.
 - **A new CCD field is declared in three places, and the build names only one of them.** `DeedPollCaseData` and
-  its grants in `DeedPollCaseType`, the projection `DeedPollCaseView` composes from (`CcdCaseProjection`, read by
-  `DeedPollRepository`), and the pinned JSON under `src/test/resources/ccd-definition/`. `DeedPollDefinitionTest`
-  fails on the definition; a field left out of the view reads as null through CCD, and nothing fails unless `DeedPollCaseViewTest` is taught it.
-  Keep the definition minimal: `DEED_POLL_SYSTEM` is granted create and read and nothing else is granted
-  anything, and the test refuses growth that was not deliberate.
+  its grants in `DeedPollCaseType`, the projection `DeedPollCaseView` composes from (`CcdCaseProjection` and
+  `CcdDocumentProjection`, read by `DeedPollRepository` and `DeedPollSupportingDocumentRepository`), and the pinned
+  JSON under `src/test/resources/ccd-definition/`. `DeedPollDefinitionTest` fails on the definition; a field left out
+  of the view reads as null through CCD, and nothing fails unless `DeedPollCaseViewTest` is taught it.
+  Keep the definition minimal: `DEED_POLL_SYSTEM` is the only profile granted anything — CR on `linkDeedPoll` and its
+  two fields, CRU on the case type, the state and `updateSupportingDocuments`, and D on `supportingDocuments` alone,
+  through `SupportingDocumentsAccess`, because data-store checks D for a removed collection item and a D on the event
+  would be carried onto the state. The test refuses growth that was not deliberate.
+- **The case's documents are its `Attached` rows, and the document event's handler is what attaches them.**
+  `SupportingDocumentsHandler` moves a row to `Attached` inside the event's transaction (`attachedOnTheCase`, only
+  when the payload URL's id equals the row's `cdamDocumentId`), so the SDK's snapshot shows it and a lost answer is
+  settled by reading the row: `CdamDocumentUploads` reads `stateOf` after **every** failure before calling anything
+  `Failed` or uncertain. The view never projects the hash token and never projects a non-`Attached` row. A delete sends
+  the event again with the rest, after the commit and ahead of the soft delete, best effort.
 - **No live calls to CCD, CDAM, IDAM or payments in any test.** WireMock only (`StubIdam`, `StubS2s`); there are
   no credentials. The one exception is `cftlibTest`, which runs CCD in-process on placeholders and is local only.
 - **No secrets.** Everything by environment variable, with a non-working default.
@@ -179,10 +202,13 @@ src/cftlib/, src/cftlibTest/     the in-process CCD stack's wiring and the one e
   failure the generate-once rule exists to prevent. Refusing costs one correction; a sworn deed cannot be undone.
 - **A read-only `@Transactional` method that throws still poisons its caller's transaction**, unless it says
   otherwise. Spring's default marks a *participating* transaction rollback-only, so the caller's `catch` decides
-  nothing and its commit fails anyway. That is why `DocumentService.downloadDocument` carries
-  `noRollbackFor = Exception.class`: `DocumentUploads` catches an unreadable document and answers a retryable
-  refusal inside the drain's single transaction, and without it one missing blob rolled back rows Notify had
-  already accepted and emailed those applicants again on the next drain.
+  nothing and its commit fails anyway. `DocumentUploads` catches an unreadable document and answers a retryable
+  refusal inside the drain's single transaction, and once one missing blob rolled back rows Notify had already
+  accepted and emailed those applicants again on the next drain. `DocumentService.downloadDocument` therefore
+  carries no `@Transactional` at all: its read is a `TransactionTemplate` callback that returns an empty answer
+  rather than throwing, and every refusal and the store call come after it. That shape is also what keeps a CDAM
+  download (a remote call) out of a transaction of its own. Putting the annotation back, or throwing inside the
+  callback, reintroduces the double email.
 
 ## Conventions worth knowing before writing code
 

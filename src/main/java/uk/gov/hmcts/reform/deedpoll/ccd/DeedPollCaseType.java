@@ -11,8 +11,9 @@ import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile.DEED_POLL_S
 import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollCaseState.Registered;
 
 /**
- * The minimal deed poll case type: one state, one event that links an existing record, two fields, and one access
- * profile granted create and read.
+ * The minimal deed poll case type: one state, one event that links an existing record and one that sets its documents
+ * (plan 03a), three fields, and one access profile, granted create, read and update -- and delete on the documents
+ * field alone.
  *
  * <p>The ids come from {@link CcdProperties} and are never written here (plan 02, decision 5). The display names are
  * text, not identifiers, and carry no onboarding weight. Everything the definition contains is pinned by
@@ -27,10 +28,14 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
 
     private final CcdProperties properties;
     private final LinkDeedPollHandler linkDeedPoll;
+    private final SupportingDocumentsHandler supportingDocuments;
 
-    public DeedPollCaseType(CcdProperties properties, LinkDeedPollHandler linkDeedPoll) {
+    public DeedPollCaseType(CcdProperties properties,
+                            LinkDeedPollHandler linkDeedPoll,
+                            SupportingDocumentsHandler supportingDocuments) {
         this.properties = properties;
         this.linkDeedPoll = linkDeedPoll;
+        this.supportingDocuments = supportingDocuments;
     }
 
     @Override
@@ -44,8 +49,7 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
             mapIdamRole(builder, idamRole, profile));
 
         // The SDK adds a caseHistory viewer field and a History tab to every case type, and grants every role that
-        // holds an event CRU on that field. A system actor reads no history, and "create and read, nothing else"
-        // would otherwise carry an update grant nobody asked for.
+        // holds an event CRU on that field. A system actor reads no history, so that grant is one nobody asked for.
         builder.omitHistoryForRoles(DEED_POLL_SYSTEM);
 
         // Definition store refuses an import whose search inputs, search results or work-basket results are empty
@@ -57,8 +61,10 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
 
         // The SDK derives state grants from events, but gives a creating event's destination state none -- it grants
         // a state change only where there is a state to leave -- and without one data-store answers every read of a
-        // Registered case 404. Stated here instead, and still only create and read. Also found by cftlib.
-        builder.grant(Registered, Permission.CR, DEED_POLL_SYSTEM);
+        // Registered case 404. Stated here instead. Also found by cftlib. Update since plan 03a: data-store refuses an
+        // event on an existing case unless the profile holds U on the case type and on the case's state
+        // (AuthorisedCreateEventOperation.verifyCaseTypeAndStateAccess).
+        builder.grant(Registered, Permission.CRU, DEED_POLL_SYSTEM);
 
         builder.decentralisedEvent(LINK_DEED_POLL, linkDeedPoll::submit)
             .initialState(Registered)
@@ -68,6 +74,18 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
             .fields()
             .mandatory(DeedPollCaseData::getDeedPollId)
             .mandatory(DeedPollCaseData::getDeedPollReference);
+
+        // Sets the case's supporting documents, which is how a CDAM upload is attached and a delete taken off the case
+        // (plan 03a, task 5). Data-store checks each change to a collection against the field's grant -- C for a new
+        // item, U for a changed one, D for one that is gone (CompoundAccessControlService) -- so the field also carries
+        // SupportingDocumentsAccess's D, which is not granted on the event because the SDK would grant it on the state.
+        builder.decentralisedEvent(CaseDocumentsEvent.EVENT_ID, supportingDocuments::submit)
+            .forState(Registered)
+            .name("Update supporting documents")
+            .description("Set the documents CDAM holds for this deed poll record")
+            .grant(Permission.CRU, DEED_POLL_SYSTEM)
+            .fields()
+            .optional(DeedPollCaseData::getSupportingDocuments);
     }
 
     /**

@@ -36,6 +36,10 @@ java:
         - name: postgres-password
           alias: DB_PASSWORD
   environment:
+    # Off until CCD/CDAM onboarding, staff read permissions and the 03b/03c rollout prerequisites are complete.
+    # Enabling cdam while this URL or the CCD identifiers are placeholders refuses startup.
+    DOCUMENT_STORE: filesystem
+    CASE_DOCUMENT_AM_URL: DEED_POLL_PLACEHOLDER
     # The one shared database for the product — `deed-poll-api` owns the `public` and `ccd` schemas,
     # `deed-poll-admin` owns `session` in the same database. Not a secret: it is a name, and the shared
     # root does not write one. Stated explicitly because `application.yaml` defaults it to `deedpoll`

@@ -6,7 +6,7 @@ import uk.gov.hmcts.ccd.sdk.api.Permission;
 import java.util.Set;
 
 /**
- * The definition's access profiles: one, the actor the linking operation runs as.
+ * The definition's access profiles: one, the actor the linking operation and the document event run as.
  *
  * <p>An access profile is the definition's own name for a set of grants, not an IDAM role, so the name here is
  * fixed and the IDAM role that maps onto it is {@link CcdProperties#systemRole()} -- configuration, because it has
@@ -19,8 +19,11 @@ import java.util.Set;
  */
 public enum DeedPollAccessProfile implements HasRole {
 
-    /** Creates and reads; never updates or deletes, because the case is only ever linked. */
-    DEED_POLL_SYSTEM("DEED_POLL_SYSTEM", Permission.CR);
+    /**
+     * Creates, reads and updates the case type. Update since plan 03a: the document event runs on an existing case,
+     * which data-store refuses without U on the case type. Never D, which CCD has no use for at this level.
+     */
+    DEED_POLL_SYSTEM("DEED_POLL_SYSTEM", Permission.CRU);
 
     private final String role;
     private final Set<Permission> caseTypePermissions;
