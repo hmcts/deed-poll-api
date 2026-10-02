@@ -409,7 +409,36 @@ Task 3 evidence — 2026-10-02:
   enforce the Notify size limit without widening the public upload limit.
 - Wire service-authorised read-back/checksum verification into successful deed preparation before its temporary
   payload is released. A read-back failure retains the payload and never starts another binary upload.
-- [ ] Retrieval works without a staff session and preserves case scope, token separation and frozen content.
+- [x] Retrieval works without a staff session and preserves case scope, token separation and frozen content.
+
+Task 4 evidence — 2026-10-02:
+
+- Added an internal correspondence reader which re-reads the persisted notification and checks its
+  case/template/frozen references before shared document ownership/readiness checks. It uses fresh
+  system-user/S2S acquisition, independently of the triggering staff context. Staff reads retain their
+  own token with no fallback; an architecture test prevents public API dependencies on privileged readers.
+- Notify still resolves only declared keys into a copy, preserves the 2 MB limit and retention/error
+  taxonomy, and closes streams on success, oversize and read failure. Database-backed drain tests prove
+  token/read failures commit a retryable pre-send outcome without Notify calls or rollback poisoning.
+- Prepared deeds are read back under service authority outside a transaction and checked for exact size
+  and SHA-256 before conditional payload release. Identity/checksum evidence remains. Read-back failure
+  retains the payload and retry uses the same Attached document, never another binary upload.
+- Added 22 tests: 13 database-backed reader/drain cases, two preparation/read-back cases, three token
+  separation/failure companions, three stream-lifecycle cases and one API authority boundary test.
+  Existing staff-refusal tests now explicitly assert no system-token fallback. Both deed templates pass.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew cleanTest cleanIntegration build --no-watch-fs`: PASS,
+  1m 43s; fresh test XML: 3,527 tests, zero failures/errors/skips, timestamps 14:27:13–14:28:29 UTC;
+  integration: 14 tests, zero failures/errors/skips, timestamps 14:27:01–14:27:10. All build Checkstyle
+  checks passed. Log: `/tmp/03b-task4-full.log`. Earlier fixture setup/stubbing and line-length findings
+  were corrected before this final passing run.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew checkstyleCftlibTest cftlibTest --no-watch-fs`: PASS,
+  50s; fresh XML timestamp 14:29:27 UTC, nine tests, zero failures/errors/skips.
+  Log: `/tmp/03b-task4-cftlib.log`. `checkDmStoreSpecDrift` and `git diff --check` also passed.
+  This is existing local real CCD/CDAM regression evidence, not Task 7's full correspondence journeys
+  or deployed system/staff permissions. Docker-free final validation remains Task 8.
+- Updated `CDAM-CALLERS.md`. The whole-batch drain transaction and durable claim ownership remain Task 5;
+  pre-case staging remains Task 6. No production switch changed. Unrelated RESUME and plans 03/03a edits
+  remain outside this task's commit. Tasks 5–8 are deliberately unimplemented in this iteration.
 
 ### Task 5: Split the drain with durable send ownership and crash handling
 

@@ -22,9 +22,8 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SentEmailResponse;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedDocumentService;
-import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
-import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
@@ -37,6 +36,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
+import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
 import uk.gov.service.notify.NotificationClient;
 
 import java.lang.reflect.RecordComponent;
@@ -627,7 +627,7 @@ class NotificationSecurityTest {
      * refused for a reason this class is not about.
      */
     private static DocumentUploads uploads(StubNotify stub) {
-        return new DocumentUploads(mock(DocumentService.class), stub.properties());
+        return new DocumentUploads(mock(CorrespondenceDocumentReader.class), stub.properties());
     }
 
     /** The refusal the confirmation email is sent off: raised for a non-publication request, and decided. */

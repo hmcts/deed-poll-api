@@ -8,15 +8,19 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
+import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
 import uk.gov.hmcts.reform.deedpoll.storage.StagedPayloads;
 
+import java.io.IOException;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Commits one immutable deed and document identity before remote work. This seam is wired into
@@ -30,17 +34,20 @@ public class DeedPreparations {
     private final DeedGenerator generator;
     private final StagedPayloads payloads;
     private final JdbcTemplate jdbc;
+    private final CorrespondenceDocumentReader reader;
     private final TransactionTemplate transaction;
 
     public DeedPreparations(DeedPollRepository cases, DeedPollSupportingDocumentRepository documents,
                             DeedDocumentService deeds, DeedGenerator generator, StagedPayloads payloads,
-                            JdbcTemplate jdbc, PlatformTransactionManager transactions) {
+                            JdbcTemplate jdbc, PlatformTransactionManager transactions,
+                            CorrespondenceDocumentReader reader) {
         this.cases = cases;
         this.documents = documents;
         this.deeds = deeds;
         this.generator = generator;
         this.payloads = payloads;
         this.jdbc = jdbc;
+        this.reader = reader;
         this.transaction = new TransactionTemplate(transactions);
     }
 
@@ -156,6 +163,39 @@ public class DeedPreparations {
         if (!prepared.equals(reserve(caseId, prepared.template()))) {
             throw unavailable();
         }
+    }
+
+    /** Keep the payload on every failed read; an Attached row never acquires a new upload budget. */
+    public void verifyAndRelease(String caseId, PreparedDeed prepared) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("Deed verification must run outside a transaction");
+        }
+        if (!jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM deedpoll_stagedpayload WHERE id = ?)",
+            Boolean.class, prepared.documentId())) {
+            return;
+        }
+        var download = reader.downloadDocument(caseId, prepared.documentId());
+        try (var stream = download.stream()) {
+            byte[] bytes = stream.readNBytes(prepared.sizeBytes() + 1);
+            if (bytes.length != prepared.sizeBytes() || !StagedPayloads.checksum(bytes).equals(prepared.checksum())) {
+                throw new UpstreamFailureError("The stored deed could not be verified; its preparation was kept");
+            }
+        } catch (IOException failure) {
+            throw new UpstreamFailureError("The stored deed could not be verified; its preparation was kept");
+        }
+        transaction.executeWithoutResult(status -> {
+            var document = documents.findByIdAndDeedPollIdForUpdate(prepared.documentId(), caseId)
+                .orElseThrow(DeedPreparations::unavailable);
+            if (document.getStorageState() != DocumentStorageState.Attached
+                || !Objects.equals(document.getCdamDocumentId(), download.document().getCdamDocumentId())) {
+                throw unavailable();
+            }
+            jdbc.update("""
+                DELETE FROM deedpoll_stagedpayload p USING deedpoll_deedpreparation d
+                WHERE p.id = d."documentId" AND d."deedPollId" = ? AND p.id = ?
+                  AND p.checksum = ? AND d.checksum = p.checksum AND d."sizeBytes" = p."sizeBytes"
+                """, caseId, prepared.documentId(), prepared.checksum());
+        });
     }
 
     private static ConflictError unavailable() {

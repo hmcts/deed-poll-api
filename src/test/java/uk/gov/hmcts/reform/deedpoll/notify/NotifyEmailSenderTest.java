@@ -6,8 +6,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
+import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
 
 import java.util.Map;
 import java.util.UUID;
@@ -44,7 +44,7 @@ class NotifyEmailSenderTest {
     @BeforeEach
     void startStub() {
         notify.start();
-        uploads = new DocumentUploads(mock(DocumentService.class), notify.properties());
+        uploads = new DocumentUploads(mock(CorrespondenceDocumentReader.class), notify.properties());
         sender = new NotifyEmailSender(notify.client(), notify.properties(), uploads);
     }
 

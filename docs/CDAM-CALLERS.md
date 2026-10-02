@@ -3,7 +3,8 @@
 Task 1 of [plan 03b](plans/deed-poll-api-03b-cdam-callers-and-staging.md), recorded 2026-10-02.
 This is a source audit and the contract for Tasks 2–8, not a claim that those tasks are implemented.
 The plan's final decision record supersedes its historical proposed/open-status paragraphs.
-CDAM remains off by default; staging and the privileged correspondence reader do not exist yet.
+CDAM remains off by default. The audit below is historical; implementation updates at the end cover
+Tasks 2–4. Pre-case staging and the drain transaction split remain Tasks 6 and 5.
 
 ## Inspected revision
 
@@ -315,3 +316,34 @@ Filesystem sends and document-free emails retain their local transaction behavio
 This task retains temporary bytes. Task 4 supplies service-authorised read-back/checksum verification and
 payload release; Task 5 still owns splitting the Notify drain. Consequently this is not yet an end-to-end
 CDAM correspondence delivery or deployment claim. Production switches remain off.
+
+
+## Task 4 implementation update — 2026-10-02
+
+[CorrespondenceDocumentReader](../src/main/java/uk/gov/hmcts/reform/deedpoll/storage/CorrespondenceDocumentReader.java)
+re-reads the persisted notification, checks its case/template/frozen personalisation against the drain
+snapshot, and resolves only the template's declared document keys. The shared
+[DocumentService.readableDocument](../src/main/java/uk/gov/hmcts/reform/deedpoll/domain/documents/DocumentService.java)
+checks case ownership and selected-store readiness before storage access. The internal CDAM reader uses
+fresh system-user/S2S token acquisition; staff downloads continue to use the current staff token with
+no fallback. No public controller selects internal authority and no caller supplies a CDAM locator.
+System READ permission remains an external onboarding requirement, not a conclusion from these tests.
+
+Token acquisition, read refusal and stream failures remain retryable pre-send outcomes. Notify receives
+nothing on these paths, and the refusal happens outside a transactional callback so it does not poison
+the current drain transaction. Malformed references and oversize files retain their technical classification;
+unconfigured retention retains its permanent classification. Only the copy sent to Notify contains upload
+tokens. Streams close on success, oversize and read failures; Notify's 2,097,152-byte limit and the public
+26,214,400-byte upload limit remain separate.
+
+[DeedPreparations.verifyAndRelease](../src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deeds/DeedPreparations.java)
+reads an Attached deed under service authority outside a transaction, checks exact size and SHA-256,
+closes the stream, then conditionally deletes its temporary payload in a short transaction. It retains
+the immutable preparation identity/checksum. Read or checksum failure keeps the payload; a later request
+reuses the Attached row and retries verification without a binary upload. A final enqueue refusal can
+now leave a verified attachment with its payload already released; this is safe because the attachment
+and immutable evidence survive. Failed or ambiguous uploads still retain their recovery bytes.
+
+Task 5 still owns the whole-batch drain transaction and durable send ownership/crash handling. The current
+reader does not claim to solve that existing limitation. Tasks 6–8 and 03c remain outstanding, and neither
+CDAM nor staging has been enabled for deployment.

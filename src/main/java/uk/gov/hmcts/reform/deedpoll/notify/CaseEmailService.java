@@ -6,15 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
-import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations;
-import uk.gov.hmcts.reform.deedpoll.domain.deeds.PreparedDeed;
-import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
-import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
-import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
-import uk.gov.hmcts.reform.deedpoll.storage.CdamDocumentUploads;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.IncompleteDataError;
@@ -22,8 +16,12 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedDocumentService;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedRouting;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedTemplate;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.PreparedDeed;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
@@ -35,11 +33,13 @@ import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
+import uk.gov.hmcts.reform.deedpoll.storage.CdamDocumentUploads;
 import uk.gov.service.notify.NotificationClient;
 import uk.gov.service.notify.NotificationClientException;
 
@@ -570,7 +570,7 @@ public class CaseEmailService {
             return before.receipt();
         }
         PreparedDeed prepared = preparations.prepare(deedPollId, requireDeed(template));
-        // Attached preparations need no payload (Task 4 releases it after verified read-back).
+        // Attached preparations reuse their stored bytes, including after a failed read-back.
         boolean attached = transaction.execute(status -> documents.findByIdAndDeedPollId(
             prepared.documentId(), deedPollId).orElseThrow().getStorageState()
             == uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState.Attached);
@@ -580,6 +580,7 @@ public class CaseEmailService {
                 deedPollId, null, new UploadedFile(bytes, prepared.originalName(), prepared.mimeType(), bytes.length),
                 prepared.originalName(), DocumentDirection.Outgoing));
         }
+        preparations.verifyAndRelease(deedPollId, prepared);
         return transaction.execute(status -> {
             deedPolls.lockForDeedPreparation(deedPollId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
             FormsSnapshot after = inspectForms(deedPollId, template, slots, requestId);

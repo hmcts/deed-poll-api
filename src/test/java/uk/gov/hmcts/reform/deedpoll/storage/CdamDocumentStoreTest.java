@@ -223,6 +223,30 @@ class CdamDocumentStoreTest {
         assertThatThrownBy(() -> store.open(CDAM_ID.toString())).isInstanceOf(UpstreamFailureError.class);
         assertThatThrownBy(() -> store.open(CDAM_ID.toString())).isInstanceOf(UpstreamFailureError.class);
         assertThatThrownBy(() -> store.open("uploads/not-a-cdam-id")).isInstanceOf(NotFoundError.class);
+        verifyNoInteractions(systemUser);
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void serviceReadNeverUsesTheTriggeringStaffToken(boolean staffPresent) throws Exception {
+        if (staffPresent) {
+            signIn("unrelated-staff");
+        }
+        when(cdam.getDocumentBinary("Bearer system", "Bearer s2s", CDAM_ID))
+            .thenReturn(ResponseEntity.ok(new ByteArrayResource(BYTES)));
+        try (var stream = store.openForService(CDAM_ID.toString())) {
+            assertThat(stream.readAllBytes()).isEqualTo(BYTES);
+        }
+        verify(systemUser).accessToken();
+        verify(cdam).getDocumentBinary("Bearer system", "Bearer s2s", CDAM_ID);
+    }
+
+    @Test
+    void serviceTokenFailureNeverReachesCdam() {
+        when(systemUser.accessToken()).thenThrow(new IllegalStateException("secret"));
+        assertThatThrownBy(() -> store.openForService(CDAM_ID.toString()))
+            .isInstanceOf(UpstreamFailureError.class).hasMessageNotContaining("secret");
+        verifyNoInteractions(cdam);
     }
 
     @Test

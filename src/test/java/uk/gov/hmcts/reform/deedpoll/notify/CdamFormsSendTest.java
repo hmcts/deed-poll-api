@@ -24,6 +24,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedTemplate;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentDownload;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.StorageReceipt;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
@@ -32,13 +33,16 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentReposit
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 import uk.gov.hmcts.reform.deedpoll.storage.CdamDocumentStore;
 import uk.gov.hmcts.reform.deedpoll.storage.CdamUploadFailure;
+import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
 import uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageStates;
 
+import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -72,6 +76,7 @@ class CdamFormsSendTest extends AbstractPostgresContainerTest {
     @Autowired private PlatformTransactionManager transactions;
     @Autowired private JdbcTemplate jdbc;
     @MockitoBean private CdamDocumentStore store;
+    @MockitoBean private CorrespondenceDocumentReader reader;
     @MockitoBean private CaseDocumentsEvent event;
     @MockitoSpyBean private NoteService notes;
     private final List<String> created = new ArrayList<>();
@@ -79,6 +84,14 @@ class CdamFormsSendTest extends AbstractPostgresContainerTest {
 
     @BeforeEach
     void remoteAnswers() {
+        when(reader.downloadDocument(anyString(), anyString())).thenAnswer(call -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            String caseId = call.getArgument(0);
+            String documentId = call.getArgument(1);
+            return new DocumentDownload(
+                documents.findByIdAndDeedPollId(documentId, caseId).orElseThrow(),
+                new ByteArrayInputStream(preparations.content(caseId, documentId)));
+        });
         when(store.save(any())).thenAnswer(call -> {
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
             duringUpload.run();
@@ -114,7 +127,10 @@ class CdamFormsSendTest extends AbstractPostgresContainerTest {
         assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(id)).singleElement()
             .satisfies(row -> assertThat(row.getStorageState()).isEqualTo(DocumentStorageState.Attached));
         verify(store).save(any());
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_stagedpayload", Long.class)).isPositive();
+        assertThat(jdbc.queryForObject("""
+            SELECT count(*) FROM deedpoll_stagedpayload p JOIN deedpoll_deedpreparation d ON p.id = d."documentId"
+            WHERE d."deedPollId" = ?
+            """, Long.class, id)).isZero();
         assertThatThrownBy(() -> emails.send(id, template(deed), Map.of("additional_notes", "changed"), key, CALLER))
             .isInstanceOf(ConflictError.class);
         verify(store).save(any());
@@ -297,6 +313,44 @@ class CdamFormsSendTest extends AbstractPostgresContainerTest {
         verify(store).save(any());
         assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(id)).hasSize(1);
         assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(id)).hasSize(1);
+    }
+
+    @Test
+    void failedReadBackRetainsExactBytesAndRetryNeverUploadsAgain() {
+        String id = linkedCase(DeedTemplate.ADULT);
+        doThrow(new UpstreamFailureError("unavailable")).when(reader).downloadDocument(anyString(), anyString());
+        assertThatThrownBy(() -> send(id)).isInstanceOf(UpstreamFailureError.class);
+        var prepared = preparations.prepare(id, DeedTemplate.ADULT);
+        byte[] original = preparations.content(id, prepared.documentId());
+        assertThat(original).isNotEmpty();
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(id)).isEmpty();
+        doAnswer(call -> new DocumentDownload(
+            documents.findById(prepared.documentId()).orElseThrow(), new ByteArrayInputStream(original)))
+            .when(reader).downloadDocument(id, prepared.documentId());
+        assertThat(send(id).enqueued()).isTrue();
+        verify(store).save(any());
+        assertThatThrownBy(() -> preparations.content(id, prepared.documentId())).isInstanceOf(ConflictError.class);
+    }
+
+    @Test
+    void checksumMismatchRetainsPayloadAndClosesStream() {
+        String id = linkedCase(DeedTemplate.ADULT);
+        var closed = new AtomicBoolean();
+        doAnswer(call ->
+            new DocumentDownload(
+                documents.findById((String) call.getArgument(1)).orElseThrow(),
+                new ByteArrayInputStream(new byte[]{1, 2, 3}) {
+                    @Override
+                    public void close() {
+                        closed.set(true);
+                    }
+                })).when(reader).downloadDocument(anyString(), anyString());
+        assertThatThrownBy(() -> send(id)).isInstanceOf(UpstreamFailureError.class);
+        assertThat(closed).isTrue();
+        var prepared = preparations.prepare(id, DeedTemplate.ADULT);
+        assertThat(preparations.content(id, prepared.documentId())).isNotEmpty();
+        assertThatThrownBy(() -> send(id)).isInstanceOf(UpstreamFailureError.class);
+        verify(store).save(any());
     }
 
     private void assertParkedAfterFailure(DocumentStorageState state, int sends) {

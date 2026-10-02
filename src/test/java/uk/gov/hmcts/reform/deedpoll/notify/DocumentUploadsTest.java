@@ -1,14 +1,14 @@
 package uk.gov.hmcts.reform.deedpoll.notify;
 
+import org.json.JSONObject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.json.JSONObject;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentDownload;
-import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
+import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -29,7 +30,7 @@ import static org.mockito.Mockito.when;
 /**
  * The drain-time seam: a stored document becomes a GOV.UK Notify upload, and the frozen row does not change.
  *
- * <p><strong>Container-free, with a mocked {@link DocumentService} and no Notify at all.</strong>
+ * <p><strong>Container-free, with a mocked {@link CorrespondenceDocumentReader} and no Notify at all.</strong>
  * {@code prepareUpload} is a static, local computation -- it base64-encodes the bytes into a JSON object and makes
  * no network call -- so what leaves this class can be asserted exactly without a stub, and the send itself is
  * {@code NotifyEmailSenderTest}'s.
@@ -47,13 +48,13 @@ class DocumentUploadsTest {
 
     private static final byte[] CONTENT = "PK\u0003\u0004 a deed".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
-    private DocumentService documents;
+    private CorrespondenceDocumentReader documents;
 
     private DocumentUploads uploads;
 
     @BeforeEach
     void setUp() {
-        documents = mock(DocumentService.class);
+        documents = mock(CorrespondenceDocumentReader.class);
         uploads = new DocumentUploads(documents, configured(StubNotify.RETENTION_WEEKS));
     }
 
@@ -80,7 +81,7 @@ class DocumentUploadsTest {
         assertThat(prepared.getString("retention_period"))
             .isEqualTo(StubNotify.RETENTION_WEEKS + " weeks");
         // Read case-scoped, which is what stops a stored id resolving to another applicant's deed.
-        verify(documents).downloadDocument(CASE_ID, DEED_ID);
+        verify(documents).forNotification(any(), eq("deed_document"));
     }
 
     @Test
@@ -115,7 +116,7 @@ class DocumentUploadsTest {
     @Test
     @DisplayName("a document that cannot be read is retried, so the store being down does not poison the case")
     void anUnreadableDocumentIsRetried() {
-        when(documents.downloadDocument(CASE_ID, DEED_ID))
+        when(documents.forNotification(any(), eq("deed_document")))
             .thenThrow(new NotFoundError("This document has no attached file"));
 
         // Decision 7's first half, and it needs TEMPORARY to be true rather than merely said. TECHNICAL is terminal
@@ -138,7 +139,8 @@ class DocumentUploadsTest {
     @DisplayName("a store that will not read is retried too, rather than escaping the drain")
     void storeThatWillNotReadIsRetried() {
         DeedPollSupportingDocument deed = deedRow();
-        when(documents.downloadDocument(CASE_ID, DEED_ID)).thenReturn(new DocumentDownload(deed, failingStream()));
+        when(documents.forNotification(any(), eq("deed_document")))
+            .thenReturn(new DocumentDownload(deed, failingStream()));
 
         // LocalFilesystemDocumentStore throws UncheckedIOException, and CDAM will throw something of its own. Any
         // of them must become a verdict rather than propagate: the drain runs a whole batch in one transaction, and
@@ -190,7 +192,7 @@ class DocumentUploadsTest {
                 NotificationFailure.PERMANENT,
                 "no usable document retention period is configured, and the forms-for-completion-adult email "
                     + "carries a document"));
-        verify(documents, never()).downloadDocument(anyString(), anyString());
+        verify(documents, never()).forNotification(any(), anyString());
     }
 
     @Test
@@ -206,7 +208,7 @@ class DocumentUploadsTest {
                 NotificationFailure.PERMANENT,
                 "no usable document retention period is configured, and the forms-for-completion-adult email "
                     + "carries a document"));
-        verify(documents, never()).downloadDocument(anyString(), anyString());
+        verify(documents, never()).forNotification(any(), anyString());
     }
 
     @Test
@@ -233,7 +235,7 @@ class DocumentUploadsTest {
     void fallsBackToTheRecordedName() {
         DeedPollSupportingDocument deed = deedRow();
         deed.setOriginalName(null);
-        when(documents.downloadDocument(eq(CASE_ID), eq(DEED_ID)))
+        when(documents.forNotification(any(), eq("deed_document")))
             .thenReturn(new DocumentDownload(deed, new ByteArrayInputStream(CONTENT)));
 
         // originalName is nullable on the entity, and a null filename reaches Notify as JSON null -- which it
@@ -244,8 +246,40 @@ class DocumentUploadsTest {
             .isEqualTo("LOC020 Change of name deed");
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, 1, 2})
+    void closesStreamAfterSuccessOversizeOrReadFailure(int outcome) {
+        var closed = new java.util.concurrent.atomic.AtomicBoolean();
+        var stream = new java.io.InputStream() {
+            private int remaining = outcome == 1 ? DocumentUploads.MAX_UPLOAD_BYTES + 1 : 3;
+
+            @Override
+            public int read() throws IOException {
+                if (outcome == 2) {
+                    throw new IOException("read failed");
+                }
+                return remaining-- > 0 ? 1 : -1;
+            }
+
+            @Override
+            public void close() {
+                closed.set(true);
+            }
+        };
+        when(documents.forNotification(any(), eq("deed_document")))
+            .thenReturn(new DocumentDownload(deedRow(), stream));
+        var result = uploads.resolve(row(), EmailTemplate.FORMS_FOR_COMPLETION_ADULT);
+        assertThat(closed).isTrue();
+        if (outcome == 0) {
+            assertThat(result).isInstanceOf(ResolvedDocuments.Ready.class);
+        } else {
+            assertThat(refusal(result).failure()).isEqualTo(outcome == 1
+                ? NotificationFailure.TECHNICAL : NotificationFailure.TEMPORARY);
+        }
+    }
+
     private void stored(byte[] content) {
-        when(documents.downloadDocument(CASE_ID, DEED_ID))
+        when(documents.forNotification(any(), eq("deed_document")))
             .thenReturn(new DocumentDownload(deedRow(), new ByteArrayInputStream(content)));
     }
 

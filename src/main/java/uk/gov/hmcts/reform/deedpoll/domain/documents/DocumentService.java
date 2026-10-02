@@ -304,6 +304,12 @@ public class DocumentService {
      *     file
      */
     public DocumentDownload downloadDocument(String deedPollId, String id) {
+        DeedPollSupportingDocument document = readableDocument(deedPollId, id);
+        return new DocumentDownload(document, store.open(locator(document)));
+    }
+
+    /** Shared ownership and readiness checks; authority is selected only by the calling reader. */
+    public DeedPollSupportingDocument readableDocument(String deedPollId, String id) {
         DeedPollSupportingDocument document = readOnly.execute(status ->
                 documents.findByIdAndDeedPollId(id, deedPollId).map(found -> {
                     initialiseType(found);
@@ -316,7 +322,7 @@ public class DocumentService {
         if (!store.serves(document.getStorageState())) {
             throw new NotFoundError(NOT_IN_THIS_STORE);
         }
-        return new DocumentDownload(document, store.open(locator(document)));
+        return document;
     }
 
     /**

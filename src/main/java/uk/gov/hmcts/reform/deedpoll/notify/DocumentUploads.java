@@ -3,9 +3,9 @@ package uk.gov.hmcts.reform.deedpoll.notify;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentDownload;
-import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
+import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
 import uk.gov.service.notify.NotificationClient;
 import uk.gov.service.notify.NotificationClientException;
 import uk.gov.service.notify.RetentionPeriodDuration;
@@ -34,8 +34,8 @@ import java.util.Optional;
  * carries the applicant's name, address and email, so a link anybody holding the URL could fetch is the wrong
  * default; Notify's confirmation step costs the applicant one field.
  *
- * <p><strong>Read through {@link DocumentService}, case-scoped, never through the store directly.</strong>
- * {@code downloadDocument(deedPollId, id)} is the one path that refuses a document belonging to another case --
+ * <p><strong>Read through {@link CorrespondenceDocumentReader}, case-scoped, never through the store directly.</strong>
+ * The reader re-reads the frozen notification and checks document ownership before opening its bytes --
  * which matters here more than anywhere, because the value being resolved came out of a stored JSON column and
  * would otherwise be a way to make one applicant's email carry another applicant's deed. The keys it is read for
  * come from {@link EmailTemplate#documentKeys()} rather than from the map, for the same reason
@@ -84,10 +84,10 @@ public class DocumentUploads {
      */
     static final int MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
 
-    private final DocumentService documents;
+    private final CorrespondenceDocumentReader documents;
     private final NotifyProperties properties;
 
-    public DocumentUploads(DocumentService documents, NotifyProperties properties) {
+    public DocumentUploads(CorrespondenceDocumentReader documents, NotifyProperties properties) {
         this.documents = documents;
         this.properties = properties;
     }
@@ -159,7 +159,7 @@ public class DocumentUploads {
         byte[] content;
         try {
             // Case-scoped, so a reference to another case's document is a NotFoundError rather than a document.
-            DocumentDownload download = documents.downloadDocument(notification.getDeedPollId(), id);
+            DocumentDownload download = documents.forNotification(notification, key);
             row = download.document();
             try (InputStream stream = download.stream()) {
                 // One byte more than the cap, so an oversized document is detected without the whole of it being
@@ -179,12 +179,10 @@ public class DocumentUploads {
             // "transient" is eight reads over three hours and a later note; the cost of guessing "gone" is an
             // applicant who is never sent their deed.
             //
-            // Catching it is only half of containing it: downloadDocument is @Transactional and participates in
-            // the drain's transaction, so Spring's default would mark that transaction rollback-only before this
-            // block ever ran -- taking down rows Notify had already accepted in the same batch. Its
-            // `noRollbackFor` is what makes this catch mean what it says; see DocumentService.downloadDocument.
+            // Ownership/readiness refusals and remote failures happen outside transactional callbacks,
+            // so catching them does not mark the drain rollback-only. Task 5 splits the drain itself.
             log.warn("Notification {} for case {} could not read its {} document {}",
-                     notification.getId(), notification.getDeedPollId(), key, id, unreadable);
+                     notification.getId(), notification.getDeedPollId(), key, id);
             return unavailable("the " + key + " document could not be read");
         }
 
