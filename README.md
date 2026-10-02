@@ -71,7 +71,7 @@ so a route added without a row here is a count that stops agreeing with the spec
 | POST | `/caseworker/cases/{id}/referrals/{referralId}/confirmation` | Record the applicant's answer to the *Request confirmation to proceed* email — `outcome` (`Confirmed` or `Withdrawn`) and an optional `note`. **409** if an answer is already stored (naming it and its date) and **409** if nobody asked this referral to confirm |
 | GET | `/caseworker/cases/{id}/emails` | The Email tab in one call — which templates apply and why not, what has already been sent, and the slot defaults |
 | POST | `/caseworker/cases/{id}/emails/{template}/preview` | What Notify would render for this case and these slots — writes nothing |
-| POST | `/caseworker/cases/{id}/emails/{template}` | Enqueue one — an outbox row and a case note inside the caseworker's transaction. Requires an **`Idempotency-Key`** UUID header; a repeat of one key answers **200** with `enqueued: false`, the same key used for different content is a **409**, and so is the email of the group that contradicts one already asked for |
+| POST | `/caseworker/cases/{id}/emails/{template}` | Enqueue one — an outbox row and a case note in one local transaction after any CDAM deed preparation. Requires an **`Idempotency-Key`** UUID header; a repeat of one key answers **200** with `enqueued: false`, the same key used for different content is a **409**, and so is the email of the group that contradicts one already asked for |
 
 There are deliberately **no** case deletes, no document-type *endpoint* and no `validate` endpoint. The one
 writer of document types is `DeedDocumentService`, which creates the LOC020 and LOC022 rows the first time each
@@ -426,15 +426,47 @@ spec against the workspace's cnp-api-docs clone.
 case's deed and stores it through the same path, as an `Outgoing` document with an applicant-facing filename
 (`LOC020-change-of-name-deed-KBDP2026-00001.docx`) filed under a document type the service creates on first use.
 It is generated **once per case** and never again — an applicant signs the paper in wet ink, so the bytes the
-court holds and the paper in their hands cannot be allowed to differ — and it is written inside the send's own
-transaction, so a refused enqueue rolls the blob back with it.
+court holds and the paper in their hands cannot be allowed to differ. Filesystem sends retain transactional
+rollback cleanup. On CDAM, a durable preparation freezes bytes, local identity and SHA-256 before upload;
+attachment and verified read-back precede final enqueue. A refused enqueue keeps that attachment for reuse.
+Later drains use a separate case-scoped service reader with fresh system/S2S credentials. Public downloads
+still use the staff token, with no fallback on denial. Claims, send-start and outcomes commit separately;
+a possibly-sent email stops for investigation (including emails without documents).
 
 > **Development only, and it must not reach a deployed environment.** Pod disk is ephemeral, replicas
 > do not share a volume, and the chart declares none — a deployed environment running this loses every
 > uploaded file on the next restart and serves 404s from whichever replica did not receive the upload.
-> CDAM supporting-document storage is implemented in 03a. Generated deeds and Notify retrieval on CDAM remain
-> 03b; migration of filesystem documents is 03c. **03a alone is not a production storage cutover**: deeds still
-> depend on filesystem storage, and switching the backend does not migrate existing files.
+> CDAM uploads, generated deeds and correspondence reads are implemented and proven locally. Existing
+> filesystem migration remains 03c. Switching backends does not migrate files in either direction.
+
+### Durable preparation and owned staging configuration
+
+`DOCUMENT_STAGING_MAX_TOTAL_BYTES` is required for new CDAM deed preparations even with staging disabled.
+It caps all retained payloads together; failed/uncertain work consumes capacity until safely resolved.
+The default zero refuses admission. Owned staging is an internal domain API only: enabling it does not
+add a citizen route or transfer browser uploads. See [the adapter contract](docs/CDAM-CALLERS.md#task-6-implementation--owned-staging-2026-10-02).
+
+| Environment variable | Default | Activation requirement |
+|---|---|---|
+| `DOCUMENT_STAGING_MAX_TOTAL_BYTES` | `0` | Positive shared durable-byte cap, agreed with database/backup owners |
+| `DOCUMENT_STAGING_ENABLED` | `false` | Requires `DOCUMENT_STORE=cdam` and every setting below |
+| `DOCUMENT_STAGING_RECORD_MAX_FILES` | `0` | Positive staged-file count per existing record |
+| `DOCUMENT_STAGING_RECORD_MAX_BYTES` | `0` | Positive retained-byte budget per record |
+| `DOCUMENT_STAGING_DRAFT_MAX_BYTES` | `0` | Positive retained-byte budget per citizen draft |
+| `DOCUMENT_STAGING_RECORD_EXPIRY` | `0s` | Positive duration from first record admission |
+| `DOCUMENT_STAGING_DRAFT_EXPIRY` | `0s` | Positive duration from first draft admission |
+| `DOCUMENT_STAGING_CLEANUP_INTERVAL_MS` | `0` | Positive fixed delay and initial delay, in milliseconds |
+| `DOCUMENT_STAGING_CLEANUP_ROWS` | `0` | Positive maximum rows per scheduled run |
+| `DOCUMENT_STAGING_CLEANUP_BYTES` | `0` | Per-run byte budget, at least 26,214,400 bytes |
+| `DOCUMENT_STAGING_CLEANUP_TIME` | `0s` | Positive elapsed-time budget for starting cleanup work |
+
+Durations accept Spring duration syntax such as `PT1H`; examples are syntax only, not production values.
+Missing/invalid settings prevent staging startup. Citizen staging preserves 10 files/draft and 7,340,032
+bytes/file; records preserve 26,214,400 bytes/file. Owner budgets count retained expired/promoting bytes.
+Cleanup runs independently of visits, across replicas, and deletes only expired Staged payloads, preserving
+tombstones. It never expires generated preparations or uncertain promotions. Expiry differs from the unpaid
+payment deadline, CDAM upload TTL and Notify link retention. Disabling staging also stops cleanup.
+The [recovery and release handoff](docs/CDAM-RECOVERY.md) specifies monitoring, ownership and rollback limits.
 
 The limits are **25 MB per file** and 26 MB per request, and they come from
 `UploadPolicy.MAX_UPLOAD_BYTES` rather than from a property — the same constant derives the refusal

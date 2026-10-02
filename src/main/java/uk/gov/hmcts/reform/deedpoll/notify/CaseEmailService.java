@@ -99,12 +99,13 @@ import java.util.stream.Collectors;
  * case with no address really would be refused twice. A <em>preview</em> checks the address not at all: reading
  * what would go out before anybody has chased the applicant for an address is legitimate.
  *
- * <p><strong>Nothing here sends.</strong> A send resolves, enqueues in the caller's transaction -- stamping the
+ * <p><strong>Nothing here sends.</strong> A send resolves, then enqueues in a local transaction -- stamping the
  * referral's {@code confirmationRequestedAt} in that same transaction where the email is the one that asks the
  * applicant to reply, and writing one case note so the email appears on the only timeline this domain has, which
  * are the two things a send writes outside the outbox -- and returns;
  * the drain is what talks to Notify, and it is called after this transaction commits -- see
  * {@link NotificationOutbox}, and {@code CaseworkerEmailController} for why the order is not an accident.
+ * CDAM forms preparation and attachment commit before final enqueue; they survive an enqueue refusal.
  */
 @Slf4j
 @Service
@@ -646,7 +647,7 @@ public class CaseEmailService {
         // to correct what they typed.
         Entitled entitled = entitle(deedPollId, template);
         String recipient = requireRecipient(entitled.deedPoll());
-        // Composing a forms email generates and stores the case's deed, in this transaction -- see
+        // Filesystem forms composition generates and stores the deed in this local transaction -- see
         // deedDocumentId. Nothing happens here for a template that carries no document.
         Composed composed = compose(entitled, template, slots, deed -> deedDocumentId(deedPollId, template, deed));
         return enqueue(deedPollId, template, requestId, caller, recipient, composed);
@@ -1399,9 +1400,9 @@ public class CaseEmailService {
     /**
      * The id of this case's deed, generating and storing it if the case has none yet.
      *
-     * <p><strong>In the send's own transaction, which is what makes the row and the deed one act.</strong> If the
-     * enqueue is then refused -- the other forms email already asked for, the request id reused -- the document row
-     * and its blob roll back with the refusal, so a case never holds a deed for an email nobody was owed.
+     * <p><strong>Used by the filesystem send path inside its local transaction.</strong> If enqueue is refused,
+     * its new document row and blob roll back together. CDAM forms use durable preparation before enqueue
+     * instead: a confirmed attachment survives refusal and is reused, never regenerated.
      *
      * <p><strong>Generated at most once per case</strong> (decision 6): a retry of the same compose journey finds
      * the deed the first attempt stored, which is why the frozen personalisation of an idempotent repeat compares

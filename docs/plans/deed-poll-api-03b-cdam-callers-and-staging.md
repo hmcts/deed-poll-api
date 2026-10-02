@@ -1,5 +1,9 @@
 # Plan 03b — CDAM callers: generated deeds, Notify retrieval and pre-case staging
 
+**Implementation status, 2026-10-02:** Tasks 1–8 are complete locally. Task 8 records the final operational
+handoff and fresh validation below. CDAM/staging remain off; citizen/web, onboarding and 03c are release
+dependencies. Earlier decision-review statuses below are historical, superseded by task evidence.
+
 **Execution handoff, 2026-10-02: all three design flags are resolved and accepted by Steve.**
 No implementation or baseline validation was performed during this decision review. Use the appended
 decision record as authoritative over the original proposals and interim open-status notes below.
@@ -621,7 +625,54 @@ Task 7 evidence — 2026-10-02:
   source preservation and verification requirements. Existing `Local` rows remain a cutover dependency.
 - Run final full/Docker-free/cftlib/drift checks and record exact commit, fresh counts and limitations. Leave
   production switches off; distinguish local completion, citizen adapter readiness, onboarding and rollout.
-- [ ] Final evidence and runbooks agree; 03c and the citizen/web handoff have concrete inputs.
+- [x] Final evidence and runbooks agree; 03c and the citizen/web handoff have concrete inputs.
+
+Task 8 evidence — 2026-10-02:
+
+- Validated implementation base: `630b9f0c3c5b26a9c683dc416e91b0bf6db6a8d3` (Task 7), plus this task's
+  runbooks, comment corrections and two aggregate-query tests. No production behaviour/configuration changed.
+  The Task 8 commit containing this evidence is identified by `feat: record CDAM operational handoff`;
+  its exact resulting hash is also recorded in the local RALPHEX progress log after commit.
+- Updated recovery/smoke, README, CLAUDE, caller-contract status and RESUME for prepared deeds, privileged
+  reads, committed outbox claims/unknown sends, owned staging and cleanup. Corrected comments that still
+  implied generation/upload/enqueue shared a transaction or the drain retained a batch transaction.
+- Recovery specifies quiescence of all old traffic-triggered workers before V28, conservative legacy claim
+  handling, compatible-worker rollback, retained stage ownership when cleanup stops, and preservation of
+  both document stores. It links ADRs 0007–0009 and names responsibilities still requiring release assignment.
+- Recorded bounded aggregate backlog/byte/age/uncertainty/expiry monitoring, authorised read-only SQL and
+  physical database/WAL/backup/restore capacity checks. Only document-state gauges ship today; collector,
+  scheduler-failure/liveness monitoring, thresholds and alert delivery remain explicit activation gates.
+- Added two PostgreSQL tests executing the runbook's actual SQL: empty results return zeros, retained
+  expired/Promoting payloads count, released tombstones do not, and grouped output has no identity labels.
+  Verified all 11 staging environment bindings are documented, runbook file links resolve and CDAM/staging
+  defaults stay off. No migration, template, reference fixture or sibling repository was edited.
+- Prepared synthetic-data operator procedures for both forms → attachment → context replacement → later
+  service-authorised drain → received Notify file, separate staff permission checks, owned promotion and
+  independent expiry. Live smoke/onboarding/response captures were not run; no approved deployed adapter
+  or authority is assumed. These procedures are the task's deliverable, not claimed operational evidence.
+- 03c receives an inventory/verification contract for Local identities, source files/checksums, existing deeds,
+  queued JSON references, source preservation, migration uncertainty and cutover/rollback. Citizen/web work
+  receives durable owner/draft authority, byte transfer, operation retries/expiry, domain-error mapping and
+  verified target/linking requirements. Neither handoff is implemented by these documentation changes.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew cleanTest cleanIntegration build --no-watch-fs`: PASS,
+  1m 44s. Fresh XML: 3,573 tests, zero failures/errors/skips (16:25:56–16:27:13 UTC); integration:
+  14 tests, zero failures/errors/skips (16:25:44–16:25:53 UTC). All build Checkstyle tasks passed.
+  Log: `/tmp/03b-task8-full.log`.
+- `INTEGRATION_TESTS_ENABLED=false TESTCONTAINERS_RYUK_DISABLED=true ./gradlew cleanTest cleanIntegration build --no-watch-fs`:
+  PASS, 32s. Fresh XML: 2,358 tests, zero failures/errors/skips (16:27:45–16:28:11 UTC).
+  PostgreSQL tests are excluded and integration does not run; no fresh integration XML exists. This does
+  not prove database concurrency or the new SQL tests. Log: `/tmp/03b-task8-docker-free.log`.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew checkstyleCftlibTest cftlibTest --no-watch-fs`: PASS,
+  54s. Fresh XML timestamp 16:29:02 UTC: 13 tests, zero failures/errors/skips. Real local CCD/CDAM with
+  guarded dm-store and local auth/Notify fixtures; no deployed permission claim. Adult preparation/attachment/
+  repeated send: 290ms; minor: 208ms; restarted-context drain: 286ms; staged promotion/read-back/retry: 193ms.
+  Log: `/tmp/03b-task8-cftlib.log`.
+- `./gradlew checkDmStoreSpecDrift --no-watch-fs`: PASS, 3s, no spec differences;
+  log `/tmp/03b-task8-drift.log`. `git diff --check` passed. XML snapshots saved separately under
+  `/tmp/03b-task8-xml/{full,docker-free,cftlib}`; only the suite/timestamps above are fresh for each run.
+- Pre-existing edits to plans 03/03a and the earlier decision-history additions in RESUME are preserved
+  outside this task's commit. Production onboarding, assigned owners/settings, monitoring/capacity evidence,
+  actual citizen/web activation and 03c migration remain release dependencies, not unchecked local tasks.
 
 ## Flags for Steve
 

@@ -67,8 +67,8 @@ import java.util.stream.Collectors;
  * indistinguishable here, and the second would have this service generate a <em>second</em> deed, which is the
  * failure decision 6 exists to prevent. A caseworker can re-file a document; nobody can un-swear a deed.
  *
- * <p><strong>Written through {@link DocumentService}, not around it.</strong> The blob goes to the
- * {@link uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentStore} seam -- CDAM in plan 03 -- and its row
+ * <p><strong>This service is the filesystem path.</strong> CDAM forms use {@link DeedPreparations}
+ * and durable attachment before enqueue. Here the blob goes through {@link DocumentService} and its row
  * gets the store's key, the mime type, the size and the filename in one transaction, with
  * {@code DocumentService}'s own rollback cleanup behind it: a generated deed whose row never commits leaves no
  * orphaned bytes. Duplicating any of that here would be a second upload path to maintain and the one that did

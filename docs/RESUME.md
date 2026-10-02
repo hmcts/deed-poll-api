@@ -1,5 +1,27 @@
 # Resume state — where the next session picks up
 
+
+**03b implementation handoff, 2026-10-02:** Tasks 1–7 implement and prove durable CDAM deeds for both templates,
+service-authorised Notify retrieval across restart, per-notification claim/send-start/outcome commits and
+owned RECORD/DRAFT staging with bounded independent cleanup. Task 8 consolidates the operational runbooks;
+its final fresh validation evidence is in [plan 03b](plans/deed-poll-api-03b-cdam-callers-and-staging.md#task-8-record-operational-limits-and-the-handoff-to-03c).
+This update supersedes historical “not implemented” and open-design notes below; their dates preserve context.
+
+CDAM and staging remain off by default. The citizen adapter and browser byte transfer are absent. Production
+quotas/durations/schedule, database/backup capacity, aggregate backlog/expiry monitoring and named operational
+owners remain activation gates under ADRs 0007–0009. Only document-state gauges are currently exported.
+Nothing is onboarded by these local tests; the expanded [operator smoke](CDAM-SMOKE.md) is prepared, not run.
+
+Read [CDAM-RECOVERY.md](CDAM-RECOVERY.md) before upgrade/rollback: stop all old traffic-triggered drain workers
+before V28/new workers; a possibly-sent email is parked for investigation, never automatically resent. Disabling
+staging stops cleanup and requires retained-backlog ownership. Changing the backend cannot serve the other
+store's documents. 03c must inventory Local rows, original files/checksums, previously generated deeds and frozen
+queued email references, preserve sources/identities, and verify attachment/read-back before cutover. Citizen/web
+work must implement authenticated durable draft ownership, actual byte transfer and verified promotion mapping.
+The recovery guide gives concrete input/check lists for both handoffs. No sibling repository was changed.
+
+## Historical decision and delivery notes
+
 **CDAM core round trip, 2026-09-29: plan 03a is complete locally** on branch
 `deed-poll-api-03a-cdam-core-round-trip`; all eight tasks are implemented. Read
 [plan 03a](plans/deed-poll-api-03a-cdam-core-round-trip.md) and the notes here before the older plan-03-next

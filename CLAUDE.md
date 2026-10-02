@@ -16,7 +16,10 @@ calls it from a sweep on the case list request, **switched off by default**, and
 `NeedsRepair` under `/caseworker/ccd-attempts`. The relational record stays authoritative; CCD holds a projection of
 it. It is proven against WireMock and a local cftlib stack on placeholder identifiers only — **nothing is
 onboarded**, and `docs/CCD-SMOKE.md` is the AAT procedure that waits on it. Plan 03a adds CDAM uploads behind
-`deedpoll.documents.store` (the filesystem stays the default), attached to the case by its document event. See
+`deedpoll.documents.store` (the filesystem stays the default), attached to the case by its document event.
+Plan 03b adds durable deed preparation, service-authorised correspondence reads, per-row notification claims,
+and owned staging with bounded scheduled expiry. The citizen adapter is absent; existing Local rows still
+require 03c. Local proof is not onboarding or rollout approval. See
 `docs/RESUME.md` and `docs/plans/`.
 
 ## Layout
@@ -57,8 +60,19 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
 - **CDAM ships off by default.** `CdamOnboarding` refuses unconfirmed CCD identifiers and local/default CDAM
   endpoints when CDAM is enabled; only `test`/`cftlib` against loopback permit placeholders. These are local test
   profiles, never deployment profiles. The configuration check cannot prove external onboarding or staff access.
-  Generated deeds and Notify retrieval are still 03b, existing-file migration is 03c; do not enable CDAM as a
-  production cutover on 03a alone. Read `docs/CDAM-RECOVERY.md` before acting on an uncertain document.
+  Generated deeds and Notify retrieval now work locally on CDAM; existing-file migration remains 03c.
+  Production cutover still requires onboarding, migration and the operator smoke. Read `docs/CDAM-RECOVERY.md`
+  before acting on an uncertain document.
+- **Prepared bytes are recovery evidence, not disposable drafts.** V26/V27 reserve one deed identity, checksum
+  and input fingerprint per case before remote work. Retain its payload until Attached read-back verifies it;
+  a failed final enqueue never authorises regeneration. The shared `DOCUMENT_STAGING_MAX_TOTAL_BYTES` cap
+  also applies when owned staging is disabled. Zero refuses new preparations.
+- **Owned staging is a trusted domain seam, not a citizen upload API.** V29 binds owner kind/ID, authenticated
+  subject, operation UUID and original expiry. Only Staged rows expire; Promoting and generated preparations
+  retain their bytes. Admission, promotion and cleanup use short commits and preserve ambiguous outcomes.
+  All production quotas, durations and cleanup budgets need release agreement. No retry extends expiry.
+  Before disabling staging, quiesce its adapters/promoters and account for the stopped cleanup scheduler.
+  Recovery, monitoring queries, rollout boundaries and 03c inputs are in `docs/CDAM-RECOVERY.md`.
 - **cftlib stubs only dm-store.** Its fixture is compiled from `src/dmStoreStub/java` into `test` and `cftlibTest`;
   never add the whole `test.output` to cftlib's classpath, because its package scan would run the entire unit suite
   inside the CFT stack. Update the pinned spec, response provenance and stub together after a verified change.

@@ -4,7 +4,10 @@ Task 1 of [plan 03b](plans/deed-poll-api-03b-cdam-callers-and-staging.md), recor
 This is a source audit and the contract for Tasks 2–8, not a claim that those tasks are implemented.
 The plan's final decision record supersedes its historical proposed/open-status paragraphs.
 CDAM remains off by default. The audit below is historical; implementation updates at the end cover
-Tasks 2–6. The implementation updates supersede the corresponding baseline audits.
+Tasks 2–6. Task 7 proves both deed/Notify journeys and owned RECORD promotion against real local CCD/CDAM.
+Task 8 consolidates the operational handoff in [recovery](CDAM-RECOVERY.md) and [smoke](CDAM-SMOKE.md).
+The implementation updates supersede the corresponding baseline audits. Dated statements that later tasks
+remain outstanding are historical; final validation is recorded in plan 03b Task 8.
 
 ## Inspected revision
 

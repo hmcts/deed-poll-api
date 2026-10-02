@@ -180,7 +180,7 @@ public class DocumentUploads {
             // applicant who is never sent their deed.
             //
             // Ownership/readiness refusals and remote failures happen outside transactional callbacks,
-            // so catching them does not mark the drain rollback-only. Task 5 splits the drain itself.
+            // and the drain has no outer transaction; only claims, send-start and outcomes commit locally.
             log.warn("Notification {} for case {} could not read its {} document {}",
                      notification.getId(), notification.getDeedPollId(), key, id);
             return unavailable("the " + key + " document could not be read");

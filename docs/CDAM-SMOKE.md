@@ -1,6 +1,6 @@
 # CDAM AAT round trip — operator procedure
 
-Prepared for plan 03a. **Not run.** Local cftlib evidence does not establish AAT onboarding or permissions.
+Prepared for plans 03a/03b. **Not run.** Local cftlib evidence does not establish AAT onboarding or permissions.
 Use synthetic cases and a harmless PDF file. Record the deployed API commit, definition version, CCD/CDAM/dm-store
 versions, date, expected bytes and observed status codes. Keep tokens out of the record.
 
@@ -17,8 +17,8 @@ versions, date, expected bytes and observed status codes. Keep tokens out of the
    the agreed staff access model before testing real staff downloads.
 4. Set `DOCUMENT_STORE=cdam`, `CASE_DOCUMENT_AM_URL` to the confirmed endpoint, and `DOCUMENT_URL_BASE` to a base
    accepted by data-store's document URL pattern. Configure all CCD identifiers and system credentials together.
-   Restart and confirm readiness. Keep ordinary traffic away during this controlled test: generated deeds and
-   Notify retrieval are still plan 03b, and existing filesystem-document migration is plan 03c.
+   Restart and confirm readiness. Keep ordinary traffic away during this controlled test: existing
+   filesystem-document migration remains plan 03c, and local caller proof does not establish deployed access.
 5. Arrange with the dm-store operator to capture the actual **response bodies** for the synthetic transaction
    below. CDAM's public response is not a dm-store capture. Do not enable unrestricted HTTP body/token logging.
 
@@ -60,3 +60,72 @@ build and `cftlibTest`. A mismatch is a finding to resolve, not a reason to loos
 If any step fails, keep CDAM rollout disabled for ordinary traffic and follow [CDAM-RECOVERY.md](CDAM-RECOVERY.md).
 Switching back to the filesystem cannot serve documents already stored in CDAM; preserve both storage backends
 and their rows until the migration/rollback procedure is agreed.
+
+## Forms, attachment and a later Notify drain (03b)
+
+Prepared, **not run against AAT**. Repeat for both LOC020/adult and LOC022/minor using synthetic applicants
+and an approved test recipient. Confirm Notify service, each template, reply-to and 1–78-week retention
+configuration, plus actual system-user CCD READ and CDAM READ permission. Configure a capacity-approved
+`DOCUMENT_STAGING_MAX_TOTAL_BYTES` for durable deed preparation. Owned staging may remain disabled.
+Complete the worker-quiescence and migration procedure in [CDAM-RECOVERY.md](CDAM-RECOVERY.md) first.
+
+1. Create/link each synthetic case via the ordinary flow. Preview and availability must not reserve a deed,
+   upload bytes or enqueue. Request the appropriate forms email with one recorded compose UUID used as the
+   `Idempotency-Key`. Expect 200 only after attachment and enqueue (not proof of delivery).
+2. For proof of a **later** drain, use an approved in-process operator/test harness calling the production
+   `CaseEmailService.send` coordinator directly, so the controller's immediate drain is not invoked. Isolate
+   the test instance from case-list/email traffic until the observation is complete. There is no public
+   defer-drain endpoint; do not add one or manipulate notification claim/send-start fields by SQL.
+   If no approved harness is available, record this step as pending, not passed by an immediate send.
+3. Record the local document identity, Outgoing direction, original filename/MIME, size and SHA-256 in a
+   restricted evidence record. Confirm one preparation, Attached local row, CCD reference and latest event
+   snapshot, no published hash and released temporary payload after read-back. Ask the dm-store operator
+   to confirm attachment metadata/cleared TTL using the response captures described above.
+4. Repeat with the same compose key and with a new key for the already-owed same-template email. Expect the
+   same notification/document, `enqueued=false`, no extra enqueue note and no second successful binary upload.
+   A harmless later case edit must not rewrite the deed or frozen correspondence. Material edits during
+   preparation must refuse stale enqueue, not regenerate; use the local fault tests for deterministic races.
+5. Restart/replace the API context before draining. In the approved harness invoke the production drain with
+   no staff security context. Verify the internal reader obtains fresh system/S2S authority and reads only
+   the claimed notification's declared, case-owned document. The send uses its frozen recipient and fields.
+   Retrieve the received Notify link through the test recipient's email-confirmation step: compare original
+   filename, bytes and SHA-256, and verify the agreed retention. A provider acceptance alone is not this proof.
+6. Run staff download/wrong-case/CCD READ refusal checks from the earlier journey separately. Service-reader
+   success never proves staff access. If the platform owner can arrange a safe synthetic permission fixture,
+   deny system READ before a deferred drain: expect no binary/Notify request, a retryable pre-send failure and
+   no send-start. Restore permission before the scheduled backoff retry. Do not revoke a shared production role.
+7. Record deployed API commit, definition/platform versions, start/end UTC times, wall-clock prepare/drain/read
+   durations, original/received checksums, binary upload/send counts, state transitions and expected/observed
+   statuses. Keep identities in restricted evidence, never metric labels. Do not capture tokens/personal payloads.
+
+An uncertain Notify result is an investigation case under ADR-0007, not a reason to repeat the public send with
+a different key. Stop the potentially-live worker and preserve evidence. Use local crash tests to prove the
+ambiguous-send paths; do not deliberately send duplicate live correspondence to manufacture this evidence.
+
+## Owned staging and expiry (only where a trusted adapter exists)
+
+Agree and record the production values/owners for every staging setting in the README, including per-owner
+expiry rationale, shared/owner capacities, scheduler delay and row/byte/time budgets. Verify capacity, backups,
+monitoring/alert delivery and operational ownership first. Enable only the isolated approved smoke environment.
+No citizen adapter exists in 03b: an approved domain RECORD owner fixture proves the seam, not citizen access.
+Where no approved adapter/harness exists, mark these operational checks pending and keep staging disabled.
+
+1. Authenticate the owner through the adapter, admit a harmless file before linking and record its original
+   receipt/expiry. Retry the same operation and content, including across restart: same identity/expiry, no
+   CDAM traffic. Wrong-owner reads/promotions fail; changed content under the same operation conflicts.
+2. Attempt promotion while unlinked: refuse without local document/upload. Complete the application's normal
+   linking flow, then promote once. Verify one Incoming local document, CCD attachment/snapshot, original
+   bytes through authorised read-back, Consumed state and payload release. Repeat promotion: same document,
+   no extra binary. A different target case/type must be refused.
+3. Admit a separate disposable stage and leave it untouched until its agreed expiry; traffic must not be
+   required for cleanup. Observe Expired plus absent payload with retained operation/expiry evidence; retries
+   return the terminal receipt and do not extend expiry. Check a Removed stage similarly via the adapter.
+4. Observe multiple replicas respecting row/byte/time limits and aggregate backlog decreasing. Verify errors
+   and scheduler inactivity alert through the approved operational test. Do not induce production database
+   faults. Protected Promoting rows and generated preparations must not be purged; deterministic crash/lock
+   scenarios are local-test evidence until a controlled operational rehearsal is agreed.
+5. Record which adapter and authenticated owner model were used. Citizen readiness additionally requires a
+   real browser upload-byte transfer and verified draft-to-case mapping; mark those pending for domain fixtures.
+
+Disable the isolated test admission/cleanup only after accounting for retained stages under the recovery
+procedure. Do not equate payload expiry with case disposal, remote deletion or backup erasure.
