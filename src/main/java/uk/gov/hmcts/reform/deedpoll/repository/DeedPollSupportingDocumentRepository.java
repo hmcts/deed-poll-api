@@ -31,6 +31,10 @@ import java.util.Optional;
  */
 public interface DeedPollSupportingDocumentRepository extends JpaRepository<DeedPollSupportingDocument, String> {
 
+    /** All legacy deed evidence, including duplicates and both directions. */
+    List<DeedPollSupportingDocument> findByDeedPollIdAndDocumentTypeNameInOrderByCreatedOnAsc(
+        String deedPollId, Collection<String> documentTypeNames);
+
     /** Aggregate operational metric; never loads document metadata or tokens. */
     long countByStorageState(DocumentStorageState state);
 

@@ -321,7 +321,33 @@ its new behavioral tests begin in Task 2. Tasks 2–8 remain untouched.
 - Prove concurrent different request IDs and different templates cannot reserve distinct new deeds for one case.
   Prove later case edits/restarts preserve the original bytes, and no payload or hash leaks through `toString`,
   logs, metrics or DTOs. Test migration on an existing V25 database and the filesystem path's rollback behaviour.
-- [ ] Durable preparation preserves one identity and exact bytes; migration and concurrency tests pass.
+- [x] Durable preparation preserves one identity and exact bytes; migration and concurrency tests pass.
+
+Task 2 evidence — 2026-10-02:
+
+- V26 adds a case-unique reservation across both templates and separate immutable payload storage with
+  byte-count/SHA-256 constraints. Existing rows are not backfilled or deleted. A real Flyway V25-to-V26
+  upgrade preserves populated legacy documents and validates migration history; repeat migration is a no-op.
+- `DeedPreparations` commits the document identity, original metadata/checksum and bytes together under a
+  case lock. Concurrent independent requests reuse one identity; competing templates produce one refusal.
+  Explicit shared capacity admission serialises across replicas and counts retained uncertain payloads.
+  The default capacity is zero, so no production quota or activation is implied.
+- Existing deeds in both directions are inspected; duplicates, incompatible or unavailable documents are
+  refused without regeneration. Case edits and another service instance retain the exact original bytes.
+  Removed/refiled preparations cannot cause filesystem regeneration. Filesystem rollback still removes
+  the row and blob. Payloads are absent from ordinary entities/DTOs; diagnostic and architecture tests
+  guard bytes, checksums and applicant metadata from preparation diagnostics and public/metric types.
+- Focused behavioural tests plus `checkstyleMain checkstyleTest`: PASS, 37 tests, zero failures/errors/skips,
+  24s. The newly added real-upgrade fixture initially used a nonexistent type-table column; corrected before
+  the passing run. Log: `/tmp/03b-task2-focused.log`.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew cleanTest cleanIntegration build --no-watch-fs`: PASS,
+  1m 29s, test 3,481 and integration 14, zero failures/errors/skips; Checkstyle passed. Fresh test XML
+  timestamps span 13:49:08–13:50:21 UTC; integration 13:48:58–13:49:05. Log: `/tmp/03b-task2-full.log`.
+  Gradle deprecation and JVM SVE warnings were non-failing. `git diff --check` passed.
+- Remote orchestration/authentication is unchanged, so cftlib is not repeated at this task boundary.
+  Preparation is an internal persistence seam, not a usable-document receipt; Task 3 wires remote
+  continuation/enqueue, and Task 4 verifies read-back before payload release. Tasks 3–8 remain unimplemented.
+  Existing unrelated RESUME and plans 03/03a edits are preserved outside this task's commit.
 
 ### Task 3: Attach prepared deeds and split the email enqueue transaction
 

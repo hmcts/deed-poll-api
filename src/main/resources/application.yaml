@@ -311,6 +311,10 @@ deedpoll:
     # not survive AKS, because pods are ephemeral and replicas do not share a volume. Real
     # storage is CDAM, in plan 03, which adds an implementation beside the local one.
     local-store-root: ${DOCUMENT_STORE_ROOT:data/documents}
+    staging:
+      # Shared durable payload cap, including retained failed/uncertain deeds. Zero refuses admission.
+      # No production capacity is assumed; pre-case staging/cleanup is introduced separately in 03b Task 6.
+      max-total-bytes: ${DOCUMENT_STAGING_MAX_TOTAL_BYTES:0}
     # Which store holds a supporting document's bytes: filesystem (LocalFilesystemDocumentStore, the default) or
     # cdam (CdamDocumentStore, plan 03a). Anything else refuses to start. cdam is switched on only after onboarding:
     # every CCD identifier is still DEED_POLL_PLACEHOLDER, and an upload to a record with no CCD case is refused as

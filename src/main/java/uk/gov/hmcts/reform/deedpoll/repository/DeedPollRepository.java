@@ -35,6 +35,15 @@ import java.util.Optional;
  */
 public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, JpaSpecificationExecutor<DeedPoll> {
 
+    /** Keeps a removed/refiled remote preparation from becoming permission to generate on the filesystem. */
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM deedpoll_deedpreparation WHERE \"deedPollId\" = :id)",
+        nativeQuery = true)
+    boolean hasDeedPreparation(@Param("id") String id);
+
+    /** Serialises deed reservations without conflicting with child-row foreign-key locks. */
+    @Query(value = "SELECT id FROM deedpoll_deedpoll WHERE id = :id FOR NO KEY UPDATE", nativeQuery = true)
+    Optional<String> lockForDeedPreparation(@Param("id") String id);
+
     /** Every case, newest first. */
     List<DeedPoll> findAllByOrderByCreatedOnDesc();
 
