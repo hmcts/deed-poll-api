@@ -11,7 +11,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** A real Flyway upgrade, including history validation, from populated V25 to V26. */
+/** A real Flyway upgrade, including history validation, from populated V25 through V27. */
 @Tag("requires-docker")
 @Testcontainers
 class DeedPreparationUpgradeTest {
@@ -44,5 +44,23 @@ class DeedPreparationUpgradeTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_deedpreparation", Long.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_stagedpayload", Long.class)).isZero();
         assertThat(upgrade.migrate().migrationsExecuted).isZero();
+        jdbc.update("""
+            INSERT INTO deedpoll_deedpreparation
+                ("deedPollId", "documentId", template, "originalName", "mimeType", "sizeBytes", checksum)
+            VALUES ('case', 'legacy1', 'ADULT', 'original.docx', 'application/docx', 1, repeat('0', 64))
+            """);
+        var latest = Flyway.configure().dataSource(source).locations("classpath:db/migration").target("27").load();
+        assertThat(latest.migrate().migrationsExecuted).isOne();
+        latest.validate();
+        assertThat(jdbc.queryForObject("""
+            SELECT "inputFingerprint" FROM deedpoll_deedpreparation WHERE "deedPollId" = 'case'
+            """, String.class)).isNull();
+        assertThat(jdbc.queryForObject("""
+            SELECT "originalName" FROM deedpoll_deedpreparation WHERE "deedPollId" = 'case'
+            """, String.class)).isEqualTo("original.docx");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update("""
+            UPDATE deedpoll_deedpreparation SET "inputFingerprint" = repeat('0', 64) WHERE "deedPollId" = 'case'
+            """)).isInstanceOf(org.springframework.dao.DataAccessException.class);
+
     }
 }

@@ -286,3 +286,32 @@ read failures before send, owner/generation races, every crash row above and bou
 races with a controlled clock. Task 7 proves both templates and staging with real local CCD/CDAM and the
 existing guarded dm-store stub. Task 8 records final full/Docker-free/cftlib/drift evidence and runbooks.
 Neither a Docker-free pass nor this contract proves real Postgres races, deployed CDAM authority or rollout.
+
+## Task 3 implementation boundary — 2026-10-02
+
+CDAM forms sends now use `CaseEmailService.send` as a coordinator with explicit `TransactionTemplate`
+steps. The first step validates and resolves existing requests/group occupants before storage work.
+`DeedPreparations.prepare` commits the original bytes and identity; `CdamDocumentUploads.continuePrepared`
+claims that row with `DocumentStorageStates.claimPrepared`, committing its first counted send before I/O.
+Only an unclaimed UploadPending row can acquire this authority. A competing request or a restart after
+claim refuses; it cannot reset the attempt counter. Within the owning request the existing two-send
+upload and bounded attachment rules apply. Attached rows are reused without another binary upload.
+
+Recovery is conservative: Uploaded, AttachUncertain, UploadUncertain and Failed preparations are parked
+on a later request, including a known remote copy whose unattached lifetime/token may have expired.
+There is no automatic attach continuation across requests, token refresh or operator repair endpoint.
+A refused upload also remains evidence; a retry is not permission to create another legal instrument.
+The existing handler/snapshot behavior is unchanged, including Attached winning after a lost answer.
+
+V27 adds an immutable fingerprint of the template's resolved deed fields using the existing DeedField
+mapping. V26 reservations retain a null fingerprint: original inputs cannot safely be inferred from the
+current case. They require investigation before a new forms enqueue, as do legacy Attached deeds without
+preparation evidence. The fingerprint is never a public field or diagnostic value. The final short
+transaction locks the case and document, revalidates entitlement, recipient, composed personalisation,
+CCD binding, direction, metadata and Attached state, and compares the original deed inputs. It then
+commits enqueue and its note atomically. A failed enqueue leaves the attachment and payload intact.
+Filesystem sends and document-free emails retain their local transaction behavior.
+
+This task retains temporary bytes. Task 4 supplies service-authorised read-back/checksum verification and
+payload release; Task 5 still owns splitting the Notify drain. Consequently this is not yet an end-to-end
+CDAM correspondence delivery or deployment claim. Production switches remain off.

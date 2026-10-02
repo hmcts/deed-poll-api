@@ -5,6 +5,15 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.PreparedDeed;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
+import uk.gov.hmcts.reform.deedpoll.storage.CdamDocumentUploads;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
@@ -279,6 +288,9 @@ public class CaseEmailService {
      * fresh bytes on every retry of one journey and store none of them.
      */
     private final DeedDocumentService deeds;
+    private final DeedPreparations preparations;
+    private final Optional<CdamDocumentUploads> remote;
+    private final TransactionTemplate transaction;
 
     public CaseEmailService(DeedPollRepository deedPolls,
                            ReferralRepository referrals,
@@ -289,7 +301,10 @@ public class CaseEmailService {
                            ReferralService referralService,
                            NoteService notes,
                            DeedDocumentService deeds,
-                           ObjectMapper json) {
+                           ObjectMapper json,
+                           PlatformTransactionManager transactions,
+                           DeedPreparations preparations,
+                           Optional<CdamDocumentUploads> remote) {
 
         this.deedPolls = deedPolls;
         this.referrals = referrals;
@@ -301,6 +316,9 @@ public class CaseEmailService {
         this.notes = notes;
         this.deeds = deeds;
         this.json = json;
+        this.transaction = new TransactionTemplate(transactions);
+        this.preparations = preparations;
+        this.remote = remote;
     }
 
     /**
@@ -535,12 +553,92 @@ public class CaseEmailService {
      * @throws IncompleteDataError if the case has no applicant email address
      * @throws uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError if the slots are not acceptable
      */
-    @Transactional
     public SendReceipt send(String deedPollId,
                            EmailTemplate template,
                            Map<String, Object> slots,
                            UUID requestId,
                            CurrentUser caller) {
+
+        if (remote.isEmpty() || FormsForCompletion.deedOf(template).isEmpty()) {
+            return transaction.execute(status -> sendLocal(deedPollId, template, slots, requestId, caller));
+        }
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("CDAM forms correspondence must not start inside a transaction");
+        }
+        FormsSnapshot before = transaction.execute(status -> inspectForms(deedPollId, template, slots, requestId));
+        if (before.receipt() != null) {
+            return before.receipt();
+        }
+        PreparedDeed prepared = preparations.prepare(deedPollId, requireDeed(template));
+        // Attached preparations need no payload (Task 4 releases it after verified read-back).
+        boolean attached = transaction.execute(status -> documents.findByIdAndDeedPollId(
+            prepared.documentId(), deedPollId).orElseThrow().getStorageState()
+            == uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState.Attached);
+        if (!attached) {
+            byte[] bytes = preparations.content(deedPollId, prepared.documentId());
+            remote.orElseThrow().continuePrepared(deedPollId, prepared.documentId(), new DocumentUpload(
+                deedPollId, null, new UploadedFile(bytes, prepared.originalName(), prepared.mimeType(), bytes.length),
+                prepared.originalName(), DocumentDirection.Outgoing));
+        }
+        return transaction.execute(status -> {
+            deedPolls.lockForDeedPreparation(deedPollId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+            FormsSnapshot after = inspectForms(deedPollId, template, slots, requestId);
+            if (after.receipt() != null) {
+                return after.receipt();
+            }
+            if (!before.equals(after)) {
+                throw new ConflictError("This case changed while its deed was being prepared. "
+                    + "Review the case before sending this email.");
+            }
+            preparations.requireCurrent(deedPollId, prepared);
+            Entitled entitled = entitle(deedPollId, template);
+            Composed composed = compose(entitled, template, slots, deed -> prepared.documentId());
+            return enqueue(deedPollId, template, requestId, caller, after.recipient(), composed);
+        });
+    }
+
+    /** Only immutable values cross the remote boundary; matching requests resolve before any storage work. */
+    private FormsSnapshot inspectForms(String caseId, EmailTemplate template, Map<String, Object> slots, UUID key) {
+        Entitled entitled = entitle(caseId, template);
+        String recipient = requireRecipient(entitled.deedPoll());
+        final Composed preview = compose(entitled, template, slots, deed -> "prepared-deed");
+        Optional<Notification> same = notifications.findByDeedPollIdAndRequestId(caseId, key);
+        if (same.isPresent()) {
+            Notification row = same.get();
+            String documentKey = template.documentKeys().iterator().next();
+            Composed actual = compose(entitled, template, slots,
+                deed -> Objects.toString(row.getPersonalisation().get(documentKey), ""));
+            if (!isTheSameSend(row, template, actual.cause().referralId(), recipient,
+                asJson(actual.personalisation()))) {
+                throw new ConflictError(REQUEST_ALREADY_USED);
+            }
+            return new FormsSnapshot(null, null, null, null, SendReceipt.alreadyOwed(row));
+        }
+        Optional<Notification> occupant = occupantOfTheGroupSlot(caseId, null, template);
+        if (occupant.isPresent()) {
+            if (!template.name().equals(occupant.get().getTemplate())) {
+                throw new ConflictError(alreadyRequested(null, occupant.get()));
+            }
+            return new FormsSnapshot(null, null, null, null, SendReceipt.alreadyOwed(occupant.get()));
+        }
+        if (!properties.isProvisioned(template)) {
+            throw new UpstreamFailureError("This email template is not configured for sending");
+        }
+        return new FormsSnapshot(recipient, asMap(asJson(preview.personalisation())),
+            DeedDocumentService.inputFingerprint(entitled.deedPoll(), requireDeed(template)),
+            entitled.deedPoll().getCcdCaseReference(), null);
+    }
+
+    private record FormsSnapshot(String recipient, Map<String, Object> personalisation, String fingerprint,
+                                 String caseReference, SendReceipt receipt) {
+        @Override
+        public String toString() {
+            return "FormsSnapshot[redacted]";
+        }
+    }
+
+    private SendReceipt sendLocal(String deedPollId, EmailTemplate template, Map<String, Object> slots,
+                                  UUID requestId, CurrentUser caller) {
 
         // Entitlement, then the address, then the payload -- the order the four answers are documented in, and the
         // reason this is two calls rather than one: a case with no address is told so before a caseworker is asked
@@ -550,6 +648,11 @@ public class CaseEmailService {
         // Composing a forms email generates and stores the case's deed, in this transaction -- see
         // deedDocumentId. Nothing happens here for a template that carries no document.
         Composed composed = compose(entitled, template, slots, deed -> deedDocumentId(deedPollId, template, deed));
+        return enqueue(deedPollId, template, requestId, caller, recipient, composed);
+    }
+
+    private SendReceipt enqueue(String deedPollId, EmailTemplate template, UUID requestId,
+                                CurrentUser caller, String recipient, Composed composed) {
         // Null for a case-driven email, which is the column's own null rather than a stand-in: such a row sits
         // outside the partial unique index, so nothing about it is keyed on a referral it does not have.
         UUID referralId = composed.cause().referralId();

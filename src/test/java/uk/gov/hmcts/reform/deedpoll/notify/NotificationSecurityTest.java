@@ -167,7 +167,8 @@ class NotificationSecurityTest {
             // the service rather than what reaches the disk. DeedDocumentServiceTest is where the storing itself
             // meets a database.
             deeds,
-            JSON);
+            JSON, mock(org.springframework.transaction.PlatformTransactionManager.class),
+            mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty());
     }
 
     @Test

@@ -362,7 +362,39 @@ Task 2 evidence — 2026-10-02:
 - Preserve 03a's handler/snapshot semantics. Keep staged bytes at this task boundary; Task 4 supplies the
   service-authorised read-back/checksum verification required before releasing them.
 - Update response descriptions only where the new refusal is observable; no new email route or success shape.
-- [ ] Both forms emails can enqueue attached CDAM deeds; remote calls hold no database transaction.
+- [x] Both forms emails can enqueue attached CDAM deeds; remote calls hold no database transaction.
+
+
+Task 3 evidence — 2026-10-02:
+
+- CDAM forms sends now prepare/claim/upload/attach outside database transactions, then lock the case and
+  document for revalidation and atomic enqueue/note. Filesystem and document-free sends retain their local
+  transaction behavior. Matching recorded requests and exclusion occupants resolve before storage work.
+- V27 records an immutable fingerprint from the existing DeedField mapping. Final validation checks material
+  deed inputs, recipient/personalisation, routing, binding, direction, metadata and Attached state. The real
+  V25→V26→V27 upgrade test preserves legacy rows and leaves unprovable old fingerprints null for investigation.
+- One counted upload claim per prepared identity across concurrent requests; only the owning live request
+  receives 03a's one fresh send after uncertainty. Crashed, failed and uncertain preparations remain parked,
+  including known Uploaded copies that may have expired; no new upload budget or cross-request attach replay.
+  The handler/snapshot semantics and Attached-wins recovery are unchanged. Staged bytes remain for Task 4.
+- Added 24 tests (21 Postgres/Spring forms scenarios and three container-free companions): both templates,
+  same-key receipt recovery/conflicting content, contradictory template/group, concurrent claim refusal,
+  no CCD link, outer transactions, changed material inputs/recipient/routing/direction, harmless audit edits,
+  failed final note with attachment reuse, upload refusal, first/second uncertain upload, attach refusal/loss,
+  handler commit before response loss, and crash/expired-copy parking. Existing filesystem rollback tests pass.
+- Final `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew cleanTest cleanIntegration build --no-watch-fs`: PASS,
+  1m 38s; test 3,505 and integration 14, zero failures/errors/skips; all build Checkstyle tasks passed.
+  Fresh test XML spans 14:09:29–14:10:42 UTC; integration 14:09:18–14:09:26. Earlier fixture errors (reply-to
+  configuration and slot name) and Checkstyle findings were corrected before the final passing run.
+  Log: `/tmp/03b-task3-full.log`.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew checkstyleCftlibTest cftlibTest --no-watch-fs`: PASS,
+  52s; fresh XML stamped 14:11:42 UTC, 9 tests, zero failures/errors/skips. This is local real CCD/CDAM
+  regression proof with the guarded dm-store stub, not the Task 7 correspondence journeys or live permissions.
+  Log: `/tmp/03b-task3-cftlib.log`. `checkDmStoreSpecDrift` and `git diff --check` also passed.
+- Caller documentation and observable 409/502 response descriptions updated. No production settings enabled.
+  Task 4 owns privileged read-back/payload release; Task 5 owns the drain transaction split. Tasks 4–8 remain
+  unimplemented. Existing unrelated RESUME and plans 03/03a edits are excluded from this task's commit.
+
 
 ### Task 4: Give the Notify document reader explicit service authority
 

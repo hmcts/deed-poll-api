@@ -82,6 +82,24 @@ public class CdamDocumentUploads implements RemoteDocumentUploads {
         return attach(claim);
     }
 
+    /** Continue the existing identity; failed or ambiguous claims are parked, never uploaded afresh. */
+    public void continuePrepared(String caseId, String documentId, DocumentUpload upload) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("A CDAM upload must not be called inside a transaction");
+        }
+        DocumentStorageStates.Claim claim = states.claimPrepared(caseId, documentId);
+        if (states.stateOf(claim) == DocumentStorageState.Attached) {
+            return;
+        }
+        try {
+            send(upload, claim);
+            attach(claim);
+        } catch (UpstreamFailureError failure) {
+            throw new UpstreamFailureError("This deed could not be confirmed in document storage. "
+                + "Its preparation has been kept; review its storage outcome before retrying.");
+        }
+    }
+
     private void send(DocumentUpload upload, DocumentStorageStates.Claim claim) {
         while (true) {
             StorageReceipt receipt;

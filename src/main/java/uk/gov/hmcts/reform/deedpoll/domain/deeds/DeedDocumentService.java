@@ -153,6 +153,15 @@ public class DeedDocumentService {
                                         Optional.of(type.getName()), Optional.of(DocumentDirection.Outgoing));
     }
 
+    /** Digest semantic deed fields with length delimiters; never regenerate a binary for comparison. */
+    public static String inputFingerprint(DeedPoll deedPoll, DeedTemplate template) {
+        StringBuilder values = new StringBuilder(template.name());
+        DeedField.resolve(template, deedPoll).forEach((field, value) ->
+            values.append('|').append(field.name()).append(':').append(value.length()).append(':').append(value));
+        return uk.gov.hmcts.reform.deedpoll.storage.StagedPayloads.checksum(
+            values.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
     /** Inspect both directions and both templates; never silently pick one of several legacy rows. */
     Optional<DeedPollSupportingDocument> existingDeed(String deedPollId) {
         var found = documentRows.findByDeedPollIdAndDocumentTypeNameInOrderByCreatedOnAsc(deedPollId, deedTypeNames());

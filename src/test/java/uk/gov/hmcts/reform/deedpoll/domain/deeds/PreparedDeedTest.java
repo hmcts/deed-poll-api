@@ -13,6 +13,19 @@ import static org.mockito.Mockito.verifyNoInteractions;
 
 class PreparedDeedTest {
     @Test
+    void fingerprintTracksRenderedFieldsButNotAuditChanges() {
+        var deedPoll = new uk.gov.hmcts.reform.deedpoll.entity.DeedPoll();
+        deedPoll.setNewForename("Original");
+        String original = DeedDocumentService.inputFingerprint(deedPoll, DeedTemplate.ADULT);
+        deedPoll.setModifiedBy("Another worker");
+        assertThat(DeedDocumentService.inputFingerprint(deedPoll, DeedTemplate.ADULT)).isEqualTo(original);
+        deedPoll.setNewForename("Changed");
+        assertThat(DeedDocumentService.inputFingerprint(deedPoll, DeedTemplate.ADULT)).isNotEqualTo(original);
+        assertThat(DeedDocumentService.inputFingerprint(deedPoll, DeedTemplate.MINOR))
+            .isNotEqualTo(DeedDocumentService.inputFingerprint(deedPoll, DeedTemplate.ADULT));
+    }
+
+    @Test
     void diagnosticTextContainsNoIdentifierNameChecksumOrBytes() {
         var prepared = new PreparedDeed("private-id", DeedTemplate.ADULT, "private-name.docx",
             "application/private", 123, "private-checksum");

@@ -101,6 +101,27 @@ public class DocumentStorageStates {
         return new Claim(parent.getId(), saved.getId(), owner);
     }
 
+    /** Claim a committed preparation once. A crash after this commit must never grant another upload. */
+    @Transactional
+    public Claim claimPrepared(String caseId, String documentId) {
+        DeedPoll parent = deedPolls.findById(caseId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+        DocumentOwner owner = DocumentOwner.of(parent);
+        DocumentStorageRule.requireCaseReady(owner.ccdCaseReference());
+        Claim claim = new Claim(caseId, documentId, owner);
+        DeedPollSupportingDocument row = lock(claim);
+        if (row.getStorageState() == DocumentStorageState.Attached) {
+            return claim;
+        }
+        if (row.getStorageState() != DocumentStorageState.UploadPending || row.getStorageUploadAttempts() != 0) {
+            throw new uk.gov.hmcts.reform.deedpoll.domain.ConflictError(
+                "This case already has a deed preparation that is not ready to use. "
+                    + "Its storage outcome must be resolved before this email can be sent.");
+        }
+        row.setStorageUploadAttempts((short) 1);
+        row.setStorageAttemptedOn(AuditClock.now());
+        return claim;
+    }
+
     /** The upload's answer was lost: it may have reached CDAM. */
     @Transactional
     public void uploadUncertain(Claim claim) {

@@ -94,7 +94,7 @@ public class DeedPreparations {
         }
         DeedPoll deedPoll = cases.findById(caseId).orElseThrow();
         if (deedPoll.getCcdCaseReference() == null) {
-            throw new ConflictError("The case must be linked to CCD before preparing its deed");
+            throw new ConflictError(uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageRule.CASE_NOT_READY);
         }
         GeneratedDeed generated = generator.generate(deedPoll, template);
         DeedPollSupportingDocument document = new DeedPollSupportingDocument();
@@ -110,10 +110,11 @@ public class DeedPreparations {
         String checksum = payloads.retain(document.getId(), generated.content());
         jdbc.update("""
             INSERT INTO deedpoll_deedpreparation
-                ("deedPollId", "documentId", template, "originalName", "mimeType", "sizeBytes", checksum)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                ("deedPollId", "documentId", template, "originalName", "mimeType", "sizeBytes", checksum,
+                 "inputFingerprint")
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, caseId, document.getId(), template.name(), document.getOriginalName(),
-            generated.mimeType(), generated.size(), checksum);
+            generated.mimeType(), generated.size(), checksum, DeedDocumentService.inputFingerprint(deedPoll, template));
         return new PreparedDeed(document.getId(), template, document.getOriginalName(),
             generated.mimeType(), generated.size(), checksum);
     }
@@ -131,6 +132,30 @@ public class DeedPreparations {
             throw unavailable();
         }
         return found.getFirst();
+    }
+
+    /** Called under the final case lock, before a prepared deed can be used in new correspondence. */
+    @Transactional
+    public void requireCurrent(String caseId, PreparedDeed prepared) {
+        var current = cases.findById(caseId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+        var document = documents.findByIdAndDeedPollIdForUpdate(prepared.documentId(), caseId)
+            .orElseThrow(DeedPreparations::unavailable);
+        deeds.requireCompatible(document, prepared.template());
+        if (document.getStorageState() != DocumentStorageState.Attached || document.getCdamDocumentId() == null
+            || !document.getCdamDocumentId().toString().equals(document.getStorageKey())) {
+            throw unavailable();
+        }
+        List<String> fingerprints = jdbc.query(
+            "SELECT \"inputFingerprint\" FROM deedpoll_deedpreparation WHERE \"deedPollId\" = ?",
+            (row, index) -> row.getString(1), caseId);
+        if (fingerprints.size() != 1
+            || !DeedDocumentService.inputFingerprint(current, prepared.template()).equals(fingerprints.getFirst())) {
+            throw new ConflictError("This case changed while its deed was being prepared. "
+                + "Review the case before sending this email.");
+        }
+        if (!prepared.equals(reserve(caseId, prepared.template()))) {
+            throw unavailable();
+        }
     }
 
     private static ConflictError unavailable() {

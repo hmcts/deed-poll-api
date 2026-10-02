@@ -64,6 +64,29 @@ class CdamDocumentUploadsTest {
         uploads = new CdamDocumentUploads(row, store, event);
     }
 
+    @Test
+    void preparedContinuationRejectsAnOuterTransactionBeforeClaiming() {
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            assertThatThrownBy(() -> uploads.continuePrepared("case", "document", upload()))
+                .isInstanceOf(IllegalStateException.class);
+            verifyNoInteractions(store, event);
+        } finally {
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
+    }
+
+    @Test
+    void alreadyAttachedPreparationNeedsNoRemoteWork() {
+        var states = mock(DocumentStorageStates.class);
+        var claim = new DocumentStorageStates.Claim("record-1", "document-1",
+            new DocumentOwner("record-1", Optional.of(CASE)));
+        when(states.claimPrepared("record-1", "document-1")).thenReturn(claim);
+        when(states.stateOf(claim)).thenReturn(Attached);
+        new CdamDocumentUploads(states, store, event).continuePrepared("record-1", "document-1", upload());
+        verifyNoInteractions(store, event);
+    }
+
     private static DocumentUpload upload() {
         return DocumentUpload.of("record-1", "type-1",
             UploadedFile.of("%PDF".getBytes(StandardCharsets.UTF_8), "birth.pdf", "application/pdf"),
