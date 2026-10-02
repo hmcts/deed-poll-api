@@ -510,7 +510,48 @@ Task 5 evidence — 2026-10-02:
 - Publish the future citizen adapter contract in `CDAM-CALLERS.md`. No citizen HTTP route until its actual
   draft authority exists. If it does exist by implementation time, add the adapter with full-context security
   and OpenAPI tests and record its explicit contract changes; do not modify the web repository in this task.
-- [ ] Durable staging, promotion and cleanup are tested; unfinished citizen/web activation is named explicitly.
+- [x] Durable staging, promotion and cleanup are tested; unfinished citizen/web activation is named explicitly.
+
+Task 6 evidence — 2026-10-02:
+
+- Added V29 owned-stage evidence and the separate `domain/staging` API. Both RECORD and DRAFT owner kinds
+  bind a stable owner ID plus authenticated subject, immutable file metadata/checksum, operation UUID and
+  original expiry. The adapter must supply verified authority; no citizen HTTP route or draft authentication
+  was invented. The existing caseworker upload route and its unlinked-case refusal are unchanged.
+- Admission shares V26's global payload quota lock with generated preparations, enforcing owner count/byte
+  quotas and the global retained-byte cap atomically. Citizen limits remain 10 files/7,340,032 bytes; records
+  retain 26,214,400 bytes with an explicit configured count. All production budgets/durations/schedule remain
+  unset; incomplete activation fails. Staging and CDAM remain off by default.
+- Promotion locks the stage against removal/expiry, checks the existing confirmed CCD binding without linking,
+  and commits one Incoming local document plus immutable target/type before remote calls. Existing upload claims
+  fence replicas and preserve the two-send uncertainty limit. Attempted/failed/uncertain promotions remain
+  protected and visible through Promoting plus the document state; they cannot restart an ambiguous upload.
+  Attached rows permit read-back retry. Checksum verification precedes atomic consumption/payload release.
+- Added independent opt-in scheduled cleanup with row/byte/time budgets, short database timeouts and
+  `FOR UPDATE SKIP LOCKED`. Only expired Staged rows can be discarded; Promoting rows and generated-deed
+  preparations remain retained and count toward capacity. Operation tombstones survive expiry/removal.
+  This does not dispose applications, remote documents, retained evidence or backups.
+- Added 25 tests: startup/policy/schedule wiring; restart/replica and fixed expiry; changed-content and owner/case
+  refusals; owner/global quota and idempotency races; concurrent promotion; expiry/removal coordination; bounded
+  cleanup; crashes before upload claim, at upload/attach/acceptance/read-back, and a deferred consumption commit
+  failure. Original bytes and one local document survive; retries never re-upload ambiguous/attached documents.
+  The database fixture uses real Postgres and the real upload state coordinator with mocked remote boundaries;
+  it does not establish citizen authority or deployed access.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew cleanTest cleanIntegration build --no-watch-fs`: PASS,
+  1m 43s. Fresh XML: 3,571 tests, zero failures/errors/skips (16:00:09–16:01:27 UTC); integration:
+  14 tests, zero failures/errors/skips (15:59:58–16:00:06 UTC). All build Checkstyle tasks passed.
+  Log: `/tmp/03b-task6-full.log`. Focused staging tests and main/test Checkstyle also passed before the
+  final expanded suite. Initial repository-lock return-type, Mockito restubbing and formatting findings were
+  corrected before this full run.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew checkstyleCftlibTest cftlibTest --no-watch-fs`: PASS,
+  49s; fresh XML timestamp 16:02:27 UTC, nine tests, zero failures/errors/skips.
+  Log: `/tmp/03b-task6-cftlib.log`. `./gradlew checkDmStoreSpecDrift --no-watch-fs`: PASS, 2s,
+  no spec differences; log `/tmp/03b-task6-drift.log`. `git diff --check` passed.
+- Published the trusted adapter contract, configuration and recovery limits in `CDAM-CALLERS.md`.
+  Citizen draft authority, web byte transfer, production configuration/ownership/capacity and external onboarding
+  remain release dependencies. Local cftlib regression is not Task 7's new staging/correspondence journeys.
+  Final Docker-free validation and consolidated operational handoff remain Task 8. Tasks 7–8 are deliberately
+  untouched. Pre-existing RESUME and plans 03/03a edits remain outside this task's commit.
 
 ### Task 7: Prove caller journeys against real local CCD/CDAM
 

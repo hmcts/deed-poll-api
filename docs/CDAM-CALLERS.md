@@ -4,7 +4,7 @@ Task 1 of [plan 03b](plans/deed-poll-api-03b-cdam-callers-and-staging.md), recor
 This is a source audit and the contract for Tasks 2–8, not a claim that those tasks are implemented.
 The plan's final decision record supersedes its historical proposed/open-status paragraphs.
 CDAM remains off by default. The audit below is historical; implementation updates at the end cover
-Tasks 2–5. Pre-case staging remains Task 6; the Task 5 update supersedes the baseline drain audit.
+Tasks 2–6. The implementation updates supersede the corresponding baseline audits.
 
 ## Inspected revision
 
@@ -405,3 +405,79 @@ finish its one remote call, so stop that worker before investigating. Elapsed ti
 No provider reconciliation, operator resend endpoint or exactly-once guarantee is introduced. An email
 that never actually left the process can therefore remain stopped. Investigation ownership and the
 production procedure still require release agreement; Tasks 6–8 and 03c remain outstanding.
+
+
+## Task 6 implementation — owned staging (2026-10-02)
+
+[OwnedStaging](../src/main/java/uk/gov/hmcts/reform/deedpoll/domain/staging/OwnedStaging.java) is an internal,
+non-transactional domain entry point with short committed database steps. There is no citizen HTTP adapter,
+staging controller or web byte-transfer implementation. The existing caseworker upload route still refuses
+an unlinked case. Neither staging nor promotion calls the linking operation.
+
+The future trusted adapter must authenticate the subject, resolve a durable owner, and authorise that owner's
+target case before calling. `StageOwner(kind, id, subject)` is the adapter's assertion, not a credential or
+request DTO. RECORD uses the existing local case ID and can promote only to that ID; DRAFT is a fixture seam
+until Fees & Pay supplies durable authenticated draft ownership and a verified draft-to-case mapping. Never
+construct this assertion from caller-supplied IDs alone, and never expose this service as an unrestricted
+system-reader route.
+
+- `admit(owner, operationUuid, file)` freezes the bytes, original filename, declared MIME type, size, SHA-256,
+  owner subject and original expiry. It returns a local stage ID, expiry and lifecycle state. Retrying the same
+  operation compares immutable content/metadata and returns the same receipt, including a Removed/Expired
+  tombstone; it never silently admits a replacement. Different content conflicts; another subject cannot reuse
+  the operation. The adapter must explain terminal receipts rather than rendering them as an available upload.
+- `promote(owner, stageId, caseId, typeId)` reserves an Incoming local document and binds case/type once. It
+  returns that document ID only after attachment and verified read-back, or from a previously Consumed stage.
+  An unlinked case leaves the stage unchanged. Another case/type conflicts. Promotion does not extend expiry;
+  a Staged item at its expiry boundary is refused even before cleanup runs.
+- `remove(owner, stageId)` discards only Staged payloads and preserves the immutable operation evidence.
+  Removed/Expired repeats are harmless. Promoting/Consumed items cannot be removed by this operation.
+- Wrong-owner or unknown resources raise `NotFoundError`; changed content, exhausted quotas, disabled staging,
+  expired promotion or incompatible lifecycle raise `ConflictError`. Remote/checksum failures retain evidence.
+  These are internal domain outcomes; the future citizen contract still needs its own reviewed HTTP mapping,
+  security/OpenAPI tests and user-visible retry/recovery handling. No new public statuses are specified here.
+
+[V29](../src/main/resources/db/migration/V29__owned_document_staging.sql) stores immutable owner/operation/file/
+expiry evidence and irreversible lifecycle transitions. Its binding survives deletion of the local document;
+there is no cascade that discards ambiguous recovery bytes. Payloads share V26's immutable table and quota
+advisory lock with generated preparations. Owner counts and byte budgets include every retained payload,
+including expired-but-not-yet-cleaned and unresolved promotions. Admission refuses at capacity. SHA-256 and
+actual byte length are checked by the database; allowed declared types, filename hygiene, non-empty bytes and
+owner-specific ceilings are checked before admission. This does not replace CDAM content inspection/scanning.
+
+Promotion commits one local identity before remote work. `claimPrepared` fences competing workers before any
+upload. A crash before that claim may resume; once an upload may have started, a retry cannot reset its budget.
+Promoting plus the existing document state is the visible recovery evidence: attempted UploadPending,
+UploadUncertain, Uploaded, AttachUncertain and Failed remain parked for investigation. Attached permits a
+read-back retry without re-upload. A missing/incorrect read or failed consumption commit keeps the bytes;
+verified consumption and payload deletion commit together. Read-back uses the existing internal service
+reader, with no change to staff download authority. No remote cleanup or permanent deletion is performed.
+
+[StagingPolicy](../src/main/java/uk/gov/hmcts/reform/deedpoll/domain/staging/StagingPolicy.java) validates activation.
+All settings below are under `deedpoll.documents.staging` and have environment bindings in application.yaml:
+
+| Property | Requirement |
+|---|---|
+| `enabled` | Defaults false; enabled staging also requires CDAM storage |
+| `max-total-bytes` | Positive shared cap for all staged bytes, including generated preparations |
+| `record-max-files`, `record-max-bytes`, `draft-max-bytes` | Explicit positive owner capacities; draft count is fixed at 10 |
+| `record-expiry`, `draft-expiry` | Explicit positive durations from original admission; no production duration assumed |
+| `cleanup-interval-ms` | Positive fixed delay between independent scheduled runs, also used as initial delay |
+| `cleanup-rows`, `cleanup-bytes`, `cleanup-time` | Positive per-run limits; byte budget must fit the largest permitted file (26,214,400 bytes) |
+
+[StagingConfiguration](../src/main/java/uk/gov/hmcts/reform/deedpoll/domain/staging/StagingConfiguration.java)
+enables Spring scheduling only with staging. Each cleanup run selects expired Staged rows with
+`FOR UPDATE SKIP LOCKED` and commits individual deletions. Locked/promoting rows are left alone. Row and byte
+budgets bound each run; elapsed monotonic time bounds new work and remaining-time SQL statement timeouts plus
+short lock timeouts bound database waits. A timeout rolls back the current item; earlier deletions remain
+committed and the next schedule can continue. Scheduler/connection acquisition overhead is not a hard real-time
+execution guarantee. Generated preparations are never selected, regardless of age. The email drain is unchanged
+and still traffic-triggered. Cleanup removes active payloads only, not case data, remote documents, tombstones
+or backup copies. Those retained records need a separate retention policy.
+
+Production limits/durations/schedule, capacity and backup checks, monitoring and responsible teams remain release
+gates under ADRs 0008–0009. Database changes are additive and staging defaults off. Before withdrawing support,
+disable new adapter admission and quiesce promotion workers; disabling the feature also stops its scheduler and
+therefore requires operational handling of retained expiry backlog. An old binary cannot recover staged rows.
+No staging adapter, citizen journey or deployed access is established by these domain tests. Task 7 still owns
+real local CCD/CDAM staging proof; Task 8 owns the final operational handoff and final combined validation.
