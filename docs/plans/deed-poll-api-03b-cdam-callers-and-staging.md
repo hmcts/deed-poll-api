@@ -566,7 +566,44 @@ Task 6 evidence — 2026-10-02:
   existing linking flow completes. Test with a domain owner fixture if the citizen adapter is still pending.
 - Keep wrong-case/staff-denial coverage separate from system-reader success. Record wall-clock timings and
   distinguish local fixture proof from deployed access. Compare fresh test XML, not a task exit code alone.
-- [ ] Deed/Notify/staging journeys pass with real local permission/attachment checks and no live calls.
+- [x] Deed/Notify/staging journeys pass with real local permission/attachment checks and no live calls.
+
+Task 7 evidence — 2026-10-02:
+
+- Added four ordered `CallerCdamCftlibTest` journeys beside the existing nine linking/staff-document tests.
+  They run real local CCD/CDAM and Postgres with the guarded dm-store fixture, local IDAM/S2S simulators
+  and a local WireMock Notify endpoint through the real Notify client. The existing non-loopback network
+  restriction and isolated cftlib source/classpath remain unchanged; no production configuration changed.
+- Both LOC020 and LOC022 use the normal linking sweep, then the production email coordinator directly to
+  defer the controller's immediate drain. Each deed is Attached, Outgoing, present in CCD's projection and
+  latest event snapshot, and agrees with its durable SHA-256 evidence. Temporary payloads are released.
+  Same-key and new-key repeated sends reuse the notification/document with exactly one binary upload each.
+- Replace the complete Spring API context before draining. Removing READ from the local case-type definition
+  produces an actual CDAM 403/404 under the system identity, no binary retrieval and no Notify request;
+  the real drain commits a pre-send attempt without send-start evidence. Restore the definition in finally,
+  make the pending retries due, then drain with an empty security context. Both sends deliver the exact original
+  bytes, filename, email-confirmation flag and 17-week fixture retention, despite later case-name edits.
+  Frozen outbox personalisation stays unchanged; no further binary upload or duplicate send occurs.
+- An explicitly trusted RECORD owner fixture admits bytes before linking. Promotion refuses with no store
+  traffic/local document while unlinked, including after the API context restarts; repeated admission preserves
+  identity and expiry. The normal sweep then links the case. Promotion attaches one Incoming local document,
+  verifies original bytes, consumes/releases the payload and reuses that document on retry. This proves the
+  domain seam, not citizen draft authentication, a citizen HTTP route or the web byte-transfer contract.
+- Existing separate tests still prove wrong-case refusal, staff CCD READ denial, unmapped-staff upstream 502,
+  ordinary document restart retrieval and soft deletion. Local system-profile grants prove no deployed access.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew checkstyleCftlibTest cftlibTest --no-watch-fs`: PASS,
+  38s; fresh XML timestamp 16:12:57 UTC: 13 tests, zero failures/errors/skips. Measured fixture operations:
+  adult prepare/attach/repeated sends 281ms; minor 209ms; restarted API drain 283ms; staged promotion/read-back/
+  retry 200ms. Log: `/tmp/03b-task7-cftlib.log`. The initial test-only dm-store inspection lacked its required
+  user-id header; this and Checkstyle findings were corrected before the passing run.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew cleanTest cleanIntegration build --no-watch-fs`: PASS,
+  1m 37s. Fresh test XML: 3,571 tests, zero failures/errors/skips (16:13:42–16:15:03 UTC); integration:
+  14 tests, zero failures/errors/skips (16:13:32–16:13:39 UTC). All build Checkstyle tasks passed.
+  Log: `/tmp/03b-task7-full.log`. `./gradlew checkDmStoreSpecDrift --no-watch-fs`: PASS, no spec differences;
+  log `/tmp/03b-task7-drift.log`. `git diff --check` passed.
+- Task 8 owns final Docker-free evidence and the operational handoff. Production settings, onboarding,
+  capacity/backup checks, citizen/web activation and filesystem migration remain release dependencies.
+  Pre-existing RESUME and plans 03/03a edits are excluded from this task's commit. Task 8 remains untouched.
 
 ### Task 8: Record operational limits and the handoff to 03c
 
