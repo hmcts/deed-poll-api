@@ -894,11 +894,9 @@ public class CaseEmailService {
      * second note either -- the applicant is owed one email, so the timeline says it once, and a caseworker
      * double-clicking would otherwise leave a case reading as though the applicant had been written to twice.
      *
-     * <p><strong>Here rather than in the drain, and the reason is a duplicate-email hazard rather than
-     * taste.</strong> {@link NotificationOutbox#drain(int)} runs a whole batch inside one
-     * {@code REQUIRES_NEW}, so a note write that failed there would roll back state changes for rows Notify had
-     * already accepted and the next drain would send them again. This transaction holds one send, is the
-     * caseworker's own, and the controller drains only after it commits.
+     * <p>The enqueue note belongs to this local transaction, so an email is never owed without its marker.
+     * {@link NotificationOutbox#drain(int)} runs after commit and records each delivery outcome separately;
+     * its terminal-failure note commits atomically with that outcome.
      *
      * <p><strong>Last of the three writes, after the outbox row and after the clock.</strong> Not for safety --
      * all three commit or roll back together -- but because both statements before it are

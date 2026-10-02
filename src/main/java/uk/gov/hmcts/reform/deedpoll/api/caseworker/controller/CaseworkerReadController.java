@@ -140,10 +140,9 @@ public class CaseworkerReadController {
      *
      * <p><strong>Drained here rather than inside {@link DeedPollService#findDeedPolls}, and after it has
      * returned.</strong> The list is a {@code readOnly = true} transaction and stays one -- a read-only list is
-     * worth keeping, and a drain does not need it widened, because {@code drain()} runs in its own transaction
-     * ({@code REQUIRES_NEW}). Calling it inside the read would suspend that transaction for the drain and then
-     * resume it, which works but puts a write inside a method whose whole contract is that it does not write; a
-     * failure in the drain also cannot spoil a response that has already been computed.
+     * worth keeping. The drain rejects an outer transaction, commits its local steps separately, and releases
+     * their locks before remote I/O. A failed drain commit can still fail this HTTP request; it cannot undo
+     * an earlier committed notification.
      * {@code CaseworkerEmailController} drains after its send for the related but stronger reason recorded there:
      * inside the enqueueing transaction the drain would not see the row it was meant to send.
      *

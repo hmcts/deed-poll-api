@@ -95,7 +95,7 @@ class EmailNotesTest {
     void pathologicalStoredNameStillComposesAnAcceptableNote() {
         // template is unbounded `text` in the database and the notes column is not. Nothing writes a name like
         // this today -- the value comes from the enum -- but "not reachable" is the wrong standard for a note
-        // written inside the drain's batch transaction, where a refusal costs rows Notify has accepted.
+        // that must commit atomically with its notification's terminal outcome.
         //
         // The whole composed note is asserted rather than only its length, so the truncation bound itself is
         // pinned: a note that merely fitted the column would also pass if the 200 became 1,900 or if the cut

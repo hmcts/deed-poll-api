@@ -454,7 +454,46 @@ Task 4 evidence — 2026-10-02:
   never unsets an earlier committed send. Terminal state plus its one note either commit together or neither does.
 - Test every document-free template too. Document the technical/uncertain recovery limitation and mixed-version
   rollout: old drain code must be stopped before new claims are processed, unless explicit compatibility is proved.
-- [ ] Concurrency and crash tests prove claim ownership, bounded retries and no blind resend of ambiguous sends.
+- [x] Concurrency and crash tests prove claim ownership, bounded retries and no blind resend of ambiguous sends.
+
+Task 5 evidence — 2026-10-02:
+
+- Added V28 (V27 already belongs to the deed input fingerprint), owner UUID and durable send-start timestamp.
+  Attempts supply the monotonic generation. Migration preserves Sent/Failed history and never-attempted Pending
+  rows; attempted legacy Pending rows are conservatively marked possibly-sent, then settled with their one note
+  by a new drain when due. The migration fixture exercises all these legacy states and retained failure evidence.
+- `NotificationOutbox` now rejects an outer transaction. `NotificationDeliveryTransactions` commits one claim,
+  send-start or outcome at a time through real Spring proxy boundaries. Immutable claim snapshots carry frozen
+  correspondence, with no managed entity/lazy relationship and a redacted string representation. Owner/generation,
+  Pending state and lease checks fence send-start and settlement; send-start authority is acquired only once.
+- Split Notify preparation from delivery. Documents are resolved before send-start, outside a transaction;
+  preparation refusals retain their classification. Only committed send-start permits the network call. Known
+  temporary refusals retain the existing eight-attempt cap/backoff; expired pre-send claims consume attempts.
+  Possibly-sent claims are never automatically reclaimed for delivery. Unknown outcomes become technical failures
+  requiring investigation, as accepted in ADR-0007. No sender still means no claims; the bounded drain remains
+  traffic-triggered. No email scheduler, provider reconciliation or operator resend endpoint was added.
+- Database tests cover racing send authority, stale workers before/after replacement, death after claim/file
+  preparation/send-start/acceptance, failed and lost send-start/outcome commits, real outcome rollback at commit,
+  attempt exhaustion, known-refusal retry and one atomic terminal note. A later file/note/database failure leaves
+  earlier sends committed. Every document-free template passes the real committed drain against local StubNotify;
+  existing correspondence tests still prove service-token reads and pre-send retry. Container-free orchestration
+  companions preserve coverage of ordering, ownership loss, no-sender behavior, immutable content and failures.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew cleanTest cleanIntegration build --no-watch-fs`: PASS,
+  1m 42s. Fresh test XML: 3,546 tests, zero failures/errors/skips, timestamps 14:47:37–14:48:52 UTC;
+  integration: 14 tests, zero failures/errors/skips, timestamps 14:47:25–14:47:34 UTC.
+  All build Checkstyle tasks passed. Log: `/tmp/03b-task5-full.log`.
+- `TESTCONTAINERS_RYUK_DISABLED=true ./gradlew checkstyleMain checkstyleTest checkstyleCftlibTest cftlibTest
+  --no-watch-fs`: PASS, 55s. Fresh cftlib XML timestamp 14:50:08 UTC: nine tests, zero failures/errors/skips.
+  This also checks the final source-comment corrections. Log: `/tmp/03b-task5-cftlib.log`.
+  `./gradlew checkDmStoreSpecDrift --no-watch-fs`: PASS, 3s; log `/tmp/03b-task5-drift.log`.
+  `git diff --check` passed. Earlier migration-number collision, simulated-death mock restubbing, Checkstyle
+  findings and V27-only migration-history assertion were corrected before the final passing validation.
+- Updated `CDAM-CALLERS.md`, `CDAM-RECOVERY.md`, repository guidance and affected transaction comments.
+  Old instances must be removed from traffic, drained and stopped before V28/new workers; mixed-version workers
+  and rollback to an old draining binary on this ledger are unsupported. Investigation ownership remains a
+  release gate. Local cftlib regression is not Task 7's full correspondence/staging proof or deployed permissions.
+  Final Docker-free validation remains Task 8. No production switch changed. Unrelated RESUME and plans 03/03a
+  edits remain outside this task's commit. Tasks 6–8 are deliberately unimplemented in this iteration.
 
 ### Task 6: Implement owned pre-case staging, promotion and expiry
 

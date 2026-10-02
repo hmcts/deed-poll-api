@@ -57,3 +57,17 @@ profiles. The check validates configuration, not live permissions or connectivit
 filesystem default is a development convenience and cannot make ephemeral pod storage durable. Do not treat
 03a as a completed production storage cutover. Switching back to filesystem also makes existing CDAM rows
 unreadable through this API. Keep the database and both stores intact while a migration/rollback is planned.
+
+## Notification delivery uncertainty (03b Task 5)
+
+The drain commits each claim, send-start and outcome separately. An expired claim with no send-start
+can retry within the eight-attempt cap. An expired claim with send-start stops as `Failed`/`TECHNICAL`,
+with one case note for investigation; it is not automatically delivered again. A send-start commit can
+succeed even if the process dies before sending, so a stopped email may never have left the API.
+
+Preserve the notification row, owner/generation, send-start and provider receipt evidence. Do not clear
+markers, reset attempts or create a replacement to bypass uncertainty. There is no operator resend or
+provider-reconciliation endpoint in this release. See the [caller contract's upgrade, rollback and
+investigation procedure](CDAM-CALLERS.md#upgrade-rollback-and-investigation-boundary) and ADR-0007 linked there.
+Old draining instances must be fully stopped before V28/new workers; mixed versions and rolling back to
+old workers on this ledger are unsupported. Operational investigation ownership remains a release gate.

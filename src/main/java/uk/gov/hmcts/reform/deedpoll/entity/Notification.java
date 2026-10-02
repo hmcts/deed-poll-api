@@ -164,6 +164,14 @@ public class Notification {
     @Column(name = "nextAttemptAt", nullable = false)
     private LocalDateTime nextAttemptAt;
 
+    /** Unique authority for the current attempt; never exposed to clients. */
+    @Column(name = "claimOwner")
+    private UUID claimOwner;
+
+    /** Durable evidence that delivery may have started; expiry is never permission to resend it. */
+    @Column(name = "sendStartedAt")
+    private LocalDateTime sendStartedAt;
+
     /** What Notify answered with, so a delivery query is possible later without a migration. */
     @Column(name = "providerNotificationId")
     private UUID providerNotificationId;

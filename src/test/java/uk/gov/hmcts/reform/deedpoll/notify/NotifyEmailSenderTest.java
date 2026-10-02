@@ -6,6 +6,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
 
@@ -51,6 +53,22 @@ class NotifyEmailSenderTest {
     @AfterEach
     void stopStub() {
         notify.stop();
+    }
+
+    static java.util.stream.Stream<EmailTemplate> documentFreeTemplates() {
+        return java.util.Arrays.stream(EmailTemplate.values()).filter(t -> t.documentKeys().isEmpty());
+    }
+
+    @ParameterizedTest
+    @MethodSource("documentFreeTemplates")
+    void everyDocumentFreeTemplatePreparesWithoutSendingAndDeliversFrozenContent(EmailTemplate template) {
+        Notification row = notification();
+        row.setTemplate(template.name());
+        PreparedNotification prepared = sender.prepare(row);
+        assertThat(prepared).isInstanceOf(PreparedNotification.Ready.class);
+        assertThat(notify.emailRequests()).isEmpty();
+        assertThat(((PreparedNotification.Ready) prepared).delivery().send()).isInstanceOf(SendOutcome.Sent.class);
+        assertThat(notify.emailRequests()).hasSize(1);
     }
 
     @Test

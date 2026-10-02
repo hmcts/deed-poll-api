@@ -4,7 +4,7 @@ Task 1 of [plan 03b](plans/deed-poll-api-03b-cdam-callers-and-staging.md), recor
 This is a source audit and the contract for Tasks 2–8, not a claim that those tasks are implemented.
 The plan's final decision record supersedes its historical proposed/open-status paragraphs.
 CDAM remains off by default. The audit below is historical; implementation updates at the end cover
-Tasks 2–4. Pre-case staging and the drain transaction split remain Tasks 6 and 5.
+Tasks 2–5. Pre-case staging remains Task 6; the Task 5 update supersedes the baseline drain audit.
 
 ## Inspected revision
 
@@ -347,3 +347,61 @@ and immutable evidence survive. Failed or ambiguous uploads still retain their r
 Task 5 still owns the whole-batch drain transaction and durable send ownership/crash handling. The current
 reader does not claim to solve that existing limitation. Tasks 6–8 and 03c remain outstanding, and neither
 CDAM nor staging has been enabled for deployment.
+
+## Task 5 implementation update — 2026-10-02
+
+This update supersedes the baseline whole-batch transaction description above.
+[NotificationOutbox](../src/main/java/uk/gov/hmcts/reform/deedpoll/notify/NotificationOutbox.java)
+rejects an active caller transaction and orchestrates up to five candidates, claiming only the next row
+when ready to process it. No sender or a nonpositive limit leaves every row untouched. The two HTTP
+callers remain traffic-triggered; no email scheduler has been added.
+
+[NotificationDeliveryTransactions](../src/main/java/uk/gov/hmcts/reform/deedpoll/notify/NotificationDeliveryTransactions.java)
+commits each claim, send-start and outcome through a separate Spring proxy invocation. Its row locks
+cover only database work. The claim snapshot freezes the recipient, template and JSON values; it holds
+no managed entity or lazy association and its string representation is redacted. A random claim owner
+plus the monotonically increasing attempt number identifies one generation. Start and settlement both
+lock and check Pending state, owner, generation and unexpired lease. Send-start can succeed only once.
+
+[NotifyEmailSender.prepare](../src/main/java/uk/gov/hmcts/reform/deedpoll/notify/NotifyEmailSender.java)
+checks provisioning and reads documents before send-start. All CDAM and Notify I/O occurs outside the
+claim/outcome transactions. A preparation refusal retains its existing classification and never records
+send-start. Unexpected preparation exceptions are retryable, since no email has been attempted. Only a
+committed send-start authorizes calling the prepared delivery. A failed or lost commit answer stops the
+drain without proceeding to the next notification; a lost send-start commit answer sends nothing.
+
+The five-minute lease, eight-attempt cap and existing backoff remain. A known temporary refusal clears
+current ownership/send-start and schedules backoff. An expired pre-send claim consumes its attempt;
+at the cap it fails with one note. An expired claim with send-start is settled as Failed/TECHNICAL with
+one note and retained owner/send-start evidence, without another delivery. Unknown runtime send failures
+are likewise terminal and report fixed investigation prose. A terminal outcome and its note commit
+together. A later file, note or database failure cannot undo an earlier committed notification.
+
+[V28](../src/main/resources/db/migration/V28__notification_delivery_claims.sql) preserves Sent/Failed
+history and leaves never-attempted Pending rows eligible. Every legacy Pending row with attempts is
+marked as possibly sent, including rows carrying an old temporary verdict: that verdict could precede
+a later crashed attempt. A new drain settles these conservatively when due, atomically with the note.
+There is no automatic migration resend and no migration-authored note separate from settlement.
+
+### Upgrade, rollback and investigation boundary
+
+Before applying V28 or starting any new drain, remove traffic from all old API instances, let in-flight
+requests finish, and stop/scale every old instance to zero. The drain runs on email-send and case-list
+requests, so merely disabling a scheduler cannot quiesce it. Verify no old process or in-flight drain
+remains, apply the migration, then start only the new version and restore traffic. Mixed old/new workers
+are unsupported: old code ignores the new fields and could resend a possibly-sent row. No environment
+has been changed by this task; deployment evidence and operational ownership remain release gates.
+
+Do not roll back to an old draining binary with this ledger. Quiesce the new workers first and retain
+the database/evidence; use a forward fix or a separately reviewed reconciliation/migration before any
+old version resumes traffic. Switching document storage to filesystem does not restore CDAM documents.
+
+Under [ADR-0007](../../deed-poll-documentation/decisions/0007-uncertain-email-delivery-requires-investigation.md),
+a possibly-sent email must be investigated before resend. Inspect the Email tab's verdict/reason and
+restricted notification identity, attempts, owner, send-start and provider receipt where recorded. Preserve
+that evidence; do not clear the marker, reset attempts, delete the row or enqueue a replacement to unstick
+it. Notify's reference is correlation, not deduplication. A paused process granted send authority may still
+finish its one remote call, so stop that worker before investigating. Elapsed time alone proves nothing.
+No provider reconciliation, operator resend endpoint or exactly-once guarantee is introduced. An email
+that never actually left the process can therefore remain stopped. Investigation ownership and the
+production procedure still require release agreement; Tasks 6–8 and 03c remain outstanding.

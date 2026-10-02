@@ -143,9 +143,8 @@ class DocumentUploadsTest {
             .thenReturn(new DocumentDownload(deed, failingStream()));
 
         // LocalFilesystemDocumentStore throws UncheckedIOException, and CDAM will throw something of its own. Any
-        // of them must become a verdict rather than propagate: the drain runs a whole batch in one transaction, and
-        // an exception here would be recorded as TECHNICAL anyway -- terminal, and with a message naming an
-        // exception class instead of a document.
+        // of them must become a retryable pre-send verdict that names the document. The drain has not yet
+        // committed send-start, so another read cannot duplicate an email.
         assertThat(refusal(uploads.resolve(row(), EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).failure())
             .isEqualTo(NotificationFailure.TEMPORARY);
     }

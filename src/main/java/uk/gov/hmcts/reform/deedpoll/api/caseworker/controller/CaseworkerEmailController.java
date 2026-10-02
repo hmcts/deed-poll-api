@@ -77,11 +77,9 @@ public class CaseworkerEmailController {
     /**
      * Injected so a send can drain immediately after it has committed.
      *
-     * <p>Here rather than inside {@link CaseEmailService#send}, and that is not tidiness: the drain runs in its
-     * own transaction ({@code REQUIRES_NEW}), so calling it inside the enqueueing transaction would suspend that
-     * transaction and the drain would not see the row it was meant to send -- the email would then wait for
-     * whichever later request happened to drain. Called from here, the enqueue has committed and the send the
-     * caseworker just made is the row the drain picks up.
+     * <p>The drain rejects an active caller transaction and commits each claim and outcome separately.
+     * Called from here, the enqueue has committed, so the new row is visible and no enqueue locks remain
+     * held during document retrieval or the Notify call.
      */
     private final NotificationOutbox outbox;
 

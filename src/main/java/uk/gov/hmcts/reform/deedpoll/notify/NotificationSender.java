@@ -30,4 +30,9 @@ public interface NotificationSender {
      * @return what happened, in the vocabulary the outbox settles rows with
      */
     SendOutcome send(Notification notification);
+
+    /** Send-only implementations have no preparation; document senders override this boundary. */
+    default PreparedNotification prepare(Notification notification) {
+        return new PreparedNotification.Ready(() -> send(notification));
+    }
 }
