@@ -358,9 +358,9 @@ is the configured `CCD_SYSTEM_ROLE`, mapped onto the `DEED_POLL_SYSTEM` access p
 
 ## CCD
 
-Each deed-poll record may be linked to one decentralised CCD case (plan 02): data-store holds a two-field
-projection, the relational record stays authoritative. The linking operation, `CcdLinkingService.link`, is called
-by `CcdLinkingSweep` after every `GET /caseworker/cases` has computed its answer — at most
+Each deed-poll record may be linked to one decentralised CCD case (plan 02): data-store holds the
+record ID, display reference and attached supporting-document references; the relational record stays authoritative.
+The linking operation, `CcdLinkingService.link`, is called by `CcdLinkingSweep` after every `GET /caseworker/cases` has computed its answer — at most
 `CCD_LINKING_SWEEP_MAX_RECORDS` of the oldest unlinked records, then at most `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS`
 outstanding attempts, stopping at the first call CCD refuses or does not answer or once `CCD_LINKING_SWEEP_MAX_DURATION` has passed, and never changing the response
 (plan 02b). **It is off by default** (`CCD_LINKING_SWEEP_ENABLED=false`), so in every deployed environment nothing
@@ -666,7 +666,7 @@ There are two Kubernetes probes and they deliberately do not check the same thin
 ```
   {"status":"UP","components":{
     "db":{"status":"UP"},
-    "deedPollSchema":{"status":"UP","details":{"tables":11}},
+    "deedPollSchema":{"status":"UP","details":{"tables":14}},
     "readinessState":{"status":"UP"}}}
 ```
 

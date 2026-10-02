@@ -15,6 +15,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
@@ -202,7 +203,7 @@ public class DocumentService {
     @Transactional
     public void removeDocument(String deedPollId, String id) {
         DeedPollSupportingDocument document = findDocument(deedPollId, id);
-        String storageKey = locator(document);
+        String storageKey = cleanupLocator(document);
         RemoteDocumentUploads remote = remoteUploads.getIfAvailable();
         Runnable removal = remote == null ? () -> {
         } : remote.removal(document);
@@ -394,14 +395,23 @@ public class DocumentService {
         });
     }
 
+    /** Only clean up bytes belonging to the selected backend, including remote uploads that never attached. */
+    private String cleanupLocator(DeedPollSupportingDocument document) {
+        if (document.getStorageState() == DocumentStorageState.Local) {
+            return store.serves(DocumentStorageState.Local) ? document.getStorageKey() : null;
+        }
+        return store.serves(DocumentStorageState.Attached) && document.getCdamDocumentId() != null
+            ? document.getCdamDocumentId().toString() : null;
+    }
+
     /**
-     * What the store is given to open or delete a row's bytes by: the CDAM document id when CDAM holds them, and the
+     * What the store is given to open a row's bytes by: the CDAM document id when CDAM holds them, and the
      * storage key otherwise.
      *
      * <p>Never the storage key for a CDAM row, although an {@code Attached} row carries its CDAM id there too: the
      * key is patchable through {@link #updateDocument}, and a CDAM id must never be taken from a request (plan 03a,
-     * decision 7). The id column is written by the CDAM store alone. A row that never reached CDAM has no id, so a
-     * delete of one that was only claimed asks the store to remove nothing.
+     * decision 7). The id column is written by the CDAM store alone. Readability and backend ownership are checked
+     * before this locator is used.
      */
     private static String locator(DeedPollSupportingDocument document) {
         return document.getCdamDocumentId() != null

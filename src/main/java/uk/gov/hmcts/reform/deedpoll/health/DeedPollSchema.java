@@ -33,9 +33,8 @@ public class DeedPollSchema {
     /**
      * Every table the deed-poll domain reads or writes: the six named by the {@code @@map}s in
      * {@code src/test/resources/reference/deed-poll.prisma}, plus the two saved-query tables,
-     * {@code deedpoll_referral}, {@code deedpoll_notification} and {@code deedpoll_ccdcreationattempt}, which have
-     * no reference model because saved queries, referrals, the notification outbox and CCD linking are new
-     * behaviour rather than a port.
+     * referrals, notifications, CCD creation attempts, deed preparations, retained payloads and owned stages.
+     * These have no reference model because they are new behaviour rather than a port.
      *
      * <p>Listed explicitly rather than derived, and the reference's reason for that survives the port even
      * though its own reason does not: Prisma has no runtime schema introspection, whereas Hibernate does know
@@ -47,8 +46,8 @@ public class DeedPollSchema {
      * <p>So <strong>this has to be updated by hand when a model is added.</strong> A missing entry is a silent
      * gap: readiness would pass on a database lacking the new table. {@code DeedPollSchemaHealthTest} guards
      * against that by checking the ported names against the reference schema file itself, exactly as
-     * {@code health.test.ts} does -- and by checking the rest against the migrations, since a table with no
-     * reference model has nothing in the reference to be checked against.
+     * {@code health.test.ts} does -- and by comparing the complete list against the migrated domain tables,
+     * since a table with no reference model has nothing in the reference to be checked against.
      */
     public static final List<String> DEED_POLL_TABLES = List.of(
         "deedpoll_deedpoll",
@@ -63,7 +62,8 @@ public class DeedPollSchema {
         "deedpoll_notification",
         "deedpoll_ccdcreationattempt",
         "deedpoll_deedpreparation",
-        "deedpoll_stagedpayload"
+        "deedpoll_stagedpayload",
+        "deedpoll_ownedstage"
     );
 
     /**
