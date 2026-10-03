@@ -7,7 +7,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
 
 import java.time.Duration;
 
-/** No production capacity, expiry or schedule is inferred. */
+/** Draft file/count ceilings preserve the accepted citizen contract; capacity, expiry and schedule are explicit. */
 @ConfigurationProperties("deedpoll.documents.staging")
 public record StagingPolicy(boolean enabled, long maxTotalBytes, int recordMaxFiles,
                             long recordMaxBytes, long draftMaxBytes, Duration recordExpiry,

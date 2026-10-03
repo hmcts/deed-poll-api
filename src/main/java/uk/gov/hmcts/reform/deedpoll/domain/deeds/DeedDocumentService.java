@@ -15,11 +15,13 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
+import uk.gov.hmcts.reform.deedpoll.storage.StagedPayloads;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.Set;
@@ -158,8 +160,8 @@ public class DeedDocumentService {
         StringBuilder values = new StringBuilder(template.name());
         DeedField.resolve(template, deedPoll).forEach((field, value) ->
             values.append('|').append(field.name()).append(':').append(value.length()).append(':').append(value));
-        return uk.gov.hmcts.reform.deedpoll.storage.StagedPayloads.checksum(
-            values.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return StagedPayloads.checksum(
+            values.toString().getBytes(StandardCharsets.UTF_8));
     }
 
     /** Inspect both directions and both templates; never silently pick one of several legacy rows. */

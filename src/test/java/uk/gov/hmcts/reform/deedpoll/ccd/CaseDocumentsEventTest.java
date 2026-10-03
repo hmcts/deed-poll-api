@@ -53,6 +53,26 @@ class CaseDocumentsEventTest {
     }
 
     @Test
+    void missingStartResponseOrTokenNeverSubmits() {
+        for (StartEventResponse response : new StartEventResponse[] {
+            null, StartEventResponse.builder().build(), StartEventResponse.builder().token(" ").build()
+        }) {
+            when(ccd.startEvent(anyString(), anyString(), anyString(), anyString())).thenReturn(response);
+            assertThatThrownBy(() -> event.submit("123", DOCUMENTS))
+                .isInstanceOf(CaseDocumentsEvent.NotSubmitted.class);
+        }
+        verify(ccd, never()).createEvent(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    void localPayloadFailureNeverSubmits() {
+        when(ccd.startEvent(anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(StartEventResponse.builder().token("event-token").build());
+        assertThatThrownBy(() -> event.submit("123", null)).isInstanceOf(CaseDocumentsEvent.NotSubmitted.class);
+        verify(ccd, never()).createEvent(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
     @DisplayName("the event sets the whole collection, and only the document being attached carries its hash")
     @SuppressWarnings("unchecked")
     void content() {

@@ -181,8 +181,8 @@ public class DocumentUploads {
             //
             // Ownership/readiness refusals and remote failures happen outside transactional callbacks,
             // and the drain has no outer transaction; only claims, send-start and outcomes commit locally.
-            log.warn("Notification {} for case {} could not read its {} document {}",
-                     notification.getId(), notification.getDeedPollId(), key, id);
+            log.warn("Notification {} for case {} could not read its {} document {}: {}",
+                notification.getId(), notification.getDeedPollId(), key, id, unreadable.getClass().getSimpleName());
             return unavailable("the " + key + " document could not be read");
         }
 
@@ -207,8 +207,8 @@ public class DocumentUploads {
             // The client refuses a document it will not carry, and the only documented reason is the size this
             // method has already measured -- so reaching here means the client refuses it for a reason nobody
             // enumerated. Technical, which is what NotificationFailure.classify answers for it anyway.
-            log.error("Notify would not prepare the {} document of notification {} for case {}",
-                      key, notification.getId(), notification.getDeedPollId(), notAccepted);
+            log.error("Notify would not prepare the {} document of notification {} for case {} (status {})",
+                      key, notification.getId(), notification.getDeedPollId(), notAccepted.getHttpResult());
             return refused("GOV.UK Notify would not accept the " + key + " document (status "
                 + notAccepted.getHttpResult() + ")");
         }

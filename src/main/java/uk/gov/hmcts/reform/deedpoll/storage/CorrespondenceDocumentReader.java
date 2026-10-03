@@ -31,7 +31,8 @@ public class CorrespondenceDocumentReader {
         if (!stored.getDeedPollId().equals(snapshot.getDeedPollId())
             || !stored.getTemplate().equals(snapshot.getTemplate())
             || !stored.getPersonalisation().equals(snapshot.getPersonalisation())
-            || !EmailTemplate.valueOf(stored.getTemplate()).documentKeys().contains(key)
+            || !EmailTemplate.byName(stored.getTemplate()).map(template -> template.documentKeys().contains(key))
+                .orElse(false)
             || !(stored.getPersonalisation().get(key) instanceof String id) || id.isBlank()) {
             throw new NotFoundError("Correspondence document reference is unavailable");
         }

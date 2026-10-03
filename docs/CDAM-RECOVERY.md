@@ -96,11 +96,14 @@ adapter must establish that authority before calling `OwnedStaging`; no citizen 
 one case/type/document, requires its existing CCD link and never links it. It returns the local document ID
 only after verified attachment. Removal/expiry discard only Staged payloads and retain operation tombstones.
 Retries retain original expiry; an expired receipt does not grant a fresh admission under the same operation.
+Admission and promotion lock the case before quota/stage locks. Case deletion refuses retained RECORD uploads
+and retained draft promotions targeting that case; remove unpromoted uploads or resolve storage first.
 
 Only expired Staged rows are selected by the independent bounded cleanup scheduler. Promoting rows and all
 generated preparations remain retained, including failed or uncertain storage work. Review stage and document
 states together. Cleanup uses row/byte/time budgets and skips locked rows; a failed current item rolls back
-without undoing earlier items. Database timeouts bound waits, not all scheduler/connection overhead. Cleanup
+without undoing earlier items. A statement/lock timeout returns the committed row count and logs bounded progress.
+Other database errors still propagate. Database timeouts bound waits, not all scheduler/connection overhead. Cleanup
 is not remote deletion, application disposal, tombstone retention or backup erasure.
 
 ## Quiesce, upgrade and rollback procedure
@@ -213,3 +216,17 @@ restart, removal, expiry and one-time promotion together. The application flow o
 and CCD linking; stage admission never makes an unpaid draft queue-eligible. No citizen activation until that
 real adapter and web byte journey pass end to end. Domain fixtures and the local cftlib RECORD owner do not
 prove citizen authentication, browser transfer or deployed access.
+
+### External review safeguards
+
+Case deletion refuses while a generated deed still has retained payload bytes. V30 also blocks
+deleting its preparation through a database cascade, so recovery bytes cannot lose their case or
+be silently discarded. Resolve storage and verify read-back before ordinary case deletion; coordinated
+disposal remains separate work. Already orphaned payloads, if any, need investigation rather than
+automatic deletion because their recovery provenance is missing.
+
+A late Notify outcome rejected by the lease fence emits an error with the notification ID and attempt.
+For provider acceptance it also records the provider notification ID and template version. Use these
+to investigate with Notify; the worker does not settle the row or authorize a resend. Rendered subject,
+body, recipient and request ID are excluded from the log. The correspondence rendering is not recovered
+into the row by this diagnostic; provider reconciliation remains separate work.

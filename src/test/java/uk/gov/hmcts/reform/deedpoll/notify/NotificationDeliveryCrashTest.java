@@ -95,6 +95,41 @@ class NotificationDeliveryCrashTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    void claimAuditTimeUsesTheClaimInstantRatherThanTheBatchCutoff() {
+        Notification row = owed();
+        var cutoff = AuditClock.now().minusSeconds(5);
+        var before = AuditClock.now();
+        assertThat(transactions.claim(row.getId(), cutoff)).isPresent();
+        assertThat(stored(row).getModifiedOn()).isAfterOrEqualTo(before).isAfter(cutoff);
+    }
+
+    @Test
+    void serverErrorRetainsSendEvidenceAndCannotBeDrainedAgain() {
+        Notification row = owed();
+        StubNotify stub = new StubNotify();
+        stub.start();
+        try {
+            stub.stubSendStatus(500);
+            var reader = org.mockito.Mockito.mock(
+                uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader.class);
+            var realSender = new NotifyEmailSender(stub.client(), stub.properties(),
+                new DocumentUploads(reader, stub.properties()));
+            var realOutbox = new NotificationOutbox(transactions, Optional.of(realSender));
+            assertThat(realOutbox.drain()).isZero();
+            assertThat(stored(row).getState()).isEqualTo(NotificationState.Failed);
+            assertThat(stored(row).getFailureVerdict()).isEqualTo(NotificationFailureVerdict.TECHNICAL);
+            assertThat(stored(row).getSendStartedAt()).isNotNull();
+            assertThat(stored(row).getClaimOwner()).isNotNull();
+            expire(row);
+            assertThat(realOutbox.drain()).isZero();
+            assertThat(stub.emailRequests()).hasSize(1);
+            assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(row.getDeedPollId())).hasSize(1);
+        } finally {
+            stub.stop();
+        }
+    }
+
+    @Test
     void knownTemporaryRefusalClearsSendAuthorityAndUsesBackoffBeforeAnotherAttempt() {
         final Notification row = owed();
         NotificationClaim first = claim(row);
@@ -143,6 +178,39 @@ class NotificationDeliveryCrashTest extends AbstractPostgresContainerTest {
         assertThat(transactions.startSend(claim)).isFalse();
         assertThat(transactions.complete(claim, SendOutcome.sent(null))).isFalse();
         assertThat(stored(row).getState()).isEqualTo(NotificationState.Pending);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void lateProviderAcceptanceIsLoggedWithoutSettlingOrExposingCorrespondence(boolean alreadyReclaimed) {
+        Notification row = owed();
+        NotificationClaim claim = claim(row);
+        assertThat(transactions.startSend(claim)).isTrue();
+        expire(row);
+        if (alreadyReclaimed) {
+            assertThat(transactions.claim(row.getId(), AuditClock.now())).isEmpty();
+        }
+        UUID providerId = UUID.randomUUID();
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(
+            NotificationDeliveryTransactions.class);
+        var logs = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            assertThat(transactions.complete(claim,
+                SendOutcome.sent(providerId, 17, "Private subject", "Private body"))).isFalse();
+            assertThat(logs.list).singleElement().satisfies(event -> assertThat(event.getFormattedMessage())
+                .contains(row.getId().toString(), "attempt 1", providerId.toString(), "template version 17",
+                    "investigate before any resend")
+                .doesNotContain("Private subject", "Private body", row.getRecipient(), row.getRequestId().toString()));
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+        assertThat(transactions.claim(row.getId(), AuditClock.now())).isEmpty();
+        assertThat(stored(row).getState()).isEqualTo(NotificationState.Failed);
+        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(row.getDeedPollId())).hasSize(1);
+        verifyNoInteractions(sender);
     }
 
     @Test

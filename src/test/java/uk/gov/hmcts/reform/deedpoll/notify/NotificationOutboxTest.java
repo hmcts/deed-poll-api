@@ -177,14 +177,14 @@ class NotificationOutboxTest {
         void retryableFailureThatRanOutIsFailed() {
             Notification row = claimed(NotificationBackoff.MAX_ATTEMPTS);
 
-            assertThat(outbox.settle(row, SendOutcome.failed(NotificationFailure.TEMPORARY, "500"), NOW))
+            assertThat(outbox.settle(row, SendOutcome.failed(NotificationFailure.TEMPORARY, "429"), NOW))
                 .isFalse();
 
             assertThat(row.getState()).isEqualTo(NotificationState.Failed);
             // The three ways to reach Failed are deliberately distinguishable on the row: a caseworker
             // reading the Email tab needs to tell "Notify refused this" from "we stopped asking".
             assertThat(row.getFailureReason())
-                .isEqualTo("Gave up after " + NotificationBackoff.MAX_ATTEMPTS + " attempts: TEMPORARY: 500");
+                .isEqualTo("Gave up after " + NotificationBackoff.MAX_ATTEMPTS + " attempts: TEMPORARY: 429");
             assertThat(row.getFailureVerdict()).isEqualTo(NotificationFailureVerdict.TEMPORARY);
         }
     }
@@ -218,7 +218,7 @@ class NotificationOutboxTest {
             // looked recoverable, then was not, and nothing is coming back to it.
             Notification row = claimed(NotificationBackoff.MAX_ATTEMPTS);
 
-            outbox.settle(row, SendOutcome.failed(NotificationFailure.TEMPORARY, "500"), NOW);
+            outbox.settle(row, SendOutcome.failed(NotificationFailure.TEMPORARY, "429"), NOW);
 
             assertThat(row.getState()).isEqualTo(NotificationState.Failed);
             assertThat(row.getFailureVerdict()).isEqualTo(NotificationFailureVerdict.TEMPORARY);

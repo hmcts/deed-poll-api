@@ -41,6 +41,54 @@ class NotificationDrainTest {
         when(transactions.complete(eq(claim), any())).thenReturn(true);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void unexpectedFailuresLogStackAndCauseTypesWithoutPrivateMessages(boolean duringSend) {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(NotificationOutbox.class);
+        var logs = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        var failure = new IllegalStateException("private provider response", new IllegalArgumentException("secret"));
+        if (duringSend) {
+            when(delivery.send()).thenThrow(failure);
+        } else {
+            when(sender.prepare(any())).thenThrow(failure);
+        }
+        try {
+            outbox.drain();
+            assertThat(logs.list).singleElement().satisfies(event -> {
+                assertThat(event.getFormattedMessage()).contains(claim.id().toString());
+                String diagnostic = ch.qos.logback.classic.spi.ThrowableProxyUtil.asString(event.getThrowableProxy());
+                assertThat(diagnostic).contains("IllegalStateException", "IllegalArgumentException",
+                    "NotificationDrainTest.java").doesNotContain("private provider response", "secret");
+            });
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+    }
+
+    @Test
+    void rejectedAuthorityIsObservable() {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(NotificationOutbox.class);
+        var logs = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        when(transactions.startSend(claim)).thenReturn(false);
+        try {
+            outbox.drain();
+            assertThat(logs.list).singleElement().satisfies(event -> {
+                assertThat(event.getLevel()).isEqualTo(ch.qos.logback.classic.Level.ERROR);
+                assertThat(event.getFormattedMessage()).contains(claim.id().toString(),
+                    "send authority rejected", "attempt 1", "nothing sent");
+            });
+            verifyNoInteractions(delivery);
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+    }
+
     @Test
     void prepareThenCommitAuthorityThenSendThenCommitOutcome() {
         assertThat(outbox.drain()).isOne();

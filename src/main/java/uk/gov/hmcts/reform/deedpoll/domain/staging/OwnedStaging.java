@@ -1,6 +1,10 @@
 package uk.gov.hmcts.reform.deedpoll.domain.staging;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -22,15 +26,18 @@ import uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageRule;
 import uk.gov.hmcts.reform.deedpoll.storage.StagedPayloads;
 
 import java.io.IOException;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
 /** Internal seam: adapters must authenticate owner and authorise its target case before calling. */
+@Slf4j
 @Service
 public class OwnedStaging {
     private final JdbcTemplate jdbc;
@@ -94,8 +101,11 @@ public class OwnedStaging {
         UploadedFile file = UploadedFile.of(submitted.content().clone(),
             submitted.originalName(), submitted.mimeType());
         return transaction.execute(status -> {
-            // Same lock as generated preparations: neither global nor owner quotas can oversubscribe.
-            jdbc.execute("SELECT pg_advisory_xact_lock(7340032, 26214400)");
+            // Lock order everywhere: case (when present), quota, then stage.
+            if (owner.kind() == StageOwner.Kind.RECORD) {
+                cases.lockForDeedPreparation(owner.id()).orElseThrow(OwnedStaging::missing);
+            }
+            payloads.lockQuota();
             List<String> existing = jdbc.query("""
                 SELECT id FROM deedpoll_ownedstage WHERE "ownerKind" = ? AND "ownerId" = ? AND "operationId" = ?
                 """, (row, index) -> row.getString(1), owner.kind().name(), owner.id(), operation);
@@ -108,9 +118,6 @@ public class OwnedStaging {
                 }
                 return stage.receipt();
             }
-            if (owner.kind() == StageOwner.Kind.RECORD && !cases.existsById(owner.id())) {
-                throw missing();
-            }
             long[] used = jdbc.queryForObject("""
                 SELECT count(*), coalesce(sum(s."sizeBytes"), 0) FROM deedpoll_ownedstage s
                 JOIN deedpoll_stagedpayload p ON p.id = s.id WHERE s."ownerKind" = ? AND s."ownerId" = ?
@@ -121,7 +128,7 @@ public class OwnedStaging {
             }
             String id = UUID.randomUUID().toString();
             String checksum = payloads.retain(id, file.content());
-            Instant now = clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+            Instant now = clock.instant().truncatedTo(ChronoUnit.MILLIS);
             Instant expiry = now.plus(policy.expiry(owner));
             jdbc.update("""
                 INSERT INTO deedpoll_ownedstage
@@ -165,6 +172,7 @@ public class OwnedStaging {
     }
 
     private Stage reserve(StageOwner owner, String id, String caseId, String typeId) {
+        cases.lockForDeedPreparation(caseId).orElseThrow(OwnedStaging::missing);
         Stage stage = lock(owner, id);
         if (!stage.state().equals("Staged")) {
             if ((stage.state().equals("Promoting") || stage.state().equals("Consumed"))
@@ -176,13 +184,12 @@ public class OwnedStaging {
         if (!clock.instant().isBefore(stage.expiry())) {
             throw conflict();
         }
-        cases.lockForDeedPreparation(caseId).orElseThrow(OwnedStaging::missing);
         var parent = cases.findById(caseId).orElseThrow(OwnedStaging::missing);
         DocumentStorageRule.requireCaseReady(Optional.ofNullable(parent.getCcdCaseReference()));
         var type = types.findById(typeId).orElseThrow(OwnedStaging::missing);
-        var document = new DocumentUpload(caseId, typeId,
+        var document = DocumentUpload.of(caseId, typeId,
             UploadedFile.of(new byte[0], stage.originalName(), stage.mimeType()),
-            stage.originalName().substring(0, Math.min(100, stage.originalName().length())), DocumentDirection.Incoming)
+            Optional.empty(), Optional.of(DocumentDirection.Incoming))
             .newRow(parent, type);
         document.setSizeBytes(stage.size());
         document.setStorageState(DocumentStorageState.UploadPending);
@@ -233,7 +240,7 @@ public class OwnedStaging {
         });
     }
 
-    /** Each deletion commits separately. SKIP LOCKED coordinates schedulers and promotion/removal. */
+    /** Lock both stage and payload with SKIP LOCKED so a contended payload cannot starve later rows. */
     public int expire() {
         outsideTransaction();
         long started = System.nanoTime();
@@ -243,28 +250,46 @@ public class OwnedStaging {
             long budget = policy.cleanupBytes() - bytes;
             long remainingMs = Math.max(1,
                 (policy.cleanupTime().toNanos() - (System.nanoTime() - started)) / 1000000);
-            Integer removed = transaction.execute(status -> {
-                jdbc.execute("SET LOCAL statement_timeout = '" + remainingMs + "ms'");
-                jdbc.execute("SET LOCAL lock_timeout = '100ms'");
-                List<String> ids = jdbc.query("""
-                    SELECT id FROM deedpoll_ownedstage WHERE state = 'Staged' AND "expiresOn" <= ?
-                        AND "sizeBytes" <= ? ORDER BY "expiresOn", id LIMIT 1 FOR UPDATE SKIP LOCKED
-                    """, (row, index) -> row.getString(1), Timestamp.from(clock.instant()), budget);
-                if (ids.isEmpty()) {
-                    return 0;
+            Integer removed;
+            try {
+                removed = transaction.execute(status -> {
+                    jdbc.execute("SET LOCAL statement_timeout = '" + remainingMs + "ms'");
+                    jdbc.execute("SET LOCAL lock_timeout = '100ms'");
+                    List<String> ids = jdbc.query("""
+                        SELECT s.id FROM deedpoll_ownedstage s JOIN deedpoll_stagedpayload p ON p.id = s.id
+                        WHERE s.state = 'Staged' AND s."expiresOn" <= ? AND s."sizeBytes" <= ?
+                        ORDER BY s."expiresOn", s.id LIMIT 1 FOR UPDATE OF s, p SKIP LOCKED
+                        """, (row, index) -> row.getString(1), Timestamp.from(clock.instant()), budget);
+                    if (ids.isEmpty()) {
+                        return null;
+                    }
+                    int size = jdbc.queryForObject("SELECT \"sizeBytes\" FROM deedpoll_ownedstage WHERE id = ?",
+                        Integer.class, ids.getFirst());
+                    discard(ids.getFirst(), "Expired");
+                    return size;
+                });
+            } catch (DataAccessException budgetReached) {
+                if (!cleanupTimeout(budgetReached)) {
+                    throw budgetReached;
                 }
-                int size = jdbc.queryForObject("SELECT \"sizeBytes\" FROM deedpoll_ownedstage WHERE id = ?",
-                    Integer.class, ids.getFirst());
-                discard(ids.getFirst(), "Expired");
-                return size;
-            });
-            if (removed == 0) {
+                log.warn("Staging expiry stopped after {} rows and {} bytes: {}",
+                    rows, bytes, budgetReached.getClass().getSimpleName());
+                break;
+            }
+            if (removed == null) {
                 break;
             }
             bytes += removed;
             rows++;
         }
         return rows;
+    }
+
+    private static boolean cleanupTimeout(DataAccessException failure) {
+        // PostgreSQL lock_timeout can remain untranslated by Spring's JDBC exception translator.
+        return failure instanceof QueryTimeoutException || failure instanceof CannotAcquireLockException
+            || failure.getMostSpecificCause() instanceof SQLException sql
+                && ("55P03".equals(sql.getSQLState()) || "57014".equals(sql.getSQLState()));
     }
 
     private void discard(String id, String state) {

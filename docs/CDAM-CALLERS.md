@@ -102,10 +102,10 @@ resolves only declared document keys into a copy; frozen JSON is never rewritten
 It reads at most 2,097,153 bytes, closes streams, and refuses above 2,097,152. Missing/malformed references,
 oversize and unexplained client preparation refusals are TECHNICAL; unreadable files are TEMPORARY before
 send; unusable retention is PERMANENT (valid range 1–78 weeks). Preserve this taxonomy and email confirmation
-on Notify downloads. Its comment at lines 182–185 still describes the former `noRollbackFor` annotation;
-the actual TransactionTemplate implementation is authoritative. Task 8 must correct stale comments.
+on Notify downloads. Document reads run outside the committed claim/send-start/settlement transactions.
 [NotificationFailure:69](../src/main/java/uk/gov/hmcts/reform/deedpoll/notify/NotificationFailure.java#L69)
-classifies 400/403 as PERMANENT, 429/500 as TEMPORARY and other/status-zero answers as TECHNICAL.
+classifies 400/403 as PERMANENT, 429 as TEMPORARY and 500/other/status-zero answers as TECHNICAL.
+An HTTP 500 does not prove refusal and must retain send-start evidence for investigation.
 
 ## Accepted design and sequence for implementation
 
@@ -158,8 +158,8 @@ shapes. No new email route, polling receipt, 202 or storage identifier is introd
 | Group occupied by contradictory template | Existing 409 naming the owed email; initial check precedes deed generation and final check closes the race. |
 | Existing deed has wrong direction or template | Existing DeedDocumentService 409, direction checked first; never regenerate. |
 | CCD link missing | Existing 409: “This case is not ready for documents yet, because it has no CCD case. Try again once it has been linked.” Do not call linking. |
-| Existing deed is unavailable, ambiguous, missing payload, or not attachable/usable | 409: “This case already has a deed preparation that is not ready to use. Its storage outcome must be resolved before this email can be sent.” No successful receipt and no blind upload. A concurrent preparation can be retried with the same key to observe committed progress, never to claim a new document. |
-| Live upload/attach refusal or lost answer | 502, retaining state. For prepared deeds use “This deed could not be confirmed in document storage. Its preparation has been kept; review its storage outcome before retrying.” A retry never grants another upload budget. After two uncertain sends or a crash at an ambiguous boundary, park. |
+| Existing deed is unavailable, ambiguous, missing payload, or not attachable/usable | 409: “This document preparation is not ready to use. Its storage outcome must be resolved before it can be used.” No successful receipt and no blind upload. A concurrent preparation can be retried with the same key to observe committed progress, never to claim a new document. |
+| Live upload/attach refusal or lost answer | 502, retaining state. For prepared deeds use “This document could not be confirmed in document storage. Its preparation has been kept; review its storage outcome before retrying.” A retry never grants another upload budget. After two uncertain sends or a crash at an ambiguous boundary, park. |
 | Read-back unavailable | 502 using fixed upstream prose for an unavailable read; keep payload/identity and retry only the read, never the binary upload. A checksum mismatch is 409: “This case’s stored deed does not match its prepared content. It must be investigated before this email can be sent.” Retain both identity and payload evidence. |
 | Material case/correspondence input changed during remote work | 409; no stale enqueue. Fixed proposed message: “This case changed while its deed was being prepared. Review the case before sending this email.” |
 | Final transaction/note/commit fails | No success receipt; database failure remains a server failure. Re-read on same-key retry; retain a confirmed attachment. |

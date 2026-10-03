@@ -16,6 +16,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
+import uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageRule;
 import uk.gov.hmcts.reform.deedpoll.storage.StagedPayloads;
 
 import java.io.IOException;
@@ -101,7 +102,7 @@ public class DeedPreparations {
         }
         DeedPoll deedPoll = cases.findById(caseId).orElseThrow();
         if (deedPoll.getCcdCaseReference() == null) {
-            throw new ConflictError(uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageRule.CASE_NOT_READY);
+            throw new ConflictError(DocumentStorageRule.CASE_NOT_READY);
         }
         GeneratedDeed generated = generator.generate(deedPoll, template);
         DeedPollSupportingDocument document = new DeedPollSupportingDocument();
@@ -144,7 +145,7 @@ public class DeedPreparations {
     /** Called under the final case lock, before a prepared deed can be used in new correspondence. */
     @Transactional
     public void requireCurrent(String caseId, PreparedDeed prepared) {
-        var current = cases.findById(caseId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+        final var current = cases.findById(caseId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
         var document = documents.findByIdAndDeedPollIdForUpdate(prepared.documentId(), caseId)
             .orElseThrow(DeedPreparations::unavailable);
         deeds.requireCompatible(document, prepared.template());
@@ -155,8 +156,18 @@ public class DeedPreparations {
         List<String> fingerprints = jdbc.query(
             "SELECT \"inputFingerprint\" FROM deedpoll_deedpreparation WHERE \"deedPollId\" = ?",
             (row, index) -> row.getString(1), caseId);
-        if (fingerprints.size() != 1
-            || !DeedDocumentService.inputFingerprint(current, prepared.template()).equals(fingerprints.getFirst())) {
+        // Legacy attachments have no generation provenance. The coordinator still checks the case snapshot,
+        // and reserve below rechecks their identity and metadata without inventing a fingerprint.
+        boolean legacy = prepared.checksum() == null && fingerprints.isEmpty();
+        if (fingerprints.size() == 1 && fingerprints.getFirst() == null) {
+            throw new ConflictError("This deed preparation predates input verification. "
+                + "Its original case inputs must be investigated before sending this email.");
+        }
+        if (!legacy && fingerprints.size() != 1) {
+            throw unavailable();
+        }
+        if (!legacy
+            && !DeedDocumentService.inputFingerprint(current, prepared.template()).equals(fingerprints.getFirst())) {
             throw new ConflictError("This case changed while its deed was being prepared. "
                 + "Review the case before sending this email.");
         }

@@ -40,6 +40,21 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
         nativeQuery = true)
     boolean hasDeedPreparation(@Param("id") String id);
 
+    /** Retained recovery bytes must not lose the case and preparation that identify them. */
+    @Query(value = """
+        SELECT EXISTS (SELECT 1 FROM deedpoll_deedpreparation d
+            JOIN deedpoll_stagedpayload p ON p.id = d."documentId" WHERE d."deedPollId" = :id)
+        """, nativeQuery = true)
+    boolean hasRetainedDeedPayload(@Param("id") String id);
+
+    /** Includes record admissions and draft promotions; recovery payloads must retain their target. */
+    @Query(value = """
+        SELECT EXISTS (SELECT 1 FROM deedpoll_ownedstage s
+            JOIN deedpoll_stagedpayload p ON p.id = s.id
+            WHERE (s."ownerKind" = 'RECORD' AND s."ownerId" = :id) OR s."caseId" = :id)
+        """, nativeQuery = true)
+    boolean hasRetainedStagePayload(@Param("id") String id);
+
     /** Serialises deed reservations without conflicting with child-row foreign-key locks. */
     @Query(value = "SELECT id FROM deedpoll_deedpoll WHERE id = :id FOR NO KEY UPDATE", nativeQuery = true)
     Optional<String> lockForDeedPreparation(@Param("id") String id);

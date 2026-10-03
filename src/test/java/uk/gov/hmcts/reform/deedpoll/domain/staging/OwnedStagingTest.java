@@ -128,6 +128,114 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    void waitingAdmissionAndPromotionDoNotHoldQuotaOrStageAheadOfTheCase() throws Exception {
+        var owner = owner();
+        link(owner.id());
+        UUID operation = UUID.randomUUID();
+        var stage = admit(staging, owner, operation);
+        CountDownLatch waitingForCase = new CountDownLatch(2);
+        var observedCases = mock(DeedPollRepository.class, org.mockito.AdditionalAnswers.delegatesTo(cases));
+        doAnswer(call -> {
+            waitingForCase.countDown();
+            return cases.lockForDeedPreparation(call.getArgument(0));
+        }).when(observedCases).lockForDeedPreparation(owner.id());
+        var replica = new OwnedStaging(jdbc, transactions, StagingPolicyTest.policy(2, 6, 2), payloads,
+            observedCases, documents, types, Optional.of(remote), reader, clock);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var requests = new ArrayList<java.util.concurrent.Future<?>>();
+            new TransactionTemplate(transactions).executeWithoutResult(status -> {
+                cases.lockForDeedPreparation(owner.id()).orElseThrow();
+                requests.add(executor.submit(() -> replica.admit(owner, operation, file)));
+                requests.add(executor.submit(() -> replica.promote(owner, stage.id(), owner.id(), typeId)));
+                try {
+                    assertThat(waitingForCase.await(5, TimeUnit.SECONDS)).isTrue();
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(failure);
+                }
+                // A deed reservation holding the case can still acquire quota; no stage -> case edge exists.
+                assertThat(jdbc.queryForObject("SELECT pg_try_advisory_xact_lock(7340032, 26214400)",
+                    Boolean.class)).isTrue();
+                assertThat(jdbc.queryForObject("SELECT id FROM deedpoll_ownedstage WHERE id = ? FOR UPDATE NOWAIT",
+                    String.class, stage.id())).isEqualTo(stage.id());
+            });
+            for (var request : requests) {
+                request.get(5, TimeUnit.SECONDS);
+            }
+        }
+        assertThat(state(stage.id())).isEqualTo("Consumed");
+        verify(store, times(1)).save(any());
+    }
+
+    @Test
+    void retainedRecordAdmissionPreventsDeletionUntilRemoved() {
+        var owner = owner();
+        var stage = admit(staging, owner, UUID.randomUUID());
+        assertThatThrownBy(() -> caseService.removeDeedPoll(owner.id())).isInstanceOf(ConflictError.class);
+        assertThat(cases.existsById(owner.id())).isTrue();
+        assertThat(retained(stage.id())).isTrue();
+        staging.remove(owner, stage.id());
+        caseService.removeDeedPoll(owner.id());
+        assertThatThrownBy(() -> staging.admit(owner, UUID.randomUUID(), file)).isInstanceOf(NotFoundError.class);
+    }
+
+    @Test
+    void draftPromotionRetainsItsTargetWhileStorageIsUncertain() {
+        var draft = new StageOwner(StageOwner.Kind.DRAFT, UUID.randomUUID().toString(), "subject");
+        String target = newCase();
+        link(target);
+        var stage = admit(staging, draft, UUID.randomUUID());
+        doThrow(new UpstreamFailureError("unavailable")).when(reader).downloadDocument(anyString(), anyString());
+        assertThatThrownBy(() -> staging.promote(draft, stage.id(), target, typeId))
+            .isInstanceOf(UpstreamFailureError.class);
+        assertThatThrownBy(() -> caseService.removeDeedPoll(target)).isInstanceOf(ConflictError.class);
+        assertThat(retained(stage.id())).isTrue();
+    }
+
+    @Test
+    void cleanupSkipsLockedPayloadAndExpiresLaterFreeRows() {
+        final var first = admit(staging, owner(), UUID.randomUUID());
+        clock.advance(Duration.ofSeconds(1));
+        var blocked = admit(staging, owner(), UUID.randomUUID());
+        clock.advance(Duration.ofSeconds(1));
+        var later = admit(staging, owner(), UUID.randomUUID());
+        clock.advance(Duration.ofHours(2));
+        new TransactionTemplate(transactions).executeWithoutResult(status -> {
+            jdbc.queryForObject("SELECT id FROM deedpoll_stagedpayload WHERE id = ? FOR UPDATE",
+                String.class, blocked.id());
+            try (var executor = Executors.newSingleThreadExecutor()) {
+                try {
+                    assertThat(executor.submit(staging::expire).get(5, TimeUnit.SECONDS)).isEqualTo(2);
+                } catch (Exception failure) {
+                    throw new AssertionError(failure);
+                }
+            }
+            assertThat(state(first.id())).isEqualTo("Expired");
+            assertThat(retained(first.id())).isFalse();
+            assertThat(state(later.id())).isEqualTo("Expired");
+            assertThat(retained(later.id())).isFalse();
+            assertThat(state(blocked.id())).isEqualTo("Staged");
+            assertThat(retained(blocked.id())).isTrue();
+        });
+        assertThat(staging.expire()).isOne();
+    }
+
+    @Test
+    void promotionUsesTheSharedDocumentNameLimit() {
+        var owner = owner();
+        link(owner.id());
+        String name = "x".repeat(200) + ".pdf";
+        var stage = staging.admit(owner, UUID.randomUUID(),
+            UploadedFile.of(file.content(), name, file.mimeType()));
+        stages.add(stage.id());
+        String id = staging.promote(owner, stage.id(), owner.id(), typeId);
+        var document = documents.findById(id).orElseThrow();
+        assertThat(document.getName()).hasSize(
+            uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentSchemas.MAX_NAME_LENGTH);
+        assertThat(document.getOriginalName()).isEqualTo(name);
+    }
+
+    @Test
     void admissionSurvivesRestartAndPreservesExpiryAndImmutableContent() {
         var owner = owner();
         UUID operation = UUID.randomUUID();

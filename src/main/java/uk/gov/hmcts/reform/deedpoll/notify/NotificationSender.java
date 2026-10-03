@@ -18,21 +18,11 @@ import uk.gov.hmcts.reform.deedpoll.entity.Notification;
  *
  * <p>An implementation should not throw: the taxonomy is the vocabulary for a failure, and a
  * {@link SendOutcome.Failed} carries more than an exception the outbox would have to classify itself.
- * The outbox catches anyway, and treats it as {@link NotificationFailure#TECHNICAL}, because one row
- * that throws must not roll back the rest of the batch.
+ * The outbox catches preparation failures as temporary and delivery failures as technical/uncertain.
+ * One row that throws must not roll back the rest of the batch.
  */
 public interface NotificationSender {
 
-    /**
-     * Sends one notification, using the recipient and the personalisation frozen on the row.
-     *
-     * @param notification the claimed row, with its attempt already counted
-     * @return what happened, in the vocabulary the outbox settles rows with
-     */
-    SendOutcome send(Notification notification);
-
-    /** Send-only implementations have no preparation; document senders override this boundary. */
-    default PreparedNotification prepare(Notification notification) {
-        return new PreparedNotification.Ready(() -> send(notification));
-    }
+    /** Prepare without sending. Only the outbox may invoke delivery after committing send authority. */
+    PreparedNotification prepare(Notification notification);
 }

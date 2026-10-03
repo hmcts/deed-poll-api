@@ -24,13 +24,19 @@ public class StagedPayloads {
         this.maxBytes = maxBytes;
     }
 
+    /** Fixed advisory-lock identity, independent of configured capacities. Acquire after any case lock. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void lockQuota() {
+        jdbc.execute("SELECT pg_advisory_xact_lock(7340032, 26214400)");
+    }
+
     /** Join the reservation transaction, serialising quota admission across every replica/owner. */
     @Transactional(propagation = Propagation.MANDATORY)
     public String retain(String id, byte[] content) {
         if (maxBytes <= 0 || content.length == 0 || content.length > UploadPolicy.MAX_UPLOAD_BYTES) {
             throw new ConflictError("Durable document preparation requires configured capacity and a bounded file");
         }
-        jdbc.execute("SELECT pg_advisory_xact_lock(7340032, 26214400)");
+        lockQuota();
         long used = jdbc.queryForObject(
             "SELECT coalesce(sum(\"sizeBytes\"), 0) FROM deedpoll_stagedpayload", Long.class);
         if (content.length > maxBytes || used > maxBytes - content.length) {

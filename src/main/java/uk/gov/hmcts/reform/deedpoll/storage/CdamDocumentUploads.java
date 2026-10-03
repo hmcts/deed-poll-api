@@ -95,8 +95,8 @@ public class CdamDocumentUploads implements RemoteDocumentUploads {
             send(upload, claim);
             attach(claim);
         } catch (UpstreamFailureError failure) {
-            throw new UpstreamFailureError("This deed could not be confirmed in document storage. "
-                + "Its preparation has been kept; review its storage outcome before retrying.");
+            throw new UpstreamFailureError("This document could not be confirmed in document storage. "
+                + "Its preparation has been kept; review its storage outcome before retrying.", failure);
         }
     }
 
@@ -132,14 +132,30 @@ public class CdamDocumentUploads implements RemoteDocumentUploads {
      */
     private DeedPollSupportingDocument attach(DocumentStorageStates.Claim claim) {
         for (int submission = 1; submission <= MAX_ATTACH_SUBMISSIONS; submission++) {
+            // A local read failure is not evidence that a CCD submission may have happened.
+            List<SupportingDocumentReference> references;
             try {
-                event.submit(claim.caseReference(), states.references(claim));
+                references = states.references(claim);
+            } catch (IllegalStateException failure) {
+                // A previous submission can commit between the failed answer and this retry's read.
+                if (states.stateOf(claim) == DocumentStorageState.Attached) {
+                    return states.attached(claim);
+                }
+                throw failure;
+            }
+            try {
+                event.submit(claim.caseReference(), references);
             } catch (RuntimeException failure) {
                 DocumentStorageState state = states.stateOf(claim);
                 if (state == DocumentStorageState.Attached) {
                     LOG.info("Document {} attached to its CCD case; the event's answer was lost ({})",
                         claim.documentId(), failure.getClass().getSimpleName());
                     return states.attached(claim);
+                }
+                if (state != DocumentStorageState.Uploaded && state != DocumentStorageState.AttachUncertain) {
+                    LOG.warn("Attach of document {} stopped in state {}", claim.documentId(), state);
+                    throw new UpstreamFailureError(
+                        "The document is no longer awaiting attachment. Review its storage outcome before retrying.");
                 }
                 if (failure instanceof CaseDocumentsEvent.NotSubmitted) {
                     throw notAttached(claim, state, failure.getMessage());

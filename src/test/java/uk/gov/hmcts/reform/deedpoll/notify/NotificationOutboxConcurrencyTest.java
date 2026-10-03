@@ -63,23 +63,18 @@ class NotificationOutboxConcurrencyTest extends AbstractPostgresContainerTest {
         deedPolls.deleteAll();
     }
 
-    @BeforeEach
-    void prepareSender() {
-        given(sender.prepare(any())).willCallRealMethod();
-    }
-
     @Test
     @DisplayName("two drains racing over one Pending row send it once between them")
     void concurrentDrainsSendOneEmail() throws Exception {
         final Notification owed = owedNotification();
         CountDownLatch firstSending = new CountDownLatch(1);
         CountDownLatch secondStarting = new CountDownLatch(1);
-        given(sender.send(any(Notification.class))).willAnswer(call -> {
+        given(sender.prepare(any(Notification.class))).willAnswer(call -> new PreparedNotification.Ready(() -> {
             firstSending.countDown();
             await(secondStarting);
             sleep(OVERLAP_MILLIS);
             return SendOutcome.sent(PROVIDER_ID, StubNotify.TEMPLATE_VERSION);
-        });
+        }));
 
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
@@ -96,7 +91,7 @@ class NotificationOutboxConcurrencyTest extends AbstractPostgresContainerTest {
             pool.shutdownNow();
         }
 
-        verify(sender, times(1)).send(any(Notification.class));
+        verify(sender, times(1)).prepare(any(Notification.class));
         Notification stored = notifications.findById(owed.getId()).orElseThrow();
         assertThat(stored.getState()).isEqualTo(NotificationState.Sent);
         assertThat(stored.getAttempts()).isOne();

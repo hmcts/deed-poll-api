@@ -65,6 +65,59 @@ class CdamDocumentUploadsTest {
     }
 
     @Test
+    void referenceReadFailureDoesNotBecomeAnUncertainSubmission() {
+        var states = mock(DocumentStorageStates.class);
+        var claim = new DocumentStorageStates.Claim("record-1", "document-1",
+            new DocumentOwner("record-1", Optional.of(CASE)));
+        when(states.claim(any())).thenReturn(claim);
+        when(store.save(any())).thenReturn(new StorageReceipt(CDAM_ID.toString(), Optional.of(HASH)));
+        var failure = new IllegalStateException("local read failed");
+        when(states.references(claim)).thenThrow(failure);
+        assertThatThrownBy(() -> new CdamDocumentUploads(states, store, event).upload(upload()))
+            .isSameAs(failure);
+        verifyNoInteractions(event);
+        verify(states, org.mockito.Mockito.never()).attachUncertain(any());
+    }
+
+    @Test
+    void delayedHandlerCommitBeforeRetryReferencesReturnsAttachedWithoutResubmitting() {
+        var states = mock(DocumentStorageStates.class);
+        var claim = new DocumentStorageStates.Claim("record-1", "document-1",
+            new DocumentOwner("record-1", Optional.of(CASE)));
+        var attached = document(Attached, CASE);
+        when(states.claim(any())).thenReturn(claim);
+        when(store.save(any())).thenReturn(receipt(CDAM_ID));
+        when(states.references(claim)).thenReturn(List.of()).thenThrow(
+            new IllegalStateException("cannot attach from Attached"));
+        when(states.stateOf(claim)).thenReturn(Uploaded, Attached);
+        when(states.attached(claim)).thenReturn(attached);
+        doThrow(noResponse()).when(event).submit(any(), anyList());
+
+        assertThat(new CdamDocumentUploads(states, store, event).upload(upload())).isSameAs(attached);
+
+        verify(event, times(1)).submit(any(), anyList());
+        verify(states, times(1)).attachUncertain(claim);
+        verify(states, org.mockito.Mockito.never()).failed(any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = DocumentStorageState.class,
+        names = {"Local", "Failed", "UploadPending", "UploadUncertain"})
+    void unexpectedStateAfterSubmissionStopsWithoutClaimingUncertainty(DocumentStorageState state) {
+        when(store.save(any())).thenReturn(new StorageReceipt(CDAM_ID.toString(), Optional.of(HASH)));
+        doAnswer(call -> {
+            row.state = state;
+            throw new IllegalStateException("lost answer");
+        }).when(event).submit(any(), anyList());
+        assertThatThrownBy(() -> uploads.upload(upload()))
+            .isInstanceOf(UpstreamFailureError.class)
+            .hasMessage("The document is no longer awaiting attachment. Review its storage outcome before retrying.");
+        assertThat(row.state).isEqualTo(state);
+        assertThat(row.history).doesNotContain(AttachUncertain);
+        verify(event, times(1)).submit(any(), anyList());
+    }
+
+    @Test
     void preparedContinuationRejectsAnOuterTransactionBeforeClaiming() {
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try {
@@ -85,6 +138,21 @@ class CdamDocumentUploadsTest {
         when(states.stateOf(claim)).thenReturn(Attached);
         new CdamDocumentUploads(states, store, event).continuePrepared("record-1", "document-1", upload());
         verifyNoInteractions(store, event);
+    }
+
+    @Test
+    void stagedUploadFailureKeepsItsCauseAndUsesDocumentWording() {
+        var states = mock(DocumentStorageStates.class);
+        var claim = new DocumentStorageStates.Claim("record-1", "document-1",
+            new DocumentOwner("record-1", Optional.of(CASE)));
+        when(states.claimPrepared("record-1", "document-1")).thenReturn(claim);
+        when(store.save(any())).thenThrow(CdamUploadFailure.nothingStored("refused"));
+        assertThatThrownBy(() ->
+            new CdamDocumentUploads(states, store, event).continuePrepared("record-1", "document-1", upload()))
+            .isInstanceOf(UpstreamFailureError.class)
+            .hasMessage("This document could not be confirmed in document storage. "
+                + "Its preparation has been kept; review its storage outcome before retrying.")
+            .hasRootCauseMessage(CdamDocumentUploads.UPLOAD_REFUSED);
     }
 
     private static DocumentUpload upload() {

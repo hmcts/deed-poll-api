@@ -34,6 +34,8 @@ class DeedPreparationsTest extends AbstractPostgresContainerTest {
     @Autowired
     private DeedPreparations preparations;
     @Autowired
+    private uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageStates storageStates;
+    @Autowired
     private DeedPollService service;
     @Autowired
     private DeedPollRepository cases;
@@ -62,6 +64,89 @@ class DeedPreparationsTest extends AbstractPostgresContainerTest {
                 """, id);
             cases.deleteById(id);
         }
+    }
+
+    @Test
+    void preparedUploadClaimCommitsOnceAndAttachedRowsDoNotClaimAgain() {
+        String id = linkedCase();
+        PreparedDeed prepared = preparations.prepare(id, DeedTemplate.ADULT);
+        storageStates.claimPrepared(id, prepared.documentId());
+        var claimed = documents.findById(prepared.documentId()).orElseThrow();
+        assertThat(claimed.getStorageUploadAttempts()).isEqualTo((short) 1);
+        assertThat(claimed.getStorageAttemptedOn()).isNotNull();
+        assertThatThrownBy(() -> storageStates.claimPrepared(id, prepared.documentId()))
+            .isInstanceOf(ConflictError.class);
+        jdbc.update("""
+            UPDATE deedpoll_supportingdocument SET "storageState" = 'Attached',
+                "cdamDocumentId" = gen_random_uuid() WHERE id = ?
+            """, prepared.documentId());
+        storageStates.claimPrepared(id, prepared.documentId());
+        assertThat(documents.findById(prepared.documentId()).orElseThrow().getStorageUploadAttempts())
+            .isEqualTo((short) 1);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = DocumentStorageState.class,
+        names = {"Local", "Failed", "Uploaded", "UploadUncertain", "AttachUncertain"})
+    void onlyAnUnclaimedPendingPreparationGrantsUpload(DocumentStorageState state) {
+        String id = linkedCase();
+        PreparedDeed prepared = preparations.prepare(id, DeedTemplate.ADULT);
+        jdbc.update("""
+            UPDATE deedpoll_supportingdocument SET "storageState" = ?, "cdamHashToken" = ?,
+                "cdamDocumentId" = gen_random_uuid() WHERE id = ?
+            """, state.name(), state.holdsHashToken() ? "synthetic-hash" : null, prepared.documentId());
+        assertThatThrownBy(() -> storageStates.claimPrepared(id, prepared.documentId()))
+            .isInstanceOf(ConflictError.class);
+        assertThat(documents.findById(prepared.documentId()).orElseThrow().getStorageUploadAttempts()).isZero();
+    }
+
+    @Test
+    void missingHistoricalFingerprintRequiresInvestigationRatherThanClaimingCaseChanged() {
+        String id = linkedCase();
+        PreparedDeed prepared = preparations.prepare(id, DeedTemplate.ADULT);
+        jdbc.update("""
+            UPDATE deedpoll_supportingdocument SET "storageState" = 'Attached',
+                "cdamDocumentId" = gen_random_uuid() WHERE id = ?
+            """, prepared.documentId());
+        jdbc.update("""
+            UPDATE deedpoll_supportingdocument SET "storageKey" = "cdamDocumentId"::text WHERE id = ?
+            """, prepared.documentId());
+        byte[] original = preparations.content(id, prepared.documentId());
+        new TransactionTemplate(transactions).executeWithoutResult(status -> {
+            // Recreate a historical fixture without changing immutable evidence in place.
+            jdbc.update("DELETE FROM deedpoll_stagedpayload WHERE id = ?", prepared.documentId());
+            jdbc.update("""
+                WITH historical AS (DELETE FROM deedpoll_deedpreparation WHERE "deedPollId" = ? RETURNING *)
+                INSERT INTO deedpoll_deedpreparation
+                    ("deedPollId", "documentId", template, "originalName", "mimeType", "sizeBytes", checksum)
+                SELECT "deedPollId", "documentId", template, "originalName", "mimeType", "sizeBytes", checksum
+                FROM historical
+                """, id);
+            payloads.retain(prepared.documentId(), original);
+        });
+        assertThatThrownBy(() -> preparations.requireCurrent(id, prepared))
+            .isInstanceOf(ConflictError.class).hasMessageContaining("predates input verification");
+        assertThat(preparations.content(id, prepared.documentId())).isNotEmpty();
+    }
+
+    @Test
+    void missingPreparationRequiresStorageReviewRatherThanClaimingCaseChanged() {
+        String id = linkedCase();
+        PreparedDeed prepared = preparations.prepare(id, DeedTemplate.ADULT);
+        jdbc.update("""
+            UPDATE deedpoll_supportingdocument SET "storageState" = 'Attached',
+                "cdamDocumentId" = gen_random_uuid() WHERE id = ?
+            """, prepared.documentId());
+        jdbc.update("""
+            UPDATE deedpoll_supportingdocument SET "storageKey" = "cdamDocumentId"::text WHERE id = ?
+            """, prepared.documentId());
+        jdbc.update("DELETE FROM deedpoll_stagedpayload WHERE id = ?", prepared.documentId());
+        jdbc.update("DELETE FROM deedpoll_deedpreparation WHERE \"deedPollId\" = ?", id);
+
+        assertThatThrownBy(() -> preparations.requireCurrent(id, prepared))
+            .isInstanceOf(ConflictError.class)
+            .hasMessage("The existing deed is unavailable or incompatible; it must not be regenerated");
+        assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(id)).hasSize(1);
     }
 
     @Test
@@ -163,8 +248,8 @@ class DeedPreparationsTest extends AbstractPostgresContainerTest {
     void attachedLegacyDeedIsReusedWithoutInventingProvenance() {
         String id = linkedCase();
         PreparedDeed first = preparations.prepare(id, DeedTemplate.MINOR);
-        jdbc.update("DELETE FROM deedpoll_deedpreparation WHERE \"deedPollId\" = ?", id);
         jdbc.update("DELETE FROM deedpoll_stagedpayload WHERE id = ?", first.documentId());
+        jdbc.update("DELETE FROM deedpoll_deedpreparation WHERE \"deedPollId\" = ?", id);
         jdbc.update("""
             UPDATE deedpoll_supportingdocument SET "storageState" = 'Attached',
                 "cdamDocumentId" = gen_random_uuid(), "storageKey" = 'legacy' WHERE id = ?
@@ -188,6 +273,24 @@ class DeedPreparationsTest extends AbstractPostgresContainerTest {
         assertThatThrownBy(() -> preparations.prepare(id, DeedTemplate.ADULT))
             .isInstanceOf(ConflictError.class).hasMessageContaining("multiple");
         assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(id)).hasSize(2);
+    }
+
+    @Test
+    void caseDeletionCannotOrphanRecoveryBytes() {
+        String id = linkedCase();
+        PreparedDeed prepared = preparations.prepare(id, DeedTemplate.ADULT);
+        byte[] original = preparations.content(id, prepared.documentId());
+        assertThatThrownBy(() -> service.removeDeedPoll(id))
+            .isInstanceOf(ConflictError.class).hasMessageContaining("retained deed preparation");
+        assertThatThrownBy(() -> jdbc.update("DELETE FROM deedpoll_deedpoll WHERE id = ?", id))
+            .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThat(preparations.content(id, prepared.documentId())).isEqualTo(original);
+        assertThat(cases.existsById(id)).isTrue();
+        // Once verification has released the payload, ordinary case deletion can cascade the evidence.
+        jdbc.update("DELETE FROM deedpoll_stagedpayload WHERE id = ?", prepared.documentId());
+        service.removeDeedPoll(id);
+        assertThat(cases.existsById(id)).isFalse();
+        assertThat(cases.hasDeedPreparation(id)).isFalse();
     }
 
     @Test

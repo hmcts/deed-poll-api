@@ -34,6 +34,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
@@ -573,8 +574,9 @@ public class CaseEmailService {
         PreparedDeed prepared = preparations.prepare(deedPollId, requireDeed(template));
         // Attached preparations reuse their stored bytes, including after a failed read-back.
         boolean attached = transaction.execute(status -> documents.findByIdAndDeedPollId(
-            prepared.documentId(), deedPollId).orElseThrow().getStorageState()
-            == uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState.Attached);
+            prepared.documentId(), deedPollId).orElseThrow(() -> new ConflictError(
+                "The prepared deed is unavailable. Review its storage outcome before retrying.")).getStorageState()
+            == DocumentStorageState.Attached);
         if (!attached) {
             byte[] bytes = preparations.content(deedPollId, prepared.documentId());
             remote.orElseThrow().continuePrepared(deedPollId, prepared.documentId(), new DocumentUpload(

@@ -71,7 +71,7 @@ class CdamFormsSendTest extends AbstractPostgresContainerTest {
     @Autowired private DeedPollRepository caseRows;
     @Autowired private DeedPollSupportingDocumentRepository documents;
     @Autowired private NotificationRepository notifications;
-    @Autowired private DeedPreparations preparations;
+    @MockitoSpyBean private DeedPreparations preparations;
     @Autowired private DocumentStorageStates states;
     @Autowired private PlatformTransactionManager transactions;
     @Autowired private JdbcTemplate jdbc;
@@ -134,6 +134,42 @@ class CdamFormsSendTest extends AbstractPostgresContainerTest {
         assertThatThrownBy(() -> emails.send(id, template(deed), Map.of("additional_notes", "changed"), key, CALLER))
             .isInstanceOf(ConflictError.class);
         verify(store).save(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(DeedTemplate.class)
+    void attachedLegacyDeedCanEnqueueWithoutInventingProvenance(DeedTemplate deed) {
+        String id = linkedCase(deed);
+        var prepared = preparations.prepare(id, deed);
+        jdbc.update("DELETE FROM deedpoll_stagedpayload WHERE id = ?", prepared.documentId());
+        jdbc.update("DELETE FROM deedpoll_deedpreparation WHERE \"deedPollId\" = ?", id);
+        UUID cdamId = UUID.randomUUID();
+        jdbc.update("""
+            UPDATE deedpoll_supportingdocument SET "storageState" = 'Attached',
+                "cdamDocumentId" = ?, "storageKey" = ? WHERE id = ?
+            """, cdamId, cdamId.toString(), prepared.documentId());
+        UUID key = UUID.randomUUID();
+        var first = send(id, deed, key);
+        assertThat(first.enqueued()).isTrue();
+        assertThat(send(id, deed, key).id()).isEqualTo(first.id());
+        assertThat(notifications.findById(first.id()).orElseThrow().getPersonalisation())
+            .containsEntry("deed_document", prepared.documentId());
+        assertThat(caseRows.hasDeedPreparation(id)).isFalse();
+        verifyNoInteractions(store, event, reader);
+    }
+
+    @Test
+    void disappearingPreparedDocumentRefusesWithoutRemoteWork() {
+        String id = linkedCase(DeedTemplate.ADULT);
+        doAnswer(call -> {
+            var prepared = (uk.gov.hmcts.reform.deedpoll.domain.deeds.PreparedDeed) call.callRealMethod();
+            documents.deleteById(prepared.documentId());
+            return prepared;
+        }).when(preparations).prepare(id, DeedTemplate.ADULT);
+        assertThatThrownBy(() -> send(id)).isInstanceOf(ConflictError.class)
+            .hasMessageContaining("prepared deed is unavailable");
+        verifyNoInteractions(store, event, reader);
+        assertThat(notifications.findByDeedPollIdOrderByCreatedOnDesc(id)).isEmpty();
     }
 
     @Test
@@ -356,7 +392,7 @@ class CdamFormsSendTest extends AbstractPostgresContainerTest {
     private void assertParkedAfterFailure(DocumentStorageState state, int sends) {
         String id = linkedCase(DeedTemplate.ADULT);
         assertThatThrownBy(() -> send(id)).isInstanceOf(UpstreamFailureError.class)
-            .hasMessage("This deed could not be confirmed in document storage. "
+            .hasMessage("This document could not be confirmed in document storage. "
                 + "Its preparation has been kept; review its storage outcome before retrying.");
         assertThatThrownBy(() -> send(id)).isInstanceOf(ConflictError.class);
         assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(id)).singleElement()

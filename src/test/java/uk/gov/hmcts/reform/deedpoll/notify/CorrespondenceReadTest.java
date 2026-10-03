@@ -171,6 +171,15 @@ class CorrespondenceReadTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    void unknownStoredTemplateRefusesServiceReadAsNotFound() {
+        row.setTemplate("REMOVED_TEMPLATE");
+        row = notifications.saveAndFlush(row);
+        assertThatThrownBy(() -> reader.forNotification(row, "deed_document"))
+            .isInstanceOf(NotFoundError.class);
+        verifyNoInteractions(cdam);
+    }
+
+    @Test
     void frozenReferenceToAnotherCaseNeverReachesCdam() {
         String other = cases.createDeedPoll(DeedPollPatch.of(Map.of(
             "dateReceived", "2026-07-01T00:00:00.000Z", "type", "Adult"))).deedPoll().getId();

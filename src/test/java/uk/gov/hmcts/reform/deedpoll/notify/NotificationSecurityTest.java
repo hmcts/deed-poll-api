@@ -381,15 +381,14 @@ class NotificationSecurityTest {
             Notification owed = notification();
             owed.setTemplate(EmailTemplate.CHASE_MISSING_DOCUMENTS.name());
             owed.setPersonalisation(slots);
-            new NotifyEmailSender(
+            deliver(new NotifyEmailSender(
                 stub.client(),
                 new NotifyProperties(
                     stub.baseUrl(), stub.apiKey(),
                     Map.of(EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), StubNotify.TEMPLATE_ID),
                     StubNotify.REPLY_TO_ID,
                     StubNotify.RETENTION_WEEKS),
-                uploads(stub))
-                .send(owed);
+                uploads(stub)), owed);
 
             assertThat(logs.list)
                 .isNotEmpty()
@@ -543,9 +542,9 @@ class NotificationSecurityTest {
         logger.addAppender(logs);
         try {
             NotifyEmailSender sender = new NotifyEmailSender(stub.client(), stub.properties(), uploads(stub));
-            sender.send(notification());
+            deliver(sender, notification());
             stub.stubSendStatus(500);
-            sender.send(notification());
+            deliver(sender, notification());
 
             assertThat(logs.list)
                 .extracting(ILoggingEvent::getFormattedMessage)
@@ -649,4 +648,11 @@ class NotificationSecurityTest {
         notification.setCreatedBy(CASEWORKER.name());
         return notification;
     }
+
+    private static SendOutcome deliver(NotificationSender sender, Notification row) {
+        PreparedNotification prepared = sender.prepare(row);
+        return prepared instanceof PreparedNotification.Refused refused ? refused.outcome()
+            : ((PreparedNotification.Ready) prepared).delivery().send();
+    }
+
 }

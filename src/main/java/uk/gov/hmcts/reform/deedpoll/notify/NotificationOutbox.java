@@ -46,7 +46,7 @@ public class NotificationOutbox {
             try {
                 prepared = sender.orElseThrow().prepare(claim.notification());
             } catch (RuntimeException exception) {
-                log.warn("Notification preparation failed ({})", exception.getClass().getSimpleName());
+                log.warn("Notification {} preparation failed", claim.id(), NotificationDiagnostics.redacted(exception));
                 prepared = new PreparedNotification.Refused(SendOutcome.failed(
                     NotificationFailure.TEMPORARY, "Could not prepare the notification"));
             }
@@ -56,12 +56,15 @@ public class NotificationOutbox {
             } else {
                 // Do not catch transaction/commit failures here: an uncertain commit cannot authorize sending.
                 if (!transactions.startSend(claim)) {
+                    log.error("Notification {} send authority rejected for attempt {}; nothing sent",
+                        claim.id(), claim.generation());
                     continue;
                 }
                 try {
                     outcome = ((PreparedNotification.Ready) prepared).delivery().send();
                 } catch (RuntimeException exception) {
-                    log.error("Notification delivery outcome is uncertain ({})", exception.getClass().getSimpleName());
+                    log.error("Notification {} delivery outcome is uncertain", claim.id(),
+                        NotificationDiagnostics.redacted(exception));
                     outcome = SendOutcome.failed(NotificationFailure.TECHNICAL,
                         "Delivery outcome is uncertain; investigate before any resend");
                 }

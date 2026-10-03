@@ -59,6 +59,29 @@ class DocumentUploadsTest {
     }
 
     @Test
+    void clientUploadRefusalDoesNotLogItsResponseBody() {
+        stored(CONTENT);
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(DocumentUploads.class);
+        var logs = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        try (var client = org.mockito.Mockito.mockStatic(uk.gov.service.notify.NotificationClient.class)) {
+            client.when(() -> uk.gov.service.notify.NotificationClient.prepareUpload(
+                any(byte[].class), anyString(), eq(true), any(uk.gov.service.notify.RetentionPeriodDuration.class)))
+                .thenThrow(new uk.gov.service.notify.NotificationClientException("private response body"));
+            assertThat(refusal(uploads.resolve(row(), EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).failure())
+                .isEqualTo(NotificationFailure.TECHNICAL);
+            assertThat(logs.list).singleElement().satisfies(event -> {
+                assertThat(event.getFormattedMessage()).contains("status").doesNotContain("private response body");
+                assertThat(event.getThrowableProxy()).isNull();
+            });
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+    }
+
+    @Test
     @DisplayName("replaces the document id with an upload carrying the bytes, the filename and the retention")
     void replacesTheIdWithAnUpload() {
         stored(CONTENT);
@@ -133,6 +156,28 @@ class DocumentUploadsTest {
         assertThat(refused.failure().retryable())
             .as("a store that was briefly unavailable must leave the row claimable by the next drain")
             .isTrue();
+    }
+
+    @Test
+    void unreadableDiagnosticsNameTheExceptionWithoutLeakingItsMessage() {
+        when(documents.forNotification(any(), eq("deed_document")))
+            .thenThrow(new IllegalStateException("private-token-and-response-body"));
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(DocumentUploads.class);
+        var logs = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            assertThat(refusal(uploads.resolve(row(), EmailTemplate.FORMS_FOR_COMPLETION_ADULT)).failure())
+                .isEqualTo(NotificationFailure.TEMPORARY);
+            assertThat(logs.list).singleElement().satisfies(event -> {
+                assertThat(event.getFormattedMessage()).contains("IllegalStateException")
+                    .doesNotContain("private-token-and-response-body");
+                assertThat(event.getThrowableProxy()).isNull();
+            });
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
     }
 
     @Test

@@ -22,6 +22,54 @@ The recovery guide gives concrete input/check lists for both handoffs. No siblin
 
 ## Historical decision and delivery notes
 
+**03b design decisions complete, 2026-10-02:** Steve accepted the final cleanup approach: opt-in bounded
+scheduled cleanup, independent of caseworker traffic, safe across replicas and preserving recovery payloads.
+[ADR-0009](../../deed-poll-documentation/decisions/0009-staged-upload-cleanup-runs-on-a-bounded-schedule.md)
+records it. All three design flags are now resolved; 03b's execution handoff and appended decision record
+supersede the earlier open-status notes. Production quotas, expiry durations, cleanup schedule/limits and
+operational ownership remain release/activation prerequisites. Citizen activation still needs real draft
+authority and the web upload handoff. No implementation or fresh baseline build has run.
+
+**03b expiry decision and release reminder, 2026-10-02:** Steve accepted fixed expiry from first staging,
+separate durations by owner type, no retry extension and protection of generated-deed recovery/unfinished
+or uncertain promotion. [ADR-0008](../../deed-poll-documentation/decisions/0008-staged-upload-expiry-requires-release-agreement.md)
+records the rule. Production durations must be agreed and configured before a release enables staging;
+the product [release checklist](../../deed-poll-documentation/operations/deployment-readiness-checklist.md#staged-upload-expiry-release-gate--2026-10-02)
+tracks this explicitly. Only the cleanup decision remains open in 03b. No implementation was started.
+
+**03b staging limits update, 2026-10-02:** Steve accepted citizen limits of 7 MB/file and 10 files/draft,
+the existing 25 MB caseworker file limit with an explicit configurable staged-file count per record, plus
+mandatory per-owner byte limits and an overall storage cap. Missing settings prevent staging activation;
+full storage refuses new uploads without deleting recovery evidence. Production capacity values remain
+activation prerequisites; local tests use explicit finite values. Flags 1/2 and flag 3's ownership/limits
+policy are accepted. Expiry and cleanup remain open. See 03b's appended decision record; no implementation.
+
+**03b staging ownership update, 2026-10-02:** Steve accepted both owner types under flag 3: existing local
+deed-poll records awaiting CCD linking, and future citizen drafts. Citizen uploads stay disabled until
+actual draft ownership/authentication exists. Flags 1 and 2 are accepted; flag 3's limits, expiry and
+cleanup remain open. The acceptance is appended to 03b; no implementation was started.
+
+**03b business-rule update, 2026-10-02:** Steve accepted flag 2: per-notification committed claims/outcomes,
+with no automatic retry of a possibly-sent email. All email templates follow this rule; uncertain outcomes
+need investigation before a resend decision. The product decision is
+[ADR-0007](../../deed-poll-documentation/decisions/0007-uncertain-email-delivery-requires-investigation.md),
+linked from 03b's appended decision record. Flags 1 and 2 are now accepted; only flag 3 remains open.
+No implementation or validation build was run.
+
+**03b decision update, 2026-10-02:** Steve accepted flag 1: bounded Postgres payload staging, with capacity
+checks and explicit quotas required before activation. The decision is appended to
+[03b](plans/deed-poll-api-03b-cdam-callers-and-staging.md). Flags 2 (possibly-sent email recovery) and 3
+(pre-case ownership, limits, expiry and cleanup) remain open. No implementation or validation build was run.
+
+**CDAM planning update, 2026-10-01:** 03a is now merged to `master` through PR #73 (`f4eb7db`), confirmed by
+fetching the remote. The next implementation plan is
+[03b — generated deeds, Notify retrieval and pre-case staging](plans/deed-poll-api-03b-cdam-callers-and-staging.md).
+It is a draft with eight tasks, not implemented. Three proposals need a decision before dependent tasks:
+temporary durable payload storage, outbox recovery after a possibly-sent email, and pre-case ownership/expiry
+and cleanup. Citizen/web activation still depends on the actual draft authority and upload adapter. 03c owns
+existing-file migration. This planning update ran no builds, live smoke or onboarding checks; the older 03a
+local validation below remains historical evidence. CDAM remains off by default.
+
 **CDAM core round trip, 2026-09-29: plan 03a is complete locally** on branch
 `deed-poll-api-03a-cdam-core-round-trip`; all eight tasks are implemented. Read
 [plan 03a](plans/deed-poll-api-03a-cdam-core-round-trip.md) and the notes here before the older plan-03-next

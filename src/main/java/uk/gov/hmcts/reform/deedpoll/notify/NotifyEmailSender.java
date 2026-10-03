@@ -75,7 +75,7 @@ public class NotifyEmailSender implements NotificationSender {
     }
 
     /**
-     * Sends one row, and answers with a verdict rather than an exception.
+     * Prepares one row without sending; delivery requires the outbox's committed authority.
      *
      * <p>{@link NotificationClientException} is the only failure the client reports, and every one of them is
      * classified by {@link NotificationFailure#classify(NotificationClientException)} -- in one place, here, so
@@ -84,20 +84,12 @@ public class NotifyEmailSender implements NotificationSender {
      * this plan has no delivery query to ask with, and a second letter telling an applicant their application was
      * refused is worse than a failed row somebody can chase.
      *
-     * <p>The client's message is logged and summarised rather than returned whole: it contains Notify's response
-     * body, and the row's {@code failureReason} is displayed to a caseworker.
+     * <p>Only the status and verdict are logged and returned: the client's message contains Notify's response
+     * body and may echo personal data.
      *
      * @param notification the claimed row, with its attempt already counted
-     * @return {@link SendOutcome.Sent} with Notify's notification id, template version and rendered wording, or
-     *     {@link SendOutcome.Failed} with the taxonomy's verdict
+     * @return a refusal, or deferred delivery for the outbox to invoke after committing send authority
      */
-    @Override
-    public SendOutcome send(Notification notification) {
-        PreparedNotification prepared = prepare(notification);
-        return prepared instanceof PreparedNotification.Refused refused ? refused.outcome()
-            : ((PreparedNotification.Ready) prepared).delivery().send();
-    }
-
     @Override
     public PreparedNotification prepare(Notification notification) {
         EmailTemplate template = EmailTemplate.byName(notification.getTemplate()).orElse(null);
@@ -161,8 +153,7 @@ public class NotifyEmailSender implements NotificationSender {
         } catch (NotificationClientException refused) {
             NotificationFailure verdict = NotificationFailure.classify(refused);
             log.warn("Notify would not send notification {} for case {} ({}, status {})",
-                     notification.getId(), notification.getDeedPollId(), verdict, refused.getHttpResult(),
-                     refused);
+                     notification.getId(), notification.getDeedPollId(), verdict, refused.getHttpResult());
             return SendOutcome.failed(verdict, "GOV.UK Notify refused the send with status "
                 + refused.getHttpResult());
         }

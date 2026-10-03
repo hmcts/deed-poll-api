@@ -54,7 +54,7 @@ public class NotificationDeliveryTransactions {
             return Optional.empty();
         }
         UUID owner = UUID.randomUUID();
-        if (notifications.claimNextDue(id, cutoff, NotificationBackoff.leaseUntil(now),
+        if (notifications.claimNextDue(id, now, NotificationBackoff.leaseUntil(now),
                 CurrentUser.SERVICE_ACCOUNT_NAME, owner, NotificationBackoff.MAX_ATTEMPTS) != 1) {
             return Optional.empty();
         }
@@ -79,7 +79,20 @@ public class NotificationDeliveryTransactions {
     public boolean complete(NotificationClaim claim, SendOutcome outcome) {
         Notification row = notifications.lockForDelivery(claim.id()).orElse(null);
         LocalDateTime now = AuditClock.now();
-        return owns(row, claim, now) && settle(row, outcome, now);
+        if (!owns(row, claim, now)) {
+            // Keep enough evidence to find the provider receipt, without logging rendered correspondence.
+            switch (outcome) {
+                case SendOutcome.Sent sent -> log.error(
+                    "Notification {} attempt {} settlement rejected; provider accepted {}, template version {}; "
+                        + "investigate before any resend",
+                    claim.id(), claim.generation(), sent.providerNotificationId(), sent.templateVersion());
+                case SendOutcome.Failed failed -> log.error(
+                    "Notification {} attempt {} settlement rejected; outcome {}; investigate before any resend",
+                    claim.id(), claim.generation(), failed.failure());
+            }
+            return false;
+        }
+        return settle(row, outcome, now);
     }
 
     private static boolean owns(Notification row, NotificationClaim claim, LocalDateTime now) {

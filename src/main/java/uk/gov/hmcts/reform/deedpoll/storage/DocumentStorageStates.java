@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.ccd.SupportingDocumentReference;
+import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentOwner;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
@@ -113,9 +114,9 @@ public class DocumentStorageStates {
             return claim;
         }
         if (row.getStorageState() != DocumentStorageState.UploadPending || row.getStorageUploadAttempts() != 0) {
-            throw new uk.gov.hmcts.reform.deedpoll.domain.ConflictError(
-                "This case already has a deed preparation that is not ready to use. "
-                    + "Its storage outcome must be resolved before this email can be sent.");
+            throw new ConflictError(
+                "This document preparation is not ready to use. "
+                    + "Its storage outcome must be resolved before it can be used.");
         }
         row.setStorageUploadAttempts((short) 1);
         row.setStorageAttemptedOn(AuditClock.now());
