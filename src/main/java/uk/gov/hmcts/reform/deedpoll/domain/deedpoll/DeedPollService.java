@@ -5,6 +5,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
@@ -399,13 +400,24 @@ public class DeedPollService {
     /**
      * Deletes a case, and its notes, witnesses and documents with it.
      *
-     * <p>The children go by the database's cascade, which {@code V3__children.sql} declares; nothing
-     * here deletes them, so there is one place that decides what a case deletion takes with it.
+     * <p>Retained deed preparations and staged uploads prevent deletion until their storage outcome is resolved.
+     * Otherwise the database cascades to the children. V30 also guards retained preparation ownership in the
+     * database, including deletion outside this service.
      *
+     * @throws ConflictError if the case owns retained preparation or staging bytes
      * @throws NotFoundError if there is no such case
      */
     @Transactional
     public void removeDeedPoll(String id) {
+        deedPolls.lockForDeedPreparation(id).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+        if (deedPolls.hasRetainedDeedPayload(id)) {
+            throw new ConflictError("This case has retained deed preparation bytes. "
+                + "Resolve its document storage outcome before deleting the case.");
+        }
+        if (deedPolls.hasRetainedStagePayload(id)) {
+            throw new ConflictError("This case has retained staged uploads. "
+                + "Remove unpromoted uploads or resolve their storage outcome before deleting the case.");
+        }
         deedPolls.delete(requireDeedPoll(id));
     }
 

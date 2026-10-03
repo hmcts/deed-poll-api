@@ -34,14 +34,14 @@ public enum NotificationFailure {
     /**
      * Notify would probably have accepted this at a different moment.
      *
-     * <p>429 is the rate limit and 500 is Notify being unwell. The row stays {@code Pending} and backs off, so
+     * <p>429 is a known rate-limit refusal. The row stays {@code Pending} and backs off, so
      * the next drain tries it again.
      */
     TEMPORARY,
 
     /**
-     * Something nobody enumerated. Failed, and logged at error, because the alternative is quietly inventing a
-     * policy for a status whose meaning has not been read.
+     * An ambiguous answer (including HTTP 500), or something nobody enumerated. Failed and logged at error:
+     * no automatic retry is safe without evidence that Notify refused the send.
      */
     TECHNICAL;
 
@@ -62,7 +62,7 @@ public enum NotificationFailure {
     public static NotificationFailure classify(int status) {
         return switch (status) {
             case 400, 403 -> PERMANENT;
-            case 429, 500 -> TEMPORARY;
+            case 429 -> TEMPORARY;
             default -> TECHNICAL;
         };
     }
@@ -70,8 +70,8 @@ public enum NotificationFailure {
     /**
      * The verdict on what the Notify client threw.
      *
-     * <p>{@code NotificationClientException.getHttpResult()} is {@code 0} when the call never reached Notify at
-     * all -- a DNS failure, a connection reset, a read timeout. That is not a status code, so it falls to
+     * <p>{@code NotificationClientException.getHttpResult()} is {@code 0} when no HTTP response was received:
+     * a DNS failure, a connection reset, a read timeout. That is not a status code, so it falls to
      * {@link #TECHNICAL} by the default branch rather than being mapped, which is the conservative reading: the
      * request may or may not have been delivered, and this plan has no delivery query to ask with (see the plan's
      * "delivery receipts" exclusion). A caseworker seeing a failed row for an email that did go out is recoverable;

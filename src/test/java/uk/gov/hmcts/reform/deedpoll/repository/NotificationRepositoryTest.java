@@ -211,7 +211,7 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         Notification due = owed(NOW.minusMinutes(1));
         entityManager.flush();
 
-        int claimed = notifications.claimNextDue(due.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT);
+        int claimed = notifications.claimNextDue(due.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT, UUID.randomUUID(), 8);
 
         assertThat(claimed).isEqualTo(1);
         Notification reloaded = entityManager.find(Notification.class, due.getId());
@@ -235,12 +235,14 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         Notification due = owed(NOW.minusMinutes(1));
         entityManager.flush();
 
-        assertThat(notifications.claimNextDue(due.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT)).isEqualTo(1);
+        assertThat(notifications.claimNextDue(due.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT,
+                                               UUID.randomUUID(), 8)).isEqualTo(1);
         // The whole multi-replica argument, as a fact about the statement rather than about the outbox: the
         // second caller is told it changed nothing, so it sends nothing. The first claim pushed
         // "nextAttemptAt" to the lease, which is what makes the second statement's own predicate false --
         // there is no lock, and none is needed.
-        assertThat(notifications.claimNextDue(due.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT)).isZero();
+        assertThat(notifications.claimNextDue(due.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT,
+                                               UUID.randomUUID(), 8)).isZero();
 
         entityManager.clear();
         assertThat(entityManager.find(Notification.class, due.getId()).getAttempts())
@@ -262,9 +264,12 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
         // Each of these is a row the statement's own predicate has to refuse, because the candidate list and
         // the claim are separated by however long the drain's loop takes -- and in the 'Sent' case, refusing
         // it is the difference between one rejection letter and two.
-        assertThat(notifications.claimNextDue(backedOff.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT)).isZero();
-        assertThat(notifications.claimNextDue(sent.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT)).isZero();
-        assertThat(notifications.claimNextDue(failed.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT)).isZero();
+        assertThat(notifications.claimNextDue(backedOff.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT,
+                                               UUID.randomUUID(), 8)).isZero();
+        assertThat(notifications.claimNextDue(sent.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT,
+                                               UUID.randomUUID(), 8)).isZero();
+        assertThat(notifications.claimNextDue(failed.getId(), NOW, LEASE_UNTIL, SERVICE_ACCOUNT,
+                                               UUID.randomUUID(), 8)).isZero();
 
         entityManager.clear();
         assertThat(entityManager.find(Notification.class, backedOff.getId()).getAttempts()).isZero();

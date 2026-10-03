@@ -39,8 +39,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
  *
  * <p><strong>Composed here rather than in a service, for the reason {@code ReferralNotes} is: the note has to
  * be unrefusable.</strong> The notes column is bounded at {@link NoteForm#MAX_NOTE_LENGTH}, and the failure
- * note is written inside the drain's batch transaction, which covers rows Notify has already accepted -- so a
- * note the notes validator refused would roll those back and the next drain would send them again. Every
+ * note commits atomically with its notification's terminal outcome. A refused note keeps that outcome
+ * unsettled for investigation, while earlier notifications stay committed. Every
  * ingredient of these two sentences is therefore either fixed at compile time or bounded here, the provider's
  * {@code failureReason} is not among them, and {@code EmailNotesTest} pins the arithmetic across the whole
  * enum rather than against one member.
@@ -56,8 +56,8 @@ public final class EmailNotes {
      * <p>Needed because {@code Notification.template} is unbounded {@code text} in the database and the notes
      * column is not. The value stored there is an enum member name written by this service, so a pathological
      * one is not reachable today -- but "not reachable" is the wrong standard for the failure note, which is
-     * written inside the drain's batch transaction: a note the validator refused would roll back rows Notify
-     * had already accepted. Truncating is the safe failure, exactly as {@code ReferralNotes.claimLapsed}
+     * written with its terminal outcome: a refused note prevents that outcome from committing.
+     * Truncating is the safe failure, exactly as {@code ReferralNotes.claimLapsed}
      * truncates a judge's name, and the bound is the same 200 the audit columns use.
      */
     private static final int MAX_TEMPLATE_NAME_LENGTH = 200;

@@ -23,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
@@ -38,6 +39,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -298,6 +300,29 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
         // The blob really went, which is what the reference's `expect(storage.delete).toHaveBeenCalledWith`
         // stands for.
         assertThat(STORE_ROOT.resolve(storageKey)).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("deleting a CDAM row on the filesystem backend leaves a colliding local blob untouched")
+    void remoteDocumentCannotDeleteLocalBlob() throws IOException {
+        String caseId = storedCase();
+        var remote = documentService.createDocument(caseId, dto(storedType()));
+        UUID cdamId = UUID.randomUUID();
+        transactions.executeWithoutResult(status -> {
+            var row = documents.findById(remote.getId()).orElseThrow();
+            row.setStorageState(DocumentStorageState.Attached);
+            row.setCdamDocumentId(cdamId);
+            row.setStorageKey(cdamId.toString());
+            documents.saveAndFlush(row);
+        });
+        Path localBlob = STORE_ROOT.resolve(cdamId.toString());
+        Files.write(localBlob, FILE.content());
+
+        documentService.removeDocument(caseId, remote.getId());
+
+        assertThat(documents.findById(remote.getId())).isEmpty();
+        verify(store, never()).delete(cdamId.toString());
+        assertThat(Files.readAllBytes(localBlob)).isEqualTo(FILE.content());
     }
 
     @Test

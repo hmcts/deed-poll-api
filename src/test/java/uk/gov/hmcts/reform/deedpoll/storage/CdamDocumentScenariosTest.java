@@ -36,11 +36,13 @@ import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.CreateDocumentTypeInput;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.CreateDocumentInput;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentStore;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentTypeService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
@@ -415,6 +417,28 @@ class CdamDocumentScenariosTest extends AbstractPostgresContainerTest {
         DeedPollSupportingDocument row = onlyRow();
         assertThat(row.getStorageState()).isEqualTo(DocumentStorageState.Failed);
         assertThat(row.getCdamHashToken()).isNull();
+        assertThat(row.getStorageKey()).isNull();
+
+        documentService.removeDocument(record, row.getId());
+
+        assertThat(documents.findAll()).isEmpty();
+        CDAM.verify(1, deleteRequestedFor(urlPathEqualTo("/cases/documents/" + FIRST))
+            .withQueryParam("permanent", equalTo("false")));
+    }
+
+    @Test
+    @DisplayName("deleting a Local metadata row never treats its supplied UUID key as a CDAM document")
+    void localStorageKeyCannotDeleteCdamDocument() {
+        String record = linkedRecord();
+        var row = documentService.createDocument(record, new CreateDocumentInput(
+            DocumentDirection.Incoming, "Legacy document", newType(), FIRST.toString(),
+            "legacy.pdf", "application/pdf"));
+
+        documentService.removeDocument(record, row.getId());
+
+        assertThat(documents.findById(row.getId())).isEmpty();
+        assertThat(CDAM.getAllServeEvents()).isEmpty();
+        assertThat(DATA_STORE.getAllServeEvents()).isEmpty();
     }
 
     @Test

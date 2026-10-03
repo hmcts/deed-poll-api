@@ -119,7 +119,10 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
             "deedpoll_savedqueryselection",
             "deedpoll_referral",
             "deedpoll_notification",
-            "deedpoll_ccdcreationattempt"
+            "deedpoll_ccdcreationattempt",
+            "deedpoll_deedpreparation",
+            "deedpoll_stagedpayload",
+            "deedpoll_ownedstage"
         );
 
         @Test
@@ -145,6 +148,19 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
             // reporting a table missing on every environment forever. Asked of the migrated schema, so it
             // fails here if V5 or V6 stopped creating them too.
             assertThat(schema.missingDeedPollTables()).doesNotContainAnyElementsOf(NOT_IN_THE_REFERENCE);
+        }
+
+        @Test
+        @DisplayName("lists every domain table created by the migrations")
+        void listsEveryMigratedDomainTable() {
+            // Read the migrated schema independently, so omitting a table from both hand-written lists fails.
+            List<String> migrated = jdbcTemplate.queryForList("""
+                select table_name from information_schema.tables
+                where table_schema = current_schema() and table_type = 'BASE TABLE'
+                    and starts_with(table_name, 'deedpoll_')
+                """, String.class);
+
+            assertThat(DeedPollSchema.DEED_POLL_TABLES).containsExactlyInAnyOrderElementsOf(migrated);
         }
     }
 
@@ -246,6 +262,19 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
                                .filter(table -> !"deedpoll_deedpoll".equals(table))
                                .toList());
             assertThat((String) health.getDetails().get("error")).contains("migration job");
+        }
+
+        @Test
+        @DisplayName("is DOWN when only the owned staging table is missing")
+        void isDownWhenOnlyOwnedStagingIsMissing() {
+            probeSchemaContaining(DeedPollSchema.DEED_POLL_TABLES.stream()
+                .filter(table -> !"deedpoll_ownedstage".equals(table))
+                .toArray(String[]::new));
+
+            Health health = new DeedPollSchemaHealthIndicator(resolvingTo(PROBE_SCHEMA)).health();
+
+            assertThat(health.getStatus()).isEqualTo(Status.DOWN);
+            assertThat(health.getDetails().get("missingTables")).isEqualTo(List.of("deedpoll_ownedstage"));
         }
 
         @Test

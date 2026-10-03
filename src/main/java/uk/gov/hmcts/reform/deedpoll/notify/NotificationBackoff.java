@@ -16,21 +16,12 @@ import java.time.LocalDateTime;
  * when a caseworker reads something, so the backoff is a floor on retry frequency rather than a
  * schedule. When there is real behaviour to observe they become properties, which is additive.
  *
- * <p><strong>The lease is not a backoff and the two are deliberately different numbers.</strong> The
- * lease is how long another drain stays off a row whose attempt has not reported back, so it has to
- * exceed the slowest realistic Notify call by a wide margin -- too short and a slow send is sent twice.
- * The backoff is how long to wait after an attempt that is known to have failed, so it starts short:
- * the common temporary failure is a rate limit, which clears in seconds.
+ * <p>The lease bounds pre-send ownership, not permission to replay a send. A durable send-start marker
+ * prevents automatic delivery after expiry; only an explicitly retryable refusal clears that marker.
  */
 public final class NotificationBackoff {
 
-    /**
-     * How long a claimed row stays off other drains before it becomes claimable again.
-     *
-     * <p>Five minutes, which is far longer than any Notify call and short enough that a replica killed
-     * mid-send does not strand an applicant's email for an afternoon. The cost of it being too long is
-     * a delay; the cost of it being too short is a second rejection letter, so it errs long.
-     */
+    /** How long a claim can acquire send authority or settle before recovery must take over. */
     static final Duration LEASE = Duration.ofMinutes(5);
 
     /** The wait after the first failed attempt. Doubles from here. */

@@ -2,6 +2,12 @@
 
 Status: draft for review, 2026-09-26. Depends on [plan 02](completed/deed-poll-api-02-ccd-foundation.md).
 
+**Progress amendment, 2026-10-01:** 03a is merged through PR #73 (`f4eb7db`).
+[Plan 03b — callers and staging](deed-poll-api-03b-cdam-callers-and-staging.md) is now drafted with eight
+implementation tasks and three explicit design flags. It has not been implemented. 03c remains the later
+existing-file migration. The original decisions/tasks below are preserved; the split plans record their
+individual progress. No live onboarding or deployment was checked by this planning update.
+
 **Decision 2026-09-27 (Steve): link first, not on demand.** Document code only ever handles a record that already
 has a CCD case, and refuses one that does not ("case not ready"). It never calls the linking operation itself.
 So this plan now also depends on:

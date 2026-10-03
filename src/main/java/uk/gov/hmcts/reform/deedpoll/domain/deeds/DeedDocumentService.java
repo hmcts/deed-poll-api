@@ -11,10 +11,17 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
+import uk.gov.hmcts.reform.deedpoll.storage.StagedPayloads;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.Set;
@@ -62,8 +69,8 @@ import java.util.stream.Collectors;
  * indistinguishable here, and the second would have this service generate a <em>second</em> deed, which is the
  * failure decision 6 exists to prevent. A caseworker can re-file a document; nobody can un-swear a deed.
  *
- * <p><strong>Written through {@link DocumentService}, not around it.</strong> The blob goes to the
- * {@link uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentStore} seam -- CDAM in plan 03 -- and its row
+ * <p><strong>This service is the filesystem path.</strong> CDAM forms use {@link DeedPreparations}
+ * and durable attachment before enqueue. Here the blob goes through {@link DocumentService} and its row
  * gets the store's key, the mime type, the size and the filename in one transaction, with
  * {@code DocumentService}'s own rollback cleanup behind it: a generated deed whose row never commits leaves no
  * orphaned bytes. Duplicating any of that here would be a second upload path to maintain and the one that did
@@ -101,18 +108,8 @@ public class DeedDocumentService {
     /**
      * The case's deed: the stored one if it has one already, otherwise generated, stored and returned.
      *
-     * <p>Idempotent by reading before writing, in one transaction with the write. That is weaker than a unique
-     * index and it is worth being explicit about why there is not one: the type row's id is data rather than a
-     * constant, so there is no predicate a partial index could carry to say "a deed of a case".
-     *
-     * <p><strong>What the read-before-write does and does not close.</strong> Two concurrent sends of the
-     * <em>same</em> forms email under different request ids both find no deed, both generate one, and the loser
-     * commits its row as well -- because the outbox refuses its insert with a row of the same template, which is
-     * the idempotent {@code 200} rather than a throw. The case then shows two deed rows. That is benign and
-     * deliberately not guarded: {@code DeedGenerator} stamps every zip entry with a fixed time, so the two blobs
-     * are byte-identical, and only one of them was ever emailed. What the read <em>does</em> close is the case
-     * that matters -- a second, <em>different</em> deed -- because the two contradictory sends cannot both reach
-     * here: one of them is refused by the mismatch below.
+     * <p>The case lock serialises generation across request IDs and templates. Legacy duplicates are
+     * refused for investigation; choosing the oldest would hide contradictory evidence.
      *
      * @param deedPollId the case the deed is for
      * @param template which of the court's deeds the case takes -- see {@link DeedTemplate}
@@ -124,42 +121,31 @@ public class DeedDocumentService {
      */
     @Transactional
     public DeedPollSupportingDocument storeDeed(String deedPollId, DeedTemplate template) {
+        deedPolls.lockForDeedPreparation(deedPollId);
         DeedPoll deedPoll = deedPolls.findById(deedPollId)
             .orElseThrow(() -> new NotFoundError("DeedPoll " + deedPollId + " not found"));
 
         Optional<DeedPollSupportingDocument> stored = existingDeed(deedPollId);
         if (stored.isPresent()) {
             DeedPollSupportingDocument existing = stored.get();
-            String held = existing.getDocumentType().getName();
-            if (existing.getDirection() != DocumentDirection.Outgoing) {
-                // Asked before the template is compared, because the direction says whether this row is a deed
-                // at all and a mismatch message would name the wrong cause. See the class comment: this is
-                // either a caseworker's upload mis-filed under a deed's type or a generated deed whose
-                // direction was patched, and this service cannot tell -- so it refuses both rather than email
-                // the first or regenerate over the second.
-                log.warn("Case {} holds an {} document filed as {}, which is not a deed this service sent out, "
-                             + "so the {} send was refused",
-                         deedPollId, existing.getDirection(), held, template.formCode());
-                throw new ConflictError(
-                    "This case holds a document filed as its " + held + " that the court did not send out, so it "
-                        + "is not a deed this service generated. Re-file that document under the type it belongs "
-                        + "to, or withdraw it, before this email can be sent");
+            requireCompatible(existing, template);
+            if (existing.getStorageKey() == null || existing.getSizeBytes() == null
+                || existing.getStorageState() != DocumentStorageState.Local) {
+                throw new ConflictError("The existing deed is unavailable; it must not be regenerated");
             }
-            if (!DeedDocumentTypes.name(template).equals(held)) {
-                // Refused rather than answered with the deed the case holds: the caller is about to send that
-                // deed out under the other deed's covering words. Neither replaced nor returned -- see the
-                // class comment for how this is reached and why it is a caseworker's decision.
-                log.warn("Case {} was asked for its {} deed but already holds {}, so the send was refused",
-                         deedPollId, template.formCode(), held);
-                throw new ConflictError(
-                    "This case already has its " + held + ", and an applicant signs and swears one deed. The "
-                        + template.formCode() + " deed this email carries is a different legal instrument, so "
-                        + "either the case's type is wrong or the deed it already holds has to be withdrawn "
-                        + "before this email can be sent");
+            try (InputStream content = documents.downloadDocument(deedPollId, existing.getId()).stream()) {
+                if (content.transferTo(OutputStream.nullOutputStream()) != existing.getSizeBytes()) {
+                    throw new ConflictError("The existing deed is unavailable; it must not be regenerated");
+                }
+            } catch (IOException | UncheckedIOException | NotFoundError unavailable) {
+                throw new ConflictError("The existing deed is unavailable; it must not be regenerated");
             }
             return existing;
         }
 
+        if (deedPolls.hasDeedPreparation(deedPollId)) {
+            throw new ConflictError("The existing deed preparation must be resolved; it must not be regenerated");
+        }
         GeneratedDeed deed = generator.generate(deedPoll, template);
         DeedPollSupportingDocumentType type = typeFor(template);
         UploadedFile file = new UploadedFile(
@@ -169,17 +155,52 @@ public class DeedDocumentService {
                                         Optional.of(type.getName()), Optional.of(DocumentDirection.Outgoing));
     }
 
-    /**
-     * The case's deed of either kind, oldest first so that a case which somehow holds two answers with the one
-     * an applicant may already have signed.
-     *
-     * <p><strong>Both directions, deliberately.</strong> Narrowing the query to {@code Outgoing} would make a
-     * generated deed whose direction a caseworker patched invisible here, and the next send would generate a
-     * second deed -- so the row is fetched whatever its direction and {@code storeDeed} refuses the ones that
-     * are not the court's own.
-     */
-    private Optional<DeedPollSupportingDocument> existingDeed(String deedPollId) {
-        return documentRows.findFirstByDeedPollIdAndDocumentTypeNameInOrderByCreatedOnAsc(deedPollId, deedTypeNames());
+    /** Digest semantic deed fields with length delimiters; never regenerate a binary for comparison. */
+    public static String inputFingerprint(DeedPoll deedPoll, DeedTemplate template) {
+        StringBuilder values = new StringBuilder(template.name());
+        DeedField.resolve(template, deedPoll).forEach((field, value) ->
+            values.append('|').append(field.name()).append(':').append(value.length()).append(':').append(value));
+        return StagedPayloads.checksum(
+            values.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Inspect both directions and both templates; never silently pick one of several legacy rows. */
+    Optional<DeedPollSupportingDocument> existingDeed(String deedPollId) {
+        var found = documentRows.findByDeedPollIdAndDocumentTypeNameInOrderByCreatedOnAsc(deedPollId, deedTypeNames());
+        if (found.size() > 1) {
+            throw new ConflictError("This case holds multiple deed documents; resolve them before sending forms");
+        }
+        return found.stream().findFirst();
+    }
+
+    void requireCompatible(DeedPollSupportingDocument existing, DeedTemplate template) {
+        String held = existing.getDocumentType().getName();
+        if (existing.getDirection() != DocumentDirection.Outgoing) {
+            // Asked before the template is compared, because the direction says whether this row is a deed
+            // at all and a mismatch message would name the wrong cause. See the class comment: this is
+            // either a caseworker's upload mis-filed under a deed's type or a generated deed whose
+            // direction was patched, and this service cannot tell -- so it refuses both rather than email
+            // the first or regenerate over the second.
+            log.warn("Case {} holds an {} document filed as {}, which is not a deed this service sent out, "
+                         + "so the {} send was refused",
+                     existing.getDeedPoll().getId(), existing.getDirection(), held, template.formCode());
+            throw new ConflictError(
+                "This case holds a document filed as its " + held + " that the court did not send out, so it "
+                    + "is not a deed this service generated. Re-file that document under the type it belongs "
+                    + "to, or withdraw it, before this email can be sent");
+        }
+        if (!DeedDocumentTypes.name(template).equals(held)) {
+            // Refused rather than answered with the deed the case holds: the caller is about to send that
+            // deed out under the other deed's covering words. Neither replaced nor returned -- see the
+            // class comment for how this is reached and why it is a caseworker's decision.
+            log.warn("Case {} was asked for its {} deed but already holds {}, so the send was refused",
+                     existing.getDeedPoll().getId(), template.formCode(), held);
+            throw new ConflictError(
+                "This case already has its " + held + ", and an applicant signs and swears one deed. The "
+                    + template.formCode() + " deed this email carries is a different legal instrument, so "
+                    + "either the case's type is wrong or the deed it already holds has to be withdrawn "
+                    + "before this email can be sent");
+        }
     }
 
     private static Set<String> deedTypeNames() {
@@ -197,7 +218,7 @@ public class DeedDocumentService {
      * ever get an HTTP surface). Either row is a correct place to file the document, and answering
      * deterministically matters more than there being exactly one.
      */
-    private DeedPollSupportingDocumentType typeFor(DeedTemplate template) {
+    DeedPollSupportingDocumentType typeFor(DeedTemplate template) {
         String name = DeedDocumentTypes.name(template);
         return types.findFirstByNameOrderByIdAsc(name).orElseGet(() -> created(template, name));
     }

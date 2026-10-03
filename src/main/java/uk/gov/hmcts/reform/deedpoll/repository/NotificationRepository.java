@@ -254,62 +254,31 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
                              @Param("now") LocalDateTime now,
                              Pageable page);
 
-    /**
-     * Takes one owed notification for this drain, if it is still owed and still due when the statement
-     * runs.
-     *
-     * <p><strong>The conditions in the {@code WHERE} are what make the drain safe across replicas with
-     * no lock, and they are not redundant with the query that found the row.</strong> This is
-     * {@code ReferralRepository.releaseStaleClaim} in shape and for the same argument, which is worth
-     * restating because the consequence here is worse than a duplicated note: between the candidate
-     * list and this statement another replica's drain may have taken the row, sent it and marked it
-     * {@code Sent}, or a previous attempt's lease may have moved {@code nextAttemptAt} into the future.
-     * Each of those makes the predicate false, so this answers {@code 0}, the caller sends nothing, and
-     * an applicant is told once rather than twice. Exactly one caller gets {@code 1} for a given
-     * attempt. There is no lock and none is needed: a single {@code UPDATE} evaluating its own
-     * predicate is atomic, and a concurrent one blocks on the row until this transaction commits and
-     * then re-evaluates against the committed values.
-     *
-     * <p><strong>Pushing {@code "nextAttemptAt"} forward is the lease, not tidiness</strong> -- it is
-     * what stops the same row being claimed again while this caller is still talking to Notify, and it
-     * is what makes a replica that dies mid-send recoverable rather than either stuck or duplicated:
-     * the row is {@code Pending} with its attempt counted, and becomes claimable again when the lease
-     * expires. The outcome handler overwrites it with the real backoff once the outcome is known.
-     *
-     * <p><strong>{@code "attempts"} is incremented here rather than by the outcome</strong>, so an
-     * attempt that never returned still counts. A counter advanced only on a completed attempt would
-     * let one poisonous row be retried forever.
-     *
-     * <p>Native SQL and {@code {@literal @}Modifying}: this <em>is</em> the statement, so it is written
-     * where a reader can check it against the rule rather than assembled by a translator. Identifiers
-     * are quoted because they are mixed case, as {@code ReferenceCounterRepository} explains.
-     * {@code 'Pending'} is an untyped literal, which Postgres resolves against the
-     * {@code "NotificationState"} column it is compared to. {@code clearAutomatically} because a
-     * statement Hibernate did not route through the session leaves any already-loaded copy of that row
-     * stale -- and the caller reads the row straight afterwards, so a stale {@code attempts} would be
-     * the value the backoff was computed from. {@code flushAutomatically} so a pending write by the
-     * caller, such as the previous row's outcome, cannot be lost behind it.
-     *
-     * @param id         the candidate to take
-     * @param now        the same instant the candidate list was taken with, so a row cannot be claimed
-     *                   against a dueness it did not qualify under
-     * @param leaseUntil when this row becomes claimable again if this attempt never reports back
-     * @param claimedBy  who to record as having written it, the service account -- no person drained
-     * @return 1 if this statement took the row, 0 if it was no longer there to take
-     */
+    /** Lock only within a short delivery transaction, never across preparation or Notify. */
+    @Query(nativeQuery = true, value = """
+        SELECT * FROM "deedpoll_notification" WHERE "id" = :id FOR UPDATE
+        """)
+    Optional<Notification> lockForDelivery(@Param("id") UUID id);
+
+    /** Conditional ownership transfer; attempted-but-ambiguous rows can only be settled for investigation. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(nativeQuery = true, value = """
         UPDATE "deedpoll_notification"
            SET "attempts" = "attempts" + 1,
                "nextAttemptAt" = :leaseUntil,
+               "claimOwner" = :owner,
                "modifiedOn" = :now,
                "modifiedBy" = :claimedBy
          WHERE "id" = :id
            AND "state" = 'Pending'
            AND "nextAttemptAt" <= :now
+           AND "sendStartedAt" IS NULL
+           AND "attempts" < :maxAttempts
         """)
     int claimNextDue(@Param("id") UUID id,
                      @Param("now") LocalDateTime now,
                      @Param("leaseUntil") LocalDateTime leaseUntil,
-                     @Param("claimedBy") String claimedBy);
+                     @Param("claimedBy") String claimedBy,
+                     @Param("owner") UUID owner,
+                     @Param("maxAttempts") int maxAttempts);
 }

@@ -91,7 +91,7 @@ class StubNotifyTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"400,PERMANENT", "403,PERMANENT", "429,TEMPORARY", "500,TEMPORARY", "418,TECHNICAL"})
+    @CsvSource({"400,PERMANENT", "403,PERMANENT", "429,TEMPORARY", "500,TECHNICAL", "418,TECHNICAL"})
     @DisplayName("a send answered with any status classifies as the taxonomy says, over real HTTP")
     void classifiesWhateverNotifyAnswersASendWith(int status, NotificationFailure expected) {
         notify.stubSendStatus(status);

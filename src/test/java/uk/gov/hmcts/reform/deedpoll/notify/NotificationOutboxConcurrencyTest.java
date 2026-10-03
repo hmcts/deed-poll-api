@@ -32,14 +32,8 @@ import static org.mockito.Mockito.verify;
 /**
  * The outbox's multi-replica promise against a real Postgres: two drains send one row once between them.
  *
- * <p>{@link NotificationRepositoryTest} proves the claim statement answers one then zero serially, and
- * {@link NotificationOutboxTest} proves a mocked losing claim is not sent. This test joins those halves under
- * the interleaving production creates: the first drain holds the row while its sender is running, the second
- * drain sees the same committed candidate and blocks on the same conditional update, then re-evaluates it after
- * the first commits. If the claim stops re-asserting state or dueness, this sends twice.
- *
- * <p>Not {@code @Transactional}: each worker must enter the proxied outbox with its own {@code REQUIRES_NEW}
- * transaction, and the final read must see what both committed.
+ * <p>The first worker commits its claim and send-start before blocking in the sender. The second worker
+ * must finish without sending that row, even though no database transaction spans the first network call.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 class NotificationOutboxConcurrencyTest extends AbstractPostgresContainerTest {
@@ -75,12 +69,12 @@ class NotificationOutboxConcurrencyTest extends AbstractPostgresContainerTest {
         final Notification owed = owedNotification();
         CountDownLatch firstSending = new CountDownLatch(1);
         CountDownLatch secondStarting = new CountDownLatch(1);
-        given(sender.send(any(Notification.class))).willAnswer(call -> {
+        given(sender.prepare(any(Notification.class))).willAnswer(call -> new PreparedNotification.Ready(() -> {
             firstSending.countDown();
             await(secondStarting);
             sleep(OVERLAP_MILLIS);
             return SendOutcome.sent(PROVIDER_ID, StubNotify.TEMPLATE_VERSION);
-        });
+        }));
 
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
@@ -97,7 +91,7 @@ class NotificationOutboxConcurrencyTest extends AbstractPostgresContainerTest {
             pool.shutdownNow();
         }
 
-        verify(sender, times(1)).send(any(Notification.class));
+        verify(sender, times(1)).prepare(any(Notification.class));
         Notification stored = notifications.findById(owed.getId()).orElseThrow();
         assertThat(stored.getState()).isEqualTo(NotificationState.Sent);
         assertThat(stored.getAttempts()).isOne();

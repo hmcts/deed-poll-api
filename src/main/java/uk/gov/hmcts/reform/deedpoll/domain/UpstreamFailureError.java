@@ -28,4 +28,8 @@ public class UpstreamFailureError extends RuntimeException {
     public UpstreamFailureError(String message) {
         super(message);
     }
+
+    public UpstreamFailureError(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

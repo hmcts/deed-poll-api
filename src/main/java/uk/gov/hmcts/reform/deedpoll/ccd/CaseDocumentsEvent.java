@@ -84,7 +84,7 @@ public class CaseDocumentsEvent {
     public void submit(String caseReference, List<SupportingDocumentReference> documents) {
         String user;
         String service;
-        StartEventResponse start;
+        CaseDataContent payload;
         try {
             user = systemUser.accessToken();
             service = serviceTokens.getObject().generate();
@@ -92,11 +92,15 @@ public class CaseDocumentsEvent {
             throw new NotSubmitted("Not submitted: " + CcdLinkingService.describe("IDAM or S2S", failure));
         }
         try {
-            start = ccd.startEvent(user, service, caseReference, EVENT_ID);
+            StartEventResponse start = ccd.startEvent(user, service, caseReference, EVENT_ID);
+            if (start == null || start.getToken() == null || start.getToken().isBlank()) {
+                throw new IllegalStateException("CCD did not supply an event token");
+            }
+            payload = content(documents, start.getToken());
         } catch (RuntimeException failure) {
             throw new NotSubmitted("Not submitted: " + CcdLinkingService.describe(failure));
         }
-        ccd.createEvent(user, service, caseReference, content(documents, start.getToken()));
+        ccd.createEvent(user, service, caseReference, payload);
     }
 
     CaseDataContent content(List<SupportingDocumentReference> documents, String eventToken) {

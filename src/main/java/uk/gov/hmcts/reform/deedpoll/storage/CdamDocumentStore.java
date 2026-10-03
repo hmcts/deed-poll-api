@@ -163,9 +163,23 @@ public class CdamDocumentStore implements DocumentStore {
      */
     @Override
     public InputStream open(String storageKey) {
+        return openWithToken(storageKey, callerToken());
+    }
+
+    /** Internal correspondence authority, never a retry/fallback from a staff refusal. */
+    InputStream openForService(String storageKey) {
+        String token;
+        try {
+            token = systemUser.accessToken();
+        } catch (RuntimeException failure) {
+            throw new UpstreamFailureError(NO_FILE);
+        }
+        return openWithToken(storageKey, token);
+    }
+
+    private InputStream openWithToken(String storageKey, String caller) {
         UUID id = documentId(storageKey == null ? "" : storageKey)
             .orElseThrow(() -> new NotFoundError("This document's file could not be found"));
-        String caller = callerToken();
         try {
             String service = serviceTokens.getObject().generate();
             ResponseEntity<Resource> response = cdam.getDocumentBinary(caller, service, id);

@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.ccd.SupportingDocumentReference;
+import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentOwner;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
@@ -99,6 +100,27 @@ public class DocumentStorageStates {
         row.setStorageAttemptedOn(AuditClock.now());
         DeedPollSupportingDocument saved = documents.save(row);
         return new Claim(parent.getId(), saved.getId(), owner);
+    }
+
+    /** Claim a committed preparation once. A crash after this commit must never grant another upload. */
+    @Transactional
+    public Claim claimPrepared(String caseId, String documentId) {
+        DeedPoll parent = deedPolls.findById(caseId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+        DocumentOwner owner = DocumentOwner.of(parent);
+        DocumentStorageRule.requireCaseReady(owner.ccdCaseReference());
+        Claim claim = new Claim(caseId, documentId, owner);
+        DeedPollSupportingDocument row = lock(claim);
+        if (row.getStorageState() == DocumentStorageState.Attached) {
+            return claim;
+        }
+        if (row.getStorageState() != DocumentStorageState.UploadPending || row.getStorageUploadAttempts() != 0) {
+            throw new ConflictError(
+                "This document preparation is not ready to use. "
+                    + "Its storage outcome must be resolved before it can be used.");
+        }
+        row.setStorageUploadAttempts((short) 1);
+        row.setStorageAttemptedOn(AuditClock.now());
+        return claim;
     }
 
     /** The upload's answer was lost: it may have reached CDAM. */

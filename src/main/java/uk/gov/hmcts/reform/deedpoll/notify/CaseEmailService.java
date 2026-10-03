@@ -5,7 +5,10 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.IncompleteDataError;
@@ -13,8 +16,12 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedDocumentService;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedRouting;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedTemplate;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.PreparedDeed;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
@@ -26,11 +33,14 @@ import uk.gov.hmcts.reform.deedpoll.entity.Notification;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
+import uk.gov.hmcts.reform.deedpoll.storage.CdamDocumentUploads;
 import uk.gov.service.notify.NotificationClient;
 import uk.gov.service.notify.NotificationClientException;
 
@@ -90,12 +100,13 @@ import java.util.stream.Collectors;
  * case with no address really would be refused twice. A <em>preview</em> checks the address not at all: reading
  * what would go out before anybody has chased the applicant for an address is legitimate.
  *
- * <p><strong>Nothing here sends.</strong> A send resolves, enqueues in the caller's transaction -- stamping the
+ * <p><strong>Nothing here sends.</strong> A send resolves, then enqueues in a local transaction -- stamping the
  * referral's {@code confirmationRequestedAt} in that same transaction where the email is the one that asks the
  * applicant to reply, and writing one case note so the email appears on the only timeline this domain has, which
  * are the two things a send writes outside the outbox -- and returns;
  * the drain is what talks to Notify, and it is called after this transaction commits -- see
  * {@link NotificationOutbox}, and {@code CaseworkerEmailController} for why the order is not an accident.
+ * CDAM forms preparation and attachment commit before final enqueue; they survive an enqueue refusal.
  */
 @Slf4j
 @Service
@@ -279,6 +290,9 @@ public class CaseEmailService {
      * fresh bytes on every retry of one journey and store none of them.
      */
     private final DeedDocumentService deeds;
+    private final DeedPreparations preparations;
+    private final Optional<CdamDocumentUploads> remote;
+    private final TransactionTemplate transaction;
 
     public CaseEmailService(DeedPollRepository deedPolls,
                            ReferralRepository referrals,
@@ -289,7 +303,10 @@ public class CaseEmailService {
                            ReferralService referralService,
                            NoteService notes,
                            DeedDocumentService deeds,
-                           ObjectMapper json) {
+                           ObjectMapper json,
+                           PlatformTransactionManager transactions,
+                           DeedPreparations preparations,
+                           Optional<CdamDocumentUploads> remote) {
 
         this.deedPolls = deedPolls;
         this.referrals = referrals;
@@ -301,6 +318,9 @@ public class CaseEmailService {
         this.notes = notes;
         this.deeds = deeds;
         this.json = json;
+        this.transaction = new TransactionTemplate(transactions);
+        this.preparations = preparations;
+        this.remote = remote;
     }
 
     /**
@@ -535,21 +555,108 @@ public class CaseEmailService {
      * @throws IncompleteDataError if the case has no applicant email address
      * @throws uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError if the slots are not acceptable
      */
-    @Transactional
     public SendReceipt send(String deedPollId,
                            EmailTemplate template,
                            Map<String, Object> slots,
                            UUID requestId,
                            CurrentUser caller) {
 
+        if (remote.isEmpty() || FormsForCompletion.deedOf(template).isEmpty()) {
+            return transaction.execute(status -> sendLocal(deedPollId, template, slots, requestId, caller));
+        }
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("CDAM forms correspondence must not start inside a transaction");
+        }
+        FormsSnapshot before = transaction.execute(status -> inspectForms(deedPollId, template, slots, requestId));
+        if (before.receipt() != null) {
+            return before.receipt();
+        }
+        PreparedDeed prepared = preparations.prepare(deedPollId, requireDeed(template));
+        // Attached preparations reuse their stored bytes, including after a failed read-back.
+        boolean attached = transaction.execute(status -> documents.findByIdAndDeedPollId(
+            prepared.documentId(), deedPollId).orElseThrow(() -> new ConflictError(
+                "The prepared deed is unavailable. Review its storage outcome before retrying.")).getStorageState()
+            == DocumentStorageState.Attached);
+        if (!attached) {
+            byte[] bytes = preparations.content(deedPollId, prepared.documentId());
+            remote.orElseThrow().continuePrepared(deedPollId, prepared.documentId(), new DocumentUpload(
+                deedPollId, null, new UploadedFile(bytes, prepared.originalName(), prepared.mimeType(), bytes.length),
+                prepared.originalName(), DocumentDirection.Outgoing));
+        }
+        preparations.verifyAndRelease(deedPollId, prepared);
+        return transaction.execute(status -> {
+            deedPolls.lockForDeedPreparation(deedPollId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+            FormsSnapshot after = inspectForms(deedPollId, template, slots, requestId);
+            if (after.receipt() != null) {
+                return after.receipt();
+            }
+            if (!before.equals(after)) {
+                throw new ConflictError("This case changed while its deed was being prepared. "
+                    + "Review the case before sending this email.");
+            }
+            preparations.requireCurrent(deedPollId, prepared);
+            Entitled entitled = entitle(deedPollId, template);
+            Composed composed = compose(entitled, template, slots, deed -> prepared.documentId());
+            return enqueue(deedPollId, template, requestId, caller, after.recipient(), composed);
+        });
+    }
+
+    /** Only immutable values cross the remote boundary; matching requests resolve before any storage work. */
+    private FormsSnapshot inspectForms(String caseId, EmailTemplate template, Map<String, Object> slots, UUID key) {
+        Entitled entitled = entitle(caseId, template);
+        String recipient = requireRecipient(entitled.deedPoll());
+        final Composed preview = compose(entitled, template, slots, deed -> "prepared-deed");
+        Optional<Notification> same = notifications.findByDeedPollIdAndRequestId(caseId, key);
+        if (same.isPresent()) {
+            Notification row = same.get();
+            String documentKey = template.documentKeys().iterator().next();
+            Composed actual = compose(entitled, template, slots,
+                deed -> Objects.toString(row.getPersonalisation().get(documentKey), ""));
+            if (!isTheSameSend(row, template, actual.cause().referralId(), recipient,
+                asJson(actual.personalisation()))) {
+                throw new ConflictError(REQUEST_ALREADY_USED);
+            }
+            return new FormsSnapshot(null, null, null, null, SendReceipt.alreadyOwed(row));
+        }
+        Optional<Notification> occupant = occupantOfTheGroupSlot(caseId, null, template);
+        if (occupant.isPresent()) {
+            if (!template.name().equals(occupant.get().getTemplate())) {
+                throw new ConflictError(alreadyRequested(null, occupant.get()));
+            }
+            return new FormsSnapshot(null, null, null, null, SendReceipt.alreadyOwed(occupant.get()));
+        }
+        if (!properties.isProvisioned(template)) {
+            throw new UpstreamFailureError("This email template is not configured for sending");
+        }
+        return new FormsSnapshot(recipient, asMap(asJson(preview.personalisation())),
+            DeedDocumentService.inputFingerprint(entitled.deedPoll(), requireDeed(template)),
+            entitled.deedPoll().getCcdCaseReference(), null);
+    }
+
+    private record FormsSnapshot(String recipient, Map<String, Object> personalisation, String fingerprint,
+                                 String caseReference, SendReceipt receipt) {
+        @Override
+        public String toString() {
+            return "FormsSnapshot[redacted]";
+        }
+    }
+
+    private SendReceipt sendLocal(String deedPollId, EmailTemplate template, Map<String, Object> slots,
+                                  UUID requestId, CurrentUser caller) {
+
         // Entitlement, then the address, then the payload -- the order the four answers are documented in, and the
         // reason this is two calls rather than one: a case with no address is told so before a caseworker is asked
         // to correct what they typed.
         Entitled entitled = entitle(deedPollId, template);
         String recipient = requireRecipient(entitled.deedPoll());
-        // Composing a forms email generates and stores the case's deed, in this transaction -- see
+        // Filesystem forms composition generates and stores the deed in this local transaction -- see
         // deedDocumentId. Nothing happens here for a template that carries no document.
         Composed composed = compose(entitled, template, slots, deed -> deedDocumentId(deedPollId, template, deed));
+        return enqueue(deedPollId, template, requestId, caller, recipient, composed);
+    }
+
+    private SendReceipt enqueue(String deedPollId, EmailTemplate template, UUID requestId,
+                                CurrentUser caller, String recipient, Composed composed) {
         // Null for a case-driven email, which is the column's own null rather than a stand-in: such a row sits
         // outside the partial unique index, so nothing about it is keyed on a referral it does not have.
         UUID referralId = composed.cause().referralId();
@@ -790,11 +897,9 @@ public class CaseEmailService {
      * second note either -- the applicant is owed one email, so the timeline says it once, and a caseworker
      * double-clicking would otherwise leave a case reading as though the applicant had been written to twice.
      *
-     * <p><strong>Here rather than in the drain, and the reason is a duplicate-email hazard rather than
-     * taste.</strong> {@link NotificationOutbox#drain(int)} runs a whole batch inside one
-     * {@code REQUIRES_NEW}, so a note write that failed there would roll back state changes for rows Notify had
-     * already accepted and the next drain would send them again. This transaction holds one send, is the
-     * caseworker's own, and the controller drains only after it commits.
+     * <p>The enqueue note belongs to this local transaction, so an email is never owed without its marker.
+     * {@link NotificationOutbox#drain(int)} runs after commit and records each delivery outcome separately;
+     * its terminal-failure note commits atomically with that outcome.
      *
      * <p><strong>Last of the three writes, after the outbox row and after the clock.</strong> Not for safety --
      * all three commit or roll back together -- but because both statements before it are
@@ -1297,9 +1402,9 @@ public class CaseEmailService {
     /**
      * The id of this case's deed, generating and storing it if the case has none yet.
      *
-     * <p><strong>In the send's own transaction, which is what makes the row and the deed one act.</strong> If the
-     * enqueue is then refused -- the other forms email already asked for, the request id reused -- the document row
-     * and its blob roll back with the refusal, so a case never holds a deed for an email nobody was owed.
+     * <p><strong>Used by the filesystem send path inside its local transaction.</strong> If enqueue is refused,
+     * its new document row and blob roll back together. CDAM forms use durable preparation before enqueue
+     * instead: a confirmed attachment survives refusal and is reused, never regenerated.
      *
      * <p><strong>Generated at most once per case</strong> (decision 6): a retry of the same compose journey finds
      * the deed the first attempt stored, which is why the frozen personalisation of an idempotent repeat compares

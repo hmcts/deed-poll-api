@@ -10,6 +10,11 @@ LOC020/LOC022 deeds, Notify's drain-time retrieval, pre-case staging) and 03c (m
 `deed-poll-api-03a-cdam-core-round-trip`. Tasks 6–8 and their final counts are recorded below. CDAM remains off
 by default; no live onboarding or AAT smoke has been performed. The earlier draft and decisions remain as history.
 
+**Merge and handoff amendment, 2026-10-01:** merged to `master` through PR #73 (`f4eb7db`), confirmed from the
+remote history. [03b — callers and staging](deed-poll-api-03b-cdam-callers-and-staging.md) is now drafted;
+its proposed decisions and implementation tasks are separate from this completed work. No new live validation
+was performed by that planning update.
+
 ## Overview
 
 Supporting documents live on the pod's filesystem today (`LocalFilesystemDocumentStore`), behind a seam that takes

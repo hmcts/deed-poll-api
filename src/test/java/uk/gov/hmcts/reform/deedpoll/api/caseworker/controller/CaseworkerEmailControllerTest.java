@@ -598,7 +598,7 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("502s a Notify outage too, with the verdict that tells it apart from a refusal")
     void previewAnswers502WhenNotifyIsUnwell() throws Exception {
-        // The same status for a temporary failure as for a permanent one, deliberately: a preview has no retry to
+        // The same status for a technical failure as for a permanent one, deliberately: a preview has no retry to
         // model -- the caseworker's retry is pressing the button again -- so a 503 would tell them nothing they
         // could act on differently. The verdict in the message is what distinguishes the two for whoever reads it,
         // and the outbox is where a retry is actually modelled.
@@ -610,7 +610,7 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
 
         authorised(post(previewOf(refusedCase())), "{}")
             .andExpect(status().isBadGateway())
-            .andExpect(jsonPath("$.error").value(Matchers.containsString("TEMPORARY")));
+            .andExpect(jsonPath("$.error").value(Matchers.containsString("TECHNICAL")));
     }
 
     @Nested
@@ -703,9 +703,9 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("a 500 leaves the row Pending, counted once and backed off")
+        @DisplayName("a 429 leaves the row Pending, counted once and backed off")
         void temporaryFailureBacksTheRowOff() throws Exception {
-            NOTIFY.stubSendStatus(500);
+            NOTIFY.stubSendStatus(429);
 
             authorised(post(sendOf(refusedCase())), "{}").andExpect(status().isOk());
 
@@ -714,7 +714,7 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 assertThat(row.getAttempts()).isOne();
                 assertThat(row.getProviderNotificationId()).isNull();
                 assertThat(row.getFailureReason())
-                    .isEqualTo("TEMPORARY: GOV.UK Notify refused the send with status 500");
+                    .isEqualTo("TEMPORARY: GOV.UK Notify refused the send with status 429");
                 assertThat(row.getNextAttemptAt()).isAfter(row.getModifiedOn());
             });
             assertThat(NOTIFY.emailRequests()).hasSize(1);
@@ -1136,9 +1136,9 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
             @Test
             @DisplayName("writes no failure note while the send is still being retried")
             void writesNoFailureNoteWhileTheSendIsStillOwed() throws Exception {
-                // A 500 leaves the row Pending and backed off, so the email may well go out on the next drain. A
+                // A 429 leaves the row Pending and backed off, so the email may well go out on the next drain. A
                 // note now would say it failed, and notes are never revised.
-                NOTIFY.stubSendStatus(500);
+                NOTIFY.stubSendStatus(429);
                 String caseId = refusedCase();
 
                 authorised(post(sendOf(caseId)), "{}").andExpect(status().isOk());

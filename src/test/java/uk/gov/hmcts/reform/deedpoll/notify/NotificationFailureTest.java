@@ -29,14 +29,14 @@ class NotificationFailureTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {429, 500})
-    @DisplayName("429 and 500 are temporary, because the same request would have worked at another moment")
-    void rateLimitedAndServerErrorAreTemporary(int status) {
+    @ValueSource(ints = {429})
+    @DisplayName("429 is temporary because the rate limit is a known refusal")
+    void rateLimitedIsTemporary(int status) {
         assertThat(NotificationFailure.classify(status)).isEqualTo(NotificationFailure.TEMPORARY);
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {0, 200, 401, 404, 409, 418, 502, 503})
+    @ValueSource(ints = {0, 200, 401, 404, 409, 418, 500, 502, 503})
     @DisplayName("anything else is technical, because nobody has read what it means")
     void everythingElseIsTechnical(int status) {
         // 0 is the client's own value for a call that never reached Notify -- a DNS failure, a reset, a read

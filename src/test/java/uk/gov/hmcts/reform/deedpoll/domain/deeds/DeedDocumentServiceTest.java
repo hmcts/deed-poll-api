@@ -101,6 +101,9 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
     @Autowired
     private ReferenceCounterRepository referenceCounters;
 
+    @Autowired
+    private org.springframework.transaction.PlatformTransactionManager transactions;
+
     @MockitoSpyBean
     private DeedGenerator generator;
 
@@ -383,6 +386,29 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
         documentService.removeDocument(caseId, document.getId());
 
         assertThat(documents.count()).isZero();
+        assertThat(storedBlobs()).isEmpty();
+    }
+
+    @Test
+    void missingFilesystemDeedIsRefusedWithoutRegeneration() throws IOException {
+        String caseId = storedCase();
+        var first = deedDocuments.storeDeed(caseId, DeedTemplate.ADULT);
+        Files.delete(STORE_ROOT.resolve(first.getStorageKey()));
+        assertThatThrownBy(() -> deedDocuments.storeDeed(caseId, DeedTemplate.ADULT))
+            .isInstanceOf(ConflictError.class);
+        assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(caseId)).hasSize(1);
+        verify(generator, times(1)).generate(any(), any());
+    }
+
+    @Test
+    void failedFilesystemEnqueueRollsBackTheRowAndBlob() {
+        String caseId = storedCase();
+        assertThatThrownBy(() -> new org.springframework.transaction.support.TransactionTemplate(transactions)
+            .execute(status -> {
+                deedDocuments.storeDeed(caseId, DeedTemplate.ADULT);
+                throw new IllegalStateException("Final enqueue refused");
+            })).isInstanceOf(IllegalStateException.class);
+        assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(caseId)).isEmpty();
         assertThat(storedBlobs()).isEmpty();
     }
 

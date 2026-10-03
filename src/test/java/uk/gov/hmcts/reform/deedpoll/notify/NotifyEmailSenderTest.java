@@ -6,8 +6,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
+import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
 
 import java.util.Map;
 import java.util.UUID;
@@ -44,7 +46,7 @@ class NotifyEmailSenderTest {
     @BeforeEach
     void startStub() {
         notify.start();
-        uploads = new DocumentUploads(mock(DocumentService.class), notify.properties());
+        uploads = new DocumentUploads(mock(CorrespondenceDocumentReader.class), notify.properties());
         sender = new NotifyEmailSender(notify.client(), notify.properties(), uploads);
     }
 
@@ -53,12 +55,52 @@ class NotifyEmailSenderTest {
         notify.stop();
     }
 
+    static java.util.stream.Stream<EmailTemplate> documentFreeTemplates() {
+        return java.util.Arrays.stream(EmailTemplate.values()).filter(t -> t.documentKeys().isEmpty());
+    }
+
+    @ParameterizedTest
+    @MethodSource("documentFreeTemplates")
+    void everyDocumentFreeTemplatePreparesWithoutSendingAndDeliversFrozenContent(EmailTemplate template) {
+        Notification row = notification();
+        row.setTemplate(template.name());
+        PreparedNotification prepared = sender.prepare(row);
+        assertThat(prepared).isInstanceOf(PreparedNotification.Ready.class);
+        assertThat(notify.emailRequests()).isEmpty();
+        assertThat(((PreparedNotification.Ready) prepared).delivery().send()).isInstanceOf(SendOutcome.Sent.class);
+        assertThat(notify.emailRequests()).hasSize(1);
+    }
+
+    @Test
+    void clientSendRefusalDoesNotLogItsResponseBody() throws Exception {
+        var client = mock(uk.gov.service.notify.NotificationClient.class);
+        org.mockito.Mockito.when(client.sendEmail(org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyMap(),
+            org.mockito.ArgumentMatchers.anyString()))
+            .thenThrow(new uk.gov.service.notify.NotificationClientException("private response body"));
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(NotifyEmailSender.class);
+        var logs = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            assertThat(deliver(new NotifyEmailSender(client, notify.properties(), uploads), notification()))
+                .isInstanceOf(SendOutcome.Failed.class);
+            assertThat(logs.list).singleElement().satisfies(event -> {
+                assertThat(event.getFormattedMessage()).contains("status").doesNotContain("private response body");
+                assertThat(event.getThrowableProxy()).isNull();
+            });
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+    }
+
     @Test
     @DisplayName("returns Notify's id and template version, sending only the values frozen on the row")
     void sendsTheFrozenRow() throws Exception {
         Notification row = notification();
 
-        SendOutcome outcome = sender.send(row);
+        SendOutcome outcome = deliver(sender, row);
 
         assertThat(outcome)
             .isEqualTo(new SendOutcome.Sent(
@@ -89,7 +131,7 @@ class NotifyEmailSenderTest {
         // A template whose preview demands a value for its file, which a send does not: the row goes out as frozen.
         notify.stubTemplateRequiring("judges_reason", "LOC021 statutory declaration.pdf");
 
-        assertThat(sender.send(notification())).isInstanceOf(SendOutcome.Sent.class);
+        assertThat(deliver(sender, notification())).isInstanceOf(SendOutcome.Sent.class);
         assertThat(notify.emailRequests()).singleElement().satisfies(request -> {
             JsonNode personalisation = JSON.readTree(request.getBodyAsString()).path("personalisation");
             assertThat(personalisation.has("LOC021 statutory declaration.pdf")).isFalse();
@@ -102,7 +144,7 @@ class NotifyEmailSenderTest {
     void classifiesAPermanentRefusal() {
         notify.stubSendStatus(400);
 
-        assertThat(sender.send(notification()))
+        assertThat(deliver(sender, notification()))
             .isEqualTo(SendOutcome.failed(
                 NotificationFailure.PERMANENT,
                 "GOV.UK Notify refused the send with status 400"));
@@ -110,13 +152,13 @@ class NotifyEmailSenderTest {
     }
 
     @Test
-    @DisplayName("turns a 500 response into a temporary verdict")
+    @DisplayName("parks a 500 response because delivery may have started")
     void classifiesATemporaryFailure() {
         notify.stubSendStatus(500);
 
-        assertThat(sender.send(notification()))
+        assertThat(deliver(sender, notification()))
             .isEqualTo(SendOutcome.failed(
-                NotificationFailure.TEMPORARY,
+                NotificationFailure.TECHNICAL,
                 "GOV.UK Notify refused the send with status 500"));
         assertThat(notify.emailRequests()).hasSize(1);
     }
@@ -124,8 +166,8 @@ class NotifyEmailSenderTest {
     @Test
     @DisplayName("sends the reply-to address with the email that invites a reply, and only that one")
     void sendsTheReplyToForTheEmailThatInvitesOne() {
-        sender.send(confirmationRow());
-        sender.send(notification());
+        deliver(sender, confirmationRow());
+        deliver(sender, notification());
 
         assertThat(notify.emailRequests()).hasSize(2);
         assertThat(replyToOf(0))
@@ -151,7 +193,7 @@ class NotifyEmailSenderTest {
                                  notify.properties().templates(), "", StubNotify.RETENTION_WEEKS),
             uploads);
 
-        assertThat(noReplyTo.send(confirmationRow()))
+        assertThat(deliver(noReplyTo, confirmationRow()))
             .isEqualTo(SendOutcome.failed(
                 NotificationFailure.PERMANENT,
                 "no reply-to address is configured, and the request-confirmation-to-proceed email asks for a "
@@ -159,7 +201,7 @@ class NotifyEmailSenderTest {
         assertThat(notify.emailRequests()).as("and nothing was sent from no-reply").isEmpty();
 
         // The email that invites no reply is unaffected: it needs no inbox and is sent as it always was.
-        assertThat(noReplyTo.send(notification())).isInstanceOf(SendOutcome.Sent.class);
+        assertThat(deliver(noReplyTo, notification())).isInstanceOf(SendOutcome.Sent.class);
         assertThat(notify.emailRequests()).hasSize(1);
     }
 
@@ -169,7 +211,7 @@ class NotifyEmailSenderTest {
         Notification row = notification();
         row.setTemplate("RENAMED_AFTER_ENQUEUE");
 
-        assertThat(sender.send(row))
+        assertThat(deliver(sender, row))
             .isEqualTo(SendOutcome.failed(
                 NotificationFailure.PERMANENT,
                 "no such email template: RENAMED_AFTER_ENQUEUE"));
@@ -188,7 +230,7 @@ class NotifyEmailSenderTest {
         row.setTemplate(EmailTemplate.FORMS_FOR_COMPLETION_ADULT.name());
         row.setPersonalisation(Map.of());
 
-        assertThat(sender.send(row))
+        assertThat(deliver(sender, row))
             .isEqualTo(SendOutcome.failed(
                 NotificationFailure.TECHNICAL,
                 "the " + FormsForCompletionPersonalisation.DEED_DOCUMENT
@@ -227,4 +269,11 @@ class NotifyEmailSenderTest {
         row.setCreatedBy("A Caseworker");
         return row;
     }
+
+    private static SendOutcome deliver(NotificationSender sender, Notification row) {
+        PreparedNotification prepared = sender.prepare(row);
+        return prepared instanceof PreparedNotification.Refused refused ? refused.outcome()
+            : ((PreparedNotification.Ready) prepared).delivery().send();
+    }
+
 }

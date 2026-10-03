@@ -22,9 +22,8 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SentEmailResponse;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedDocumentService;
-import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
-import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
@@ -37,6 +36,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.NotificationRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
+import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
 import uk.gov.service.notify.NotificationClient;
 
 import java.lang.reflect.RecordComponent;
@@ -167,7 +167,8 @@ class NotificationSecurityTest {
             // the service rather than what reaches the disk. DeedDocumentServiceTest is where the storing itself
             // meets a database.
             deeds,
-            JSON);
+            JSON, mock(org.springframework.transaction.PlatformTransactionManager.class),
+            mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty());
     }
 
     @Test
@@ -380,15 +381,14 @@ class NotificationSecurityTest {
             Notification owed = notification();
             owed.setTemplate(EmailTemplate.CHASE_MISSING_DOCUMENTS.name());
             owed.setPersonalisation(slots);
-            new NotifyEmailSender(
+            deliver(new NotifyEmailSender(
                 stub.client(),
                 new NotifyProperties(
                     stub.baseUrl(), stub.apiKey(),
                     Map.of(EmailTemplate.CHASE_MISSING_DOCUMENTS.key(), StubNotify.TEMPLATE_ID),
                     StubNotify.REPLY_TO_ID,
                     StubNotify.RETENTION_WEEKS),
-                uploads(stub))
-                .send(owed);
+                uploads(stub)), owed);
 
             assertThat(logs.list)
                 .isNotEmpty()
@@ -542,9 +542,9 @@ class NotificationSecurityTest {
         logger.addAppender(logs);
         try {
             NotifyEmailSender sender = new NotifyEmailSender(stub.client(), stub.properties(), uploads(stub));
-            sender.send(notification());
+            deliver(sender, notification());
             stub.stubSendStatus(500);
-            sender.send(notification());
+            deliver(sender, notification());
 
             assertThat(logs.list)
                 .extracting(ILoggingEvent::getFormattedMessage)
@@ -626,7 +626,7 @@ class NotificationSecurityTest {
      * refused for a reason this class is not about.
      */
     private static DocumentUploads uploads(StubNotify stub) {
-        return new DocumentUploads(mock(DocumentService.class), stub.properties());
+        return new DocumentUploads(mock(CorrespondenceDocumentReader.class), stub.properties());
     }
 
     /** The refusal the confirmation email is sent off: raised for a non-publication request, and decided. */
@@ -648,4 +648,11 @@ class NotificationSecurityTest {
         notification.setCreatedBy(CASEWORKER.name());
         return notification;
     }
+
+    private static SendOutcome deliver(NotificationSender sender, Notification row) {
+        PreparedNotification prepared = sender.prepare(row);
+        return prepared instanceof PreparedNotification.Refused refused ? refused.outcome()
+            : ((PreparedNotification.Ready) prepared).delivery().send();
+    }
+
 }

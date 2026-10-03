@@ -16,7 +16,10 @@ calls it from a sweep on the case list request, **switched off by default**, and
 `NeedsRepair` under `/caseworker/ccd-attempts`. The relational record stays authoritative; CCD holds a projection of
 it. It is proven against WireMock and a local cftlib stack on placeholder identifiers only — **nothing is
 onboarded**, and `docs/CCD-SMOKE.md` is the AAT procedure that waits on it. Plan 03a adds CDAM uploads behind
-`deedpoll.documents.store` (the filesystem stays the default), attached to the case by its document event. See
+`deedpoll.documents.store` (the filesystem stays the default), attached to the case by its document event.
+Plan 03b adds durable deed preparation, service-authorised correspondence reads, per-row notification claims,
+and owned staging with bounded scheduled expiry. The citizen adapter is absent; existing Local rows still
+require 03c. Local proof is not onboarding or rollout approval. See
 `docs/RESUME.md` and `docs/plans/`.
 
 ## Layout
@@ -57,8 +60,19 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
 - **CDAM ships off by default.** `CdamOnboarding` refuses unconfirmed CCD identifiers and local/default CDAM
   endpoints when CDAM is enabled; only `test`/`cftlib` against loopback permit placeholders. These are local test
   profiles, never deployment profiles. The configuration check cannot prove external onboarding or staff access.
-  Generated deeds and Notify retrieval are still 03b, existing-file migration is 03c; do not enable CDAM as a
-  production cutover on 03a alone. Read `docs/CDAM-RECOVERY.md` before acting on an uncertain document.
+  Generated deeds and Notify retrieval now work locally on CDAM; existing-file migration remains 03c.
+  Production cutover still requires onboarding, migration and the operator smoke. Read `docs/CDAM-RECOVERY.md`
+  before acting on an uncertain document.
+- **Prepared bytes are recovery evidence, not disposable drafts.** V26/V27 reserve one deed identity, checksum
+  and input fingerprint per case before remote work. Retain its payload until Attached read-back verifies it;
+  a failed final enqueue never authorises regeneration. The shared `DOCUMENT_STAGING_MAX_TOTAL_BYTES` cap
+  also applies when owned staging is disabled. Zero refuses new preparations.
+- **Owned staging is a trusted domain seam, not a citizen upload API.** V29 binds owner kind/ID, authenticated
+  subject, operation UUID and original expiry. Only Staged rows expire; Promoting and generated preparations
+  retain their bytes. Admission, promotion and cleanup use short commits and preserve ambiguous outcomes.
+  All production quotas, durations and cleanup budgets need release agreement. No retry extends expiry.
+  Before disabling staging, quiesce its adapters/promoters and account for the stopped cleanup scheduler.
+  Recovery, monitoring queries, rollout boundaries and 03c inputs are in `docs/CDAM-RECOVERY.md`.
 - **cftlib stubs only dm-store.** Its fixture is compiled from `src/dmStoreStub/java` into `test` and `cftlibTest`;
   never add the whole `test.output` to cftlib's classpath, because its package scan would run the entire unit suite
   inside the CFT stack. Update the pinned spec, response provenance and stub together after a verified change.
@@ -152,14 +166,14 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
 - **No live calls to CCD, CDAM, IDAM or payments in any test.** WireMock only (`StubIdam`, `StubS2s`); there are
   no credentials. The one exception is `cftlibTest`, which runs CCD in-process on placeholders and is local only.
 - **No secrets.** Everything by environment variable, with a non-working default.
-- **A case note written from the outbox drain must be impossible to refuse.** `NotificationOutbox.drain` runs a
-  whole batch in one `REQUIRES_NEW`, and the note the transition into `Failed` writes is not guarded — so a note
-  the notes column or validator rejects rolls back rows Notify has *already accepted*, and the next drain emails
-  those applicants again. `EmailNotes` therefore composes from fixed prose plus a name bounded at 200, never from
-  `failureReason` or any other external text, and `EmailNotesTest` pins both notes under `NoteForm.MAX_NOTE_LENGTH`
-  for *every* `EmailTemplate` member, so a new template with a verbose `displayName()` fails a test instead of
-  failing mid-drain. The sent note is in `CaseEmailService.send`'s own transaction for the same reason, not in the
-  drain. `NotificationOutboxTest.oneRefusedNoteTakesTheBatchWithIt` is what keeps that cost visible.
+- **The outbox must run outside any caller transaction.** `NotificationDeliveryTransactions` commits claims,
+  send-start and outcomes separately; document reads and Notify calls run outside them. Owner UUID plus attempt
+  generation and an unexpired lease fence send-start and settlement. Expired pre-send claims consume the eight
+  attempts; a row with `sendStartedAt` is never automatically delivered again unless a known temporary refusal
+  was committed. Unknown sends stop as `Failed`/`TECHNICAL` for investigation (ADR-0007). Outcome plus its one
+  failure note commit atomically; a later failure cannot undo an earlier send. `EmailNotes` keeps the note bounded
+  so it cannot prevent settlement. Do not reset evidence to unstick a row. Old drain binaries must be fully stopped
+  before V28/new workers, and cannot resume on this ledger without reviewed reconciliation. See `CDAM-CALLERS.md`.
 - **Every email event puts exactly one marker on the Notes grid** — one on a fresh enqueue, one on the transition
   *into* `NotificationState.Failed` (the transition, not a `PERMANENT` verdict, which would miss the
   exhausted-retry route), and none for a transient failure or an idempotent repeat send. A new send or settle path
@@ -200,15 +214,10 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
   `existingDeed` still reads **both** directions on purpose — narrowing the query would hide a generated deed whose
   direction a caseworker patched, and the next send would store a *second* legal instrument, which is the one
   failure the generate-once rule exists to prevent. Refusing costs one correction; a sworn deed cannot be undone.
-- **A read-only `@Transactional` method that throws still poisons its caller's transaction**, unless it says
-  otherwise. Spring's default marks a *participating* transaction rollback-only, so the caller's `catch` decides
-  nothing and its commit fails anyway. `DocumentUploads` catches an unreadable document and answers a retryable
-  refusal inside the drain's single transaction, and once one missing blob rolled back rows Notify had already
-  accepted and emailed those applicants again on the next drain. `DocumentService.downloadDocument` therefore
-  carries no `@Transactional` at all: its read is a `TransactionTemplate` callback that returns an empty answer
-  rather than throwing, and every refusal and the store call come after it. That shape is also what keeps a CDAM
-  download (a remote call) out of a transaction of its own. Putting the annotation back, or throwing inside the
-  callback, reintroduces the double email.
+- **A read-only `@Transactional` method that throws still poisons a participating caller transaction.**
+  `DocumentService.downloadDocument` uses a short read template and throws refusals after it, keeping remote
+  reads outside database transactions. The drain now rejects an outer transaction and commits only the local
+  claim/outcome steps. Do not wrap a document read or the drain in a new outer transaction.
 
 ## Conventions worth knowing before writing code
 
@@ -282,7 +291,7 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
   *copy* of the personalisation: a token expires and would be at rest in the database, so the row is read and
   never rewritten. The ids it resolves come from `EmailTemplate.documentKeys()` rather than from the map — an
   arbitrary personalisation value is not a document id — and they are read only through the case-scoped
-  `DocumentService.downloadDocument`, because the value came out of a stored `jsonb` column and would otherwise be
+  internal `CorrespondenceDocumentReader`, because the value came out of a stored `jsonb` column and would otherwise be
   a way to make one applicant's email carry another's deed. `confirm_email_before_download` is always true. **No
   failure here is `PERMANENT`** except an unconfigured retention, because `PERMANENT` is the one verdict whose row
   can be replaced and a replaced forms email is a second deed for one change of name. The rest divides on whether
