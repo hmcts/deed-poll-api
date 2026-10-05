@@ -10,9 +10,17 @@ def product = "deed-poll"
 def component = "api"
 
 withPipeline(type, product, component) {
-  // The CNP VM agent has no Docker daemon, so the Testcontainers-backed `integration` source set
-  // cannot run here. `build.gradle` leaves it wired into `check` when this is unset, which is what a
-  // local run wants. Set on BOTH paths, unlike pcs-api's onPR()-only: this repo's master agent has no
-  // Docker either, and master build #3 failed for the same reason.
-  env.INTEGRATION_TESTS_ENABLED = "false"
+  // The environment's Ubuntu agent image supplies Docker and grants jenkinsssh access. Include
+  // PostgreSQL-backed tests on PR and master builds so Sonar receives their coverage.
+  env.INTEGRATION_TESTS_ENABLED = "true"
+  env.TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX = "hmctsprod.azurecr.io/imported/"
+
+  before('test') {
+    sh label: 'Check Docker access for PostgreSQL tests', script: 'docker info --format "{{.ServerVersion}}"'
+  }
+
+  // The shared library publishes the test source set; publish integration results here as well.
+  afterAlways('test') {
+    junit testResults: '**/test-results/integration/*.xml', allowEmptyResults: true
+  }
 }

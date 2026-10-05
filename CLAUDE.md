@@ -193,7 +193,7 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
   `CaseEmailService.occupantOfTheGroupSlot`, because the availability check and the refusal must agree; the enum
   flag and V20's `IN` list state the same fact twice and `EmailExclusionGroupTest` holds them together. The
   index-existence check a named target used to buy is gone too: `NotificationRepositoryTest` against real Postgres
-  is the only place any conflict clause executes, and Docker-free CI does not run it.
+  is the only place any conflict clause executes, and explicitly Docker-free local runs do not run it.
 - **A deed is generated once per *case*, and which `DeedPollType` takes which deed is stated once.**
   `DeedDocumentTypes.caseTypes` is the one statement; `DeedRouting.deedFor` searches it, `FormsForCompletion` is the
   only place a `DeedTemplate` meets an `EmailTemplate`, and a second copy of the adult/minor lists is how an

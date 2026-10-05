@@ -18,9 +18,8 @@ import uk.gov.hmcts.reform.deedpoll.db.ContainerDatabase;
  * it -- {@code integrationTest} has {@code test}'s output on its classpath, not the reverse -- and
  * a second copy would be a second thing to keep in step with {@link ContainerDatabase}.
  *
- * <p>The {@code requires-docker} tag exists so CI can exclude these where no Docker daemon is
- * available, and JUnit 5 inherits it -- so all 21 subclasses carry it already and a new one needs no
- * annotation.
+ * <p>The {@code requires-docker} tag supports explicitly Docker-free local runs. Jenkins includes
+ * these tests. JUnit 5 inherits the tag, so a new subclass needs no annotation.
  */
 @Tag("requires-docker")
 public abstract class AbstractPostgresContainerTest {
