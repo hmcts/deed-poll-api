@@ -14,9 +14,14 @@ not prove AAT Document Store access.
 
 Live enablement is still pending. Read [CCD-SMOKE.md's activation inventory](CCD-SMOKE.md#aat-activation-inventory--2026-10-05):
 S2S registration PR 1140 is still a draft; AAT has the platform key but S2S does not mount it; the product-vault
-API key copy and CCD/CDAM allowlists are being prepared separately. Jurisdiction, case type, system role/user,
+API key copy and CCD/CDAM allowlists are prepared in
+[infra PR 23](https://github.com/hmcts/deed-poll-infra/pull/23) and
+[Flux PR 48005](https://github.com/hmcts/cnp-flux-config/pull/48005). The access change is
+[API PR 77](https://github.com/hmcts/deed-poll-api/pull/77). All three were opened as drafts. Jurisdiction, case type, system role/user,
 CCD definition/routing and CDAM per-service permissions remain outstanding. No AAT activation or file upload
 was performed. Existing filesystem files must be accounted for before any pod replacement or cutover.
+A read-only aggregate inventory attempt from the workspace could not connect because the database hostname
+did not resolve. No SQL ran; file/row counts remain unverified.
 
 **03b implementation handoff, 2026-10-02:** Tasks 1–7 implement and prove durable CDAM deeds for both templates,
 service-authorised Notify retrieval across restart, per-notification claim/send-start/outcome commits and

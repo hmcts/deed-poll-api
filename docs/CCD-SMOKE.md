@@ -12,6 +12,11 @@ expects; a different answer is a finding, not something to work around.
 
 Read-only checks against AAT cluster 00 found the following. This is preparation, not a completed smoke.
 The API runs `c8c34ff`; it still selects filesystem storage. No activation switch was changed.
+Prepared changes: [API #77](https://github.com/hmcts/deed-poll-api/pull/77),
+[infra #23](https://github.com/hmcts/deed-poll-infra/pull/23),
+[Flux #48005](https://github.com/hmcts/cnp-flux-config/pull/48005).
+The workspace's read-only database inventory attempt stopped at DNS resolution; no SQL ran, so existing
+filesystem-document counts are still unverified.
 
 | Dependency | Observed state / next action |
 |---|---|
