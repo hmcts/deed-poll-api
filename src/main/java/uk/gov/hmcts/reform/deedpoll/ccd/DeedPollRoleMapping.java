@@ -1,5 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.ccd;
 
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Map;
@@ -25,10 +27,13 @@ public record DeedPollRoleMapping(Map<String, DeedPollAccessProfile> byIdamRole)
     }
 
     /**
-     * The mapping the configured identifiers give: the system role onto {@code DEED_POLL_SYSTEM}, and no more.
+     * The system role can write; the confirmed deed-poll admin role can read documents. Generic caseworker and
+     * judicial roles deliberately confer no CCD access: neither may bypass private-case or referral visibility.
      */
     public static DeedPollRoleMapping from(CcdProperties properties) {
-        return new DeedPollRoleMapping(Map.of(properties.systemRole(), DeedPollAccessProfile.DEED_POLL_SYSTEM));
+        return new DeedPollRoleMapping(Map.of(
+            properties.systemRole(), DeedPollAccessProfile.DEED_POLL_SYSTEM,
+            Role.DEEDPOLL_ADMIN.claimValue(), DeedPollAccessProfile.DEED_POLL_DOCUMENT_READER));
     }
 
     /** The access profiles a caller holding these IDAM roles has, which is empty for a role nobody mapped. */

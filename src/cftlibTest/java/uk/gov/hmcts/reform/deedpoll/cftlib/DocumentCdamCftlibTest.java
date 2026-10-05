@@ -2,7 +2,8 @@ package uk.gov.hmcts.reform.deedpoll.cftlib;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import feign.FeignException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -17,6 +18,8 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import uk.gov.hmcts.reform.authorisation.generators.AuthTokenGenerator;
 import uk.gov.hmcts.reform.ccd.client.CoreCaseDataApi;
+import uk.gov.hmcts.reform.ccd.client.model.CaseDataContent;
+import uk.gov.hmcts.reform.ccd.client.model.Event;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdCreationAttempts;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingSweep;
 import uk.gov.hmcts.reform.deedpoll.ccd.SystemUserTokens;
@@ -38,12 +41,15 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.deleteRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Real CCD and CDAM, only dm-store stubbed. The first two ordered tests deliberately replace the API context. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
@@ -147,9 +153,11 @@ class DocumentCdamCftlibTest extends CftlibTest {
         Path definition = Path.of("build/cftlib/definitions/DEED_POLL_PLACEHOLDER");
         Path grants = definition.resolve("AuthorisationCaseType.json");
         String original = Files.readString(grants);
-        JsonNode withoutRead = json.readTree(original);
-        for (JsonNode grant : withoutRead) {
-            ((ObjectNode) grant).put("CRUD", grant.path("CRUD").asText().replace("R", ""));
+        ArrayNode withoutRead = json.createArrayNode();
+        for (JsonNode grant : json.readTree(original)) {
+            if (!grant.path("UserRole").asText().equals("DEED_POLL_DOCUMENT_READER")) {
+                withoutRead.add(grant);
+            }
         }
         try {
             Files.writeString(grants, withoutRead.toString());
@@ -174,7 +182,11 @@ class DocumentCdamCftlibTest extends CftlibTest {
     @Order(4)
     void anUnmappedUserIsDeniedButTheUpstreamStackReportsBadGateway() throws Exception {
         DM.server().resetRequests();
-        HttpResponse<String> denied = send(filePath(recordId), "GET", "", "application/json", CftlibConfig.ADMIN_USER);
+        HttpResponse<String> denied = http.send(HttpRequest.newBuilder(
+            URI.create("http://localhost:4455/cases/documents/" + remoteId + "/binary"))
+            .header("Authorization", idam.getAccessToken(CftlibConfig.UNMAPPED_USER, "password"))
+            .header("ServiceAuthorization", serviceTokens.generate()).GET().build(),
+            HttpResponse.BodyHandlers.ofString());
         // The persistence gate returns 403, data-store wraps that as 500, and CDAM returns 502. Pin this finding
         // separately; accepting 502 in the preceding test would not prove CCD's read-permission check.
         assertThat(denied.statusCode()).as(denied.body()).isEqualTo(502);
@@ -184,6 +196,24 @@ class DocumentCdamCftlibTest extends CftlibTest {
 
     @Test
     @Order(5)
+    void documentReaderCannotSubmitTheSystemDocumentEvent() {
+        String user = idam.getAccessToken(CftlibConfig.DOCUMENT_READER, "password");
+        String service = serviceTokens.generate();
+        // CCD can return an event token before checking write access. Submission must still be refused.
+        var start = ccd.startEvent(user, service, reference, "updateSupportingDocuments");
+        var content = CaseDataContent.builder().eventToken(start.getToken())
+            .event(Event.builder().id("updateSupportingDocuments").build())
+            .data(Map.of("supportingDocuments", List.of())).build();
+        String before = latestSnapshot();
+        assertThatThrownBy(() -> ccd.createEvent(user, service, reference, content))
+            .isInstanceOfSatisfying(FeignException.class, failure -> assertThat(failure.status()).isIn(403, 404));
+        assertThat(latestSnapshot()).isEqualTo(before);
+        assertThat(documents.findById(documentId).orElseThrow().getStorageState())
+            .isEqualTo(DocumentStorageState.Attached);
+    }
+
+    @Test
+    @Order(6)
     void refusesAnotherCasesDocumentAndAnUploadBeforeLinkingWithoutCallingTheStore() throws Exception {
         String other = createRecord();
         DM.server().resetRequests();
@@ -194,7 +224,7 @@ class DocumentCdamCftlibTest extends CftlibTest {
     }
 
     @Test
-    @Order(6)
+    @Order(7)
     void deletionRemovesTheCcdReferenceAndCdamCanNoLongerDownload() throws Exception {
         // There is deliberately no document-delete HTTP endpoint. Exercise its existing domain entry point.
         documentService.removeDocument(recordId, documentId);

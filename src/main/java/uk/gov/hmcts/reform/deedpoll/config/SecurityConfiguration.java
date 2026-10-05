@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.env.Environment;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -160,7 +161,7 @@ public class SecurityConfiguration {
      *   <li><strong>The user.</strong> The same {@link JwtDecoder} as everywhere else, so the token is checked
      *       exactly as a caseworker's is. The caller must then hold an access profile the definition grants
      *       something to, reached through the definition's own role mapping ({@link DeedPollRoleMapping}) rather
-     *       than a second list.</li>
+     *       than a second list. Read-only staff profiles may use GET; mutations require the system profile.</li>
      * </ul>
      */
     @Bean
@@ -184,7 +185,10 @@ public class SecurityConfiguration {
             // matcher at once, and that needs the MVC introspector, which a context with no web server lacks.
             .securityMatcher(PathPatternRequestMatcher.withDefaults().matcher(CCD_PERSISTENCE_PATH))
             .addFilterBefore(serviceAuthFilter, BearerTokenAuthenticationFilter.class)
-            .authorizeHttpRequests(requests -> requests.anyRequest().hasAnyAuthority(grantedProfiles))
+            .authorizeHttpRequests(requests -> requests
+                .requestMatchers(PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.GET, CCD_PERSISTENCE_PATH))
+                    .hasAnyAuthority(grantedProfiles)
+                .anyRequest().hasAuthority(DeedPollAccessProfile.DEED_POLL_SYSTEM.getRole()))
             .oauth2ResourceServer(resourceServer -> resourceServer
                 .jwt(jwt -> jwt
                     .decoder(jwtDecoder)

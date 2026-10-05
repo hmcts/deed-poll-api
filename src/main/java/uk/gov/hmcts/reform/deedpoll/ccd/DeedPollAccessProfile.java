@@ -6,12 +6,12 @@ import uk.gov.hmcts.ccd.sdk.api.Permission;
 import java.util.Set;
 
 /**
- * The definition's access profiles: one, the actor the linking operation and the document event run as.
+ * The definition's access profiles: the system actor and staff document readers.
  *
  * <p>An access profile is the definition's own name for a set of grants, not an IDAM role, so the name here is
- * fixed and the IDAM role that maps onto it is {@link CcdProperties#systemRole()} -- configuration, because it has
- * not been onboarded. {@link DeedPollCaseType} writes that mapping. The name is an implementation choice agreed
- * 2026-09-27, not an onboarded identifier.
+ * fixed. {@link DeedPollRoleMapping} maps the configured system role and the confirmed admin role onto separate
+ * profiles; {@link DeedPollCaseType} writes those mappings. Profile names are internal implementation choices,
+ * not new IDAM roles to register.
  *
  * <p>Every constant here gets an {@code AuthorisationCaseType} row with its {@link #getCaseTypePermissions()}, so a
  * new one is a new grant on the whole case type -- which {@code DeedPollDefinitionTest} refuses until it is added to
@@ -23,7 +23,10 @@ public enum DeedPollAccessProfile implements HasRole {
      * Creates, reads and updates the case type. Update since plan 03a: the document event runs on an existing case,
      * which data-store refuses without U on the case type. Never D, which CCD has no use for at this level.
      */
-    DEED_POLL_SYSTEM("DEED_POLL_SYSTEM", Permission.CRU);
+    DEED_POLL_SYSTEM("DEED_POLL_SYSTEM", Permission.CRU),
+
+    /** Reads documents as the staff caller; it cannot create or change a CCD case. */
+    DEED_POLL_DOCUMENT_READER("DEED_POLL_DOCUMENT_READER", Set.of(Permission.R));
 
     private final String role;
     private final Set<Permission> caseTypePermissions;

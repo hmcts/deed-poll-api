@@ -201,11 +201,25 @@ class CcdPersistenceSecurityTest {
     }
 
     @Test
-    @DisplayName("refuses a valid user the definition grants nothing to -- an admin caseworker included -- with 403")
+    @DisplayName("refuses generic caseworkers and judiciary without a mapped CCD profile")
     void refusesAnUnauthorisedUser() throws Exception {
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker", Role.JUDICIAL.claimValue()));
 
         mockMvc.perform(get(PROBE).headers(headers(CCD_DATA, IDAM.accessToken()))).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void adminHasOnlyTheDocumentReaderProfile() throws Exception {
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+
+        mockMvc.perform(get(PROBE).headers(headers(CCD_DATA, IDAM.accessToken())))
+            .andExpect(status().isOk())
+            .andExpect(content().string("DEED_POLL_DOCUMENT_READER"));
+        mockMvc.perform(sdkSubmission(headers(CCD_DATA, IDAM.accessToken())))
+            .andExpect(status().isForbidden());
+        mockMvc.perform(post("/ccd-persistence/cases/123/supplementary-data")
+                .headers(headers(CCD_DATA, IDAM.accessToken())).contentType(MediaType.APPLICATION_JSON).content("{}"))
+            .andExpect(status().isForbidden());
     }
 
     @Test

@@ -228,7 +228,9 @@ class CallerCdamCftlibTest extends CftlibTest {
         String original = Files.readString(grants);
         JsonNode withoutRead = json.readTree(original);
         for (JsonNode grant : withoutRead) {
-            ((ObjectNode) grant).put("CRUD", grant.path("CRUD").asText().replace("R", ""));
+            if (grant.path("UserRole").asText().equals("DEED_POLL_SYSTEM")) {
+                ((ObjectNode) grant).put("CRUD", grant.path("CRUD").asText().replace("R", ""));
+            }
         }
         try {
             Files.writeString(grants, withoutRead.toString());

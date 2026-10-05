@@ -8,6 +8,37 @@ is done. What *has* been proved is the code, against WireMock and against the in
 Run it by hand, in order, and stop at the first step that does not answer as written. Every step names what it
 expects; a different answer is a finding, not something to work around.
 
+## AAT activation inventory — 2026-10-05
+
+Read-only checks against AAT cluster 00 found the following. This is preparation, not a completed smoke.
+The API runs `c8c34ff`; it still selects filesystem storage. No activation switch was changed.
+
+| Dependency | Observed state / next action |
+|---|---|
+| S2S identity | `deed_poll_api` is proposed in `hmcts/service-auth-provider-app#1140`, still a draft pending production keys. The AAT platform key exists, but the running S2S SecretProviderClass does not mount it. Complete registration and verify a lease before calling CCD. |
+| Product-vault key | Add the AAT-only infra copy `microservicekey-deed-poll-api` → `api-s2s-secret`, then mount it as `DEED_POLL_API_S2S_SECRET`. Never reuse the web key. |
+| CCD/CDAM allowlists | Neither running AAT service allows `deed_poll_api`; add it to each AAT Flux allowlist. The API does not need the case-user-role-management allowlist. |
+| Identifiers and system identity | Jurisdiction, case type and system role remain unconfirmed. Provision the dedicated system user, password-grant client and vault credentials; ensure its client audience is accepted by the API persistence chain. |
+| Definition and routing | Generate with confirmed IDs, register the mapped IDAM roles at PUBLIC and import. Add the case-type prefix → deed-poll API route in AAT data-store. |
+| CDAM service permissions | Add `deed_poll_api`, restricted to the confirmed case type/jurisdiction, to CDAM `service_config.json` with CREATE/READ/UPDATE. `ccd_data` already has wildcard ATTACH/READ. |
+| Staff access | This branch supplies the read-only profile for the confirmed admin role. Non-admin caseworkers and judicial document access remain outside that mapping. |
+| Existing files and cutover | Inventory Local rows, original bytes and queued email references before any restart/cutover. There is no mixed-backend fallback. Follow 03c and `CDAM-RECOVERY.md`. |
+
+Confirmed endpoint values (from the running AAT platform configuration):
+
+```yaml
+IDAM_API_URL: https://idam-api.aat.platform.hmcts.net
+IDAM_S2S_AUTH_URL: http://rpe-service-auth-provider-aat.service.core-compute-aat.internal
+CCD_DATA_STORE_URL: http://ccd-data-store-api-aat.service.core-compute-aat.internal
+CASE_DOCUMENT_AM_URL: http://ccd-case-document-am-api-aat.service.core-compute-aat.internal
+DOCUMENT_URL_BASE: http://dm-store-aat.service.core-compute-aat.internal
+```
+
+The document URL base matches AAT data-store's deployed URL pattern. Endpoints and an S2S key are insufficient
+for activation: retain `CCD_LINKING_SWEEP_ENABLED=false` and `DOCUMENT_STORE=filesystem` until the identity,
+definition, routing, permissions and existing-file gates are met. Then run this procedure and `CDAM-SMOKE.md`
+in a controlled window, including staff read-back across replicas. Record live evidence separately from local tests.
+
 ## 0. What has to exist first
 
 Each of these is onboarding and belongs to Steve; the plan's Dependencies section is the list of record.
@@ -25,7 +56,7 @@ Each of these is onboarding and belongs to Steve; the plan's Dependencies sectio
 | The case list request's linking sweep | `CCD_LINKING_SWEEP_ENABLED` (`false`; set `true` only once everything above is in place), `CCD_LINKING_SWEEP_MAX_RECORDS` (`2`), `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` (`5`), `CCD_LINKING_SWEEP_MAX_DURATION` (`PT15S`) |
 | Data-store routes our case type to us | data-store's `ccd.decentralised.case-type-service-urls`, keyed on a **prefix of the case type id** |
 | `deed_poll_api` allowed to call data-store; `ccd_data` allowed to call us | data-store's S2S allowlist; ours is the constant `SecurityConfiguration.CCD_PERSISTENCE_CALLERS` |
-| The system role registered as a **user role** in definition store | definition store's user-role table, at `PUBLIC` |
+| The system and `caseworker-deedpoll-admin` roles registered as **user roles** in definition store | definition store's user-role table, at `PUBLIC` |
 | data-store → our `.internal` address reachable | network (`azure-platform-terraform#3161` created the address) |
 
 Two things cftlib found that no WireMock test could have, both repeated here because both fail quietly:
@@ -47,9 +78,12 @@ ls build/definitions/"$CCD_CASE_TYPE_ID"
 ```
 
 Expect one directory named for the case type. Its contents must match `src/test/resources/ccd-definition/` except
-for the three identifiers — one state (`Registered`), one event (`linkDeedPoll`), two fields (`deedPollId`,
-`deedPollReference`), `DEED_POLL_SYSTEM` granted create and read and nothing else granted anything. Anything more
-is not the definition this service was tested against.
+for the three identifiers — one state (`Registered`), two events (`linkDeedPoll`, `updateSupportingDocuments`),
+three application fields (`deedPollId`, `deedPollReference`, `supportingDocuments`). `DEED_POLL_SYSTEM` holds CRU
+on the case type/state, CR on linking and CRU on the document event, with D only on the documents field.
+`DEED_POLL_DOCUMENT_READER` holds R on the case type/state/documents only and maps `caseworker-deedpoll-admin`.
+Neither profile is granted history. Compare against the pinned definition; do not import the earlier link-only
+shape described in the original plan 02 procedure.
 
 Convert the JSON to a spreadsheet with CCD's definition processor, as `pcs-api`'s `bin/create-xlsx.sh` does
 (`hmctsprod.azurecr.io/ccd/definition-processor:latest json2xlsx -D <dir> -o <file>.xlsx`), and import it through

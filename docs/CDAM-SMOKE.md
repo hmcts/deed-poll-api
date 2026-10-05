@@ -11,10 +11,11 @@ versions, date, expected bytes and observed status codes. Keep tokens out of the
 2. Register the API's S2S identity on CDAM's allow-list and grant CREATE, READ and UPDATE for the confirmed case
    type/jurisdiction. Data-store needs ATTACH and READ. It attaches documents before our persistence callback;
    this API does not call `attachToCase` directly.
-3. Confirm the caseworker's CCD profile grants READ on the case type, state and `supportingDocuments` field.
-   The current definition grants only the system profile. The local test grants that existing profile to a
-   synthetic caseworker; this is not an instruction to grant system privileges to real caseworkers. Provision
-   the agreed staff access model before testing real staff downloads.
+3. Import the definition with `DEED_POLL_DOCUMENT_READER`: it maps the existing `caseworker-deedpoll-admin`
+   role to READ on the case type, state and `supportingDocuments` only. Register that IDAM role in definition
+   store at PUBLIC, alongside the system role. Test staff must have their normal admin role, not the system
+   role. Generic caseworker and judicial roles remain unmapped; enabling their downloads needs a separate
+   access model preserving private-case and referral visibility.
 4. Set `DOCUMENT_STORE=cdam`, `CASE_DOCUMENT_AM_URL` to the confirmed endpoint, and `DOCUMENT_URL_BASE` to a base
    accepted by data-store's document URL pattern. Configure all CCD identifiers and system credentials together.
    Restart and confirm readiness. Keep ordinary traffic away during this controlled test: existing
@@ -35,6 +36,9 @@ versions, date, expected bytes and observed status codes. Keep tokens out of the
    confirm the document's metadata has `case_id`, `case_type_id`, `jurisdiction`, and its TTL is cleared.
 4. Download `/caseworker/cases/{id}/documents/{documentId}/file` as the authorised caseworker. Expect 200 and
    byte-for-byte equality. Restart the API or route the next download to another replica; repeat the comparison.
+   Confirm the staff token contains no system role. Submitting `updateSupportingDocuments` directly through
+   CCD as that staff caller must be refused without changing the case or its documents. Receiving a start-event
+   token alone is not proof of write access: the local stack defers this refusal until submission.
 5. Repeat the download as a synthetic staff user admitted by persistence but without CCD READ on the case type.
    Expect 403/404 and no bytes; confirm CDAM performed the denial. An entirely unmapped staff user currently
    gets 502 through the upstream error wrapping described in the recovery guide, still with no bytes. Record

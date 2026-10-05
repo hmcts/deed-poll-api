@@ -1,5 +1,11 @@
 [
   {
+    "CRUD": "R",
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "LiveFrom": "01/01/2017",
+    "UserRole": "DEED_POLL_DOCUMENT_READER"
+  },
+  {
     "CRUD": "CRU",
     "CaseTypeID": "DEED_POLL_PLACEHOLDER",
     "LiveFrom": "01/01/2017",

@@ -1,6 +1,23 @@
 # Resume state — where the next session picks up
 
 
+**AAT CCD/CDAM enablement preparation, 2026-10-05:** The API now has a separate
+`DEED_POLL_DOCUMENT_READER` profile for the confirmed `caseworker-deedpoll-admin` IDAM role: READ on the case,
+state and documents only; no events or history. Persistence mutations still require the system profile.
+The local document fixture no longer gives staff the system role. Generic caseworkers and judiciary are
+not mapped because broader access must preserve private-case/referral restrictions.
+
+Validation: `check` passed with 3,617 unit tests and 14 integration tests, zero skipped or failed, plus
+Checkstyle. All 14 local `cftlibTest` journeys passed against real CCD/CDAM with dm-store stubbed, including
+admin download after restart, CCD READ denial and refusal to submit the system document event. This does
+not prove AAT Document Store access.
+
+Live enablement is still pending. Read [CCD-SMOKE.md's activation inventory](CCD-SMOKE.md#aat-activation-inventory--2026-10-05):
+S2S registration PR 1140 is still a draft; AAT has the platform key but S2S does not mount it; the product-vault
+API key copy and CCD/CDAM allowlists are being prepared separately. Jurisdiction, case type, system role/user,
+CCD definition/routing and CDAM per-service permissions remain outstanding. No AAT activation or file upload
+was performed. Existing filesystem files must be accounted for before any pod replacement or cutover.
+
 **03b implementation handoff, 2026-10-02:** Tasks 1–7 implement and prove durable CDAM deeds for both templates,
 service-authorised Notify retrieval across restart, per-notification claim/send-start/outcome commits and
 owned RECORD/DRAFT staging with bounded independent cleanup. Task 8 consolidates the operational runbooks;

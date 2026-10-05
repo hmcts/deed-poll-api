@@ -7,13 +7,15 @@ import uk.gov.hmcts.ccd.sdk.api.DecentralisedConfigBuilder;
 import uk.gov.hmcts.ccd.sdk.api.HasRole;
 import uk.gov.hmcts.ccd.sdk.api.Permission;
 
+import java.util.Set;
+
+import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile.DEED_POLL_DOCUMENT_READER;
 import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile.DEED_POLL_SYSTEM;
 import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollCaseState.Registered;
 
 /**
  * The minimal deed poll case type: one state, one event that links an existing record and one that sets its documents
- * (plan 03a), three fields, and one access profile, granted create, read and update -- and delete on the documents
- * field alone.
+ * (plan 03a), three fields, a system profile and a separate read-only document profile for admin caseworkers.
  *
  * <p>The ids come from {@link CcdProperties} and are never written here (plan 02, decision 5). The display names are
  * text, not identifiers, and carry no onboarding weight. Everything the definition contains is pinned by
@@ -50,7 +52,7 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
 
         // The SDK adds a caseHistory viewer field and a History tab to every case type, and grants every role that
         // holds an event CRU on that field. A system actor reads no history, so that grant is one nobody asked for.
-        builder.omitHistoryForRoles(DEED_POLL_SYSTEM);
+        builder.omitHistoryForRoles(DEED_POLL_SYSTEM, DEED_POLL_DOCUMENT_READER);
 
         // Definition store refuses an import whose search inputs, search results or work-basket results are empty
         // (work-basket inputs alone may be). Nobody searches this case type, so each holds only the case reference,
@@ -65,6 +67,7 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
         // event on an existing case unless the profile holds U on the case type and on the case's state
         // (AuthorisedCreateEventOperation.verifyCaseTypeAndStateAccess).
         builder.grant(Registered, Permission.CRU, DEED_POLL_SYSTEM);
+        builder.grant(Registered, Set.of(Permission.R), DEED_POLL_DOCUMENT_READER);
 
         builder.decentralisedEvent(LINK_DEED_POLL, linkDeedPoll::submit)
             .initialState(Registered)
