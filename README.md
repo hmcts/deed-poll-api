@@ -595,6 +595,16 @@ running at once.
 Tests never touch that database. Anything needing one starts a throwaway Postgres via
 Testcontainers, so `./gradlew build` requires a working Docker but no local setup.
 
+Jenkins explicitly enables the PostgreSQL-backed tests on PR and master builds. The CNP library
+selects the environment's Ubuntu worker; its image includes Docker and its startup configuration
+grants `jenkinsssh` access. A `before('test')` check verifies daemon access, and Testcontainers uses
+the HMCTS ACR image mirror after the shared pipeline logs in. Unit and integration coverage feed
+the same JaCoCo XML report for Sonar; both sets of test results are published to Jenkins.
+
+`INTEGRATION_TESTS_ENABLED=false` remains available for a local Docker-free run. It excludes
+database-backed tests and is not equivalent to the CI coverage run. An unavailable Docker daemon
+in Jenkins fails the build rather than falling back to that partial suite.
+
 Two things can make Testcontainers fail on a developer machine for reasons unrelated to the
 code, both when the build itself runs inside a container that shares the host's Docker daemon:
 
@@ -713,9 +723,9 @@ somebody remembering to add it. `OpenAPIPublisherTest` writes the document to
 `/tmp/openapi-specs.json` and asserts that it actually describes the caseworker and judicial surfaces —
 both operation counts and every path — rather than merely being served.
 
-**Nothing currently consumes that file.** `Jenkinsfile_CNP` has no publishing step and sets
-`INTEGRATION_TESTS_ENABLED = "false"`, which drops the `integration` source set from `check`, so the
-document is produced only by a local `./gradlew integration`. Restoring the publish to
+**Nothing currently consumes that file.** The enabled `integration` source set produces it during
+Jenkins `check` and a local `./gradlew integration`, but `Jenkinsfile_CNP` has no publishing step.
+Restoring the publish to
 [`hmcts/cnp-api-docs`](https://github.com/hmcts/cnp-api-docs) is an accepted outstanding gap — see
 `docs/RESUME.md`.
 

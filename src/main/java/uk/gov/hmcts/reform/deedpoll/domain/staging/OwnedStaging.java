@@ -253,7 +253,8 @@ public class OwnedStaging {
             Integer removed;
             try {
                 removed = transaction.execute(status -> {
-                    jdbc.execute("SET LOCAL statement_timeout = '" + remainingMs + "ms'");
+                    jdbc.queryForObject("SELECT set_config('statement_timeout', ?, true)",
+                        String.class, remainingMs + "ms");
                     jdbc.execute("SET LOCAL lock_timeout = '100ms'");
                     List<String> ids = jdbc.query("""
                         SELECT s.id FROM deedpoll_ownedstage s JOIN deedpoll_stagedpayload p ON p.id = s.id
