@@ -1,5 +1,20 @@
 # Resume state — where the next session picks up
 
+**AAT onboarding, 2026-10-06:** Steve confirmed AAT and the identifiers `DEEDPOLL` / `DEEDPOLL` /
+`deed-poll-system-update`; retain internal profile `DEED_POLL_SYSTEM`. Four linked draft PRs are prepared:
+[infra #25](https://github.com/hmcts/deed-poll-infra/pull/25),
+[IDAM #1016](https://github.com/hmcts/idam-access-config/pull/1016),
+[CDAM #813](https://github.com/hmcts/ccd-case-document-am-api/pull/813), and
+[Flux #48052](https://github.com/hmcts/cnp-flux-config/pull/48052).
+Nothing has been merged/applied by this session; no live smoke has run. Linking/CDAM/staging remain off.
+
+Resume with infrastructure plan review and AAT credentials apply, then durable IDAM and S2S registration.
+Existing [S2S #1140](https://github.com/hmcts/service-auth-provider-app/pull/1140) remains draft/open with a
+production-secret dependency. AAT's source API S2S secret was verified enabled; API destination secrets
+were absent. CCD importer access is still needed for PUBLIC role registration and definition import.
+The AAT workbook is generated and checked locally. The [six-workstream checklist](plans/ccd-cdam-doc-store-onboarding.md)
+records PRs/commits, secret names, validation, ordering and remaining execution gates. It supersedes older
+identity assumptions below. Staff document access and existing-file migration remain separate workstreams.
 
 **03b implementation handoff, 2026-10-02:** Tasks 1–7 implement and prove durable CDAM deeds for both templates,
 service-authorised Notify retrieval across restart, per-notification claim/send-start/outcome commits and
