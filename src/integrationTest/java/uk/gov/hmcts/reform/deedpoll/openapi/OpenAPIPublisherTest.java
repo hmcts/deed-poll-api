@@ -68,8 +68,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
-    /** Where the Jenkins library looks for it. */
-    private static final Path PUBLISHED_SPEC = Paths.get("/tmp/openapi-specs.json");
+    /** Defaults to the pipeline location; local runs can isolate their generated document. */
+    private static final Path PUBLISHED_SPEC = Paths.get(
+        System.getenv().getOrDefault("OPENAPI_SPEC_PATH", "/tmp/openapi-specs.json"));
 
     /**
      * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
@@ -871,7 +872,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .contains(tab.label()));
         assertThat(filter)
             .as("and says an unrecognised key falls back rather than being refused")
-            .contains(ListFilters.LIST_FILTERS.get(0).key());
+            .contains(ListFilters.LIST_FILTERS.get(0).key())
+            .contains("publishToLondonGazette=true", "dateNoticeSentToLondonGazette", "state=Enroled",
+                      "dateEnroled:asc");
     }
 
     /**

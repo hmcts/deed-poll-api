@@ -477,6 +477,8 @@ public class DeedPollService {
             case ListFilters.NotIn notIn -> deedPolls.findOpenOrderByCreatedOnDesc(notIn.states());
             case ListFilters.AwaitingConfirmation ignored ->
                 deedPolls.findByAwaitingConfirmationSinceIsNotNullOrderByAwaitingConfirmationSinceAsc();
+            case ListFilters.ReadyForPublication ready ->
+                deedPolls.findAll(CaseSpecifications.criterion(ready), order(ListFilters.OLDEST_ENROLLED_FIRST));
         };
     }
 

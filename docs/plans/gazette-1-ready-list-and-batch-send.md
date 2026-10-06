@@ -217,7 +217,15 @@ and 6 do not depend on them and may proceed.
 Add the filter, its default sort, and its description text. Test: the predicate matches exactly the three
 conditions of decision 1, the default sort, and that every other filter's behaviour is unchanged.
 
-- [ ] Filter added, tests green, OpenAPI delta is exactly the filter's description text
+- [x] Filter added, tests green, OpenAPI delta is exactly the filter's description text
+  and readyForPublication added to CreateSavedQueryRequest and UpdateSavedQueryRequest
+  filter enums (both are generated from ListFilters, matching saved-query validation).
+
+Execution correction, 6 October 2026: the original description-only expectation
+overlooked the two generated saved-query enums. These additive entries preserve the
+existing shared filter catalogue; omitting them would publish an inaccurate contract.
+Verified against retained snapshots and the successful full build (3,619 test /
+14 integration, zero failures or skips); see `gazette-1a-task1-validation.md`.
 
 ### Task 2: Audit schema
 
@@ -246,8 +254,9 @@ every write.
 
 ### Task 5: Full validation and OpenAPI regeneration
 
-Regenerate the OpenAPI document. Confirm the delta is exactly: the filter description text, two new
-operations, and their new schemas — nothing pre-existing altered. Record the final test counts next to the
+Regenerate the OpenAPI document. Confirm the delta is exactly: the filter description text,
+readyForPublication added to the two saved-query request filter enums, two new
+operations, and their new schemas — no other pre-existing contract altered. Record the final test counts next to the
 Task-0 baseline.
 
 - [ ] `./gradlew build` green; OpenAPI delta matches exactly; final counts recorded

@@ -43,11 +43,25 @@ Record source commit/provenance and compare semantic contract deltas.
 
 ### Task 1: Baseline and named ready filter (parent Task 1)
 
-- [ ] Record clean-source baseline build results and unit/integration counts.
-- [ ] Add readyForPublication to ListFilters and the controller description, with
+- [x] Record clean-source baseline build results and unit/integration counts.
+- [x] Add readyForPublication to ListFilters and the controller description, with
   tests for all predicate terms, oldest-enrolled ordering and existing fallbacks.
-- [ ] Run full build; verify this task's OpenAPI delta is only the filter description.
-- [ ] Record results and mark parent Task 1 complete only when verified.
+- [x] Run full build; verify this task's OpenAPI delta is exactly the filter description
+  and readyForPublication appended to the CreateSavedQueryRequest and
+  UpdateSavedQueryRequest filter enums.
+- [x] Record results and mark parent Task 1 complete only when verified.
+
+Task 1 execution evidence: `gazette-1a-task1-validation.md`. Full build is green
+(3,619 test / 14 integration, zero failures or skips; baseline 3,614 / 14).
+The initial description-only contract expectation was incorrect. On 6 October the
+coordinating agent verified the exact three-path semantic delta against the saved-query
+schema generator and validation code: both derive their accepted keys from ListFilters.
+The two additive enum entries are a necessary part of the requested filter and preserve
+that existing behavior. This is a corrected technical expectation, not new business
+sign-off. Task 1 is now reconciled: the retained snapshots have exactly these three
+changes, both hashes match, and the build log and XML reports confirm the counts
+above. The baseline and full build were not repeated solely for this documentation
+correction. Parent Task 1 is also marked complete; Tasks 2–4 remain pending.
 
 ### Task 2: Audit schema (parent Task 2)
 
@@ -67,7 +81,8 @@ Record source commit/provenance and compare semantic contract deltas.
 ### Task 4: Foundation contract and handoff
 
 - [ ] Regenerate and compare OpenAPI against the baseline: only the named filter's
-  description and the history operation/required schemas may be added by this run.
+  description, its addition to the two saved-query request filter enums, and the
+  history operation/required schemas may be added by this run.
 - [ ] Update API documentation and record final test counts and generated-spec provenance.
 - [ ] Record the pending spreadsheet, Notify wording and uncertain-send design decisions
   in the parent plan; keep its blocked tasks unchecked and the plan active.

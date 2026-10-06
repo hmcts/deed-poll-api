@@ -8,6 +8,7 @@ import jakarta.persistence.criteria.Root;
 import org.hibernate.query.criteria.HibernateCriteriaBuilder;
 import org.springframework.data.jpa.domain.Specification;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -146,6 +147,10 @@ public final class CaseSpecifications {
             // for, and a specification that ordered would be ignored by the paged query in any case.
             case ListFilters.AwaitingConfirmation ignored ->
                 (root, query, cb) -> cb.isNotNull(root.get("awaitingConfirmationSince"));
+            case ListFilters.ReadyForPublication ignored -> (root, query, cb) -> cb.and(
+                cb.isTrue(root.get("publishToLondonGazette")),
+                cb.isNull(root.get("dateNoticeSentToLondonGazette")),
+                cb.equal(root.get("state"), DeedPollState.Enroled));
         };
     }
 

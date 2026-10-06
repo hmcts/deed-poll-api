@@ -132,7 +132,9 @@ public class OpenAPIQueryParameters {
                     + "the key that was actually applied, so the fallback is observable. ANDs with `q` and every "
                     + "`where` condition. `awaitingConfirmation` is the cases still waiting for an applicant's "
                     + "reply to the Request confirmation to proceed email, and each row on it carries "
-                    + "`daysAwaitingConfirmation`."));
+                    + "`daysAwaitingConfirmation`. `readyForPublication` selects `publishToLondonGazette=true`, "
+                    + "`dateNoticeSentToLondonGazette` absent and `state=Enroled`; its default sort is "
+                    + "`dateEnroled:asc` (oldest enrolled first), unless the caller supplies `sort`."));
     }
 
     /** The tab keys and their labels, in render order, so the document lists them as the tab bar does. */
