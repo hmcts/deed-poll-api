@@ -216,10 +216,10 @@ caseworker thinks of as one email; that is the timeline being honest, and notes 
 **A sixth case-list tab, `awaitingConfirmation`.** Where a judge has refused a request not to publish, the office
 emails the applicant to ask whether they still want the deed enrolled; until the reply is recorded the case is
 waiting, and this tab is the list of them. It is the one tab whose criterion is **not a case state** — a waiting
-case is in whatever state its dates make it, ordinarily `Returned` — and the one that carries **a default order of
-its own**, longest wait first, because a waiting list in creation order buries the case most at risk of being
-forgotten. A `sort` the caller names still wins. Each row carries `daysAwaitingConfirmation`, which reads 0 on the
-day the email went out, and the case read carries `awaitingConfirmationSince`. That column is a **read-model**
+case is in whatever state its dates make it, ordinarily `Returned`. It defaults to longest wait first, because
+a waiting list in creation order buries the case most at risk of being forgotten. The `readyForPublication`
+filter separately defaults to oldest enrolment first. A `sort` the caller names still wins. Each row carries
+`daysAwaitingConfirmation`, which reads 0 on the day the email went out, and the case read carries `awaitingConfirmationSince`. That column is a **read-model**
 recomputed from the referral table by the send and by the recording; it is readable and not writable, so no patch
 can put a case into the waiting list or take it out without an answer.
 
@@ -342,9 +342,9 @@ so that an unconfigured environment refuses every token** rather than trusting a
 
 Roles come from `/o/userinfo`, not from the token — an IDAM access token carries no roles at all — and
 the lookup is deliberately uncached, so a role removed in IDAM is gone from the next request. The one
-role modelled is `caseworker-deedpoll-admin`, and it gates five things: whether `privacy` is editable,
-deleting a note, deleting a witness, publishing or amending a *shared* saved query, and the
-`/caseworker/ccd-attempts` list and repairs.
+caseworker role modelled is `caseworker-deedpoll-admin`, and it gates six things: whether `privacy` is editable,
+deleting a note, deleting a witness, publishing or amending a *shared* saved query, the
+`/caseworker/ccd-attempts` list and repairs, and Gazette notice history.
 
 > **No route is gated as a route.** Every authenticated principal reaches the whole caseworker surface,
 > because the only role name confirmed with IDAM is the admin one and gating everything on it would lock

@@ -251,7 +251,7 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
   change the answer calls the single recompute — `ReferralService.refreshCurrentReferralState` /
   `refreshAwaitingConfirmation`, the second public only because `CaseEmailService.send` is in another package —
   inside the same transaction. The rule itself lives in a class with no database in it (`CurrentReferralState`,
-  `ConfirmationWait`) so that CI, which has no Docker, runs it. **A new write path that skips the recompute
+  `ConfirmationWait`), so it can be tested independently of persistence. **A new write path that skips the recompute
   leaves the column wrong for ever and no existing test fails.**
 - **A send's identity is the caller's `Idempotency-Key`, and it is transport rather than correspondence.**
   `POST /caseworker/cases/{id}/emails/{template}` requires the header — one compose journey mints one UUID and
