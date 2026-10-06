@@ -77,7 +77,7 @@ create unique index deedpoll_gazette_notice_batch_request_id_key
 
 create table deedpoll_gazette_notice_batch_case (
     batch_id uuid not null references deedpoll_gazette_notice_batch (id),
-    deed_poll_id uuid not null references deedpoll_deedpoll (id),
+    deed_poll_id text not null references deedpoll_deedpoll (id),
     reference_number varchar(255) not null,
     primary key (batch_id, deed_poll_id)
 );
@@ -89,6 +89,10 @@ denormalised onto the join row deliberately: the history read (decision 6) must 
 if a case is later amended, and reading it live off `deedpoll_deedpoll` would show today's reference for a
 record whose reference could theoretically change, which is not what "what did we send" means. The unique
 index on `request_id` is this operation's idempotency guard — see decision 4.
+
+Schema correction, 6 October 2026: `deed_poll_id` uses text to match the existing
+V2 case primary key; PostgreSQL cannot create the originally proposed UUID-to-text
+foreign key. The migration is V31, since V26–V30 already exist on this branch.
 
 **The spreadsheet itself is not retained.** Confirmed with the business: the audit trail is the batch, its
 sender, its timestamp and its case list: enough to answer "who sent what, when", and enough to regenerate the
@@ -166,7 +170,7 @@ not arrived by then.
 1. **Filter** — `ListFilters` gains `readyForPublication`; `CaseworkerReadController`'s filter parameter
    description is updated (it is generated into the OpenAPI document, so this alone changes the published
    spec — expected and must be reconciled by the admin companion plan's Task 0).
-2. **Schema** — `V26__gazette_notice_batch.sql`; JPA entities `GazetteNoticeBatch`,
+2. **Schema** — `V31__gazette_notice_batch.sql`; JPA entities `GazetteNoticeBatch`,
    `GazetteNoticeBatchCase`; repositories.
 3. **Domain** — `domain/gazette`: `GazetteNoticeService` (validate-then-send), `GazetteSpreadsheet`
    (generation), reusing `NotifyProperties`/`NotificationClient` directly rather than the outbox.
@@ -229,10 +233,14 @@ Verified against retained snapshots and the successful full build (3,619 test /
 
 ### Task 2: Audit schema
 
-`V26__gazette_notice_batch.sql`, entities, repositories. Test the unique index on `request_id` refuses a
+`V31__gazette_notice_batch.sql`, entities, repositories. Test the unique index on `request_id` refuses a
 repeat at the database level, not only in application code.
 
-- [ ] Migration, entities and repositories added; constraint-level test green
+- [x] Migration, entities and repositories added; constraint-level test green
+
+Verified on 6 October 2026: V31, including the text case-ID foreign key correction
+above. Full build: 3,629 test / 14 integration, no failures, errors or skips;
+OpenAPI unchanged from Task 1. See `gazette-1a-task2-validation.md`.
 
 ### Task 3: Role gate and history read
 

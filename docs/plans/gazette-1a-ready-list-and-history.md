@@ -13,7 +13,7 @@ Read that complete plan and CLAUDE.md before implementation.
 - Implement the named ready filter, audit schema and admin-only history read.
 - Use the parent's working predicate: publication requested, notice date absent,
   state Enroled; default order dateEnroled ascending. Do not claim new business sign-off.
-- The parent names V26, which is already committed for deed preparation. Use the
+- The parent originally named V26, which is already committed for deed preparation. Use the
   next unused migration number on this branch; never edit existing migrations.
 - Spreadsheet columns/order and Notify wording are not agreed. Do not implement
   the spreadsheet, batch-send endpoint, Notify provisioning or a placeholder send.
@@ -65,10 +65,15 @@ correction. Parent Task 1 is also marked complete; Tasks 2–4 remain pending.
 
 ### Task 2: Audit schema (parent Task 2)
 
-- [ ] Add the next unused Flyway migration, JPA entities and repositories following
+- [x] Add the next unused Flyway migration, JPA entities and repositories following
   the parent's two-table schema, frozen references and attribution requirements.
-- [ ] Test request-id uniqueness against real PostgreSQL and run the full build.
-- [ ] Record results and mark parent Task 2 complete only when verified.
+- [x] Test request-id uniqueness against real PostgreSQL and run the full build.
+- [x] Record results and mark parent Task 2 complete only when verified.
+
+Task 2 execution evidence: `gazette-1a-task2-validation.md`. V31 adds the audit
+tables; the case foreign key uses text to match V2. Full build is green
+(3,629 test / 14 integration, zero failures, errors or skips), and OpenAPI is
+unchanged from Task 1. Parent Task 2 is complete; later tasks remain pending.
 
 ### Task 3: Role gate and history read (parent Task 3)
 
