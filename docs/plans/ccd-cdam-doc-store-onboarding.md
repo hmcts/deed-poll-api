@@ -17,7 +17,7 @@ workstream with environment-specific evidence before marking it done.
 These names are settled for onboarding; registration and deployed configuration are still outstanding.
 The internal CCD access profile remains `DEED_POLL_SYSTEM`. Do not grant it to real staff to make downloads work.
 Steve explicitly requested AAT registration on 2026-10-06. Four linked draft PRs now contain the
-registration configuration; see the AAT execution log below. Next review/apply infrastructure PR #25,
+registration configuration; see the AAT execution log below. Infrastructure PR #25 is now merged; verify its AAT apply,
 then complete IDAM/S2S deployment and the CCD role/definition import. No live registration is claimed.
 
 Identity investigation found an existing, still-open S2S registration PR and no deed-poll system account
@@ -346,7 +346,7 @@ Validation completed:
 
 Remaining execution gates, in order:
 
-1. Review/apply infra #25 and verify all four enabled destination secrets without exposing their values.
+1. Infra #25 is merged. Verify its AAT apply and all four enabled destination secrets without exposing their values.
 2. Complete IDAM #1016 synchronization and S2S #1140 deployment; verify password-grant userinfo role and
    own-service token leasing. Do not substitute the short-lived test-user helper or another product's identity.
 3. Deploy CDAM #813 and Flux #48052 with registration flags still off; confirm effective runtime settings.
@@ -355,6 +355,16 @@ Remaining execution gates, in order:
    import the generated definition. Do not give definition-import privilege to the runtime account.
 5. Run the controlled CCD/CDAM smoke after staff access and rollout prerequisites are settled. There is no
    separate direct API-to-doc-store registration in this design; CDAM already appears in AAT's store allowlist.
+
+### 2026-10-06 infrastructure PR merged
+
+- Steve explicitly authorized merging infra #25. It was marked ready and squash-merged at
+  `2026-10-06T22:21:51Z`, merge commit `8cf4c51c6e7dc1f867a71d04bc064d28aa4ce65b`.
+- GitHub confirmed `MERGED`. The merge was pinned to the validated head `e1d6d57`; no admin override
+  was used. GitHub reported no PR checks or pipeline-plan comments at merge time.
+- Merge is not apply evidence. The infrastructure pipeline's AAT result and all four destination secrets
+  still need verification before IDAM registration or Flux secret mounts proceed. No other registration
+  PR was merged in this turn. Workstream 1 remains open.
 
 ## Related procedures and implementation plans
 
