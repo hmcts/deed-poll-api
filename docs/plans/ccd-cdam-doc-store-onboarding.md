@@ -338,7 +338,9 @@ Validation completed:
   From the processor repository, run `yarn json2xlsx -D <api>/build/definitions/DEEDPOLL -o <api>/build/definitions/CCD_Definition_DEEDPOLL_aat.xlsx`.
   On this ARM host Java additionally needed `JAVA_TOOL_OPTIONS=-XX:UseSVE=0`.
 - GitHub showed the four new PRs open/draft; no CI checks were reported for infra, IDAM or CDAM at the
-  final check. Passing local validation is not a passing platform pipeline or approval to deploy.
+  final check. Flux #48052 passed all 18 reported static, secrets and environment-schema CI checks,
+  including both AAT clusters. Local validation is not a substitute for the other platform pipelines
+  or infrastructure plan review.
 - `CCD-SMOKE.md` now includes the supporting-document event/field, internal profile registration and
   API-client audience. No deployed smoke was run.
 
