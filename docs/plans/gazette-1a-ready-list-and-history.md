@@ -77,11 +77,16 @@ unchanged from Task 1. Parent Task 2 is complete; later tasks remain pending.
 
 ### Task 3: Role gate and history read (parent Task 3)
 
-- [ ] Implement GET /caseworker/gazette-notices with DEEDPOLL_ADMIN enforcement,
+- [x] Implement GET /caseworker/gazette-notices with DEEDPOLL_ADMIN enforcement,
   pagination, newest-first ordering and response DTOs that expose no subject ID.
-- [ ] Test authenticated non-admin refusal, admin results, ordering, pagination,
+- [x] Test authenticated non-admin refusal, admin results, ordering, pagination,
   empty history and attribution privacy with the repository's full-context patterns.
-- [ ] Run full build; record results and mark parent Task 3 complete when verified.
+- [x] Run full build; record results and mark parent Task 3 complete when verified.
+
+Task 3 execution evidence: `gazette-1a-task3-validation.md`. The admin-only history
+read is implemented with frozen references and no subject or request identity on
+the wire. Full build is green (3,641 test / 15 integration, zero failures, errors
+or skips). Parent Task 3 is complete; foundation Task 4 remains pending.
 
 ### Task 4: Foundation contract and handoff
 

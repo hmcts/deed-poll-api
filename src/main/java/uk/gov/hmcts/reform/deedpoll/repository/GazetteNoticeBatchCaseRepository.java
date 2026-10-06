@@ -12,4 +12,6 @@ public interface GazetteNoticeBatchCaseRepository
     extends JpaRepository<GazetteNoticeBatchCase, GazetteNoticeBatchCaseId> {
 
     List<GazetteNoticeBatchCase> findByIdBatchId(UUID batchId);
+
+    List<GazetteNoticeBatchCase> findByIdBatchIdIn(List<UUID> batchIds);
 }

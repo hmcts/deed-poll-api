@@ -247,7 +247,12 @@ OpenAPI unchanged from Task 1. See `gazette-1a-task2-validation.md`.
 `GET /caseworker/gazette-notices`, gated, paged, newest first. Test: 403 for a non-admin token, correct
 shape and ordering for an admin one, no subject id anywhere in the response.
 
-- [ ] History endpoint implemented and gated; no owner id on the wire
+- [x] History endpoint implemented and gated; no owner id on the wire
+
+Verified on 6 October 2026: the full-context PostgreSQL tests cover role refusal,
+admin results, frozen references, newest-first ordering, pagination and privacy.
+Full build: 3,641 test / 15 integration, no failures, errors or skips.
+See `gazette-1a-task3-validation.md`.
 
 ### Task 4: Batch send
 

@@ -133,10 +133,28 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/ccd-attempts/{attemptId}/retry"
     );
 
+    /** Admin-only publication history, whose single GET is asserted separately. */
+    private static final String GAZETTE_HISTORY_PATH = "/caseworker/gazette-notices";
+
     private static final ObjectMapper JSON = new ObjectMapper();
 
     @Autowired
     private MockMvc mvc;
+
+    @Test
+    void documentsAdminGazetteHistoryWithoutPrivateIdentities() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+        JsonNode path = spec.get("paths").get(GAZETTE_HISTORY_PATH);
+        assertThat(path.fieldNames()).toIterable().containsExactly("get");
+        assertThat(path.at("/get/description").asText()).contains("caseworker-deedpoll-admin");
+        assertThat(path.at("/get/responses/200/content/*~1*/schema/$ref").asText())
+            .isEqualTo("#/components/schemas/GazetteNoticeHistoryResponse");
+        assertThat(spec.at("/components/schemas/GazetteNoticeHistoryResponse/properties").fieldNames())
+            .toIterable().containsExactlyInAnyOrder("batches", "page", "size", "total", "totalPages");
+        assertThat(spec.at("/components/schemas/GazetteNoticeBatchResponse/properties").fieldNames())
+            .toIterable().containsExactlyInAnyOrder("sentAt", "sentBy", "caseCount", "referenceNumbers");
+    }
 
     @DisplayName("Generate swagger documentation")
     @Test
@@ -274,6 +292,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         List<String> known = new ArrayList<>(CASEWORKER_PATHS);
         known.addAll(JUDICIAL_PATHS);
         known.addAll(CCD_ATTEMPT_PATHS);
+        known.add(GAZETTE_HISTORY_PATH);
         known.add("/");
 
         assertThat(documented)
