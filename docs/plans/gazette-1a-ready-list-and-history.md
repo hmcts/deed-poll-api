@@ -90,11 +90,18 @@ or skips). Parent Task 3 is complete; foundation Task 4 remains pending.
 
 ### Task 4: Foundation contract and handoff
 
-- [ ] Regenerate and compare OpenAPI against the baseline: only the named filter's
+- [x] Regenerate and compare OpenAPI against the baseline: only the named filter's
   description, its addition to the two saved-query request filter enums, and the
   history operation/required schemas may be added by this run.
-- [ ] Update API documentation and record final test counts and generated-spec provenance.
-- [ ] Record the pending spreadsheet, Notify wording and uncertain-send design decisions
+- [x] Update API documentation and record final test counts and generated-spec provenance.
+- [x] Record the pending spreadsheet, Notify wording and uncertain-send design decisions
   in the parent plan; keep its blocked tasks unchecked and the plan active.
-- [ ] Confirm all foundation tests pass and the full admin contract remains unavailable
+- [x] Confirm all foundation tests pass and the full admin contract remains unavailable
   until the batch-send task is implemented and validated.
+
+Task 4 execution evidence: `gazette-1a-task4-validation.md`. Fresh full build
+passed (3,641 test / 16 integration, zero failures, errors or skips); Checkstyle
+passed. Regenerated OpenAPI has exactly the six permitted baseline changes and
+is semantically unchanged from Task 3. All foundation tasks are complete. The
+parent plan remains active with business inputs, batch sending and full-contract
+validation unchecked; the full admin plan 16 contract is still unavailable.

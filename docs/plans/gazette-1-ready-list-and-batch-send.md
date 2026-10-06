@@ -12,6 +12,32 @@ writes an audit trail, and a history read for that trail. The admin companion,
 Dynamics original is silent on it — so unlike `domain/deedpoll`, nothing here is checked against
 `src/test/resources/reference/`. Treat every decision below as this repo's own, not an inherited one.
 
+## Foundation handoff and unresolved send design — 6 October 2026
+
+Tasks 1–3 are implemented and locally validated. The foundation execution plan
+`gazette-1a-ready-list-and-history.md` completes only the ready filter, V31 audit
+schema and admin-only history GET. Its final contract comparison and build evidence
+are in `gazette-1a-task4-validation.md`. This parent plan remains active; Tasks 0,
+4 and 5 remain incomplete. The full admin plan 16 contract is unavailable until
+batch sending is implemented and validated.
+
+Before any send-path implementation, obtain the spreadsheet's required fields,
+column order and header format, and agree the Notify wording and provisioning.
+Task 0's ready-predicate reconfirmation is still pending; the implemented predicate
+remains the working assumption, with no new business sign-off from this run.
+
+Decision 4 below is an unresolved proposal, not an implementable delivery guarantee.
+A database rollback cannot undo Notify accepting an email. A timeout, lost response,
+or database failure after acceptance can leave an email sent with no committed audit
+row or request key; a retry could then send twice. The existing unique request index
+alone cannot settle that outcome. The claims below that every failure means “nothing
+happened” and can safely be retried must not be used as send-path acceptance criteria.
+Agree how to preserve evidence of an uncertain send, how it will be reconciled, and
+when retry is permitted before implementing Task 4. This foundation chooses no
+send/recovery design and supplies no all-or-nothing email guarantee. Decision 7's
+note transaction and Task 4's rollback tests must be reconciled with that decision.
+Do not implement a placeholder spreadsheet or send while these decisions are pending.
+
 ## What already exists and needs no change
 
 `publishToLondonGazette` (boolean) and `dateNoticeSentToLondonGazette` (date) are already columns on
@@ -31,7 +57,7 @@ count cheap for the admin worklist banner (`total` on an unfiltered-by-`where` r
 
 ### 1. Ready is `publishToLondonGazette:true AND dateNoticeSentToLondonGazette IS NULL AND state:Enroled`
 
-Confirmed with the business as a working assumption, not a ported rule. Add `readyForPublication` as a sixth
+Confirmed with the business as a working assumption, not a ported rule. Add `readyForPublication` as a seventh
 member of `ListFilters`, translating to exactly that predicate, default sort
 `dateEnroled:asc` (oldest-enrolled-first — the same "longest-waiting first" instinct `awaitingConfirmation`
 already applies, oldest cases get published first). Like every other filter, an unrecognised or repeated
@@ -256,7 +282,8 @@ See `gazette-1a-task3-validation.md`.
 
 ### Task 4: Batch send
 
-**Blocked on Task 0's first two items.** `GazetteSpreadsheet`, `GazetteNoticeService`, the controller
+**Blocked on Task 0's first two items and resolution of the uncertain-send design above.**
+`GazetteSpreadsheet`, `GazetteNoticeService`, the controller
 operation, the case note, the idempotency behaviour (decision 4), the re-validation (decision 5), the
 all-or-nothing transaction (decision 4). Test: a successful send sets the date and note on every case and
 writes one audit row; a stale selection 409s naming the stale ids and changes nothing; a repeated

@@ -1,6 +1,17 @@
 # Resume state — where the next session picks up
 
 
+**Gazette foundation handoff, 2026-10-06:** The named `readyForPublication` filter,
+V31 audit schema and admin-only `GET /caseworker/gazette-notices` are implemented.
+The full admin plan 16 contract remains unavailable: no batch-send operation,
+spreadsheet or Gazette Notify provisioning is implemented. The parent
+[Gazette plan](plans/gazette-1-ready-list-and-batch-send.md) remains active with
+business inputs and send/full-validation tasks unchecked. Its transaction proposal
+cannot guarantee all-or-nothing email delivery: rollback cannot undo Notify acceptance.
+Spreadsheet layout, Notify wording and uncertain-send reconciliation/retry decisions
+are still required. Final counts and local OpenAPI provenance are recorded in
+[foundation validation](plans/gazette-1a-task4-validation.md).
+
 **03b implementation handoff, 2026-10-02:** Tasks 1–7 implement and prove durable CDAM deeds for both templates,
 service-authorised Notify retrieval across restart, per-notification claim/send-start/outcome commits and
 owned RECORD/DRAFT staging with bounded independent cleanup. Task 8 consolidates the operational runbooks;

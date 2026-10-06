@@ -156,6 +156,20 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .toIterable().containsExactlyInAnyOrder("sentAt", "sentBy", "caseCount", "referenceNumbers");
     }
 
+    @Test
+    void documentsPublicationFilterInBothSavedQueryWriteContracts() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+        for (String schema : List.of("CreateSavedQueryRequest", "UpdateSavedQueryRequest")) {
+            List<String> filters = StreamSupport.stream(
+                spec.at("/components/schemas/" + schema + "/properties/filter/enum").spliterator(), false)
+                .map(JsonNode::asText).toList();
+            assertThat(filters).as("%s retains existing filters and appends publication readiness", schema)
+                .containsExactly("all", "open", "received", "enroled", "returned",
+                                 "awaitingConfirmation", "readyForPublication");
+        }
+    }
+
     @DisplayName("Generate swagger documentation")
     @Test
     void generateDocs() throws Exception {
