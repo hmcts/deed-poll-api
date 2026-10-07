@@ -32,13 +32,14 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 ## The API surface
 
 Thirty-four caseworker operations across twenty-one paths, plus five judicial ones on a namespace of their
-own (below), and three admin-only CCD-attempt ones (see [Repairing attempts](#repairing-attempts)).
+own (below), three admin-only CCD-attempt ones (see [Repairing attempts](#repairing-attempts)), and one admin-only
+Gazette history read (see [Gazette publication foundation](#gazette-publication-foundation)).
 `/swagger-ui.html` is the authority; this table is the map — and `OpenAPIPublisherTest` asserts each count,
 so a route added without a row here is a count that stops agreeing with the spec.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/caseworker/cases` | The case list — a `filter` key (one of six tabs), `where` conditions, a `q` search term, `sort`, `page` and `size`. The default order is newest first on every tab but `awaitingConfirmation`, which defaults to longest wait first |
+| GET | `/caseworker/cases` | The case list — a `filter` key (one of seven tabs), `where` conditions, a `q` search term, `sort`, `page` and `size`. The default order is newest first except `awaitingConfirmation` (longest wait first) and `readyForPublication` (oldest enrolment first) |
 | GET | `/caseworker/cases/field-rules` | Show / hide / mandate rules for a `type`, `migrated` and `publishToGazette` |
 | GET | `/caseworker/cases/{id}` | One case **with** its notes, witnesses and documents — one call, not four |
 | GET | `/caseworker/document-types` | Every supporting-document type, with its applicability arrays |
@@ -215,10 +216,10 @@ caseworker thinks of as one email; that is the timeline being honest, and notes 
 **A sixth case-list tab, `awaitingConfirmation`.** Where a judge has refused a request not to publish, the office
 emails the applicant to ask whether they still want the deed enrolled; until the reply is recorded the case is
 waiting, and this tab is the list of them. It is the one tab whose criterion is **not a case state** — a waiting
-case is in whatever state its dates make it, ordinarily `Returned` — and the one that carries **a default order of
-its own**, longest wait first, because a waiting list in creation order buries the case most at risk of being
-forgotten. A `sort` the caller names still wins. Each row carries `daysAwaitingConfirmation`, which reads 0 on the
-day the email went out, and the case read carries `awaitingConfirmationSince`. That column is a **read-model**
+case is in whatever state its dates make it, ordinarily `Returned`. It defaults to longest wait first, because
+a waiting list in creation order buries the case most at risk of being forgotten. The `readyForPublication`
+filter separately defaults to oldest enrolment first. A `sort` the caller names still wins. Each row carries
+`daysAwaitingConfirmation`, which reads 0 on the day the email went out, and the case read carries `awaitingConfirmationSince`. That column is a **read-model**
 recomputed from the referral table by the send and by the recording; it is readable and not writable, so no patch
 can put a case into the waiting list or take it out without an answer.
 
@@ -341,9 +342,9 @@ so that an unconfigured environment refuses every token** rather than trusting a
 
 Roles come from `/o/userinfo`, not from the token — an IDAM access token carries no roles at all — and
 the lookup is deliberately uncached, so a role removed in IDAM is gone from the next request. The one
-role modelled is `caseworker-deedpoll-admin`, and it gates five things: whether `privacy` is editable,
-deleting a note, deleting a witness, publishing or amending a *shared* saved query, and the
-`/caseworker/ccd-attempts` list and repairs.
+caseworker role modelled is `caseworker-deedpoll-admin`, and it gates six things: whether `privacy` is editable,
+deleting a note, deleting a witness, publishing or amending a *shared* saved query, the
+`/caseworker/ccd-attempts` list and repairs, and Gazette notice history.
 
 > **No route is gated as a route.** Every authenticated principal reaches the whole caseworker surface,
 > because the only role name confirmed with IDAM is the admin one and gating everything on it would lock
@@ -715,12 +716,48 @@ not 200 when the database is unreachable.
 name, image and ingress host, but no probe path is configured — so these endpoints are tested and not
 yet wired. Naming the two paths is part of the outstanding deployment onboarding.
 
+### Gazette publication foundation
+
+`GET /caseworker/cases?filter=readyForPublication` uses the working predicate
+`publishToLondonGazette=true AND dateNoticeSentToLondonGazette IS NULL AND state=Enroled`.
+The default sort is `dateEnroled:asc`; an explicit `sort` overrides it. Existing `where`,
+search and pagination still apply. Unknown or repeated filter values fall back to `all`.
+The filter is also accepted by saved-query create/update requests and is available to
+callers with case-list access. This implementation does not constitute new business sign-off.
+
+| Method | Path | Access and response |
+|---|---|---|
+| GET | `/caseworker/gazette-notices` | Requires `caseworker-deedpoll-admin`; authenticated non-admins receive 403. Returns paged publication history |
+
+History accepts `page` (1-based, default 1) and `size` (default 25, capped at 100),
+using the existing paging validation. It returns `batches`, `page`, `size`, `total`
+and `totalPages`. Each batch exposes `sentAt`, `sentBy` (display name), `caseCount`,
+`referenceNumbers` and `referencesTruncated`. References are frozen on the audit membership,
+with a preview of at most 100 per batch in lexical display order (not numerical reference or send order).
+`referencesTruncated` is true when more members exist; `caseCount` remains the full frozen count.
+The query limits membership in PostgreSQL before loading it into memory. References are never
+read from today's case. Batches are newest first, with descending
+batch UUID as the equal-timestamp tie-breaker. There is no custom filtering or sorting.
+An empty history returns an empty `batches` array and zero totals. Neither subject IDs
+nor request IDs are published.
+
+V31 adds the batch and membership audit tables, including database-enforced request-ID
+uniqueness. V32 adds indexes for case membership checks and bounded reference previews.
+There is currently no batch-send operation or production audit writer:
+no Gazette spreadsheet, Notify template configuration, case-date update or case-note
+write is implemented. The full admin plan 16 contract remains unavailable until the
+batch-send task is implemented and validated. Spreadsheet layout, Notify wording and
+uncertain-send recovery require decisions; database rollback cannot undo email acceptance.
+See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md) and
+[foundation validation](docs/plans/gazette-1a-task4-validation.md).
+
 ### The OpenAPI document
 
 Published at `/v3/api-docs`, and browsable at `/swagger-ui.html`. `springdoc.packagesToScan` covers
 `…deedpoll.api`, so a controller is documented by being in the package it belongs in rather than by
 somebody remembering to add it. `OpenAPIPublisherTest` writes the document to
-`/tmp/openapi-specs.json` and asserts that it actually describes the caseworker and judicial surfaces —
+`/tmp/openapi-specs.json` (the fixed pipeline contract). Copy that file after a local run
+if you need a worktree-specific evidence artifact. It asserts the caseworker, judicial and admin surfaces —
 both operation counts and every path — rather than merely being served.
 
 **Nothing currently consumes that file.** The enabled `integration` source set produces it during

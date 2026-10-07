@@ -27,6 +27,7 @@ require 03c. Local proof is not onboarding or rollout approval. See
 ```
 api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations across 21 paths, plus the admin-only
                                   /caseworker/ccd-attempts (3 operations, counted apart as CCD_ATTEMPT_PATHS)
+                                  and /caseworker/gazette-notices (1 history GET, counted apart)
 api/judicial/{controller,dto}     the judicial surface — 5 operations, keyed on the referral, never on the case
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
@@ -226,6 +227,8 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
   `PhysicalNamingStrategyStandardImpl` are load-bearing: Boot's default strategy would rewrite them
   to `new_forename` and stop finding them. Enum columns also need
   `@JdbcTypeCode(SqlTypes.NAMED_ENUM)`, or Hibernate sends the value as an integer ordinal.
+- **Gazette audit tables (V31) use explicit snake_case table and column mappings**, unlike the ported
+  mixed-case schema. Their restrictive foreign keys preserve membership; case deletion returns a conflict.
 - **Flyway owns the schema; Hibernate validates against it** (`ddl-auto: validate`). Entities are
   checked against the migrations, never the other way round.
 - **A patch is three-state: absent / null / value.** Omitting a field leaves it alone; an explicit
@@ -251,7 +254,7 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
   change the answer calls the single recompute — `ReferralService.refreshCurrentReferralState` /
   `refreshAwaitingConfirmation`, the second public only because `CaseEmailService.send` is in another package —
   inside the same transaction. The rule itself lives in a class with no database in it (`CurrentReferralState`,
-  `ConfirmationWait`) so that CI, which has no Docker, runs it. **A new write path that skips the recompute
+  `ConfirmationWait`), so it can be tested independently of persistence. **A new write path that skips the recompute
   leaves the column wrong for ever and no existing test fails.**
 - **A send's identity is the caller's `Idempotency-Key`, and it is transport rather than correspondence.**
   `POST /caseworker/cases/{id}/emails/{template}` requires the header — one compose journey mints one UUID and

@@ -113,6 +113,22 @@ class CaseSpecificationsTest extends AbstractPostgresContainerTest {
         return deedPoll;
     }
 
+    @Test
+    void publicationReadinessRequiresEveryTermIncludingNonNullTrueAndEnroled() {
+        final DeedPoll ready = persisted("publishToLondonGazette", true, "state", DeedPollState.Enroled);
+        persisted("publishToLondonGazette", false, "state", DeedPollState.Enroled);
+        persisted("publishToLondonGazette", null, "state", DeedPollState.Enroled);
+        persisted("publishToLondonGazette", true, "state", DeedPollState.Enroled,
+                  "dateNoticeSentToLondonGazette", LocalDateTime.of(2026, 10, 1, 0, 0));
+        persisted("publishToLondonGazette", true, "state", null);
+        for (DeedPollState state : DeedPollState.values()) {
+            if (state != DeedPollState.Enroled) {
+                persisted("publishToLondonGazette", true, "state", state);
+            }
+        }
+        assertThat(matching(ListFilters.filterFor("readyForPublication"))).containsExactly(ready.getId());
+    }
+
     /** The ids of this test's own rows that the given conditions admit, under the "all" tab. */
     private List<String> matching(String... where) {
         return matching(ALL, where);
@@ -574,6 +590,8 @@ class CaseSpecificationsTest extends AbstractPostgresContainerTest {
                 case ListFilters.NotIn notIn -> deedPolls.findOpenOrderByCreatedOnDesc(notIn.states());
                 case ListFilters.AwaitingConfirmation ignored ->
                     deedPolls.findByAwaitingConfirmationSinceIsNotNullOrderByAwaitingConfirmationSinceAsc();
+                case ListFilters.ReadyForPublication ignored ->
+                    throw new IllegalArgumentException("Gazette has no legacy named finder");
             };
         }
     }

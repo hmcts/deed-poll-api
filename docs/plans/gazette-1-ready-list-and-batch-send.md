@@ -12,6 +12,32 @@ writes an audit trail, and a history read for that trail. The admin companion,
 Dynamics original is silent on it — so unlike `domain/deedpoll`, nothing here is checked against
 `src/test/resources/reference/`. Treat every decision below as this repo's own, not an inherited one.
 
+## Foundation handoff and unresolved send design — 6 October 2026
+
+Tasks 1–3 are implemented and locally validated. The foundation execution plan
+`gazette-1a-ready-list-and-history.md` completes only the ready filter, V31 audit
+schema and admin-only history GET. Its final contract comparison and build evidence
+are in `gazette-1a-task4-validation.md`. This parent plan remains active; Tasks 0,
+4 and 5 remain incomplete. The full admin plan 16 contract is unavailable until
+batch sending is implemented and validated.
+
+Before any send-path implementation, obtain the spreadsheet's required fields,
+column order and header format, and agree the Notify wording and provisioning.
+Task 0's ready-predicate reconfirmation is still pending; the implemented predicate
+remains the working assumption, with no new business sign-off from this run.
+
+Decision 4 below is an unresolved proposal, not an implementable delivery guarantee.
+A database rollback cannot undo Notify accepting an email. A timeout, lost response,
+or database failure after acceptance can leave an email sent with no committed audit
+row or request key; a retry could then send twice. The existing unique request index
+alone cannot settle that outcome. The claims below that every failure means “nothing
+happened” and can safely be retried must not be used as send-path acceptance criteria.
+Agree how to preserve evidence of an uncertain send, how it will be reconciled, and
+when retry is permitted before implementing Task 4. This foundation chooses no
+send/recovery design and supplies no all-or-nothing email guarantee. Decision 7's
+note transaction and Task 4's rollback tests must be reconciled with that decision.
+Do not implement a placeholder spreadsheet or send while these decisions are pending.
+
 ## What already exists and needs no change
 
 `publishToLondonGazette` (boolean) and `dateNoticeSentToLondonGazette` (date) are already columns on
@@ -31,7 +57,7 @@ count cheap for the admin worklist banner (`total` on an unfiltered-by-`where` r
 
 ### 1. Ready is `publishToLondonGazette:true AND dateNoticeSentToLondonGazette IS NULL AND state:Enroled`
 
-Confirmed with the business as a working assumption, not a ported rule. Add `readyForPublication` as a sixth
+Confirmed with the business as a working assumption, not a ported rule. Add `readyForPublication` as a seventh
 member of `ListFilters`, translating to exactly that predicate, default sort
 `dateEnroled:asc` (oldest-enrolled-first — the same "longest-waiting first" instinct `awaitingConfirmation`
 already applies, oldest cases get published first). Like every other filter, an unrecognised or repeated
@@ -77,7 +103,7 @@ create unique index deedpoll_gazette_notice_batch_request_id_key
 
 create table deedpoll_gazette_notice_batch_case (
     batch_id uuid not null references deedpoll_gazette_notice_batch (id),
-    deed_poll_id uuid not null references deedpoll_deedpoll (id),
+    deed_poll_id text not null references deedpoll_deedpoll (id),
     reference_number varchar(255) not null,
     primary key (batch_id, deed_poll_id)
 );
@@ -89,6 +115,10 @@ denormalised onto the join row deliberately: the history read (decision 6) must 
 if a case is later amended, and reading it live off `deedpoll_deedpoll` would show today's reference for a
 record whose reference could theoretically change, which is not what "what did we send" means. The unique
 index on `request_id` is this operation's idempotency guard — see decision 4.
+
+Schema correction, 6 October 2026: `deed_poll_id` uses text to match the existing
+V2 case primary key; PostgreSQL cannot create the originally proposed UUID-to-text
+foreign key. The migration is V31, since V26–V30 already exist on this branch.
 
 **The spreadsheet itself is not retained.** Confirmed with the business: the audit trail is the batch, its
 sender, its timestamp and its case list: enough to answer "who sent what, when", and enough to regenerate the
@@ -132,8 +162,14 @@ dropping members of it is a different action from the one they confirmed.
 ### 6. `GET /caseworker/gazette-notices` is a plain, paged history read
 
 Returns `sentAt`, `sentBy` (display name only — the subject id is never published, same discipline as
-`claimedBy`/`decidedBy`), `caseCount`, and the list of `referenceNumber`s per batch, newest first. No filtering
-or sorting beyond that; this is an audit list, not a second case-list surface.
+`claimedBy`/`decidedBy`), `caseCount`, and a preview of at most 100 frozen `referenceNumbers`
+per batch, with `referencesTruncated` indicating omitted members. Batches are newest first;
+references use lexical display order, not send order. No custom filtering or sorting.
+
+Review amendment (2026-10-07): this bounded preview intentionally replaces the original
+full-membership history contract to bound database reads and response size. All membership
+remains stored, but no API currently retrieves the omitted references for a batch over 100.
+Full audit retrieval must be resolved before the full batch-send contract is considered complete.
 
 ### 7. Every batch-sent case gets exactly one case note, in the same transaction as the send
 
@@ -166,7 +202,7 @@ not arrived by then.
 1. **Filter** — `ListFilters` gains `readyForPublication`; `CaseworkerReadController`'s filter parameter
    description is updated (it is generated into the OpenAPI document, so this alone changes the published
    spec — expected and must be reconciled by the admin companion plan's Task 0).
-2. **Schema** — `V26__gazette_notice_batch.sql`; JPA entities `GazetteNoticeBatch`,
+2. **Schema** — `V31__gazette_notice_batch.sql`; JPA entities `GazetteNoticeBatch`,
    `GazetteNoticeBatchCase`; repositories.
 3. **Domain** — `domain/gazette`: `GazetteNoticeService` (validate-then-send), `GazetteSpreadsheet`
    (generation), reusing `NotifyProperties`/`NotificationClient` directly rather than the outbox.
@@ -217,25 +253,43 @@ and 6 do not depend on them and may proceed.
 Add the filter, its default sort, and its description text. Test: the predicate matches exactly the three
 conditions of decision 1, the default sort, and that every other filter's behaviour is unchanged.
 
-- [ ] Filter added, tests green, OpenAPI delta is exactly the filter's description text
+- [x] Filter added, tests green, OpenAPI delta is exactly the filter's description text
+  and readyForPublication added to CreateSavedQueryRequest and UpdateSavedQueryRequest
+  filter enums (both are generated from ListFilters, matching saved-query validation).
+
+Execution correction, 6 October 2026: the original description-only expectation
+overlooked the two generated saved-query enums. These additive entries preserve the
+existing shared filter catalogue; omitting them would publish an inaccurate contract.
+Verified against retained snapshots and the successful full build (3,619 test /
+14 integration, zero failures or skips); see `gazette-1a-task1-validation.md`.
 
 ### Task 2: Audit schema
 
-`V26__gazette_notice_batch.sql`, entities, repositories. Test the unique index on `request_id` refuses a
+`V31__gazette_notice_batch.sql`, entities, repositories. Test the unique index on `request_id` refuses a
 repeat at the database level, not only in application code.
 
-- [ ] Migration, entities and repositories added; constraint-level test green
+- [x] Migration, entities and repositories added; constraint-level test green
+
+Verified on 6 October 2026: V31, including the text case-ID foreign key correction
+above. Full build: 3,629 test / 14 integration, no failures, errors or skips;
+OpenAPI unchanged from Task 1. See `gazette-1a-task2-validation.md`.
 
 ### Task 3: Role gate and history read
 
 `GET /caseworker/gazette-notices`, gated, paged, newest first. Test: 403 for a non-admin token, correct
 shape and ordering for an admin one, no subject id anywhere in the response.
 
-- [ ] History endpoint implemented and gated; no owner id on the wire
+- [x] History endpoint implemented and gated; no owner id on the wire
+
+Verified on 6 October 2026: the full-context PostgreSQL tests cover role refusal,
+admin results, frozen references, newest-first ordering, pagination and privacy.
+Full build: 3,641 test / 15 integration, no failures, errors or skips.
+See `gazette-1a-task3-validation.md`.
 
 ### Task 4: Batch send
 
-**Blocked on Task 0's first two items.** `GazetteSpreadsheet`, `GazetteNoticeService`, the controller
+**Blocked on Task 0's first two items and resolution of the uncertain-send design above.**
+`GazetteSpreadsheet`, `GazetteNoticeService`, the controller
 operation, the case note, the idempotency behaviour (decision 4), the re-validation (decision 5), the
 all-or-nothing transaction (decision 4). Test: a successful send sets the date and note on every case and
 writes one audit row; a stale selection 409s naming the stale ids and changes nothing; a repeated
@@ -246,8 +300,9 @@ every write.
 
 ### Task 5: Full validation and OpenAPI regeneration
 
-Regenerate the OpenAPI document. Confirm the delta is exactly: the filter description text, two new
-operations, and their new schemas — nothing pre-existing altered. Record the final test counts next to the
+Regenerate the OpenAPI document. Confirm the delta is exactly: the filter description text,
+readyForPublication added to the two saved-query request filter enums, two new
+operations, and their new schemas — no other pre-existing contract altered. Record the final test counts next to the
 Task-0 baseline.
 
 - [ ] `./gradlew build` green; OpenAPI delta matches exactly; final counts recorded

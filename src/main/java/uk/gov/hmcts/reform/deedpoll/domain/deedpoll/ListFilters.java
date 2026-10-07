@@ -16,7 +16,7 @@ import java.util.Set;
  * meant the API could not offer the same filters without restating them.
  *
  * <p>The reference expresses the criterion as a Prisma {@code where} clause. This port names the shapes it
- * actually uses -- one state, every state but a set, or the outstanding-confirmation clause -- as
+ * actually uses -- states, outstanding confirmation, or publication readiness -- as
  * {@link FilterWhere}, so the list endpoint can turn one into a query without the filter list having to know
  * how cases are stored.
  */
@@ -31,6 +31,10 @@ public final class ListFilters {
      */
     public static final CaseSort LONGEST_WAIT_FIRST =
         new CaseSort("awaitingConfirmationSince", CaseSort.Direction.ASCENDING);
+
+    /** Oldest enrolled cases are the first to be published. */
+    public static final CaseSort OLDEST_ENROLLED_FIRST =
+        new CaseSort("dateEnroled", CaseSort.Direction.ASCENDING);
 
     /**
      * Order matters: it is the order the tabs render in, and the first entry is the fallback for an
@@ -48,8 +52,9 @@ public final class ListFilters {
      * inserted</strong>, which is why the reference's five keys are still the first five: the order is the
      * render order, so a caseworker's tab bar keeps the shape it had. It is the one tab whose criterion is not
      * about {@code state} at all -- a case waiting for an applicant's reply is in whatever state its dates make
-     * it, ordinarily Returned -- and the one that carries its own order, because a list of waiting cases in
+     * it, ordinarily Returned -- and carries its own order, because a list of waiting cases in
      * creation order would bury the longest wait. See {@code V17__case_awaiting_confirmation.sql}.
+     * {@code readyForPublication} is also appended and orders by the oldest enrolment first.
      */
     public static final List<ListFilter> LIST_FILTERS = List.of(
         new ListFilter("all", "All applications", Optional.empty()),
@@ -59,7 +64,9 @@ public final class ListFilters {
         new ListFilter("enroled", "Enroled", Optional.of(new In(EnumSet.of(DeedPollState.Enroled)))),
         new ListFilter("returned", "Returned", Optional.of(new In(EnumSet.of(DeedPollState.Returned)))),
         new ListFilter("awaitingConfirmation", "Awaiting confirmation",
-            Optional.of(new AwaitingConfirmation()), Optional.of(LONGEST_WAIT_FIRST)));
+            Optional.of(new AwaitingConfirmation()), Optional.of(LONGEST_WAIT_FIRST)),
+        new ListFilter("readyForPublication", "Ready for publication",
+            Optional.of(new ReadyForPublication()), Optional.of(OLDEST_ENROLLED_FIRST)));
 
     private ListFilters() {
     }
@@ -67,7 +74,7 @@ public final class ListFilters {
     /**
      * What a filter admits: the reference's {@code Prisma.DeedPollWhereInput}, in the shapes this service uses.
      */
-    public sealed interface FilterWhere permits In, NotIn, AwaitingConfirmation {
+    public sealed interface FilterWhere permits In, NotIn, AwaitingConfirmation, ReadyForPublication {
     }
 
     /** Only these states. */
@@ -89,12 +96,16 @@ public final class ListFilters {
     public record AwaitingConfirmation() implements FilterWhere {
     }
 
+    /** Publication requested, no notice sent, and the case is Enroled: the Gazette working predicate. */
+    public record ReadyForPublication() implements FilterWhere {
+    }
+
     /**
      * One filter tab: its key, its label, the criterion it admits, and the order it is asked for by default.
      *
      * <p>The default order is the tab's own rather than the list endpoint's, because it is a property of the
-     * question the tab asks: "which case has waited longest" is the whole of the waiting list, where every other
-     * tab is a set of cases whose useful default is the newest. A caller that names {@code sort} still wins --
+     * question the tab asks: the confirmation and publication lists put the longest wait first; the ported
+     * tabs default to the newest cases. A caller that names {@code sort} still wins --
      * see {@link CaseSort#parse(String, CaseSort)} -- so this is a default and not a fixed order.
      *
      * @param defaultSort the order for a request that asked for none, or empty for the newest-first default

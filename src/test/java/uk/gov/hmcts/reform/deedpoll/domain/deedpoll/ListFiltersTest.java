@@ -14,8 +14,8 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Ports every test block in {@code reference/ts/deed-poll/list-filters.test.ts}, and covers the one tab that is
- * not in the reference.
+ * Ports every test block in {@code reference/ts/deed-poll/list-filters.test.ts}, and covers the additional tabs that
+ * are not in the reference.
  *
  * <p>{@code awaitingConfirmation} is this service's own: the reference has no confirmation exchange to wait for.
  * It is appended to the ported five rather than inserted among them, which is what the key-order assertion below
@@ -56,7 +56,8 @@ class ListFiltersTest {
         // because the order is the render order: a tab bar a caseworker knows keeps the shape it had, and a
         // bookmarked ?filter= keeps meaning what it meant.
         assertThat(ListFilters.LIST_FILTERS).extracting(ListFilters.ListFilter::key)
-            .containsExactly("all", "open", "received", "enroled", "returned", "awaitingConfirmation");
+            .containsExactly("all", "open", "received", "enroled", "returned", "awaitingConfirmation",
+                             "readyForPublication");
     }
 
     @Nested
@@ -82,7 +83,7 @@ class ListFiltersTest {
             assertThat(ListFilters.LONGEST_WAIT_FIRST.direction()).isEqualTo(CaseSort.Direction.ASCENDING);
 
             assertThat(ListFilters.LIST_FILTERS)
-                .filteredOn(filter -> !"awaitingConfirmation".equals(filter.key()))
+                .filteredOn(filter -> !List.of("awaitingConfirmation", "readyForPublication").contains(filter.key()))
                 .allSatisfy(filter -> assertThat(filter.defaultSort())
                     .as("%s leaves the newest-first default alone", filter.key())
                     .isEmpty());
@@ -99,6 +100,17 @@ class ListFiltersTest {
         private ListFilters.ListFilter awaiting() {
             return ListFilters.filterFor("awaitingConfirmation");
         }
+    }
+
+    @Test
+    void readyForPublicationHasItsOwnCriterionAndOldestEnrolledOrder() {
+        ListFilters.ListFilter ready = ListFilters.filterFor("readyForPublication");
+        assertThat(ready.where()).contains(new ListFilters.ReadyForPublication());
+        assertThat(ready.defaultSort()).contains(new CaseSort("dateEnroled", CaseSort.Direction.ASCENDING));
+        assertThat(ListFilters.filterTabs()).contains(
+            new ListFilters.FilterTab("readyForPublication", "Ready for publication"));
+        assertThat(ListFilters.filterFor(List.of("readyForPublication", "readyForPublication")).key())
+            .isEqualTo("all");
     }
 
     @Nested

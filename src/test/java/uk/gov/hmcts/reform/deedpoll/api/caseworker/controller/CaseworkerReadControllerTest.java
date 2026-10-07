@@ -278,6 +278,59 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
+        void publicationReadyListUsesOldestEnrolledOrderAndAllowsAnExplicitSort() throws Exception {
+            final DeedPoll recent = backdated(queryCase("Ada", "publishToLondonGazette", true,
+                "state", DeedPollState.Enroled, "dateEnroled", LocalDateTime.of(2026, 5, 1, 0, 0)),
+                LocalDateTime.of(2026, 8, 1, 0, 0));
+            final DeedPoll oldest = backdated(queryCase("Zoe", "publishToLondonGazette", true,
+                "state", DeedPollState.Enroled, "dateEnroled", LocalDateTime.of(2026, 3, 1, 0, 0)),
+                LocalDateTime.of(2026, 6, 1, 0, 0));
+            queryCase("Not requested", "publishToLondonGazette", false, "state", DeedPollState.Enroled);
+            queryCase("Already sent", "publishToLondonGazette", true, "state", DeedPollState.Enroled,
+                      "dateNoticeSentToLondonGazette", LocalDateTime.of(2026, 9, 1, 0, 0));
+            queryCase("Not enrolled", "publishToLondonGazette", true, "state", DeedPollState.Received);
+
+            authorised(get("/caseworker/cases").param("filter", "readyForPublication"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.filter").value("readyForPublication"))
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.cases.length()").value(2))
+                .andExpect(jsonPath("$.cases[0].id").value(oldest.getId()))
+                .andExpect(jsonPath("$.cases[1].id").value(recent.getId()));
+            authorised(get("/caseworker/cases").param("filter", "readyForPublication")
+                           .param("sort", "newForename:asc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cases[0].id").value(recent.getId()))
+                .andExpect(jsonPath("$.cases[1].id").value(oldest.getId()));
+            assertThat(deedPollService.findDeedPolls(ListFilters.filterFor("readyForPublication")))
+                .extracting(row -> row.deedPoll().getId()).containsExactly(oldest.getId(), recent.getId());
+        }
+
+        @Test
+        void publicationReadyListComposesWithConditionsAndSearch() throws Exception {
+            queryCase("Zoe", "publishToLondonGazette", true, "state", DeedPollState.Enroled,
+                      "type", DeedPollType.Adult);
+            DeedPoll wanted = queryCase("Zoe", "publishToLondonGazette", true,
+                "state", DeedPollState.Enroled, "type", DeedPollType.Minor);
+            queryCase("Ada", "publishToLondonGazette", true, "state", DeedPollState.Enroled,
+                      "type", DeedPollType.Minor);
+            authorised(get("/caseworker/cases").param("filter", "readyForPublication")
+                           .param("where", "type:is:Minor").param("q", "Zoe"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.cases[0].id").value(wanted.getId()));
+        }
+
+        @Test
+        void repeatedPublicationFilterFallsBackToAll() throws Exception {
+            newCase(Map.of("newForename", "Not ready"));
+            authorised(get("/caseworker/cases").param("filter", "readyForPublication", "readyForPublication"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.filter").value("all"))
+                .andExpect(jsonPath("$.total").value(1));
+        }
+
+        @Test
         @DisplayName("the awaiting-confirmation filter is the waiting cases, longest wait first, with the days")
         void theAwaitingConfirmationFilterIsTheWaitingCases() throws Exception {
             // A case asked in March and one asked in May, plus one that is waiting for nothing. The two waiting
