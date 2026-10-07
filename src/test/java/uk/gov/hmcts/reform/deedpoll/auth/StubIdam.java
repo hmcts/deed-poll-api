@@ -109,7 +109,8 @@ public final class StubIdam {
         server.stubFor(get(urlPathEqualTo("/o/userinfo")).willReturn(aResponse()
             .withStatus(400)
             .withHeader("Content-Type", "application/json; charset=utf-8")
-            .withBody("{\"error_description\":\"Not able to read user information.\",\"error\":\"unauthorized_client\"}")));
+            .withBody("""
+                {"error_description":"Not able to read user information.","error":"unauthorized_client"}""")));
     }
 
     public void stubUserInfo(String subject, String name, List<String> roles) {
