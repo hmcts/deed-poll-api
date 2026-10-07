@@ -162,8 +162,14 @@ dropping members of it is a different action from the one they confirmed.
 ### 6. `GET /caseworker/gazette-notices` is a plain, paged history read
 
 Returns `sentAt`, `sentBy` (display name only — the subject id is never published, same discipline as
-`claimedBy`/`decidedBy`), `caseCount`, and the list of `referenceNumber`s per batch, newest first. No filtering
-or sorting beyond that; this is an audit list, not a second case-list surface.
+`claimedBy`/`decidedBy`), `caseCount`, and a preview of at most 100 frozen `referenceNumbers`
+per batch, with `referencesTruncated` indicating omitted members. Batches are newest first;
+references use lexical display order, not send order. No custom filtering or sorting.
+
+Review amendment (2026-10-07): this bounded preview intentionally replaces the original
+full-membership history contract to bound database reads and response size. All membership
+remains stored, but no API currently retrieves the omitted references for a batch over 100.
+Full audit retrieval must be resolved before the full batch-send contract is considered complete.
 
 ### 7. Every batch-sent case gets exactly one case note, in the same transaction as the send
 

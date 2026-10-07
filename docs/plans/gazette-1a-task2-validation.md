@@ -1,5 +1,15 @@
 # Gazette foundation Task 2 validation
 
+## Current-tree reruns (2026-10-07)
+
+The results, hashes and no-shared-artifact statements below describe the original
+run with the then-present output override. The command below is updated for the
+current fixed `/tmp/openapi-specs.json` publisher: it removes stale output, forces
+execution and copies only after success. Run without another publisher using the
+same temporary path. Preserve historical snapshots before rerunning; current output
+includes the bounded reference preview and `referencesTruncated` contract amendment.
+Historical hashes and equality with the original Task 3 snapshot no longer apply.
+
 ## Provenance and scope
 
 - Date: 2026-10-06.
@@ -40,11 +50,15 @@ and two database-free composite-key tests. They prove:
 Validation command, run from this worktree:
 
 ```sh
+set -eu
+mkdir -p build/gazette-evidence
+rm -f /tmp/openapi-specs.json build/gazette-evidence/task2-openapi.json
 JAVA_HOME=/tmp/deed-poll-jdk21 \
 TESTCONTAINERS_RYUK_DISABLED=true \
 INTEGRATION_TESTS_ENABLED=true \
-OPENAPI_SPEC_PATH="$PWD/build/gazette-evidence/task2-openapi.json" \
-./gradlew build
+./gradlew build --rerun-tasks
+test -s /tmp/openapi-specs.json
+cp /tmp/openapi-specs.json build/gazette-evidence/task2-openapi.json
 ```
 
 The initial compile exposed incorrect case fixture accessor/type assumptions; the

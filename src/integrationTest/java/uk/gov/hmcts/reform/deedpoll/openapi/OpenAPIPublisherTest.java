@@ -68,9 +68,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
-    /** Defaults to the pipeline location; local runs can isolate their generated document. */
-    private static final Path PUBLISHED_SPEC = Paths.get(
-        System.getenv().getOrDefault("OPENAPI_SPEC_PATH", "/tmp/openapi-specs.json"));
+    /** Fixed output contract with the publishing pipeline. */
+    private static final Path PUBLISHED_SPEC = Paths.get("/tmp/openapi-specs.json");
 
     /**
      * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
@@ -153,7 +152,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(spec.at("/components/schemas/GazetteNoticeHistoryResponse/properties").fieldNames())
             .toIterable().containsExactlyInAnyOrder("batches", "page", "size", "total", "totalPages");
         assertThat(spec.at("/components/schemas/GazetteNoticeBatchResponse/properties").fieldNames())
-            .toIterable().containsExactlyInAnyOrder("sentAt", "sentBy", "caseCount", "referenceNumbers");
+            .toIterable().containsExactlyInAnyOrder(
+                "sentAt", "sentBy", "caseCount", "referenceNumbers", "referencesTruncated");
     }
 
     @Test

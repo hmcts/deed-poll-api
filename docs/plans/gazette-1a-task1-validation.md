@@ -1,5 +1,13 @@
 # Gazette foundation Task 1 validation
 
+## Current-tree clarification (2026-10-07)
+
+The provenance and hashes below describe the historical baseline run. The temporary
+`OPENAPI_SPEC_PATH` harness override has since been removed: the current publisher
+always writes `/tmp/openapi-specs.json`. Current reruns must copy that freshly
+generated file after a successful forced integration run, as shown in the Task 2–4
+records. The historical baseline itself has not been regenerated or relabelled.
+
 ## Baseline provenance
 
 - Date: 2026-10-06.

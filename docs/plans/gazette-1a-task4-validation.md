@@ -1,5 +1,15 @@
 # Gazette foundation Task 4 validation
 
+## Current-tree reruns (2026-10-07)
+
+The results, hashes and no-shared-artifact statements below describe the original
+run with the then-present output override. The command below is updated for the
+current fixed `/tmp/openapi-specs.json` publisher: it removes stale output, forces
+execution and copies only after success. Run without another publisher using the
+same temporary path. Preserve historical snapshots before rerunning; current output
+includes the bounded reference preview and `referencesTruncated` contract amendment.
+Historical hashes and equality with the original Task 3 snapshot no longer apply.
+
 ## Provenance and scope
 
 - Date: 2026-10-06.
@@ -13,9 +23,9 @@
 
 ## Regenerated contract
 
-The full build regenerates `build/gazette-evidence/task4-openapi.json` through
-`OpenAPIPublisherTest`. Its source is the starting commit above plus the test change
-in this commit. The retained baseline hash was checked against the Task 1 record.
+The original full build generated `build/gazette-evidence/task4-openapi.json` through
+the then-configurable `OpenAPIPublisherTest`. Its source was the starting commit
+above plus the Task 4 test change. Current runs use the copy step below. The retained baseline hash was checked against the Task 1 record.
 SHA-256:
 
 - Baseline: `0208a35a4d4accf2120a8a096eb7cad816183920096adc4d3fa2027ca3eeed54`.
@@ -42,22 +52,29 @@ publication key in both saved-query write schemas. Existing tests continue to
 cover the GET-only history contract, response field sets, role gate, paging,
 ordering, frozen references, privacy, ready predicate and PostgreSQL constraints.
 
-Reproducible local comparison and evidence, retained in ignored
+Historical local comparison and evidence, retained in ignored
 `build/gazette-evidence/`: `verify-task4-contract.py`, `baseline-openapi.json`,
 `task4-openapi.json`, `task4-openapi-delta.json`, `task4-build.log` and
-`task4-counts.json`. Run the comparison with
-`python3 build/gazette-evidence/verify-task4-contract.py`.
+`task4-counts.json`. The historical `verify-task4-contract.py` additionally requires
+equality with the original Task 3 snapshot. It is not a current-tree verifier and
+will reject freshly copied current output because the preview contract changed.
+Use the current build's OpenAPI integration assertions for the revised contract;
+a pass against retained snapshots proves only the historical comparison.
 
 ## Validation
 
 Command, with Java 21 and real PostgreSQL tests enabled:
 
 ```sh
+set -eu
+mkdir -p build/gazette-evidence
+rm -f /tmp/openapi-specs.json build/gazette-evidence/task4-openapi.json
 JAVA_HOME=/tmp/deed-poll-jdk21 \
 TESTCONTAINERS_RYUK_DISABLED=true \
 INTEGRATION_TESTS_ENABLED=true \
-OPENAPI_SPEC_PATH="$PWD/build/gazette-evidence/task4-openapi.json" \
 ./gradlew build --rerun-tasks
+test -s /tmp/openapi-specs.json
+cp /tmp/openapi-specs.json build/gazette-evidence/task4-openapi.json
 ```
 
 `--rerun-tasks` forces fresh execution, including the unchanged foundation tests
@@ -83,7 +100,8 @@ coverage is green; the added integration test accounts for the increase from Tas
 ## Handoff boundary
 
 README now describes the seven filter keys, publication ordering, access rules,
-history paging/shape, frozen attribution and local OpenAPI output override.
+history paging/shape, frozen attribution and, at that time, a local OpenAPI output
+override (subsequently removed; see the current-tree rerun instructions above).
 The parent plan remains active with only Tasks 1–3 checked. Spreadsheet layout,
 Notify wording/provisioning and ready-predicate reconfirmation remain unchecked.
 The send and full-contract validation tasks remain unchecked as well.

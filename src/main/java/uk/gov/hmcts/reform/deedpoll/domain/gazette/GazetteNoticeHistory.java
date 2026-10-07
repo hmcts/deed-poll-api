@@ -1,13 +1,10 @@
 package uk.gov.hmcts.reform.deedpoll.domain.gazette;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
@@ -25,7 +22,7 @@ import java.util.stream.Collectors;
 @Service
 public class GazetteNoticeHistory {
 
-    private static final Logger LOG = LoggerFactory.getLogger(GazetteNoticeHistory.class);
+    public static final int MAX_REFERENCES = 100;
 
     private final GazetteNoticeBatchRepository batches;
     private final GazetteNoticeBatchCaseRepository cases;
@@ -38,20 +35,18 @@ public class GazetteNoticeHistory {
     /** Newest first, with a stable identity tie-breaker for equal send timestamps. */
     @Transactional(readOnly = true)
     public Page<GazetteNoticeSummary> history(CurrentUser caller, CasePaging paging) {
-        try {
-            caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
-        } catch (ForbiddenError refused) {
-            LOG.warn("Gazette history refused: requires caseworker-deedpoll-admin role");
-            throw refused;
-        }
+        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
         Page<GazetteNoticeBatch> found = batches.findAll(PageRequest.of(paging.index(), paging.size(),
             Sort.by(Sort.Direction.DESC, "sentAt", "id")));
         List<UUID> ids = found.stream().map(GazetteNoticeBatch::getId).toList();
         Map<UUID, List<GazetteNoticeBatchCase>> members = ids.isEmpty() ? Map.of()
-            : cases.findByIdBatchIdIn(ids).stream()
+            : cases.referencePreview(ids, MAX_REFERENCES + 1).stream()
                 .collect(Collectors.groupingBy(member -> member.getId().getBatchId()));
-        return found.map(batch -> new GazetteNoticeSummary(batch.getSentAt(), batch.getSentByName(),
-            batch.getCaseCount(), members.getOrDefault(batch.getId(), List.of()).stream()
-                .map(GazetteNoticeBatchCase::getReferenceNumber).sorted().toList()));
+        return found.map(batch -> {
+            List<GazetteNoticeBatchCase> preview = members.getOrDefault(batch.getId(), List.of());
+            return new GazetteNoticeSummary(batch.getSentAt(), batch.getSentByName(), batch.getCaseCount(),
+                preview.stream().limit(MAX_REFERENCES).map(GazetteNoticeBatchCase::getReferenceNumber).toList(),
+                preview.size() > MAX_REFERENCES);
+        });
     }
 }

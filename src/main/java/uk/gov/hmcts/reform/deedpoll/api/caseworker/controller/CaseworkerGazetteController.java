@@ -24,7 +24,8 @@ public class CaseworkerGazetteController {
 
     @Operation(summary = "Read Gazette notice history",
         description = "Requires caseworker-deedpoll-admin. Batches are newest first, with frozen case references "
-            + "and display-name attribution. No custom filtering or sorting.")
+            + "and display-name attribution. At most 100 references per batch, in lexical display order, with "
+            + "referencesTruncated indicating omitted members. This is not send order. No custom filtering or sorting.")
     @GetMapping
     public GazetteNoticeHistoryResponse history(
         @Parameter(description = "Page number, starting at 1; defaults to 1.")

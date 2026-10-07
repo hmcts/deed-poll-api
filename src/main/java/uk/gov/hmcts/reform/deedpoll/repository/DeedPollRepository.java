@@ -59,6 +59,14 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
     @Query(value = "SELECT id FROM deedpoll_deedpoll WHERE id = :id FOR NO KEY UPDATE", nativeQuery = true)
     Optional<String> lockForDeedPreparation(@Param("id") String id);
 
+    /** Serialises deletion with new child foreign-key references, including Gazette membership. */
+    @Query(value = "SELECT id FROM deedpoll_deedpoll WHERE id = :id FOR UPDATE", nativeQuery = true)
+    Optional<String> lockForDeletion(@Param("id") String id);
+
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM deedpoll_gazette_notice_batch_case WHERE deed_poll_id = :id)",
+        nativeQuery = true)
+    boolean hasGazetteMembership(@Param("id") String id);
+
     /** Every case, newest first. */
     List<DeedPoll> findAllByOrderByCreatedOnDesc();
 

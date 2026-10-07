@@ -39,6 +39,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteNoticeHistory.MAX_REFERENCES;
 
 /** Real PostgreSQL and the whole security context, with only IDAM stubbed. */
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -117,6 +118,7 @@ class CaseworkerGazetteControllerTest extends AbstractPostgresContainerTest {
             .andExpect(jsonPath("$.batches[0].sentAt").value("2026-10-06T10:30:00"))
             .andExpect(jsonPath("$.batches[0].sentBy").value("Historical Sender"))
             .andExpect(jsonPath("$.batches[0].caseCount").value(2))
+            .andExpect(jsonPath("$.batches[0].referencesTruncated").value(false))
             .andExpect(jsonPath("$.batches[0].referenceNumbers[0]").value("2026/A"))
             .andExpect(jsonPath("$.batches[0].referenceNumbers[1]").value("2026/B"))
             .andReturn().getResponse().getContentAsString();
@@ -124,9 +126,29 @@ class CaseworkerGazetteControllerTest extends AbstractPostgresContainerTest {
         assertThat(response.fieldNames()).toIterable()
             .containsExactlyInAnyOrder("batches", "page", "size", "total", "totalPages");
         assertThat(response.at("/batches/0").fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("sentAt", "sentBy", "caseCount", "referenceNumbers");
+            .containsExactlyInAnyOrder("sentAt", "sentBy", "caseCount", "referenceNumbers", "referencesTruncated");
         assertThat(body).doesNotContain(SENDER_SUBJECT, StubIdam.SUBJECT, batch.getRequestId().toString(),
             "sentById", "requestId", "2026/AMENDED", "Current Administrator");
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {MAX_REFERENCES, MAX_REFERENCES + 1, MAX_REFERENCES + 50})
+    void boundsReferencesPerBatchAndReportsOmittedMembers(int count) throws Exception {
+        String[] references = java.util.stream.IntStream.range(0, count)
+            .mapToObj(i -> String.format("2026/%03d", i)).toArray(String[]::new);
+        GazetteNoticeBatch large = batch(SENT_AT, "Large", references);
+        GazetteNoticeBatch small = batch(SENT_AT.minusDays(1), "Small", "2026/2", "2026/10");
+        assertThat(members.referencePreview(List.of(large.getId(), small.getId()), MAX_REFERENCES + 1))
+            .hasSize(Math.min(count, MAX_REFERENCES + 1) + 2);
+        authorised(get(HISTORY)).andExpect(status().isOk())
+            .andExpect(jsonPath("$.batches[0].caseCount").value(count))
+            .andExpect(jsonPath("$.batches[0].referenceNumbers.length()").value(MAX_REFERENCES))
+            .andExpect(jsonPath("$.batches[0].referenceNumbers[" + (MAX_REFERENCES - 1) + "]")
+                .value(references[MAX_REFERENCES - 1]))
+            .andExpect(jsonPath("$.batches[0].referencesTruncated").value(count > MAX_REFERENCES))
+            .andExpect(jsonPath("$.batches[1].referenceNumbers[0]").value("2026/10"))
+            .andExpect(jsonPath("$.batches[1].referenceNumbers[1]").value("2026/2"))
+            .andExpect(jsonPath("$.batches[1].referencesTruncated").value(false));
     }
 
     @Test

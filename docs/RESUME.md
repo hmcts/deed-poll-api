@@ -2,7 +2,7 @@
 
 
 **Gazette foundation handoff, 2026-10-06:** The named `readyForPublication` filter,
-V31 audit schema and admin-only `GET /caseworker/gazette-notices` are implemented.
+V31 audit schema, V32 membership/read indexes and admin-only `GET /caseworker/gazette-notices` are implemented.
 The full admin plan 16 contract remains unavailable: no batch-send operation,
 spreadsheet or Gazette Notify provisioning is implemented. The parent
 [Gazette plan](plans/gazette-1-ready-list-and-batch-send.md) remains active with

@@ -10,6 +10,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.GazetteNoticeBatch;
 import uk.gov.hmcts.reform.deedpoll.entity.GazetteNoticeBatchCase;
@@ -33,6 +35,9 @@ class GazetteNoticeBatchRepositoryTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private GazetteNoticeBatchCaseRepository cases;
+
+    @Autowired
+    private DeedPollService service;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -115,6 +120,18 @@ class GazetteNoticeBatchRepositoryTest extends AbstractPostgresContainerTest {
         assertThatThrownBy(entityManager::flush)
             .isInstanceOf(PersistenceException.class)
             .hasMessageContaining("foreign key constraint");
+    }
+
+    @Test
+    void serviceRefusesDeletionWithDomainConflict() {
+        GazetteNoticeBatch batch = batches.saveAndFlush(batch(UUID.randomUUID()));
+        DeedPoll deedPoll = persistedCase();
+        cases.saveAndFlush(member(batch.getId(), deedPoll.getId()));
+
+        assertThatThrownBy(() -> service.removeDeedPoll(deedPoll.getId()))
+            .isInstanceOf(ConflictError.class).hasMessageContaining("Gazette publication audit evidence");
+        assertThat(entityManager.find(DeedPoll.class, deedPoll.getId())).isNotNull();
+        assertThat(cases.findByIdBatchId(batch.getId())).hasSize(1);
     }
 
     @Test

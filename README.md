@@ -731,15 +731,19 @@ callers with case-list access. This implementation does not constitute new busin
 
 History accepts `page` (1-based, default 1) and `size` (default 25, capped at 100),
 using the existing paging validation. It returns `batches`, `page`, `size`, `total`
-and `totalPages`. Each batch exposes only `sentAt`, `sentBy` (display name), `caseCount`
-and `referenceNumbers`. References are frozen on the audit membership, sorted by
-reference, rather than read from today's case. Batches are newest first, with descending
+and `totalPages`. Each batch exposes `sentAt`, `sentBy` (display name), `caseCount`,
+`referenceNumbers` and `referencesTruncated`. References are frozen on the audit membership,
+with a preview of at most 100 per batch in lexical display order (not numerical reference or send order).
+`referencesTruncated` is true when more members exist; `caseCount` remains the full frozen count.
+The query limits membership in PostgreSQL before loading it into memory. References are never
+read from today's case. Batches are newest first, with descending
 batch UUID as the equal-timestamp tie-breaker. There is no custom filtering or sorting.
 An empty history returns an empty `batches` array and zero totals. Neither subject IDs
 nor request IDs are published.
 
 V31 adds the batch and membership audit tables, including database-enforced request-ID
-uniqueness. There is currently no batch-send operation or production audit writer:
+uniqueness. V32 adds indexes for case membership checks and bounded reference previews.
+There is currently no batch-send operation or production audit writer:
 no Gazette spreadsheet, Notify template configuration, case-date update or case-note
 write is implemented. The full admin plan 16 contract remains unavailable until the
 batch-send task is implemented and validated. Spreadsheet layout, Notify wording and
@@ -752,8 +756,8 @@ See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md) 
 Published at `/v3/api-docs`, and browsable at `/swagger-ui.html`. `springdoc.packagesToScan` covers
 `…deedpoll.api`, so a controller is documented by being in the package it belongs in rather than by
 somebody remembering to add it. `OpenAPIPublisherTest` writes the document to
-`/tmp/openapi-specs.json` by default; set `OPENAPI_SPEC_PATH` to an existing-directory path
-inside the worktree to isolate local output. It asserts the caseworker, judicial and admin surfaces —
+`/tmp/openapi-specs.json` (the fixed pipeline contract). Copy that file after a local run
+if you need a worktree-specific evidence artifact. It asserts the caseworker, judicial and admin surfaces —
 both operation counts and every path — rather than merely being served.
 
 **Nothing currently consumes that file.** The enabled `integration` source set produces it during

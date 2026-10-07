@@ -401,15 +401,15 @@ public class DeedPollService {
      * Deletes a case, and its notes, witnesses and documents with it.
      *
      * <p>Retained deed preparations and staged uploads prevent deletion until their storage outcome is resolved.
-     * Otherwise the database cascades to the children. V30 also guards retained preparation ownership in the
-     * database, including deletion outside this service.
+     * Gazette audit membership also prevents deletion permanently. Otherwise the database cascades to the children.
+     * V30 also guards retained preparation ownership in the database, including deletion outside this service.
      *
-     * @throws ConflictError if the case owns retained preparation or staging bytes
+     * @throws ConflictError if the case owns retained preparation or staging bytes, or Gazette audit membership
      * @throws NotFoundError if there is no such case
      */
     @Transactional
     public void removeDeedPoll(String id) {
-        deedPolls.lockForDeedPreparation(id).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+        deedPolls.lockForDeletion(id).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
         if (deedPolls.hasRetainedDeedPayload(id)) {
             throw new ConflictError("This case has retained deed preparation bytes. "
                 + "Resolve its document storage outcome before deleting the case.");
@@ -417,6 +417,9 @@ public class DeedPollService {
         if (deedPolls.hasRetainedStagePayload(id)) {
             throw new ConflictError("This case has retained staged uploads. "
                 + "Remove unpromoted uploads or resolve their storage outcome before deleting the case.");
+        }
+        if (deedPolls.hasGazetteMembership(id)) {
+            throw new ConflictError("This case is part of Gazette publication audit evidence and cannot be deleted.");
         }
         deedPolls.delete(requireDeedPoll(id));
     }
