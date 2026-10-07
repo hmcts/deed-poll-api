@@ -16,9 +16,10 @@ workstream with environment-specific evidence before marking it done.
 
 These names are settled for onboarding; registration and deployed configuration are still outstanding.
 The internal CCD access profile remains `DEED_POLL_SYSTEM`. Do not grant it to real staff to make downloads work.
-Steve explicitly requested AAT registration on 2026-10-06. Four linked draft PRs now contain the
-registration configuration; see the AAT execution log below. Infrastructure PR #25 is now merged; verify its AAT apply,
-then complete IDAM/S2S deployment and the CCD role/definition import. No live registration is claimed.
+Steve explicitly requested AAT registration on 2026-10-06. Infra #25 is merged and its four API secrets
+were verified present/enabled on 2026-10-07. A separate CCD importer is now prepared in infra #26 and
+IDAM #1016. Apply #26 before the IDAM rerun; see the dedicated importer entry below. Then complete
+IDAM/S2S deployment and the CCD role/definition import. No live IDAM or CCD registration is claimed.
 
 Identity investigation found an existing, still-open S2S registration PR and no deed-poll system account
 or password-grant client in current IDAM configuration. See the identity inventory and session log below.
@@ -346,12 +347,12 @@ Validation completed:
 
 Remaining execution gates, in order:
 
-1. Infra #25 is merged. Verify its AAT apply and all four enabled destination secrets without exposing their values.
+1. Infra #25's four API secrets are verified present/enabled. Review/apply importer infra #26 and verify its
+   two separate importer secrets before the next IDAM run.
 2. Complete IDAM #1016 synchronization and S2S #1140 deployment; verify password-grant userinfo role and
    own-service token leasing. Do not substitute the short-lived test-user helper or another product's identity.
 3. Deploy CDAM #813 and Flux #48052 with registration flags still off; confirm effective runtime settings.
-4. Arrange an authorized deed-poll CCD importer. The user was asked for its vault/secret names; no account
-   was supplied in this session. Register `deed-poll-system-update` and `DEED_POLL_SYSTEM` as `PUBLIC`, then
+4. Verify the new importer's IDAM synchronization and authentication using the #26 credentials. Register `deed-poll-system-update` and `DEED_POLL_SYSTEM` as `PUBLIC`, then
    import the generated definition. Do not give definition-import privilege to the runtime account.
 5. Run the controlled CCD/CDAM smoke after staff access and rollout prerequisites are settled. There is no
    separate direct API-to-doc-store registration in this design; CDAM already appears in AAT's store allowlist.
@@ -365,6 +366,66 @@ Remaining execution gates, in order:
 - Merge is not apply evidence. The infrastructure pipeline's AAT result and all four destination secrets
   still need verification before IDAM registration or Flux secret mounts proceed. No other registration
   PR was merged in this turn. Workstream 1 remains open.
+
+### 2026-10-07 Jenkins failure investigation
+
+- Live metadata confirmed all four API secrets exist and are enabled in `deed-poll-aat`, updated at
+  `2026-10-07T05:40:51Z`. This establishes the destination-secret prerequisite, not IDAM registration.
+- IDAM #1016 build 1 reported ERROR at `05:39:25Z`, 86 seconds before those secrets appeared.
+  Missing secrets are a hypothesis until the console error is read. GitHub's description is only
+  `This commit cannot be built`.
+- CDAM #813 build 1 reported ERROR at `05:35:58Z` with the same generic description. Its actual
+  failing stage/cause is unknown.
+- Both Jenkins console requests redirected to Microsoft sign-in. The available browser tool could not
+  start because its Chrome executable is absent. No authenticated Jenkins session was available.
+  Steve was asked for each build's failing stage and first error block, with credentials omitted.
+- IDAM PR head `385306f`: 41 local unit tests passed. `writeSecretFile` with `TEAMS=deed-poll` and all
+  five pipeline environments produced exactly the three expected API IDAM secret references, all
+  pointing to `deed-poll-aat`. No live IDAM calls or secret-value reads were made.
+- CDAM PR head `24676204`: 75 local tests passed across `DocumentManagementServiceImplTest` and
+  `CaseDocumentAmControllerTest`; compilation succeeded. This does not cover the full Jenkins pipeline.
+- No reproducible defect was found in the PR changes, so neither PR was modified or merged and no
+  Jenkins retry was triggered. Next obtain the two console error blocks; retry IDAM once its failure
+  is confirmed to be the now-resolved credential prerequisite, or fix the actual reported cause.
+- Local diagnostic logs: `/tmp/deed-poll-idam-1016-local-tests.log` and
+  `/tmp/deed-poll-cdam-813-local-tests.log`. This investigation was recorded after documentation PR #78 merged. Steve will rerun the pipelines
+  during office hours; account preparation continues separately.
+
+### 2026-10-07 dedicated CCD importer prepared
+
+Steve confirmed no known deed-poll CCD importer exists and requested the PCS pattern. Prepared a separate
+AAT-only durable IDAM account; no live account was created and no definition-store call was made.
+
+| Setting | Prepared value |
+|---|---|
+| Account | `deed-poll-definition-importer-aat@hmcts.net` |
+| Roles | `ccd-admin`, `ccd-import`, matching PCS's `PCS CCD Definition Import User` |
+| Vault | `deed-poll-aat` |
+| Username secret | `definition-importer-username` |
+| Password secret | `definition-importer-password` (Terraform-generated; no value committed) |
+| Excluded environments | demo, ithc, perftest, prod |
+| Infrastructure | [deed-poll-infra #26](https://github.com/hmcts/deed-poll-infra/pull/26), commit `216ff5c` |
+| IDAM registration | Updated [idam-access-config #1016](https://github.com/hmcts/idam-access-config/pull/1016), importer commit `74ec2f7` |
+
+PCS precedent: `idam-access-config/apps/pcs/base/accounts.yaml` declares the same two roles and vault-reference
+names. `pcs-api/Jenkinsfile_CNP` loads them into `DEFINITION_IMPORTER_USERNAME/PASSWORD` for data setup;
+its `HighLevelDataSetupApp` registers CCD roles then loads the generated workbook. Deed-poll's account
+preparation follows the identity pattern; automatic pipeline imports are not enabled in this change.
+
+The importer is distinct from the runtime user, which retains only `deed-poll-system-update`. Its credentials
+are not added to API/chart/Flux secret mounts. The existing CCD-owned roles are reused, not redefined.
+A registered user alone does not establish a usable import route: the eventual operator/pipeline must use
+an accepted OAuth client and authorized service caller where required by definition store.
+
+Validation: Terraform formatting and validation passed without a state backend, plan or apply. IDAM's
+schemas and effective-environment loader passed; the secret manifest contains exactly two importer references,
+both in AAT. The account's role list and vault-reference names match PCS exactly. No secrets were read.
+
+Next, review and apply infra #26, verify the two enabled importer secrets, then rerun/synchronize IDAM #1016.
+**The new importer references mean an IDAM rerun now requires #26 as well as the already-applied #25 secrets.**
+After synchronization, authenticate the importer and verify its two roles. Then register `deed-poll-system-update`
+and `DEED_POLL_SYSTEM` as PUBLIC in definition store and import the checked `DEEDPOLL` workbook through the
+authorized route. Keep linking/CDAM/staging disabled until their separate smoke and rollout gates pass.
 
 ## Related procedures and implementation plans
 
