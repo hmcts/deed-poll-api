@@ -25,7 +25,8 @@ Each of these is onboarding and belongs to Steve; the plan's Dependencies sectio
 | The case list request's linking sweep | `CCD_LINKING_SWEEP_ENABLED` (`false`; set `true` only once everything above is in place), `CCD_LINKING_SWEEP_MAX_RECORDS` (`2`), `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` (`5`), `CCD_LINKING_SWEEP_MAX_DURATION` (`PT15S`) |
 | Data-store routes our case type to us | data-store's `ccd.decentralised.case-type-service-urls`, keyed on a **prefix of the case type id** |
 | `deed_poll_api` allowed to call data-store; `ccd_data` allowed to call us | data-store's S2S allowlist; ours is the constant `SecurityConfiguration.CCD_PERSISTENCE_CALLERS` |
-| The system role registered as a **user role** in definition store | definition store's user-role table, at `PUBLIC` |
+| The system role and internal profile registered in definition store | `deed-poll-system-update` and `DEED_POLL_SYSTEM`, both at `PUBLIC` |
+| The API accepts the system client's token audience | `IDAM_API_AUDIENCES` includes `deed-poll-api` alongside `deed-poll-admin` in AAT |
 | data-store → our `.internal` address reachable | network (`azure-platform-terraform#3161` created the address) |
 
 Two things cftlib found that no WireMock test could have, both repeated here because both fail quietly:
@@ -41,15 +42,19 @@ Two things cftlib found that no WireMock test could have, both repeated here bec
 ## 1. Generate and import the definition
 
 ```bash
-export CCD_CASE_TYPE_ID=<confirmed> CCD_JURISDICTION_ID=<confirmed> CCD_SYSTEM_ROLE=<confirmed>
+export CCD_CASE_TYPE_ID=DEEDPOLL CCD_JURISDICTION_ID=DEEDPOLL CCD_SYSTEM_ROLE=deed-poll-system-update
 SPRING_PROFILES_ACTIVE=config-gen ./gradlew generateCCDConfig
 ls build/definitions/"$CCD_CASE_TYPE_ID"
 ```
 
 Expect one directory named for the case type. Its contents must match `src/test/resources/ccd-definition/` except
-for the three identifiers — one state (`Registered`), one event (`linkDeedPoll`), two fields (`deedPollId`,
-`deedPollReference`), `DEED_POLL_SYSTEM` granted create and read and nothing else granted anything. Anything more
-is not the definition this service was tested against.
+for the three identifiers — one state (`Registered`), two events (`linkDeedPoll`,
+`updateSupportingDocuments`) and three data fields (`deedPollId`, `deedPollReference`, `supportingDocuments`),
+plus the generated `caseHistory` presentation field.
+Only `DEED_POLL_SYSTEM` has grants: CR on the linking event and its two fields, CRU on the case type,
+state and document event, and CRUD on `supportingDocuments` (D permits collection-item removal).
+The role mapping must map `idam:deed-poll-system-update` to that profile. Staff access is a separate
+onboarding workstream; do not assign the system profile to staff.
 
 Convert the JSON to a spreadsheet with CCD's definition processor, as `pcs-api`'s `bin/create-xlsx.sh` does
 (`hmctsprod.azurecr.io/ccd/definition-processor:latest json2xlsx -D <dir> -o <file>.xlsx`), and import it through
@@ -62,7 +67,7 @@ whoever owns the import in AAT (a Dependencies item). Expect the import to be ac
 With the service deployed on the confirmed configuration:
 
 1. **The system user signs in.** A password grant for `DEED_POLL_SYSTEM_USERNAME` against the configured client
-   returns a token whose `roles` include `CCD_SYSTEM_ROLE`. If the role is absent, stop: the persistence chain
+   returns a token whose IDAM userinfo `roles` include `CCD_SYSTEM_ROLE`. If the role is absent, stop: the persistence chain
    will refuse every callback.
 2. **`/ccd-persistence/**` refuses everybody but data-store.** From inside the cluster:
    - no `ServiceAuthorization` → **401**;

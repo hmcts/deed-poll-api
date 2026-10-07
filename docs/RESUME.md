@@ -1,5 +1,25 @@
 # Resume state — where the next session picks up
 
+**AAT onboarding, updated 2026-10-07:** Runtime identifiers remain `DEEDPOLL` / `DEEDPOLL` /
+`deed-poll-system-update`, with internal profile `DEED_POLL_SYSTEM`. Infrastructure #25 and documentation
+#78 are merged. All four API identity secrets were verified present/enabled in `deed-poll-aat`.
+
+Steve requested a separate CCD importer following PCS. [Infra #26](https://github.com/hmcts/deed-poll-infra/pull/26)
+prepares `definition-importer-username/password`; updated [IDAM #1016](https://github.com/hmcts/idam-access-config/pull/1016)
+registers that account with `ccd-admin` and `ccd-import`, keeping runtime privileges separate.
+**Apply #26 before rerunning IDAM #1016:** the two importer secrets are new prerequisites. The account has
+not been created or authenticated by this session, and no definition import has run.
+
+IDAM #1016 and [CDAM #813](https://github.com/hmcts/ccd-case-document-am-api/pull/813) build 1 reported ERROR.
+Jenkins console access requires Microsoft sign-in; the underlying causes remain unknown. Local IDAM
+41 tests and CDAM 75 focused tests passed. Steve will rerun the pipelines during office hours.
+[Flux #48052](https://github.com/hmcts/cnp-flux-config/pull/48052) passed its 18 reported checks.
+[S2S #1140](https://github.com/hmcts/service-auth-provider-app/pull/1140) remains a separate prerequisite.
+
+Next verify importer credentials and IDAM synchronization, then PUBLIC CCD role registration and the
+checked `DEEDPOLL` definition import. Linking/CDAM/staging remain disabled. The
+[six-workstream checklist](plans/ccd-cdam-doc-store-onboarding.md) records identities, PRs, ordering,
+validation and the outstanding smoke, staff-access and existing-file migration gates.
 
 **Gazette foundation handoff, 2026-10-06:** The named `readyForPublication` filter,
 V31 audit schema, V32 membership/read indexes and admin-only `GET /caseworker/gazette-notices` are implemented.
