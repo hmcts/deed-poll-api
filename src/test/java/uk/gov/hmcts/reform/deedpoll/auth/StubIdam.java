@@ -101,6 +101,17 @@ public final class StubIdam {
         server.stubFor(get(urlPathEqualTo("/o/userinfo")).willReturn(aResponse().withStatus(status)));
     }
 
+    /**
+     * What AAT's IDAM answered on 2026-10-07 for a still-valid token whose testing-support user had been deleted:
+     * a 400, not a 401. Copied from the measured response, body and all.
+     */
+    public void stubUserInfoForDeletedUser() {
+        server.stubFor(get(urlPathEqualTo("/o/userinfo")).willReturn(aResponse()
+            .withStatus(400)
+            .withHeader("Content-Type", "application/json; charset=utf-8")
+            .withBody("{\"error_description\":\"Not able to read user information.\",\"error\":\"unauthorized_client\"}")));
+    }
+
     public void stubUserInfo(String subject, String name, List<String> roles) {
         String quotedRoles = roles.stream().map(role -> '"' + role + '"').collect(Collectors.joining(","));
         stubUserInfoBody("""

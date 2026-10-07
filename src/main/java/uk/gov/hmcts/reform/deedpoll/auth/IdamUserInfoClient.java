@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.auth;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.client.RestClient;
@@ -8,6 +9,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.IdamClaims;
 
+import java.io.IOException;
 import java.util.Map;
 import java.util.Objects;
 
@@ -36,6 +38,8 @@ public class IdamUserInfoClient {
     private static final ParameterizedTypeReference<Map<String, Object>> CLAIMS =
         new ParameterizedTypeReference<>() {
         };
+    private static final String UNKNOWN_USER = "unauthorized_client";
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final IdamDiscovery discovery;
     private final RestClient restClient;
@@ -93,6 +97,16 @@ public class IdamUserInfoClient {
                 .onStatus(status -> status.value() == 401 || status.value() == 403, (request, response) -> {
                     throw new UnauthorizedError("IDAM rejected the access token");
                 })
+                // Except that a deleted user is not a 401. Measured against AAT on 2026-10-07: a token that
+                // still verifies, for a user testing-support has since deleted, gets 400 `unauthorized_client`
+                // ("Not able to read user information."), and every AAT persona is such a user within three
+                // hours. Narrowed to that error code because any other 400 may be this request's fault.
+                .onStatus(status -> status.value() == 400, (request, response) -> {
+                    if (UNKNOWN_USER.equals(errorCode(response.getBody().readAllBytes()))) {
+                        throw new UnauthorizedError("IDAM no longer recognises the access token's user");
+                    }
+                    throw new IllegalStateException("IDAM userinfo answered 400");
+                })
                 .body(CLAIMS);
         } catch (RestClientException e) {
             throw new IllegalStateException("IDAM userinfo failed", e);
@@ -102,5 +116,13 @@ public class IdamUserInfoClient {
             throw new IllegalStateException("IDAM userinfo returned no claims");
         }
         return claims;
+    }
+
+    private static String errorCode(byte[] body) {
+        try {
+            return JSON.readTree(body).path("error").asText(null);
+        } catch (IOException e) {
+            return null;
+        }
     }
 }
