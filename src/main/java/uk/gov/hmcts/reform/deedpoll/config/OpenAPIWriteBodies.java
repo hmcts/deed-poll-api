@@ -22,6 +22,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
+import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteSettingsService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
@@ -135,7 +136,26 @@ public class OpenAPIWriteBodies {
             describeDirectionBody(openApi);
             describeEmailBodies(openApi);
             describeUploadBody(openApi);
+            describeGazetteSettingsBody(openApi);
         };
+    }
+
+    private void describeGazetteSettingsBody(OpenAPI openApi) {
+        Schema<?> settings = schema(openApi, "UpdateGazetteSettingsRequest");
+        if (settings == null) {
+            return;
+        }
+        settings.setType("object");
+        settings.setProperties(null);
+        settings.addProperty("recipientEmail", new StringSchema()
+            .maxLength(GazetteSettingsService.MAX_EMAIL_LENGTH)
+            .pattern(GazetteSettingsService.EMAIL_PATTERN)
+            .description("One email address; outer whitespace is trimmed."
+                + " Local part is at most 64 characters. Null and blank are refused."));
+        settings.addProperty("revision", new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
+            .description("The revision returned by the settings read; stale values return 409."));
+        settings.setRequired(java.util.List.of("recipientEmail", "revision"));
+        settings.setAdditionalProperties(false);
     }
 
     /**

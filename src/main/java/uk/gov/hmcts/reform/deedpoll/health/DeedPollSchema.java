@@ -66,7 +66,9 @@ public class DeedPollSchema {
         "deedpoll_stagedpayload",
         "deedpoll_ownedstage",
         "deedpoll_gazette_notice_batch",
-        "deedpoll_gazette_notice_batch_case"
+        "deedpoll_gazette_notice_batch_case",
+        "deedpoll_gazette_settings",
+        "deedpoll_gazette_settings_change"
     );
 
     /**

@@ -28,6 +28,7 @@ require 03c. Local proof is not onboarding or rollout approval. See
 api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations across 21 paths, plus the admin-only
                                   /caseworker/ccd-attempts (3 operations, counted apart as CCD_ATTEMPT_PATHS)
                                   and /caseworker/gazette-notices (1 history GET, counted apart)
+                                  and /caseworker/gazette-settings (admin-only GET/PUT)
 api/judicial/{controller,dto}     the judicial surface — 5 operations, keyed on the referral, never on the case
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer

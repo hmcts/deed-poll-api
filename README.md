@@ -730,6 +730,8 @@ callers with case-list access. This implementation does not constitute new busin
 
 | Method | Path | Access and response |
 |---|---|---|
+| GET | `/caseworker/gazette-settings` | Admin-only current recipient, revision and change attribution |
+| PUT | `/caseworker/gazette-settings` | Admin-only recipient update with optimistic revision check |
 | GET | `/caseworker/gazette-notices` | Requires `caseworker-deedpoll-admin`; authenticated non-admins receive 403. Returns paged publication history |
 
 History accepts `page` (1-based, default 1) and `size` (default 25, capped at 100),
@@ -743,6 +745,17 @@ read from today's case. Batches are newest first, with descending
 batch UUID as the equal-timestamp tie-breaker. There is no custom filtering or sorting.
 An empty history returns an empty `batches` array and zero totals. Neither subject IDs
 nor request IDs are published.
+
+Recipient settings start unset at revision 0. `PUT` takes only `recipientEmail` and
+`revision`: one validated email address (trimmed, maximum 254 characters and 64 for
+the local part) and the integer revision returned by `GET`. Blank/null recipients
+are refused. A stale revision returns 409 without changing the setting. Saving an
+unchanged address at its current revision is a no-op. V33 persists the singleton
+and an append-only application change history with previous/new addresses, UTC
+change time and verified caller subject/display name. Subject IDs are not exposed.
+Settings and their audit change commit in one transaction; concurrent first saves
+have only one winner. The settings endpoint sends no email. Future batch sending
+must check the confirmed settings revision and snapshot its accepted recipient.
 
 V31 adds the batch and membership audit tables, including database-enforced request-ID
 uniqueness. V32 adds indexes for case membership checks and bounded reference previews.
