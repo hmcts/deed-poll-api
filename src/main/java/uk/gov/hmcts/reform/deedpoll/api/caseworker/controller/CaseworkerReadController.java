@@ -115,7 +115,8 @@ public class CaseworkerReadController {
      * <p><strong>The order a request does not name comes from the filter it asked for.</strong> Newest first for
      * the ported tabs: "awaiting confirmation" is asked for longest wait first, because a waiting list in
      * creation order buries the case at risk of being forgotten. {@code readyForPublication} selects
-     * publication requested, no notice sent and state Enroled, defaulting to {@code dateEnroled:asc}.
+     * publication requested, no notice sent and state Enroled, excluding Deed of Relinquishment,
+     * defaulting to {@code dateEnroled:asc}.
      * A {@code sort} the caller does name still wins,
      * for the reason {@link CaseSort#parse(String, CaseSort)} records -- a tab that forced its order would make
      * its own column headers unclickable.

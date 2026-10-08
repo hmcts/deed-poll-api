@@ -133,7 +133,9 @@ public class OpenAPIQueryParameters {
                     + "`where` condition. `awaitingConfirmation` is the cases still waiting for an applicant's "
                     + "reply to the Request confirmation to proceed email, and each row on it carries "
                     + "`daysAwaitingConfirmation`. `readyForPublication` selects `publishToLondonGazette=true`, "
-                    + "`dateNoticeSentToLondonGazette` absent and `state=Enroled`; its default sort is "
+                    + "`dateNoticeSentToLondonGazette` absent and `state=Enroled`, "
+                    + "excluding `type=DeedOfRelinquishment`; "
+                    + "other types, including unset types, are unchanged. Its default sort is "
                     + "`dateEnroled:asc` (oldest enrolled first), unless the caller supplies `sort`."));
     }
 
