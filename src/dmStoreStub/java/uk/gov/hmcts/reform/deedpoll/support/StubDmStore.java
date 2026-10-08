@@ -113,7 +113,9 @@ public final class StubDmStore implements AutoCloseable {
                 metadata.put("mimeType", file.getBody().asString().startsWith("%PDF-")
                     ? "application/pdf" : "text/plain");
                 String disposition = file.getHeader("Content-Disposition").firstValue();
-                metadata.put("originalDocumentName", disposition.replaceAll(".*filename=\"([^\"]+)\".*", "$1"));
+                // Sliced rather than matched: the `.*filename="([^"]+)".*` it replaces backtracks super-linearly.
+                String afterName = disposition.substring(disposition.indexOf("filename=\"") + "filename=\"".length());
+                metadata.put("originalDocumentName", afterName.substring(0, afterName.indexOf('"')));
                 metadata.put("createdBy", request.getHeader("user-id"));
                 metadata.put("ttl", request.getPart("ttl").getBody().asString());
                 ObjectNode fields = metadata.putObject("metadata");
