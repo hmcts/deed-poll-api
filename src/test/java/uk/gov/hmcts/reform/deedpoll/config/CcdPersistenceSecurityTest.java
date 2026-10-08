@@ -4,6 +4,8 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -121,6 +123,17 @@ class CcdPersistenceSecurityTest {
             .andExpect(content().string("DEED_POLL_SYSTEM"));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"caseworker-deedpoll", "caseworker-deedpoll-admin", "caseworker-deedpoll-judicial"})
+    void admitsStaffAsReadersOnly(String role) throws Exception {
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "A Staff Reader", List.of(role));
+        mockMvc.perform(get(PROBE).headers(headers(CCD_DATA, IDAM.accessToken())))
+            .andExpect(status().isOk())
+            .andExpect(content().string("DEED_POLL_READER"));
+        mockMvc.perform(get(PROBE).headers(headers(OURSELVES, IDAM.accessToken())))
+            .andExpect(status().isForbidden());
+    }
+
     @Test
     @DisplayName("accepts a ServiceAuthorization sent without its Bearer prefix, as the S2S library does")
     void acceptsAnUnprefixedServiceToken() throws Exception {
@@ -201,9 +214,9 @@ class CcdPersistenceSecurityTest {
     }
 
     @Test
-    @DisplayName("refuses a valid user the definition grants nothing to -- an admin caseworker included -- with 403")
+    @DisplayName("refuses a valid user with no deed-poll role with 403")
     void refusesAnUnauthorisedUser() throws Exception {
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker", "citizen"));
 
         mockMvc.perform(get(PROBE).headers(headers(CCD_DATA, IDAM.accessToken()))).andExpect(status().isForbidden());
     }

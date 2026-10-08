@@ -154,10 +154,12 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
   `CcdDocumentProjection`, read by `DeedPollRepository` and `DeedPollSupportingDocumentRepository`), and the pinned
   JSON under `src/test/resources/ccd-definition/`. `DeedPollDefinitionTest` fails on the definition; a field left out
   of the view reads as null through CCD, and nothing fails unless `DeedPollCaseViewTest` is taught it.
-  Keep the definition minimal: `DEED_POLL_SYSTEM` is the only profile granted anything — CR on `linkDeedPoll` and its
+  Keep the definition minimal: `DEED_POLL_SYSTEM` holds CR on `linkDeedPoll` and its
   two fields, CRU on the case type, the state and `updateSupportingDocuments`, and D on `supportingDocuments` alone,
   through `SupportingDocumentsAccess`, because data-store checks D for a removed collection item and a D on the event
-  would be carried onto the state. The test refuses growth that was not deliberate.
+  would be carried onto the state. `DEED_POLL_READER` holds R only on the case type, Registered state and
+  supportingDocuments, mapped from the three staff roles. It holds no events, history or identifier fields.
+  The test refuses growth that was not deliberate.
 - **The case's documents are its `Attached` rows, and the document event's handler is what attaches them.**
   `SupportingDocumentsHandler` moves a row to `Attached` inside the event's transaction (`attachedOnTheCase`, only
   when the payload URL's id equals the row's `cdamDocumentId`), so the SDK's snapshot shows it and a lost answer is

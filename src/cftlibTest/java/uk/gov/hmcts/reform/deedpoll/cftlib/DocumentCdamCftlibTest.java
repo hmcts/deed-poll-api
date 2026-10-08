@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.cftlib;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import feign.FeignException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -17,6 +18,8 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import uk.gov.hmcts.reform.authorisation.generators.AuthTokenGenerator;
 import uk.gov.hmcts.reform.ccd.client.CoreCaseDataApi;
+import uk.gov.hmcts.reform.ccd.client.model.CaseDataContent;
+import uk.gov.hmcts.reform.ccd.client.model.Event;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdCreationAttempts;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingSweep;
 import uk.gov.hmcts.reform.deedpoll.ccd.SystemUserTokens;
@@ -38,12 +41,15 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.deleteRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Real CCD and CDAM, only dm-store stubbed. The first two ordered tests deliberately replace the API context. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
@@ -142,6 +148,31 @@ class DocumentCdamCftlibTest extends CftlibTest {
     }
 
     @Test
+    @Order(2)
+    void eachStaffRoleReadsDocumentsButCannotSubmitCcdEvents() throws Exception {
+        for (String user : List.of(CftlibConfig.DOCUMENT_READER, CftlibConfig.ADMIN_USER, CftlibConfig.JUDICIAL_USER)) {
+            String token = idam.getAccessToken(user, "password");
+            HttpResponse<String> download = send(filePath(recordId), "GET", "", "application/json", user);
+            assertThat(download.statusCode()).as(user + ": " + download.body()).isEqualTo(200);
+            assertThat(download.body()).isEqualTo(CONTENT);
+            String service = serviceTokens.generate();
+            assertThatThrownBy(() -> {
+                var start = ccd.startCase(token, service, "DEED_POLL_PLACEHOLDER", "linkDeedPoll");
+                ccd.submitCaseCreation(token, service, "DEED_POLL_PLACEHOLDER", CaseDataContent.builder()
+                    .eventToken(start.getToken()).event(Event.builder().id("linkDeedPoll").build())
+                    .data(Map.of("deedPollId", recordId, "deedPollReference", "KBDP-test")).build());
+            }).isInstanceOfSatisfying(FeignException.class, denied -> assertThat(denied.status()).isIn(403, 404));
+            // Starting an existing-case event can succeed with READ; submission must still refuse it.
+            assertThatThrownBy(() -> {
+                var start = ccd.startEvent(token, service, reference, "updateSupportingDocuments");
+                ccd.createEvent(token, service, reference, CaseDataContent.builder()
+                    .eventToken(start.getToken()).event(Event.builder().id("updateSupportingDocuments").build())
+                    .data(Map.of("supportingDocuments", List.of())).build());
+            }).isInstanceOfSatisfying(FeignException.class, denied -> assertThat(denied.status()).isIn(403, 404));
+        }
+    }
+
+    @Test
     @Order(3)
     void cdamRefusesACaseworkerWithoutCcdCaseTypeReadPermission() throws Exception {
         Path definition = Path.of("build/cftlib/definitions/DEED_POLL_PLACEHOLDER");
@@ -149,7 +180,10 @@ class DocumentCdamCftlibTest extends CftlibTest {
         String original = Files.readString(grants);
         JsonNode withoutRead = json.readTree(original);
         for (JsonNode grant : withoutRead) {
-            ((ObjectNode) grant).put("CRUD", grant.path("CRUD").asText().replace("R", ""));
+            if (grant.path("UserRole").asText().equals("DEED_POLL_READER")) {
+                // Keep a nonempty cell: the JSON-to-XLSX converter omits an empty first-row column.
+                ((ObjectNode) grant).put("CRUD", "U");
+            }
         }
         try {
             Files.writeString(grants, withoutRead.toString());
@@ -174,7 +208,8 @@ class DocumentCdamCftlibTest extends CftlibTest {
     @Order(4)
     void anUnmappedUserIsDeniedButTheUpstreamStackReportsBadGateway() throws Exception {
         DM.server().resetRequests();
-        HttpResponse<String> denied = send(filePath(recordId), "GET", "", "application/json", CftlibConfig.ADMIN_USER);
+        HttpResponse<String> denied = send(filePath(recordId), "GET", "", "application/json",
+            CftlibConfig.UNMAPPED_USER);
         // The persistence gate returns 403, data-store wraps that as 500, and CDAM returns 502. Pin this finding
         // separately; accepting 502 in the preceding test would not prove CCD's read-permission check.
         assertThat(denied.statusCode()).as(denied.body()).isEqualTo(502);
