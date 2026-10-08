@@ -38,6 +38,29 @@ send/recovery design and supplies no all-or-nothing email guarantee. Decision 7'
 note transaction and Task 4's rollback tests must be reconciled with that decision.
 Do not implement a placeholder spreadsheet or send while these decisions are pending.
 
+## Spreadsheet implementation slice — 8 October 2026
+
+Following the supplied templates and Steve's instruction to proceed with the mapping
+and generator recommendation, `GazetteSpreadsheet` implements production workbook
+generation independently of Task 4's send protocol. The 27 adult / 21 minor visible
+columns and blank-value rule are implemented using cleaned tracked resources.
+Full display references, existing English labels and UTC calendar dates displayed
+`dd/mm/yyyy` are the implementation choices. Adult/Adult Transgender and
+Minor/Minor Transgender form the two files. Relinquishment and Unknown/missing
+classification refuse the whole selection. Ready-list handling of Unknown/null is
+unchanged. Input order is retained within each file; absent groups produce no file.
+
+See [template provenance and mapping](../../src/main/resources/gazette-templates/README.md).
+This supersedes the undecided/placeholder spreadsheet paragraphs below for this
+slice only. It does not unblock the send protocol or supply the old transactional
+email guarantee. Current cross-repo decisions also require an admin-editable API
+recipient setting and three Notify variants (adult, minor, mixed), superseding the
+original fixed chart recipient and single-template proposal below.
+
+- [x] Implement the production generator and cleaned runtime templates.
+- [x] Validate the generator and full API build; see [validation evidence](gazette-spreadsheet-validation.md).
+- [ ] Complete Task 4's independent send/recovery design and implementation.
+
 ## What already exists and needs no change
 
 `publishToLondonGazette` (boolean) and `dateNoticeSentToLondonGazette` (date) are already columns on
