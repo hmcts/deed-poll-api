@@ -231,13 +231,12 @@ notify:
     # so it also needs NOTIFY_EMAIL_REPLY_TO_ID above: without it NotifyProperties.isProvisioned reports it
     # unprovisioned rather than letting Notify send it from an address nobody reads. charts/deed-poll-api sets
     # BOTH ids, so ⑤ reads provisioned in AAT -- this comment used to say it set neither, which was true before
-    # the chart's own CORRECTED 2026-09-25 block. What AAT still lacks is the Notify API key, which
-    # isProvisioned deliberately does not read: the template is offered and every send fails terminally with
-    # "Empty key" until azure-access#8111 lets the secret be written. The chart says the whole of that.
+    # the chart's own CORRECTED 2026-09-25 block. isProvisioned deliberately does not read the Notify API key,
+    # so until AAT had one (2026-10-08) the template was offered and every send failed terminally with "Empty key".
     chase-missing-documents: ${NOTIFY_TEMPLATE_CHASE_MISSING_DOCUMENTS:DEED_POLL_PLACEHOLDER}
-    # The two forms-for-completion emails, ① and ②, which carry the generated deed. Neither has been authored in
-    # Notify yet -- the content draft is deed-poll-admin's .business_context/notify-templates/forms-for-completion.md
-    # -- so both stay on the placeholder and read unprovisioned, which is what the Email tab should say rather than
+    # The two forms-for-completion emails, ① and ②, which carry the generated deed. Both are authored on the
+    # non-prod Notify service and charts/deed-poll-api sets their ids; the placeholder default stays so an
+    # environment that sets nothing reads unprovisioned, which is what the Email tab should say rather than
     # offering a send that cannot render. They are listed here all the same, for the reason
     # request-confirmation-to-proceed is: absent from this map the placeholder is what templateId answers anyway,
     # but the environment variable would then be one nobody reads. Both invite a reply (their words say "you can
