@@ -88,6 +88,33 @@ class IdamUserInfoClientTest {
     }
 
     @Test
+    @DisplayName("refuses a token whose user IDAM has since deleted")
+    void refusesATokenForADeletedUser() {
+        // AAT's answer, measured on 2026-10-07 by deleting a testing-support user and presenting its still-valid
+        // token: a 400, not a 401. Every AAT persona is swept within three hours, so this is a 500 on every page
+        // for any tester whose session outlived their persona unless it is recognised.
+        IDAM.stubUserInfoForDeletedUser();
+
+        assertThatThrownBy(() -> client().currentUser("token", StubIdam.SUBJECT))
+            .isInstanceOf(UnauthorizedError.class);
+    }
+
+    @Test
+    @DisplayName("does not answer 401 for a 400 that does not say the user is unknown")
+    void doesNotBlameTheCallerForAnyOther400() {
+        // A 400 can be this service's malformed request, which the caller cannot fix by signing in again.
+        IDAM.server().stubFor(get(urlPathEqualTo("/o/userinfo")).willReturn(aResponse()
+            .withStatus(400)
+            .withHeader("Content-Type", "application/json")
+            .withBody("""
+                {"error":"invalid_request"}""")));
+
+        assertThatThrownBy(() -> client().currentUser("token", StubIdam.SUBJECT))
+            .isInstanceOf(IllegalStateException.class)
+            .isNotInstanceOf(UnauthorizedError.class);
+    }
+
+    @Test
     @DisplayName("refuses a userinfo response describing somebody else")
     void refusesAMismatchedSubject() {
         IDAM.stubUserInfo("somebody-else", "Another Caseworker", List.of());

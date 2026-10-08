@@ -248,6 +248,17 @@ class SecurityConfigurationTest extends AbstractPostgresContainerTest {
         }
 
         @Test
+        @DisplayName("refuses a token whose user IDAM has deleted with a 401, not a 500")
+        void refusesATokenForADeletedUser() throws Exception {
+            // The signature still verifies, so only userinfo can tell -- and it says so with a 400. A 500 here
+            // stranded AAT testers on error pages once their persona user was swept, with no route to sign-in.
+            IDAM.stubUserInfoForDeletedUser();
+
+            mockMvc.perform(get("/caseworker/probe/current-user").headers(bearer(IDAM.accessToken())))
+                .andExpect(status().isUnauthorized());
+        }
+
+        @Test
         @DisplayName("refuses a token that is not a JWT at all")
         void refusesGarbage() throws Exception {
             mockMvc.perform(get("/caseworker/probe/current-user").headers(bearer("not-a-token")))
