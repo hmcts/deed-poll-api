@@ -3,7 +3,7 @@
 ## Overview
 
 A caseworker-admin needs to notice when applications are ready to be sent to the London Gazette, check them,
-and send one email carrying a spreadsheet of every application in the batch. This plan is the api half: a
+and send one email with adult/minor spreadsheet download links for the batch. This plan is the api half: a
 `readyForPublication` case-list filter, a batch send operation that marks every included case as sent and
 writes an audit trail, and a history read for that trail. The admin companion,
 `deed-poll-admin/docs/plans/16-gazette-1-ready-list-review-and-send.md`, consumes all three.
@@ -12,31 +12,20 @@ writes an audit trail, and a history read for that trail. The admin companion,
 Dynamics original is silent on it — so unlike `domain/deedpoll`, nothing here is checked against
 `src/test/resources/reference/`. Treat every decision below as this repo's own, not an inherited one.
 
-## Foundation handoff and unresolved send design — 6 October 2026
+## Current handoff — 8 October 2026
 
-Tasks 1–3 are implemented and locally validated. The foundation execution plan
-`gazette-1a-ready-list-and-history.md` completes only the ready filter, V31 audit
-schema and admin-only history GET. Its final contract comparison and build evidence
-are in `gazette-1a-task4-validation.md`. This parent plan remains active; Tasks 0,
-4 and 5 remain incomplete. The full admin plan 16 contract is unavailable until
-batch sending is implemented and validated.
+The ready list/history, production spreadsheet generator and persistent recipient
+settings are merged (PRs #80, #87, #88 and #89). Batch sending remains unimplemented.
+Use [Gazette batch send and recovery contract](gazette-1b-send-and-recovery-contract.md)
+for the next slices. It replaces the former single-transaction email design:
+acceptance by Notify cannot be undone by rolling back a local transaction.
 
-Before any send-path implementation, obtain the spreadsheet's required fields,
-column order and header format, and agree the Notify wording and provisioning.
-Task 0's ready-predicate reconfirmation is still pending; the implemented predicate
-remains the working assumption, with no new business sign-off from this run.
-
-Decision 4 below is an unresolved proposal, not an implementable delivery guarantee.
-A database rollback cannot undo Notify accepting an email. A timeout, lost response,
-or database failure after acceptance can leave an email sent with no committed audit
-row or request key; a retry could then send twice. The existing unique request index
-alone cannot settle that outcome. The claims below that every failure means “nothing
-happened” and can safely be retried must not be used as send-path acceptance criteria.
-Agree how to preserve evidence of an uncertain send, how it will be reconciled, and
-when retry is permitted before implementing Task 4. This foundation chooses no
-send/recovery design and supplies no all-or-nothing email guarantee. Decision 7's
-note transaction and Task 4's rollback tests must be reconciled with that decision.
-Do not implement a placeholder spreadsheet or send while these decisions are pending.
+The contract specifies durable request states, one delivery attempt, reservations,
+original-recipient snapshots, status reads and complete frozen-reference pagination.
+An uncertain outcome stops further sends for those cases pending investigation.
+The old foundation validation files retain their historical evidence. Task 0 still
+records the outstanding predicate reconfirmation and environment provisioning;
+no further spreadsheet layout decision is needed to implement the next ledger slice.
 
 ## Spreadsheet implementation slice — 8 October 2026
 
@@ -52,8 +41,8 @@ unchanged. Input order is retained within each file; absent groups produce no fi
 
 See [template provenance and mapping](../../src/main/resources/gazette-templates/README.md).
 This supersedes the undecided/placeholder spreadsheet paragraphs below for this
-slice only. It does not unblock the send protocol or supply the old transactional
-email guarantee. Current cross-repo decisions also require an admin-editable API
+slice only. It supplies generation to the new durable send protocol; it provides no
+transactional email guarantee. Current cross-repo decisions also require an admin-editable API
 recipient setting and three Notify variants (adult, minor, mixed), superseding the
 original fixed chart recipient and single-template proposal below.
 
@@ -131,12 +120,11 @@ those classes exist to enforce. Neither is acceptable, so:
   fifth are all case-shaped questions ("which case is this about", "does it invite a reply", "which deed does
   it carry") that a batch email has no answer to.
 - **Do not write to `deedpoll_notification`.** Add a new table (decision 3) instead.
-- **Do reuse `NotifyProperties` and `NotificationClient` directly** — the configuration surface
-  (`notify.templates.*`, api key, base URL) and the client library, not the outbox/drain machinery. A new
-  `notify.templates.gazette-notice` key and a `notify.gazette.recipient` key (the Gazette's own fixed address,
-  chart-managed, never caseworker-entered) are provisioned the same way every other template is, and
-  `NotifyProperties`/`EmailTemplateTest.Configuration`-style pinning should be extended to include it so a
-  missing chart value fails a test rather than failing silently in a deployed pod.
+- **Reuse `NotifyProperties` and `NotificationClient`** for the provider boundary,
+  with distinct adult-only, minor-only and mixed Gazette template IDs. Recipient
+  settings are API-owned through the merged admin editor; a fixed chart recipient
+  is superseded. Freeze the confirmed recipient/revision and relevant Notify
+  configuration on admission, as specified in the send/recovery contract.
 
 ### 3. A new audit table, not a projection of anything else
 
@@ -172,44 +160,33 @@ Schema correction, 6 October 2026: `deed_poll_id` uses text to match the existin
 V2 case primary key; PostgreSQL cannot create the originally proposed UUID-to-text
 foreign key. The migration is V31, since V26–V30 already exist on this branch.
 
-**The spreadsheet itself is not retained.** Confirmed with the business: the audit trail is the batch, its
-sender, its timestamp and its case list: enough to answer "who sent what, when", and enough to regenerate the
-spreadsheet from the same case refs if it is ever needed again. Do not add a document/blob column here.
+**The spreadsheet itself is not retained.** Keep frozen membership, file names,
+counts, hashes and delivery evidence. References alone cannot recreate the original
+spreadsheet after case values change; the former regeneration claim was incorrect.
+No archive/download endpoint is included in this slice. The request ledger and its
+case reservations are separate from V31's successful-send evidence.
 
-### 4. The send is transactional and all-or-nothing, with a client-minted idempotency key
+### 4. Durable admission, one delivery attempt and explicit uncertainty
 
-`POST /caseworker/gazette-notices` requires `Idempotency-Key`, following `notify-6`'s admin-idempotent-send
-discipline exactly: the caller mints one UUID when the review/confirmation page renders and resubmits the same
-key on retry. On a repeat of a key already recorded, answer the existing batch's summary (200, not a new send)
-rather than raising `DataIntegrityViolationException` — the same "read before assuming a conflict is a
-conflict" shape `CaseEmailService.resolveRefusedInsert` uses, simplified because there is exactly one unique
-index to consider here rather than three.
+Follow [the send/recovery contract](gazette-1b-send-and-recovery-contract.md).
+The originating request commits admission before preparation and commits send-start
+before contacting Notify. It commits acceptance, sent audit, case dates and notes
+atomically afterwards. Failure to persist an accepted send means uncertainty.
+No local rollback, timeout or expired claim authorises another provider call.
 
-**Everything happens in one transaction, and Notify is called synchronously inside it, not drained
-afterwards.** This is a deliberate departure from the outbox pattern, flagged for review rather than asserted
-as obviously right:
-
-- The outbox/drain split exists because a per-case email must survive Notify being briefly unreachable
-  without blocking the caseworker's request, and because `DocumentUploads` needs to resolve a document per
-  row at drain time. Neither reason applies here: there is no per-row document resolution (the spreadsheet is
-  built once, for the whole batch, before the call), and this is a rare, deliberate admin action rather than a
-  request-path email — the caseworker-admin is already on a "confirm and send" screen and can be told
-  synchronously that it failed and to retry, exactly as the existing email check pages do at 409.
-- **On any failure — spreadsheet generation, the Notify call, or the database write — the whole batch rolls
-  back**: no case gets `dateNoticeSentToLondonGazette` set, no audit row is written, no case note is added.
-  A failed send is "nothing happened, try again", never a partially-sent batch.
-- **This is the one design choice in this plan most worth revisiting if requirements change** — if the
-  Gazette send is ever expected to run unattended (a scheduled batch rather than an admin clicking a button),
-  the outbox's retry-on-failure story becomes relevant again and this decision should be reopened.
+An identical idempotency key/payload/subject returns recorded status; changed content
+or subject conflicts. A known `NotSent` outcome permits a fresh confirmation and
+new request. An `Uncertain` outcome retains its reservation and needs investigation.
+There is no automatic delivery retry or operator resend endpoint in the first version.
 
 ### 5. Validate the selection is still ready, immediately before sending
 
-The request body is a list of case ids. Before doing anything else, re-read each and confirm it still
-satisfies decision 1's predicate. Any case that does not (already sent by a racing admin, or its state
-changed) refuses the whole request with 409, naming which ids failed and why — the same "a race is a 409, not
-a silent partial success" shape the caseworker referral endpoints already use. **Do not send the batch minus
-the stale ones**: the caseworker-admin reviewed a specific set on the confirmation screen, and silently
-dropping members of it is a different action from the one they confirmed.
+Preview validates distinct case IDs and returns current recipient/revision,
+counts and a fingerprint of mapped data/readiness. Send admission requires that
+fingerprint and recipient revision and rechecks both under its locking protocol.
+Any changed, excluded, unclassified, missing or reserved member refuses the whole
+selection; no silent removal. Case writes are guarded during preparation/sending.
+See the contract for expiry, key identity, typed refusals and concurrency tests.
 
 ### 6. `GET /caseworker/gazette-notices` is a plain, paged history read
 
@@ -218,55 +195,40 @@ Returns `sentAt`, `sentBy` (display name only — the subject id is never publis
 per batch, with `referencesTruncated` indicating omitted members. Batches are newest first;
 references use lexical display order, not send order. No custom filtering or sorting.
 
-Review amendment (2026-10-07): this bounded preview intentionally replaces the original
-full-membership history contract to bound database reads and response size. All membership
-remains stored, but no API currently retrieves the omitted references for a batch over 100.
-Full audit retrieval must be resolved before the full batch-send contract is considered complete.
+The next contract adds `batchId` to each history summary and a separate paginated
+full-membership read for new and legacy batches, preserving the bounded list preview.
+Pending/not-sent/uncertain requests use a separate request list; they never appear
+as successful history.
 
-### 7. Every batch-sent case gets exactly one case note, in the same transaction as the send
+### 7. Notes belong to committed local transitions
 
-Following the "every email event puts exactly one marker on the Notes grid" rule: a fixed-prose note
-("Notice of publication sent to the London Gazette") on each of the batch's cases, written in `send`'s own
-transaction (not the drain's `REQUIRES_NEW`, because there is no drain here) so a note the validator refuses
-would roll back the whole batch rather than silently succeeding on 39 of 40 cases.
+Admission writes one submitted marker per member. Success settlement writes one
+sent marker per member alongside case dates and V31 evidence. A terminal failure
+writes one fixed not-sent or uncertain marker per member alongside its outcome.
+Repeat POSTs, concurrent settlement and repeated recovery add no duplicate notes.
+A note failure rolls back that local transition, never the remote email; a durable
+send-start marker prevents recovery from sending again. See the new contract.
 
-### 8. Both new endpoints are gated on `Role.DEEDPOLL_ADMIN`, refusing everyone else with 403
+### 8. Every Gazette-specific operation is gated on `Role.DEEDPOLL_ADMIN`, refusing everyone else with 403
 
 Not a presentational check. `readyForPublication` as a filter value is visible to anyone who can call the case
 list at all (the same as every other filter), so the **list-level gate belongs to admin's own `/judicial`-style
-route mounting, not to api** — but the two new operations (batch send, and the history read) are gated here,
+route mounting, not to api** — but all Gazette-specific operations (preview, send, settings, status and history) are gated here,
 because a non-admin caller must not be able to send the Gazette email or read who has, regardless of what
 admin's own UI shows them. Refuse with a plain 403 and a logged reason, the same shape `requireRole` uses on
 the admin side.
 
-## The spreadsheet
+## The spreadsheet and implementation layers
 
-**Column layout is not decided in this plan.** Confirmed with the business as an open item: what the Gazette
-actually requires (which fields, in which order, any header format) needs their sign-off before
-`GazetteSpreadsheet` is written. Build the generation as an isolated, independently testable component
-(`domain/gazette/GazetteSpreadsheet`, given a list of cases and answering the workbook bytes) precisely so the
-column mapping can change without touching the transactional send path around it. Do not guess a layout and
-ship it; stub it behind a clearly-marked placeholder mapping and flag Task 4 as blocked on the answer if it has
-not arrived by then.
+The merged `GazetteSpreadsheet` and tracked clean templates implement the agreed
+27 adult / 21 minor visible columns, blank missing values and case-type grouping.
+Use frozen detached inputs from admission and prepare every required file before
+emailing. No placeholder generator or all-column source workbook is permitted.
 
-## Layers
-
-1. **Filter** — `ListFilters` gains `readyForPublication`; `CaseworkerReadController`'s filter parameter
-   description is updated (it is generated into the OpenAPI document, so this alone changes the published
-   spec — expected and must be reconciled by the admin companion plan's Task 0).
-2. **Schema** — `V31__gazette_notice_batch.sql`; JPA entities `GazetteNoticeBatch`,
-   `GazetteNoticeBatchCase`; repositories.
-3. **Domain** — `domain/gazette`: `GazetteNoticeService` (validate-then-send), `GazetteSpreadsheet`
-   (generation), reusing `NotifyProperties`/`NotificationClient` directly rather than the outbox.
-4. **API** — `api/caseworker/dto` (`SendGazetteNoticeRequest`, `GazetteNoticeBatchResponse`,
-   `GazetteNoticeHistoryResponse`), `CaseworkerGazetteController` (or a new controller class, kept apart
-   from `CaseworkerCaseController`/`CaseworkerEmailController` the way judicial's is kept apart from
-   caseworker's), gated on `Role.DEEDPOLL_ADMIN`.
-5. **Notify config** — `notify.templates.gazette-notice`, `notify.gazette.recipient` in `application.yaml`
-   and the chart, pinned the way `EmailTemplateTest.Configuration` pins the existing templates.
-6. **Tests** — unit tests per class, an integration test for the unique-index idempotency behaviour against
-   real Postgres (following `NotificationRepositoryTest`'s precedent for why that one needs a real database),
-   and the OpenAPI delta reconciled the way every prior admin-consuming plan reconciles it.
+The new [send/recovery contract](gazette-1b-send-and-recovery-contract.md) defines
+ledger persistence, transaction boundaries, HTTP DTOs, Notify configuration,
+recovery and the ordered implementation slices. Keep these outside the existing
+per-case notification ledger. Add the next unused migration; never edit V31–V33.
 
 ## Validation Commands
 
@@ -284,21 +246,16 @@ Measure and record the baseline `test`/`integration` test counts on this branch 
 
 ### Task 0: Confirm business inputs before writing any send-path code
 
-Gather sign-off on the three things this plan explicitly does not decide:
+- [x] Spreadsheet column layout, blank behavior and type grouping implemented;
+  generator merged in PR #88.
+- [x] Initial Notify wording drafted for adult-only, minor-only and mixed batches,
+  following Steve's instruction; subject/body remain editable in Notify.
+- [ ] Provision templates, reply-to and file-download settings; record their IDs.
+- [ ] Ready-list predicate re-confirmed beyond the agreed relinquishment exclusion.
 
-- the Gazette spreadsheet's required column layout;
-- the Gazette notice email's Notify template wording (a new entry alongside the existing
-  `.business_context/notify-templates/` docs and `NOTIFY_PROVISIONING_REQUEST.md`, since this is a new
-  template Notify has to provision);
-- the ready-list predicate in decision 1, already tentatively agreed but worth restating as a checkpoint
-  before it is built against.
-
-This task produces no code. Do not start Task 4 (the send path) until the first two are answered; Tasks 1–3
-and 6 do not depend on them and may proceed.
-
-- [ ] Spreadsheet column layout confirmed
-- [ ] Notify template content confirmed and provisioning requested
-- [ ] Ready-list predicate re-confirmed
+These release/business dependencies do not block the local ledger and contract
+implementation with synthetic data and a stub sender. Keep production sends disabled
+until provisioning, support ownership and controlled acceptance checks are complete.
 
 ### Task 1: `readyForPublication` filter
 
@@ -338,23 +295,28 @@ admin results, frozen references, newest-first ordering, pagination and privacy.
 Full build: 3,641 test / 15 integration, no failures, errors or skips.
 See `gazette-1a-task3-validation.md`.
 
-### Task 4: Batch send
+### Task 4: Batch send and recovery
 
-**Blocked on Task 0's first two items and resolution of the uncertain-send design above.**
-`GazetteSpreadsheet`, `GazetteNoticeService`, the controller
-operation, the case note, the idempotency behaviour (decision 4), the re-validation (decision 5), the
-all-or-nothing transaction (decision 4). Test: a successful send sets the date and note on every case and
-writes one audit row; a stale selection 409s naming the stale ids and changes nothing; a repeated
-`Idempotency-Key` returns the original batch's summary rather than sending twice; a Notify failure rolls back
-every write.
+Implement the ordered slices in [the new contract](gazette-1b-send-and-recovery-contract.md):
 
-- [ ] Batch send implemented; all four test scenarios above green
+- [ ] 4a — Request ledger, state transitions, legacy compatibility and case guards.
+- [ ] 4b — Preview/admission, status and full-membership APIs; regenerate OpenAPI.
+- [ ] 4c — One-shot Notify delivery, all-file preparation and bounded recovery.
+- [ ] 4d — Fault-injection, races and recovery evidence; no automatic uncertain resend.
+
+The next executable slice is ledger/guards. It must not expose an operational send
+control before the complete contract and sender tests are ready. Successful local
+settlement updates every case/date/note atomically; external email acceptance is
+never covered by that transaction.
 
 ### Task 5: Full validation and OpenAPI regeneration
 
-Regenerate the OpenAPI document. Confirm the delta is exactly: the filter description text,
-readyForPublication added to the two saved-query request filter enums, two new
-operations, and their new schemas — no other pre-existing contract altered. Record the final test counts next to the
-Task-0 baseline.
+- [ ] Full build and contract validation after the send implementation.
+- [ ] Measure the complete generated delta: five new operations in the design and
+  `batchId` on sent-history summaries, with all new request/status/error schemas.
+  Existing settings, case/email, judicial and deferred CCD contracts stay intact.
+- [ ] Record final test counts, local fault-injection and review evidence.
+- [ ] Provision/activate only after the contract's release prerequisites are met.
 
-- [ ] `./gradlew build` green; OpenAPI delta matches exactly; final counts recorded
+Documentation-only contract planning does not count as any of these completed
+implementation tasks. No live send or runtime contract was added by that planning PR.
