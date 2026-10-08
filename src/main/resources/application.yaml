@@ -188,9 +188,8 @@ notify:
   # The real base URL as the default, because that is where every provisioned environment points; a test
   # overrides it to StubNotify. Harmless while the key is empty: nothing can be sent without one.
   api-url: ${NOTIFY_API_URL:https://api.notifications.service.gov.uk}
-  # A secret, with no working default, for the reason idam.s2s-auth.totp-secret has none. It is not in the
-  # `deed-poll` vault yet, which is why charts/deed-poll-api/values.yaml names no Notify secret -- a chart
-  # naming a secret the vault does not hold fails to deploy. notify-0 adds both ends together.
+  # A secret, with no working default, for the reason idam.s2s-auth.totp-secret has none. Deployed, it is
+  # the `notify-api-key` vault secret, which charts/deed-poll-api/values.yaml maps onto this variable.
   api-key: ${NOTIFY_API_KEY:}
   # The reply-to address id for the emails whose words ask the applicant to reply -- today
   # request-confirmation-to-proceed, which asks whether they still want the deed enrolled, and
