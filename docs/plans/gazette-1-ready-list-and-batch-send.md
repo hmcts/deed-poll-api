@@ -61,6 +61,26 @@ original fixed chart recipient and single-template proposal below.
 - [x] Validate the generator and full API build; see [validation evidence](gazette-spreadsheet-validation.md).
 - [ ] Complete Task 4's independent send/recovery design and implementation.
 
+## Recipient settings slice — 8 October 2026
+
+`GET` and `PUT /caseworker/gazette-settings` now provide the admin-editable
+recipient contract, independently of batch sending. V33 seeds an unset singleton
+at revision 0 and adds its change audit. The domain requires `DEEDPOLL_ADMIN` for
+both operations and takes change attribution from the authenticated caller.
+Updates validate one address, lock the singleton and require the original revision;
+stale edits return 409, including concurrent initial edits. A current unchanged
+address is a no-op. Both the new settings and their audit row commit atomically.
+OpenAPI publishes the exact keyed request and response, without caller subjects.
+
+- [x] Implement persistent settings, validation, role gate and attribution.
+- [x] Publish the read/update contract for the admin editor.
+- [ ] Integrate the settings revision into send confirmation and snapshot the
+  accepted recipient for retries and batch audit. Settings writes send no email.
+
+See [recipient settings validation](gazette-recipient-settings-validation.md).
+This supersedes the original fixed chart recipient below; Notify provisioning,
+review/selection and the send/recovery contract remain outstanding.
+
 ## What already exists and needs no change
 
 `publishToLondonGazette` (boolean) and `dateNoticeSentToLondonGazette` (date) are already columns on
@@ -93,7 +113,7 @@ Other types, including Unknown and unset types, keep their current read behaviou
 their send eligibility remains a separate decision. A selected case reclassified as
 relinquishment must cause a whole-request refusal before any email is sent, never
 silent removal from the batch. The current change implements the read exclusion;
-the send endpoint and generator are still outstanding.
+the generator now enforces this rule; the send endpoint remains outstanding.
 
 ### 2. The batch send is a new, case-driven Notify path — outside `CaseEmailService`/`NotificationOutbox` entirely
 

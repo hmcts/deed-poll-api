@@ -157,6 +157,21 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    void documentsGazetteSettingsAndTheStaleEditContract() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+        JsonNode path = spec.get("paths").get("/caseworker/gazette-settings");
+        assertThat(path.fieldNames()).toIterable().containsExactlyInAnyOrder("get", "put");
+        assertThat(path.at("/put/description").asText()).contains("caseworker-deedpoll-admin", "409", "No email");
+        assertThat(spec.at("/components/schemas/GazetteSettingsResponse/properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("recipientEmail", "revision", "updatedAt", "updatedBy");
+        JsonNode body = spec.at("/components/schemas/UpdateGazetteSettingsRequest");
+        assertThat(body.get("required").toString()).contains("recipientEmail", "revision");
+        assertThat(body.get("additionalProperties").asBoolean()).isFalse();
+        assertThat(body.at("/properties/recipientEmail/maxLength").asInt()).isEqualTo(254);
+    }
+
+    @Test
     void documentsPublicationFilterInBothSavedQueryWriteContracts() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
@@ -307,6 +322,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.addAll(JUDICIAL_PATHS);
         known.addAll(CCD_ATTEMPT_PATHS);
         known.add(GAZETTE_HISTORY_PATH);
+        known.add("/caseworker/gazette-settings");
         known.add("/");
 
         assertThat(documented)
