@@ -747,10 +747,14 @@ nor request IDs are published.
 V31 adds the batch and membership audit tables, including database-enforced request-ID
 uniqueness. V32 adds indexes for case membership checks and bounded reference previews.
 There is currently no batch-send operation or production audit writer:
-no Gazette spreadsheet, Notify template configuration, case-date update or case-note
-write is implemented. The full admin plan 16 contract remains unavailable until the
-batch-send task is implemented and validated. Spreadsheet layout, Notify wording and
-uncertain-send recovery require decisions; database rollback cannot undo email acceptance.
+no Notify template configuration, case-date update or case-note write is implemented.
+`GazetteSpreadsheet` now generates the separate adult/minor XLSX files using the
+[clean runtime templates and mapping](src/main/resources/gazette-templates/README.md).
+It preserves visible columns and blank missing values, and refuses excluded or
+unclassified cases without silently reducing a selection. It is an internal generator;
+there is no export/download endpoint yet. The full admin plan 16 contract remains
+unavailable until batch sending is implemented and validated. Notify provisioning and
+uncertain-send recovery remain outstanding; database rollback cannot undo email acceptance.
 See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md) and
 [foundation validation](docs/plans/gazette-1a-task4-validation.md).
 
