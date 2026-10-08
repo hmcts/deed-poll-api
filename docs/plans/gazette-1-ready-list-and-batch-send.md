@@ -58,10 +58,19 @@ count cheap for the admin worklist banner (`total` on an unfiltered-by-`where` r
 ### 1. Ready is `publishToLondonGazette:true AND dateNoticeSentToLondonGazette IS NULL AND state:Enroled`
 
 Confirmed with the business as a working assumption, not a ported rule. Add `readyForPublication` as a seventh
-member of `ListFilters`, translating to exactly that predicate, default sort
+member of `ListFilters`, translating to that predicate with the exclusion below, default sort
 `dateEnroled:asc` (oldest-enrolled-first — the same "longest-waiting first" instinct `awaitingConfirmation`
 already applies, oldest cases get published first). Like every other filter, an unrecognised or repeated
 `filter` value falls back to `all`; this one is additive and does not change that fallback.
+
+Decision amendment (2026-10-08, following Steve's 7 October instruction): Deed of
+Relinquishment stays outside this process. Exclude `DeedOfRelinquishment` from the
+ready list and its total, and from future spreadsheet generation and batch sending.
+Other types, including Unknown and unset types, keep their current read behaviour;
+their send eligibility remains a separate decision. A selected case reclassified as
+relinquishment must cause a whole-request refusal before any email is sent, never
+silent removal from the batch. The current change implements the read exclusion;
+the send endpoint and generator are still outstanding.
 
 ### 2. The batch send is a new, case-driven Notify path — outside `CaseEmailService`/`NotificationOutbox` entirely
 

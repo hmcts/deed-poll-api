@@ -129,6 +129,29 @@ class CaseSpecificationsTest extends AbstractPostgresContainerTest {
         assertThat(matching(ListFilters.filterFor("readyForPublication"))).containsExactly(ready.getId());
     }
 
+    @Test
+    void publicationReadinessExcludesOnlyRelinquishmentAndReflectsTypeChanges() {
+        Set<String> expected = new LinkedHashSet<>();
+        for (DeedPollType type : DeedPollType.values()) {
+            DeedPoll record = persisted("publishToLondonGazette", true,
+                "state", DeedPollState.Enroled, "type", type);
+            if (type != DeedPollType.DeedOfRelinquishment) {
+                expected.add(record.getId());
+            }
+        }
+        DeedPoll unclassified = persisted("publishToLondonGazette", true, "state", DeedPollState.Enroled);
+        expected.add(unclassified.getId());
+        ListFilters.ListFilter ready = ListFilters.filterFor("readyForPublication");
+
+        assertThat(matching(ready)).containsExactlyInAnyOrderElementsOf(expected);
+        assertThat(matching(ALL)).containsExactlyInAnyOrderElementsOf(mine);
+
+        unclassified.setType(DeedPollType.DeedOfRelinquishment);
+        entityManager.flush();
+        expected.remove(unclassified.getId());
+        assertThat(matching(ready)).containsExactlyInAnyOrderElementsOf(expected);
+    }
+
     /** The ids of this test's own rows that the given conditions admit, under the "all" tab. */
     private List<String> matching(String... where) {
         return matching(ALL, where);

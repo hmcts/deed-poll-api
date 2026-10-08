@@ -9,6 +9,7 @@ import org.hibernate.query.criteria.HibernateCriteriaBuilder;
 import org.springframework.data.jpa.domain.Specification;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -150,7 +151,10 @@ public final class CaseSpecifications {
             case ListFilters.ReadyForPublication ignored -> (root, query, cb) -> cb.and(
                 cb.isTrue(root.get("publishToLondonGazette")),
                 cb.isNull(root.get("dateNoticeSentToLondonGazette")),
-                cb.equal(root.get("state"), DeedPollState.Enroled));
+                cb.equal(root.get("state"), DeedPollState.Enroled),
+                // Only relinquishment is excluded; a SQL inequality alone would also drop unset types.
+                cb.or(cb.isNull(root.get("type")),
+                      cb.notEqual(root.get("type"), DeedPollType.DeedOfRelinquishment)));
         };
     }
 

@@ -96,7 +96,7 @@ public final class ListFilters {
     public record AwaitingConfirmation() implements FilterWhere {
     }
 
-    /** Publication requested, no notice sent, and the case is Enroled: the Gazette working predicate. */
+    /** Publication requested, no notice sent, Enroled, and not a Deed of Relinquishment. */
     public record ReadyForPublication() implements FilterWhere {
     }
 

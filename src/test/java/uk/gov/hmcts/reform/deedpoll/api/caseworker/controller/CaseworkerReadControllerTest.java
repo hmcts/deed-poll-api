@@ -289,6 +289,9 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
             queryCase("Already sent", "publishToLondonGazette", true, "state", DeedPollState.Enroled,
                       "dateNoticeSentToLondonGazette", LocalDateTime.of(2026, 9, 1, 0, 0));
             queryCase("Not enrolled", "publishToLondonGazette", true, "state", DeedPollState.Received);
+            queryCase("Relinquishment", "publishToLondonGazette", true, "state", DeedPollState.Enroled,
+                      "type", DeedPollType.DeedOfRelinquishment,
+                      "dateEnroled", LocalDateTime.of(2026, 1, 1, 0, 0));
 
             authorised(get("/caseworker/cases").param("filter", "readyForPublication"))
                 .andExpect(status().isOk())
@@ -304,6 +307,11 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.cases[1].id").value(oldest.getId()));
             assertThat(deedPollService.findDeedPolls(ListFilters.filterFor("readyForPublication")))
                 .extracting(row -> row.deedPoll().getId()).containsExactly(oldest.getId(), recent.getId());
+            authorised(get("/caseworker/cases").param("filter", "readyForPublication").param("size", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.totalPages").value(2))
+                .andExpect(jsonPath("$.cases[0].id").value(oldest.getId()));
         }
 
         @Test

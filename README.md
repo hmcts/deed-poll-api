@@ -719,7 +719,10 @@ yet wired. Naming the two paths is part of the outstanding deployment onboarding
 ### Gazette publication foundation
 
 `GET /caseworker/cases?filter=readyForPublication` uses the working predicate
-`publishToLondonGazette=true AND dateNoticeSentToLondonGazette IS NULL AND state=Enroled`.
+`publishToLondonGazette=true AND dateNoticeSentToLondonGazette IS NULL AND state=Enroled`,
+excluding `type=DeedOfRelinquishment`. Other types, including unset types, retain their
+existing behaviour. The exclusion applies before pagination and to the total used by admin
+for its ready count.
 The default sort is `dateEnroled:asc`; an explicit `sort` overrides it. Existing `where`,
 search and pagination still apply. Unknown or repeated filter values fall back to `all`.
 The filter is also accepted by saved-query create/update requests and is available to
