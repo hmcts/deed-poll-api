@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 
+import org.hibernate.Hibernate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -301,8 +302,8 @@ public class DeedPollService {
     public DeedPollWithComputed findDeedPoll(String id) {
         DeedPoll record = deedPolls.findWithDocumentsById(id)
             .orElseThrow(() -> new NotFoundError("DeedPoll " + id + " not found"));
-        record.getNotes().size();
-        record.getWitnesses().size();
+        Hibernate.initialize(record.getNotes());
+        Hibernate.initialize(record.getWitnesses());
         return Computed.withComputed(record);
     }
 
