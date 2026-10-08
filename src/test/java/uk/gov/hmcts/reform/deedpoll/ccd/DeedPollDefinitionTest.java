@@ -123,37 +123,28 @@ class DeedPollDefinitionTest {
     }
 
     @Test
-    @DisplayName("DEED_POLL_SYSTEM holds what its two events need, D only on the documents field, and nobody else"
-        + " is granted anything")
-    void onlyTheSystemProfileIsGrantedAndOnlyWhatItsEventsNeed() throws IOException {
+    @DisplayName("system grants stay unchanged; staff read documents without event or mutation permissions")
+    void systemWritesAndStaffOnlyRead() throws IOException {
         Path caseType = generate();
 
-        List<JsonNode> grants = new ArrayList<>();
-        grants.addAll(rows(caseType, "AuthorisationCaseType.json"));
-        grants.addAll(rows(caseType, "AuthorisationCaseEvent/AuthorisationCaseEvent.json"));
-        grants.addAll(rows(caseType, "AuthorisationCaseField/DEED_POLL_SYSTEM.json"));
-        grants.addAll(rows(caseType, "AuthorisationCaseState.json"));
-
-        // A creating event leaves its destination state ungranted in the SDK, and data-store then refuses every read.
-        assertThat(rows(caseType, "AuthorisationCaseState.json")).as("the one state is granted")
-            .singleElement().satisfies(row -> assertThat(row.get("CaseStateID").asText()).isEqualTo("Registered"));
-        assertThat(grants).isNotEmpty()
-            .allSatisfy(grant -> assertThat(grant.get("UserRole").asText()).isEqualTo("DEED_POLL_SYSTEM"));
-        // Update on the case type and the state: data-store checks both before any event on an existing case.
-        assertThat(crud(caseType, "AuthorisationCaseType.json", "CaseTypeID"))
-            .containsOnly(Map.entry(PLACEHOLDER, "CRU"));
-        assertThat(crud(caseType, "AuthorisationCaseState.json", "CaseStateID"))
-            .containsOnly(Map.entry("Registered", "CRU"));
+        assertThat(crud(caseType, "AuthorisationCaseType.json", "UserRole"))
+            .containsOnly(Map.entry("DEED_POLL_SYSTEM", "CRU"), Map.entry("DEED_POLL_READER", "R"));
+        assertThat(crud(caseType, "AuthorisationCaseState.json", "UserRole"))
+            .containsOnly(Map.entry("DEED_POLL_SYSTEM", "CRU"), Map.entry("DEED_POLL_READER", "R"));
+        assertThat(rows(caseType, "AuthorisationCaseState.json"))
+            .allSatisfy(row -> assertThat(row.get("CaseStateID").asText()).isEqualTo("Registered"));
+        assertThat(rows(caseType, "AuthorisationCaseEvent/AuthorisationCaseEvent.json"))
+            .allSatisfy(row -> assertThat(row.get("UserRole").asText()).isEqualTo("DEED_POLL_SYSTEM"));
         assertThat(crud(caseType, "AuthorisationCaseEvent/AuthorisationCaseEvent.json", "CaseEventID")).containsOnly(
             Map.entry(DeedPollCaseType.LINK_DEED_POLL, "CR"), Map.entry(CaseDocumentsEvent.EVENT_ID, "CRU"));
-        // Delete only where a collection item is taken away, and not on the event, which would carry it to the state.
         assertThat(crud(caseType, "AuthorisationCaseField/DEED_POLL_SYSTEM.json", "CaseFieldID")).containsOnly(
             Map.entry("deedPollId", "CR"), Map.entry("deedPollReference", "CR"),
             Map.entry(CaseDocumentsEvent.FIELD, "CRUD"));
+        assertThat(crud(caseType, "AuthorisationCaseField/DEED_POLL_READER.json", "CaseFieldID"))
+            .containsOnly(Map.entry(CaseDocumentsEvent.FIELD, "R"));
         try (Stream<Path> fieldGrants = Files.list(caseType.resolve("AuthorisationCaseField"))) {
             assertThat(fieldGrants).extracting(path -> path.getFileName().toString())
-                .as("one field-grant file per granted profile")
-                .containsExactly("DEED_POLL_SYSTEM.json");
+                .containsExactlyInAnyOrder("DEED_POLL_SYSTEM.json", "DEED_POLL_READER.json");
         }
         assertThat(rows(caseType, "CaseRoles.json")).as("no case roles").isEmpty();
     }
@@ -172,12 +163,16 @@ class DeedPollDefinitionTest {
     }
 
     @Test
-    @DisplayName("the configured IDAM role maps onto DEED_POLL_SYSTEM, and nothing else maps onto anything")
-    void systemRoleMapsOntoTheProfile() throws IOException {
-        assertThat(rows(generate(), "RoleToAccessProfiles.json")).singleElement().satisfies(row -> {
-            assertThat(row.get("RoleName").asText()).isEqualTo("idam:" + PLACEHOLDER);
-            assertThat(row.get("AccessProfiles").asText()).isEqualTo("DEED_POLL_SYSTEM");
-            assertThat(row.get("ReadOnly").asText()).isEqualTo("N");
+    @DisplayName("the system role maps to system grants and each staff role maps to read-only grants")
+    void idamRolesMapOntoTheProfiles() throws IOException {
+        List<JsonNode> mappings = rows(generate(), "RoleToAccessProfiles.json");
+        assertThat(mappings).extracting(row -> row.get("RoleName").asText() + ":"
+            + row.get("AccessProfiles").asText()).containsExactlyInAnyOrder(
+                "idam:" + PLACEHOLDER + ":DEED_POLL_SYSTEM",
+                "idam:caseworker-deedpoll:DEED_POLL_READER",
+                "idam:caseworker-deedpoll-admin:DEED_POLL_READER",
+                "idam:caseworker-deedpoll-judicial:DEED_POLL_READER");
+        assertThat(mappings).allSatisfy(row -> {
             assertThat(row.get("Disabled").asText()).isEqualTo("N");
         });
     }
@@ -195,7 +190,8 @@ class DeedPollDefinitionTest {
         Path caseType = output.resolve("CONFIRMED_TYPE");
         assertThat(rows(caseType, "CaseType.json")).singleElement()
             .satisfies(row -> assertThat(row.get("JurisdictionID").asText()).isEqualTo("CONFIRMED_JURISDICTION"));
-        assertThat(rows(caseType, "RoleToAccessProfiles.json")).singleElement()
+        assertThat(rows(caseType, "RoleToAccessProfiles.json"))
+            .filteredOn(row -> row.get("AccessProfiles").asText().equals("DEED_POLL_SYSTEM")).singleElement()
             .satisfies(row -> assertThat(row.get("RoleName").asText()).isEqualTo("idam:confirmed-role"));
     }
 

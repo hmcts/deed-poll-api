@@ -1,5 +1,21 @@
 # Resume state — where the next session picks up
 
+**Staff document READ, 2026-10-08:** Steve agreed read access for all three user types. The definition now
+maps ordinary caseworkers (`caseworker-deedpoll`), admins (`caseworker-deedpoll-admin`) and judiciary
+(`caseworker-deedpoll-judicial`) to `DEED_POLL_READER`. It grants R only on the case type, Registered
+state and document collection; system grants are unchanged. The ordinary caseworker role is new and
+is in [IDAM #1016](https://github.com/hmcts/idam-access-config/pull/1016) at `947b956`; the test-persona
+update is [admin #161](https://github.com/hmcts/deed-poll-admin/pull/161). Registration/assignment are pending. Register all six external roles
+and internal profiles at PUBLIC, then regenerate/import the definition using `docs/CCD-SMOKE.md`.
+Local proof: 170 API permission/security tests and all 14 CCD/CDAM journeys passed.
+No activation or live staff smoke has run. Linking/CDAM/staging remain off. Production is deferred.
+
+AAT infrastructure #26 is merged. IDAM #1016 and CDAM #813 have since passed CI. The AAT-only S2S
+registration is [Flux #48113](https://github.com/hmcts/cnp-flux-config/pull/48113), with auto-merge requested
+and review outstanding at the last check; shared S2S #1140 is deferred. Definition-store also needs
+[Flux #48117](https://github.com/hmcts/cnp-flux-config/pull/48117), and runtime onboarding still needs
+[Flux #48052](https://github.com/hmcts/cnp-flux-config/pull/48052). These updates supersede the older statuses below.
+
 **AAT onboarding, updated 2026-10-07:** Runtime identifiers remain `DEEDPOLL` / `DEEDPOLL` /
 `deed-poll-system-update`, with internal profile `DEED_POLL_SYSTEM`. Infrastructure #25 and documentation
 #78 are merged. All four API identity secrets were verified present/enabled in `deed-poll-aat`.

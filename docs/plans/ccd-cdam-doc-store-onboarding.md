@@ -171,9 +171,10 @@ unlinked records as well as newly created smoke cases.
 
 ### 3. Staff document access
 
-- Agree which real staff roles may read documents, including any case-visibility/privacy restrictions.
-- Implement the role-to-access-profile mapping and READ grants on the case type, state and
-  `supportingDocuments` field. The current definition grants only the system profile.
+- Agreed 2026-10-08: all three staff types receive case-type-wide CCD document READ. The definition
+  maps their dedicated IDAM roles to `DEED_POLL_READER`, with R on case type, state and supportingDocuments.
+- Register/assign `caseworker-deedpoll` in AAT; deploy the API/admin changes and register all six role/profile
+  names at PUBLIC before importing the regenerated definition. See the latest dated entry below.
 - Update the generated-definition fixtures and permission tests together with the implementation.
 - Prove authorised staff downloads and denial for a user without the required READ permission, plus
   wrong-case refusal. Service-authorised Notify retrieval is a separate check.
@@ -436,3 +437,212 @@ authorized route. Keep linking/CDAM/staging disabled until their separate smoke 
 - [CDAM protocol and permissions](../CDAM-SEQUENCE.md)
 - [CDAM implementation and migration scope](deed-poll-api-03-cdam-documents.md)
 - [03b callers and staging](deed-poll-api-03b-cdam-callers-and-staging.md)
+
+
+### 2026-10-08 PR and AAT deployment checkpoint
+
+Verified GitHub status and live `cft-aat-01-aks` configuration. Earlier failing-build and missing-importer
+secret notes above are historical and superseded by this checkpoint.
+
+| Change | Verified state |
+|---|---|
+| Infra #26 | Merged 2026-10-07 07:32 UTC; importer secret metadata updated 07:35 UTC. Both importer secrets and all four API identity secrets are enabled. |
+| IDAM #1016 | Open, not draft, review required, behind master. Jenkins build 7 SUCCESS at `b798b8124c5cc8bec35513a754d5038ae60eca5a`. Diff remains only accounts/roles/services YAML. |
+| CDAM #813 | Open/draft; five checks SUCCESS at `b0eeb4463a0dd09a759d283ae6d819b04fa7ff98`, including preview functional/smoke and Pact verification. |
+| Flux #48052 | Open/draft. Earlier 18 checks passed at `96ff9864ef0`. Pushed `c8f2a7857fd` to retain the Notify secret added to today's API chart; all 18 fresh CI checks passed. |
+| S2S #1140 | Open/draft, merge conflict, overall Jenkins ERROR and static/unit check SUCCESS at `799abbe1`. Its recorded production-secret prerequisite still needs owner confirmation; production was not inspected. |
+
+The IDAM pipeline passed without local Gradle patch `a6a81cf`. That patch remains unpushed and is not a
+current merge prerequisite. HTTP 429 was the earlier observed failure; no specific infrastructure or
+cache change has been proven to explain the later success. The PR description was corrected accordingly.
+
+Live deployment evidence:
+
+- API: 3/3 ready, `prod-577e674-20261008091046`, Helm release Ready at chart 0.0.19.
+  `DOCUMENT_STORE=filesystem`, `IDAM_API_AUDIENCES=deed-poll-admin`; no explicit agreed CCD identifiers or
+  linking/staging enablement in the deployment environment.
+- CCD data-store: 3 ready, `prod-9c7ea73-20261007164257`; no `deed_poll_api` allowlist member or DEEDPOLL route.
+- CDAM: 2 ready, `prod-98b0b52-20261007144954`; no `deed_poll_api` allowlist member.
+- Definition store: 2 ready, `prod-906c27b-20261008103307`; no role-catalogue or definition-import call made.
+- S2S: 3 ready, `prod-8ca9939-20261007061917`; no deed-poll-named environment configuration observed.
+  This is not a token-leasing test.
+- dm-store: 2 ready, `prod-a56f955-20261006115603`; its S2S allowlist already includes
+  `ccd_case_document_am_api`. Connectivity, attachment metadata and byte durability remain untested.
+
+Flux compatibility correction: the current API chart now mounts `notify-api-key` as `NOTIFY_API_KEY`.
+The older onboarding overlay replaced the entire list and would have removed it. Added that existing mount;
+all six chart mounts are preserved alongside four identity mounts. YAML parsing, no-duplicate/mount-preservation
+assertions, `git diff --check` and `kubectl kustomize` for `apps/deed-poll/aat/base` passed. Rendered HelmRelease
+assertions also confirm the three activation flags stay off. No runtime rollout or application data changed.
+
+Next gate is review/merge/deployment of IDAM and CDAM, resolution of the S2S merge/production-secret prerequisites,
+and corrected Flux merge (all 18 checks passed). Then verify authentication, register CCD PUBLIC roles and import the definition.
+Staff access, real document-store smoke and 03c migration remain separate gates. This dated handover is local.
+
+### 2026-10-08 S2S #1140 conflict resolved and prerequisites rechecked
+
+Steve asked to investigate S2S #1140 while the other registration PRs are in flight. Created isolated
+checkout `/tmp/deed-poll-s2s-1140` and merged master `2312b777` into the existing PR branch. The sole conflict
+was chart version: PR 0.3.140 versus master's 0.3.139. Kept 0.3.140 and master's Java chart dependency 5.3.2.
+Pushed merge commit `0126712a4b9b7ff7f8f6320807f8964711f54e21`; GitHub reports MERGEABLE, still draft.
+The final diff against master remains four mapping lines and the version bump only.
+
+Helm dependency retrieval and lint passed. Rendered AAT and production with Key Vault support enabled;
+assertions prove both secret names/aliases occur exactly once in the proper environment vault, no duplicates,
+and all master registrations are retained. Fresh Jenkins status is pending. The older run's generic ERROR
+cannot be diagnosed from its successful unit/static check; fetching its detailed console returned HTTP 403.
+
+Fresh metadata checks confirm both `microservicekey-deed-poll-web` and `microservicekey-deed-poll-api` are
+present and enabled in sandbox, demo, AAT, perftest and ITHC. **Production metadata access now works**, correcting
+the older no-access note: both names are absent in `s2s-prod`, and neither appears among soft-deleted secrets.
+No secret values were read and no secrets were created or rotated. Read access does not establish write access.
+
+Next action requiring Steve's authorization beyond the existing AAT scope: create only those two missing
+production secrets, each independently generated from ten cryptographically random bytes encoded as 16 BASE32
+characters, then verify without logging values. Preserve all non-production secrets. The shared chart references
+production as well as AAT, which is why this prerequisite blocks merge even for AAT onboarding.
+Keep PR draft until prerequisite verification and CI complete. No merge, live rollout or token lease was performed.
+
+### 2026-10-08 AAT-only S2S route selected and prepared
+
+Steve explicitly requested AAT first instead of production secret creation. No production secrets were
+changed. The preceding request for production authorization is superseded for current onboarding.
+
+Raised [Flux #48113](https://github.com/hmcts/cnp-flux-config/pull/48113), branch `deed-poll-s2s-aat-only`,
+commit `7fae4eb0faf`, from master `2a79fa3eca8`. It changes only the RPE AAT kustomization and adds an
+AAT-only S2S HelmRelease patch. It uses the deployed S2S chart 0.3.139 (Java chart 5.3.2) without a chart
+release or application image update:
+
+- Add `java.keyVaults.s2s-aat` with `excludeEnvironmentSuffix: true`, mounting the existing
+  `microservicekey-deed-poll-api` and `microservicekey-deed-poll-web` under `/mnt/secrets/s2s-aat/`.
+  Aliases remain `microserviceKeys.deed_poll_api` and `microserviceKeys.deed_poll_web`.
+- Retain the standard `/mnt/secrets/s2s/` configuration import and append the new directory through
+  AAT's `SPRING_CONFIG_IMPORT`. The new import is required, so a missing mount fails startup visibly.
+- The additional vault map entry preserves the chart's complete existing S2S secret list and
+  SecretProviderClass. Both mounts use the same AAT vault and existing S2S identity access.
+
+Validation: Helm lint passed; AAT Kustomize and Helm rendering verified the exact aliases, both mount paths
+and both imports, and that the original SecretProviderClass is unchanged. RPE production, demo, ITHC,
+perftest, sandbox and preview Kustomize output is byte-identical to the baseline. `git diff --check` passed.
+
+A full S2S build could not run locally because its Java 25 toolchain is unavailable. A separate Java 21
+harness used the deployed source `8ca9939`'s actual `AppProperties` class and exact Spring Boot 3.4.4 version;
+both tests passed (zero failures/errors): old keys/JWT configuration survive while both new underscore-named
+service keys bind; a missing required import fails startup. All keys were synthetic; no live credentials used.
+This is focused binding evidence, not a full application build or deployed token-leasing proof.
+
+All 18 Flux CI checks passed at `7fae4eb0faf`, including both AAT schemas and static tests.
+Next: Flux #48113 review/merge, wait for AAT reconciliation and readiness, then lease/validate a token for
+`deed_poll_api` using its existing AAT key without logging values/tokens. CCD/CDAM onboarding continues through
+its own PRs. S2S #1140 remains draft for a later wider rollout and no longer gates this AAT-only route.
+Remove the extra mount and import together when the shared chart eventually supplies the same registrations.
+
+### 2026-10-08 AAT-only S2S merge authorized; awaiting repository review
+
+Steve authorized proceeding with Flux #48113 merge, AAT reconciliation and token-leasing verification.
+Rechecked head `7fae4eb0fafa697d15e7931b52fe20de892b07dc`: all 18 CI checks passed. A normal squash merge
+was refused by the base-branch policy because review is required. Enabled squash auto-merge at
+2026-10-08 14:43 UTC; GitHub reports OPEN / BLOCKED / REVIEW_REQUIRED with auto-merge enabled.
+No administrator override was used. Existing review requests include Platform Operations; no messages or
+new review requests were sent. No merge, rollout or token lease has occurred yet.
+
+After review/merge, verify the AAT RPE HelmRelease and all S2S replicas are ready with the additional mount,
+then POST `/lease` with the service name and freshly generated OTP, followed by GET `/details` with the
+leased bearer token. Report only HTTP outcomes and returned service identity; never log secret values,
+OTPs or tokens. Production remains deferred. This entry is the current resume point for AAT S2S.
+
+### 2026-10-08 work advanced while reviews are pending: definition import readiness
+
+Steve requested independent work while S2S #48113 awaits review. Rechecked IDAM #1016, CDAM #813 and
+Flux #48052/#48113: all remain open awaiting review, so account authentication and deployed token verification
+were not attempted against unprovisioned identities.
+
+Found an additional prerequisite: AAT definition store's S2S allowlist contains `pcs_api` but not
+`deed_poll_api`. This was confirmed from its live deployment, image `prod-906c27b-20261008103307`, and the
+Flux AAT overlay. Its service-authentication filter applies before the user authorization checks; possessing
+an importer account alone is insufficient. `/import` also requires the user's `ccd-import` authority.
+
+Raised [Flux #48117](https://github.com/hmcts/cnp-flux-config/pull/48117), branch
+`deed-poll-aat-definition-import`, commit `d36982c1a58`: append only `deed_poll_api` to
+`apps/ccd/ccd-definition-store-api/aat.yaml`'s `DEFINITION_STORE_S2S_AUTHORISED_SERVICES`. Both AAT cluster
+Kustomize renders preserve every existing caller and add the new identity once. Semantic YAML comparison
+confirmed no other setting changes, and `git diff --check` passed. No production file changed and no merge
+or live registration was performed. All 18 Flux CI checks passed at `d36982c1a58`.
+
+Expanded `docs/CCD-SMOKE.md` with the exact pre-import request sequence: dedicated importer password grant
+and userinfo role check, own-service token lease/validation, read-before-create PUBLIC role catalogue entries,
+multipart import with a pre-recorded `X-Import-Job-Id`, then job/definition read-back. Existing classifications
+are never overwritten implicitly. Unknown import outcomes require status inspection, not blind resubmission.
+Confirmed the service filter, import authority, job-ID header and job endpoint against deployed source `906c27b`.
+
+Artifact recheck: all 22 generated JSON files still match the pinned fixtures with only agreed identifier
+substitutions. The existing spreadsheet remains at
+`build/definitions/CCD_Definition_DEEDPOLL_aat.xlsx`, SHA-256
+`0c9170e04fab0ef88906c08607b2a838257beca85c03b02a675345fcf83d956a`.
+Compared generator baseline `b412e08` with deployed API `577e674`: no CCD definition classes, fixtures or SDK
+dependency/generation configuration changed; build.gradle changes concern CI test gating only. This confirms
+artifact readiness, not deployed import acceptance. It still grants only the system profile; staff access is
+workstream 3 and remains a separate gate before ordinary document use.
+
+Next: review/merge/deploy #48117 alongside the other prepared prerequisites, authenticate the provisioned
+identities, then perform role registration/import. Linking, CDAM storage and staging remain disabled.
+
+### 2026-10-08 staff document access implementation outline (decision pending)
+
+Investigated the independent staff-access workstream while the deployment PRs await review. Current
+`DeedPollRoleMapping.from` maps only the configured system role; `DeedPollAccessProfile` grants only
+`DEED_POLL_SYSTEM`. `DocumentService.downloadDocument` checks document/case ownership and passes the caller's
+authority to CDAM. It does not substitute system authority for a staff download. The judicial HTTP surface
+currently exposes referral operations, not a judicial document-download route.
+
+Asked Steve whether initial AAT READ should cover only existing `caseworker-deedpoll-admin` (recommended
+initial scope), or also judicial users with referral-scoped visibility. No answer recorded yet and no
+permissions changed. Do not grant judicial users blanket case-type READ as a substitute for referral checks.
+
+If admin-only scope is accepted, the implementation should introduce a distinct internal READ profile,
+map the existing admin IDAM role to it, and grant R on case type, Registered state and supportingDocuments
+without granting either mutation event or C/U/D. Keep system grants unchanged. `DeedPollRoleMapping`,
+`DeedPollAccessProfile`, `DeedPollCaseType`, `SupportingDocumentsAccess` and generated-definition fixtures
+must move together. Register the chosen staff profile and actual admin IDAM role as PUBLIC in definition
+store before importing the expanded definition; re-generate the workbook, since today's checked artifact
+still has only system grants.
+
+Verification must prove allowed staff byte download, unmapped-role denial, refusal of creation/update
+under staff authority, unchanged system attachment/Notify retrieval and wrong-case refusal. Update
+`DeedPollDefinitionTest`, role-mapping tests and persistence-security tests; use cftlib for the downstream
+CDAM/CCD permission behavior before deployed AAT smoke. Existing-file migration and activation stay separate.
+
+### 2026-10-08 — staff READ scope agreed
+
+Steve confirmed all three user types may read documents. The implementation maps `caseworker-deedpoll`,
+`caseworker-deedpoll-admin` and `caseworker-deedpoll-judicial` to `DEED_POLL_READER`, with R only on the
+case type, Registered state and supportingDocuments. The system profile retains its existing grants.
+No staff mutation event, history or identifier-field grant is added. This is case-type-wide CCD document
+access; the application referral visibility rules and UI routes remain unchanged.
+
+Ordinary caseworkers previously held no dedicated IDAM role. Prepare/register `caseworker-deedpoll`
+for AAT with the same environment exclusions as the other staff roles, assign it to caseworker accounts,
+and update the admin persona/local seeder. No role is automatically assigned to existing real accounts.
+Register all six role/profile names listed in `docs/CCD-SMOKE.md` as PUBLIC in definition store. Regenerate
+the workbook: the earlier system-only AAT workbook is superseded and must not be imported for staff reads.
+Workstream 3 remains open until deployment and the three-persona AAT smoke pass. Keep CDAM, linking and
+staging off until their separate activation prerequisites are met.
+
+Validation for the staff-read implementation: 170 API authentication/permission tests and all 14 real local
+CCD/CDAM journeys passed. The journeys cover all three staff readers, denied CCD creation/update, missing
+READ, unmapped users, wrong-case refusal, system attachment/deletion and Notify retrieval across restart.
+Checkstyle on all changed Java sources passed via its pinned CLI; Gradle's Checkstyle workers crash on this
+ARM host, so the direct invocation supplied `-XX:UseSVE=0`. IDAM's 41 tests passed using a temporary local
+Maven Central override (Artifactory DNS unavailable; no repository build changes). Admin's 84 persona/gate
+and 18 claim-parser tests, build and lint passed. These are local proofs; the deployed AAT smoke is still due.
+
+IDAM #1016 now includes the new role at `947b956`; admin persona PR is
+https://github.com/hmcts/deed-poll-admin/pull/161. Wait for registration before deploying the admin persona,
+then assign/refresh existing real caseworker identities. The runtime account remains system-only.
+
+Regenerated AAT artifact: `build/definitions/CCD_Definition_DEEDPOLL_aat_staff_read.xlsx`, SHA-256
+`2f0450bf49a58b8673573c086d60d62a0009158d57bb363b6e55e0b37e49ef79`.
+All 23 generated JSON files match pinned fixtures after identifier substitution (role-map rows sort by the
+substituted role name). XLSX conversion used definition-processor `7a30a861`; required identifiers and
+reader mappings are present. This artifact supersedes the earlier system-only workbook; it is not imported.
+Generate with `--rerun-tasks` when changing identifiers because Gradle does not track those environment inputs.

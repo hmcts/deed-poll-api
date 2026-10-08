@@ -21,6 +21,9 @@ import java.util.Optional;
  */
 public enum Role {
 
+    /** An ordinary deed-poll caseworker; grants CCD document reads, without admin or judicial powers. */
+    CASEWORKER("caseworker-deedpoll"),
+
     DEEDPOLL_ADMIN("caseworker-deedpoll-admin"),
 
     /**

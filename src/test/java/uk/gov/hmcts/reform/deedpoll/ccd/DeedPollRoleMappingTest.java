@@ -2,11 +2,13 @@ package uk.gov.hmcts.reform.deedpoll.ccd;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile.DEED_POLL_READER;
 import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile.DEED_POLL_SYSTEM;
 
 class DeedPollRoleMappingTest {
@@ -15,9 +17,13 @@ class DeedPollRoleMappingTest {
         DeedPollRoleMapping.from(new CcdProperties("CASE_TYPE", "JURISDICTION", "system-role"));
 
     @Test
-    @DisplayName("maps the configured system role onto DEED_POLL_SYSTEM, and nothing else onto anything")
-    void mapsOnlyTheSystemRole() {
-        assertThat(MAPPING.byIdamRole()).containsExactlyEntriesOf(Map.of("system-role", DEED_POLL_SYSTEM));
+    @DisplayName("maps the configured system actor separately from read-only staff")
+    void mapsSystemAndStaffRoles() {
+        assertThat(MAPPING.byIdamRole()).containsExactlyEntriesOf(Map.of(
+            "system-role", DEED_POLL_SYSTEM,
+            Role.CASEWORKER.claimValue(), DEED_POLL_READER,
+            Role.DEEDPOLL_ADMIN.claimValue(), DEED_POLL_READER,
+            Role.JUDICIAL.claimValue(), DEED_POLL_READER));
     }
 
     @Test
@@ -29,12 +35,13 @@ class DeedPollRoleMappingTest {
     @Test
     @DisplayName("gives nothing for roles nobody mapped -- the profile's own name included")
     void profilesForUnmappedRoles() {
-        assertThat(MAPPING.profilesFor(List.of("caseworker-deedpoll", "DEED_POLL_SYSTEM", "SYSTEM-ROLE"))).isEmpty();
+        assertThat(MAPPING.profilesFor(List.of("caseworker", "citizen", "DEED_POLL_SYSTEM",
+            "DEED_POLL_READER", "SYSTEM-ROLE"))).isEmpty();
     }
 
     @Test
-    @DisplayName("counts DEED_POLL_SYSTEM as granted, because the definition gives it create and read")
+    @DisplayName("counts system and reader profiles as granted on the case type")
     void grantedProfiles() {
-        assertThat(DeedPollRoleMapping.granted()).containsExactly(DEED_POLL_SYSTEM);
+        assertThat(DeedPollRoleMapping.granted()).containsExactlyInAnyOrder(DEED_POLL_SYSTEM, DEED_POLL_READER);
     }
 }

@@ -25,7 +25,8 @@ Each of these is onboarding and belongs to Steve; the plan's Dependencies sectio
 | The case list request's linking sweep | `CCD_LINKING_SWEEP_ENABLED` (`false`; set `true` only once everything above is in place), `CCD_LINKING_SWEEP_MAX_RECORDS` (`2`), `CCD_LINKING_SWEEP_MAX_RECONCILIATIONS` (`5`), `CCD_LINKING_SWEEP_MAX_DURATION` (`PT15S`) |
 | Data-store routes our case type to us | data-store's `ccd.decentralised.case-type-service-urls`, keyed on a **prefix of the case type id** |
 | `deed_poll_api` allowed to call data-store; `ccd_data` allowed to call us | data-store's S2S allowlist; ours is the constant `SecurityConfiguration.CCD_PERSISTENCE_CALLERS` |
-| The system role and internal profile registered in definition store | `deed-poll-system-update` and `DEED_POLL_SYSTEM`, both at `PUBLIC` |
+| `deed_poll_api` allowed to call definition store for controlled import | AAT `DEFINITION_STORE_S2S_AUTHORISED_SERVICES`; Flux #48117 supplies the missing caller entry |
+| Roles/profiles registered in definition store | `deed-poll-system-update`, `DEED_POLL_SYSTEM`, `caseworker-deedpoll`, `caseworker-deedpoll-admin`, `caseworker-deedpoll-judicial`, `DEED_POLL_READER`, all at `PUBLIC` |
 | The API accepts the system client's token audience | `IDAM_API_AUDIENCES` includes `deed-poll-api` alongside `deed-poll-admin` in AAT |
 | data-store → our `.internal` address reachable | network (`azure-platform-terraform#3161` created the address) |
 
@@ -41,9 +42,50 @@ Two things cftlib found that no WireMock test could have, both repeated here bec
 
 ## 1. Generate and import the definition
 
+### AAT import prerequisites and request sequence — checked 2026-10-08
+
+The durable importer credentials already exist in `deed-poll-aat` as
+`definition-importer-username` and `definition-importer-password`. Account/client provisioning still
+depends on IDAM #1016 being merged and synchronized. Authenticate through the dedicated `deed-poll-api`
+OAuth client using `api-idam-client-secret`, with its registered redirect
+`http://deed-poll-api-aat.service.core-compute-aat.internal/receiver` and scopes `openid profile roles`.
+Use the importer credentials for administration, not the runtime system-user credentials.
+
+Definition store requires both user and service authorization. Use deed-poll's own `deed_poll_api` S2S
+identity once AAT-only Flux #48113 reconciles; Flux #48117 must also reconcile to admit it to definition
+store. The AAT definition-store endpoint is
+`http://ccd-definition-store-api-aat.service.core-compute-aat.internal`. Do not borrow `ccd_admin`, PCS
+or another service's S2S key to bypass an absent allowlist entry.
+
+Keep credentials, OTPs and tokens in process memory. Do not put them in shell command arguments, traces,
+logs, committed files or the handover. Record response status, expected role names, definition version,
+artifact checksum and import job ID only. These requests are prepared, not evidence of execution:
+
+| Order | Request | Required outcome |
+|---|---|---|
+| 1 | IDAM `POST /o/token`, password grant using the importer and `deed-poll-api` client | 200 with an access token; no automatic retry of failed credentials |
+| 2 | IDAM `GET /o/userinfo`, using that bearer token | Roles include `ccd-admin` and `ccd-import`; do not record the account's personal fields |
+| 3 | S2S `POST /lease` for `deed_poll_api` using a fresh OTP, then `GET /details` | Both 200; details returns `deed_poll_api` |
+| 4 | Definition store `GET /api/user-roles/deed-poll-system-update,DEED_POLL_SYSTEM,caseworker-deedpoll,caseworker-deedpoll-admin,caseworker-deedpoll-judicial,DEED_POLL_READER` with `Authorization` and `ServiceAuthorization` | Determine which roles exist and confirm every existing entry is `PUBLIC` |
+| 5 | For each missing role only, `POST /api/user-role` with `role` and `security_classification: PUBLIC`, using the same headers | 201; then GET again and verify all six entries. On conflict, reread rather than overwriting; stop if an existing classification differs |
+| 6 | `POST /import?reindex=false&deleteOldIndex=false`, multipart field `file`, both authorization headers, and a newly recorded UUID in `X-Import-Job-Id` | 201 plus the import job ID; then read the job and definition back |
+| 7 | `GET /import-jobs/{id}` and `GET /api/data/case-type/DEEDPOLL` with both authorization headers | Job is `COMPLETED`; imported definition has the agreed jurisdiction, role mapping, events and fields |
+
+Choose and record the import UUID **before** uploading. If the response times out or is lost, inspect
+that same job and the definition before considering another upload. `PENDING` is not a reason to submit
+again; `FAILED` requires investigation, and an immediate 404 does not prove a request cannot still arrive.
+A 409 for the same job ID means to inspect that job, not switch IDs automatically. Avoid unreviewed
+reindexing or index deletion during onboarding. A successful definition import does not enable the sweep.
+
+Verified against AAT definition-store image commit `906c27b`: its security chain applies service
+authorization, `/import` requires the `ccd-import` authority, and it supports `X-Import-Job-Id` plus the
+job-status endpoint. Role creation uses POST so an existing classification is not silently changed by PUT.
+
+### Generate the artifact
+
 ```bash
 export CCD_CASE_TYPE_ID=DEEDPOLL CCD_JURISDICTION_ID=DEEDPOLL CCD_SYSTEM_ROLE=deed-poll-system-update
-SPRING_PROFILES_ACTIVE=config-gen ./gradlew generateCCDConfig
+SPRING_PROFILES_ACTIVE=config-gen ./gradlew generateCCDConfig --rerun-tasks
 ls build/definitions/"$CCD_CASE_TYPE_ID"
 ```
 
@@ -51,10 +93,21 @@ Expect one directory named for the case type. Its contents must match `src/test/
 for the three identifiers — one state (`Registered`), two events (`linkDeedPoll`,
 `updateSupportingDocuments`) and three data fields (`deedPollId`, `deedPollReference`, `supportingDocuments`),
 plus the generated `caseHistory` presentation field.
-Only `DEED_POLL_SYSTEM` has grants: CR on the linking event and its two fields, CRU on the case type,
+`DEED_POLL_SYSTEM` retains its existing grants: CR on the linking event and its two fields, CRU on the case type,
 state and document event, and CRUD on `supportingDocuments` (D permits collection-item removal).
-The role mapping must map `idam:deed-poll-system-update` to that profile. Staff access is a separate
-onboarding workstream; do not assign the system profile to staff.
+The role mapping must map `idam:deed-poll-system-update` to that profile. The three staff roles
+`caseworker-deedpoll`, `caseworker-deedpoll-admin`, and `caseworker-deedpoll-judicial` map to
+`DEED_POLL_READER`: R only on the case type, Registered state and supportingDocuments. No staff event,
+mutation, history or identifier-field grants. Register all six names above at PUBLIC before import.
+Do not assign the system role/profile to staff. Ordinary caseworkers need the new product role assigned
+in IDAM; a previously roleless account cannot pass CCD read checks. Refresh its login after assignment.
+
+After import, use one user of each type to download the same synthetic attached document. Each must get
+the expected bytes using their own bearer token. CCD event submission must refuse each staff user;
+starting an existing-case event alone does not prove write authority. Confirm a user with no deed-poll
+role cannot retrieve the binary, and a wrong case/document pair returns 404 without contacting CDAM.
+This grants CCD document reads across DEEDPOLL, including judicial users; it adds no judicial download
+route and does not change referral visibility or application editing rules.
 
 Convert the JSON to a spreadsheet with CCD's definition processor, as `pcs-api`'s `bin/create-xlsx.sh` does
 (`hmctsprod.azurecr.io/ccd/definition-processor:latest json2xlsx -D <dir> -o <file>.xlsx`), and import it through
