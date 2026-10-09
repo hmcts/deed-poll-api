@@ -203,10 +203,10 @@ artifact and its source SHA/checksum for admin rather than reusing a shared temp
 
 **Files:** this plan's execution evidence; API release notes/role documentation.
 
-- [ ] Run full build, required security/domain/container tests, generated-definition comparison and local cftlib checks. Record commands, counts, failures/skips and changed permission coverage honestly.
-- [ ] Re-scan runtime source for legacy-only authorisation and Gazette `isAdmin` checks. Remaining legacy references must be limited to explicit compatibility mapping, its fixtures and migration documentation.
-- [ ] Review all capability consumers against the matrix: Team leader retains every non-Gazette admin privilege; Delivery Manager inherits them without a second role; neither acquires judicial/system privileges.
-- [ ] Record release artifact/source identities, CCD definition provenance, admin contract handoff, compatibility-removal criteria and outstanding external rollout steps. Do not mark deployment as complete from test results.
+- [x] Run full build, required security/domain/container tests, generated-definition comparison and local cftlib checks. Record commands, counts, failures/skips and changed permission coverage honestly.
+- [x] Re-scan runtime source for legacy-only authorisation and Gazette `isAdmin` checks. Remaining legacy references must be limited to explicit compatibility mapping, its fixtures and migration documentation.
+- [x] Review all capability consumers against the matrix: Team leader retains every non-Gazette admin privilege; Delivery Manager inherits them without a second role; neither acquires judicial/system privileges.
+- [x] Record release artifact/source identities, CCD definition provenance, admin contract handoff, compatibility-removal criteria and outstanding external rollout steps. Do not mark deployment as complete from test results.
 
 ## Post-Completion
 
@@ -636,3 +636,116 @@ fixture/test compilation passed. The final artifact checksum matches the recorde
 test-results/, integration-results/ and checkstyle/, alongside the source patch, artifacts and full deltas.
 Existing compiler/JVM/Gradle warnings remain. cftlib execution, full build and release acceptance are
 Task 6, not claimed here. Only Task 5 was completed in this iteration.
+
+
+## Execution evidence — Task 6 (9 October 2026)
+
+Started clean at `d231a0416d06372ab9c4dd49191bf12487561905` on
+`feat/team-leader-delivery-manager`. Read workspace/repository guidance and both companion plans.
+Only this API worktree was changed. Independent review stages remain deferred; no push, merge,
+remote publication, deployment, CCD import, registration or real account change occurred.
+
+Added [the API release handoff](../STAFF-ROLE-RELEASE.md), linked from README. It records the
+consumer matrix, complete contract reconciliation, placeholder-definition limitation, separate
+staff-gate integration, API-before-UI sequence, fresh login and targeted session handling,
+subject-preserving migration, explicit Delivery Manager assignment, legacy retirement criteria
+and rollback constraints. Corrected two stale controller/package comments that still named the
+legacy role as the authority; no executable behaviour changed in this acceptance task. Existing
+permission regressions from Tasks 1–5 provide the implementation tests; no artificial documentation
+unit test was added. Local release-document links and changed-line formatting were checked.
+
+### Consumer and legacy scan
+
+Reviewed every capability consumer against the matrix: CurrentUser supplies OVERRIDE_PRIVACY to
+create/edit privacy adapters; note/witness deletion checks the respective capability before the
+parent-scoped lookup; saved-query visibility and subject ownership remain separate from shared
+management; all three CCD repairs require REPAIR_CCD and preserve retry evidence. Delivery Manager
+inherits all five grants without a second role, and only adds ACCESS_GAZETTE. Unknown roles and
+independently supplied flags cannot grant capabilities. Judicial services still require JUDICIAL;
+CCD maps both new roles only to the existing reader profile, with the system role separate.
+
+Gazette history, settings, preview, admission, repeats and reads require ACCESS_GAZETTE. Member
+reads go through the gated detail method. Controller preview/submission checks precede business
+validation. All filter-taking list overloads reach the named-worklist gate before reads/counts;
+HTTP outbox/sweep effects follow the authorised result. Saved-query execution reaches that same
+list path. Background delivery/recovery continues on durable admitted authority.
+
+Runtime legacy references now occur only in Role's deprecated compatibility declaration/provenance,
+RoleCapabilities' temporary five-capability mapping and DeedPollRoleMapping's temporary reader row.
+No legacy-only authorisation or Gazette isAdmin checks remain. Retained isAdmin adapters are for
+privacy and derive from OVERRIDE_PRIVACY. The line-numbered scan is `permission-scan.txt` in the
+local evidence directory. Existing ordinary/judicial, private-query, mixed-role, no-side-effect,
+known-key retry and cftlib document/event-denial tests were included in acceptance.
+
+### Validation
+
+Executed from this worktree; Docker coverage was explicitly enabled, with no tag exclusions:
+
+```bash
+export JAVA_HOME=/tmp/deed-poll-jdk21
+export JAVA_TOOL_OPTIONS=-XX:UseSVE=0
+export TESTCONTAINERS_RYUK_DISABLED=true
+export INTEGRATION_TESTS_ENABLED=true
+export OPENAPI_OUTPUT_PATH="$PWD/build/evidence/task6/openapi-team-leader-delivery-manager.json"
+./gradlew build generateCCDConfig cftlibTest checkstyleCftlib checkstyleCftlibTest \
+  --max-workers=2 -Porg.gradle.java.installations.paths=/tmp/deed-poll-jdk21 \
+  -Porg.gradle.java.installations.auto-detect=false
+git diff --check
+git diff --cached --check
+```
+
+The first invocation failed main Checkstyle on two long comment lines; integration completed
+successfully. The second found one remaining long comment line, while the full test suite
+completed successfully. Wrapped that line and repeated the command: BUILD SUCCESSFUL. Gradle
+reused the passing test/integration results as UP-TO-DATE after comment-only changes; no test
+failure was suppressed. Final acceptance counts from the retained XML:
+
+| Suite | XML suites | Tests | Failures | Errors | Skips |
+|---|---:|---:|---:|---:|---:|
+| test | 444 | 4021 | 0 | 0 | 0 |
+| integration | 3 | 19 | 0 | 0 | 0 |
+| cftlibTest | 2 | 14 | 0 | 0 | 0 |
+
+The full build includes security, domain, PostgreSQL/container, conformance, architecture and
+publisher coverage. cftlib ran separately in the same invocation and confirmed local reader/event
+boundaries and linking/document/recovery journeys. All configured build Checkstyle tasks plus
+checkstyleCftlib/checkstyleCftlibTest passed. No Staff classes exist on this baseline; that companion
+feature was not imported. Existing JVM, dependency/logging and Gradle deprecation warnings remain.
+No live external smoke was run; those operator steps remain in Post-Completion and the handoff.
+
+Evidence is local and ignored under `build/evidence/task6/`: validation-initial.log,
+validation-second.log, validation.log, counts.json, test-results/, integration-results/,
+cftlibTest-results/, checkstyle/, permission-scan.txt, source.patch, provenance.json,
+artifact-sha256.json, definition/, definition-delta.json and definition-sha256.json.
+The evidence collector compares all nested definition JSON files, not just the top-level files.
+
+### Release identities and contract handoff
+
+The source snapshot tree is `5de6878748d353c88f50ae8e56358bef742531f8`; its src subtree is
+`166885be95ce0adc3cd5bd7f987293180328b441`. It identifies the starting commit plus this task's
+source-comment corrections. The final task commit preserves that src subtree; only execution
+record/progress documentation follows the snapshot. Machine-readable provenance includes the
+source patch checksum. The final commit containing this evidence is the release source reference.
+
+- Local `build/libs/deed-poll-api.jar` SHA-256:
+  `e144df1e4883fcb422c628c0a139c9950b192129ff0fbd4df00bb64f7f711171`.
+- Complete `build/evidence/task6/openapi-team-leader-delivery-manager.json` SHA-256:
+  `647a110a74114db4f1114a469d85240876224becb90be0b3d038121d5fb1e70e`.
+  It is byte-identical to Task 5: 51 operations, 36 paths, 55 schemas. Its complete deltas and
+  admin-input checksum remain those recorded in Task 5; transfer them together. The older admin
+  contract's seven missing operations, eleven schemas and history batchId still require explicit
+  reconciliation. No sibling contract was changed here.
+- `build/evidence/task6/definition-sha256.json` SHA-256:
+  `c576a9b15e5debc3d4897e0fd883372f2176d1cc82c4a17ff98d714096254661`.
+  This manifest records the individual hashes of all 23 generated JSON files. Each matches the
+  pinned snapshot structurally. Recursive comparison with release baseline
+  `938795d417cbca4ba202bc14603de9042cc9a460` changes only RoleToAccessProfiles.json: exactly the
+  two new DEED_POLL_READER rows, no removals or other file changes. Generation uses the pinned
+  SDK/config-gen profile and placeholder identifiers; environment-specific import provenance
+  remains the release owner's responsibility.
+
+No image digest or deployed artifact identity exists from this run. Record them during release,
+verify all serving instances enforce the boundary, and execute the infra/admin companion handoff.
+Compatibility remains until assignments, stale sessions, reader imports and rollback versions meet
+the documented removal criteria. Only Task 6 was completed in this iteration; all API task sections
+are now complete. External rollout is still outstanding.

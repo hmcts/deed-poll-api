@@ -13,11 +13,11 @@ import uk.gov.hmcts.reform.deedpoll.ccd.CcdAttemptRepairs;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 
 /**
- * The CCD creation attempts that are not linked, and the two ways an admin moves one out of {@code NeedsRepair}
+ * The CCD creation attempts that are not linked, and the two repair moves taking one out of {@code NeedsRepair}
  * (plan 02b, Task 4).
  *
- * <p><strong>Admins only, and the gate is not here.</strong> {@code CcdAttemptRepairs} requires
- * {@code Role.DEEDPOLL_ADMIN} on every operation, as {@code JudicialReferralService} requires {@code Role.JUDICIAL},
+ * <p><strong>The domain enforces repair authority.</strong> {@code CcdAttemptRepairs} requires
+ * {@code Capability.REPAIR_CCD} on every operation; judicial authority remains a separate role,
  * so a caller without it is the domain's 403 however it arrives.
  *
  * <p><strong>Both moves are sub-resources taking no body</strong>, like a referral's withdrawal: the move is the

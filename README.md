@@ -360,6 +360,7 @@ roles receive 403 before reads, outbox drain or CCD sweep; unauthenticated calle
 Ordinary case fields, conditions and visibility are unchanged. Background delivery uses durable
 admission evidence and does not reauthorise an already admitted request. See the
 [permission contract and rollout](docs/plans/20261009-team-leader-delivery-manager.md).
+Release owners should also use the [API release handoff](docs/STAFF-ROLE-RELEASE.md).
 
 `/ccd-persistence/**` is the exception, with a chain of its own: it is where CCD's data-store calls this
 service back, so it admits an S2S token verified as `ccd_data` and nobody else, plus an IDAM user whose role
