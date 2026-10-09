@@ -232,6 +232,11 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
   `@JdbcTypeCode(SqlTypes.NAMED_ENUM)`, or Hibernate sends the value as an integer ordinal.
 - **Gazette audit tables (V31) use explicit snake_case table and column mappings**, unlike the ported
   mixed-case schema. Their restrictive foreign keys preserve membership; case deletion returns a conflict.
+- **Gazette request evidence (V34) is separate from successful V31 history.** `GazetteRequestLedger`
+  owns short committed transactions and cannot join a caller transaction. Preparing/Sending block case
+  PATCH; every request membership prevents deletion. NotSent releases the reservation; Uncertain/Sent
+  retain it. Repeated keys grant no delivery claim. The ledger has no HTTP or Notify caller yet: preview
+  verification and detached spreadsheet input snapshots must be added inside locked admission first.
 - **Flyway owns the schema; Hibernate validates against it** (`ddl-auto: validate`). Entities are
   checked against the migrations, never the other way round.
 - **A patch is three-state: absent / null / value.** Omitting a field leaves it alone; an explicit

@@ -759,8 +759,11 @@ must check the confirmed settings revision and snapshot its accepted recipient.
 
 V31 adds the batch and membership audit tables, including database-enforced request-ID
 uniqueness. V32 adds indexes for case membership checks and bounded reference previews.
-There is currently no batch-send operation or production audit writer:
-no Notify template configuration, case-date update or case-note write is implemented.
+There is currently no batch-send endpoint or Notify caller. The internal request
+ledger now persists reservations, ownership and delivery evidence, with atomic local
+case-date/history/note settlement. Active requests block case edits; retained request
+evidence prevents deletion. Uncertain outcomes keep reservations and cannot resend.
+See [ledger scope and validation](docs/plans/gazette-1c-request-ledger-and-guards.md).
 `GazetteSpreadsheet` now generates the separate adult/minor XLSX files using the
 [clean runtime templates and mapping](src/main/resources/gazette-templates/README.md).
 It preserves visible columns and blank missing values, and refuses excluded or

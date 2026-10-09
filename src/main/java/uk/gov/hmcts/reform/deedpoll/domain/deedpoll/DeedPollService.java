@@ -330,6 +330,10 @@ public class DeedPollService {
     @Transactional
     public DeedPollWithComputed updateDeedPoll(String id, DeedPollPatch dto, WriteContext ctx) {
         DeedPoll record = requireDeedPollForUpdate(id);
+        if (deedPolls.hasActiveGazetteRequest(id)) {
+            throw new ConflictError(
+                "This case has a London Gazette request in progress. Check its status before editing.");
+        }
         DeedPollPatch data = dto.copy().coerceDates();
 
         // If Type is part of this update, recompute the prefix from the new type, preserving the existing
@@ -419,7 +423,7 @@ public class DeedPollService {
             throw new ConflictError("This case has retained staged uploads. "
                 + "Remove unpromoted uploads or resolve their storage outcome before deleting the case.");
         }
-        if (deedPolls.hasGazetteMembership(id)) {
+        if (deedPolls.hasGazetteMembership(id) || deedPolls.hasGazetteRequestEvidence(id)) {
             throw new ConflictError("This case is part of Gazette publication audit evidence and cannot be deleted.");
         }
         deedPolls.delete(requireDeedPoll(id));
