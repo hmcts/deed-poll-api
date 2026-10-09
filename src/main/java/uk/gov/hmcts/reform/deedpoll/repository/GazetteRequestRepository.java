@@ -17,6 +17,9 @@ import java.util.UUID;
 /** All writes participate in the ledger's short transaction; no method calls a remote service. */
 @Repository
 public class GazetteRequestRepository {
+    // Compile-time constants, one per variant, so no statement is assembled at runtime.
+    private static final String READ = "SELECT * FROM deedpoll_gazette_request WHERE id = ?";
+    private static final String READ_FOR_UPDATE = READ + " FOR UPDATE";
     private static final RowMapper<GazetteRequest> ROW = (row, index) -> new GazetteRequest(
         row.getObject("id", UUID.class), row.getObject("request_id", UUID.class), row.getString("payload_hash"),
         row.getString("submitted_by_id"), row.getString("submitted_by_name"),
@@ -45,8 +48,7 @@ public class GazetteRequestRepository {
     }
 
     public Optional<GazetteRequest> read(UUID id, boolean lock) {
-        return jdbc.query("SELECT * FROM deedpoll_gazette_request WHERE id = ?" + (lock ? " FOR UPDATE" : ""),
-            ROW, id).stream().findFirst();
+        return jdbc.query(lock ? READ_FOR_UPDATE : READ, ROW, id).stream().findFirst();
     }
 
     /** Candidate read only; expire locks and rechecks each row in its own short transaction. */

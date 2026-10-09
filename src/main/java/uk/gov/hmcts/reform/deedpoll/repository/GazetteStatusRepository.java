@@ -24,6 +24,25 @@ public class GazetteStatusRepository {
             CASE WHEN state = 'Sent' THEN settled_at END AS sent_at, failure_code
         FROM deedpoll_gazette_request
         """;
+    /*
+      Each statement is a compile-time constant, one per variant, rather than SQL concatenated at runtime: the
+      choice between variants is code, and every value is a bound parameter.
+    */
+    private static final String PAGE = " ORDER BY submitted_at DESC, id DESC LIMIT ? OFFSET ?";
+    private static final String COUNT_ALL = "SELECT count(*) FROM deedpoll_gazette_request";
+    private static final String COUNT_IN_STATE = COUNT_ALL + " WHERE state = ?";
+    private static final String LIST_ALL = REQUEST + PAGE;
+    private static final String LIST_IN_STATE = REQUEST + " WHERE state = ?" + PAGE;
+    private static final String REQUEST_MEMBER_COUNT =
+        "SELECT count(*) FROM deedpoll_gazette_request_case WHERE batch_id = ?";
+    private static final String REQUEST_MEMBERS = "SELECT deed_poll_id, reference_number "
+        + "FROM deedpoll_gazette_request_case WHERE batch_id = ? ORDER BY reference_number, deed_poll_id "
+        + "LIMIT ? OFFSET ?";
+    private static final String BATCH_MEMBER_COUNT =
+        "SELECT count(*) FROM deedpoll_gazette_notice_batch_case WHERE batch_id = ?";
+    private static final String BATCH_MEMBERS = "SELECT deed_poll_id, reference_number "
+        + "FROM deedpoll_gazette_notice_batch_case WHERE batch_id = ? ORDER BY reference_number, deed_poll_id "
+        + "LIMIT ? OFFSET ?";
     private static final RowMapper<GazetteBatchStatus> ROW = (row, index) -> new GazetteBatchStatus(
         row.getObject("id", UUID.class), GazetteRequestState.valueOf(row.getString("state")),
         row.getObject("submitted_at", LocalDateTime.class), row.getString("submitted_by_name"),
@@ -38,13 +57,11 @@ public class GazetteStatusRepository {
     }
 
     public Page<GazetteBatchStatus> list(CasePaging paging, GazetteRequestState state) {
-        String filter = state == null ? "" : " WHERE state = ?";
-        Object[] args = state == null ? new Object[0] : new Object[]{state.name()};
-        long total = jdbc.queryForObject("SELECT count(*) FROM deedpoll_gazette_request" + filter, Long.class, args);
-        String sql = REQUEST + filter + " ORDER BY submitted_at DESC, id DESC LIMIT ? OFFSET ?";
         long offset = (long) paging.index() * paging.size();
-        List<GazetteBatchStatus> rows = state == null ? jdbc.query(sql, ROW, paging.size(), offset)
-            : jdbc.query(sql, ROW, state.name(), paging.size(), offset);
+        long total = state == null ? jdbc.queryForObject(COUNT_ALL, Long.class)
+            : jdbc.queryForObject(COUNT_IN_STATE, Long.class, state.name());
+        List<GazetteBatchStatus> rows = state == null ? jdbc.query(LIST_ALL, ROW, paging.size(), offset)
+            : jdbc.query(LIST_IN_STATE, ROW, state.name(), paging.size(), offset);
         return new PageImpl<>(rows, PageRequest.of(paging.index(), paging.size()), total);
     }
 
@@ -64,10 +81,8 @@ public class GazetteStatusRepository {
     public Page<GazetteMember> members(UUID id, CasePaging paging) {
         boolean request = Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM deedpoll_gazette_request WHERE id = ?)", Boolean.class, id));
-        String table = request ? "deedpoll_gazette_request_case" : "deedpoll_gazette_notice_batch_case";
-        long total = jdbc.queryForObject("SELECT count(*) FROM " + table + " WHERE batch_id = ?", Long.class, id);
-        List<GazetteMember> rows = jdbc.query("SELECT deed_poll_id, reference_number FROM " + table
-            + " WHERE batch_id = ? ORDER BY reference_number, deed_poll_id LIMIT ? OFFSET ?",
+        long total = jdbc.queryForObject(request ? REQUEST_MEMBER_COUNT : BATCH_MEMBER_COUNT, Long.class, id);
+        List<GazetteMember> rows = jdbc.query(request ? REQUEST_MEMBERS : BATCH_MEMBERS,
             (row, index) -> new GazetteMember(row.getString(1), row.getString(2)),
             id, paging.size(), (long) paging.index() * paging.size());
         return new PageImpl<>(rows, PageRequest.of(paging.index(), paging.size()), total);
