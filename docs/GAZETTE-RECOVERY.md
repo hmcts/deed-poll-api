@@ -25,6 +25,26 @@ publication in The London Gazette”; copy remains editable in Notify. The wordi
 draft is `deed-poll-documentation/plans/active/gazette-email-wording.md`. The court
 reply-to mailbox is `kbdeedspoll@justice.gov.uk`; it is not the LG recipient default.
 
+### Non-production template configuration
+
+The chart supplies these non-prod template IDs, provided by Steve on 9 October 2026:
+
+| Environment variable | Notify template name | Template ID |
+|---|---|---|
+| `NOTIFY_TEMPLATE_GAZETTE_ADULT` | `gazette_notice_adult` | `1ab4503a-1c1b-4db1-b805-b188b1923e0b` |
+| `NOTIFY_TEMPLATE_GAZETTE_MINOR` | `gazette_notice_minor` | `823518db-0064-4df8-8ddd-2f52bd52e997` |
+| `NOTIFY_TEMPLATE_GAZETTE_MIXED` | `gazette_notice_adults_and_minors` | `d956464f-8fe1-4eb2-9f02-4a309a14636e` |
+
+Read-only `GET /v2/template/{id}` verification using the AAT service credential on
+9 October 2026 confirmed all three are version 1 email templates. Names, subject,
+body and exact placeholders match the agreed wording. No email was sent; this
+does not verify download links, recipient confirmation or deployed API egress.
+Production must override the IDs with templates belonging to its Notify service.
+The chart explicitly keeps `GAZETTE_ENABLED=false`. Its shared 26-week download
+retention is an AAT test value, not an agreed production retention policy.
+
+### Activation checks
+
 Before enabling delivery, record the provisioned identifiers, retention decision,
 monitored support team/escalation contact, evidence-access/retention policy and
 external review. Validate all three variants using synthetic cases and a controlled
