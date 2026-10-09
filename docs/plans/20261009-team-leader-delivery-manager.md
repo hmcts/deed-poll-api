@@ -149,10 +149,10 @@ artifact and its source SHA/checksum for admin rather than reusing a shared temp
 
 **Files:** this plan; relevant role/security/Gazette tests in `src/test/java/uk/gov/hmcts/reform/deedpoll/`.
 
-- [ ] Record implementation SHA, branch, clean/dirty baseline, relevant dependency SHAs and validation results. Reconcile newer Gazette/CCD work and the staff-gate branch; do not silently drop either.
-- [ ] Inventory every current admin check, actual Gazette HTTP operation, ready-filter execution path, generated role mapping and local fixture. Record file locations and ownership/visibility rules to preserve.
-- [ ] Add baseline regression coverage where an existing privileged behaviour lacks it. Distinguish current behaviour from the new matrix; do not preserve legacy Gazette access in the final expectations.
-- [ ] Record the exact permission matrix and new claim strings above in test data. Run focused baseline tests and account for failures before implementation.
+- [x] Record implementation SHA, branch, clean/dirty baseline, relevant dependency SHAs and validation results. Reconcile newer Gazette/CCD work and the staff-gate branch; do not silently drop either.
+- [x] Inventory every current admin check, actual Gazette HTTP operation, ready-filter execution path, generated role mapping and local fixture. Record file locations and ownership/visibility rules to preserve.
+- [x] Add baseline regression coverage where an existing privileged behaviour lacks it. Distinguish current behaviour from the new matrix; do not preserve legacy Gazette access in the final expectations.
+- [x] Record the exact permission matrix and new claim strings above in test data. Run focused baseline tests and account for failures before implementation.
 
 ### Task 2: Add the two roles and explicit inherited capabilities
 
@@ -221,3 +221,137 @@ Fresh login is required after assignment changes. Legacy compatibility must be r
 follow-up only after assignments, sessions and rollback versions have been accounted for. Rolling back
 to a binary granting Gazette access to old admins would reverse the agreed boundary; use a forward fix
 or suspend Gazette access instead. In-flight Gazette evidence must survive either approach.
+
+
+## Execution evidence — Task 1 (9 October 2026)
+
+### Baseline and integration inputs
+
+- Started clean on `feat/team-leader-delivery-manager` at
+  `9e2ac0979235e5b3bfc61c6afda4011fd90351c6`. Its only delta from fetched
+  `origin/master` `938795d417cbca4ba202bc14603de9042cc9a460` was this plan.
+- Read-only companion HEADs: admin `3ac876cfc0864350a2895892254eacc1105a5117`,
+  infra `8d8bc501eb423f8e3addf3631f15be79a105e926`. Both companion plans agree
+  on the exact claims and API-before-UI rollout. These are source identities, not deployed versions.
+- CCD branch `feat/aat-ccd-staff-read` at `e17d0454e9b3a2fb65296ce5e8242f968e56f34f`
+  is already an ancestor of the release baseline (merge-base ancestry check passed).
+  Retain its three existing reader mappings and add the two new staff mappings in Task 3.
+- Staff-gate branch inspected at `54c6f5fbeec4ab72b5a2852eaefb8195a5b7b60b`.
+  Its `config/StaffArea.java` admits CASEWORKER/DEEDPOLL_ADMIN to `/caseworker`
+  and only JUDICIAL to `/judicial`. It introduces StaffGate, StaffAccessDeniedHandler,
+  SecurityConfiguration wiring, application configuration and three staff test classes.
+  None is on this baseline: its general chain uses `anyRequest().authenticated()`.
+  Companion integration must add both new roles to StaffArea.CASEWORKER and its
+  membership/report-mode tests, preserve the configured mode, and retain the judicial boundary.
+  Do not import the other agent's unfinished feature here. Gazette domain gates must enforce
+  regardless of whether that companion gate reports or enforces.
+- Build pins CCD SDK `7.1.0` (BOM-managed decentralised-runtime), cftlib `0.19.2377`,
+  CDAM client `1.59.2`, IDAM client `3.0.5`, service-auth client `5.3.5`, Notify
+  `6.2.0-RELEASE`, Spring Boot `3.5.16`, Java 21. These are published dependencies;
+  this build does not consume sibling source checkouts and does not establish their source SHAs.
+
+### Authorisation and execution inventory
+
+Paths below are relative to `src/main/java/uk/gov/hmcts/reform/deedpoll/`.
+Full line-numbered snapshots are retained locally under `build/evidence/task1/`
+(`admin-checks.txt`, `role-fixtures.txt`, `dependency-versions.txt`).
+
+- `domain/auth/Role.java`, `IdamClaims.java`, `CurrentUser.java`: exact claim recognition,
+  admin derivation and immutable role list. CurrentUser's public constructor currently accepts
+  an independent isAdmin boolean; Task 2 must remove its authority. `requireAnyRole()` is
+  open on an empty required-role list; capability refusal must not delegate an empty list.
+- `domain/notes/NoteService.java:160`, `domain/witnesses/WitnessService.java:157`:
+  deletion requires DEEDPOLL_ADMIN. Preserve parent scoping, not-found behaviour and attribution.
+- `ccd/CcdAttemptRepairs.java:88,105,127`: list, reconcile, retry require admin.
+  Repairs also require subject identity. Keep no-resend evidence, state checks and transactions.
+- `domain/savedqueries/SavedQueryPermissions.java:69,95`: shared edits and publishing use
+  isAdmin. Visibility remains owner-or-shared; an admin cannot see another person's private query.
+  Ownership uses subject, never display name. The owner may unpublish after losing privilege.
+- Privacy adapters: `CurrentUser.writeContext`, `domain/deedpoll/WriteContext`,
+  `PresentationContext`, `FormPresentation` (create defaults and editability),
+  `DeedPollService` (create and privacy patch), `EditView.EditContext`.
+  Preserve ordinary case data and privacy field rules; derive the flag from OVERRIDE_PRIVACY.
+- `ccd/DeedPollRoleMapping.java:32-37` supplies both persistence authentication and
+  `DeedPollCaseType` generated RoleToAccessProfiles rows. Existing CASEWORKER, DEEDPOLL_ADMIN
+  and JUDICIAL map only to DEED_POLL_READER; the configured system role maps separately.
+  Reader grants are read-only case type/state/supportingDocuments; no system events or identifiers.
+  Snapshot: `src/test/resources/ccd-definition/DEED_POLL_PLACEHOLDER/RoleToAccessProfiles.json`.
+- `src/cftlib/.../CftlibConfig.java`: ADMIN_USER has only the legacy claim; role catalogue
+  bootstrap and reader fixtures need the two new claims, without adding system/importer authority.
+  The complete test-fixture inventory includes auth/claims, security, CCD mapping/definition,
+  saved queries, referrals, note/witness/case controllers, Gazette ledger/preview/delivery/settings/history.
+  Vendored `src/test/resources/reference/` remains untouched historical specification.
+
+Actual Gazette HTTP operations (all under `/caseworker`):
+
+| Method | Path | Current domain gate |
+|---|---|---|
+| GET | `/gazette-notices` | GazetteNoticeHistory.history |
+| GET, PUT | `/gazette-settings` | GazetteSettingsService.get/update |
+| POST | `/gazette-notice-previews` | GazettePreviews.preview |
+| POST | `/gazette-notices` | GazetteRequestLedger admission/repeated-key resolution |
+| GET | `/gazette-notice-requests` | GazetteStatuses.list |
+| GET | `/gazette-notices/{batchId}` | GazetteStatuses.detail |
+| GET | `/gazette-notices/{batchId}/cases` | GazetteStatuses.members via detail |
+
+These eight operations live in CaseworkerGazetteController, CaseworkerGazetteSettingsController
+and CaseworkerGazetteRequestsController. The latter's `admin()` helper also checks before body/key
+validation on preview/submit. Ledger gates occur in admit, repeat and read paths;
+all must change, including repeat keys. No human recovery or download endpoint exists on this
+baseline. GazetteRecovery and GazetteDelivery use durable admitted authority; preserve reservations,
+provider/send evidence, immutable attribution and no-replay semantics. Existing legacy-admin happy
+paths describe the baseline only and must be converted to Delivery Manager in later tasks.
+
+The ninth Gazette entry is `GET /caseworker/cases?filter=readyForPublication`, including its
+pagination total/count. CaseworkerReadController.cases resolves ListFilters.filterFor, calls
+DeedPollService.findDeedPolls, then drains the notification outbox and runs the CCD sweep.
+All public findDeedPolls overloads currently lack caller-based authorisation, including unpaged
+and query/sort/paging variants. Task 4 must gate the resolved named filter at the domain seam,
+before database reads and before those controller side effects. SavedQueryService stores and
+returns filter/query definitions through SavedQueryView; execution is a case-list link, not a
+separate server-side saved-query execution endpoint. The same named-filter gate must apply there.
+Ordinary field conditions may select identical cases and remain permitted.
+
+### Regression coverage and target contract
+
+Existing CurrentUser/IdamClaims, FormPresentation, Note/Witness, SavedQueryPermissions/Service,
+CcdAttemptRepairs/controller, GazettePreviewApi, GazetteDeliveryApi and history/settings controller
+tests cover current role behaviour, ownership, state transitions and HTTP gates.
+Added GazetteStatusesTest covers direct domain list/detail/member denials and denial before parsing,
+with no repository interactions for empty, caseworker, judicial and caseworker+judicial callers.
+It asserts no legacy Gazette allowance and therefore remains valid after the new contract lands.
+
+`src/test/resources/auth/staff-permission-contract.json` records the target claim/capability matrix
+for single, empty, unknown, duplicate and mixed roles, plus separate judicial, CCD reader and system
+expectations. It is target test data for Tasks 2–4, not an assertion that new roles work today.
+The first five capabilities belong to Team leader and temporary legacy admin; Delivery Manager
+adds only ACCESS_GAZETTE. Neither new role confers judicial or system authority. Private-query
+visibility and subject ownership remain independent of that capability matrix.
+
+
+### Task 1 validation result
+
+Executed from this worktree with `JAVA_HOME=/tmp/deed-poll-jdk21`,
+`JAVA_TOOL_OPTIONS=-XX:UseSVE=0`, `TESTCONTAINERS_RYUK_DISABLED=true`:
+
+```bash
+./gradlew test --tests '*CurrentUser*' --tests '*IdamClaims*' \
+  --tests '*Note*' --tests '*Witness*' --tests '*SavedQuery*' \
+  --tests '*CcdAttempt*' --tests '*FormPresentation*' --tests '*Gazette*' \
+  --tests '*Security*' --tests '*DeedPollRoleMapping*' --tests '*DeedPollDefinition*' \
+  checkstyleMain checkstyleTest --max-workers=2 \
+  -Porg.gradle.java.installations.paths=/tmp/deed-poll-jdk21 \
+  -Porg.gradle.java.installations.auto-detect=false
+git diff --check
+```
+
+Result: BUILD SUCCESSFUL; 919 tests across 135 XML suites, zero failures, errors or skips.
+Docker-backed HTTP/database tests were included; no requires-docker exclusion was used.
+GazetteStatusesTest contributed eight passing cases. Main/test Checkstyle and diff check passed.
+Existing compiler/Gradle deprecation warnings remain; there were no validation failures to resolve.
+Results and the exact Gradle log were copied before any subsequent run into
+`build/evidence/task1/test-results`, `counts.json`, `validation.log` and `checkstyle/`.
+No RoleCapabilities or Staff test classes exist on this baseline, so those selectors were omitted.
+Standalone generation, cftlib, OpenAPI publication and full build belong to later implementation
+and acceptance tasks; this focused baseline run does not claim those checks or deployment passed.
+Only Task 1 is complete in this iteration; runtime roles and authorisation remain at the baseline.

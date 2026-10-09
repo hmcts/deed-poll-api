@@ -1,0 +1,180 @@
+{
+  "description": "Target contract agreed 2026-10-09; not a claim that the baseline implements it. Normal case visibility and subject-based ownership remain unchanged.",
+  "cases": [
+    {
+      "name": "team-leader",
+      "claims": [
+        "caseworker-deedpoll-team-leader"
+      ],
+      "capabilities": [
+        "OVERRIDE_PRIVACY",
+        "DELETE_NOTE",
+        "DELETE_WITNESS",
+        "MANAGE_SHARED_QUERIES",
+        "REPAIR_CCD"
+      ],
+      "judicial": false,
+      "ccdReader": true,
+      "ccdSystem": false
+    },
+    {
+      "name": "delivery-manager",
+      "claims": [
+        "caseworker-deedpoll-delivery-manager"
+      ],
+      "capabilities": [
+        "OVERRIDE_PRIVACY",
+        "DELETE_NOTE",
+        "DELETE_WITNESS",
+        "MANAGE_SHARED_QUERIES",
+        "REPAIR_CCD",
+        "ACCESS_GAZETTE"
+      ],
+      "judicial": false,
+      "ccdReader": true,
+      "ccdSystem": false
+    },
+    {
+      "name": "legacy-admin",
+      "claims": [
+        "caseworker-deedpoll-admin"
+      ],
+      "capabilities": [
+        "OVERRIDE_PRIVACY",
+        "DELETE_NOTE",
+        "DELETE_WITNESS",
+        "MANAGE_SHARED_QUERIES",
+        "REPAIR_CCD"
+      ],
+      "judicial": false,
+      "ccdReader": true,
+      "ccdSystem": false
+    },
+    {
+      "name": "caseworker",
+      "claims": [
+        "caseworker-deedpoll"
+      ],
+      "capabilities": [],
+      "judicial": false,
+      "ccdReader": true,
+      "ccdSystem": false
+    },
+    {
+      "name": "judicial",
+      "claims": [
+        "caseworker-deedpoll-judicial"
+      ],
+      "capabilities": [],
+      "judicial": true,
+      "ccdReader": true,
+      "ccdSystem": false
+    },
+    {
+      "name": "empty",
+      "claims": [],
+      "capabilities": [],
+      "judicial": false,
+      "ccdReader": false,
+      "ccdSystem": false
+    },
+    {
+      "name": "unknown",
+      "claims": [
+        "unknown-role"
+      ],
+      "capabilities": [],
+      "judicial": false,
+      "ccdReader": false,
+      "ccdSystem": false
+    },
+    {
+      "name": "team-leader-judicial",
+      "claims": [
+        "caseworker-deedpoll-team-leader",
+        "caseworker-deedpoll-judicial"
+      ],
+      "capabilities": [
+        "OVERRIDE_PRIVACY",
+        "DELETE_NOTE",
+        "DELETE_WITNESS",
+        "MANAGE_SHARED_QUERIES",
+        "REPAIR_CCD"
+      ],
+      "judicial": true,
+      "ccdReader": true,
+      "ccdSystem": false
+    },
+    {
+      "name": "delivery-manager-judicial",
+      "claims": [
+        "caseworker-deedpoll-delivery-manager",
+        "caseworker-deedpoll-judicial"
+      ],
+      "capabilities": [
+        "OVERRIDE_PRIVACY",
+        "DELETE_NOTE",
+        "DELETE_WITNESS",
+        "MANAGE_SHARED_QUERIES",
+        "REPAIR_CCD",
+        "ACCESS_GAZETTE"
+      ],
+      "judicial": true,
+      "ccdReader": true,
+      "ccdSystem": false
+    },
+    {
+      "name": "legacy-judicial",
+      "claims": [
+        "caseworker-deedpoll-admin",
+        "caseworker-deedpoll-judicial"
+      ],
+      "capabilities": [
+        "OVERRIDE_PRIVACY",
+        "DELETE_NOTE",
+        "DELETE_WITNESS",
+        "MANAGE_SHARED_QUERIES",
+        "REPAIR_CCD"
+      ],
+      "judicial": true,
+      "ccdReader": true,
+      "ccdSystem": false
+    },
+    {
+      "name": "duplicate-team-leader",
+      "claims": [
+        "caseworker-deedpoll-team-leader",
+        "caseworker-deedpoll-team-leader"
+      ],
+      "capabilities": [
+        "OVERRIDE_PRIVACY",
+        "DELETE_NOTE",
+        "DELETE_WITNESS",
+        "MANAGE_SHARED_QUERIES",
+        "REPAIR_CCD"
+      ],
+      "judicial": false,
+      "ccdReader": true,
+      "ccdSystem": false
+    },
+    {
+      "name": "mixed-privileged",
+      "claims": [
+        "caseworker-deedpoll-admin",
+        "caseworker-deedpoll-team-leader",
+        "caseworker-deedpoll-delivery-manager"
+      ],
+      "capabilities": [
+        "OVERRIDE_PRIVACY",
+        "DELETE_NOTE",
+        "DELETE_WITNESS",
+        "MANAGE_SHARED_QUERIES",
+        "REPAIR_CCD",
+        "ACCESS_GAZETTE"
+      ],
+      "judicial": false,
+      "ccdReader": true,
+      "ccdSystem": false
+    }
+  ]
+}
