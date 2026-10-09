@@ -1,5 +1,13 @@
 # Team leader and Delivery Manager: API permissions
 
+## External review authorisation
+
+The user has now requested the external review using Copilot with Opus. The tasks-only restriction
+below applied to the completed implementation run. Run the external review/fix loop and its final
+validation in this worktree, preserving the ownership and isolation rules below. Review against
+`938795d417cbca4ba202bc14603de9042cc9a460`, the implementation base, rather than stale local `master`.
+Local fixes, tests and commits are authorised; pushing, merging, deployment and account changes are not.
+
 ## Execution instructions — 9 October 2026
 
 The user authorised this API plan in an isolated worktree with Ralphex `-t` (tasks only).
