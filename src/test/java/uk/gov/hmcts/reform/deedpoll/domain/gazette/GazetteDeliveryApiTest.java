@@ -55,7 +55,7 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
     private static final String PREVIEW = "/caseworker/gazette-notice-previews";
     private static final String REQUESTS = "/caseworker/gazette-notice-requests";
     private static final String SUBJECT = "gazette-delivery-test";
-    private static final CurrentUser ADMIN = CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "Admin", SUBJECT);
+    private static final CurrentUser ADMIN = CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Admin", SUBJECT);
     private static final uk.gov.hmcts.reform.deedpoll.notify.StubNotify NOTIFY =
         new uk.gov.hmcts.reform.deedpoll.notify.StubNotify();
     private static final StubIdam IDAM = new StubIdam();
@@ -113,7 +113,7 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
         IDAM.stubDefaults();
         NOTIFY.stubDefaults();
         accepted("20000000-0000-0000-0000-000000000001");
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Admin", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Admin", List.of(Role.DELIVERY_MANAGER.claimValue()));
         oldSettings = jdbc.queryForMap("SELECT * FROM deedpoll_gazette_settings WHERE id = 1");
         jdbc.update("""
             UPDATE deedpoll_gazette_settings SET recipient_email = 'gazette@example.com', revision = 1,

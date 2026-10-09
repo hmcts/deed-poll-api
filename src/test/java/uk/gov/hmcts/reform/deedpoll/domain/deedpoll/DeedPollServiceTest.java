@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
@@ -51,6 +53,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 class DeedPollServiceTest extends AbstractPostgresContainerTest {
+    private static final CurrentUser LIST_READER =
+        CurrentUser.currentUser(List.of(Role.CASEWORKER), "Staff", "subject");
 
     /** createDeedPoll cannot allocate a reference without a Date Received to derive the year. */
     private static final String RECEIVED = "2026-07-01T00:00:00.000Z";
@@ -628,11 +632,11 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
         created("dateReceived", RECEIVED);
         created("dateReceived", RECEIVED, "dateEnroled", "2026-08-01T00:00:00.000Z");
 
-        assertThat(deedPollService.findDeedPolls(ListFilters.filterFor("enroled")))
+        assertThat(deedPollService.findDeedPolls(LIST_READER, ListFilters.filterFor("enroled")))
             .singleElement()
             .satisfies(withComputed ->
                 assertThat(withComputed.deedPoll().getState()).isEqualTo(DeedPollState.Enroled));
-        assertThat(deedPollService.findDeedPolls(ListFilters.filterFor("open"))).hasSize(1);
+        assertThat(deedPollService.findDeedPolls(LIST_READER, ListFilters.filterFor("open"))).hasSize(1);
     }
 
     @Test
@@ -645,7 +649,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
 
         // Decision 3: the two compose. The Adult case that is enrolled is excluded by the tab, and the open
         // Minor case by the condition, so exactly one of the three survives both.
-        assertThat(deedPollService.findDeedPolls(
+        assertThat(deedPollService.findDeedPolls(LIST_READER,
                 ListFilters.filterFor("open"), CaseQuery.parse(List.of("type:is:Adult"))))
             .singleElement()
             .satisfies(withComputed -> {
@@ -664,9 +668,9 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
 
         ListFilters.ListFilter all = ListFilters.filterFor("all");
 
-        assertThat(deedPollService.findDeedPolls(all, CaseQuery.NONE))
+        assertThat(deedPollService.findDeedPolls(LIST_READER, all, CaseQuery.NONE))
             .extracting(withComputed -> withComputed.deedPoll().getId())
-            .containsExactlyElementsOf(deedPollService.findDeedPolls(all).stream()
+            .containsExactlyElementsOf(deedPollService.findDeedPolls(LIST_READER, all).stream()
                 .map(withComputed -> withComputed.deedPoll().getId())
                 .toList());
     }
@@ -695,7 +699,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
         }
 
         private CaseResults page(CaseSort sort, CasePaging paging) {
-            return deedPollService.findDeedPolls(all, CaseQuery.NONE, sort, paging);
+            return deedPollService.findDeedPolls(LIST_READER, all, CaseQuery.NONE, sort, paging);
         }
 
         @Test
@@ -712,7 +716,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
 
             assertThat(forenamesOf(results)).containsExactly("Newest", "Middle", "Older");
             assertThat(results.cases().stream().map(found -> found.deedPoll().getId()))
-                .containsExactlyElementsOf(deedPollService.findDeedPolls(all).stream()
+                .containsExactlyElementsOf(deedPollService.findDeedPolls(LIST_READER, all).stream()
                     .map(found -> found.deedPoll().getId())
                     .toList());
             assertThat(results.page()).isEqualTo(1);
@@ -804,7 +808,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
             recordTwoWitnesses(enroled.getId());
             deedPollService.updateDeedPoll(enroled.getId(), patch("dateEnroled", "2026-08-05T00:00:00.000Z"));
 
-            CaseResults results = deedPollService.findDeedPolls(
+            CaseResults results = deedPollService.findDeedPolls(LIST_READER,
                 ListFilters.filterFor("open"),
                 CaseQuery.parse(List.of("newForename:startsWith:adult")),
                 CaseSort.parse("newForename:asc"),
@@ -860,7 +864,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
         private final ListFilters.ListFilter all = ListFilters.filterFor("all");
 
         private CaseResults searched(ListFilters.ListFilter filter, String term, String... where) {
-            return deedPollService.findDeedPolls(
+            return deedPollService.findDeedPolls(LIST_READER,
                 filter,
                 CaseQuery.parse(List.of(where)),
                 CaseSearch.parse(term),
@@ -942,7 +946,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
             created("dateReceived", RECEIVED, "newForename", "One");
             created("dateReceived", RECEIVED, "newForename", "Two");
 
-            CaseResults unsearched = deedPollService.findDeedPolls(
+            CaseResults unsearched = deedPollService.findDeedPolls(LIST_READER,
                 all, CaseQuery.NONE, CaseSort.NEWEST_FIRST, CasePaging.FIRST);
 
             assertThat(unsearched.referenceMatch()).isNull();

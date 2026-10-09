@@ -181,12 +181,12 @@ artifact and its source SHA/checksum for admin rather than reusing a shared temp
 
 **Files:** Gazette controllers and services; case-list read/filter execution; related HTTP/domain tests.
 
-- [ ] Gate history, settings GET/PUT, preview, submission (including retries), request listing/detail/member reads, and every existing human recovery/download action with `ACCESS_GAZETTE`. Replace controller pre-validation helpers as well as domain gates. Inventory actual routes rather than assuming one `/gazette/**` prefix covers them.
-- [ ] Gate the resolved `readyForPublication` worklist before querying cases, draining outbox or invoking the CCD sweep. Carry the caller to the appropriate domain seam so direct service use cannot bypass the rule. Follow saved-query execution into that same gate; keep unrelated filters unchanged.
-- [ ] Cover authenticated legacy admin, Team leader, caseworker, judicial, unknown/no service roles and Team leader+judicial: all receive 403 on valid Gazette requests. Unauthenticated calls retain 401. Delivery Manager alone and Delivery Manager+judicial pass the role gate.
-- [ ] Assert denials do not reveal batch/settings/member data or mutate settings, requests, reservations, notes, documents or send state; Notify is never invoked. Include a legacy/Team leader retry of an already known request key and a bookmarked ready-filter count.
-- [ ] Preserve Delivery Manager happy-path outcomes, concurrency/conflict handling, idempotency and recovery evidence. Background completion of a previously admitted request is not a fresh human authorisation.
-- [ ] Run Gazette, case-list, saved-query and security tests with database-backed coverage and record results.
+- [x] Gate history, settings GET/PUT, preview, submission (including retries), request listing/detail/member reads, and every existing human recovery/download action with `ACCESS_GAZETTE`. Replace controller pre-validation helpers as well as domain gates. Inventory actual routes rather than assuming one `/gazette/**` prefix covers them.
+- [x] Gate the resolved `readyForPublication` worklist before querying cases, draining outbox or invoking the CCD sweep. Carry the caller to the appropriate domain seam so direct service use cannot bypass the rule. Follow saved-query execution into that same gate; keep unrelated filters unchanged.
+- [x] Cover authenticated legacy admin, Team leader, caseworker, judicial, unknown/no service roles and Team leader+judicial: all receive 403 on valid Gazette requests. Unauthenticated calls retain 401. Delivery Manager alone and Delivery Manager+judicial pass the role gate.
+- [x] Assert denials do not reveal batch/settings/member data or mutate settings, requests, reservations, notes, documents or send state; Notify is never invoked. Include a legacy/Team leader retry of an already known request key and a bookmarked ready-filter count.
+- [x] Preserve Delivery Manager happy-path outcomes, concurrency/conflict handling, idempotency and recovery evidence. Background completion of a previously admitted request is not a fresh human authorisation.
+- [x] Run Gazette, case-list, saved-query and security tests with database-backed coverage and record results.
 
 ### Task 5: Reconcile fixtures, API descriptions and contract provenance
 
@@ -462,3 +462,73 @@ generation.log, validation-initial.log, validation.log, cftlib.log, counts.json,
 test-results/, cftlib-test-results/, checkstyle/ and definition-delta.json. Existing compiler/Gradle/JVM
 warnings remain. These results establish local behaviour only; full-build acceptance, Gazette gates,
 contract publication and external rollout remain Tasks 4–6 and Post-Completion. Only Task 3 is complete.
+
+
+## Execution evidence — Task 4 (9 October 2026)
+
+Started clean at `9f2193cf9e08acf3551040cf81a2d06474506530` on
+`feat/team-leader-delivery-manager`. Read workspace/repository guidance and companion plans.
+Only this API worktree was edited. No review stage, push, merge or deployment was performed.
+
+Replaced all human Gazette domain gates with `ACCESS_GAZETTE`, including ledger admission,
+known-key repeat and direct reads. The controller's preview/submission helper checks the capability
+before business body/key validation. The route inventory remains eight operations: history GET,
+settings GET/PUT, preview POST, submission POST, request-list GET, detail GET and members GET.
+There is no human recovery/download operation on this baseline. Background delivery/recovery keeps
+using the durable admission claim; its send, reservation, attribution and recovery logic is unchanged.
+
+The ninth entry is the named `readyForPublication` case-list filter. All four filter-taking
+`DeedPollService.findDeedPolls` overloads now require an explicit caller and enforce before any
+finder/specification, total-count or reference-match read. The HTTP controller passes the verified
+caller and only drains outbox/runs CCD sweep after the authorised result. The no-argument overload
+continues to select the ordinary all-cases filter. Saved queries store definitions and execute through
+case-list URLs, so they reach the same gate; owning or publishing a saved query grants no bypass.
+Ordinary filters, field conditions and case visibility remain unchanged.
+
+Added direct-domain denial tests with zero collaborator interactions for history, settings, preview,
+ledger admission/repeat/read and every list overload; extended status/member tests for legacy admin,
+Team leader and Team leader+judicial. PostgreSQL/full-security-context HTTP tests cover all nine
+entries for empty/unknown roles, caseworker, judicial, legacy admin, Team leader and Team leader+judicial,
+plus unauthenticated 401s and Delivery Manager alone/with judicial allowances. Valid fresh requests and
+same-subject known-key retries are refused. Full row snapshots prove denied calls leave settings,
+requests/files/members, reservations, successful history, notes, documents, notifications and cases
+unchanged; mocks prove no Notify, outbox or sweep calls. Saved-query read-to-execution tests prove
+403 without a count, while ordinary conditions still return the same case.
+
+Existing Gazette outcome fixtures now use Delivery Manager alone, preserving the concurrency,
+conflict, idempotency, attribution, send and recovery regressions. Other list fixtures carry explicit
+callers; ordinary domain query tests use caseworker, while all-filter/ready-list fixtures use Delivery
+Manager. Broader fixture naming, cftlib identity reconciliation and operation documentation remain Task 5.
+
+Validation used Java 21 and Docker, with no `requires-docker` exclusion:
+
+```bash
+export JAVA_HOME=/tmp/deed-poll-jdk21
+export JAVA_TOOL_OPTIONS=-XX:UseSVE=0
+export TESTCONTAINERS_RYUK_DISABLED=true
+./gradlew test --tests '*GazetteStatusesTest' --max-workers=2 \
+  -Porg.gradle.java.installations.paths=/tmp/deed-poll-jdk21 \
+  -Porg.gradle.java.installations.auto-detect=false
+./gradlew checkstyleMain checkstyleTest test --tests '*Gazette*' \
+  --tests '*CaseworkerRead*' --tests '*DeedPollService*' --tests '*CcdCaseReferenceColumn*' \
+  --tests '*SavedQuery*' --tests '*Security*' --max-workers=2 \
+  -Porg.gradle.java.installations.paths=/tmp/deed-poll-jdk21 \
+  -Porg.gradle.java.installations.auto-detect=false
+git diff --check
+```
+
+The first command was the red run before gate migration: 14 tests, two expected failures for legacy
+admin status reads. Initial broad validation ran 745 tests with seven new snapshot-comparison failures:
+JDBC SQL-array wrapper equality was comparing object identity. JSON row-value snapshots resolved them.
+After adding saved-query coverage, seven cleanup failures exposed a string bind against its UUID key;
+binding `UUID.fromString` resolved them. Initial lint found two long lines and two variable-declaration
+distance warnings; line wrapping/final locals resolved them. No production rule was relaxed.
+
+Final result: BUILD SUCCESSFUL; 752 tests across 80 XML suites, zero failures/errors/skips.
+Both main/test Checkstyle tasks and diff check passed. Existing JVM/compiler/Gradle warnings remain.
+Evidence is retained under `build/evidence/task4/`: red.log, validation-initial.log, validation-second.log,
+lint-initial.log, validation.log, initial-counts.json, counts.json, initial-test-results/, test-results/,
+checkstyle/ and gates.txt. The runtime scan found no legacy role checks or `isAdmin` in Gazette gates.
+No Staff test classes exist on this baseline; the existing Security tests were included. Full build,
+OpenAPI publication and release acceptance remain Tasks 5–6; these local tests do not prove deployment.
+Only Task 4 is complete in this iteration.

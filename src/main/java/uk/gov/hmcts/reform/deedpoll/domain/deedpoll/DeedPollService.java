@@ -10,6 +10,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
@@ -161,12 +163,13 @@ public class DeedPollService {
     /** Every case, newest first, each with its derived day counts. */
     @Transactional(readOnly = true)
     public List<DeedPollWithComputed> findDeedPolls() {
-        return findDeedPolls(ListFilters.LIST_FILTERS.get(0));
+        return findDeedPolls(CurrentUser.ANONYMOUS, ListFilters.LIST_FILTERS.get(0));
     }
 
     /** The cases one saved-query filter admits, newest first, each with its derived day counts. */
     @Transactional(readOnly = true)
-    public List<DeedPollWithComputed> findDeedPolls(ListFilters.ListFilter filter) {
+    public List<DeedPollWithComputed> findDeedPolls(CurrentUser caller, ListFilters.ListFilter filter) {
+        requireFilterAccess(caller, filter);
         List<DeedPoll> found = filter.where()
             .map(this::casesMatching)
             .orElseGet(deedPolls::findAllByOrderByCreatedOnDesc);
@@ -188,9 +191,11 @@ public class DeedPollService {
      *     {@code where}
      */
     @Transactional(readOnly = true)
-    public List<DeedPollWithComputed> findDeedPolls(ListFilters.ListFilter filter, CaseQuery query) {
+    public List<DeedPollWithComputed> findDeedPolls(CurrentUser caller, ListFilters.ListFilter filter,
+                                                  CaseQuery query) {
+        requireFilterAccess(caller, filter);
         if (query.isEmpty()) {
-            return findDeedPolls(filter);
+            return findDeedPolls(caller, filter);
         }
         return Computed.withComputedAll(
             deedPolls.findAll(CaseSpecifications.matching(filter, query), NEWEST_FIRST));
@@ -217,11 +222,11 @@ public class DeedPollService {
      * @param paging which page and how many rows, {@link CasePaging#FIRST} for a request that asked for none
      */
     @Transactional(readOnly = true)
-    public CaseResults findDeedPolls(ListFilters.ListFilter filter,
+    public CaseResults findDeedPolls(CurrentUser caller, ListFilters.ListFilter filter,
                                      CaseQuery query,
                                      CaseSort sort,
                                      CasePaging paging) {
-        return findDeedPolls(filter, query, CaseSearch.NONE, sort, paging);
+        return findDeedPolls(caller, filter, query, CaseSearch.NONE, sort, paging);
     }
 
     /**
@@ -237,11 +242,12 @@ public class DeedPollService {
      * @param search the term, {@link CaseSearch#NONE} for a request with no {@code q}
      */
     @Transactional(readOnly = true)
-    public CaseResults findDeedPolls(ListFilters.ListFilter filter,
+    public CaseResults findDeedPolls(CurrentUser caller, ListFilters.ListFilter filter,
                                      CaseQuery query,
                                      CaseSearch search,
                                      CaseSort sort,
                                      CasePaging paging) {
+        requireFilterAccess(caller, filter);
         Page<DeedPoll> found = deedPolls.findAll(
             CaseSpecifications.matching(filter, query, search),
             PageRequest.of(paging.index(), paging.size(), order(sort)));
@@ -250,6 +256,13 @@ public class DeedPollService {
             paging,
             found.getTotalElements(),
             referenceMatch(filter, query, search));
+    }
+
+    /** Named Gazette worklists require admitted staff authority, including their total count. */
+    private static void requireFilterAccess(CurrentUser caller, ListFilters.ListFilter filter) {
+        if ("readyForPublication".equals(filter.key())) {
+            caller.require(Capability.ACCESS_GAZETTE);
+        }
     }
 
     /**

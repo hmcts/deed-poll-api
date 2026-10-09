@@ -83,7 +83,7 @@ class CaseworkerGazetteControllerTest extends AbstractPostgresContainerTest {
     @BeforeEach
     void setUp() {
         IDAM.stubDefaults();
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Current Administrator", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Current Administrator", List.of(Role.DELIVERY_MANAGER.claimValue()));
     }
 
     @Test
@@ -98,7 +98,7 @@ class CaseworkerGazetteControllerTest extends AbstractPostgresContainerTest {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Historical Sender", List.of(role));
         authorised(get(HISTORY))
             .andExpect(status().isForbidden())
-            .andExpect(jsonPath("$.error").value(containsString(Role.DEEDPOLL_ADMIN.claimValue())));
+            .andExpect(jsonPath("$.error").value(containsString("ACCESS_GAZETTE")));
     }
 
     @Test

@@ -21,6 +21,8 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseSummaryResponse;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
@@ -81,6 +83,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
+    private static final CurrentUser LIST_READER =
+        CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Manager", "subject");
 
     /** createDeedPoll cannot allocate a reference number without a Date Received to derive the year from. */
     private static final String RECEIVED = "2026-07-01T00:00:00.000Z";
@@ -279,6 +283,7 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
 
         @Test
         void publicationReadyListUsesOldestEnrolledOrderAndAllowsAnExplicitSort() throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Manager", List.of(Role.DELIVERY_MANAGER.claimValue()));
             final DeedPoll recent = backdated(queryCase("Ada", "publishToLondonGazette", true,
                 "state", DeedPollState.Enroled, "dateEnroled", LocalDateTime.of(2026, 5, 1, 0, 0)),
                 LocalDateTime.of(2026, 8, 1, 0, 0));
@@ -305,7 +310,7 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.cases[0].id").value(recent.getId()))
                 .andExpect(jsonPath("$.cases[1].id").value(oldest.getId()));
-            assertThat(deedPollService.findDeedPolls(ListFilters.filterFor("readyForPublication")))
+            assertThat(deedPollService.findDeedPolls(LIST_READER, ListFilters.filterFor("readyForPublication")))
                 .extracting(row -> row.deedPoll().getId()).containsExactly(oldest.getId(), recent.getId());
             authorised(get("/caseworker/cases").param("filter", "readyForPublication").param("size", "1"))
                 .andExpect(status().isOk())
@@ -316,6 +321,7 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
 
         @Test
         void publicationReadyListComposesWithConditionsAndSearch() throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Manager", List.of(Role.DELIVERY_MANAGER.claimValue()));
             queryCase("Zoe", "publishToLondonGazette", true, "state", DeedPollState.Enroled,
                       "type", DeedPollType.Adult);
             DeedPoll wanted = queryCase("Zoe", "publishToLondonGazette", true,
@@ -675,7 +681,7 @@ class CaseworkerReadControllerTest extends AbstractPostgresContainerTest {
         @DisplayName("a bare list is the same rows in the same order as the unpaged finder answers")
         void bareListMatchesTheUnpagedFinder() throws Exception {
             String expected = mapper.writeValueAsString(CaseSummaryResponse.from(
-                deedPollService.findDeedPolls(ListFilters.filterFor("all"))));
+                deedPollService.findDeedPolls(LIST_READER, ListFilters.filterFor("all"))));
 
             String body = authorised(get("/caseworker/cases"))
                 .andExpect(status().isOk())

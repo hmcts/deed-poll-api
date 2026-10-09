@@ -5,8 +5,8 @@ import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
-import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.repository.GazetteSettingsRepository;
 
@@ -34,13 +34,13 @@ public class GazetteSettingsService {
 
     @Transactional(readOnly = true)
     public GazetteSettings get(CurrentUser caller) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.ACCESS_GAZETTE);
         return repository.read(false);
     }
 
     @Transactional
     public GazetteSettings update(CurrentUser caller, Map<String, Object> fields) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.ACCESS_GAZETTE);
         final String subject = caller.requireUserId();
         if (!Set.of("recipientEmail", "revision").containsAll(fields.keySet())) {
             throw new InvalidInputError("Only recipientEmail and revision may be supplied.");

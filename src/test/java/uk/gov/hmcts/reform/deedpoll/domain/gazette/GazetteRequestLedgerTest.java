@@ -49,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
     private static final String SUBJECT = "gazette-ledger-test";
     private static final CurrentUser ADMIN =
-        CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "Gazette Admin", SUBJECT);
+        CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Gazette Admin", SUBJECT);
     private static final GazetteDeliveryConfiguration CONFIG =
         new GazetteDeliveryConfiguration(UUID.fromString("20000000-0000-0000-0000-000000000001"),
             UUID.fromString("10000000-0000-0000-0000-000000000001"), 4);
@@ -130,7 +130,7 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
             .isInstanceOf(ConflictError.class);
         assertThatThrownBy(() -> ledger.admit(ADMIN, key, List.of(adult, minor), FINGERPRINT, 2))
             .isInstanceOf(ConflictError.class);
-        CurrentUser other = CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "Gazette Admin", "other");
+        CurrentUser other = CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Gazette Admin", "other");
         assertThatThrownBy(() -> ledger.admit(other, key, List.of(adult, minor), FINGERPRINT, 1))
             .isInstanceOf(ConflictError.class);
     }

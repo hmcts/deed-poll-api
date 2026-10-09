@@ -22,8 +22,8 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.PreviewGazetteRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SubmitGazetteRequest;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
-import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteBodies;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteDelivery;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazettePreviews;
@@ -58,7 +58,7 @@ public class CaseworkerGazetteRequestsController {
     @ApiResponse(responseCode = "503", content = @Content(schema = @Schema(implementation = GazetteError.class)))
     @PostMapping("/gazette-notice-previews")
     public GazettePreviewResponse preview(@RequestBody PreviewGazetteRequest body) {
-        CurrentUser caller = admin();
+        CurrentUser caller = gazetteCaller();
         return GazettePreviewResponse.from(previews.preview(caller, GazetteBodies.selection(body.fields(), false)));
     }
 
@@ -77,7 +77,7 @@ public class CaseworkerGazetteRequestsController {
     @PostMapping("/gazette-notices")
     public ResponseEntity<GazetteStatusResponse> submit(@RequestBody SubmitGazetteRequest body,
                                                        @RequestHeader("Idempotency-Key") String header) {
-        CurrentUser caller = admin();
+        CurrentUser caller = gazetteCaller();
         UUID key = key(header);
         List<String> ids = GazetteBodies.selection(body.fields(), true);
         String token = GazetteBodies.fingerprint(body.fields());
@@ -117,9 +117,9 @@ public class CaseworkerGazetteRequestsController {
         return GazetteMembersResponse.from(statuses.members(CurrentUsers.required(), batchId, page, size));
     }
 
-    private static CurrentUser admin() {
+    private static CurrentUser gazetteCaller() {
         CurrentUser caller = CurrentUsers.required();
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.ACCESS_GAZETTE);
         return caller;
     }
 

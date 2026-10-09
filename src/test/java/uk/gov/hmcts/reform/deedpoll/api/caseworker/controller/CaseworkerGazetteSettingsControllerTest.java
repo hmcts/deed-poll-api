@@ -71,7 +71,7 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
     @BeforeEach
     void setUp() {
         IDAM.stubDefaults();
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Administrator", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Administrator", List.of(Role.DELIVERY_MANAGER.claimValue()));
         jdbc.update("DELETE FROM deedpoll_gazette_settings_change");
         jdbc.update("UPDATE deedpoll_gazette_settings SET revision = 0, recipient_email = null, "
             + "updated_at = null, updated_by_id = null, updated_by_name = null WHERE id = 1");
@@ -104,7 +104,7 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
             .andExpect(jsonPath("$.updatedAt").isNotEmpty()).andReturn().getResponse().getContentAsString();
         assertThat(body).doesNotContain(StubIdam.SUBJECT, "updatedById");
         authorised(get(PATH)).andExpect(jsonPath("$.recipientEmail").value("gazette@example.com"));
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Renamed Administrator", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Renamed Administrator", List.of(Role.DELIVERY_MANAGER.claimValue()));
         save("{\"recipientEmail\":\"new@example.com\",\"revision\":1}")
             .andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(2));
         assertThat(jdbc.queryForList("SELECT previous_email, recipient_email, changed_by_id "
@@ -155,7 +155,7 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
 
     @Test
     void concurrentFirstSavesHaveOnlyOneWinnerAndOneAuditRow() throws Exception {
-        CurrentUser admin = new CurrentUser(List.of(Role.DEEDPOLL_ADMIN), true, "Administrator", "subject");
+        CurrentUser admin = new CurrentUser(List.of(Role.DELIVERY_MANAGER), true, "Administrator", "subject");
         CountDownLatch start = new CountDownLatch(1);
         try (var executor = Executors.newFixedThreadPool(2)) {
             var attempts = List.of("one@example.com", "two@example.com").stream().map(email -> executor.submit(() -> {
@@ -176,7 +176,7 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
 
     @Test
     void failedAuditWriteLeavesTheSettingUnchanged() {
-        CurrentUser admin = new CurrentUser(List.of(Role.DEEDPOLL_ADMIN), true, "a".repeat(300), "subject");
+        CurrentUser admin = new CurrentUser(List.of(Role.DELIVERY_MANAGER), true, "a".repeat(300), "subject");
         assertThatThrownBy(() -> service.update(admin, Map.of("recipientEmail", "a@example.com", "revision", 0)))
             .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
         assertThat(jdbc.queryForObject("SELECT revision FROM deedpoll_gazette_settings", Integer.class)).isZero();

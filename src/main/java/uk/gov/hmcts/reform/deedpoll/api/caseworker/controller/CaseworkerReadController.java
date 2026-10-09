@@ -11,6 +11,7 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseDetailResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseListResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DocumentTypeResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.FieldRulesResponse;
+import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingSweep;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
@@ -170,7 +171,7 @@ public class CaseworkerReadController {
 
         ListFilters.ListFilter resolved = ListFilters.filterFor(filter);
         CaseResults results = deedPolls.findDeedPolls(
-            resolved,
+            CurrentUsers.required(), resolved,
             CaseQuery.parse(parameters.get("where")),
             CaseSearch.parse(single("q", parameters.get("q"))),
             CaseSort.parse(single("sort", parameters.get("sort")),

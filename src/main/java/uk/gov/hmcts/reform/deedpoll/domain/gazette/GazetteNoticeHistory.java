@@ -5,8 +5,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
-import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.entity.GazetteNoticeBatch;
 import uk.gov.hmcts.reform.deedpoll.entity.GazetteNoticeBatchCase;
@@ -35,7 +35,7 @@ public class GazetteNoticeHistory {
     /** Newest first, with a stable identity tie-breaker for equal send timestamps. */
     @Transactional(readOnly = true)
     public Page<GazetteNoticeSummary> history(CurrentUser caller, CasePaging paging) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.ACCESS_GAZETTE);
         Page<GazetteNoticeBatch> found = batches.findAll(PageRequest.of(paging.index(), paging.size(),
             Sort.by(Sort.Direction.DESC, "sentAt", "id")));
         List<UUID> ids = found.stream().map(GazetteNoticeBatch::getId).toList();
