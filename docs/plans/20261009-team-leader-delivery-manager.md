@@ -159,11 +159,11 @@ artifact and its source SHA/checksum for admin rather than reusing a shared temp
 **Files:** `domain/auth/{Role,IdamClaims,CurrentUser}.java`; new `domain/auth/Capability.java` and
 `domain/auth/RoleCapabilities.java`; corresponding auth tests.
 
-- [ ] Add Team leader and Delivery Manager claims. Keep the legacy claim explicitly deprecated for migration, granting only Team leader capabilities. Do not normalise legacy admin into Delivery Manager.
-- [ ] Implement the immutable mapping and `can`/`require` capability helpers. A missing capability fails closed; do not derive a required-role list that could invoke the existing open-on-empty `requireAnyRole()` behaviour.
-- [ ] Derive any retained compatibility flag from this mapping. Keep identity/subject and audit attribution unchanged; do not permit separately asserted capability sets to override verified roles.
-- [ ] Test each role alone, legacy only, empty/unknown claims, duplicate/mixed roles and judicial combinations. Assert Delivery Manager's inherited set includes every Team leader capability and Gazette is the only new one.
-- [ ] Run auth/claims tests and compile affected callers; record results.
+- [x] Add Team leader and Delivery Manager claims. Keep the legacy claim explicitly deprecated for migration, granting only Team leader capabilities. Do not normalise legacy admin into Delivery Manager.
+- [x] Implement the immutable mapping and `can`/`require` capability helpers. A missing capability fails closed; do not derive a required-role list that could invoke the existing open-on-empty `requireAnyRole()` behaviour.
+- [x] Derive any retained compatibility flag from this mapping. Keep identity/subject and audit attribution unchanged; do not permit separately asserted capability sets to override verified roles.
+- [x] Test each role alone, legacy only, empty/unknown claims, duplicate/mixed roles and judicial combinations. Assert Delivery Manager's inherited set includes every Team leader capability and Gazette is the only new one.
+- [x] Run auth/claims tests and compile affected callers; record results.
 
 ### Task 3: Preserve casework privileges and CCD document access
 
@@ -355,3 +355,45 @@ No RoleCapabilities or Staff test classes exist on this baseline, so those selec
 Standalone generation, cftlib, OpenAPI publication and full build belong to later implementation
 and acceptance tasks; this focused baseline run does not claim those checks or deployment passed.
 Only Task 1 is complete in this iteration; runtime roles and authorisation remain at the baseline.
+
+
+## Execution evidence — Task 2 (9 October 2026)
+
+Started clean at `4a119c8e2014a37eb10a44b6fbbfeeea7c5a72d4` on
+`feat/team-leader-delivery-manager`. Read the workspace/repository instructions and both companion
+plans; their claim names and inheritance contract agree. No sibling repository was changed.
+
+Added the exact Team leader and Delivery Manager claims to `Role`; marked `DEEDPOLL_ADMIN`
+deprecated for migration. `IdamClaims` already resolves through `Role.fromClaimValue`, so both
+array and comma-separated claims recognise the new roles without a second parsing implementation.
+`Capability` and `RoleCapabilities` define an immutable explicit union: Team leader and legacy
+admin receive the five casework capabilities; Delivery Manager inherits those and only adds
+`ACCESS_GAZETTE`. Caseworker/judicial roles grant none of these privileged capabilities.
+`CurrentUser.can`/`require` fail closed, including a null requirement, independently of the existing
+open-on-empty role helper. The retained constructor flag is ignored and derived from
+`OVERRIDE_PRIVACY`; roles are defensively copied. Identity, subject and audit attribution stay intact.
+No capability set or extra claims can override recognised roles.
+
+Added `RoleCapabilitiesTest`: all 12 contract fixtures, each exercised with both supported claim
+formats, plus exact inheritance/legacy checks, immutable grants and role snapshots, independent
+flag/claim injection refusals, null requirement refusal and identity assertions. Existing auth and
+claims tests still pass. Tests were added first: compilation failed on the missing capability API
+(`build/evidence/task2/red.log`), then passed after implementation.
+
+Executed with `JAVA_HOME=/tmp/deed-poll-jdk21`, `JAVA_TOOL_OPTIONS=-XX:UseSVE=0`,
+`TESTCONTAINERS_RYUK_DISABLED=true`:
+
+```bash
+./gradlew test --tests '*CurrentUser*' --tests '*IdamClaims*' --tests '*RoleCapabilities*' \
+  checkstyleMain checkstyleTest --max-workers=2 \
+  -Porg.gradle.java.installations.paths=/tmp/deed-poll-jdk21 \
+  -Porg.gradle.java.installations.auto-detect=false
+git diff --check
+```
+
+BUILD SUCCESSFUL: 54 tests across 7 XML suites; zero failures, errors or skips. Main/test compilation
+and both Checkstyle tasks passed. Evidence is saved under `build/evidence/task2/` as validation.log,
+counts.json, test-results/ and checkstyle/. Deprecation notices include the deliberately deprecated
+legacy role; no warnings were suppressed. This is focused domain/auth coverage, not HTTP/database
+or rollout proof. Consumer gate migration, CCD generation/cftlib, OpenAPI and full-build acceptance
+remain Tasks 3–6. Only Task 2 was completed in this iteration.
