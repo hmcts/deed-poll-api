@@ -10,6 +10,11 @@ import java.time.LocalDateTime;
 @Repository
 public class GazetteSettingsRepository {
 
+    // Compile-time constants, one per variant, so no statement is assembled at runtime.
+    private static final String READ = "SELECT recipient_email, revision, updated_at, updated_by_name "
+        + "FROM deedpoll_gazette_settings WHERE id = 1";
+    private static final String READ_FOR_UPDATE = READ + " FOR UPDATE";
+
     private final JdbcTemplate jdbc;
 
     public GazetteSettingsRepository(JdbcTemplate jdbc) {
@@ -17,8 +22,7 @@ public class GazetteSettingsRepository {
     }
 
     public GazetteSettings read(boolean lock) {
-        return jdbc.queryForObject("SELECT recipient_email, revision, updated_at, updated_by_name "
-            + "FROM deedpoll_gazette_settings WHERE id = 1" + (lock ? " FOR UPDATE" : ""),
+        return jdbc.queryForObject(lock ? READ_FOR_UPDATE : READ,
             (row, index) -> new GazetteSettings(row.getString("recipient_email"), row.getInt("revision"),
                 row.getObject("updated_at", LocalDateTime.class), row.getString("updated_by_name")));
     }
