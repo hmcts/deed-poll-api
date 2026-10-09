@@ -273,7 +273,8 @@ provider retention duration still needs provisioning. Never retain expiring file
 ## Implementation slices and acceptance evidence
 
 Each slice gets a separate execution plan and PR; completing this design does not
-check off its code. Implement in this order:
+check off its code. Slice 1 is implemented on the ledger branch; see its
+[execution plan and evidence](gazette-1c-request-ledger-and-guards.md). Implement in this order:
 
 1. **Request ledger and guards:** migration, states, unique key/case reservations,
    legacy backfill/key handling, deletion and relevant case-writer guards, atomic

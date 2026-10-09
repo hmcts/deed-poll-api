@@ -67,6 +67,17 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
         nativeQuery = true)
     boolean hasGazetteMembership(@Param("id") String id);
 
+    @Query(value = """
+        SELECT EXISTS (SELECT 1 FROM deedpoll_gazette_reservation r
+            JOIN deedpoll_gazette_request g ON g.id = r.request_batch_id
+            WHERE r.deed_poll_id = :id AND g.state IN ('Preparing', 'Sending'))
+        """, nativeQuery = true)
+    boolean hasActiveGazetteRequest(@Param("id") String id);
+
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM deedpoll_gazette_request_case WHERE deed_poll_id = :id)",
+        nativeQuery = true)
+    boolean hasGazetteRequestEvidence(@Param("id") String id);
+
     /** Every case, newest first. */
     List<DeedPoll> findAllByOrderByCreatedOnDesc();
 

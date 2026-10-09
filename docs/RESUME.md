@@ -1,5 +1,12 @@
 # Resume state — where the next session picks up
 
+**Gazette ledger, 2026-10-09:** The isolated `feat/gazette-request-ledger` worktree
+implements parent task 4a over the send/recovery design. V34 adds request evidence
+and reservations, atomic local transitions and case edit/delete guards. No sender
+or new HTTP operation exists. See [scope, validation and next step](plans/gazette-1c-request-ledger-and-guards.md).
+This supersedes the older Gazette foundation handoff below: spreadsheets and the
+recipient editor are already merged; preview/status APIs and one-shot delivery are next.
+
 **Staff document READ, 2026-10-08:** Steve agreed read access for all three user types. The definition now
 maps ordinary caseworkers (`caseworker-deedpoll`), admins (`caseworker-deedpoll-admin`) and judiciary
 (`caseworker-deedpoll-judicial`) to `DEED_POLL_READER`. It grants R only on the case type, Registered
