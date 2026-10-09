@@ -2,7 +2,7 @@
 
 This is the API handoff for the 9 October 2026 permission change. Local validation does not
 establish IDAM registration, CCD import, account assignment or deployment. The
-[execution plan](plans/20261009-team-leader-delivery-manager.md) records the acceptance results
+[execution plan](plans/completed/20261009-team-leader-delivery-manager.md) records the acceptance results
 and artifact identities. The admin and infrastructure companion plans own their releases.
 
 ## Accepted permission boundary
@@ -33,10 +33,10 @@ Known request keys do not bypass admission. There is no human recovery/download 
 this baseline. Workers finish already-admitted requests using durable authority, preserving
 reservation, idempotency, send and audit evidence. Ordinary field queries remain unchanged.
 
-The general security chain on this baseline requires authentication. The separate staff-gate
-feature is not included: its eventual integration must admit both new roles to CASEWORKER,
-preserve its configured report/enforce mode, and retain the independent judicial boundary.
-Gazette capability enforcement does not depend on that mode.
+The staff-gate feature merged to master has been integrated before PR publication. Both new
+roles are admitted independently to CASEWORKER in report and enforce modes; neither gains
+judicial membership. The configured report/enforce mode is preserved, and Gazette capability
+enforcement does not depend on that mode.
 
 ## Release inputs and provenance
 

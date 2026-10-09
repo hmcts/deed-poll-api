@@ -65,7 +65,7 @@ links) requires ACCESS_GAZETTE, with 403 before reads or side effects. Ordinary 
 and case visibility remain unchanged. Neither new role grants judicial or system authority.
 Saved-query private visibility and ownership still use the subject. Background Gazette completion
 uses durable admitted authority; never rewrite historical attribution. See the
-[permission plan](docs/plans/20261009-team-leader-delivery-manager.md) for migration and rollout.
+[permission plan](docs/plans/completed/20261009-team-leader-delivery-manager.md) for migration and rollout.
 
 ## Rules that break things silently if ignored
 

@@ -97,10 +97,11 @@ class StaffAccessRulesTest {
     }
 
     @Test
-    @DisplayName("admits the caseworker role and the administrator role, each on its own")
-    void admitsEitherStaffRole() throws Exception {
-        as(List.of(Role.CASEWORKER.claimValue()), CASEWORKER_PATH).andExpect(status().isNotFound());
-        as(List.of(Role.DEEDPOLL_ADMIN.claimValue()), CASEWORKER_PATH).andExpect(status().isNotFound());
+    @DisplayName("admits each caseworker, Team leader, Delivery Manager and legacy role alone")
+    void admitsEachStaffRole() throws Exception {
+        for (Role role : List.of(Role.CASEWORKER, Role.TEAM_LEADER, Role.DELIVERY_MANAGER, Role.DEEDPOLL_ADMIN)) {
+            as(List.of(role.claimValue()), CASEWORKER_PATH).andExpect(status().isNotFound());
+        }
     }
 
     @Test
@@ -110,10 +111,10 @@ class StaffAccessRulesTest {
     }
 
     @Test
-    @DisplayName("refuses a caseworker and an administrator on the judicial surface, in the service's own words")
+    @DisplayName("refuses every non-judicial staff role on the judicial surface")
     void refusesNonJudgesOnTheJudicialSurface() throws Exception {
-        for (String role : List.of(Role.CASEWORKER.claimValue(), Role.DEEDPOLL_ADMIN.claimValue())) {
-            as(List.of(role), JUDICIAL_PATH)
+        for (Role role : List.of(Role.CASEWORKER, Role.TEAM_LEADER, Role.DELIVERY_MANAGER, Role.DEEDPOLL_ADMIN)) {
+            as(List.of(role.claimValue()), JUDICIAL_PATH)
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error").value("Requires one of the following roles: "
                     + Role.JUDICIAL.claimValue()));

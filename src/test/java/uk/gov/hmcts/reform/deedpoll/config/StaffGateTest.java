@@ -69,10 +69,11 @@ class StaffGateTest {
 
     @ParameterizedTest
     @EnumSource(StaffGate.Mode.class)
-    @DisplayName("admits the caseworker role alone, and the administrator role alone, in either mode")
-    void admitsEitherStaffRole(StaffGate.Mode mode) {
-        assertThat(granted(mode, caller("idam-2", Role.CASEWORKER.claimValue()))).isTrue();
-        assertThat(granted(mode, caller("idam-3", Role.DEEDPOLL_ADMIN.claimValue()))).isTrue();
+    @DisplayName("admits every caseworker staff role alone without warning in either mode")
+    void admitsEachStaffRole(StaffGate.Mode mode) {
+        for (Role role : List.of(Role.CASEWORKER, Role.TEAM_LEADER, Role.DELIVERY_MANAGER, Role.DEEDPOLL_ADMIN)) {
+            assertThat(granted(mode, caller("idam-2", role.claimValue()))).isTrue();
+        }
         assertThat(logs.list).isEmpty();
     }
 

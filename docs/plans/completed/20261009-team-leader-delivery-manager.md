@@ -653,7 +653,7 @@ Started clean at `d231a0416d06372ab9c4dd49191bf12487561905` on
 Only this API worktree was changed. Independent review stages remain deferred; no push, merge,
 remote publication, deployment, CCD import, registration or real account change occurred.
 
-Added [the API release handoff](../STAFF-ROLE-RELEASE.md), linked from README. It records the
+Added [the API release handoff](../../STAFF-ROLE-RELEASE.md), linked from README. It records the
 consumer matrix, complete contract reconciliation, placeholder-definition limitation, separate
 staff-gate integration, API-before-UI sequence, fresh login and targeted session handling,
 subject-preserving migration, explicit Delivery Manager assignment, legacy retirement criteria
@@ -757,3 +757,16 @@ verify all serving instances enforce the boundary, and execute the infra/admin c
 Compatibility remains until assignments, stale sessions, reader imports and rollback versions meet
 the documented removal criteria. Only Task 6 was completed in this iteration; all API task sections
 are now complete. External rollout is still outstanding.
+
+## PR preparation: integration with current master
+
+Before the user-requested push/PR, integrated `origin/master` at `281061f`, including the
+new staff membership gate. Added Team leader and Delivery Manager independently to CASEWORKER,
+preserving the report/enforce setting and judicial separation. Expanded gate and filter-chain
+regression coverage for both roles alone, and corrected links after the completed-plan move.
+The earlier Copilot/Opus review had no findings; this subsequent integration was validated locally.
+
+`./gradlew build --max-workers=2` with the explicit Java 21 toolchain and Docker enabled passed:
+4,082 unit/domain/HTTP tests and 19 integration tests, no failures, errors or skips.
+Checkstyle and all build checks passed; 11 repaired API plan/handoff links resolve.
+The build log is `/tmp/deed-poll-api-roles-pr-build.log` (local evidence only).

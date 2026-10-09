@@ -1,6 +1,6 @@
 # Gazette batch send and recovery contract
 
-> Superseded access decision (9 October 2026): [Team leader and Delivery Manager contract](20261009-team-leader-delivery-manager.md)
+> Superseded access decision (9 October 2026): [Team leader and Delivery Manager contract](completed/20261009-team-leader-delivery-manager.md)
 > governs staff permissions. All Gazette entry points, including the named ready worklist/count and
 > saved-query execution, require Delivery Manager alone. Team leader and temporary legacy admin retain
 > non-Gazette casework capabilities only. Earlier admin-access wording below is historical; other
