@@ -19,6 +19,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
+import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteRefusal;
 
 import java.util.List;
 
@@ -97,6 +98,13 @@ public class DomainErrorHandler {
      * <p>409 rather than 400 because there is nothing in the payload to correct: it would succeed unchanged
      * once the conflicting data is gone.
      */
+    @ExceptionHandler(GazetteRefusal.class)
+    public ResponseEntity<GazetteError> gazette(GazetteRefusal error) {
+        return ResponseEntity.status(error.code()
+            == GazetteRefusal.Code.GAZETTE_UNAVAILABLE
+                ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.CONFLICT).body(GazetteError.from(error));
+    }
+
     @ExceptionHandler(ConflictError.class)
     public ResponseEntity<ApiError> conflict(ConflictError error) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiError.of(error.getMessage()));

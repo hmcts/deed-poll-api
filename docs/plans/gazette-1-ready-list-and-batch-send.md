@@ -12,10 +12,13 @@ writes an audit trail, and a history read for that trail. The admin companion,
 Dynamics original is silent on it — so unlike `domain/deedpoll`, nothing here is checked against
 `src/test/resources/reference/`. Treat every decision below as this repo's own, not an inherited one.
 
-## Current handoff — 8 October 2026
+## Current handoff — 9 October 2026
 
 The ready list/history, production spreadsheet generator and persistent recipient
-settings are merged (PRs #80, #87, #88 and #89). Batch sending remains unimplemented.
+settings are merged (PRs #80, #87, #88 and #89). The internal
+[request ledger and guards](gazette-1c-request-ledger-and-guards.md) are now implemented
+with the [preview and status slice](gazette-1d-preview-admission-and-status.md).
+Fresh HTTP batch sending remains unavailable.
 Use [Gazette batch send and recovery contract](gazette-1b-send-and-recovery-contract.md)
 for the next slices. It replaces the former single-transaction email design:
 acceptance by Notify cannot be undone by rolling back a local transaction.
@@ -299,13 +302,15 @@ See `gazette-1a-task3-validation.md`.
 
 Implement the ordered slices in [the new contract](gazette-1b-send-and-recovery-contract.md):
 
-- [ ] 4a — Request ledger, state transitions, legacy compatibility and case guards.
-- [ ] 4b — Preview/admission, status and full-membership APIs; regenerate OpenAPI.
+- [x] 4a — Request ledger, state transitions, legacy compatibility and case guards
+  ([implementation and validation](gazette-1c-request-ledger-and-guards.md)).
+- [x] 4b — Preview/admission, status and full-membership APIs; regenerate OpenAPI
+  ([implementation and validation](gazette-1d-preview-admission-and-status.md)).
 - [ ] 4c — One-shot Notify delivery, all-file preparation and bounded recovery.
 - [ ] 4d — Fault-injection, races and recovery evidence; no automatic uncertain resend.
 
-The next executable slice is ledger/guards. It must not expose an operational send
-control before the complete contract and sender tests are ready. Successful local
+The next executable slice is one-shot delivery and bounded recovery. Fresh HTTP
+admission must remain disabled until both are implemented and tested. Successful local
 settlement updates every case/date/note atomically; external email acceptance is
 never covered by that transaction.
 

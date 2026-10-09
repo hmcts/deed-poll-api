@@ -98,7 +98,8 @@ class NotificationDeliveryCrashTest extends AbstractPostgresContainerTest {
     void claimAuditTimeUsesTheClaimInstantRatherThanTheBatchCutoff() {
         Notification row = owed();
         var cutoff = AuditClock.now().minusSeconds(5);
-        var before = AuditClock.now();
+        // V11 stores modifiedOn as timestamp(3); compare its millisecond precision, not JVM nanoseconds.
+        var before = AuditClock.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
         assertThat(transactions.claim(row.getId(), cutoff)).isPresent();
         assertThat(stored(row).getModifiedOn()).isAfterOrEqualTo(before).isAfter(cutoff);
     }

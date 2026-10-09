@@ -213,6 +213,9 @@ notify:
   # is the unit Notify documents the retention period in.
   document-retention-weeks: ${NOTIFY_DOCUMENT_RETENTION_WEEKS:}
   templates:
+    gazette-adult: ${NOTIFY_TEMPLATE_GAZETTE_ADULT:DEED_POLL_PLACEHOLDER}
+    gazette-minor: ${NOTIFY_TEMPLATE_GAZETTE_MINOR:DEED_POLL_PLACEHOLDER}
+    gazette-mixed: ${NOTIFY_TEMPLATE_GAZETTE_MIXED:DEED_POLL_PLACEHOLDER}
     # The Notify template UUID, which differs per environment and so is configuration rather than a constant
     # in Java. DEED_POLL_PLACEHOLDER is the same literal deedpoll.ccd.case-type-id uses, so one grep lists
     # every external identifier this service is still waiting on. With it set, Notify answers a preview with
@@ -259,6 +262,9 @@ case_document_am:
   url: ${CASE_DOCUMENT_AM_URL:http://localhost:4455}
 
 deedpoll:
+  gazette:
+    # Enables provisioned previews only; fresh HTTP sending remains unavailable in this slice.
+    enabled: ${GAZETTE_ENABLED:false}
   ccd:
     # The CCD identifiers this service is waiting on, and deliberately not the real values: the case type,
     # jurisdiction and system role have not been onboarded, so anything else here would be a guess somebody

@@ -137,7 +137,29 @@ public class OpenAPIWriteBodies {
             describeEmailBodies(openApi);
             describeUploadBody(openApi);
             describeGazetteSettingsBody(openApi);
+            describeGazetteBodies(openApi);
         };
+    }
+
+    private void describeGazetteBodies(OpenAPI openApi) {
+        for (String name : java.util.List.of("PreviewGazetteRequest", "SubmitGazetteRequest")) {
+            Schema<?> body = schema(openApi, name);
+            if (body == null) {
+                continue;
+            }
+            body.setType("object");
+            body.setProperties(null);
+            body.addProperty("caseIds", new ArraySchema().items(new StringSchema().minLength(1).maxLength(255))
+                .minItems(1).maxItems(100).uniqueItems(true));
+            body.setRequired(java.util.List.of("caseIds"));
+            if (name.equals("SubmitGazetteRequest")) {
+                body.addProperty("selectionFingerprint", new StringSchema().minLength(1).maxLength(512)
+                    .description("Exact opaque token returned by preview; retain it with the same key on a retry."));
+                body.addProperty("recipientRevision", new IntegerSchema().minimum(java.math.BigDecimal.ZERO));
+                body.setRequired(java.util.List.of("caseIds", "selectionFingerprint", "recipientRevision"));
+            }
+            body.setAdditionalProperties(false);
+        }
     }
 
     private void describeGazetteSettingsBody(OpenAPI openApi) {

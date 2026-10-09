@@ -44,7 +44,8 @@ public class GazetteNoticeHistory {
                 .collect(Collectors.groupingBy(member -> member.getId().getBatchId()));
         return found.map(batch -> {
             List<GazetteNoticeBatchCase> preview = members.getOrDefault(batch.getId(), List.of());
-            return new GazetteNoticeSummary(batch.getSentAt(), batch.getSentByName(), batch.getCaseCount(),
+            return new GazetteNoticeSummary(batch.getId(), batch.getSentAt(), batch.getSentByName(),
+                batch.getCaseCount(),
                 preview.stream().limit(MAX_REFERENCES).map(GazetteNoticeBatchCase::getReferenceNumber).toList(),
                 preview.size() > MAX_REFERENCES);
         });

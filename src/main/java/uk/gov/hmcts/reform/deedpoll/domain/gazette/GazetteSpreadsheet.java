@@ -53,12 +53,23 @@ public class GazetteSpreadsheet {
                 case Unknown -> throw unclassified();
             }
         }
-        List<GeneratedGazetteSpreadsheet> files = new ArrayList<>();
-        if (!adults.isEmpty()) {
-            files.add(workbook(adults, true));
+        List<GazetteInput> inputs = new ArrayList<>();
+        adults.forEach(row -> inputs.add(GazetteInput.from(row)));
+        minors.forEach(row -> inputs.add(GazetteInput.from(row)));
+        return generateInputs(inputs);
+    }
+
+    /** Generates from admission's detached values; no later read of live case entities is required. */
+    public List<GeneratedGazetteSpreadsheet> generateInputs(List<GazetteInput> inputs) {
+        if (inputs == null || inputs.isEmpty()) {
+            throw new InvalidInputError("Select at least one case for Gazette publication.");
         }
-        if (!minors.isEmpty()) {
-            files.add(workbook(minors, false));
+        List<GeneratedGazetteSpreadsheet> files = new ArrayList<>();
+        for (String kind : List.of("adult", "minor")) {
+            List<GazetteInput> group = inputs.stream().filter(input -> kind.equals(input.kind())).toList();
+            if (!group.isEmpty()) {
+                files.add(workbook(group, kind.equals("adult")));
+            }
         }
         return List.copyOf(files);
     }
@@ -67,7 +78,7 @@ public class GazetteSpreadsheet {
         return new ConflictError("Correct unknown or missing case types before Gazette publication.");
     }
 
-    private GeneratedGazetteSpreadsheet workbook(List<DeedPoll> cases, boolean adult) {
+    private GeneratedGazetteSpreadsheet workbook(List<GazetteInput> cases, boolean adult) {
         if (cases.size() >= SpreadsheetVersion.EXCEL2007.getMaxRows()) {
             throw new InvalidInputError("Gazette selection exceeds the Excel row limit.");
         }
@@ -89,7 +100,7 @@ public class GazetteSpreadsheet {
             for (int index = 0; index < cases.size(); index++) {
                 Row row = sheet.createRow(index + 1);
                 for (int column = 0; column < columns.size(); column++) {
-                    write(row.createCell(column), columns.get(column).value(cases.get(index)), textStyle, dateStyle);
+                    write(row.createCell(column), cases.get(index).values().get(column), textStyle, dateStyle);
                 }
             }
             AreaReference area = new AreaReference(new CellReference(0, 0),

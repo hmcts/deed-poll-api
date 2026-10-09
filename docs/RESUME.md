@@ -1,5 +1,13 @@
 # Resume state — where the next session picks up
 
+**Gazette preview/status, 2026-10-09:** `feat/gazette-preview-status` implements parent
+4b and carries the ledger from #91, which merged into the design branch rather than
+master. Five new HTTP operations, locked confirmation validation, immutable export
+inputs, typed refusals and full frozen membership are implemented. Fresh HTTP sends
+remain unavailable. See [execution scope, evidence and next step](plans/gazette-1d-preview-admission-and-status.md).
+Next: one-shot delivery and independent bounded recovery, followed by the admin journey.
+This supersedes the historical Gazette handoff further below.
+
 **Staff document READ, 2026-10-08:** Steve agreed read access for all three user types. The definition now
 maps ordinary caseworkers (`caseworker-deedpoll`), admins (`caseworker-deedpoll-admin`) and judiciary
 (`caseworker-deedpoll-judicial`) to `DEED_POLL_READER`. It grants R only on the case type, Registered
