@@ -1,6 +1,8 @@
 package uk.gov.hmcts.reform.deedpoll.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.DispatcherType;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -198,12 +200,27 @@ public class SecurityConfiguration {
             .build();
     }
 
+    /**
+     * Every path not claimed by {@link #ccdPersistenceFilterChain}.
+     *
+     * <p>Authentication alone was the rule for every staff route until the {@link StaffArea} rules, so any token IDAM
+     * issued could reach the caseworker surface (OWASP finding H1). The judicial area is enforced outright, because
+     * its services already refuse a non-judge and the rule changes no outcome. The caseworker area goes through
+     * {@link StaffGate}, which reports before it enforces: see {@code deedpoll.security.staff-gate}.
+     * {@code anyRequest().authenticated()} stays as the fallback for the empty citizen namespace and unknown paths.
+     * A new top-level prefix is caught by {@code StaffAccessRulesTest} rather than by a {@code denyAll()}.
+     */
     @Bean
     @SuppressWarnings("PMD.SignatureDeclareThrowsException")
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                   JwtDecoder jwtDecoder,
-                                                  IdamAuthenticationConverter authenticationConverter)
+                                                  IdamAuthenticationConverter authenticationConverter,
+                                                  ObjectMapper objectMapper,
+                                                  @Value("${deedpoll.security.staff-gate:enforce}")
+                                                  String staffGateMode)
         throws Exception {
+
+        StaffGate caseworkerGate = new StaffGate(StaffArea.CASEWORKER, StaffGate.Mode.of(staffGateMode));
 
         return http
             .authorizeHttpRequests(requests -> requests
@@ -213,7 +230,10 @@ public class SecurityConfiguration {
                 .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
                 .requestMatchers(PUBLIC_PATHS).permitAll()
                 .requestMatchers(CCD_SDK_PATHS).denyAll()
+                .requestMatchers(StaffArea.JUDICIAL.pattern()).hasAnyAuthority(StaffArea.JUDICIAL.authorities())
+                .requestMatchers(StaffArea.CASEWORKER.pattern()).access(caseworkerGate.manager())
                 .anyRequest().authenticated())
+            .exceptionHandling(errors -> errors.accessDeniedHandler(new StaffAccessDeniedHandler(objectMapper)))
             .oauth2ResourceServer(resourceServer -> resourceServer
                 .jwt(jwt -> jwt
                     .decoder(jwtDecoder)

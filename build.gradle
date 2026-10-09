@@ -296,13 +296,74 @@ repositories {
 }
 
 ext {
-  log4JVersion = "2.25.1"
-  logbackVersion = "1.5.18"
+  log4JVersion = "2.25.5"
+  logbackVersion = "1.5.38"
 }
 
 ext['snakeyaml.version'] = '2.0'
 ext['httpclient5.version'] = '5.6.4'
 ext['httpcore5.version'] = '5.4.3'
+
+/*
+  Security patch overrides on the lines Boot 3.5.16 already manages. 3.5.16 is the newest 3.5.x, so these
+  are the only way to take the fixes; remove each one once a Boot release manages that version or later.
+  Every version here had no OSV advisory on 2026-10-09, and each replaces a suppression in
+  config/owasp/suppressions.xml.
+*/
+ext['tomcat.version'] = '10.1.60'
+ext['postgresql.version'] = '42.7.14'
+ext['jackson-bom.version'] = '2.21.7'
+ext['commons-lang3.version'] = '3.21.0'
+ext['opentelemetry.version'] = '1.66.0'
+
+/*
+  Jackson 2 only, for this application's own classpaths.
+
+  The CCD SDK's plugin constrains elasticsearch-java to `strictly [9, 10)`, which floats to the newest 9.x.
+  Every release from 9.2.0 depends on Jackson 3 (`tools.jackson`) at runtime scope. 9.1.12 is the last that
+  depends on Jackson 2 alone, and it is inside the plugin's range. Nothing in this service calls the client;
+  only Boot's Elasticsearch auto-configuration and health indicator reference it.
+
+  cftlib's configurations are left as cftlib resolves them.
+
+  bcprov arrives through spring-cloud-starter, which Boot does not manage.
+*/
+configurations.matching { !it.name.startsWith('cftlib') }.configureEach {
+  resolutionStrategy.eachDependency { details ->
+    if (details.requested.group == 'co.elastic.clients' && details.requested.name == 'elasticsearch-java') {
+      details.useVersion '9.1.12'
+      details.because 'Last elasticsearch-java release without a Jackson 3 dependency'
+    }
+    if (details.requested.group == 'org.bouncycastle' && details.requested.name == 'bcprov-jdk18on') {
+      details.useVersion '1.86'
+      details.because 'Security fixes; 1.80.2 has Critical and High advisories'
+    }
+  }
+}
+
+/*
+  Fails the build if this application's own classpaths resolve a Jackson 3 artifact. Jackson 3's serialisation
+  changes have caused data loss, so the application must stay on Jackson 2. cftlib's configurations are
+  exempt: its bundled CCD services (data-store, aac, user-profile, docassembly) are compiled against
+  Jackson 3. That is upstream's runtime, local only, and it never ships.
+*/
+tasks.register('verifyNoJackson3') {
+  group = 'verification'
+  description = 'Fails if an application classpath resolves tools.jackson (Jackson 3)'
+  doLast {
+    def appConfigurations = configurations.findAll { it.canBeResolved && !it.name.startsWith('cftlib') }
+    def offenders = appConfigurations.collectMany { conf ->
+      conf.incoming.resolutionResult.allComponents
+        .collect { it.moduleVersion }
+        .findAll { it != null && it.group.startsWith('tools.jackson') }
+        .collect { "${conf.name}: ${it}" }
+    }
+    if (offenders) {
+      throw new GradleException("Jackson 3 must not be on any classpath:\n  " + offenders.join('\n  '))
+    }
+  }
+}
+tasks.named('check') { dependsOn 'verifyNoJackson3' }
 
 dependencies {
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-web'
