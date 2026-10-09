@@ -8,6 +8,32 @@
     <packageUrl regex="true">^pkg:maven/com\.fasterxml\.jackson\.core/jackson\-databind@.*$</packageUrl>
     <cve>CVE-2023-35116</cve>
   </suppress>
+  <suppress>
+    <notes>False positive: CPE match on the Java client.
+      elasticsearch-java is the Elasticsearch Java client library. dependency-check matches it to the
+      Elasticsearch server CPEs because the version numbers line up.
+      Every CVE reported on 2026-10-09 (PR #96, 26 of them) is server code the client jar does not contain:
+      ML model deserialisation, ingest simulation, search allocation, HTTP request smuggling.
+      Scoped to the server CPEs on this one package. It suppresses no CVE filed against the client itself.</notes>
+    <packageUrl regex="true">^pkg:maven/co\.elastic\.clients/elasticsearch\-java@.*$</packageUrl>
+    <cpe>cpe:/a:elastic:elasticsearch</cpe>
+    <cpe>cpe:/a:elasticsearch:elasticsearch</cpe>
+  </suppress>
+  <suppress>
+    <notes>False positive: the generic opentelemetry:opentelemetry CPE.
+      NVD files every OpenTelemetry language under one CPE, so these Java jars match CVEs in other languages:
+      CVE-2026-54285 is opentelemetry-js (@opentelemetry/core baggage parsing).
+      CVE-2026-29181, 24051, 39882, 39883 and 41178 are OpenTelemetry-Go (baggage, Darwin/BSD resource
+      detection, OTLP HTTP exporters).
+      Suppressed by CVE id, not CPE, so a genuine Java CVE filed under the same CPE is still reported.</notes>
+    <packageUrl regex="true">^pkg:maven/io\.opentelemetry(\.semconv)?/opentelemetry\-.*$</packageUrl>
+    <cve>CVE-2026-54285</cve>
+    <cve>CVE-2026-29181</cve>
+    <cve>CVE-2026-24051</cve>
+    <cve>CVE-2026-39882</cve>
+    <cve>CVE-2026-39883</cve>
+    <cve>CVE-2026-41178</cve>
+  </suppress>
   <!--
     Assessed suppressions, 2026-10-09. They replace the blanket "pipeline unblock" blocks of 2026-09-15 and
     2026-09-28.
