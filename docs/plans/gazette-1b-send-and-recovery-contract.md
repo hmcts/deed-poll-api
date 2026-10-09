@@ -5,8 +5,9 @@ Based on API master `7ff8352` (recipient settings PR #89) and admin master
 `5cd70ad` (PR #163). This replaces the transactional-email proposal in the
 [parent plan](gazette-1-ready-list-and-batch-send.md), decisions 2–7 and Task 4.
 The ledger and [preview/status slice](gazette-1d-preview-admission-and-status.md) now
-implement the persistence and HTTP contract. Fresh HTTP sending and the recovery
-worker remain unavailable.
+implement the persistence and HTTP contract. The
+[delivery/recovery slice](gazette-1e-delivery-and-recovery.md) connects confirmed
+submissions behind the disabled-by-default flag and adds independent recovery.
 
 The business rules already agreed are one Notify email per batch, adult/minor
 spreadsheet download links with absent groups omitted, visible columns only,
@@ -21,7 +22,7 @@ A database transaction cannot include Notify's acceptance atomically. Keep short
 local transactions before and after the remote call. An accepted email whose
 local settlement fails is **uncertain**, never a safe-to-repeat failure.
 
-The first version makes **at most one application-level `sendEmail` invocation per
+The first version makes **at most one application-level Notify email invocation per
 accepted request**. Even a known temporary refusal ends that request. There is no
 automatic delivery retry or operator resend endpoint. This is narrower than the
 existing per-case outbox's bounded retries and is compatible with ADR-0007, which
@@ -31,8 +32,11 @@ case reservations and require investigation. A Notify reference is for correlati
 do not depend on it deduplicating sends. Verify the SDK/HTTP/proxy retry behavior
 before connecting the sender, and disable any transparent POST replay.
 
-Reuse `NotificationClient`, existing connection/configuration conventions and the
-conservative status classification in `NotificationFailure`. Keep the batch ledger
+Reuse the Notify SDK's encoding, authentication and acceptance parser, existing
+configuration conventions and the conservative classification in `NotificationFailure`.
+The 6.2.0 SDK transport exposes no timeout/replay controls, so slice 3 deliberately
+uses dedicated OkHttp HTTP with retry/redirect controls and a non-replayable body;
+see the execution evidence. Do not route Gazette through the SDK's default send transport. Keep the batch ledger
 and orchestration outside `EmailTemplate`, `CaseEmailService`, `NotificationOutbox`
 and `deedpoll_notification`: those own correspondence for one case per row.
 
@@ -275,7 +279,7 @@ provider retention duration still needs provisioning. Never retain expiring file
 ## Implementation slices and acceptance evidence
 
 Each slice gets a separate execution plan and PR; completing this design does not
-check off its code. Slices 1 and 2 are implemented; see the
+check off its code. Slices 1–3 are implemented; see the
 [ledger evidence](gazette-1c-request-ledger-and-guards.md) and
 [preview/status evidence](gazette-1d-preview-admission-and-status.md). Implement in this order:
 

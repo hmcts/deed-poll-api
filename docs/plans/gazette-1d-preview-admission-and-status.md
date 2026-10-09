@@ -120,6 +120,10 @@ has been performed for this slice.
 
 ## Next executable slice
 
+Update 9 October 2026: PR #92 merged this slice into master. The next API slice is
+now implemented in [delivery/recovery](gazette-1e-delivery-and-recovery.md).
+The text below records the original handoff.
+
 Implement one-shot Notify delivery and the bounded recovery scanner, using these
 immutable inputs and ledger transitions. Prove file preparation failures, known refusal,
 ambiguous sends, accepted-but-unsettled outcomes, crashes and zero automatic resends.

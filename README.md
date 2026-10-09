@@ -766,7 +766,7 @@ request evidence prevents deletion. Uncertain outcomes keep reservations.
 | Method | Path | Behaviour (admin-only) |
 |---|---|---|
 | POST | `/caseworker/gazette-notice-previews` | Check up to 100 distinct cases, recipient and configuration; return counts, references and a 30-minute confirmation token |
-| POST | `/caseworker/gazette-notices` | Resolve an existing key/body/subject to recorded status; fresh HTTP submissions remain unavailable |
+| POST | `/caseworker/gazette-notices` | Submit one confirmed batch when enabled; repeated key/body/subject reads status without another send |
 | GET | `/caseworker/gazette-notice-requests` | Paged request statuses; optional exact state filter |
 | GET | `/caseworker/gazette-notices/{batchId}` | Current request or legacy sent status; unavailable legacy facts are null |
 | GET | `/caseworker/gazette-notices/{batchId}/cases` | All frozen references, paged at 25 by default, capped at 100 |
@@ -785,13 +785,28 @@ receipts are not published. Sent means accepted by Notify, not delivered or publ
 
 `GAZETTE_ENABLED` defaults false; provisioned previews also need the configured
 recipient, the required `NOTIFY_TEMPLATE_GAZETTE_ADULT`/`MINOR`/`MIXED` variant and
-existing Notify key/reply-to/retention settings. Even with complete configuration,
-fresh HTTP submissions receive 503 `GAZETTE_UNAVAILABLE` until the delivery/recovery
-slice is ready. No Notify caller or recovery scheduler is implemented yet.
+existing Notify key/reply-to/retention settings. Disabled or incomplete configuration
+returns 503 `GAZETTE_UNAVAILABLE` before admitting a new request. Existing requests
+remain readable and repeatable while delivery is disabled.
+
+The originating POST generates all required files, commits send authority, then sends
+one email with download links. Known refusals (400/403/429) end `NotSent`; ambiguous
+responses or failed local acceptance settlement stop as `Uncertain`. No request is
+automatically sent again. Recovery runs independently every minute, settling at most
+25 expired requests per pass without calling Notify. It releases expired preparation
+reservations and retains every possible-send reservation. File bytes and upload values
+stay in memory; only file metadata/checksums and provider receipt evidence are stored.
+
+Gazette uses a dedicated HTTP transport with connection retries and redirects disabled,
+a non-replayable body, 5-second connect, 30-second read/write and 60-second call timeouts.
+It connects directly; deployment egress must allow this and must not replay POSTs.
+Activation still requires Notify provisioning, support ownership and controlled
+recipient/download evidence. See the [delivery and recovery runbook](docs/GAZETTE-RECOVERY.md).
 
 See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md),
 [ledger evidence](docs/plans/gazette-1c-request-ledger-and-guards.md) and
-[preview/status implementation](docs/plans/gazette-1d-preview-admission-and-status.md).
+[preview/status implementation](docs/plans/gazette-1d-preview-admission-and-status.md), and
+[delivery/recovery evidence](docs/plans/gazette-1e-delivery-and-recovery.md).
 
 ### The OpenAPI document
 

@@ -31,9 +31,8 @@ import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
- * Internal durable primitives, without a sender or HTTP admission endpoint.
+ * Durable primitives used by admission, one-shot delivery and recovery.
  * Fingerprints are verified and immutable generation inputs captured under the admission locks.
- * HTTP can resolve existing requests; fresh public admission awaits the delivery adapter.
  */
 @Service
 public class GazetteRequestLedger {
@@ -232,7 +231,7 @@ public class GazetteRequestLedger {
         });
     }
 
-    /** One recovery transition; the bounded scanner is deliberately a later slice. */
+    /** One idempotent recovery transition, with the lease rechecked under a row lock. */
     public boolean expire(UUID id) {
         return commit(() -> {
             GazetteRequest row = requests.read(id, true).orElse(null);

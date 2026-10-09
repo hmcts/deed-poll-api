@@ -10,7 +10,7 @@ import uk.gov.service.notify.SendEmailResponse;
 import java.util.Map;
 
 /**
- * The one thing in this service that sends an email: hands one claimed outbox row to GOV.UK Notify and reports
+ * The per-case outbox sender: hands one claimed outbox row to GOV.UK Notify and reports
  * what came back in the vocabulary the outbox settles rows with.
  *
  * <p>The implementation of {@link NotificationSender} the outbox was written to work without. Adding this bean is
