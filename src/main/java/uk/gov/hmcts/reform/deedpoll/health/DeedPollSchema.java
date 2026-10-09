@@ -68,7 +68,11 @@ public class DeedPollSchema {
         "deedpoll_gazette_notice_batch",
         "deedpoll_gazette_notice_batch_case",
         "deedpoll_gazette_settings",
-        "deedpoll_gazette_settings_change"
+        "deedpoll_gazette_settings_change",
+        "deedpoll_gazette_request",
+        "deedpoll_gazette_request_case",
+        "deedpoll_gazette_reservation",
+        "deedpoll_gazette_request_file"
     );
 
     /**
