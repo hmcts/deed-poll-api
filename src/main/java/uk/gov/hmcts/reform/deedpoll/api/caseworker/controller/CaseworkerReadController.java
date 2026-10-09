@@ -164,6 +164,10 @@ public class CaseworkerReadController {
      * call, and the Feign timeouts in {@code application.yaml} cap what that call can cost; {@code max-duration}
      * bounds a CCD that answers every call slowly but in time.
      */
+    @io.swagger.v3.oas.annotations.Operation(
+        description = "The named readyForPublication worklist and count require "
+            + "caseworker-deedpoll-delivery-manager, including saved-query links. Other authenticated roles "
+            + "receive 403 before reads or side effects. Ordinary filters and field conditions are unchanged.")
     @GetMapping("/cases")
     public CaseListResponse cases(
         @RequestParam(name = "filter", required = false) String filter,

@@ -1,5 +1,11 @@
 # Plan: generalise the derived admin boolean into a role/capability model
 
+> Superseded in full (9 October 2026) by the
+> [Team leader and Delivery Manager contract](20261009-team-leader-delivery-manager.md).
+> Follow that plan's roles, capabilities and narrow privacy adapters. The behaviour-preserving scope
+> and mandatory removal of every isAdmin adapter below no longer apply. This text is retained as
+> planning history, not an active implementation checklist.
+
 ## Overview
 
 **A behaviour-preserving refactor, and nothing else.** Replace `boolean isAdmin`, threaded through three

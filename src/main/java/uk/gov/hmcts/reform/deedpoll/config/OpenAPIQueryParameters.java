@@ -135,7 +135,9 @@ public class OpenAPIQueryParameters {
                     + "`daysAwaitingConfirmation`. `readyForPublication` selects `publishToLondonGazette=true`, "
                     + "`dateNoticeSentToLondonGazette` absent and `state=Enroled`, "
                     + "excluding `type=DeedOfRelinquishment`; "
-                    + "other types, including unset types, are unchanged. Its default sort is "
+                    + "other types, including unset types, are unchanged. This named worklist and its count require "
+                    + "caseworker-deedpoll-delivery-manager (403 otherwise), including saved-query links. "
+                    + "Its default sort is "
                     + "`dateEnroled:asc` (oldest enrolled first), unless the caller supplies `sort`."));
     }
 

@@ -193,11 +193,11 @@ artifact and its source SHA/checksum for admin rather than reusing a shared temp
 **Files:** cftlib/test fixtures; Gazette controller OpenAPI descriptions; integration publisher tests;
 `README.md`, `CLAUDE.md`, active role/Gazette plans.
 
-- [ ] Make Gazette fixtures use Delivery Manager-only identities. Keep separate Team leader and legacy negative fixtures; avoid fixing tests by assigning all roles to every caller.
-- [ ] Update operation descriptions and privileged-role documentation, including named-ready-filter refusal. Preserve paths, payloads, idempotency semantics and audit attribution.
-- [ ] Mark the active older Gazette plans' admin-access decisions and the generalisation plan as superseded by this permission contract. Keep completed plans and vendored reference source as historical evidence.
-- [ ] Generate the complete OpenAPI artifact and record source SHA, checksum and full delta for the admin plan. Do not filter unrelated contract drift away; describe it for reconciliation.
-- [ ] Run publisher/contract tests and review regenerated artifacts for unintended schema/path changes.
+- [x] Make Gazette fixtures use Delivery Manager-only identities. Keep separate Team leader and legacy negative fixtures; avoid fixing tests by assigning all roles to every caller.
+- [x] Update operation descriptions and privileged-role documentation, including named-ready-filter refusal. Preserve paths, payloads, idempotency semantics and audit attribution.
+- [x] Mark the active older Gazette plans' admin-access decisions and the generalisation plan as superseded by this permission contract. Keep completed plans and vendored reference source as historical evidence.
+- [x] Generate the complete OpenAPI artifact and record source SHA, checksum and full delta for the admin plan. Do not filter unrelated contract drift away; describe it for reconciliation.
+- [x] Run publisher/contract tests and review regenerated artifacts for unintended schema/path changes.
 
 ### Task 6: Verify acceptance criteria and prepare the release handoff
 
@@ -532,3 +532,107 @@ checkstyle/ and gates.txt. The runtime scan found no legacy role checks or `isAd
 No Staff test classes exist on this baseline; the existing Security tests were included. Full build,
 OpenAPI publication and release acceptance remain Tasks 5–6; these local tests do not prove deployment.
 Only Task 4 is complete in this iteration.
+
+
+## Execution evidence — Task 5 (9 October 2026)
+
+Started clean at `c87c076302ad780927e2c1403ca04b0cd84bb89a` on
+`feat/team-leader-delivery-manager`. Read workspace/repository instructions and companion plans.
+Only this API worktree was edited. No push, review stage, merge, deployment or account change occurred.
+
+Gazette happy-path fixtures now explicitly name Delivery Manager and still carry only that claim.
+Existing separate Team leader/legacy denial fixtures and historical persisted sender names remain intact.
+The cftlib legacy user is explicitly named `LEGACY_ADMIN_USER`; its identity and legacy-only assignment
+are unchanged, alongside the existing separate Team leader and Delivery Manager accounts. No account
+was granted additional roles. Gazette runtime paths, bodies, admission/idempotency, recovery and audit
+attribution are unchanged. README and CLAUDE now document the capability matrix and named-worklist
+refusal. The five active Gazette implementation plans carry a superseding access notice, and the older
+role-generalisation plan is superseded in full. Completed plans and vendored references were untouched.
+
+All eight Gazette operation descriptions now require the Delivery Manager claim. The case-list operation
+and filter parameter document the named `readyForPublication` worklist/count and saved-query refusal.
+A new publisher test verifies all eight descriptions and both worklist descriptions, alongside existing
+path/schema/body/idempotency coverage. `OPENAPI_OUTPUT_PATH` optionally isolates publisher output in an
+existing directory; the default `/tmp/openapi-specs.json` pipeline contract is retained. Every run here
+used a worktree-local path, including the before artifact; no shared temporary spec was written.
+
+### Complete contract handoff for the admin companion
+
+Artifact: `build/evidence/task5/openapi-team-leader-delivery-manager.json` (complete, unfiltered).
+SHA-256: `647a110a74114db4f1114a469d85240876224becb90be0b3d038121d5fb1e70e`.
+The document contains 51 operations over 36 paths and 55 schemas, including the root operation.
+
+Source identity is the starting commit above plus `build/evidence/task5/source.patch`
+(SHA-256 `e66eaa4a5814fb046a6ff42d2c015acfd81c808d54546d8d2d201459b4b9d5f1`).
+The Git source snapshot tree is `8c2e9faadfac69ad92b9424768cdd278b7393f9a`, whose `src` subtree is
+`40b3d1760ed1eb6c8a5588c1038b9ed83b1f9570`. This identifies the generated source without claiming the
+starting commit alone contains these changes. The final task commit retains that exact source subtree;
+only documentation/progress is added afterwards. Machine-readable provenance is in `provenance.json`.
+
+Compared the entire parsed JSON against the API before artifact, SHA-256
+`c5465002de9a57d175cad73a9b33392b22d8e73337cd02df5ece51eec80b86cc`:
+exactly ten documentation locations change — the eight Gazette operation descriptions, the case-list
+operation description and its `filter` parameter description. There are no added/removed paths,
+operations, schemas or properties; operation IDs, parameters other than that description, request/response
+shapes, metadata, servers and security are unchanged. Full before/after values are retained in
+`api-before-full-delta.json`, with the location inventory in `api-before-summary.json`.
+
+Also compared against the complete read-only admin working-copy input
+`../../deed-poll-admin/libs/deed-poll-api-client/openapi.json`, SHA-256
+`1469c505bfae3a47bd66a53a52658789ddeb933dcdfa0de16e2542e7c766d9d9`.
+This file checksum, rather than an assumed unchanged sibling HEAD, identifies the actual input.
+It contains 44 operations, 31 paths and 44 schemas. The complete delta has 21 changed JSON locations:
+
+- Seven added operations across five new paths and one existing path: GET/PUT
+  `/caseworker/gazette-settings`, POST `/caseworker/gazette-notice-previews`, GET
+  `/caseworker/gazette-notice-requests`, GET `/caseworker/gazette-notices/{batchId}`, GET
+  `/caseworker/gazette-notices/{batchId}/cases`, and POST on the existing `/caseworker/gazette-notices`.
+- Eleven added schemas: `Conflict`, `GazetteError`, `GazetteMemberResponse`, `GazetteMembersResponse`,
+  `GazettePreviewResponse`, `GazetteRequestsResponse`, `GazetteSettingsResponse`, `GazetteStatusResponse`,
+  `PreviewGazetteRequest`, `SubmitGazetteRequest`, `UpdateGazetteSettingsRequest`.
+- One existing-schema addition: `GazetteNoticeBatchResponse.batchId`, a string with UUID format.
+- Three existing documentation locations change: history GET description, case-list GET description,
+  and only the `filter` parameter's description within its parameter array.
+
+No removals or other changes were found. The newer settings, preview, submission/status/member surfaces
+and history batchId are pre-existing API drift, not introduced by this role task; none was filtered out.
+Full added definitions and before/after values are in `admin-current-full-delta.json`, with a location
+inventory in `admin-current-summary.json`. The admin plan must reconcile its consumed/deferred contract
+inventories against this whole artifact and regenerate its client; no sibling file was changed here.
+Build evidence is local and ignored, so transfer these exact files with their checksums during handoff,
+or regenerate from this task's source using the isolated output option. No remote publication is claimed.
+
+### Task 5 validation
+
+Executed from this worktree with Java 21 and Docker, without a `requires-docker` exclusion:
+
+```bash
+export JAVA_HOME=/tmp/deed-poll-jdk21
+export JAVA_TOOL_OPTIONS=-XX:UseSVE=0
+export TESTCONTAINERS_RYUK_DISABLED=true
+export OPENAPI_OUTPUT_PATH="$PWD/build/evidence/task5/openapi-team-leader-delivery-manager.json"
+./gradlew integration --tests '*OpenAPIPublisherTest' test --tests '*Gazette*' \
+  checkstyleMain checkstyleTest checkstyleIntegrationTest checkstyleCftlib checkstyleCftlibTest \
+  compileCftlibTestJava --max-workers=2 \
+  -Porg.gradle.java.installations.paths=/tmp/deed-poll-jdk21 \
+  -Porg.gradle.java.installations.auto-detect=false
+git diff --check
+git diff --cached --check
+```
+
+Before changing descriptions, ran `integration --tests '*OpenAPIPublisherTest.generateDocs'` with
+`OPENAPI_OUTPUT_PATH` pointing at `openapi-before.json` and the same environment/toolchain options:
+one passing baseline publisher test. Added the new description assertions and ran
+`integration --tests '*OpenAPIPublisherTest.documentsEveryGazetteGateAndNamedWorklistRefusal'`:
+one expected failure against legacy-admin descriptions (`red.log`). After implementation, all 281
+Gazette tests and 17 publisher tests passed; initial validation then failed main/test Checkstyle on
+longer claim/fixture names. Wrapped the lines without changing the artifact, then reran the full focused
+command above successfully.
+
+Final result: BUILD SUCCESSFUL, 281 Gazette tests across 23 suites and 17 publisher tests in one suite,
+zero failures/errors/skips. PostgreSQL-backed tests were included. All five Checkstyle tasks and cftlib
+fixture/test compilation passed. The final artifact checksum matches the recorded handoff. Evidence in
+`build/evidence/task5/` includes baseline.log, red.log, validation-initial.log, validation.log, counts.json,
+test-results/, integration-results/ and checkstyle/, alongside the source patch, artifacts and full deltas.
+Existing compiler/JVM/Gradle warnings remain. cftlib execution, full build and release acceptance are
+Task 6, not claimed here. Only Task 5 was completed in this iteration.

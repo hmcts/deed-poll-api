@@ -22,14 +22,16 @@ public class CaseworkerGazetteSettingsController {
     }
 
     @Operation(operationId = "getGazetteSettings", summary = "Read London Gazette recipient settings",
-        description = "Requires caseworker-deedpoll-admin. Initially recipient and attribution are null, revision 0.")
+        description = "Requires caseworker-deedpoll-delivery-manager. "
+            + "Initially recipient and attribution are null, revision 0.")
     @GetMapping
     public GazetteSettingsResponse get() {
         return GazetteSettingsResponse.from(service.get(CurrentUsers.required()));
     }
 
     @Operation(operationId = "updateGazetteSettings", summary = "Update London Gazette recipient settings",
-        description = "Requires caseworker-deedpoll-admin. Supply the revision read with the form; stale revisions "
+        description = "Requires caseworker-deedpoll-delivery-manager. "
+            + "Supply the revision read with the form; stale revisions "
             + "return 409 without changes. Each changed address increments revision and records attribution. "
             + "Saving the current address at the current revision is a no-op. No email is sent.")
     @PutMapping

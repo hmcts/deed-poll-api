@@ -52,10 +52,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Built-in feature which saves service's swagger specs in temporary directory.
  * Each CI run on master should automatically save and upload (if updated) documentation.
  *
- * <p>The path below is the contract with the pipeline, not a choice: the HMCTS Jenkins library reads
+ * <p>The default path below is the contract with the pipeline: the HMCTS Jenkins library reads
  * {@code /tmp/openapi-specs.json} after the integration stage and publishes it to {@code hmcts/cnp-api-docs}.
  * It is the template's own wiring, kept verbatim -- {@code pcs-api} keeps the same file -- so that it works when
- * the pipeline is onboarded rather than needing to be discovered then.
+ * the pipeline is onboarded rather than needing to be discovered then. Local concurrent runs may set
+ * {@code OPENAPI_OUTPUT_PATH} to an isolated artifact in an existing directory.
  *
  * <p><strong>What the spec covers is asserted, not assumed.</strong> The template's version only checked that
  * the document was served, which stays green while it describes nothing: {@code springdoc.packagesToScan} named
@@ -68,8 +69,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
-    /** Fixed output contract with the publishing pipeline. */
-    private static final Path PUBLISHED_SPEC = Paths.get("/tmp/openapi-specs.json");
+    /** Pipeline default, with an optional isolated local output path. */
+    private static final Path PUBLISHED_SPEC = Paths.get(
+        System.getenv().getOrDefault("OPENAPI_OUTPUT_PATH", "/tmp/openapi-specs.json"));
 
     /**
      * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
@@ -122,9 +124,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     );
 
     /**
-     * The admins' view of the CCD creation attempts and its two repairs (plan 02b, task 4), counted apart from
+     * The privileged view of the CCD creation attempts and its two repairs (plan 02b, task 4), counted apart from
      * {@link #CASEWORKER_PATHS} for the reason the judicial routes are: the caseworker count is a number the README
-     * and the resume notes state, and these three operations are an admin's, gated on {@code Role.DEEDPOLL_ADMIN}.
+     * and the resume notes state, and these three operations require {@code REPAIR_CCD}.
      */
     private static final List<String> CCD_ATTEMPT_PATHS = List.of(
         "/caseworker/ccd-attempts",
@@ -132,7 +134,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/ccd-attempts/{attemptId}/retry"
     );
 
-    /** Admin-only publication history, whose single GET is asserted separately. */
+    /** Delivery Manager-only publication history, whose single GET is asserted separately. */
     private static final String GAZETTE_HISTORY_PATH = "/caseworker/gazette-notices";
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -141,12 +143,12 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     private MockMvc mvc;
 
     @Test
-    void documentsAdminGazetteHistoryWithoutPrivateIdentities() throws Exception {
+    void documentsDeliveryManagerGazetteHistoryWithoutPrivateIdentities() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
         JsonNode path = spec.get("paths").get(GAZETTE_HISTORY_PATH);
         assertThat(path.fieldNames()).toIterable().containsExactlyInAnyOrder("get", "post");
-        assertThat(path.at("/get/description").asText()).contains("caseworker-deedpoll-admin");
+        assertThat(path.at("/get/description").asText()).contains("caseworker-deedpoll-delivery-manager");
         assertThat(path.at("/get/responses/200/content/*~1*/schema/$ref").asText())
             .isEqualTo("#/components/schemas/GazetteNoticeHistoryResponse");
         assertThat(spec.at("/components/schemas/GazetteNoticeHistoryResponse/properties").fieldNames())
@@ -194,13 +196,38 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
         JsonNode path = spec.get("paths").get("/caseworker/gazette-settings");
         assertThat(path.fieldNames()).toIterable().containsExactlyInAnyOrder("get", "put");
-        assertThat(path.at("/put/description").asText()).contains("caseworker-deedpoll-admin", "409", "No email");
+        assertThat(path.at("/put/description").asText())
+            .contains("caseworker-deedpoll-delivery-manager", "409", "No email");
         assertThat(spec.at("/components/schemas/GazetteSettingsResponse/properties").fieldNames()).toIterable()
             .containsExactlyInAnyOrder("recipientEmail", "revision", "updatedAt", "updatedBy");
         JsonNode body = spec.at("/components/schemas/UpdateGazetteSettingsRequest");
         assertThat(body.get("required").toString()).contains("recipientEmail", "revision");
         assertThat(body.get("additionalProperties").asBoolean()).isFalse();
         assertThat(body.at("/properties/recipientEmail/maxLength").asInt()).isEqualTo(254);
+    }
+
+    @Test
+    void documentsEveryGazetteGateAndNamedWorklistRefusal() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+        int operations = 0;
+        for (String path : List.of("/caseworker/gazette-notices", "/caseworker/gazette-settings",
+            "/caseworker/gazette-notice-previews", "/caseworker/gazette-notice-requests",
+            "/caseworker/gazette-notices/{batchId}", "/caseworker/gazette-notices/{batchId}/cases")) {
+            for (JsonNode operation : spec.get("paths").get(path)) {
+                assertThat(operation.path("description").asText()).contains("caseworker-deedpoll-delivery-manager")
+                    .doesNotContain("caseworker-deedpoll-admin");
+                operations++;
+            }
+        }
+        assertThat(operations).isEqualTo(8);
+        JsonNode cases = spec.get("paths").get("/caseworker/cases").get("get");
+        assertThat(cases.path("description").asText())
+            .contains("readyForPublication", "caseworker-deedpoll-delivery-manager", "403", "saved-query", "count");
+        JsonNode filter = StreamSupport.stream(cases.get("parameters").spliterator(), false)
+            .filter(parameter -> "filter".equals(parameter.path("name").asText())).findFirst().orElseThrow();
+        assertThat(filter.path("description").asText())
+            .contains("caseworker-deedpoll-delivery-manager", "403");
     }
 
     @Test

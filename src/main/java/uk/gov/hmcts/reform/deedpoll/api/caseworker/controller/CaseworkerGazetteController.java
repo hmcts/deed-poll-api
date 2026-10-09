@@ -11,7 +11,7 @@ import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteNoticeHistory;
 
-/** Publication audit history. The domain enforces the admin role on every read. */
+/** Publication audit history. The domain enforces ACCESS_GAZETTE on every read. */
 @RestController
 @RequestMapping("/caseworker/gazette-notices")
 public class CaseworkerGazetteController {
@@ -23,7 +23,8 @@ public class CaseworkerGazetteController {
     }
 
     @Operation(summary = "Read Gazette notice history",
-        description = "Requires caseworker-deedpoll-admin. Batches are newest first, with frozen case references "
+        description = "Requires caseworker-deedpoll-delivery-manager. "
+            + "Batches are newest first, with frozen case references "
             + "and display-name attribution. At most 100 references per batch, in lexical display order, with "
             + "referencesTruncated indicating omitted members. This is not send order. No custom filtering or sorting.")
     @GetMapping

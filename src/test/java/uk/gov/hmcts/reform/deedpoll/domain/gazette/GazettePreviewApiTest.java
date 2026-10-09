@@ -61,7 +61,8 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     private static final String PREVIEW = "/caseworker/gazette-notice-previews";
     private static final String REQUESTS = "/caseworker/gazette-notice-requests";
     private static final String SUBJECT = "gazette-preview-test";
-    private static final CurrentUser ADMIN = CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Admin", SUBJECT);
+    private static final CurrentUser DELIVERY_MANAGER =
+        CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Delivery Manager", SUBJECT);
     private static final StubIdam IDAM = new StubIdam();
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -107,7 +108,7 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     @BeforeEach
     void configure() {
         IDAM.stubDefaults();
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Admin", List.of(Role.DELIVERY_MANAGER.claimValue()));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Delivery Manager", List.of(Role.DELIVERY_MANAGER.claimValue()));
         oldSettings = jdbc.queryForMap("SELECT * FROM deedpoll_gazette_settings WHERE id = 1");
         jdbc.update("""
             UPDATE deedpoll_gazette_settings SET recipient_email = 'gazette@example.com', revision = 1,
@@ -148,14 +149,15 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     @MethodSource("refusedClaims")
     void everyOperationRefusesValidRequestsWithoutReadingOrChangingEvidence(List<String> claims) throws Exception {
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         UUID key = UUID.randomUUID();
-        CurrentUser verified = CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Admin", StubIdam.SUBJECT);
+        CurrentUser verified =
+            CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Delivery Manager", StubIdam.SUBJECT);
         var admitted = admit(verified, key, preview, id);
         String fresh = ready("Minor");
-        GazettePreview freshPreview = previews.preview(ADMIN, List.of(fresh));
+        GazettePreview freshPreview = previews.preview(DELIVERY_MANAGER, List.of(fresh));
         final var before = evidence();
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Admin", claims);
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Delivery Manager", claims);
         for (MockHttpServletRequestBuilder request : routes(admitted.request().id())) {
             authorised(request).andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.recipientEmail").doesNotExist())
@@ -174,9 +176,10 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     @ValueSource(booleans = {false, true})
     void deliveryManagerAloneOrWithJudicialPassesEveryGate(boolean judicial) throws Exception {
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         UUID key = UUID.randomUUID();
-        final var admitted = admit(CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Admin", StubIdam.SUBJECT),
+        final var admitted = admit(
+            CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Delivery Manager", StubIdam.SUBJECT),
             key, preview, id);
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Manager", judicial
             ? List.of(Role.DELIVERY_MANAGER.claimValue(), Role.JUDICIAL.claimValue())
@@ -287,9 +290,9 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
         "representativePostcode", "applicantEmail", "displayReference"})
     void changingAnyMappedTextAfterPreviewRefusesAdmission(String field) {
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         jdbc.update("UPDATE deedpoll_deedpoll SET \"" + field + "\" = 'changed' WHERE id = ?", id);
-        assertThatThrownBy(() -> admit(ADMIN, UUID.randomUUID(), preview, id))
+        assertThatThrownBy(() -> admit(DELIVERY_MANAGER, UUID.randomUUID(), preview, id))
             .isInstanceOfSatisfying(GazetteRefusal.class,
                 error -> assertThat(error.code()).isEqualTo(GazetteRefusal.Code.SELECTION_CHANGED));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_gazette_reservation WHERE deed_poll_id = ?",
@@ -302,9 +305,9 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
         "\"nationalitySection\" = 'Section1'"})
     void changingMappedDatesAndEnumsRefusesAdmission(String assignment) {
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         jdbc.update("UPDATE deedpoll_deedpoll SET " + assignment + " WHERE id = ?", id);
-        assertThatThrownBy(() -> admit(ADMIN, UUID.randomUUID(), preview, id))
+        assertThatThrownBy(() -> admit(DELIVERY_MANAGER, UUID.randomUUID(), preview, id))
             .isInstanceOfSatisfying(GazetteRefusal.class,
                 error -> assertThat(error.code()).isEqualTo(GazetteRefusal.Code.SELECTION_CHANGED));
     }
@@ -313,11 +316,11 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     void canonicalSelectionAndUnmappedChangesPreserveConfirmation() throws Exception {
         String adult = ready("Adult");
         String minor = ready("Minor");
-        GazettePreview preview = previews.preview(ADMIN, List.of(adult, minor));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(adult, minor));
         jdbc.update("UPDATE deedpoll_deedpoll SET \"modifiedBy\" = 'Another editor' WHERE id = ?", adult);
         // Minor applicant address is not among the supplied minor template's visible columns.
         jdbc.update("UPDATE deedpoll_deedpoll SET \"applicantAddress1\" = 'Not exported' WHERE id = ?", minor);
-        var admitted = admit(ADMIN, UUID.randomUUID(), preview, minor, adult);
+        var admitted = admit(DELIVERY_MANAGER, UUID.randomUUID(), preview, minor, adult);
         assertThat(admitted.request().configuration().templateId().toString())
             .isEqualTo("20000000-0000-0000-0000-000000000003");
         assertThat(admitted.inputs()).hasSize(2);
@@ -332,8 +335,9 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     void requestPagingHasStableOrderStateFilterAndBounds() throws Exception {
         String first = ready("Adult");
         String second = ready("Minor");
-        var one = admit(ADMIN, UUID.randomUUID(), previews.preview(ADMIN, List.of(first)), first);
-        var two = admit(ADMIN, UUID.randomUUID(), previews.preview(ADMIN, List.of(second)), second);
+        var one = admit(DELIVERY_MANAGER, UUID.randomUUID(), previews.preview(DELIVERY_MANAGER, List.of(first)), first);
+        var two = admit(DELIVERY_MANAGER, UUID.randomUUID(),
+            previews.preview(DELIVERY_MANAGER, List.of(second)), second);
         jdbc.update("UPDATE deedpoll_gazette_request SET submitted_at = '2026-01-01' WHERE id IN (?, ?)",
             one.request().id(), two.request().id());
         String higher = java.util.stream.Stream.of(one.request().id().toString(), two.request().id().toString())
@@ -362,19 +366,19 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     @Test
     void expiryReadinessAndRecipientRevisionAreRecheckedBeforeAdmission() {
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         var input = GazetteInput.from(cases.findById(id).orElseThrow());
         String expired = GazetteConfirmation.issue(List.of(input), AuditClock.now().minusSeconds(1));
-        assertThatThrownBy(() -> ledger.admit(ADMIN, UUID.randomUUID(), List.of(id), expired, 1))
+        assertThatThrownBy(() -> ledger.admit(DELIVERY_MANAGER, UUID.randomUUID(), List.of(id), expired, 1))
             .isInstanceOfSatisfying(GazetteRefusal.class,
                 error -> assertThat(error.code()).isEqualTo(GazetteRefusal.Code.CONFIRMATION_EXPIRED));
         jdbc.update("UPDATE deedpoll_deedpoll SET \"publishToLondonGazette\" = false WHERE id = ?", id);
-        assertThatThrownBy(() -> admit(ADMIN, UUID.randomUUID(), preview, id))
+        assertThatThrownBy(() -> admit(DELIVERY_MANAGER, UUID.randomUUID(), preview, id))
             .isInstanceOfSatisfying(GazetteRefusal.class,
                 error -> assertThat(error.code()).isEqualTo(GazetteRefusal.Code.CASE_NOT_READY));
         jdbc.update("UPDATE deedpoll_deedpoll SET \"publishToLondonGazette\" = true WHERE id = ?", id);
         jdbc.update("UPDATE deedpoll_gazette_settings SET revision = 3");
-        assertThatThrownBy(() -> admit(ADMIN, UUID.randomUUID(), preview, id))
+        assertThatThrownBy(() -> admit(DELIVERY_MANAGER, UUID.randomUUID(), preview, id))
             .isInstanceOfSatisfying(GazetteRefusal.class,
                 error -> assertThat(error.code()).isEqualTo(GazetteRefusal.Code.RECIPIENT_CHANGED));
     }
@@ -383,9 +387,9 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     void detachedInputsGenerateOriginalValuesAndRepeatedKeysNeverReturnInputs() throws Exception {
         String id = ready("Adult");
         jdbc.update("UPDATE deedpoll_deedpoll SET \"newForename\" = 'Original' WHERE id = ?", id);
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         UUID key = UUID.randomUUID();
-        var admitted = admit(ADMIN, key, preview, id);
+        var admitted = admit(DELIVERY_MANAGER, key, preview, id);
         // Direct fixture SQL emulates a later change after the short lock; ordinary PATCH is already guarded.
         jdbc.update("UPDATE deedpoll_deedpoll SET \"newForename\" = 'Changed' WHERE id = ?", id);
         assertThatThrownBy(() -> admitted.inputs().getFirst().values().set(4, "Mutated"))
@@ -394,7 +398,7 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
         try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(generated.content()))) {
             assertThat(workbook.getSheetAt(0).getRow(1).getCell(4).getStringCellValue()).isEqualTo("Original");
         }
-        var repeat = ledger.admit(ADMIN, key, List.of(id), preview.selectionFingerprint(), 1);
+        var repeat = ledger.admit(DELIVERY_MANAGER, key, List.of(id), preview.selectionFingerprint(), 1);
         assertThat(repeat.claim()).isNull();
         assertThat(repeat.inputs()).isEmpty();
         previewHttp(id).andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("CASE_RESERVED"));
@@ -403,7 +407,7 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     @Test
     void disabledDeliveryCannotAdmitAFreshRequest() throws Exception {
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         org.mockito.Mockito.doThrow(new GazetteRefusal(GazetteRefusal.Code.GAZETTE_UNAVAILABLE))
             .when(configuration).forGroups(1, 0);
         submit(UUID.randomUUID(), preview, id).andExpect(status().isServiceUnavailable())
@@ -419,7 +423,7 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
         "unknown", "duplicates", "tokenMalformed"})
     void submissionStrictlyValidatesItsOwnBody(String mutation) throws Exception {
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         Map<String, Object> body = new java.util.HashMap<>(Map.of("caseIds", List.of(id),
             "selectionFingerprint", preview.selectionFingerprint(), "recipientRevision", 1));
         switch (mutation) {
@@ -442,7 +446,7 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     @ValueSource(strings = {"1-1-1-1-1", "invalid", "", "missing"})
     void submissionRequiresACanonicalUuidHeader(String header) throws Exception {
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         var request = post(ROOT).contentType("application/json").content(JSON.writeValueAsString(Map.of(
             "caseIds", List.of(id), "selectionFingerprint", preview.selectionFingerprint(), "recipientRevision", 1)));
         if (!header.equals("missing")) {
@@ -455,8 +459,9 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     void sameKeyHttpRetryReturnsStatusAndLocationBeforeCurrentConfigurationChecks() throws Exception {
         String id = ready("Minor");
         UUID key = UUID.randomUUID();
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
-        CurrentUser verified = CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Admin", StubIdam.SUBJECT);
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
+        CurrentUser verified =
+            CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Delivery Manager", StubIdam.SUBJECT);
         var admitted = admit(verified, key, preview, id);
         jdbc.update("UPDATE deedpoll_gazette_settings SET recipient_email = 'new@example.com', revision = 2");
         JsonNode pending = json(submit(key, preview, id).andExpect(status().isAccepted())
@@ -487,12 +492,12 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     @Test
     void changedSubjectAndPayloadAreTypedConflicts() throws Exception {
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         UUID key = UUID.randomUUID();
-        admit(ADMIN, key, preview, id);
+        admit(DELIVERY_MANAGER, key, preview, id);
         submit(key, preview, id).andExpect(status().isConflict())
             .andExpect(jsonPath("$.code").value("REQUEST_KEY_REUSED"));
-        assertThatThrownBy(() -> ledger.repeat(ADMIN, key, List.of(id), "different", 1))
+        assertThatThrownBy(() -> ledger.repeat(DELIVERY_MANAGER, key, List.of(id), "different", 1))
             .isInstanceOfSatisfying(GazetteRefusal.class,
                 error -> assertThat(error.code()).isEqualTo(GazetteRefusal.Code.REQUEST_KEY_REUSED));
     }

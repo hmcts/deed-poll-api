@@ -1,5 +1,11 @@
 # Plan: London Gazette publication — ready list, batch send and audit trail
 
+> Superseded access decision (9 October 2026): [Team leader and Delivery Manager contract](20261009-team-leader-delivery-manager.md)
+> governs staff permissions. All Gazette entry points, including the named ready worklist/count and
+> saved-query execution, require Delivery Manager alone. Team leader and temporary legacy admin retain
+> non-Gazette casework capabilities only. Earlier admin-access wording below is historical; other
+> delivery, idempotency and recovery decisions remain applicable.
+
 ## Overview
 
 A caseworker-admin needs to notice when applications are ready to be sent to the London Gazette, check them,

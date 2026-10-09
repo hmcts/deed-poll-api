@@ -71,7 +71,7 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
     @BeforeEach
     void setUp() {
         IDAM.stubDefaults();
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Administrator", List.of(Role.DELIVERY_MANAGER.claimValue()));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Delivery Manager", List.of(Role.DELIVERY_MANAGER.claimValue()));
         jdbc.update("DELETE FROM deedpoll_gazette_settings_change");
         jdbc.update("UPDATE deedpoll_gazette_settings SET revision = 0, recipient_email = null, "
             + "updated_at = null, updated_by_id = null, updated_by_name = null WHERE id = 1");
@@ -89,8 +89,8 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
 
     @ParameterizedTest
     @ValueSource(strings = {"caseworker-civil", "caseworker-deedpoll", "caseworker-deedpoll-judicial"})
-    void refusesBothOperationsForNonAdmins(String role) throws Exception {
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Administrator", List.of(role));
+    void refusesBothOperationsForNonDeliveryManagers(String role) throws Exception {
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Delivery Manager", List.of(role));
         authorised(get(PATH)).andExpect(status().isForbidden());
         save("{\"recipientEmail\":\"gazette@example.com\",\"revision\":0}").andExpect(status().isForbidden());
         assertThat(auditCount()).isZero();
@@ -100,11 +100,11 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
     void persistsChangesWithVerifiedAttributionAndDoesNotPublishSubjects() throws Exception {
         String body = save("{\"recipientEmail\":\"  gazette@example.com  \",\"revision\":0}")
             .andExpect(status().isOk()).andExpect(jsonPath("$.recipientEmail").value("gazette@example.com"))
-            .andExpect(jsonPath("$.revision").value(1)).andExpect(jsonPath("$.updatedBy").value("Administrator"))
+            .andExpect(jsonPath("$.revision").value(1)).andExpect(jsonPath("$.updatedBy").value("Delivery Manager"))
             .andExpect(jsonPath("$.updatedAt").isNotEmpty()).andReturn().getResponse().getContentAsString();
         assertThat(body).doesNotContain(StubIdam.SUBJECT, "updatedById");
         authorised(get(PATH)).andExpect(jsonPath("$.recipientEmail").value("gazette@example.com"));
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Renamed Administrator", List.of(Role.DELIVERY_MANAGER.claimValue()));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Renamed Delivery Manager", List.of(Role.DELIVERY_MANAGER.claimValue()));
         save("{\"recipientEmail\":\"new@example.com\",\"revision\":1}")
             .andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(2));
         assertThat(jdbc.queryForList("SELECT previous_email, recipient_email, changed_by_id "
@@ -155,13 +155,14 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
 
     @Test
     void concurrentFirstSavesHaveOnlyOneWinnerAndOneAuditRow() throws Exception {
-        CurrentUser admin = new CurrentUser(List.of(Role.DELIVERY_MANAGER), true, "Administrator", "subject");
+        CurrentUser deliveryManager =
+            new CurrentUser(List.of(Role.DELIVERY_MANAGER), true, "Delivery Manager", "subject");
         CountDownLatch start = new CountDownLatch(1);
         try (var executor = Executors.newFixedThreadPool(2)) {
             var attempts = List.of("one@example.com", "two@example.com").stream().map(email -> executor.submit(() -> {
                 start.await();
                 try {
-                    service.update(admin, Map.of("recipientEmail", email, "revision", 0));
+                    service.update(deliveryManager, Map.of("recipientEmail", email, "revision", 0));
                     return "saved";
                 } catch (uk.gov.hmcts.reform.deedpoll.domain.ConflictError expected) {
                     return "conflict";
@@ -176,8 +177,10 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
 
     @Test
     void failedAuditWriteLeavesTheSettingUnchanged() {
-        CurrentUser admin = new CurrentUser(List.of(Role.DELIVERY_MANAGER), true, "a".repeat(300), "subject");
-        assertThatThrownBy(() -> service.update(admin, Map.of("recipientEmail", "a@example.com", "revision", 0)))
+        CurrentUser deliveryManager =
+            new CurrentUser(List.of(Role.DELIVERY_MANAGER), true, "a".repeat(300), "subject");
+        assertThatThrownBy(() -> service.update(
+            deliveryManager, Map.of("recipientEmail", "a@example.com", "revision", 0)))
             .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
         assertThat(jdbc.queryForObject("SELECT revision FROM deedpoll_gazette_settings", Integer.class)).isZero();
         assertThat(auditCount()).isZero();

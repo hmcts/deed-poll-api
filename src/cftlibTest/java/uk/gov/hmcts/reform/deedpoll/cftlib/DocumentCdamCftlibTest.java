@@ -150,7 +150,8 @@ class DocumentCdamCftlibTest extends CftlibTest {
     @Test
     @Order(2)
     void eachStaffRoleReadsDocumentsButCannotSubmitCcdEvents() throws Exception {
-        for (String user : List.of(CftlibConfig.DOCUMENT_READER, CftlibConfig.ADMIN_USER, CftlibConfig.JUDICIAL_USER,
+        for (String user : List.of(CftlibConfig.DOCUMENT_READER, CftlibConfig.LEGACY_ADMIN_USER,
+            CftlibConfig.JUDICIAL_USER,
             CftlibConfig.TEAM_LEADER_USER, CftlibConfig.DELIVERY_MANAGER_USER)) {
             String token = idam.getAccessToken(user, "password");
             HttpResponse<String> download = send(filePath(recordId), "GET", "", "application/json", user);
