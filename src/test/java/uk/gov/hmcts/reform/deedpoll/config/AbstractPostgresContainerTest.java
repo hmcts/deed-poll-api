@@ -37,6 +37,8 @@ public abstract class AbstractPostgresContainerTest {
 
     @DynamicPropertySource
     static void datasourceProperties(DynamicPropertyRegistry registry) {
+        // Recovery is exercised explicitly in tests, without cached contexts racing another test's fixtures.
+        registry.add("deedpoll.gazette.recovery-initial-delay-ms", () -> 3_600_000);
         registry.add("spring.datasource.url", () -> JDBC_URL);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);

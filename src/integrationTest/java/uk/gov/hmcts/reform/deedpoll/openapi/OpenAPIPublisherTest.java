@@ -178,7 +178,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(spec.at("/components/schemas/GazetteError/properties").fieldNames()).toIterable()
             .containsExactlyInAnyOrder("error", "code", "conflicts");
         JsonNode send = spec.get("paths").get(GAZETTE_HISTORY_PATH).get("post");
-        assertThat(send.at("/description").asText()).contains("Fresh HTTP submissions are unavailable");
+        assertThat(send.at("/description").asText()).contains("Sending is disabled by default");
         for (String status : List.of("200", "202", "409", "503")) {
             assertThat(send.at("/responses/" + status + "/content").isMissingNode()).isFalse();
         }

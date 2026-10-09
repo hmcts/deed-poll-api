@@ -1,11 +1,14 @@
 # Resume state — where the next session picks up
 
-**Gazette preview/status, 2026-10-09:** `feat/gazette-preview-status` implements parent
-4b and carries the ledger from #91, which merged into the design branch rather than
-master. Five new HTTP operations, locked confirmation validation, immutable export
-inputs, typed refusals and full frozen membership are implemented. Fresh HTTP sends
-remain unavailable. See [execution scope, evidence and next step](plans/gazette-1d-preview-admission-and-status.md).
-Next: one-shot delivery and independent bounded recovery, followed by the admin journey.
+**Gazette delivery/recovery, 2026-10-09:** PR #92 merged the ledger and preview/status
+contract into master (`801e949`). The isolated `feat/gazette-delivery-recovery` worktree
+implements parent 4c/4d: all-file preparation, one-shot delivery, committed outcomes
+and independent bounded recovery. Sending stays disabled by default. See
+[execution scope and validation](plans/gazette-1e-delivery-and-recovery.md) and the
+[recovery/release procedure](GAZETTE-RECOVERY.md).
+Next: refresh the admin OpenAPI client, then implement preview/confirmation, stable
+request keys, typed outcomes and request detail/full membership. Provisioning,
+external review and controlled test-recipient delivery remain release work.
 This supersedes the historical Gazette handoff further below.
 
 **Staff document READ, 2026-10-08:** Steve agreed read access for all three user types. The definition now

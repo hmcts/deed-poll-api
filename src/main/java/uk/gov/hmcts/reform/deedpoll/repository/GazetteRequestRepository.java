@@ -49,6 +49,15 @@ public class GazetteRequestRepository {
             ROW, id).stream().findFirst();
     }
 
+    /** Candidate read only; expire locks and rechecks each row in its own short transaction. */
+    public List<UUID> expired(LocalDateTime now) {
+        return jdbc.queryForList("""
+            SELECT id FROM deedpoll_gazette_request
+            WHERE state IN ('Preparing', 'Sending') AND lease_until <= ?
+            ORDER BY lease_until, id LIMIT 25
+            """, UUID.class, now);
+    }
+
     public boolean legacyKey(UUID key) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM deedpoll_gazette_notice_batch WHERE request_id = ?)", Boolean.class, key));

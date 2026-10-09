@@ -78,6 +78,10 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
         registry.add("idam.api.audiences", () -> StubIdam.AUDIENCE);
     }
 
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private uk.gov.hmcts.reform.deedpoll.notify.GazetteNotify notify;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    private GazetteConfiguration configuration;
     @Autowired
     private MockMvc mvc;
     @Autowired
@@ -107,6 +111,7 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
 
     @AfterEach
     void cleanOwnEvidence() {
+        org.mockito.Mockito.verifyNoInteractions(notify);
         for (String id : ownCases) {
             jdbc.update("DELETE FROM deedpoll_gazette_reservation WHERE deed_poll_id = ?", id);
             jdbc.update("DELETE FROM deedpoll_gazette_notice_batch_case WHERE deed_poll_id = ?", id);
@@ -306,9 +311,11 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    void publicSendCannotAdmitEvenWhenPreviewConfigurationIsComplete() throws Exception {
+    void disabledDeliveryCannotAdmitAFreshRequest() throws Exception {
         String id = ready("Adult");
         GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        org.mockito.Mockito.doThrow(new GazetteRefusal(GazetteRefusal.Code.GAZETTE_UNAVAILABLE))
+            .when(configuration).forGroups(1, 0);
         submit(UUID.randomUUID(), preview, id).andExpect(status().isServiceUnavailable())
             .andExpect(jsonPath("$.code").value("GAZETTE_UNAVAILABLE"));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_gazette_request_case WHERE deed_poll_id = ?",

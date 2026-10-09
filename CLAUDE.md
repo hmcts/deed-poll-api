@@ -237,9 +237,14 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
   owns short committed transactions and cannot join a caller transaction. Preparing/Sending block case
   PATCH; every request membership prevents deletion. NotSent releases the reservation; Uncertain/Sent
   retain it. Repeated keys grant no delivery claim or generation inputs. Production admission verifies
-  the preview token under the case locks and captures immutable mapped spreadsheet values. HTTP resolves
-  recorded requests only; fresh submissions stay unavailable until the sender/recovery slice. No Notify
-  caller exists yet. Never expose ledger projections, claims or mapped input snapshots as HTTP DTOs.
+  the preview token under the case locks and captures immutable mapped spreadsheet values. `GazetteDelivery`
+  prepares every file and commits Sending before the single Notify call. A lost commit acknowledgement grants
+  no send authority; uncertain remote/local outcomes never allow resend. `GazetteNotify` reuses the SDK's local
+  encoding/authentication/parser through dedicated non-replaying, bounded HTTP, because the SDK transport has
+  no public timeout/retry controls. Do not replace it with `NotificationClient.sendEmail` without equivalent
+  evidence. Recovery runs every minute, at most 25 rows, independently of `GAZETTE_ENABLED` (default false).
+  Never expose ledger projections, claims, file values or provider responses as HTTP DTOs. See
+  `docs/GAZETTE-RECOVERY.md` before investigating an uncertain request.
 - **Flyway owns the schema; Hibernate validates against it** (`ddl-auto: validate`). Entities are
   checked against the migrations, never the other way round.
 - **A patch is three-state: absent / null / value.** Omitting a field leaves it alone; an explicit

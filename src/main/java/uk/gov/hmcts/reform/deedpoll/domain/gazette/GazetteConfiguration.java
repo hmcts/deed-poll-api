@@ -6,7 +6,7 @@ import uk.gov.hmcts.reform.deedpoll.notify.NotifyProperties;
 
 import java.util.UUID;
 
-/** Preview provisioning only. There is no delivery adapter in this slice, regardless of configuration. */
+/** Admission and preview provisioning; disabled by default. Configuration is frozen before remote work. */
 @Component
 public class GazetteConfiguration {
     private final NotifyProperties notify;

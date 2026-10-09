@@ -18,7 +18,8 @@ The ready list/history, production spreadsheet generator and persistent recipien
 settings are merged (PRs #80, #87, #88 and #89). The internal
 [request ledger and guards](gazette-1c-request-ledger-and-guards.md) are now implemented
 with the [preview and status slice](gazette-1d-preview-admission-and-status.md).
-Fresh HTTP batch sending remains unavailable.
+The [delivery/recovery slice](gazette-1e-delivery-and-recovery.md) connects fresh
+confirmed HTTP submissions behind `GAZETTE_ENABLED=false` by default.
 Use [Gazette batch send and recovery contract](gazette-1b-send-and-recovery-contract.md)
 for the next slices. It replaces the former single-transaction email design:
 acceptance by Notify cannot be undone by rolling back a local transaction.
@@ -28,7 +29,7 @@ original-recipient snapshots, status reads and complete frozen-reference paginat
 An uncertain outcome stops further sends for those cases pending investigation.
 The old foundation validation files retain their historical evidence. Task 0 still
 records the outstanding predicate reconfirmation and environment provisioning;
-no further spreadsheet layout decision is needed to implement the next ledger slice.
+no further spreadsheet layout decision is needed for the admin integration.
 
 ## Spreadsheet implementation slice — 8 October 2026
 
@@ -306,21 +307,23 @@ Implement the ordered slices in [the new contract](gazette-1b-send-and-recovery-
   ([implementation and validation](gazette-1c-request-ledger-and-guards.md)).
 - [x] 4b — Preview/admission, status and full-membership APIs; regenerate OpenAPI
   ([implementation and validation](gazette-1d-preview-admission-and-status.md)).
-- [ ] 4c — One-shot Notify delivery, all-file preparation and bounded recovery.
-- [ ] 4d — Fault-injection, races and recovery evidence; no automatic uncertain resend.
+- [x] 4c — One-shot Notify delivery, all-file preparation and bounded recovery.
+- [x] 4d — Fault-injection, races and recovery evidence; no automatic uncertain resend.
+  See [delivery/recovery evidence](gazette-1e-delivery-and-recovery.md).
 
-The next executable slice is one-shot delivery and bounded recovery. Fresh HTTP
-admission must remain disabled until both are implemented and tested. Successful local
+The next executable slice is the admin contract refresh and confirmation/status journey.
+New sending remains disabled by default pending the release prerequisites. Successful local
 settlement updates every case/date/note atomically; external email acceptance is
 never covered by that transaction.
 
 ### Task 5: Full validation and OpenAPI regeneration
 
-- [ ] Full build and contract validation after the send implementation.
-- [ ] Measure the complete generated delta: five new operations in the design and
+- [x] Full build and contract validation after the send implementation (3,844 test / 18 integration).
+- [x] Measure the complete generated delta: five new operations in the design and
   `batchId` on sent-history summaries, with all new request/status/error schemas.
   Existing settings, case/email, judicial and deferred CCD contracts stay intact.
-- [ ] Record final test counts, local fault-injection and review evidence.
+- [x] Record final test counts and local fault-injection evidence in the slice 3 plan.
+- [ ] Run and record the separate external Copilot/Opus release review.
 - [ ] Provision/activate only after the contract's release prerequisites are met.
 
 Documentation-only contract planning does not count as any of these completed

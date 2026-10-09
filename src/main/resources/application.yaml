@@ -263,7 +263,7 @@ case_document_am:
 
 deedpoll:
   gazette:
-    # Enables provisioned previews only; fresh HTTP sending remains unavailable in this slice.
+    # Enables provisioned previews and new confirmed sends. Recovery runs independently while disabled.
     enabled: ${GAZETTE_ENABLED:false}
   ccd:
     # The CCD identifiers this service is waiting on, and deliberately not the real values: the case type,

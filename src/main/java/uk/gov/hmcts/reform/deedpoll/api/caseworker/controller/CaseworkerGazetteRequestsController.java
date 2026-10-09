@@ -25,11 +25,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteBodies;
-import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteConfirmation;
+import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteDelivery;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazettePreviews;
-import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteRefusal;
-import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteRequest;
-import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteRequestLedger;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteRequestState;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteStatuses;
 
@@ -41,13 +38,13 @@ import java.util.UUID;
 @RequestMapping("/caseworker")
 public class CaseworkerGazetteRequestsController {
     private final GazettePreviews previews;
-    private final GazetteRequestLedger ledger;
+    private final GazetteDelivery delivery;
     private final GazetteStatuses statuses;
 
-    public CaseworkerGazetteRequestsController(GazettePreviews previews, GazetteRequestLedger ledger,
+    public CaseworkerGazetteRequestsController(GazettePreviews previews, GazetteDelivery delivery,
                                                GazetteStatuses statuses) {
         this.previews = previews;
-        this.ledger = ledger;
+        this.delivery = delivery;
         this.statuses = statuses;
     }
 
@@ -65,10 +62,11 @@ public class CaseworkerGazetteRequestsController {
         return GazettePreviewResponse.from(previews.preview(caller, GazetteBodies.selection(body.fields(), false)));
     }
 
-    @Operation(operationId = "submitGazetteNotice", summary = "Resolve a Gazette request",
-        description = "Requires caseworker-deedpoll-admin. Fresh HTTP submissions are unavailable until the sender "
-            + "and recovery slice is implemented, regardless of configuration. Identical recorded requests can be "
-            + "resolved: 202 means Preparing/Sending; 200 means terminal, not necessarily sent. "
+    @Operation(operationId = "submitGazetteNotice", summary = "Submit or resolve a Gazette request",
+        description = "Requires caseworker-deedpoll-admin. Sending is disabled by default. "
+            + "When configured and enabled, "
+            + "a fresh confirmed request makes at most one email attempt. Repeats resolve recorded status only. "
+            + "202 means Preparing/Sending; 200 means terminal, not necessarily sent. "
             + "Reuse the original key and body after a lost response. Never retry an uncertain request with a new key.")
     @ApiResponse(responseCode = "200",
         content = @Content(schema = @Schema(implementation = GazetteStatusResponse.class)))
@@ -84,17 +82,12 @@ public class CaseworkerGazetteRequestsController {
         List<String> ids = GazetteBodies.selection(body.fields(), true);
         String token = GazetteBodies.fingerprint(body.fields());
         int revision = GazetteBodies.revision(body.fields());
-        GazetteRequest recorded = ledger.repeat(caller, key, ids, token, revision).orElse(null);
-        if (recorded == null) {
-            GazetteConfirmation.expiry(token);
-            // No code/configuration switch may admit a fresh HTTP request without a delivery/recovery adapter.
-            throw new GazetteRefusal(GazetteRefusal.Code.GAZETTE_UNAVAILABLE);
-        }
-        GazetteStatusResponse status = GazetteStatusResponse.from(statuses.detail(caller, recorded.id()));
+        UUID batch = delivery.submit(caller, key, ids, token, revision);
+        GazetteStatusResponse status = GazetteStatusResponse.from(statuses.detail(caller, batch));
         boolean pending = status.state() == GazetteRequestState.Preparing
             || status.state() == GazetteRequestState.Sending;
         return ResponseEntity.status(pending ? 202 : 200)
-            .location(URI.create("/caseworker/gazette-notices/" + recorded.id())).body(status);
+            .location(URI.create("/caseworker/gazette-notices/" + batch)).body(status);
     }
 
     @Operation(operationId = "getGazetteRequests", summary = "Read Gazette request statuses",

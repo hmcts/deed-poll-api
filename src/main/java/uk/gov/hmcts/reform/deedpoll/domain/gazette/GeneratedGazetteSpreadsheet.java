@@ -1,6 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.domain.gazette;
 
-/** One populated workbook, ready for the future batch delivery service. */
+/** One populated workbook, ready for the batch delivery service. */
 public record GeneratedGazetteSpreadsheet(String filename, int caseCount, byte[] content) {
 
     public GeneratedGazetteSpreadsheet {
