@@ -29,6 +29,7 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations 
                                   /caseworker/ccd-attempts (3 operations, counted apart as CCD_ATTEMPT_PATHS)
                                   and /caseworker/gazette-notices (1 history GET, counted apart)
                                   and /caseworker/gazette-settings (admin-only GET/PUT)
+                                  plus 5 Gazette preview/request/status/member operations (admin-only)
 api/judicial/{controller,dto}     the judicial surface — 5 operations, keyed on the referral, never on the case
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
@@ -235,8 +236,10 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
 - **Gazette request evidence (V34) is separate from successful V31 history.** `GazetteRequestLedger`
   owns short committed transactions and cannot join a caller transaction. Preparing/Sending block case
   PATCH; every request membership prevents deletion. NotSent releases the reservation; Uncertain/Sent
-  retain it. Repeated keys grant no delivery claim. The ledger has no HTTP or Notify caller yet: preview
-  verification and detached spreadsheet input snapshots must be added inside locked admission first.
+  retain it. Repeated keys grant no delivery claim or generation inputs. Production admission verifies
+  the preview token under the case locks and captures immutable mapped spreadsheet values. HTTP resolves
+  recorded requests only; fresh submissions stay unavailable until the sender/recovery slice. No Notify
+  caller exists yet. Never expose ledger projections, claims or mapped input snapshots as HTTP DTOs.
 - **Flyway owns the schema; Hibernate validates against it** (`ddl-auto: validate`). Entities are
   checked against the migrations, never the other way round.
 - **A patch is three-state: absent / null / value.** Omitting a field leaves it alone; an explicit

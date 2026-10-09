@@ -126,7 +126,8 @@ class CaseworkerGazetteControllerTest extends AbstractPostgresContainerTest {
         assertThat(response.fieldNames()).toIterable()
             .containsExactlyInAnyOrder("batches", "page", "size", "total", "totalPages");
         assertThat(response.at("/batches/0").fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("sentAt", "sentBy", "caseCount", "referenceNumbers", "referencesTruncated");
+            .containsExactlyInAnyOrder(
+                "batchId", "sentAt", "sentBy", "caseCount", "referenceNumbers", "referencesTruncated");
         assertThat(body).doesNotContain(SENDER_SUBJECT, StubIdam.SUBJECT, batch.getRequestId().toString(),
             "sentById", "requestId", "2026/AMENDED", "Current Administrator");
     }

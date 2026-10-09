@@ -145,7 +145,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
         JsonNode path = spec.get("paths").get(GAZETTE_HISTORY_PATH);
-        assertThat(path.fieldNames()).toIterable().containsExactly("get");
+        assertThat(path.fieldNames()).toIterable().containsExactlyInAnyOrder("get", "post");
         assertThat(path.at("/get/description").asText()).contains("caseworker-deedpoll-admin");
         assertThat(path.at("/get/responses/200/content/*~1*/schema/$ref").asText())
             .isEqualTo("#/components/schemas/GazetteNoticeHistoryResponse");
@@ -153,7 +153,39 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .toIterable().containsExactlyInAnyOrder("batches", "page", "size", "total", "totalPages");
         assertThat(spec.at("/components/schemas/GazetteNoticeBatchResponse/properties").fieldNames())
             .toIterable().containsExactlyInAnyOrder(
-                "sentAt", "sentBy", "caseCount", "referenceNumbers", "referencesTruncated");
+                "batchId", "sentAt", "sentBy", "caseCount", "referenceNumbers", "referencesTruncated");
+    }
+
+    @Test
+    void documentsGazettePreviewAndStatusWithoutPublishingInternalClaims() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+        for (String name : List.of("PreviewGazetteRequest", "SubmitGazetteRequest")) {
+            JsonNode body = spec.at("/components/schemas/" + name);
+            assertThat(body.get("additionalProperties").asBoolean()).isFalse();
+            assertThat(body.at("/properties/caseIds/minItems").asInt()).isOne();
+            assertThat(body.at("/properties/caseIds/maxItems").asInt()).isEqualTo(100);
+            assertThat(body.at("/properties/caseIds/uniqueItems").asBoolean()).isTrue();
+        }
+        assertThat(spec.at("/components/schemas/SubmitGazetteRequest/properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("caseIds", "selectionFingerprint", "recipientRevision");
+        assertThat(spec.at("/components/schemas/GazetteStatusResponse/properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("batchId", "state", "submittedAt", "submittedBy", "recipientEmail",
+                "recipientRevision", "caseCount", "adultCount", "minorCount", "sentAt", "failureCode");
+        assertThat(spec.at("/components/schemas/GazettePreviewResponse/properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("recipientEmail", "recipientRevision", "caseCount", "adultCount", "minorCount",
+                "cases", "selectionFingerprint", "expiresAt");
+        assertThat(spec.at("/components/schemas/GazetteError/properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("error", "code", "conflicts");
+        JsonNode send = spec.get("paths").get(GAZETTE_HISTORY_PATH).get("post");
+        assertThat(send.at("/description").asText()).contains("Fresh HTTP submissions are unavailable");
+        for (String status : List.of("200", "202", "409", "503")) {
+            assertThat(send.at("/responses/" + status + "/content").isMissingNode()).isFalse();
+        }
+        assertThat(send.get("parameters").toString()).contains("Idempotency-Key", "required");
+        for (String privateType : List.of("GazetteInput", "GazetteRequest", "Claim", "Reservation")) {
+            assertThat(spec.at("/components/schemas/" + privateType).isMissingNode()).isTrue();
+        }
     }
 
     @Test
@@ -323,6 +355,10 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.addAll(CCD_ATTEMPT_PATHS);
         known.add(GAZETTE_HISTORY_PATH);
         known.add("/caseworker/gazette-settings");
+        known.add("/caseworker/gazette-notice-previews");
+        known.add("/caseworker/gazette-notice-requests");
+        known.add("/caseworker/gazette-notices/{batchId}");
+        known.add("/caseworker/gazette-notices/{batchId}/cases");
         known.add("/");
 
         assertThat(documented)

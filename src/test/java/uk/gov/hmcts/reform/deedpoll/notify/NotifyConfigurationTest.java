@@ -75,9 +75,13 @@ class NotifyConfigurationTest {
                 // Every template this service sends is listed, and every one of them is the placeholder: the map
                 // is what an environment overrides, so a template missing from it is an environment variable
                 // nobody reads. One grep for the literal lists both.
-                assertThat(properties.templates()).containsExactlyInAnyOrderEntriesOf(
-                    Arrays.stream(EmailTemplate.values()).collect(Collectors.toMap(
-                        EmailTemplate::key, template -> "DEED_POLL_PLACEHOLDER")));
+                var expected = Arrays.stream(EmailTemplate.values()).collect(Collectors.toMap(
+                    EmailTemplate::key, template -> "DEED_POLL_PLACEHOLDER"));
+                for (String key : java.util.List.of("gazette-adult", "gazette-minor", "gazette-mixed")) {
+                    expected.put(key, "DEED_POLL_PLACEHOLDER");
+                }
+                assertThat(properties.templates()).containsExactlyInAnyOrderEntriesOf(expected);
+                assertThat(context.getEnvironment().getProperty("deedpoll.gazette.enabled", Boolean.class)).isFalse();
                 // And no reply-to, which is the other half of what notify-0 supplies. So the email whose words
                 // ask the applicant to reply is unprovisioned twice over, and says so in the Email tab.
                 assertThat(properties.emailReplyToId()).isEmpty();

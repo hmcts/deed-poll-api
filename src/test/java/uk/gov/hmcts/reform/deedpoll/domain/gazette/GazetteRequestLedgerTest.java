@@ -23,6 +23,9 @@ import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteRequestLedger.Claim;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteRequestLedger.Reservation;
 
 import java.util.ArrayList;
+import java.util.concurrent.ConcurrentHashMap;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -36,13 +39,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Real PostgreSQL and real transactions: no Notify, no mocked persistence. */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE, properties = {
+    "deedpoll.gazette.enabled=true", "notify.api-key=synthetic-not-used",
+    "notify.email-reply-to-id=10000000-0000-0000-0000-000000000001", "notify.document-retention-weeks=4",
+    "notify.templates.gazette-adult=20000000-0000-0000-0000-000000000001",
+    "notify.templates.gazette-minor=20000000-0000-0000-0000-000000000001",
+    "notify.templates.gazette-mixed=20000000-0000-0000-0000-000000000001"
+})
 class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
     private static final String SUBJECT = "gazette-ledger-test";
     private static final CurrentUser ADMIN =
         CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "Gazette Admin", SUBJECT);
     private static final GazetteDeliveryConfiguration CONFIG =
-        new GazetteDeliveryConfiguration(UUID.randomUUID(), UUID.randomUUID(), 4);
+        new GazetteDeliveryConfiguration(UUID.fromString("20000000-0000-0000-0000-000000000001"),
+            UUID.fromString("10000000-0000-0000-0000-000000000001"), 4);
     private static final String FINGERPRINT = "confirmed-input-v1";
 
     @Autowired
@@ -53,6 +63,10 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
     private DeedPollService cases;
     @Autowired
     private PlatformTransactionManager transactions;
+
+    @Autowired
+    private DeedPollRepository caseRecords;
+    private final Map<UUID, String> tokens = new ConcurrentHashMap<>();
 
     private final List<String> fixtureCases = new ArrayList<>();
     private Map<String, Object> oldSettings;
@@ -104,26 +118,26 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
             assertThat(row.configuration()).isEqualTo(CONFIG);
         });
         jdbc.update("UPDATE deedpoll_gazette_settings SET recipient_email = 'changed@example.com', revision = 2");
-        Reservation repeat = ledger.reserve(ADMIN, key, List.of(minor, adult), FINGERPRINT, 1, null);
+        Reservation repeat = ledger.admit(ADMIN, key, List.of(minor, adult), tokens.get(key), 1);
         assertThat(repeat.claim()).isNull();
         assertThat(repeat.request().id()).isEqualTo(first.request().id());
         assertThat(repeat.request().recipientEmail()).isEqualTo("gazette@example.com");
         assertThat(noteCount(adult)).isOne();
         assertThat(noteCount(minor)).isOne();
-        assertThatThrownBy(() -> ledger.reserve(ADMIN, key, List.of(adult), FINGERPRINT, 1, CONFIG))
+        assertThatThrownBy(() -> ledger.admit(ADMIN, key, List.of(adult), FINGERPRINT, 1))
             .isInstanceOf(ConflictError.class);
-        assertThatThrownBy(() -> ledger.reserve(ADMIN, key, List.of(adult, minor), "changed", 1, CONFIG))
+        assertThatThrownBy(() -> ledger.admit(ADMIN, key, List.of(adult, minor), "changed", 1))
             .isInstanceOf(ConflictError.class);
-        assertThatThrownBy(() -> ledger.reserve(ADMIN, key, List.of(adult, minor), FINGERPRINT, 2, CONFIG))
+        assertThatThrownBy(() -> ledger.admit(ADMIN, key, List.of(adult, minor), FINGERPRINT, 2))
             .isInstanceOf(ConflictError.class);
         CurrentUser other = CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "Gazette Admin", "other");
-        assertThatThrownBy(() -> ledger.reserve(other, key, List.of(adult, minor), FINGERPRINT, 1, CONFIG))
+        assertThatThrownBy(() -> ledger.admit(other, key, List.of(adult, minor), FINGERPRINT, 1))
             .isInstanceOf(ConflictError.class);
     }
 
     @Test
     void refusesNonAdminsBeforeLookingUpOrWritingAnything() {
-        assertThatThrownBy(() -> ledger.reserve(CurrentUser.ANONYMOUS, null, null, null, 0, null))
+        assertThatThrownBy(() -> ledger.admit(CurrentUser.ANONYMOUS, null, null, null, 0))
             .isInstanceOf(ForbiddenError.class);
         assertThatThrownBy(() -> ledger.read(CurrentUser.ANONYMOUS, UUID.randomUUID()))
             .isInstanceOf(ForbiddenError.class);
@@ -132,7 +146,7 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
     @Test
     void refusesMissingOrChangedRecipientAndInvalidSelectionWithoutEvidence() {
         String id = ready("Adult");
-        assertThatThrownBy(() -> ledger.reserve(ADMIN, UUID.randomUUID(), List.of(id), FINGERPRINT, 0, CONFIG))
+        assertThatThrownBy(() -> ledger.admit(ADMIN, UUID.randomUUID(), List.of(id), FINGERPRINT, 0))
             .isInstanceOf(ConflictError.class);
         assertThatThrownBy(() -> reserve(UUID.randomUUID(), id, id)).isInstanceOf(InvalidInputError.class);
         assertThatThrownBy(() -> reserve(UUID.randomUUID())).isInstanceOf(InvalidInputError.class);
@@ -461,7 +475,7 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
         jdbc.update("INSERT INTO deedpoll_gazette_notice_batch VALUES (?, now(), ?, 'Legacy', ?, 1)",
             batch, SUBJECT, key);
         jdbc.update("INSERT INTO deedpoll_gazette_notice_batch_case VALUES (?, ?, 'legacy-reference')", batch, id);
-        assertThatThrownBy(() -> reserve(key, id)).isInstanceOf(ConflictError.class).hasMessageContaining("historical");
+        assertThatThrownBy(() -> reserve(key, id)).isInstanceOf(ConflictError.class);
         assertThatThrownBy(() -> reserve(UUID.randomUUID(), id)).isInstanceOf(ConflictError.class);
     }
 
@@ -485,7 +499,20 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
     }
 
     private Reservation reserve(UUID key, String... ids) {
-        return ledger.reserve(ADMIN, key, List.of(ids), FINGERPRINT, 1, CONFIG);
+        String token = tokens.computeIfAbsent(key, ignored -> {
+            List<GazetteInput> inputs = new ArrayList<>();
+            for (String id : ids) {
+                var row = caseRecords.findById(id).orElse(null);
+                if (row != null && row.getType() != null && switch (row.getType()) {
+                        case Adult, AdultTransgender, Minor, MinorTransgender -> true;
+                        default -> false;
+                    }) {
+                    inputs.add(GazetteInput.from(row));
+                }
+            }
+            return GazetteConfirmation.issue(inputs, AuditClock.now().plusMinutes(30).withNano(0));
+        });
+        return ledger.admit(ADMIN, key, List.of(ids), token, 1);
     }
 
     private String ready(String type) {

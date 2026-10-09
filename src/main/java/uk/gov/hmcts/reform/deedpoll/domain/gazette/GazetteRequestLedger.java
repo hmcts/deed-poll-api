@@ -14,7 +14,6 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
-import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.GazetteRequestRepository;
 
@@ -24,42 +23,44 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
  * Internal durable primitives, without a sender or HTTP admission endpoint.
- * The next slice must add preview fingerprint verification inside the locked admission below.
- * Until then the fingerprint is trusted internal input; this service has no HTTP or Notify caller.
+ * Fingerprints are verified and immutable generation inputs captured under the admission locks.
+ * HTTP can resolve existing requests; fresh public admission awaits the delivery adapter.
  */
 @Service
 public class GazetteRequestLedger {
     private final GazetteRequestRepository requests;
     private final DeedPollRepository cases;
     private final NoteService notes;
+    private final GazetteConfiguration configuration;
     private final TransactionTemplate transaction;
 
     public GazetteRequestLedger(GazetteRequestRepository requests, DeedPollRepository cases, NoteService notes,
-                                PlatformTransactionManager transactions) {
+                                PlatformTransactionManager transactions, GazetteConfiguration configuration) {
         this.requests = requests;
         this.cases = cases;
         this.notes = notes;
+        this.configuration = configuration;
         this.transaction = new TransactionTemplate(transactions);
     }
 
     /**
-     * Reserves a trusted, already confirmed selection. There is deliberately no controller calling this yet.
-     * Payload identity is stored here; preview generation/expiry and fingerprint verification belong to slice 2.
+     * Reserves a confirmed selection, rechecking its fingerprint under locks.
+     * Only the originating operation receives immutable generation inputs and a claim.
      */
-    public Reservation reserve(CurrentUser caller, UUID key, List<String> selected, String fingerprint,
-                               int recipientRevision, GazetteDeliveryConfiguration configuration) {
+    public Reservation admit(CurrentUser caller, UUID key, List<String> selected, String fingerprint,
+                             int recipientRevision) {
         caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
         String subject = caller.requireUserId();
-        List<String> ids = selection(selected);
+        List<String> ids = GazetteSelection.ids(selected);
         if (key == null || fingerprint == null || fingerprint.isBlank() || fingerprint.length() > 512
             || recipientRevision < 0) {
             throw new InvalidInputError("Invalid Gazette request identity.");
@@ -67,45 +68,69 @@ public class GazetteRequestLedger {
         String identity = identity(ids, fingerprint, recipientRevision);
         return commit(() -> {
             requests.lockKey(key);
-            GazetteRequest existing = requests.byKey(key).orElse(null);
+            GazetteRequest existing = repeated(key, identity, subject);
             if (existing != null) {
-                if (!existing.payloadHash().equals(identity) || !existing.submittedById().equals(subject)) {
-                    throw new ConflictError("Gazette request key was already used for another submission.");
-                }
-                return new Reservation(existing, null);
-            }
-            if (requests.legacyKey(key)) {
-                throw new ConflictError("Gazette request key belongs to historical sent evidence.");
+                return new Reservation(existing, null, List.of());
             }
             GazetteSettings settings = requests.lockSettings();
-            if (settings.recipientEmail() == null || settings.revision() != recipientRevision) {
-                throw new ConflictError("Reload and confirm the London Gazette recipient before submitting.");
+            if (settings.recipientEmail() == null) {
+                throw new GazetteRefusal(GazetteRefusal.Code.RECIPIENT_NOT_CONFIGURED);
             }
-            Objects.requireNonNull(configuration, "Gazette configuration is required for a new request");
+            if (settings.revision() != recipientRevision) {
+                throw new GazetteRefusal(GazetteRefusal.Code.RECIPIENT_CHANGED);
+            }
             List<DeedPoll> members = new ArrayList<>();
             for (String id : ids) {
                 if (!requests.lockCase(id)) {
-                    throw new NotFoundError("Gazette case not found");
+                    GazetteSelection.ready(id, null, false);
                 }
                 DeedPoll record = cases.findById(id).orElseThrow();
-                requireReady(record);
-                if (requests.reserved(id)) {
-                    throw new ConflictError("A selected case already belongs to a Gazette publication request.");
-                }
+                GazetteSelection.ready(id, record, requests.reserved(id));
                 members.add(record);
             }
-            int adults = (int) members.stream().filter(record -> kind(record).equals("adult")).count();
+            List<GazetteInput> inputs = members.stream().map(GazetteInput::from)
+                .sorted(GazettePreviews.order()).toList();
+            GazetteConfirmation.verify(fingerprint, inputs);
+            int adults = (int) inputs.stream().filter(input -> input.kind().equals("adult")).count();
+            GazetteDeliveryConfiguration frozenConfiguration = Objects.requireNonNull(
+                configuration.forGroups(adults, inputs.size() - adults));
             LocalDateTime now = AuditClock.now();
             GazetteRequest row = new GazetteRequest(UUID.randomUUID(), key, identity, subject, caller.name(), now,
-                settings.recipientEmail(), settings.revision(), adults, members.size() - adults, configuration,
+                settings.recipientEmail(), settings.revision(), adults, members.size() - adults, frozenConfiguration,
                 UUID.randomUUID(), now.plusMinutes(5), GazetteRequestState.Preparing, null, null, null);
             requests.insert(row, fingerprint);
-            for (DeedPoll record : members) {
-                requests.member(row.id(), record.getId(), record.getDisplayReference(), kind(record));
-                note(record.getId(), row, "London Gazette publication request submitted.");
+            for (GazetteInput input : inputs) {
+                requests.member(row.id(), input.caseId(), input.referenceNumber(), input.kind());
+                note(input.caseId(), row, "London Gazette publication request submitted.");
             }
-            return new Reservation(row, new Claim(row.id(), row.owner()));
+            return new Reservation(row, new Claim(row.id(), row.owner()), inputs);
         });
+    }
+
+    /** Resolve retries even when configuration, eligibility or token expiry have since changed. */
+    public Optional<GazetteRequest> repeat(CurrentUser caller, UUID key, List<String> selected,
+                                         String fingerprint, int revision) {
+        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        String subject = caller.requireUserId();
+        List<String> ids = GazetteSelection.ids(selected);
+        if (key == null || fingerprint == null || fingerprint.isBlank() || fingerprint.length() > 512 || revision < 0) {
+            throw new InvalidInputError("Invalid Gazette request identity.");
+        }
+        return commit(() -> {
+            requests.lockKey(key);
+            return Optional.ofNullable(repeated(key, identity(ids, fingerprint, revision), subject));
+        });
+    }
+
+    private GazetteRequest repeated(UUID key, String identity, String subject) {
+        GazetteRequest row = requests.byKey(key).orElse(null);
+        if (row != null && (!row.payloadHash().equals(identity) || !row.submittedById().equals(subject))) {
+            throw new GazetteRefusal(GazetteRefusal.Code.REQUEST_KEY_REUSED);
+        }
+        if (row == null && requests.legacyKey(key)) {
+            throw new GazetteRefusal(GazetteRefusal.Code.REQUEST_KEY_REUSED);
+        }
+        return row;
     }
 
     public GazetteRequest read(CurrentUser caller, UUID id) {
@@ -255,36 +280,6 @@ public class GazetteRequestLedger {
         return transaction.execute(status -> action.get());
     }
 
-    private static List<String> selection(List<String> ids) {
-        if (ids == null || ids.isEmpty() || ids.size() > 100
-            || ids.stream().anyMatch(id -> id == null || id.isBlank() || id.length() > 255)
-            || new HashSet<>(ids).size() != ids.size()) {
-            throw new InvalidInputError("Select between 1 and 100 distinct Gazette cases.");
-        }
-        return ids.stream().sorted().toList();
-    }
-
-    private static void requireReady(DeedPoll record) {
-        if (!record.isPublishToLondonGazette() || record.getDateNoticeSentToLondonGazette() != null
-            || record.getState() != DeedPollState.Enroled || record.getDisplayReference() == null
-            || record.getDisplayReference().isBlank()) {
-            throw new ConflictError("A selected case is no longer ready for Gazette publication.");
-        }
-        kind(record);
-    }
-
-    private static String kind(DeedPoll record) {
-        if (record.getType() == null) {
-            throw new ConflictError("Correct missing case types before Gazette publication.");
-        }
-        return switch (record.getType()) {
-            case Adult, AdultTransgender -> "adult";
-            case Minor, MinorTransgender -> "minor";
-            case Unknown, DeedOfRelinquishment -> throw new ConflictError(
-                "A selected case type cannot be included in Gazette publication.");
-        };
-    }
-
     private static void requireFiles(GazetteRequest row, List<GazetteFileEvidence> files) {
         if (files == null || files.stream().anyMatch(Objects::isNull)) {
             throw new IllegalArgumentException("Missing Gazette file evidence");
@@ -325,6 +320,9 @@ public class GazetteRequestLedger {
     }
 
     /** Only a fresh reservation grants the calling operation a claim; a repeated key never does. */
-    public record Reservation(GazetteRequest request, Claim claim) {
+    public record Reservation(GazetteRequest request, Claim claim, List<GazetteInput> inputs) {
+        public Reservation {
+            inputs = List.copyOf(inputs);
+        }
     }
 }

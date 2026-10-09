@@ -4,7 +4,9 @@ Design revision: 1, 8 October 2026. **Implementation plan, not a published API.*
 Based on API master `7ff8352` (recipient settings PR #89) and admin master
 `5cd70ad` (PR #163). This replaces the transactional-email proposal in the
 [parent plan](gazette-1-ready-list-and-batch-send.md), decisions 2–7 and Task 4.
-No send endpoint, recovery worker or schema described below exists yet.
+The ledger and [preview/status slice](gazette-1d-preview-admission-and-status.md) now
+implement the persistence and HTTP contract. Fresh HTTP sending and the recovery
+worker remain unavailable.
 
 The business rules already agreed are one Notify email per batch, adult/minor
 spreadsheet download links with absent groups omitted, visible columns only,
@@ -273,8 +275,9 @@ provider retention duration still needs provisioning. Never retain expiring file
 ## Implementation slices and acceptance evidence
 
 Each slice gets a separate execution plan and PR; completing this design does not
-check off its code. Slice 1 is implemented on the ledger branch; see its
-[execution plan and evidence](gazette-1c-request-ledger-and-guards.md). Implement in this order:
+check off its code. Slices 1 and 2 are implemented; see the
+[ledger evidence](gazette-1c-request-ledger-and-guards.md) and
+[preview/status evidence](gazette-1d-preview-admission-and-status.md). Implement in this order:
 
 1. **Request ledger and guards:** migration, states, unique key/case reservations,
    legacy backfill/key handling, deletion and relevant case-writer guards, atomic

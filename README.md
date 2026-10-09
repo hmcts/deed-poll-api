@@ -736,7 +736,7 @@ callers with case-list access. This implementation does not constitute new busin
 
 History accepts `page` (1-based, default 1) and `size` (default 25, capped at 100),
 using the existing paging validation. It returns `batches`, `page`, `size`, `total`
-and `totalPages`. Each batch exposes `sentAt`, `sentBy` (display name), `caseCount`,
+and `totalPages`. Each batch exposes `batchId`, `sentAt`, `sentBy` (display name), `caseCount`,
 `referenceNumbers` and `referencesTruncated`. References are frozen on the audit membership,
 with a preview of at most 100 per batch in lexical display order (not numerical reference or send order).
 `referencesTruncated` is true when more members exist; `caseCount` remains the full frozen count.
@@ -759,20 +759,39 @@ must check the confirmed settings revision and snapshot its accepted recipient.
 
 V31 adds the batch and membership audit tables, including database-enforced request-ID
 uniqueness. V32 adds indexes for case membership checks and bounded reference previews.
-There is currently no batch-send endpoint or Notify caller. The internal request
-ledger now persists reservations, ownership and delivery evidence, with atomic local
-case-date/history/note settlement. Active requests block case edits; retained request
-evidence prevents deletion. Uncertain outcomes keep reservations and cannot resend.
-See [ledger scope and validation](docs/plans/gazette-1c-request-ledger-and-guards.md).
-`GazetteSpreadsheet` now generates the separate adult/minor XLSX files using the
-[clean runtime templates and mapping](src/main/resources/gazette-templates/README.md).
-It preserves visible columns and blank missing values, and refuses excluded or
-unclassified cases without silently reducing a selection. It is an internal generator;
-there is no export/download endpoint yet. The full admin plan 16 contract remains
-unavailable until batch sending is implemented and validated. Notify provisioning and
-uncertain-send recovery remain outstanding; database rollback cannot undo email acceptance.
-See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md) and
-[foundation validation](docs/plans/gazette-1a-task4-validation.md).
+The request ledger persists reservations, ownership and delivery evidence, with atomic
+local case-date/history/note settlement. Active requests block case edits; retained
+request evidence prevents deletion. Uncertain outcomes keep reservations.
+
+| Method | Path | Behaviour (admin-only) |
+|---|---|---|
+| POST | `/caseworker/gazette-notice-previews` | Check up to 100 distinct cases, recipient and configuration; return counts, references and a 30-minute confirmation token |
+| POST | `/caseworker/gazette-notices` | Resolve an existing key/body/subject to recorded status; fresh HTTP submissions remain unavailable |
+| GET | `/caseworker/gazette-notice-requests` | Paged request statuses; optional exact state filter |
+| GET | `/caseworker/gazette-notices/{batchId}` | Current request or legacy sent status; unavailable legacy facts are null |
+| GET | `/caseworker/gazette-notices/{batchId}/cases` | All frozen references, paged at 25 by default, capped at 100 |
+
+Preview writes no evidence or files. Domain admission rechecks the fingerprint and
+recipient revision under locks and captures immutable mapped values for spreadsheet
+generation. The [clean templates](src/main/resources/gazette-templates/README.md)
+retain visible columns and blank missing values. No live-case reread is needed to
+produce files after admission. No export/archive endpoint exists.
+
+A repeated HTTP request uses its original UUID `Idempotency-Key` and exact body.
+202 means preparing/sending; 200 means a terminal status, **not necessarily sent**.
+Both return a status Location. Read `state` and fixed `failureCode`; never use a new
+key to work around uncertainty. Subjects, request keys, owner claims and provider
+receipts are not published. Sent means accepted by Notify, not delivered or published.
+
+`GAZETTE_ENABLED` defaults false; provisioned previews also need the configured
+recipient, the required `NOTIFY_TEMPLATE_GAZETTE_ADULT`/`MINOR`/`MIXED` variant and
+existing Notify key/reply-to/retention settings. Even with complete configuration,
+fresh HTTP submissions receive 503 `GAZETTE_UNAVAILABLE` until the delivery/recovery
+slice is ready. No Notify caller or recovery scheduler is implemented yet.
+
+See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md),
+[ledger evidence](docs/plans/gazette-1c-request-ledger-and-guards.md) and
+[preview/status implementation](docs/plans/gazette-1d-preview-admission-and-status.md).
 
 ### The OpenAPI document
 
