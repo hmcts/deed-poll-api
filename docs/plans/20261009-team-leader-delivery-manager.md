@@ -170,12 +170,12 @@ artifact and its source SHA/checksum for admin rather than reusing a shared temp
 **Files:** note/witness services, `SavedQueryPermissions`, `CcdAttemptRepairs`, privacy adapters,
 `DeedPollRoleMapping`, applicable staff namespace gates; associated tests and CCD definition snapshots.
 
-- [ ] Replace non-Gazette admin role checks with the corresponding capability. Feed existing privacy adapters from `OVERRIDE_PRIVACY`, preserving both create defaults and edit behaviour.
-- [ ] Preserve saved-query rules: shared-query management does not grant access to another user's private query, ownership remains subject-based, and an owner can still unpublish under existing rules.
-- [ ] Admit both new roles to caseworker namespace membership wherever membership is enforced or reported. Preserve the staff gate's configured mode and judicial boundaries; Gazette refusals must enforce even if the general staff gate is report-only.
-- [ ] Map both new roles to the existing CCD staff reader profile. Preserve the legacy reader mapping temporarily and ordinary/judicial mappings. Grant neither new role the system profile, system events or importer roles.
-- [ ] Parameterise privileged domain/HTTP tests over Team leader, Delivery Manager and legacy admin. Add denials for ordinary/judicial callers and document-reader tests for each new role alone.
-- [ ] Regenerate and review the CCD definition/snapshots; prove only intended role rows change. Run focused tests and the local cftlib document journey; do not hand-edit vendored reference fixtures.
+- [x] Replace non-Gazette admin role checks with the corresponding capability. Feed existing privacy adapters from `OVERRIDE_PRIVACY`, preserving both create defaults and edit behaviour.
+- [x] Preserve saved-query rules: shared-query management does not grant access to another user's private query, ownership remains subject-based, and an owner can still unpublish under existing rules.
+- [x] Admit both new roles to caseworker namespace membership wherever membership is enforced or reported. Preserve the staff gate's configured mode and judicial boundaries; Gazette refusals must enforce even if the general staff gate is report-only.
+- [x] Map both new roles to the existing CCD staff reader profile. Preserve the legacy reader mapping temporarily and ordinary/judicial mappings. Grant neither new role the system profile, system events or importer roles.
+- [x] Parameterise privileged domain/HTTP tests over Team leader, Delivery Manager and legacy admin. Add denials for ordinary/judicial callers and document-reader tests for each new role alone.
+- [x] Regenerate and review the CCD definition/snapshots; prove only intended role rows change. Run focused tests and the local cftlib document journey; do not hand-edit vendored reference fixtures.
 
 ### Task 4: Make every Gazette entry point Delivery Manager-only
 
@@ -397,3 +397,68 @@ counts.json, test-results/ and checkstyle/. Deprecation notices include the deli
 legacy role; no warnings were suppressed. This is focused domain/auth coverage, not HTTP/database
 or rollout proof. Consumer gate migration, CCD generation/cftlib, OpenAPI and full-build acceptance
 remain Tasks 3–6. Only Task 2 was completed in this iteration.
+
+
+## Execution evidence — Task 3 (9 October 2026)
+
+Started clean at `fa92c555db850ca051836f8616d3541306f858c4` on
+`feat/team-leader-delivery-manager`. Read workspace/repository guidance and both companion plans.
+Only this API worktree was edited; no review stage, push, merge or deployment was performed.
+
+Migrated note deletion, witness deletion and all three CCD repair operations to their explicit
+capabilities. Saved-query editing/publishing now consults `MANAGE_SHARED_QUERIES`; visibility,
+subject-based ownership and the owner's ability to unpublish remain unchanged. `CurrentUser.writeContext`
+feeds the existing privacy adapters directly from `OVERRIDE_PRIVACY`. Tests cover create/edit privacy
+writes, create defaults, existing-value preservation and attribution for each privileged role alone.
+
+Parameterized existing domain and HTTP regressions over Team leader, Delivery Manager and legacy
+admin, including parent scoping, private-query refusals, shared-query edits/deletes/publishing,
+CCD repair outcomes, conflict/no-resend evidence and concurrent repairs. Ordinary/judicial deletion
+and shared-query denials remain explicit; all five judicial operations refuse each privileged role
+without JUDICIAL. The new CCD mappings are exercised by the persistence security chain and local
+CDAM downloads with each role alone; both new roles are refused CCD creation/document event submission.
+
+This baseline still has no `StaffArea`/`StaffGate` membership or report-mode implementation. The general
+chain remains `anyRequest().authenticated()` and the new-role HTTP tests pass through it. No separate
+staff-gate feature was imported or its mode changed. Companion integration must admit both new roles
+in `StaffArea.CASEWORKER` and cover report/enforce modes while retaining JUDICIAL-only judicial access,
+as identified in Task 1. Gazette domain gates remain enforcing independently of that general chain;
+their migration to Delivery Manager-only capability checks is Task 4, not completed here.
+
+`generateCCDConfig` compared 23 JSON files against the prior pinned definition. Exactly one file
+changed: `RoleToAccessProfiles.json`, with exactly two added `DEED_POLL_READER` rows for the new claims.
+All existing mappings and every other generated file are unchanged. System/event/importer privileges
+were not added. The snapshot was copied from generated output; vendored reference fixtures were untouched.
+The complete delta is recorded in `build/evidence/task3/definition-delta.json`.
+
+Executed from this worktree with `JAVA_HOME=/tmp/deed-poll-jdk21`,
+`JAVA_TOOL_OPTIONS=-XX:UseSVE=0`, `TESTCONTAINERS_RYUK_DISABLED=true`; each Gradle invocation used
+`--max-workers=2 -Porg.gradle.java.installations.paths=/tmp/deed-poll-jdk21
+-Porg.gradle.java.installations.auto-detect=false`:
+
+```bash
+./gradlew test --tests '*CcdAttemptRepairsTest' --tests '*SavedQueryPermissionsTest'
+./gradlew generateCCDConfig
+./gradlew test --tests '*CurrentUser*' --tests '*IdamClaims*' --tests '*RoleCapabilities*' \
+  --tests '*Note*' --tests '*Witness*' --tests '*SavedQuery*' --tests '*CcdAttempt*' \
+  --tests '*FormPresentation*' --tests '*CaseworkerCaseController*' --tests '*Security*' \
+  --tests '*DeedPollRoleMapping*' --tests '*DeedPollDefinition*' checkstyleMain checkstyleTest
+./gradlew cftlibTest checkstyleCftlib checkstyleCftlibTest checkstyleMain
+git diff --check
+```
+
+The first command was the red test run before implementation: 87 tests, 24 expected failures because
+new-role CCD repairs were still legacy-only. Focused validation after implementation passed all
+832 tests across 124 XML suites, zero failures/errors/skips, including Docker-backed HTTP/database
+coverage (no `requires-docker` exclusion). Its initial Checkstyle run found one variable-declaration
+distance warning in a new parameterized test; making the local caller final resolved it. Repeating
+the validation command succeeded; Gradle retained the passing test result as UP-TO-DATE because that
+lint-only correction did not change test bytecode. Main/test Checkstyle both passed.
+
+The complete local cftlib suite passed all 14 tests, zero failures/errors/skips, including the document
+journey with all five staff roles, event refusals, restart/recovery and existing linking/caller journeys.
+Both cftlib Checkstyle tasks passed. Evidence is retained under `build/evidence/task3/`: red.log,
+generation.log, validation-initial.log, validation.log, cftlib.log, counts.json, cftlib-counts.json,
+test-results/, cftlib-test-results/, checkstyle/ and definition-delta.json. Existing compiler/Gradle/JVM
+warnings remain. These results establish local behaviour only; full-build acceptance, Gazette gates,
+contract publication and external rollout remain Tasks 4–6 and Post-Completion. Only Task 3 is complete.

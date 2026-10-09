@@ -164,7 +164,7 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
      * {@code isAdmin = false} for an admin and silently drop the privacy fields.
      */
     public WriteContext writeContext() {
-        return new WriteContext(isAdmin, name);
+        return new WriteContext(can(Capability.OVERRIDE_PRIVACY), name);
     }
 
     /**

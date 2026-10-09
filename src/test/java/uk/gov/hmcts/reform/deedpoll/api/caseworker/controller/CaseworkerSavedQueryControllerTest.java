@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -252,13 +254,15 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$[0].name").value("Mine, shared"));
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("shows an Administrator no more than anyone else, so the override is not a visibility one")
-        void showsAnAdministratorNoMore() throws Exception {
+        void showsAnAdministratorNoMore(Role role) throws Exception {
+            Caller caller = new Caller(ADMIN.subject(), ADMIN.name(), List.of(role.claimValue()));
             save(OWNER, "Mine, private", false);
             save(OWNER, "Mine, shared", true);
 
-            as(ADMIN, get("/caseworker/saved-queries"))
+            as(caller, get("/caseworker/saved-queries"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].name").value("Mine, shared"));
@@ -285,16 +289,18 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$[0].selected").value(false));
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("flags each query with whether this caller may change it")
-        void flagsWhetherThisCallerMayChangeIt() throws Exception {
+        void flagsWhetherThisCallerMayChangeIt(Role role) throws Exception {
+            Caller caller = new Caller(ADMIN.subject(), ADMIN.name(), List.of(role.claimValue()));
             save(OWNER, "Shared", true);
 
             // Published rather than left for the client to derive, because a client that reimplements the rule
             // drifts from it -- and then renders a button that 403s. Asserted from all three sides.
             as(OWNER, get("/caseworker/saved-queries"))
                 .andExpect(jsonPath("$[0].editable").value(true));
-            as(ADMIN, get("/caseworker/saved-queries"))
+            as(caller, get("/caseworker/saved-queries"))
                 .andExpect(jsonPath("$[0].editable").value(true));
             as(OTHER, get("/caseworker/saved-queries"))
                 .andExpect(jsonPath("$[0].editable").value(false));
@@ -317,13 +323,15 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
     @DisplayName("POST /caseworker/saved-queries")
     class CreateSavedQuery {
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("saves the whole view and answers 201 with it")
-        void savesTheWholeView() throws Exception {
+        void savesTheWholeView(Role role) throws Exception {
+            Caller caller = new Caller(ADMIN.subject(), ADMIN.name(), List.of(role.claimValue()));
             // As the Administrator, because this body publishes and only an Administrator may. Changed rather
             // than duplicated: an unpublished create is covered by `defaultsToUnshared` below, and a second
             // happy path differing only in caller would drift from this one.
-            as(ADMIN, post("/caseworker/saved-queries"), """
+            as(caller, post("/caseworker/saved-queries"), """
                 {"name":"Adults received in June","description":"For the June audit","shared":true,\
                 "filter":"received","conditions":["type:is:Adult","dateReceived:after:2026-06-01"],\
                 "sortField":"dateReceived","sortDirection":"asc","searchTerm":"Smith"}""")
@@ -476,15 +484,17 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.error").value("Saved query " + UNKNOWN_ID + " not found"));
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("404s an Administrator naming somebody else's unshared one")
-        void notFoundForAnAdministratorNamingAnUnsharedOne() throws Exception {
+        void notFoundForAnAdministratorNamingAnUnsharedOne(Role role) throws Exception {
+            Caller caller = new Caller(ADMIN.subject(), ADMIN.name(), List.of(role.claimValue()));
             String id = save(OWNER, "Private", false);
 
             // Decision 2's refinement, at the route: the override reaches shared queries only, and it is the
             // visibility rule that enforces that rather than a second check. So an administrator gets the same
             // 404 as anyone else, and cannot tell it from an id that never existed either.
-            as(ADMIN, get("/caseworker/saved-queries/" + id))
+            as(caller, get("/caseworker/saved-queries/" + id))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("Saved query " + id + " not found"));
         }
@@ -551,12 +561,14 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
             assertThat(saved.getName()).isEqualTo("Ops");
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("an Administrator may publish an existing query")
-        void anAdministratorMayPublishAnExistingQuery() throws Exception {
-            String id = save(ADMIN, "Ops", false);
+        void anAdministratorMayPublishAnExistingQuery(Role role) throws Exception {
+            Caller caller = new Caller(ADMIN.subject(), ADMIN.name(), List.of(role.claimValue()));
+            String id = save(caller, "Ops", false);
 
-            as(ADMIN, patch("/caseworker/saved-queries/" + id), "{\"shared\":true}")
+            as(caller, patch("/caseworker/saved-queries/" + id), "{\"shared\":true}")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.shared").value(true));
 
@@ -577,12 +589,14 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
             assertThat(stored(id).isShared()).isFalse();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("an Administrator amends a shared one, and the owner is unchanged by it")
-        void anAdministratorAmendsASharedOne() throws Exception {
+        void anAdministratorAmendsASharedOne(Role role) throws Exception {
+            Caller caller = new Caller(ADMIN.subject(), ADMIN.name(), List.of(role.claimValue()));
             String id = save(OWNER, "Ops", true);
 
-            as(ADMIN, patch("/caseworker/saved-queries/" + id), "{\"name\":\"Ops, corrected\"}")
+            as(caller, patch("/caseworker/saved-queries/" + id), "{\"name\":\"Ops, corrected\"}")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.name").value("Ops, corrected"))
                 // Editing does not transfer ownership: ownerName is captured when the query is saved and never
@@ -590,7 +604,7 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.ownerId").value(OWNER.subject()))
                 .andExpect(jsonPath("$.ownerName").value(OWNER.name()))
                 // And modifiedBy is the caller who actually changed it, which is the point of having both.
-                .andExpect(jsonPath("$.modifiedBy").value(ADMIN.name()));
+                .andExpect(jsonPath("$.modifiedBy").value(caller.name()));
 
             assertThat(stored(id).getOwnerId()).isEqualTo(OWNER.subject());
         }
@@ -620,12 +634,14 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
             assertThat(stored(id).getName()).isEqualTo("Ops");
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("404s an Administrator amending somebody else's unshared one, which is unchanged")
-        void notFoundForAnAdministratorAmendingAnUnsharedOne() throws Exception {
+        void notFoundForAnAdministratorAmendingAnUnsharedOne(Role role) throws Exception {
+            Caller caller = new Caller(ADMIN.subject(), ADMIN.name(), List.of(role.claimValue()));
             String id = save(OWNER, "Ops", false);
 
-            as(ADMIN, patch("/caseworker/saved-queries/" + id), "{\"name\":\"Tidied\"}")
+            as(caller, patch("/caseworker/saved-queries/" + id), "{\"name\":\"Tidied\"}")
                 .andExpect(status().isNotFound());
 
             assertThat(stored(id).getName()).isEqualTo("Ops");
@@ -726,12 +742,14 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
             assertThat(savedQueries.findById(UUID.fromString(deleted))).isEmpty();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("an Administrator deletes a shared one")
-        void anAdministratorDeletesASharedOne() throws Exception {
+        void anAdministratorDeletesASharedOne(Role role) throws Exception {
+            Caller caller = new Caller(ADMIN.subject(), ADMIN.name(), List.of(role.claimValue()));
             String id = save(OWNER, "Ops", true);
 
-            as(ADMIN, delete("/caseworker/saved-queries/" + id)).andExpect(status().isNoContent());
+            as(caller, delete("/caseworker/saved-queries/" + id)).andExpect(status().isNoContent());
 
             assertThat(savedQueries.findById(UUID.fromString(id))).isEmpty();
         }
@@ -761,13 +779,15 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
             assertThat(savedQueries.findById(UUID.fromString(id))).isPresent();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("404s anybody deleting somebody else's unshared one, Administrator included")
-        void notFoundDeletingSomebodyElsesUnsharedOne() throws Exception {
+        void notFoundDeletingSomebodyElsesUnsharedOne(Role role) throws Exception {
+            Caller caller = new Caller(ADMIN.subject(), ADMIN.name(), List.of(role.claimValue()));
             String id = save(OWNER, "Ops", false);
 
             as(OTHER, delete("/caseworker/saved-queries/" + id)).andExpect(status().isNotFound());
-            as(ADMIN, delete("/caseworker/saved-queries/" + id)).andExpect(status().isNotFound());
+            as(caller, delete("/caseworker/saved-queries/" + id)).andExpect(status().isNotFound());
 
             assertThat(savedQueries.findById(UUID.fromString(id))).isPresent();
         }
@@ -867,12 +887,14 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
             assertThat(selections.count()).isZero();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("404s an Administrator selecting somebody else's unshared query")
-        void notFoundForAnAdministrator() throws Exception {
+        void notFoundForAnAdministrator(Role role) throws Exception {
+            Caller caller = new Caller(ADMIN.subject(), ADMIN.name(), List.of(role.claimValue()));
             String id = save(OWNER, "Private", false);
 
-            as(ADMIN, put("/caseworker/saved-queries/" + id + "/selection"))
+            as(caller, put("/caseworker/saved-queries/" + id + "/selection"))
                 .andExpect(status().isNotFound());
 
             assertThat(selections.count()).isZero();

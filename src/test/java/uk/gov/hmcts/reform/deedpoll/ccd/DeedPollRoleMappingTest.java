@@ -2,6 +2,8 @@ package uk.gov.hmcts.reform.deedpoll.ccd;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 
 import java.util.List;
@@ -16,6 +18,12 @@ class DeedPollRoleMappingTest {
     private static final DeedPollRoleMapping MAPPING =
         DeedPollRoleMapping.from(new CcdProperties("CASE_TYPE", "JURISDICTION", "system-role"));
 
+    @ParameterizedTest
+    @EnumSource(Role.class)
+    void eachStaffRoleAloneGrantsOnlyTheReaderProfile(Role role) {
+        assertThat(MAPPING.profilesFor(List.of(role.claimValue()))).containsExactly(DEED_POLL_READER);
+    }
+
     @Test
     @DisplayName("maps the configured system actor separately from read-only staff")
     void mapsSystemAndStaffRoles() {
@@ -23,6 +31,8 @@ class DeedPollRoleMappingTest {
             "system-role", DEED_POLL_SYSTEM,
             Role.CASEWORKER.claimValue(), DEED_POLL_READER,
             Role.DEEDPOLL_ADMIN.claimValue(), DEED_POLL_READER,
+            Role.TEAM_LEADER.claimValue(), DEED_POLL_READER,
+            Role.DELIVERY_MANAGER.claimValue(), DEED_POLL_READER,
             Role.JUDICIAL.claimValue(), DEED_POLL_READER));
     }
 

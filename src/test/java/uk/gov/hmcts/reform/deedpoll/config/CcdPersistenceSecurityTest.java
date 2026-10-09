@@ -124,7 +124,8 @@ class CcdPersistenceSecurityTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"caseworker-deedpoll", "caseworker-deedpoll-admin", "caseworker-deedpoll-judicial"})
+    @ValueSource(strings = {"caseworker-deedpoll", "caseworker-deedpoll-admin", "caseworker-deedpoll-judicial",
+        "caseworker-deedpoll-team-leader", "caseworker-deedpoll-delivery-manager"})
     void admitsStaffAsReadersOnly(String role) throws Exception {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "A Staff Reader", List.of(role));
         mockMvc.perform(get(PROBE).headers(headers(CCD_DATA, IDAM.accessToken())))

@@ -3,8 +3,8 @@ package uk.gov.hmcts.reform.deedpoll.domain.witnesses;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
-import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
@@ -154,7 +154,7 @@ public class WitnessService {
      */
     @Transactional
     public void removeWitness(String deedPollId, String id, CurrentUser caller) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.DELETE_WITNESS);
         witnesses.delete(findWitness(deedPollId, id));
     }
 

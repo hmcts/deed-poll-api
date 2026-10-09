@@ -171,6 +171,8 @@ class DeedPollDefinitionTest {
                 "idam:" + PLACEHOLDER + ":DEED_POLL_SYSTEM",
                 "idam:caseworker-deedpoll:DEED_POLL_READER",
                 "idam:caseworker-deedpoll-admin:DEED_POLL_READER",
+                "idam:caseworker-deedpoll-team-leader:DEED_POLL_READER",
+                "idam:caseworker-deedpoll-delivery-manager:DEED_POLL_READER",
                 "idam:caseworker-deedpoll-judicial:DEED_POLL_READER");
         assertThat(mappings).allSatisfy(row -> {
             assertThat(row.get("Disabled").asText()).isEqualTo("N");

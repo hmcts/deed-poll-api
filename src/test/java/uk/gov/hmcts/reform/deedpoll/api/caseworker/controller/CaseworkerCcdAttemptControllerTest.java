@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -160,7 +162,7 @@ class CaseworkerCcdAttemptControllerTest extends AbstractPostgresContainerTest {
         private void refusedAllThree(String id) throws Exception {
             authorised(get(ATTEMPTS))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error").value(containsString(Role.DEEDPOLL_ADMIN.claimValue())));
+                .andExpect(jsonPath("$.error").value(containsString("REPAIR_CCD")));
             authorised(post(ATTEMPTS + "/" + id + "/reconciliation")).andExpect(status().isForbidden());
             authorised(post(ATTEMPTS + "/" + id + "/retry")).andExpect(status().isForbidden());
 
@@ -174,9 +176,11 @@ class CaseworkerCcdAttemptControllerTest extends AbstractPostgresContainerTest {
     @DisplayName("the list")
     class TheList {
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("answers the counts per status and the unlinked attempts, publishing none of the hidden fields")
-        void listsUnlinked() throws Exception {
+        void listsUnlinked(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
             CcdCreationAttempt repair = needingRepair(true);
             opened();
 
@@ -237,9 +241,11 @@ class CaseworkerCcdAttemptControllerTest extends AbstractPostgresContainerTest {
     @DisplayName("the repairs")
     class Repairs {
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("reconciliation moves NeedsRepair to AwaitingConfirmation, attributed, binding nothing")
-        void reconciles() throws Exception {
+        void reconciles(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
             CcdCreationAttempt attempt = needingRepair(true);
 
             authorised(post(ATTEMPTS + "/" + attempt.getId() + "/reconciliation"))
@@ -254,9 +260,11 @@ class CaseworkerCcdAttemptControllerTest extends AbstractPostgresContainerTest {
             assertThat(deedPolls.findById(attempt.getDeedPollId()).orElseThrow().getCcdCaseReference()).isNull();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("a retry from scratch moves NeedsRepair to Pending, attributed, binding nothing")
-        void retries() throws Exception {
+        void retries(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
             CcdCreationAttempt attempt = needingRepair(false);
 
             authorised(post(ATTEMPTS + "/" + attempt.getId() + "/retry"))
@@ -270,9 +278,11 @@ class CaseworkerCcdAttemptControllerTest extends AbstractPostgresContainerTest {
             assertThat(deedPolls.findById(attempt.getDeedPollId()).orElseThrow().getCcdCaseReference()).isNull();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("a retry from scratch of an attempt that may have reached CCD is a 409 saying what to do instead")
-        void retryRefusedAfterSubmission() throws Exception {
+        void retryRefusedAfterSubmission(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
             CcdCreationAttempt attempt = needingRepair(true);
 
             authorised(post(ATTEMPTS + "/" + attempt.getId() + "/retry"))
@@ -307,9 +317,11 @@ class CaseworkerCcdAttemptControllerTest extends AbstractPostgresContainerTest {
             }
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("two admins repairing at once make one move: one 200, one 409")
-        void concurrentRepairsMakeOneMove() throws Exception {
+        void concurrentRepairsMakeOneMove(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
             CcdCreationAttempt attempt = needingRepair(false);
             String path = ATTEMPTS + "/" + attempt.getId();
 

@@ -7,6 +7,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -331,10 +333,11 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.newForename").value("Ada"));
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("honours a privacy an admin sets")
-        void honoursAPrivacyAnAdminSets() throws Exception {
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+        void honoursAPrivacyAnAdminSets(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
 
             authorised(post("/caseworker/cases"), json(Map.of(
                 "dateReceived", quoted(RECEIVED),
@@ -513,11 +516,12 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
             assertThat(deedPolls.findById(record.getId()).orElseThrow().getPrivacy()).isEqualTo(Privacy.Normal);
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("honours a privacy an admin sets on an existing case")
-        void honoursAPrivacyAnAdminSets() throws Exception {
+        void honoursAPrivacyAnAdminSets(Role role) throws Exception {
             DeedPoll record = newCase(Map.of("type", "Adult"));
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
 
             authorised(patch("/caseworker/cases/" + record.getId()), json(Map.of(
                 "privacy", quoted("Private"))))

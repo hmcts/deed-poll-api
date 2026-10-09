@@ -4,6 +4,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
@@ -192,13 +194,15 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
         assertThat(witnessService.findWitness(owner, witnessId).getId()).isEqualTo(witnessId);
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
     @DisplayName("removes after an existence check, scoped to the parent case")
-    void removesAfterAnExistenceCheck() {
+    void removesAfterAnExistenceCheck(Role role) {
+        CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
         String caseId = storedCase();
         String witnessId = witnessService.createWitness(caseId, create()).getId();
 
-        witnessService.removeWitness(caseId, witnessId, ADMIN);
+        witnessService.removeWitness(caseId, witnessId, caller);
 
         assertThat(witnesses.findById(witnessId)).isEmpty();
     }
@@ -279,9 +283,11 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
         assertThat(saved.getModifiedOn()).isAfter(createdOn);
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
     @DisplayName("refuses to remove a witness through another case, and leaves it stored")
-    void refusesToRemoveAWitnessThroughAnotherCase() {
+    void refusesToRemoveAWitnessThroughAnotherCase(Role role) {
+        CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
         // Not a reference block -- there, the delete's own `where` carries deedPollId and the guard is
         // asserted only on the read paths. Here the scope is what the delete is given, so it is worth
         // asserting that a wrong parent cannot delete somebody else's witness.
@@ -289,15 +295,17 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
         String other = storedCase();
         String witnessId = witnessService.createWitness(owner, create()).getId();
 
-        assertThatThrownBy(() -> witnessService.removeWitness(other, witnessId, ADMIN))
+        assertThatThrownBy(() -> witnessService.removeWitness(other, witnessId, caller))
             .isInstanceOf(NotFoundError.class);
 
         assertThat(witnesses.findById(witnessId)).isPresent();
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"CASEWORKER", "JUDICIAL"})
     @DisplayName("refuses a delete by a caller without the Administrator role, and leaves the witness stored")
-    void refusesADeleteByACallerWithoutTheAdministratorRole() {
+    void refusesADeleteByACallerWithoutTheAdministratorRole(Role role) {
+        CurrentUser caller = CurrentUser.currentUser(List.of(role), "Caseworker", "caseworker-1");
         // Not a reference block: the reference has no authorisation at all in this service. The business
         // splits editing from deleting -- both roles may add and amend a witness, and "Delete witnesses" is
         // marked for Administrators alone -- and the rule lives here rather than on the route so that a caller
@@ -305,7 +313,7 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
         String caseId = storedCase();
         String witnessId = witnessService.createWitness(caseId, create()).getId();
 
-        assertThatThrownBy(() -> witnessService.removeWitness(caseId, witnessId, CASEWORKER))
+        assertThatThrownBy(() -> witnessService.removeWitness(caseId, witnessId, caller))
             .isInstanceOf(ForbiddenError.class);
 
         // The assertion that carries the test. The refusal alone would also pass against an implementation
@@ -328,12 +336,14 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
         assertThat(witnesses.findById(witnessId)).isPresent();
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
     @DisplayName("404s an Administrator deleting a witness that does not exist, so the check did not swallow it")
-    void administratorDeletingAMissingWitnessStillGets404() {
+    void administratorDeletingAMissingWitnessStillGets404(Role role) {
+        CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
         // The role check runs first, so it has to be shown not to have absorbed the not-found: an admin
         // addressing a witness that was never stored still gets the absence, not a success.
-        assertThatThrownBy(() -> witnessService.removeWitness(storedCase(), "nope", ADMIN))
+        assertThatThrownBy(() -> witnessService.removeWitness(storedCase(), "nope", caller))
             .isInstanceOf(NotFoundError.class);
     }
 
@@ -349,9 +359,11 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
             .isInstanceOf(ForbiddenError.class);
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
     @DisplayName("deletes the last witness on a case, since no minimum is enforced")
-    void deletesTheLastWitnessOnACase() {
+    void deletesTheLastWitnessOnACase(Role role) {
+        CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
         // No artefact states a minimum number of witnesses -- checked DeedPollValidation, the reference's
         // deed-poll-validation.ts and the Dataverse business rules, none of which mention witnesses -- so the
         // absence of a rule is asserted rather than left to be discovered. If the business says there is a
@@ -359,7 +371,7 @@ class WitnessServiceTest extends AbstractPostgresContainerTest {
         String caseId = storedCase();
         String only = witnessService.createWitness(caseId, create()).getId();
 
-        witnessService.removeWitness(caseId, only, ADMIN);
+        witnessService.removeWitness(caseId, only, caller);
 
         assertThat(witnessService.findWitnesses(caseId)).isEmpty();
     }
