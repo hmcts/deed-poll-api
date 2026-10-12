@@ -32,8 +32,8 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 ## The API surface
 
 Thirty-four caseworker operations across twenty-one paths, plus five judicial ones on a namespace of their
-own (below), three admin-only CCD-attempt ones (see [Repairing attempts](#repairing-attempts)), and one admin-only
-Gazette history read (see [Gazette publication foundation](#gazette-publication-foundation)).
+own (below), three privileged CCD-attempt ones (see [Repairing attempts](#repairing-attempts)), and eight
+Delivery Manager-only Gazette operations (see [Gazette publication foundation](#gazette-publication-foundation)).
 `/swagger-ui.html` is the authority; this table is the map — and `OpenAPIPublisherTest` asserts each count,
 so a route added without a row here is a count that stops agreeing with the spec.
 
@@ -54,13 +54,13 @@ so a route added without a row here is a count that stops agreeing with the spec
 | POST | `/caseworker/cases/{id}/witnesses` | Add a witness — all four fields required |
 | GET | `/caseworker/cases/{id}/witnesses/{witnessId}` | One witness |
 | PATCH | `/caseworker/cases/{id}/witnesses/{witnessId}` | Amend a witness — an omitted field is left alone |
-| DELETE | `/caseworker/cases/{id}/witnesses/{witnessId}` | Delete a witness — **Administrators only**, 204, and 404 through the wrong case |
+| DELETE | `/caseworker/cases/{id}/witnesses/{witnessId}` | Delete a witness — **Team leader or Delivery Manager (legacy admin temporarily)**, 204, and 404 through the wrong case |
 | POST | `/caseworker/cases/{id}/documents` | Upload a file (multipart) and record its document row |
 | GET | `/caseworker/cases/{id}/documents/{documentId}/file` | Stream a document's stored file back |
 | GET | `/caseworker/saved-queries` | The shared library plus the caller's own, each flagged `selected` and `editable` |
-| POST | `/caseworker/saved-queries` | Save a query — `name` required, unshared unless `shared` says otherwise, and **only an Administrator may set `shared`** (403 otherwise) |
+| POST | `/caseworker/saved-queries` | Save a query — `name` required, unshared unless `shared` says otherwise, and **only a Team leader, Delivery Manager or temporary legacy admin may set `shared`** (403 otherwise) |
 | GET | `/caseworker/saved-queries/{id}` | One saved query, if it is shared or theirs |
-| PATCH | `/caseworker/saved-queries/{id}` | Amend one — the owner, or an **Administrator** if it is shared. Setting `shared` true needs an Administrator; clearing it does not |
+| PATCH | `/caseworker/saved-queries/{id}` | Amend one — the owner, or an **privileged query manager** if it is shared. Setting `shared` true needs MANAGE_SHARED_QUERIES; clearing it does not |
 | DELETE | `/caseworker/saved-queries/{id}` | Delete one — same rule, 204, and its subscribers' selections cascade |
 | PUT | `/caseworker/saved-queries/{id}/selection` | Add it to the caller's own list — 204, idempotent, no edit rights needed |
 | DELETE | `/caseworker/saved-queries/{id}/selection` | Remove it from the caller's own list — 204 whether or not it was in it |
@@ -89,7 +89,7 @@ entity, which is why its permission rules are written out rather than implied:
 
 - A query is **visible** if it is `shared` or the caller owns it. One that is neither is **404**, carrying the
   message an id that never existed gets, so no id is discoverable by watching status codes. That includes an
-  Administrator naming somebody else's unshared query: the override reaches shared queries only, and the
+  privileged query manager naming somebody else's unshared query: the override reaches shared queries only, and the
   visibility rule is what enforces that rather than a second check.
 - A query the caller can see but may not change is **403**. They are already looking at it, so there is nothing
   left to conceal, and a 404 there would be a lie a client cannot act on.
@@ -233,7 +233,7 @@ effect of loading either judicial list — the shared pool or the judge's own �
 
 **Five operations, on a namespace of their own.** They are *not* part of the thirty above: a judge is not a
 caseworker with fewer permissions, and `/judicial/**` has its own controllers and its own DTOs so that a
-caseworker response — which carries every field a caseworker sees, the admin-only privacy fields included —
+caseworker response — which carries every field a caseworker sees, the privacy fields included —
 cannot be reused for the judiciary by accident. An ArchUnit rule asserts the separation in bytecode.
 
 | Method | Path | What it does |
@@ -283,16 +283,16 @@ off the only page that linked to it.
 
 The judicial application view is a **confirmed minimum** (Steve, 2026-09-17): the reference, the application
 type, the old and new names, and the referral's own reasons, notes and urgency. It excludes payment and fee
-references, applicant contact details, workflow dates, internal audit trails and the admin-only privacy field.
+references, applicant contact details, workflow dates, internal audit trails and the privacy field.
 Any *addition* to that set is a legal and policy decision, not an engineering one.
 
 The witness delete was the eighteenth, and is **the one witness route restricted by role**: the capability
-matrix puts "Delete witnesses" at ✗ for Basic User and ✓ for Administrator, the same split as deleting a
-note. The check lives in `WitnessService.removeWitness` rather than on the route, so it holds for every
+historical matrix restricted "Delete witnesses" to Administrator, like deleting a note. Today
+DELETE_WITNESS grants that privilege to Team leader, Delivery Manager and temporary legacy admin. The check lives in `WitnessService.removeWitness` rather than on the route, so it holds for every
 future caller, and it **refuses before it resolves** — a caller without the role gets 403 whether or not
 the witness exists, so the status code cannot be used to tell an existing witness from a missing one. The
 delete is a hard one, on the notes precedent, and there is **no minimum number of witnesses** a case must
-retain: no artefact states one, so an Administrator may delete the last witness on a case. That is the one
+retain: no artefact states one, so an authorised caller may delete the last witness on a case. That is the one
 decision here the business might want changed.
 
 Before the route existed, `removeWitness` was an ungated two-argument method safe only because nothing
@@ -310,10 +310,9 @@ both roles.
 The note delete was the thirteenth, added 2026-09-08 on exactly that principle rather than against it:
 `deed-poll-admin` is losing its data-access layer to this service and its note form has always had a delete
 button, so the operation acquired a real consumer. `NoteService.removeNote` already existed and was already
-tested — this was the route it was keeping itself for. It is **Administrators only**, enforced the same way
-the witness delete is: in `NoteService.removeNote` rather than on the route. Only
-`caseworker-deedpoll-admin` is confirmed with IDAM, which is why the restriction is expressed as "requires
-the admin role" and never as "requires a Basic User role" — naming that second role would be inventing one.
+tested — this was the route it was keeping itself for. It is **Team leader or Delivery Manager (legacy admin temporarily)**, enforced the same way
+the witness delete is: in `NoteService.removeNote` rather than on the route, using DELETE_NOTE.
+Team leader, Delivery Manager and the temporary legacy admin each grant that capability.
 
 Every failure answers the same envelope — `{"error": "...", "errors": [{"field": "...", "message": "..."}]}`
 (`api/ApiError.java`), so a form can render a message against the input it belongs to.
@@ -340,17 +339,28 @@ so that an unconfigured environment refuses every token** rather than trusting a
 | `IDAM_API_ISSUER_URL` | The IDAM issuer. Endpoints are discovered from it, never configured |
 | `IDAM_API_AUDIENCES` | Comma-separated `aud` values that are ours. Empty refuses everything |
 
-Roles come from `/o/userinfo`, not from the token — an IDAM access token carries no roles at all — and
-the lookup is deliberately uncached, so a role removed in IDAM is gone from the next request. The one
-caseworker role modelled is `caseworker-deedpoll-admin`, and it gates six things: whether `privacy` is editable,
-deleting a note, deleting a witness, publishing or amending a *shared* saved query, the
-`/caseworker/ccd-attempts` list and repairs, and Gazette notice history.
+Roles come from `/o/userinfo`, not from the token, and the lookup is uncached. The application maps
+verified roles to explicit capabilities:
 
-> **No route is gated as a route.** Every authenticated principal reaches the whole caseworker surface,
-> because the only role name confirmed with IDAM is the admin one and gating everything on it would lock
-> out ordinary caseworkers. Naming a non-admin caseworker role is part of the IDAM onboarding that has not
-> happened; until it does, `anyRequest().authenticated()` is the whole of the *transport's* authorisation
-> rule, and the checks above live in the domain, where they hold for callers a route does not have.
+| Role claim | Privileges |
+|---|---|
+| `caseworker-deedpoll-team-leader` | Privacy override, note/witness deletion, shared-query management, CCD repairs |
+| `caseworker-deedpoll-delivery-manager` | All Team leader privileges plus the entire Gazette facility |
+| `caseworker-deedpoll-admin` (deprecated) | Temporary Team leader compatibility; no Gazette access |
+
+Each new role works alone. Neither grants judicial or system access. Private saved queries remain
+owner-only; shared-query management does not bypass that rule. The privacy adapter derives its flag
+from OVERRIDE_PRIVACY. The transport on this baseline uses `anyRequest().authenticated()`; domain
+capability gates enforce independently. The separate staff-gate integration must admit both new roles
+to casework while preserving its configured mode and judicial boundary.
+
+All eight Gazette HTTP operations and `GET /caseworker/cases?filter=readyForPublication`, including
+its count and saved-query links, require `caseworker-deedpoll-delivery-manager`. Other authenticated
+roles receive 403 before reads, outbox drain or CCD sweep; unauthenticated callers receive 401.
+Ordinary case fields, conditions and visibility are unchanged. Background delivery uses durable
+admission evidence and does not reauthorise an already admitted request. See the
+[permission contract and rollout](docs/plans/completed/20261009-team-leader-delivery-manager.md).
+Release owners should also use the [API release handoff](docs/STAFF-ROLE-RELEASE.md).
 
 `/ccd-persistence/**` is the exception, with a chain of its own: it is where CCD's data-store calls this
 service back, so it admits an S2S token verified as `ccd_data` and nobody else, plus an IDAM user whose role
@@ -386,8 +396,8 @@ this service being down. `CcdConfiguration` registers the client instead.
 
 ### Repairing attempts
 
-Three admin-only operations under `/caseworker/ccd-attempts`, counted apart from the caseworker surface as
-`CCD_ATTEMPT_PATHS`. Each needs `caseworker-deedpoll-admin` (403 otherwise), and neither move calls CCD or writes a
+Three REPAIR_CCD-protected operations under `/caseworker/ccd-attempts`, counted apart from the caseworker surface as
+`CCD_ATTEMPT_PATHS`. Each needs Team leader, Delivery Manager or temporary legacy admin (403 otherwise), and neither move calls CCD or writes a
 binding: the next case-list sweep does the rest.
 
 | Method | Path | What it does |
@@ -730,9 +740,9 @@ callers with case-list access. This implementation does not constitute new busin
 
 | Method | Path | Access and response |
 |---|---|---|
-| GET | `/caseworker/gazette-settings` | Admin-only current recipient, revision and change attribution |
-| PUT | `/caseworker/gazette-settings` | Admin-only recipient update with optimistic revision check |
-| GET | `/caseworker/gazette-notices` | Requires `caseworker-deedpoll-admin`; authenticated non-admins receive 403. Returns paged publication history |
+| GET | `/caseworker/gazette-settings` | Delivery Manager-only current recipient, revision and change attribution |
+| PUT | `/caseworker/gazette-settings` | Delivery Manager-only recipient update with optimistic revision check |
+| GET | `/caseworker/gazette-notices` | Requires `caseworker-deedpoll-delivery-manager`; other authenticated roles receive 403. Returns paged publication history |
 
 History accepts `page` (1-based, default 1) and `size` (default 25, capped at 100),
 using the existing paging validation. It returns `batches`, `page`, `size`, `total`
@@ -763,7 +773,7 @@ The request ledger persists reservations, ownership and delivery evidence, with 
 local case-date/history/note settlement. Active requests block case edits; retained
 request evidence prevents deletion. Uncertain outcomes keep reservations.
 
-| Method | Path | Behaviour (admin-only) |
+| Method | Path | Behaviour (Delivery Manager-only) |
 |---|---|---|
 | POST | `/caseworker/gazette-notice-previews` | Check up to 100 distinct cases, recipient and configuration; return counts, references and a 30-minute confirmation token |
 | POST | `/caseworker/gazette-notices` | Submit one confirmed batch when enabled; repeated key/body/subject reads status without another send |
@@ -813,8 +823,8 @@ See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md),
 Published at `/v3/api-docs`, and browsable at `/swagger-ui.html`. `springdoc.packagesToScan` covers
 `…deedpoll.api`, so a controller is documented by being in the package it belongs in rather than by
 somebody remembering to add it. `OpenAPIPublisherTest` writes the document to
-`/tmp/openapi-specs.json` (the fixed pipeline contract). Copy that file after a local run
-if you need a worktree-specific evidence artifact. It asserts the caseworker, judicial and admin surfaces —
+`/tmp/openapi-specs.json` by default (the pipeline contract). For an isolated local run, set
+`OPENAPI_OUTPUT_PATH` to an absolute filename in an existing worktree-specific evidence directory. It asserts the caseworker, judicial and admin surfaces —
 both operation counts and every path — rather than merely being served.
 
 **Nothing currently consumes that file.** The enabled `integration` source set produces it during

@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -662,9 +664,11 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
             IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("an Administrator deletes the witness, and the case's list no longer carries it")
-        void deletesTheWitness() throws Exception {
+        void deletesTheWitness(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
             String caseId = newCase();
             String keptId = addWitness(caseId, "Kept");
             String deletedId = addWitness(caseId, "Deleted");
@@ -688,12 +692,13 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
             assertThat(deedPolls.findById(caseId)).isPresent();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"CASEWORKER", "JUDICIAL"})
         @DisplayName("403s a caseworker without the Administrator role, and the witness survives")
-        void refusesACaseworkerWithoutTheRole() throws Exception {
+        void refusesACaseworkerWithoutTheRole(Role role) throws Exception {
             String caseId = newCase();
             String witnessId = addWitness(caseId, "Wilma Witness");
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of(role.claimValue()));
 
             authorised(delete("/caseworker/cases/" + caseId + "/witnesses/" + witnessId))
                 .andExpect(status().isForbidden())
@@ -701,7 +706,7 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
                 // remove it. Disguising the refusal as an absence would send them to look for a witness they
                 // can see on the page.
                 .andExpect(jsonPath("$.error")
-                    .value("Requires one of the following roles: " + Role.DEEDPOLL_ADMIN.claimValue()));
+                    .value("Requires capability: DELETE_WITNESS"));
 
             // The half that matters: the 403 alone would also pass against a handler that refused after
             // deleting, and that is the failure nothing downstream could report or undo.
@@ -731,9 +736,11 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isNotFound());
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("404s an Administrator deleting a witness through another case, and does not delete it")
-        void refusesADeleteThroughAnotherCase() throws Exception {
+        void refusesADeleteThroughAnotherCase(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
             // Scoping still applies to someone who is allowed to delete: the gate and the scope are separate
             // rules, and holding the role does not widen which rows the route reaches.
             String caseId = newCase();

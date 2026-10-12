@@ -6,8 +6,8 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
-import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.repository.GazetteStatusRepository;
 
@@ -23,7 +23,7 @@ public class GazetteStatuses {
     }
 
     public Page<GazetteBatchStatus> list(CurrentUser caller, String page, String size, String state) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.ACCESS_GAZETTE);
         GazetteRequestState filter;
         try {
             filter = state == null ? null : GazetteRequestState.valueOf(state);
@@ -34,7 +34,7 @@ public class GazetteStatuses {
     }
 
     public GazetteBatchStatus detail(CurrentUser caller, UUID id) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.ACCESS_GAZETTE);
         return repository.detail(id).orElseThrow(() -> new NotFoundError("Gazette batch not found"));
     }
 

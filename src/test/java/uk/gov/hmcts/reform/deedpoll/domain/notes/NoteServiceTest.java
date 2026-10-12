@@ -4,6 +4,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
@@ -216,20 +218,24 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
         assertThat(noteService.findNote(owner, noteId).getId()).isEqualTo(noteId);
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
     @DisplayName("removes after an existence check, scoped to the parent case")
-    void removesAfterAnExistenceCheck() {
+    void removesAfterAnExistenceCheck(Role role) {
+        CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
         String caseId = storedCase();
         String noteId = noteService.createNote(caseId, create("original")).getId();
 
-        noteService.removeNote(caseId, noteId, ADMIN);
+        noteService.removeNote(caseId, noteId, caller);
 
         assertThat(notes.findById(noteId)).isEmpty();
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
     @DisplayName("refuses to remove a note through another case, and leaves it stored")
-    void refusesToRemoveANoteThroughAnotherCase() {
+    void refusesToRemoveANoteThroughAnotherCase(Role role) {
+        CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
         // Not a reference block -- there, the delete's own `where` carries deedPollId and the guard is
         // asserted only on the read paths. Here the scope is what the delete is given, so it is worth
         // asserting that a wrong parent cannot delete somebody else's note.
@@ -237,21 +243,23 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
         String other = storedCase();
         String noteId = noteService.createNote(owner, create("original")).getId();
 
-        assertThatThrownBy(() -> noteService.removeNote(other, noteId, ADMIN)).isInstanceOf(NotFoundError.class);
+        assertThatThrownBy(() -> noteService.removeNote(other, noteId, caller)).isInstanceOf(NotFoundError.class);
 
         assertThat(notes.findById(noteId)).isPresent();
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"CASEWORKER", "JUDICIAL"})
     @DisplayName("refuses a delete by a caller without the Administrator role, and leaves the note stored")
-    void refusesADeleteByACallerWithoutTheAdministratorRole() {
+    void refusesADeleteByACallerWithoutTheAdministratorRole(Role role) {
+        CurrentUser caller = CurrentUser.currentUser(List.of(role), "Caseworker", "caseworker-1");
         // Not a reference block: there the rule was a middleware in front of the route, so the service had
         // nothing to test. The business splits editing from deleting -- a Basic User may create, view and edit
         // notes -- and notes are the audit record of a case, so deletion specifically is privileged.
         String caseId = storedCase();
         String noteId = noteService.createNote(caseId, create("original")).getId();
 
-        assertThatThrownBy(() -> noteService.removeNote(caseId, noteId, CASEWORKER))
+        assertThatThrownBy(() -> noteService.removeNote(caseId, noteId, caller))
             .isInstanceOf(ForbiddenError.class);
 
         // The assertion that carries the test. The refusal alone would also pass against an implementation
@@ -274,12 +282,14 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
         assertThat(notes.findById(noteId)).isPresent();
     }
 
-    @Test
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
     @DisplayName("404s an Administrator deleting a note that does not exist, so the check did not swallow it")
-    void administratorDeletingAMissingNoteStillGets404() {
+    void administratorDeletingAMissingNoteStillGets404(Role role) {
+        CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
         // The role check runs first, so it has to be shown not to have absorbed the not-found: an admin
         // addressing a note that was never stored still gets the absence, not a success.
-        assertThatThrownBy(() -> noteService.removeNote(storedCase(), "nope", ADMIN))
+        assertThatThrownBy(() -> noteService.removeNote(storedCase(), "nope", caller))
             .isInstanceOf(NotFoundError.class);
     }
 

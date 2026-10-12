@@ -10,6 +10,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
@@ -32,6 +34,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 class CcdCaseReferenceColumnTest extends AbstractPostgresContainerTest {
+    private static final CurrentUser LIST_READER =
+        CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Manager", "subject");
 
     private static final String REFERENCE = "1234567890123456";
 
@@ -180,7 +184,7 @@ class CcdCaseReferenceColumnTest extends AbstractPostgresContainerTest {
 
         assertThat(snapshot()).isEqualTo(before);
         // Nor does searching for the reference's digits find the case it is bound to.
-        assertThat(deedPollService.findDeedPolls(ListFilters.LIST_FILTERS.get(0), CaseQuery.NONE,
+        assertThat(deedPollService.findDeedPolls(LIST_READER, ListFilters.LIST_FILTERS.get(0), CaseQuery.NONE,
                                                  new CaseSearch(REFERENCE), CaseSort.NEWEST_FIRST,
                                                  CasePaging.FIRST).total())
             .isZero();
@@ -190,10 +194,10 @@ class CcdCaseReferenceColumnTest extends AbstractPostgresContainerTest {
     private Map<String, List<String>> snapshot() {
         Map<String, List<String>> answers = new LinkedHashMap<>();
         for (ListFilters.ListFilter filter : ListFilters.LIST_FILTERS) {
-            answers.put(filter.key() + "/finder", deedPollService.findDeedPolls(filter).stream()
+            answers.put(filter.key() + "/finder", deedPollService.findDeedPolls(LIST_READER, filter).stream()
                 .map(found -> found.deedPoll().getId()).toList());
 
-            CaseResults paged = deedPollService.findDeedPolls(filter, CaseQuery.NONE, CaseSearch.NONE,
+            CaseResults paged = deedPollService.findDeedPolls(LIST_READER, filter, CaseQuery.NONE, CaseSearch.NONE,
                                                               filter.defaultSort().orElse(CaseSort.NEWEST_FIRST),
                                                               CasePaging.FIRST);
             answers.put(filter.key() + "/paged", paged.cases().stream()

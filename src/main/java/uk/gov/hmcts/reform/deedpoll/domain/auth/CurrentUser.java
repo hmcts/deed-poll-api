@@ -72,9 +72,10 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
      */
     public static final CurrentUser ANONYMOUS = currentUser(List.of(), null, null);
 
+    /** The compatibility flag is always derived from roles; the supplied flag has no authority. */
     public CurrentUser(List<Role> roles, boolean isAdmin, String name, String userId) {
         this.roles = List.copyOf(roles);
-        this.isAdmin = isAdmin;
+        this.isAdmin = RoleCapabilities.forRoles(this.roles).contains(Capability.OVERRIDE_PRIVACY);
         this.name = name;
         this.userId = userId;
     }
@@ -82,7 +83,7 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
     /**
      * Build a caller from a resolved set of roles, an optional display name and the token's subject.
      *
-     * <p>{@code isAdmin} is derived rather than passed, exactly as the reference derives it: a caller
+     * <p>{@code isAdmin} is derived from the privacy capability: a caller
      * that could assert it independently of its roles is a caller that can be wrong about it.
      *
      * <p>{@code userId} gets no fallback, where {@code name} gets the service account. An unattributed
@@ -96,7 +97,7 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
         String subject = userId == null ? "" : userId.trim();
         return new CurrentUser(
             roles,
-            roles.contains(Role.DEEDPOLL_ADMIN),
+            false,
             trimmed.isEmpty() ? SERVICE_ACCOUNT_NAME : trimmed,
             subject.isEmpty() ? null : subject
         );
@@ -125,6 +126,18 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
         return userId;
     }
 
+    /** Whether the caller's recognised roles grant this capability. Missing requirements fail closed. */
+    public boolean can(Capability capability) {
+        return capability != null && RoleCapabilities.forRoles(roles).contains(capability);
+    }
+
+    /** Refuse a missing grant directly, without the open-on-empty role-list helper. */
+    public void require(Capability capability) {
+        if (!can(capability)) {
+            throw new ForbiddenError("Requires capability: " + capability);
+        }
+    }
+
     /**
      * Refuse the caller unless they hold at least one of the given roles.
      *
@@ -151,7 +164,7 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
      * {@code isAdmin = false} for an admin and silently drop the privacy fields.
      */
     public WriteContext writeContext() {
-        return new WriteContext(isAdmin, name);
+        return new WriteContext(can(Capability.OVERRIDE_PRIVACY), name);
     }
 
     /**

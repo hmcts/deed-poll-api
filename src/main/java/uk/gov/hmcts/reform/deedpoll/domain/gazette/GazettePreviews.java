@@ -3,8 +3,8 @@ package uk.gov.hmcts.reform.deedpoll.domain.gazette;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
-import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
@@ -34,7 +34,7 @@ public class GazettePreviews {
     /** A consistent read snapshot; admission later rechecks under write locks. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public GazettePreview preview(CurrentUser caller, List<String> selected) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.ACCESS_GAZETTE);
         List<String> ids = GazetteSelection.ids(selected);
         GazetteSettings recipient = settings.read(false);
         if (recipient.recipientEmail() == null) {

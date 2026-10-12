@@ -3,6 +3,8 @@ package uk.gov.hmcts.reform.deedpoll.domain.savedqueries;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
@@ -64,15 +66,17 @@ class SavedQueryPermissionsTest {
             assertThat(SavedQueryPermissions.visibleTo(query(false), OTHER)).isFalse();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("an Administrator does not see somebody else's unshared one either")
-        void anAdministratorDoesNotSeeAnUnsharedOne() {
+        void anAdministratorDoesNotSeeAnUnsharedOne(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             // Decision 2's refinement, and the cell most likely to be "fixed" by someone tidying the override up:
             // an unshared query is nobody else's business, and an orphaned private one harms nobody because
             // nobody else can see it. This is also what makes the 404 in the service the only answer an
             // administrator can get for another user's private query -- there is no 403 branch to reach.
-            assertThat(SavedQueryPermissions.visibleTo(query(false), ADMIN)).isFalse();
-            assertThat(SavedQueryPermissions.visibleTo(query(true), ADMIN)).isTrue();
+            assertThat(SavedQueryPermissions.visibleTo(query(false), caller)).isFalse();
+            assertThat(SavedQueryPermissions.visibleTo(query(true), caller)).isTrue();
         }
 
         @Test
@@ -117,13 +121,15 @@ class SavedQueryPermissionsTest {
             assertThat(SavedQueryPermissions.editableBy(query(true), OWNER)).isTrue();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("an Administrator may, but only a shared one")
-        void anAdministratorMayChangeASharedOne() {
-            assertThat(SavedQueryPermissions.editableBy(query(true), ADMIN)).isTrue();
+        void anAdministratorMayChangeASharedOne(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
+            assertThat(SavedQueryPermissions.editableBy(query(true), caller)).isTrue();
             // Unreachable in practice, because the visibility rule answers first -- asserted anyway, so that the
             // override cannot quietly widen if the two rules are ever composed in the other order.
-            assertThat(SavedQueryPermissions.editableBy(query(false), ADMIN)).isFalse();
+            assertThat(SavedQueryPermissions.editableBy(query(false), caller)).isFalse();
         }
 
         @Test
@@ -147,12 +153,14 @@ class SavedQueryPermissionsTest {
                 .hasMessage(SavedQueryPermissions.NOT_YOURS);
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("and it is silent for a caller who may")
-        void itIsSilentForACallerWhoMay() {
+        void itIsSilentForACallerWhoMay(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             assertThatCode(() -> SavedQueryPermissions.requireEditableBy(query(true), OWNER))
                 .doesNotThrowAnyException();
-            assertThatCode(() -> SavedQueryPermissions.requireEditableBy(query(true), ADMIN))
+            assertThatCode(() -> SavedQueryPermissions.requireEditableBy(query(true), caller))
                 .doesNotThrowAnyException();
         }
     }
@@ -161,10 +169,12 @@ class SavedQueryPermissionsTest {
     @DisplayName("who can publish a saved query")
     class Publishing {
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("an Administrator may")
-        void anAdministratorMay() {
-            assertThat(SavedQueryPermissions.publishableBy(ADMIN)).isTrue();
+        void anAdministratorMay(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
+            assertThat(SavedQueryPermissions.publishableBy(caller)).isTrue();
             assertThat(SavedQueryPermissions.publishableBy(OWNER_WHO_IS_ADMIN)).isTrue();
         }
 
@@ -177,14 +187,16 @@ class SavedQueryPermissionsTest {
             assertThat(SavedQueryPermissions.publishableBy(OWNER)).isFalse();
         }
 
-        @Test
-        @DisplayName("holding some other role is not holding the admin one")
-        void holdingAnotherRoleIsNotHoldingTheAdminOne() {
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"CASEWORKER", "JUDICIAL"})
+        @DisplayName("ordinary and judicial roles cannot publish or manage another owner's shared query")
+        void holdingAnotherRoleIsNotHoldingTheAdminOne(Role role) {
             // `isAdmin` is derived from the role list rather than passed, so this cannot pass by accident -- but
             // it is the cell a reasonable reading gets wrong, judicial being the more privileged-sounding role.
-            CurrentUser judge = CurrentUser.currentUser(List.of(Role.JUDICIAL), "A Judge", "judge-5");
+            CurrentUser judge = CurrentUser.currentUser(List.of(role), "A Judge", "judge-5");
 
             assertThat(SavedQueryPermissions.publishableBy(judge)).isFalse();
+            assertThat(SavedQueryPermissions.editableBy(query(true), judge)).isFalse();
         }
 
         @Test
@@ -207,20 +219,24 @@ class SavedQueryPermissionsTest {
                 .hasMessage(SavedQueryPermissions.NOT_PUBLISHABLE);
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("and it is silent for an Administrator")
-        void itIsSilentForAnAdministrator() {
-            assertThatCode(() -> SavedQueryPermissions.requirePublishableBy(ADMIN)).doesNotThrowAnyException();
+        void itIsSilentForAnAdministrator(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
+            assertThatCode(() -> SavedQueryPermissions.requirePublishableBy(caller)).doesNotThrowAnyException();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("it asks about the caller only, so the query's own state cannot widen it")
-        void itAsksAboutTheCallerOnly() {
+        void itAsksAboutTheCallerOnly(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             // The signature takes no query, which is the structural half of decision 4 -- there is no row whose
             // `shared` or `ownerId` could make a non-Administrator publishable. Stated as a test because the
             // obvious "improvement" is to pass the query in for symmetry with the other two.
             assertThat(SavedQueryPermissions.publishableBy(OWNER)).isFalse();
-            assertThat(SavedQueryPermissions.publishableBy(ADMIN)).isTrue();
+            assertThat(SavedQueryPermissions.publishableBy(caller)).isTrue();
         }
     }
 

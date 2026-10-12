@@ -8,8 +8,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
-import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdAttemptRow;
@@ -37,8 +37,8 @@ import java.util.stream.Collectors;
  * writes, clears or replaces {@code ccdCaseReference}. The move is one conditional statement from
  * {@code NeedsRepair}, so two admins acting at once make one move between them and the second is told so with a 409.
  *
- * <p><strong>Gated on {@link Role#DEEDPOLL_ADMIN} here, in the domain</strong>, as {@code JudicialReferralService}
- * gates on {@link Role#JUDICIAL}: anyone else is a 403 before anything is read. No transaction of its own, because
+ * <p><strong>Gated on {@link Capability#REPAIR_CCD} here, in the domain</strong>, as {@code JudicialReferralService}
+ * gates on {@code Role.JUDICIAL}: anyone else is a 403 before anything is read. No transaction of its own, because
  * each ledger call is one, and a repair that shared one with its read could not report a lost race truthfully.
  *
  * <p><strong>Every move is logged, made or refused</strong>, in fixed prose: the attempt id, the move and the
@@ -85,7 +85,7 @@ public class CcdAttemptRepairs {
      * @throws InvalidInputError for a status that is unknown, or is {@code Linked}
      */
     public CcdAttemptOverview overview(CurrentUser caller, String status, CasePaging paging) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.REPAIR_CCD);
         Optional<CcdCreationAttemptStatus> only = listable(status);
 
         Page<CcdAttemptRow> found = attempts.unlinked(only, PageRequest.of(paging.index(), paging.size()));
@@ -102,7 +102,7 @@ public class CcdAttemptRepairs {
      * @throws ConflictError  if the attempt is not {@code NeedsRepair}
      */
     public CcdAttemptSummary reconcileAgain(String attemptId, CurrentUser caller) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.REPAIR_CCD);
         String repairer = caller.requireUserId();
         UUID id = parsed(attemptId);
 
@@ -124,7 +124,7 @@ public class CcdAttemptRepairs {
      * @throws ConflictError  if the attempt is not {@code NeedsRepair}, or may already have created a case in CCD
      */
     public CcdAttemptSummary retryFromScratch(String attemptId, CurrentUser caller) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.REPAIR_CCD);
         String repairer = caller.requireUserId();
         UUID id = parsed(attemptId);
 

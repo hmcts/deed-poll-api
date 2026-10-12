@@ -55,7 +55,8 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
     private static final String PREVIEW = "/caseworker/gazette-notice-previews";
     private static final String REQUESTS = "/caseworker/gazette-notice-requests";
     private static final String SUBJECT = "gazette-delivery-test";
-    private static final CurrentUser ADMIN = CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "Admin", SUBJECT);
+    private static final CurrentUser DELIVERY_MANAGER =
+        CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Delivery Manager", SUBJECT);
     private static final uk.gov.hmcts.reform.deedpoll.notify.StubNotify NOTIFY =
         new uk.gov.hmcts.reform.deedpoll.notify.StubNotify();
     private static final StubIdam IDAM = new StubIdam();
@@ -113,7 +114,7 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
         IDAM.stubDefaults();
         NOTIFY.stubDefaults();
         accepted("20000000-0000-0000-0000-000000000001");
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Admin", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Delivery Manager", List.of(Role.DELIVERY_MANAGER.claimValue()));
         oldSettings = jdbc.queryForMap("SELECT * FROM deedpoll_gazette_settings WHERE id = 1");
         jdbc.update("""
             UPDATE deedpoll_gazette_settings SET recipient_email = 'gazette@example.com', revision = 1,
@@ -152,7 +153,7 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
             : group.equals("Minor") ? "2" : "1");
         accepted(template);
         List<String> ids = group.equals("mixed") ? List.of(ready("Adult"), ready("Minor")) : List.of(ready(group));
-        GazettePreview preview = previews.preview(ADMIN, ids);
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, ids);
         UUID key = UUID.randomUUID();
         JsonNode result = json(submit(key, preview, ids.toArray(String[]::new))
             .andExpect(status().isOk()).andExpect(jsonPath("$.state").value("Sent")));
@@ -194,7 +195,7 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
     void providerRefusalsAndAmbiguityAreTerminalAndNeverAutomaticallyRetried(int code) throws Exception {
         NOTIFY.stubSendStatus(code);
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         UUID key = UUID.randomUUID();
         boolean refused = code == 400 || code == 403 || code == 429;
         String state = refused ? "NotSent" : "Uncertain";
@@ -207,11 +208,12 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
         assertThat(cases.findById(id).orElseThrow().getDateNoticeSentToLondonGazette()).isNull();
         if (refused) {
             accepted("20000000-0000-0000-0000-000000000001");
-            submit(UUID.randomUUID(), previews.preview(ADMIN, List.of(id)), id)
+            submit(UUID.randomUUID(), previews.preview(DELIVERY_MANAGER, List.of(id)), id)
                 .andExpect(status().isOk()).andExpect(jsonPath("$.state").value("Sent"));
             assertThat(NOTIFY.emailRequests()).hasSize(2);
         } else {
-            assertThatThrownBy(() -> previews.preview(ADMIN, List.of(id))).isInstanceOf(GazetteRefusal.class);
+            assertThatThrownBy(() -> previews.preview(DELIVERY_MANAGER, List.of(id)))
+                .isInstanceOf(GazetteRefusal.class);
         }
     }
 
@@ -220,7 +222,7 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
     void preparationFailureNeverSendsAPartialBatch(String failure) throws Exception {
         String adult = ready("Adult");
         String minor = ready("Minor");
-        GazettePreview preview = previews.preview(ADMIN, List.of(adult, minor));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(adult, minor));
         switch (failure) {
             case "oversize" -> org.mockito.Mockito.doReturn(List.of(
                 new GeneratedGazetteSpreadsheet("gazette-adult.xlsx", 1, new byte[2 * 1024 * 1024 + 1]),
@@ -255,12 +257,12 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
             throw new IllegalStateException("lost commit acknowledgement");
         }).when(ledger).startSend(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyList());
         String id = ready("Adult");
-        JsonNode result = json(submit(UUID.randomUUID(), previews.preview(ADMIN, List.of(id)), id)
+        JsonNode result = json(submit(UUID.randomUUID(), previews.preview(DELIVERY_MANAGER, List.of(id)), id)
             .andExpect(status().isAccepted()));
         UUID batch = UUID.fromString(result.get("batchId").asText());
         age(batch);
         recovery.recover();
-        assertThat(ledger.read(ADMIN, batch).state()).isEqualTo(commitHappened
+        assertThat(ledger.read(DELIVERY_MANAGER, batch).state()).isEqualTo(commitHappened
             ? GazetteRequestState.Uncertain : GazetteRequestState.NotSent);
         assertThat(NOTIFY.emailRequests()).isEmpty();
     }
@@ -269,12 +271,12 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
     void acceptedSendWithFailedLocalNoteBecomesUncertainAndRetainsReceipt() throws Exception {
         failNotes("NEW.note = 'Notice of publication sent to the London Gazette.'");
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         UUID key = UUID.randomUUID();
         JsonNode response = json(submit(key, preview, id).andExpect(status().isOk())
             .andExpect(jsonPath("$.state").value("Uncertain")));
         UUID batch = UUID.fromString(response.get("batchId").asText());
-        assertThat(ledger.read(ADMIN, batch).providerNotificationId()).isEqualTo(
+        assertThat(ledger.read(DELIVERY_MANAGER, batch).providerNotificationId()).isEqualTo(
             uk.gov.hmcts.reform.deedpoll.notify.StubNotify.NOTIFICATION_ID);
         assertThat(cases.findById(id).orElseThrow().getDateNoticeSentToLondonGazette()).isNull();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_gazette_notice_batch WHERE id = ?",
@@ -299,11 +301,11 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
             assertThat(org.springframework.transaction.support.TransactionSynchronizationManager
                 .isActualTransactionActive()).isFalse();
             GazetteRequest row = call.getArgument(0);
-            assertThat(ledger.read(ADMIN, row.id()).state()).isEqualTo(GazetteRequestState.Sending);
+            assertThat(ledger.read(DELIVERY_MANAGER, row.id()).state()).isEqualTo(GazetteRequestState.Sending);
             return call.callRealMethod();
         }).when(notify).send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         UUID key = UUID.randomUUID();
         submit(key, preview, id).andExpect(status().isOk()).andExpect(jsonPath("$.state").value("Sent"));
         submit(key, preview, id).andExpect(status().isOk());
@@ -316,7 +318,7 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
         List<UUID> batches = new ArrayList<>();
         for (int index = 0; index < 27; index++) {
             String id = ready("Adult");
-            var row = admit(ADMIN, UUID.randomUUID(), previews.preview(ADMIN, List.of(id)), id);
+            var row = admit(DELIVERY_MANAGER, UUID.randomUUID(), previews.preview(DELIVERY_MANAGER, List.of(id)), id);
             if (index % 2 == 0) {
                 ledger.startSend(row.claim(), List.of(new GazetteFileEvidence("adult", 1, 100, "0".repeat(64))));
             }
@@ -329,7 +331,7 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
         org.mockito.Mockito.doThrow(new AssertionError("Recovery must never send"))
             .when(notify).send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         recovery.recover();
-        assertThat(batches.stream().map(id -> ledger.read(ADMIN, id).state())
+        assertThat(batches.stream().map(id -> ledger.read(DELIVERY_MANAGER, id).state())
             .filter(state -> state == GazetteRequestState.Preparing || state == GazetteRequestState.Sending))
             .hasSize(2);
         try (var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
@@ -348,24 +350,24 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
     @Test
     void failedRecoveryTransactionRemainsEligibleForNextScan() {
         String id = ready("Adult");
-        var row = admit(ADMIN, UUID.randomUUID(), previews.preview(ADMIN, List.of(id)), id);
+        var row = admit(DELIVERY_MANAGER, UUID.randomUUID(), previews.preview(DELIVERY_MANAGER, List.of(id)), id);
         age(row.request().id());
         failNotes("true");
         recovery.recover();
-        assertThat(ledger.read(ADMIN, row.request().id()).state()).isEqualTo(GazetteRequestState.Preparing);
+        assertThat(ledger.read(DELIVERY_MANAGER, row.request().id()).state()).isEqualTo(GazetteRequestState.Preparing);
         assertThat(requests.reserved(id)).isTrue();
         jdbc.execute("DROP TRIGGER gazette_delivery_note_failure ON deedpoll_notes");
         recovery.recover();
-        assertThat(ledger.read(ADMIN, row.request().id()).state()).isEqualTo(GazetteRequestState.NotSent);
+        assertThat(ledger.read(DELIVERY_MANAGER, row.request().id()).state()).isEqualTo(GazetteRequestState.NotSent);
         assertThat(requests.reserved(id)).isFalse();
     }
 
     @Test
     void deliveryRefusesAnEnclosingTransactionBeforePreparingOrSending() {
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         assertThatThrownBy(() -> new org.springframework.transaction.support.TransactionTemplate(transactions)
-            .execute(status -> delivery.submit(ADMIN, UUID.randomUUID(), List.of(id),
+            .execute(status -> delivery.submit(DELIVERY_MANAGER, UUID.randomUUID(), List.of(id),
                 preview.selectionFingerprint(), 1))).isInstanceOf(IllegalStateException.class);
         assertThat(NOTIFY.emailRequests()).isEmpty();
     }
@@ -374,7 +376,7 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
     @Test
     void simultaneousSameKeyAndOverlappingRequestsCannotSendTwice() throws Exception {
         String id = ready("Adult");
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         UUID key = UUID.randomUUID();
         var sending = new java.util.concurrent.CountDownLatch(1);
         var release = new java.util.concurrent.CountDownLatch(1);
@@ -384,13 +386,13 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
             return call.callRealMethod();
         }).when(notify).send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         try (var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
-            var first = executor.submit(() -> delivery.submit(ADMIN, key, List.of(id),
+            var first = executor.submit(() -> delivery.submit(DELIVERY_MANAGER, key, List.of(id),
                 preview.selectionFingerprint(), 1));
             try {
                 assertThat(sending.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
-                UUID repeated = delivery.submit(ADMIN, key, List.of(id), preview.selectionFingerprint(), 1);
-                assertThat(ledger.read(ADMIN, repeated).state()).isEqualTo(GazetteRequestState.Sending);
-                assertThatThrownBy(() -> delivery.submit(ADMIN, UUID.randomUUID(), List.of(id),
+                UUID repeated = delivery.submit(DELIVERY_MANAGER, key, List.of(id), preview.selectionFingerprint(), 1);
+                assertThat(ledger.read(DELIVERY_MANAGER, repeated).state()).isEqualTo(GazetteRequestState.Sending);
+                assertThatThrownBy(() -> delivery.submit(DELIVERY_MANAGER, UUID.randomUUID(), List.of(id),
                     preview.selectionFingerprint(), 1)).isInstanceOf(GazetteRefusal.class);
                 release.countDown();
                 assertThat(first.get(10, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(repeated);
@@ -419,9 +421,9 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
             }).when(notify).prepare(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyList());
         }
         String id = ready("Adult");
-        JsonNode result = json(submit(UUID.randomUUID(), previews.preview(ADMIN, List.of(id)), id)
+        JsonNode result = json(submit(UUID.randomUUID(), previews.preview(DELIVERY_MANAGER, List.of(id)), id)
             .andExpect(status().isOk()).andExpect(jsonPath("$.state").value(afterSendStart ? "Uncertain" : "NotSent")));
-        var row = ledger.read(ADMIN, UUID.fromString(result.get("batchId").asText()));
+        var row = ledger.read(DELIVERY_MANAGER, UUID.fromString(result.get("batchId").asText()));
         assertThat(row.providerNotificationId()).isEqualTo(afterSendStart
             ? uk.gov.hmcts.reform.deedpoll.notify.StubNotify.NOTIFICATION_ID : null);
         assertThat(NOTIFY.emailRequests()).hasSize(afterSendStart ? 1 : 0);
@@ -435,14 +437,15 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
             .when(notify).send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         String id = ready("Adult");
         UUID key = UUID.randomUUID();
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
-        assertThatThrownBy(() -> delivery.submit(ADMIN, key, List.of(id), preview.selectionFingerprint(), 1))
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
+        assertThatThrownBy(() -> delivery.submit(DELIVERY_MANAGER, key, List.of(id), preview.selectionFingerprint(), 1))
             .isInstanceOf(AssertionError.class);
         UUID batch = requests.byKey(key).orElseThrow().id();
         age(batch);
         recovery.recover();
-        assertThat(ledger.read(ADMIN, batch).state()).isEqualTo(GazetteRequestState.Uncertain);
-        assertThat(delivery.submit(ADMIN, key, List.of(id), preview.selectionFingerprint(), 1)).isEqualTo(batch);
+        assertThat(ledger.read(DELIVERY_MANAGER, batch).state()).isEqualTo(GazetteRequestState.Uncertain);
+        assertThat(delivery.submit(DELIVERY_MANAGER, key, List.of(id), preview.selectionFingerprint(), 1))
+            .isEqualTo(batch);
         assertThat(NOTIFY.emailRequests()).isEmpty();
         assertThat(requests.reserved(id)).isTrue();
     }
@@ -455,7 +458,7 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
         }).when(ledger).sent(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any());
         String id = ready("Adult");
-        submit(UUID.randomUUID(), previews.preview(ADMIN, List.of(id)), id).andExpect(status().isOk())
+        submit(UUID.randomUUID(), previews.preview(DELIVERY_MANAGER, List.of(id)), id).andExpect(status().isOk())
             .andExpect(jsonPath("$.state").value("Sent"));
         assertThat(NOTIFY.emailRequests()).hasSize(1);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_notes WHERE \"deedPollId\" = ?",
@@ -468,7 +471,7 @@ class GazetteDeliveryApiTest extends AbstractPostgresContainerTest {
         failNotes("NEW.note = 'London Gazette email outcome is uncertain. Investigate before any resend.'");
         String id = ready("Adult");
         UUID key = UUID.randomUUID();
-        GazettePreview preview = previews.preview(ADMIN, List.of(id));
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
         JsonNode response = json(submit(key, preview, id).andExpect(status().isAccepted())
             .andExpect(jsonPath("$.state").value("Sending")));
         UUID batch = UUID.fromString(response.get("batchId").asText());

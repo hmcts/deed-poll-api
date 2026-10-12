@@ -6,11 +6,12 @@
  *
  * <p><strong>Only the operations something actually calls</strong>, derived from what the sibling
  * {@code deed-poll-admin} does: no document-type writes, no document metadata create or patch, and no
- * {@code validate} endpoint, because they have no consumer. Two of the deletes are role-gated, a note's and a
- * witness's, and {@code Role#DEEDPOLL_ADMIN} is required for both -- restricted in {@code NoteService.removeNote}
+ * {@code validate} endpoint, because they have no consumer. Two deletes require explicit capabilities, a note's and a
+ * witness's: {@code DELETE_NOTE} and {@code DELETE_WITNESS}, enforced in {@code NoteService.removeNote}
  * and {@code WitnessService.removeWitness} rather than here, so the rule holds for a caller that is not a route.
- * A saved query's delete is not role-gated but <em>ownership</em>-gated, with an administrator override for a
- * shared one, in {@code SavedQueryService}; and unselecting one is nobody's privilege but the caller's own.
+ * A saved query's delete is not role-gated but <em>ownership</em>-gated, with a
+ * {@code MANAGE_SHARED_QUERIES} override for a shared one, in {@code SavedQueryService}; unselecting one
+ * is the caller's own privilege.
  * The witness writes joined on the same test: the admin renders a case's witnesses and had no way to record
  * one, so the consumer arrived and the routes followed.
  *
@@ -34,8 +35,10 @@
  *       {@code Role#JUDICIAL} with no route in this package at all: they belong to a judicial surface rather
  *       than to the caseworker one.</li>
  *   <li>{@code CaseworkerCcdAttemptController} -- the CCD creation attempts that are not linked, and the two
- *       ways out of {@code NeedsRepair}. Admins only, gated in {@code CcdAttemptRepairs}; the one route here about
- *       this service's own plumbing rather than a case, which is why it sits beside the cases and not under one.</li>
+ *       ways out of {@code NeedsRepair}. {@code REPAIR_CCD} is enforced in {@code CcdAttemptRepairs}; these routes
+ *       cover this service's own plumbing rather than a case, so they sit beside the cases and not under one.</li>
+ *   <li>The three Gazette controllers -- history, settings, preview, submission, request status and members;
+ *       all require {@code ACCESS_GAZETTE}, as does the named {@code readyForPublication} case-list filter.</li>
  * </ul>
  *
  * <p><strong>Every route in this package is one of those bullets; there is no route here that no controller

@@ -14,11 +14,11 @@ import java.util.Optional;
  *
  * <p><strong>Membership, not capability.</strong> This decides whether a caller is staff of this service at all,
  * which authentication alone never did: until this table, any token IDAM issued could read and write every case.
- * What a member may then do is still the domain's {@code requireAnyRole}, unchanged.
+ * What a member may then do is decided by the domain's capability and judicial-role checks.
  *
  * <ul>
- *   <li>{@link #CASEWORKER} admits an administrator without the caseworker role, because the business's two
- *       levels are additive: an Administrator holds every Basic User permission.</li>
+ *   <li>{@link #CASEWORKER} admits Team leaders, Delivery Managers and temporary legacy administrators
+ *       without an additional caseworker role. Gazette access still requires its separate capability.</li>
  *   <li>{@link #JUDICIAL} admits only the judicial role. Nothing on the judicial surface calls the caseworker
  *       one. A judge who also needs case search is given the caseworker role, which is an assignment and not a
  *       code change.</li>
@@ -26,7 +26,7 @@ import java.util.Optional;
  */
 public enum StaffArea {
 
-    CASEWORKER("/caseworker", Role.CASEWORKER, Role.DEEDPOLL_ADMIN),
+    CASEWORKER("/caseworker", Role.CASEWORKER, Role.TEAM_LEADER, Role.DELIVERY_MANAGER, Role.DEEDPOLL_ADMIN),
 
     JUDICIAL("/judicial", Role.JUDICIAL);
 

@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -549,9 +551,11 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
             IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("deletes the note and answers 204 with no body")
-        void deletesTheNote() throws Exception {
+        void deletesTheNote(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
             String caseId = newCase();
             String noteId = addNote(caseId, "Called the applicant");
 
@@ -562,9 +566,11 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
             assertThat(notes.findById(noteId)).isEmpty();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("leaves the case and its other notes alone")
-        void deletesOnlyThatNote() throws Exception {
+        void deletesOnlyThatNote(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
             String caseId = newCase();
             String keptId = addNote(caseId, "Kept");
             String deletedId = addNote(caseId, "Deleted");
@@ -579,9 +585,11 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
             assertThat(deedPolls.findById(caseId)).isPresent();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("404s deleting a note through another case, and does not delete it")
-        void refusesADeleteThroughAnotherCase() throws Exception {
+        void refusesADeleteThroughAnotherCase(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
             String caseId = newCase();
             String otherCaseId = newCase();
             String noteId = addNote(caseId, "Ours");
@@ -605,12 +613,13 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isNotFound());
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"CASEWORKER", "JUDICIAL"})
         @DisplayName("403s a caseworker without the Administrator role, and the note survives")
-        void refusesACaseworkerWithoutTheRole() throws Exception {
+        void refusesACaseworkerWithoutTheRole(Role role) throws Exception {
             String caseId = newCase();
             String noteId = addNote(caseId, "Called the applicant");
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of(role.claimValue()));
 
             authorised(delete("/caseworker/cases/" + caseId + "/notes/" + noteId))
                 .andExpect(status().isForbidden())
@@ -618,7 +627,7 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
                 // remove it. Disguising the refusal as an absence would send them to look for a note they can
                 // see on the page.
                 .andExpect(jsonPath("$.error")
-                    .value("Requires one of the following roles: " + Role.DEEDPOLL_ADMIN.claimValue()));
+                    .value("Requires capability: DELETE_NOTE"));
 
             // The half that matters: the 403 alone would also pass against a handler that refused after
             // deleting, and that is the failure nothing downstream could report or undo.
@@ -669,9 +678,11 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
             assertThat(stored(noteId).getNote()).isEqualTo("Called twice");
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("404s deleting the same note twice, rather than answering 204 again")
-        void notIdempotent() throws Exception {
+        void notIdempotent(Role role) throws Exception {
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "An Admin", List.of(role.claimValue()));
             String caseId = newCase();
             String noteId = addNote(caseId, "Called the applicant");
 

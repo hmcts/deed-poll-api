@@ -3,6 +3,10 @@ package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
@@ -22,6 +26,25 @@ class FormPresentationTest {
     private static final PresentationContext ADMIN_EXISTING = new PresentationContext(true, false);
     private static final PresentationContext USER_NEW = new PresentationContext(false, true);
     private static final PresentationContext USER_EXISTING = new PresentationContext(false, false);
+
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
+    void inheritedPrivacyAdaptersPreserveDefaultsAndEditing(Role role) {
+        WriteContext write = CurrentUser.currentUser(List.of(role), "Staff", "staff-1").writeContext();
+        PresentationContext creating = new PresentationContext(write.isAdmin(), true);
+        PresentationContext editing = new PresentationContext(write.isAdmin(), false);
+        for (DeedPollType type : DeedPollType.values()) {
+            assertThat(FormPresentation.privacyEditable(type, creating)).isTrue();
+            assertThat(FormPresentation.privacyEditable(type, editing)).isTrue();
+            assertThat(FormPresentation.defaultPrivacy(type, Privacy.Normal, editing)).isEqualTo(Privacy.Normal);
+            assertThat(FormPresentation.defaultPrivacy(type, Privacy.Private, editing)).isEqualTo(Privacy.Private);
+        }
+        assertThat(FormPresentation.defaultPrivacy(DeedPollType.MinorTransgender, null, creating))
+            .isEqualTo(Privacy.Private);
+        assertThat(FormPresentation.defaultPrivacy(DeedPollType.Adult, Privacy.Private, creating))
+            .isEqualTo(Privacy.Private);
+        assertThat(FormPresentation.defaultPrivacy(DeedPollType.Adult, null, creating)).isEqualTo(Privacy.Normal);
+    }
 
     @Nested
     @DisplayName("defaultPrivacy -- create matrix")

@@ -357,11 +357,13 @@ class JudicialSecurityTest {
             verifyNothingHappened();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("is refused it holding the administrator role too, because judicial is not seniority")
-        void isRefusedHoldingTheAdminRole() {
+        void isRefusedHoldingTheAdminRole(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             for (Operation operation : operations()) {
-                assertThatThrownBy(() -> operation.by(ADMIN))
+                assertThatThrownBy(() -> operation.by(caller))
                     .as("%s refuses an administrator", operation.name())
                     .isInstanceOf(ForbiddenError.class);
             }

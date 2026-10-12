@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.domain.savedqueries;
 
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.SavedQuery;
 
@@ -66,7 +67,7 @@ public final class SavedQueryPermissions {
      */
     public static boolean editableBy(SavedQuery query, CurrentUser caller) {
         String userId = caller.requireUserId();
-        return userId.equals(query.getOwnerId()) || (caller.isAdmin() && query.isShared());
+        return userId.equals(query.getOwnerId()) || (caller.can(Capability.MANAGE_SHARED_QUERIES) && query.isShared());
     }
 
     /**
@@ -92,7 +93,7 @@ public final class SavedQueryPermissions {
     public static boolean publishableBy(CurrentUser caller) {
         caller.requireUserId();
 
-        return caller.isAdmin();
+        return caller.can(Capability.MANAGE_SHARED_QUERIES);
     }
 
     /**

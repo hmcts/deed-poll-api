@@ -28,12 +28,15 @@ import java.io.File;
 public class CftlibConfig implements CFTLibConfigurer {
 
     /**
-     * An admin caseworker, holding {@link Role#DEEDPOLL_ADMIN} and nothing else.
+     * A legacy compatibility caseworker, holding {@link Role#DEEDPOLL_ADMIN} and nothing else.
      */
-    public static final String ADMIN_USER = "deed-poll-admin@localhost";
+    public static final String LEGACY_ADMIN_USER = "deed-poll-admin@localhost";
 
     /** A local staff reader, without the system role. */
     public static final String DOCUMENT_READER = "deed-poll-reader@localhost";
+
+    public static final String TEAM_LEADER_USER = "deed-poll-team-leader@localhost";
+    public static final String DELIVERY_MANAGER_USER = "deed-poll-delivery-manager@localhost";
 
     public static final String JUDICIAL_USER = "deed-poll-judge@localhost";
     public static final String UNMAPPED_USER = "deed-poll-unmapped@localhost";
@@ -60,13 +63,17 @@ public class CftlibConfig implements CFTLibConfigurer {
         // Wherever the case type is onboarded, the same role has to be registered in that definition store.
         lib.createRoles(DeedPollAccessProfile.DEED_POLL_SYSTEM.getRole(), identifiers.systemRole(),
             DeedPollAccessProfile.DEED_POLL_READER.getRole(), Role.DEEDPOLL_ADMIN.claimValue(),
-            Role.JUDICIAL.claimValue(), Role.CASEWORKER.claimValue());
+            Role.JUDICIAL.claimValue(), Role.CASEWORKER.claimValue(),
+            Role.TEAM_LEADER.claimValue(), Role.DELIVERY_MANAGER.claimValue());
         lib.createIdamUser(systemUser, identifiers.systemRole());
-        lib.createIdamUser(ADMIN_USER, Role.DEEDPOLL_ADMIN.claimValue());
+        lib.createIdamUser(LEGACY_ADMIN_USER, Role.DEEDPOLL_ADMIN.claimValue());
+        lib.createIdamUser(TEAM_LEADER_USER, Role.TEAM_LEADER.claimValue());
+        lib.createIdamUser(DELIVERY_MANAGER_USER, Role.DELIVERY_MANAGER.claimValue());
         lib.createIdamUser(DOCUMENT_READER, Role.CASEWORKER.claimValue());
         lib.createIdamUser(JUDICIAL_USER, Role.JUDICIAL.claimValue());
         lib.createIdamUser(UNMAPPED_USER, "caseworker");
-        for (String staff : java.util.List.of(DOCUMENT_READER, ADMIN_USER, JUDICIAL_USER, UNMAPPED_USER)) {
+        for (String staff : java.util.List.of(DOCUMENT_READER, LEGACY_ADMIN_USER, JUDICIAL_USER, UNMAPPED_USER,
+            TEAM_LEADER_USER, DELIVERY_MANAGER_USER)) {
             lib.createProfile(staff, identifiers.jurisdictionId(), identifiers.caseTypeId(),
                 DeedPollCaseState.Registered.name());
         }

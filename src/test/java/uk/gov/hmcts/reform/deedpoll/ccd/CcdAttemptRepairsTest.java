@@ -156,9 +156,11 @@ class CcdAttemptRepairsTest {
     @DisplayName("the list")
     class Overview {
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("answers the counts and the page, with canRetryFromScratch in place of the flag")
-        void answersCountsAndPage() {
+        void answersCountsAndPage(Role role) {
+            final CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             Map<CcdCreationAttemptStatus, Long> counts = new EnumMap<>(CcdCreationAttemptStatus.class);
             for (CcdCreationAttemptStatus status : CcdCreationAttemptStatus.values()) {
                 counts.put(status, 0L);
@@ -171,7 +173,7 @@ class CcdAttemptRepairsTest {
             when(attempts.unlinked(Optional.empty(), PageRequest.of(1, 1)))
                 .thenReturn(new PageImpl<>(List.of(mayRetry), PageRequest.of(1, 1), 2));
 
-            CcdAttemptOverview overview = repairs.overview(ADMIN, null, new CasePaging(2, 1));
+            CcdAttemptOverview overview = repairs.overview(caller, null, new CasePaging(2, 1));
 
             assertThat(overview.counts()).containsExactlyEntriesOf(counts);
             assertThat(overview.attempts()).extracting(CcdAttemptSummary::canRetryFromScratch).containsExactly(true);
@@ -223,13 +225,15 @@ class CcdAttemptRepairsTest {
     @DisplayName("reconcile again")
     class ReconcileAgain {
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("moves an attempt that needs repair, attributed to the admin, and logs it without them")
-        void movesAndLogs() {
+        void movesAndLogs(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             reads(row(NeedsRepair, true), row(AwaitingConfirmation, true));
             when(attempts.reconcileAgain(ATTEMPT, ADMIN_SUBJECT)).thenReturn(true);
 
-            CcdAttemptSummary moved = repairs.reconcileAgain(ATTEMPT.toString(), ADMIN);
+            CcdAttemptSummary moved = repairs.reconcileAgain(ATTEMPT.toString(), caller);
 
             assertThat(moved.status()).isEqualTo(AwaitingConfirmation);
             verify(attempts).reconcileAgain(ATTEMPT, ADMIN_SUBJECT);
@@ -238,13 +242,15 @@ class CcdAttemptRepairsTest {
             assertNoIdentityLogged();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("is always open, even to an attempt that may have reached CCD")
-        void openWhateverWasSubmitted() {
+        void openWhateverWasSubmitted(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             reads(row(NeedsRepair, true), row(AwaitingConfirmation, true));
             when(attempts.reconcileAgain(ATTEMPT, ADMIN_SUBJECT)).thenReturn(true);
 
-            assertThat(repairs.reconcileAgain(ATTEMPT.toString(), ADMIN).status()).isEqualTo(AwaitingConfirmation);
+            assertThat(repairs.reconcileAgain(ATTEMPT.toString(), caller).status()).isEqualTo(AwaitingConfirmation);
         }
 
         @ParameterizedTest
@@ -261,37 +267,43 @@ class CcdAttemptRepairsTest {
                 "CCD creation attempt " + ATTEMPT + ": repair NeedsRepair -> AwaitingConfirmation refused (409)");
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("a lost race is a 409 in the words the attempt now calls for")
-        void lostRace() {
+        void lostRace(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             reads(row(NeedsRepair, false), row(AwaitingConfirmation, false));
             when(attempts.reconcileAgain(ATTEMPT, ADMIN_SUBJECT)).thenReturn(false);
 
-            assertThatThrownBy(() -> repairs.reconcileAgain(ATTEMPT.toString(), ADMIN))
+            assertThatThrownBy(() -> repairs.reconcileAgain(ATTEMPT.toString(), caller))
                 .isInstanceOf(ConflictError.class)
                 .hasMessageContaining("This attempt is AwaitingConfirmation rather than NeedsRepair");
             assertThat(logged()).containsExactly(
                 "CCD creation attempt " + ATTEMPT + ": repair NeedsRepair -> AwaitingConfirmation refused (409)");
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("an attempt that left NeedsRepair and came back to it meanwhile is a 409 saying to reload")
-        void movedMeanwhile() {
+        void movedMeanwhile(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             reads(row(NeedsRepair, false), row(NeedsRepair, false));
             when(attempts.reconcileAgain(ATTEMPT, ADMIN_SUBJECT)).thenReturn(false);
 
-            assertThatThrownBy(() -> repairs.reconcileAgain(ATTEMPT.toString(), ADMIN))
+            assertThatThrownBy(() -> repairs.reconcileAgain(ATTEMPT.toString(), caller))
                 .isInstanceOf(ConflictError.class)
                 .hasMessage(CcdAttemptRepairs.MOVED_MEANWHILE);
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("an attempt gone between the read and the write is a 404")
-        void goneMeanwhile() {
+        void goneMeanwhile(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             when(attempts.row(ATTEMPT)).thenReturn(Optional.of(row(NeedsRepair, false))).thenReturn(Optional.empty());
             when(attempts.reconcileAgain(ATTEMPT, ADMIN_SUBJECT)).thenReturn(false);
 
-            assertThatThrownBy(() -> repairs.reconcileAgain(ATTEMPT.toString(), ADMIN))
+            assertThatThrownBy(() -> repairs.reconcileAgain(ATTEMPT.toString(), caller))
                 .isInstanceOf(NotFoundError.class)
                 .hasMessage(CcdAttemptRepairs.NOT_FOUND);
             assertThat(logged()).containsExactly(
@@ -303,13 +315,15 @@ class CcdAttemptRepairsTest {
     @DisplayName("try again from scratch")
     class RetryFromScratch {
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("moves an attempt nothing was submitted for, attributed, and logs it without the admin")
-        void movesAndLogs() {
+        void movesAndLogs(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             reads(row(NeedsRepair, false), row(Pending, false));
             when(attempts.retryFromScratch(ATTEMPT, ADMIN_SUBJECT)).thenReturn(true);
 
-            CcdAttemptSummary moved = repairs.retryFromScratch(ATTEMPT.toString(), ADMIN);
+            CcdAttemptSummary moved = repairs.retryFromScratch(ATTEMPT.toString(), caller);
 
             assertThat(moved.status()).isEqualTo(Pending);
             assertThat(logged()).containsExactly(
@@ -317,25 +331,29 @@ class CcdAttemptRepairsTest {
             assertNoIdentityLogged();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("moves an attempt that ran out of tries on refusals, submitted but proven to have created nothing")
-        void movesWhatIsProvenToHaveCreatedNothing() {
+        void movesWhatIsProvenToHaveCreatedNothing(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             reads(row(NeedsRepair, true, true), row(Pending, true));
             when(attempts.retryFromScratch(ATTEMPT, ADMIN_SUBJECT)).thenReturn(true);
 
-            CcdAttemptSummary moved = repairs.retryFromScratch(ATTEMPT.toString(), ADMIN);
+            CcdAttemptSummary moved = repairs.retryFromScratch(ATTEMPT.toString(), caller);
 
             assertThat(moved.status()).isEqualTo(Pending);
             verify(attempts).retryFromScratch(ATTEMPT, ADMIN_SUBJECT);
             assertNoIdentityLogged();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("refuses an attempt that may have reached CCD with a 409 that says what to do, and writes nothing")
-        void refusesWhatMayHaveBeenSubmitted() {
+        void refusesWhatMayHaveBeenSubmitted(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             reads(row(NeedsRepair, true));
 
-            assertThatThrownBy(() -> repairs.retryFromScratch(ATTEMPT.toString(), ADMIN))
+            assertThatThrownBy(() -> repairs.retryFromScratch(ATTEMPT.toString(), caller))
                 .isInstanceOf(ConflictError.class)
                 .hasMessage(CcdAttemptRepairs.MAY_HAVE_REACHED)
                 .hasMessageContaining("second case")
@@ -358,13 +376,15 @@ class CcdAttemptRepairsTest {
             verify(attempts, never()).retryFromScratch(any(), anyString());
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("a statement that matched nothing on a row still needing repair is the submission refusal")
-        void lostToTheStatementsOwnCondition() {
+        void lostToTheStatementsOwnCondition(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             reads(row(NeedsRepair, false), row(NeedsRepair, true));
             when(attempts.retryFromScratch(ATTEMPT, ADMIN_SUBJECT)).thenReturn(false);
 
-            assertThatThrownBy(() -> repairs.retryFromScratch(ATTEMPT.toString(), ADMIN))
+            assertThatThrownBy(() -> repairs.retryFromScratch(ATTEMPT.toString(), caller))
                 .isInstanceOf(ConflictError.class)
                 .hasMessage(CcdAttemptRepairs.MAY_HAVE_REACHED);
         }
@@ -374,11 +394,13 @@ class CcdAttemptRepairsTest {
     @DisplayName("an unknown attempt")
     class Unknown {
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("an id that is not a UUID is a 404, reads nothing and logs nothing")
-        void notAnId() {
+        void notAnId(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             for (Consumer<String> repair : List.<Consumer<String>>of(
-                id -> repairs.reconcileAgain(id, ADMIN), id -> repairs.retryFromScratch(id, ADMIN))) {
+                id -> repairs.reconcileAgain(id, caller), id -> repairs.retryFromScratch(id, caller))) {
                 assertThatThrownBy(() -> repair.accept("not-an-id\nforged log line"))
                     .isInstanceOf(NotFoundError.class)
                     .hasMessage(CcdAttemptRepairs.NOT_FOUND);
@@ -387,14 +409,16 @@ class CcdAttemptRepairsTest {
             assertThat(logs.list).isEmpty();
         }
 
-        @Test
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {"TEAM_LEADER", "DELIVERY_MANAGER", "DEEDPOLL_ADMIN"})
         @DisplayName("an id nothing was stored under is a 404, logged as refused")
-        void nothingStored() {
+        void nothingStored(Role role) {
+            CurrentUser caller = CurrentUser.currentUser(List.of(role), ADMIN.name(), ADMIN.userId());
             when(attempts.row(ATTEMPT)).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> repairs.reconcileAgain(ATTEMPT.toString(), ADMIN))
+            assertThatThrownBy(() -> repairs.reconcileAgain(ATTEMPT.toString(), caller))
                 .isInstanceOf(NotFoundError.class);
-            assertThatThrownBy(() -> repairs.retryFromScratch(ATTEMPT.toString(), ADMIN))
+            assertThatThrownBy(() -> repairs.retryFromScratch(ATTEMPT.toString(), caller))
                 .isInstanceOf(NotFoundError.class);
             assertThat(logged()).containsExactly(
                 "CCD creation attempt " + ATTEMPT + ": repair NeedsRepair -> AwaitingConfirmation refused (404)",

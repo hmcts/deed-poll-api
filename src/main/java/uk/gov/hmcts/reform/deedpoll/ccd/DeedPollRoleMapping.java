@@ -34,6 +34,8 @@ public record DeedPollRoleMapping(Map<String, DeedPollAccessProfile> byIdamRole)
             properties.systemRole(), DeedPollAccessProfile.DEED_POLL_SYSTEM,
             Role.CASEWORKER.claimValue(), DeedPollAccessProfile.DEED_POLL_READER,
             Role.DEEDPOLL_ADMIN.claimValue(), DeedPollAccessProfile.DEED_POLL_READER,
+            Role.TEAM_LEADER.claimValue(), DeedPollAccessProfile.DEED_POLL_READER,
+            Role.DELIVERY_MANAGER.claimValue(), DeedPollAccessProfile.DEED_POLL_READER,
             Role.JUDICIAL.claimValue(), DeedPollAccessProfile.DEED_POLL_READER));
     }
 

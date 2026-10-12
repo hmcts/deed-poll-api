@@ -48,8 +48,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 })
 class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
     private static final String SUBJECT = "gazette-ledger-test";
-    private static final CurrentUser ADMIN =
-        CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "Gazette Admin", SUBJECT);
+    private static final CurrentUser DELIVERY_MANAGER =
+        CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Gazette Delivery Manager", SUBJECT);
     private static final GazetteDeliveryConfiguration CONFIG =
         new GazetteDeliveryConfiguration(UUID.fromString("20000000-0000-0000-0000-000000000001"),
             UUID.fromString("10000000-0000-0000-0000-000000000001"), 4);
@@ -118,25 +118,26 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
             assertThat(row.configuration()).isEqualTo(CONFIG);
         });
         jdbc.update("UPDATE deedpoll_gazette_settings SET recipient_email = 'changed@example.com', revision = 2");
-        Reservation repeat = ledger.admit(ADMIN, key, List.of(minor, adult), tokens.get(key), 1);
+        Reservation repeat = ledger.admit(DELIVERY_MANAGER, key, List.of(minor, adult), tokens.get(key), 1);
         assertThat(repeat.claim()).isNull();
         assertThat(repeat.request().id()).isEqualTo(first.request().id());
         assertThat(repeat.request().recipientEmail()).isEqualTo("gazette@example.com");
         assertThat(noteCount(adult)).isOne();
         assertThat(noteCount(minor)).isOne();
-        assertThatThrownBy(() -> ledger.admit(ADMIN, key, List.of(adult), FINGERPRINT, 1))
+        assertThatThrownBy(() -> ledger.admit(DELIVERY_MANAGER, key, List.of(adult), FINGERPRINT, 1))
             .isInstanceOf(ConflictError.class);
-        assertThatThrownBy(() -> ledger.admit(ADMIN, key, List.of(adult, minor), "changed", 1))
+        assertThatThrownBy(() -> ledger.admit(DELIVERY_MANAGER, key, List.of(adult, minor), "changed", 1))
             .isInstanceOf(ConflictError.class);
-        assertThatThrownBy(() -> ledger.admit(ADMIN, key, List.of(adult, minor), FINGERPRINT, 2))
+        assertThatThrownBy(() -> ledger.admit(DELIVERY_MANAGER, key, List.of(adult, minor), FINGERPRINT, 2))
             .isInstanceOf(ConflictError.class);
-        CurrentUser other = CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "Gazette Admin", "other");
+        CurrentUser other =
+            CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Gazette Delivery Manager", "other");
         assertThatThrownBy(() -> ledger.admit(other, key, List.of(adult, minor), FINGERPRINT, 1))
             .isInstanceOf(ConflictError.class);
     }
 
     @Test
-    void refusesNonAdminsBeforeLookingUpOrWritingAnything() {
+    void refusesNonDeliveryManagersBeforeLookingUpOrWritingAnything() {
         assertThatThrownBy(() -> ledger.admit(CurrentUser.ANONYMOUS, null, null, null, 0))
             .isInstanceOf(ForbiddenError.class);
         assertThatThrownBy(() -> ledger.read(CurrentUser.ANONYMOUS, UUID.randomUUID()))
@@ -146,7 +147,7 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
     @Test
     void refusesMissingOrChangedRecipientAndInvalidSelectionWithoutEvidence() {
         String id = ready("Adult");
-        assertThatThrownBy(() -> ledger.admit(ADMIN, UUID.randomUUID(), List.of(id), FINGERPRINT, 0))
+        assertThatThrownBy(() -> ledger.admit(DELIVERY_MANAGER, UUID.randomUUID(), List.of(id), FINGERPRINT, 0))
             .isInstanceOf(ConflictError.class);
         assertThatThrownBy(() -> reserve(UUID.randomUUID(), id, id)).isInstanceOf(InvalidInputError.class);
         assertThatThrownBy(() -> reserve(UUID.randomUUID())).isInstanceOf(InvalidInputError.class);
@@ -192,7 +193,7 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
         assertThat(ledger.startSend(new Claim(result.request().id(), UUID.randomUUID()), files(result))).isFalse();
         assertThat(ledger.startSend(result.claim(), files(result))).isTrue();
         assertThat(ledger.startSend(result.claim(), files(result))).isFalse();
-        assertThat(ledger.read(ADMIN, result.request().id()).state()).isEqualTo(GazetteRequestState.Sending);
+        assertThat(ledger.read(DELIVERY_MANAGER, result.request().id()).state()).isEqualTo(GazetteRequestState.Sending);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_gazette_request_file WHERE batch_id = ?",
             Integer.class, result.request().id())).isEqualTo(2);
     }
@@ -277,7 +278,7 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
         UUID provider = UUID.randomUUID();
         assertThat(ledger.sent(sending.claim(), provider, 2)).isFalse();
         assertThat(state(sending)).isEqualTo(GazetteRequestState.Uncertain);
-        assertThat(ledger.read(ADMIN, sending.request().id()).providerNotificationId()).isEqualTo(provider);
+        assertThat(ledger.read(DELIVERY_MANAGER, sending.request().id()).providerNotificationId()).isEqualTo(provider);
         assertThat(ledger.sent(sending.claim(), provider, 2)).isFalse();
         assertThatThrownBy(() -> ledger.sent(sending.claim(), UUID.randomUUID(), 2)).isInstanceOf(ConflictError.class);
         assertThat(reservations(after)).isOne();
@@ -316,7 +317,7 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
         assertThatThrownBy(() -> ledger.sent(result.claim(), UUID.randomUUID(), 1))
             .isInstanceOf(RuntimeException.class);
         assertThat(state(result)).isEqualTo(GazetteRequestState.Sending);
-        assertThat(ledger.read(ADMIN, result.request().id()).providerNotificationId()).isNull();
+        assertThat(ledger.read(DELIVERY_MANAGER, result.request().id()).providerNotificationId()).isNull();
         assertThat(noticeDate(one)).isNull();
         assertThat(noticeDate(two)).isNull();
         assertThat(noteCount(one)).isOne();
@@ -512,7 +513,7 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
             }
             return GazetteConfirmation.issue(inputs, AuditClock.now().plusMinutes(30).withNano(0));
         });
-        return ledger.admit(ADMIN, key, List.of(ids), token, 1);
+        return ledger.admit(DELIVERY_MANAGER, key, List.of(ids), token, 1);
     }
 
     private String ready(String type) {
@@ -538,7 +539,7 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
     }
 
     private GazetteRequestState state(Reservation row) {
-        return ledger.read(ADMIN, row.request().id()).state();
+        return ledger.read(DELIVERY_MANAGER, row.request().id()).state();
     }
 
     private int noteCount(String id) {

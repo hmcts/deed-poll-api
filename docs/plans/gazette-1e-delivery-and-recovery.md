@@ -1,5 +1,11 @@
 # Gazette one-shot delivery and recovery
 
+> Superseded access decision (9 October 2026): [Team leader and Delivery Manager contract](completed/20261009-team-leader-delivery-manager.md)
+> governs staff permissions. All Gazette entry points, including the named ready worklist/count and
+> saved-query execution, require Delivery Manager alone. Team leader and temporary legacy admin retain
+> non-Gazette casework capabilities only. Earlier admin-access wording below is historical; other
+> delivery, idempotency and recovery decisions remain applicable.
+
 Execution slice 3 of [the send/recovery contract](gazette-1b-send-and-recovery-contract.md),
 parent tasks 4c/4d. Started 9 October 2026 from master `801e949` (merged PR #92),
 in `.worktrees/deed-poll-api-gazette-delivery`, branch `feat/gazette-delivery-recovery`.

@@ -83,7 +83,7 @@ class CaseworkerGazetteControllerTest extends AbstractPostgresContainerTest {
     @BeforeEach
     void setUp() {
         IDAM.stubDefaults();
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Current Administrator", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Current Delivery Manager", List.of(Role.DELIVERY_MANAGER.claimValue()));
     }
 
     @Test
@@ -93,12 +93,12 @@ class CaseworkerGazetteControllerTest extends AbstractPostgresContainerTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"caseworker-civil", "caseworker-deedpoll", "caseworker-deedpoll-judicial"})
-    void refusesAuthenticatedNonAdmins(String role) throws Exception {
+    void refusesAuthenticatedNonDeliveryManagers(String role) throws Exception {
         batch(SENT_AT, "Historical Sender", "2026/PRIVATE");
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Historical Sender", List.of(role));
         authorised(get(HISTORY))
             .andExpect(status().isForbidden())
-            .andExpect(jsonPath("$.error").value(containsString(Role.DEEDPOLL_ADMIN.claimValue())));
+            .andExpect(jsonPath("$.error").value(containsString("ACCESS_GAZETTE")));
     }
 
     @Test
@@ -129,7 +129,7 @@ class CaseworkerGazetteControllerTest extends AbstractPostgresContainerTest {
             .containsExactlyInAnyOrder(
                 "batchId", "sentAt", "sentBy", "caseCount", "referenceNumbers", "referencesTruncated");
         assertThat(body).doesNotContain(SENDER_SUBJECT, StubIdam.SUBJECT, batch.getRequestId().toString(),
-            "sentById", "requestId", "2026/AMENDED", "Current Administrator");
+            "sentById", "requestId", "2026/AMENDED", "Current Delivery Manager");
     }
 
     @ParameterizedTest

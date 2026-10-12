@@ -264,8 +264,8 @@ case_document_am:
 deedpoll:
   security:
     # The /caseworker/** membership gate (SecurityConfiguration, StaffGate).
-    # - `report` logs "staff-gate report subject=..." for a caller holding neither caseworker-deedpoll nor
-    #   caseworker-deedpoll-admin, and lets them through. Any other value, or none, refuses them with a 403.
+    # - `report` logs "staff-gate report subject=..." for a caller outside StaffArea.CASEWORKER's roles
+    #   and lets them through. Any other value, or none, refuses them with a 403.
     # - `report` is the default for one release only, while the role is registered and assigned (OWASP plan 01,
     #   Task 4). Task 5 changes it to `enforce`, and Task 12 removes report mode.
     staff-gate: ${STAFF_GATE_MODE:report}

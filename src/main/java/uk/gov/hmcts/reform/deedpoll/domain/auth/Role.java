@@ -24,7 +24,13 @@ public enum Role {
     /** An ordinary deed-poll caseworker; grants CCD document reads, without admin or judicial powers. */
     CASEWORKER("caseworker-deedpoll"),
 
+    /** Migration-only compatibility: Team leader capabilities, never Delivery Manager. */
+    @Deprecated(since = "2026-10-09")
     DEEDPOLL_ADMIN("caseworker-deedpoll-admin"),
+
+    TEAM_LEADER("caseworker-deedpoll-team-leader"),
+
+    DELIVERY_MANAGER("caseworker-deedpoll-delivery-manager"),
 
     /**
      * A judge, who may claim a referral out of the shared pool and record a direction on one they hold.

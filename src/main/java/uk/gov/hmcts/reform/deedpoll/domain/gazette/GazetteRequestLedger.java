@@ -7,8 +7,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
-import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
@@ -57,7 +57,7 @@ public class GazetteRequestLedger {
      */
     public Reservation admit(CurrentUser caller, UUID key, List<String> selected, String fingerprint,
                              int recipientRevision) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.ACCESS_GAZETTE);
         String subject = caller.requireUserId();
         List<String> ids = GazetteSelection.ids(selected);
         if (key == null || fingerprint == null || fingerprint.isBlank() || fingerprint.length() > 512
@@ -109,7 +109,7 @@ public class GazetteRequestLedger {
     /** Resolve retries even when configuration, eligibility or token expiry have since changed. */
     public Optional<GazetteRequest> repeat(CurrentUser caller, UUID key, List<String> selected,
                                          String fingerprint, int revision) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.ACCESS_GAZETTE);
         String subject = caller.requireUserId();
         List<String> ids = GazetteSelection.ids(selected);
         if (key == null || fingerprint == null || fingerprint.isBlank() || fingerprint.length() > 512 || revision < 0) {
@@ -133,7 +133,7 @@ public class GazetteRequestLedger {
     }
 
     public GazetteRequest read(CurrentUser caller, UUID id) {
-        caller.requireAnyRole(Role.DEEDPOLL_ADMIN);
+        caller.require(Capability.ACCESS_GAZETTE);
         return requests.read(id, false).orElseThrow(() -> new NotFoundError("Gazette request not found"));
     }
 

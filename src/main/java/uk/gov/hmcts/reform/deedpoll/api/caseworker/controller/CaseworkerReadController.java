@@ -11,6 +11,7 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseDetailResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseListResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DocumentTypeResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.FieldRulesResponse;
+import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingSweep;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
@@ -163,6 +164,10 @@ public class CaseworkerReadController {
      * call, and the Feign timeouts in {@code application.yaml} cap what that call can cost; {@code max-duration}
      * bounds a CCD that answers every call slowly but in time.
      */
+    @io.swagger.v3.oas.annotations.Operation(
+        description = "The named readyForPublication worklist and count require "
+            + "caseworker-deedpoll-delivery-manager, including saved-query links. Other authenticated roles "
+            + "receive 403 before reads or side effects. Ordinary filters and field conditions are unchanged.")
     @GetMapping("/cases")
     public CaseListResponse cases(
         @RequestParam(name = "filter", required = false) String filter,
@@ -170,7 +175,7 @@ public class CaseworkerReadController {
 
         ListFilters.ListFilter resolved = ListFilters.filterFor(filter);
         CaseResults results = deedPolls.findDeedPolls(
-            resolved,
+            CurrentUsers.required(), resolved,
             CaseQuery.parse(parameters.get("where")),
             CaseSearch.parse(single("q", parameters.get("q"))),
             CaseSort.parse(single("sort", parameters.get("sort")),

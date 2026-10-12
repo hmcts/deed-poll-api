@@ -25,11 +25,11 @@ require 03c. Local proof is not onboarding or rollout approval. See
 ## Layout
 
 ```
-api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations across 21 paths, plus the admin-only
+api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations across 21 paths, plus the REPAIR_CCD-protected
                                   /caseworker/ccd-attempts (3 operations, counted apart as CCD_ATTEMPT_PATHS)
                                   and /caseworker/gazette-notices (1 history GET, counted apart)
-                                  and /caseworker/gazette-settings (admin-only GET/PUT)
-                                  plus 5 Gazette preview/request/status/member operations (admin-only)
+                                  and /caseworker/gazette-settings (Delivery Manager-only GET/PUT)
+                                  plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
 api/judicial/{controller,dto}     the judicial surface — 5 operations, keyed on the referral, never on the case
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
@@ -53,6 +53,19 @@ src/test/resources/reference/    VENDORED specification: TypeScript source and D
 src/test/resources/ccd-definition/  the generated CCD definition, pinned — DeedPollDefinitionTest compares every file
 src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/document journeys; local only
 ```
+
+## Staff permissions
+
+`caseworker-deedpoll-team-leader` grants OVERRIDE_PRIVACY, DELETE_NOTE, DELETE_WITNESS,
+MANAGE_SHARED_QUERIES and REPAIR_CCD. `caseworker-deedpoll-delivery-manager` inherits all five
+and alone grants ACCESS_GAZETTE. The deprecated `caseworker-deedpoll-admin` temporarily grants
+only the first five. Resolve capabilities from verified roles; the retained privacy boolean is derived.
+Every Gazette operation and the named `readyForPublication` worklist/count (including saved-query
+links) requires ACCESS_GAZETTE, with 403 before reads or side effects. Ordinary field conditions
+and case visibility remain unchanged. Neither new role grants judicial or system authority.
+Saved-query private visibility and ownership still use the subject. Background Gazette completion
+uses durable admitted authority; never rewrite historical attribution. See the
+[permission plan](docs/plans/completed/20261009-team-leader-delivery-manager.md) for migration and rollout.
 
 ## Rules that break things silently if ignored
 
@@ -160,7 +173,7 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
   two fields, CRU on the case type, the state and `updateSupportingDocuments`, and D on `supportingDocuments` alone,
   through `SupportingDocumentsAccess`, because data-store checks D for a removed collection item and a D on the event
   would be carried onto the state. `DEED_POLL_READER` holds R only on the case type, Registered state and
-  supportingDocuments, mapped from the three staff roles. It holds no events, history or identifier fields.
+  supportingDocuments, mapped from the five staff roles. It holds no events, history or identifier fields.
   The test refuses growth that was not deliberate.
 - **The case's documents are its `Attached` rows, and the document event's handler is what attaches them.**
   `SupportingDocumentsHandler` moves a row to `Attached` inside the event's transaction (`attachedOnTheCase`, only

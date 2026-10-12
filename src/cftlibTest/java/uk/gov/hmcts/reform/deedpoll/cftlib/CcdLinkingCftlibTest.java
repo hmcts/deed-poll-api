@@ -47,7 +47,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * data-store, as the system user, and compared with both of this service's own records of it -- the binding on
  * {@code deedpoll_deedpoll} and the SDK's {@code ccd.case_data} row.
  *
- * <p>The other two tests are plan 02b's journeys, driven over HTTP as {@link CftlibConfig#ADMIN_USER} with the sweep
+ * <p>The other two tests are plan 02b's journeys, driven over HTTP as
+ * {@link CftlibConfig#LEGACY_ADMIN_USER} with the sweep
  * switched on by the cftlib profile. One is a record created through {@code POST /caseworker/cases} and linked by the
  * next {@code GET /caseworker/cases}. The other is an attempt forced into {@code NeedsRepair} before anything was
  * submitted, retried from scratch through the repair endpoint, and then linked by the next list request. Each
@@ -227,7 +228,8 @@ class CcdLinkingCftlibTest extends CftlibTest {
     }
 
     private HttpResponse<String> send(HttpRequest.Builder request) throws Exception {
-        return http.send(request.header("Authorization", idam.getAccessToken(CftlibConfig.ADMIN_USER, "password"))
+        return http.send(request.header("Authorization",
+            idam.getAccessToken(CftlibConfig.LEGACY_ADMIN_USER, "password"))
             .build(), HttpResponse.BodyHandlers.ofString());
     }
 
