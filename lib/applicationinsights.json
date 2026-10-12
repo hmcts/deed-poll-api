@@ -17,5 +17,30 @@
         "percentage": 1
       }
     ]
+  },
+  "preview": {
+    "processors": [
+      {
+        "type": "attribute",
+        "actions": [
+          {
+            "key": "url.query",
+            "action": "delete"
+          },
+          {
+            "key": "url.full",
+            "pattern": "^(?<base>[^?#]*)[?#].*$",
+            "replace": "${base}?REDACTED",
+            "action": "mask"
+          },
+          {
+            "key": "http.url",
+            "pattern": "^(?<base>[^?#]*)[?#].*$",
+            "replace": "${base}?REDACTED",
+            "action": "mask"
+          }
+        ]
+      }
+    ]
   }
 }
