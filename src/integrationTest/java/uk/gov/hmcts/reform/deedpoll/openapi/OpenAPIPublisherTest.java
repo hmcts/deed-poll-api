@@ -360,11 +360,13 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      * {@code deed-poll-admin}'s generated client without anything failing. Found while adding {@code mine},
      * which had to be written into {@link #JUDICIAL_PATHS} by hand for the count to move at all.
      *
-     * <p>{@code "/"} is Spring Boot's welcome route and the one legitimate path outside both surfaces. Adding a
-     * name to this set is a deliberate act: a new {@code /caseworker} or {@code /judicial} route belongs in the
-     * list for its own namespace, where the count then forces the number to be restated.
+     * <p>{@code "/"} is Spring Boot's welcome route, and {@code "/me"} is the caller's own access answer, which any
+     * authenticated caller may read: {@code SecurityConfiguration.ANY_AUTHENTICATED_PATHS}. They are the only
+     * legitimate paths outside both surfaces. Adding a name to this set is a deliberate act: a new
+     * {@code /caseworker} or {@code /judicial} route belongs in the list for its own namespace, where the count then
+     * forces the number to be restated.
      */
-    @DisplayName("Documents no path outside the caseworker and judicial surfaces")
+    @DisplayName("Documents no path outside the caseworker and judicial surfaces but the root and /me")
     @Test
     void documentsNoUnlistedPath() throws Exception {
         JsonNode paths = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -387,6 +389,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.add("/caseworker/gazette-notices/{batchId}");
         known.add("/caseworker/gazette-notices/{batchId}/cases");
         known.add("/");
+        known.add("/me");
 
         assertThat(documented)
             .describedAs("a documented path in neither surface -- add it to the list for its namespace, so that "

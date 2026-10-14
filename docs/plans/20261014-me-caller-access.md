@@ -126,22 +126,22 @@ Files: `api/caller/controller/CallerAccessController.java`, `api/caller/dto/Call
 `api/caller/{controller,dto}/package-info.java`, `config/SecurityConfiguration.java`,
 `config/StaffAccessRulesTest.java`, new `api/caller/dto/CallerAccessResponseTest.java`.
 
-- [ ] Add `CallerAccessResponse` with a static factory taking the authorities and the `CurrentUser`, applying
+- [x] Add `CallerAccessResponse` with a static factory taking the authorities and the `CurrentUser`, applying
       decisions 2–4. Javadoc says why there's no identity (decision 6) and why the flags ignore the gate mode
       (decision 3).
-- [ ] Add `CallerAccessController`: `GET /me`, `operationId = "getCallerAccess"`, `Cache-Control: no-store`, and an
+- [x] Add `CallerAccessController`: `GET /me`, `operationId = "getCallerAccess"`, `Cache-Control: no-store`, and an
       `@Operation` description saying any authenticated caller may call it and what an empty answer means.
-- [ ] Add `ANY_AUTHENTICATED_PATHS` to `SecurityConfiguration` with `.authenticated()` ahead of `anyRequest()`
+- [x] Add `ANY_AUTHENTICATED_PATHS` to `SecurityConfiguration` with `.authenticated()` ahead of `anyRequest()`
       (decision 8), and update the class Javadoc that says every route is in a staff area.
-- [ ] Update `StaffAccessRulesTest.everyRouteIsInAStaffArea` to accept `ANY_AUTHENTICATED_PATHS`, and add a test that
+- [x] Update `StaffAccessRulesTest.everyRouteIsInAStaffArea` to accept `ANY_AUTHENTICATED_PATHS`, and add a test that
       the set is exactly `{"/me"}`.
-- [ ] Unit tests for `CallerAccessResponse` covering:
+- [x] Unit tests for `CallerAccessResponse` covering:
   - each `Role` alone, with the expected flags and capabilities
   - Team leader plus judicial together
   - an empty role list
   - capabilities in declaration order with no duplicates (for example, Team leader plus Delivery Manager)
   - legacy `DEEDPOLL_ADMIN` getting Team leader's set and `staff: true`
-- [ ] Mark completed
+- [x] Mark completed
 
 ### Task 2: Prove it through the real filter chain
 
@@ -183,6 +183,21 @@ Files: `CLAUDE.md`, `README.md`, this plan's Execution notes.
 - direct Checkstyle: 0 warnings
 - first selector (without `*CallerAccess*`): 63 tests, 0 failures
 - second selector: 589 tests, 0 failures
+
+**Task 1** (`CallerAccessController`, `CallerAccessResponse`, `api/caller` package docs, `SecurityConfiguration`,
+`StaffAccessRulesTest`, `CallerAccessResponseTest`, `OpenAPIPublisherTest`):
+- `RoleCapabilities.forRoles` returns `Set.copyOf`, which has no order, so the response re-reads `Capability.values()`
+  to get declaration order
+- the controller reads authorities from the `SecurityContextHolder` after `CurrentUsers.required()`, so an
+  unauthenticated call still fails with that method's explanation
+- `OpenAPIPublisherTest.documentsNoUnlistedPath` (integration) refused `/me` as a path outside both surfaces; `/me`
+  was added to its known list with the reason, the same deliberate act its Javadoc asks for
+- first selector (with `*CallerAccess*`): 73 tests, 0 failures
+- second selector: 590 tests, 0 failures
+- `./gradlew build` failed only in `checkstyleFunctionalTest` (worker SIGILL/SIGABRT, exit 134); with the Checkstyle
+  tasks excluded: 4,160 unit and 19 integration tests, 0 failures, 0 skipped
+- Checkstyle run directly over all five source sets: 0 warnings (one long Javadoc line found and fixed first)
+- `git diff --check`: clean
 
 ## Post-Completion
 

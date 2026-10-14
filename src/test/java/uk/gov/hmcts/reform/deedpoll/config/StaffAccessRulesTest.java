@@ -73,7 +73,7 @@ class StaffAccessRulesTest {
     }
 
     @Test
-    @DisplayName("every route this service maps is inside a staff area, apart from the public root")
+    @DisplayName("every route this service maps is inside a staff area, apart from the public root and the allowlist")
     void everyRouteIsInAStaffArea() {
         List<String> patterns = handlerMapping.getHandlerMethods().entrySet().stream()
             .filter(entry -> entry.getValue().getBeanType().getName().startsWith(APPLICATION_PACKAGE))
@@ -85,7 +85,14 @@ class StaffAccessRulesTest {
             .anyMatch(pattern -> pattern.startsWith(StaffArea.JUDICIAL.prefix() + "/"));
         assertThat(patterns)
             .as("a route outside every StaffArea is open to any IDAM token: add it to StaffArea or the allowlist")
-            .allMatch(pattern -> "/".equals(pattern) || StaffArea.of(pattern).isPresent());
+            .allMatch(pattern -> "/".equals(pattern) || StaffArea.of(pattern).isPresent()
+                || List.of(SecurityConfiguration.ANY_AUTHENTICATED_PATHS).contains(pattern));
+    }
+
+    @Test
+    @DisplayName("the routes any authenticated caller may reach are exactly /me, so another is a reviewed change")
+    void anyAuthenticatedPathsAreExactlyMe() {
+        assertThat(SecurityConfiguration.ANY_AUTHENTICATED_PATHS).containsExactly("/me");
     }
 
     @Test
