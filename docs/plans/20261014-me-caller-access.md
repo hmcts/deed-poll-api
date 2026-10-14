@@ -223,6 +223,7 @@ Files: `CLAUDE.md`, `README.md`, this plan's Execution notes.
 - Checkstyle 10 run directly over main, test, integrationTest, functionalTest and smokeTest with
   `build/config/checkstyle/checkstyle.xml`: 0 warnings
 - `git diff --check`: clean
+- review fixes landed at `8024f97` after the documentation commit `3a86707`; the counts above were not re-measured
 - no live verification: nothing was called in any deployed environment, and admin has not consumed `/me` yet
 
 ## Post-Completion

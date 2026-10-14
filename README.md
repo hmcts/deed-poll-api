@@ -37,7 +37,8 @@ Delivery Manager-only Gazette operations (see [Gazette publication foundation](#
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
 `capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
 `/swagger-ui.html` is the authority; this table is the map — and `OpenAPIPublisherTest` asserts each count,
-so a route added without a row here is a count that stops agreeing with the spec.
+so a route added without a row here is a count that stops agreeing with the spec. `/me` and `/` are the only
+documented paths outside the counted surfaces; `documentsNoUnlistedPath` allowlists them by name.
 
 | Method | Path | What it does |
 |---|---|---|
