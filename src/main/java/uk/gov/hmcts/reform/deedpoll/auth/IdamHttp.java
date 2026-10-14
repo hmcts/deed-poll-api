@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.auth;
 
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
+import org.springframework.boot.http.client.ClientHttpRequestFactorySettings.Redirects;
 import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestTemplate;
@@ -48,6 +49,14 @@ public final class IdamHttp {
     }
 
     /**
+     * As {@link #restClient()}, but a redirect is returned rather than followed, so a credential-bearing request is
+     * never re-sent elsewhere and a 3xx is seen as the non-answer it is.
+     */
+    public static RestClient restClientWithoutRedirects() {
+        return RestClient.builder().requestFactory(requestFactory(Redirects.DONT_FOLLOW)).build();
+    }
+
+    /**
      * The same timeouts for the JWKS fetch, which Nimbus makes through {@link org.springframework.web.client
      * .RestOperations} rather than a {@code RestClient}.
      */
@@ -56,7 +65,11 @@ public final class IdamHttp {
     }
 
     private static ClientHttpRequestFactory requestFactory() {
-        return ClientHttpRequestFactoryBuilder.detect()
-            .build(ClientHttpRequestFactorySettings.defaults().withTimeouts(CONNECT_TIMEOUT, READ_TIMEOUT));
+        return requestFactory(Redirects.FOLLOW_WHEN_POSSIBLE);
+    }
+
+    private static ClientHttpRequestFactory requestFactory(Redirects redirects) {
+        return ClientHttpRequestFactoryBuilder.detect().build(ClientHttpRequestFactorySettings.defaults()
+            .withTimeouts(CONNECT_TIMEOUT, READ_TIMEOUT).withRedirects(redirects));
     }
 }

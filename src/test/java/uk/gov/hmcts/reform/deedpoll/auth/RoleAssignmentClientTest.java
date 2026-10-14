@@ -82,6 +82,24 @@ class RoleAssignmentClientTest {
     }
 
     @Test
+    @DisplayName("a redirect carrying a list is a failure, and is not followed")
+    void aRedirectIsAFailure() {
+        RAS.stubFor(get(urlPathMatching("/am/role-assignments/actors/.*")).willReturn(aResponse()
+            .withStatus(302)
+            .withHeader("Location", RAS.baseUrl() + "/elsewhere")
+            .withHeader("Content-Type", "application/json")
+            .withBody("""
+                {"roleAssignmentResponse":[{"roleName":"ctsc-team-leader"}]}""")));
+        RAS.stubFor(get(urlPathEqualTo("/elsewhere")).willReturn(aResponse().withStatus(200)
+            .withBody("""
+                {"roleAssignmentResponse":[]}""")));
+
+        assertThatThrownBy(() -> client().assignments("token", SUBJECT))
+            .isInstanceOf(RoleAssignmentUnavailable.class);
+        RAS.verify(0, getRequestedFor(urlPathEqualTo("/elsewhere")));
+    }
+
+    @Test
     @DisplayName("reads every field the mapping uses")
     void readsTheFieldsTheMappingUses() {
         answer(200, """

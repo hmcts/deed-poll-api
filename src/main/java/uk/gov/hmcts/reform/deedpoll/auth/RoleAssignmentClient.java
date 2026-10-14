@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestClientResponseException;
 import uk.gov.hmcts.reform.authorisation.generators.AuthTokenGenerator;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.OrganisationalRoleAssignment;
 
@@ -49,7 +48,7 @@ public class RoleAssignmentClient {
     private final RestClient restClient;
 
     public RoleAssignmentClient(RoleAssignmentProperties properties, AuthTokenGenerator serviceTokens) {
-        this(properties, serviceTokens, IdamHttp.restClient());
+        this(properties, serviceTokens, IdamHttp.restClientWithoutRedirects());
     }
 
     public RoleAssignmentClient(RoleAssignmentProperties properties, AuthTokenGenerator serviceTokens,
@@ -80,20 +79,22 @@ public class RoleAssignmentClient {
                 .uri(properties.url() + "/am/role-assignments/actors/{actorId}", subject)
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                 .header(SERVICE_AUTHORIZATION, serviceToken)
-                .retrieve()
-                .body(byte[].class);
-        } catch (RestClientResponseException e) {
-            if (e.getStatusCode().value() == 404) {
-                return List.of();
-            }
-            // No cause: a response exception's message carries RAS's body, which is never to reach a log.
-            throw new RoleAssignmentUnavailable("RAS answered " + e.getStatusCode().value(),
-                                                e.getStatusCode().value(), null);
+                .exchange((request, response) -> {
+                    int status = response.getStatusCode().value();
+                    if (status == 404) {
+                        return null;
+                    }
+                    // Only 2xx is an answer: a redirect carrying a list must not grant anything.
+                    if (status < 200 || status > 299) {
+                        throw new RoleAssignmentUnavailable("RAS answered " + status, status, null);
+                    }
+                    return response.getBody().readAllBytes();
+                });
         } catch (RestClientException e) {
             throw new RoleAssignmentUnavailable("RAS could not be reached", null, e);
         }
 
-        return parse(body);
+        return body == null ? List.of() : parse(body);
     }
 
     private static List<OrganisationalRoleAssignment> parse(byte[] body) {
