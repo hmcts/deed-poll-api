@@ -41,6 +41,7 @@ so a route added without a row here is a count that stops agreeing with the spec
 
 | Method | Path | What it does |
 |---|---|---|
+| GET | `/me` | The caller's own access: `staff` and `judicial` (does each area admit their roles) plus `capabilities` in `Capability` order. Any authenticated caller, `no-store`, no identity; a caller with no deed-poll role gets `false`, `false`, `[]` rather than 403 |
 | GET | `/caseworker/cases` | The case list — a `filter` key (one of seven tabs), `where` conditions, a `q` search term, `sort`, `page` and `size`. The default order is newest first except `awaitingConfirmation` (longest wait first) and `readyForPublication` (oldest enrolment first) |
 | GET | `/caseworker/cases/field-rules` | Show / hide / mandate rules for a `type`, `migrated` and `publishToGazette` |
 | GET | `/caseworker/cases/{id}` | One case **with** its notes, witnesses and documents — one call, not four |

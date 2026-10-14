@@ -36,6 +36,7 @@ class NamespaceSeparationSecurityTest {
     private static final String CASEWORKER = "uk.gov.hmcts.reform.deedpoll.api.caseworker";
     private static final String CITIZEN = "uk.gov.hmcts.reform.deedpoll.api.citizen";
     private static final String JUDICIAL = "uk.gov.hmcts.reform.deedpoll.api.judicial";
+    private static final String CALLER = "uk.gov.hmcts.reform.deedpoll.api.caller";
 
     private static final JavaClasses API_CLASSES = new ClassFileImporter()
         .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
@@ -85,6 +86,15 @@ class NamespaceSeparationSecurityTest {
     }
 
     @Test
+    @DisplayName("the caller namespace shares no DTO with a staff or citizen namespace, in either direction")
+    void callerSharesNoDtos() {
+        for (String other : new String[] {CASEWORKER, CITIZEN, JUDICIAL}) {
+            assertNoDtoDependency(CALLER, other);
+            assertNoDtoDependency(other, CALLER);
+        }
+    }
+
+    @Test
     @DisplayName("the three namespaces do not depend on each other at all")
     void theNamespacesAreIndependent() {
         // A controller calling another namespace's controller would share the DTOs by another route, and one
@@ -111,7 +121,7 @@ class NamespaceSeparationSecurityTest {
     @Test
     @DisplayName("every namespace exists, so the rules are checking something")
     void everyNamespaceExists() {
-        for (String namespace : new String[] {CASEWORKER, CITIZEN, JUDICIAL}) {
+        for (String namespace : new String[] {CASEWORKER, CITIZEN, JUDICIAL, CALLER}) {
             assertThat(documentedPackage(namespace + ".controller")).exists();
             assertThat(documentedPackage(namespace + ".dto")).exists();
         }
