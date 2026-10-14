@@ -205,7 +205,8 @@ See the contract for expiry, key identity, typed refusals and concurrency tests.
 ### 6. `GET /caseworker/gazette-notices` is a plain, paged history read
 
 Returns `sentAt`, `sentBy` (display name only — the subject id is never published, same discipline as
-`claimedBy`/`decidedBy`), `caseCount`, and a preview of at most 100 frozen `referenceNumbers`
+`claimedBy`/`decidedBy`; except that a caller with no IDAM name claims has the subject as their display name,
+accepted at release review F1), `caseCount`, and a preview of at most 100 frozen `referenceNumbers`
 per batch, with `referencesTruncated` indicating omitted members. Batches are newest first;
 references use lexical display order, not send order. No custom filtering or sorting.
 
@@ -338,7 +339,8 @@ never covered by that transaction.
   `batchId` on sent-history summaries, with all new request/status/error schemas.
   Existing settings, case/email, judicial and deferred CCD contracts stay intact.
 - [x] Record final test counts and local fault-injection evidence in the slice 3 plan.
-- [ ] Run and record the separate external Copilot/Opus release review.
+- [x] Run and record the separate external Copilot/Opus release review
+  ([record](gazette-release-review.md): F1 accepted, F2 a release dependency).
 - [ ] Provision/activate only after the contract's release prerequisites are met.
 
 Documentation-only contract planning does not count as any of these completed

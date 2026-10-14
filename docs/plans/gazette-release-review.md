@@ -84,14 +84,21 @@ UP-TO-DATE.
 
 ### Findings
 
-**F1, valid, not fixed here: attribution can be an IDAM subject.**
+**F1, valid, accepted (Steve, 14 October 2026): attribution can be an IDAM subject.**
 `GazetteRequestLedger` (admission) stores `caller.name()` as `submittedBy`, and it is published, as are
 `sentBy`, the case notes and the settings' `updatedBy`. When the token carries no `name`,
 `given_name` or `family_name`, `IdamClaims.displayNameFrom` falls back to `sub`. That fallback is
 service-wide and deliberate (9cec400: traceable rather than misattributed to the service account),
 so every audit column in the service shares it. But it contradicts this contract's "IDAM subjects
 … are never published" in exactly that edge case, and no Gazette test covers a caller without a
-name. Fixing it is a choice between service-wide and Gazette-only, so it waits on a decision.
+name.
+
+*Resolution:* keep the service-wide fallback. A subject is an internal ID shown only to authenticated
+staff, and real staff accounts carry names. A Gazette-only guard would leave the same subject on
+every other audit column, and removing the fallback service-wide would cost traceability for an
+edge case. The 1b contract and the parent plan's decision 6 now state the exception.
+`CaseworkerGazetteSettingsControllerTest.publishesTheSubjectAsAttributionWhenIdamSuppliesNoName`
+pins it end to end, so a change to either side is a decision, not a drift.
 
 **F2, by design, temporary: the staff gate's report mode logs the subject.**
 `StaffGate` logs `subject=` for a caller outside the staff roles, before the Gazette capability check
@@ -99,7 +106,9 @@ refuses them with 403. This is OWASP plan 01 Task 4's deliberate one-release rep
 (`STAFF_GATE_MODE`, default `report`). Task 5 switches to `enforce` and Task 12 removes it. It is
 not Gazette-specific, but **Gazette must not be enabled anywhere the gate is still in report mode.**
 
-No code changed on this branch, so the baseline above stands as the final count.
+F1 added one test and no production code. Final, 14 October 2026, rebased on `22f3d7f` (master with
+api#102 and #103), with the validation commands above: 4,151 test / 19 integration, no failures, errors
+or skips, both tasks executed, and Checkstyle clean. That's 65 more than the `be3291a` baseline: the F1 test plus whatever #103 added (not counted separately).
 
 ### Scope note: api#103 (merged after this review)
 
