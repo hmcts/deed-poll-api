@@ -362,6 +362,23 @@ admission evidence and does not reauthorise an already admitted request. See the
 [permission contract and rollout](docs/plans/completed/20261009-team-leader-delivery-manager.md).
 Release owners should also use the [API release handoff](docs/STAFF-ROLE-RELEASE.md).
 
+AM's organisational role assignments can be a second source of those same roles. This is off by default.
+When enabled, `ctsc` adds caseworker, `ctsc-team-leader` adds Team leader (and Delivery Manager if it carries
+the Gazette skill), and `judge`/`fee-paid-judge` add judicial. Only `ORGANISATION` assignments in the configured
+jurisdiction and inside their begin/end window count. They are read from RAS once per request, uncached. If RAS
+fails, the caller keeps their IDAM roles and nothing more. The CCD system user and `/ccd-persistence/**` never
+consult it.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ROLE_ASSIGNMENT_ENABLED` | `false` | Ask RAS at all. The chart sets it false explicitly |
+| `ROLE_ASSIGNMENT_URL` | `http://localhost:4096` | RAS's base URL; set by flux per environment |
+| `ROLE_ASSIGNMENT_JURISDICTION` | `DEEDPOLL` | The `attributes.jurisdiction` an assignment must carry |
+| `ROLE_ASSIGNMENT_GAZETTE_SKILL` | empty | The `ctsc-team-leader` authorisation that grants Delivery Manager; empty grants none |
+
+Enabling it also needs the outbound S2S settings (`IDAM_S2S_AUTH_URL`, `DEED_POLL_API_S2S_SECRET`) and RAS
+admitting `deed_poll_api`. See `CLAUDE.md` for the activation order.
+
 `/ccd-persistence/**` is the exception, with a chain of its own: it is where CCD's data-store calls this
 service back, so it admits an S2S token verified as `ccd_data` and nobody else, plus an IDAM user whose role
 is the configured `CCD_SYSTEM_ROLE`, mapped onto the `DEED_POLL_SYSTEM` access profile. The generator's

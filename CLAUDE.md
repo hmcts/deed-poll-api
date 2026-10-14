@@ -67,6 +67,38 @@ Saved-query private visibility and ownership still use the subject. Background G
 uses durable admitted authority; never rewrite historical attribution. See the
 [permission plan](docs/plans/completed/20261009-team-leader-delivery-manager.md) for migration and rollout.
 
+### AM as a second role source (off by default)
+
+`deedpoll.roles.am.enabled` (`ROLE_ASSIGNMENT_ENABLED`, default false) makes `IdamAuthenticationConverter`
+union the caller's AM organisational role assignments into the IDAM-derived roles. It adds no new `Role` or
+`Capability`, and subject and name still come from IDAM. The mapping is pure, in `domain/auth/AmRoles`:
+
+| RAS assignment | Role |
+|---|---|
+| `ctsc` | `CASEWORKER` |
+| `ctsc-team-leader` | `TEAM_LEADER` |
+| `ctsc-team-leader` whose `authorisations` holds `ROLE_ASSIGNMENT_GAZETTE_SKILL` | also `DELIVERY_MANAGER` |
+| `judge`, `fee-paid-judge` | `JUDICIAL` |
+
+Every other name maps to nothing. An assignment counts only if it is `ORGANISATION`, not `SPECIFIC`, inside
+its begin/end window, and its `attributes.jurisdiction` equals `ROLE_ASSIGNMENT_JURISDICTION` (default
+`DEEDPOLL`). **Never drop the jurisdiction filter**: `ctsc` and `ctsc-team-leader` are shared across services,
+and without it a Probate team leader becomes a deed poll Team leader. With the skill empty (the default), AM
+never yields a Delivery Manager.
+
+- **No cache**, for `IdamUserInfoClient`'s reason: a cached role outlives its removal. One RAS call per
+  authenticated request (`GET /am/role-assignments/actors/{subject}`, the caller's own token plus S2S).
+- **Failure adds nothing.** `AmRoleSource` turns RAS unreachable, non-2xx or an unreadable body into a WARN and
+  no AM roles. The WARN gives a 12-hex-digit hash of the subject and the status, never the token, the body or
+  the cause (its message carries the URL, which carries the subject). A 404 means no assignments, with no WARN.
+- **The CCD system user never calls RAS**, and `/ccd-persistence/**` (`CcdCallerAuthenticationConverter`) stays
+  IDAM-only. CCD document access for AM-only users needs a later definition change.
+
+Activation, none of it done in this repo: flux sets `ROLE_ASSIGNMENT_URL` and mounts the S2S secret; RAS adds
+`deed_poll_api` to `ROLE_ASSIGNMENT_S2S_AUTHORISED_SERVICES`; `ROLE_ASSIGNMENT_GAZETTE_SKILL` is set once RD
+allocates the service code; CRD/JRD profiles exist; only then `ROLE_ASSIGNMENT_ENABLED=true`. See
+`docs/plans/20261014-am-role-source.md`.
+
 ## Rules that break things silently if ignored
 
 - **The CDAM hash token is transient.** Keep it only while `Uploaded`/`AttachUncertain`; never log, project or

@@ -156,14 +156,14 @@ is needed; tests alongside the converter's existing tests, or a new `IdamAuthent
 **Files:** `charts/deed-poll-api/values.yaml`, `DeploymentChartConformanceTest` if it enumerates env vars, `CLAUDE.md`
 (the auth section), `README.md` (configuration), and this plan's Execution notes.
 
-- [ ] Add `ROLE_ASSIGNMENT_ENABLED: "false"` to the chart (decision 9), and keep the conformance test green.
-- [ ] Document in `CLAUDE.md`: the AM role source, the mapping table, the jurisdiction filter rationale, the no-cache rule and the fallback. Also the activation steps, which are not done here:
+- [x] Add `ROLE_ASSIGNMENT_ENABLED: "false"` to the chart (decision 9), and keep the conformance test green.
+- [x] Document in `CLAUDE.md`: the AM role source, the mapping table, the jurisdiction filter rationale, the no-cache rule and the fallback. Also the activation steps, which are not done here:
   - flux sets `ROLE_ASSIGNMENT_URL`;
   - `deed_poll_api` is added to RAS's `ROLE_ASSIGNMENT_S2S_AUTHORISED_SERVICES`;
   - the Gazette skill code is set once RD allocates the service code;
   - then `ROLE_ASSIGNMENT_ENABLED=true`.
-- [ ] Record the validation counts and the branch SHA in Execution notes. Do not claim any live verification.
-- [ ] Mark completed
+- [x] Record the validation counts and the branch SHA in Execution notes. Do not claim any live verification.
+- [x] Mark completed
 
 ## Execution notes
 
@@ -207,7 +207,18 @@ is needed; tests alongside the converter's existing tests, or a new `IdamAuthent
   sets as in Task 2: clean
 - `git diff --check`: clean
 
-(The run fills in the rest.)
+**Task 4** (chart `ROLE_ASSIGNMENT_ENABLED: "false"`, `CLAUDE.md`, `README.md`), on branch `feat/am-role-source`,
+starting from `f625d61`:
+- `DeploymentChartConformanceTest` needed no change: it already requires every chart environment value to be read
+  by `application.yaml`, which reads `${ROLE_ASSIGNMENT_ENABLED`
+- the chart comment and docs note that enabling also needs the outbound S2S secret, which the chart does not mount
+- first selector (with `*AmRoles*` added): 117 tests, 0 failures
+- second selector: 585 tests, 0 failures
+- `./gradlew build` with the Checkstyle tasks excluded: 4,149 unit and 19 integration tests, 0 failures, 0 skipped
+- Checkstyle's Gradle worker died with SIGABRT (exit 134) again. No Java source changed in this task, so Task 3's
+  direct Checkstyle run still applies
+- `git diff --check`: clean
+- nothing was verified against a live RAS, IDAM, AAT or any deployment; every RAS interaction is WireMock only
 
 ## Post-Completion
 
