@@ -117,10 +117,10 @@ recorded in the repo's earlier plans. Record actual test counts.
 **Files:** new `domain/auth/OrganisationalRoleAssignment.java` (a record of the parsed fields) and
 `domain/auth/AmRoles.java` (the decision 1 and 2 mapping); new `src/test/.../domain/auth/AmRolesTest.java`.
 
-- [ ] Add the record and a pure `AmRoles.rolesFrom(List<OrganisationalRoleAssignment>, String jurisdiction, String gazetteSkill, Instant now)` returning an immutable `Set<Role>`.
-- [ ] Tests for each mapping row. Also test each filter separately: wrong jurisdiction, `CASE` roleType, `SPECIFIC` grant, future begin, past end, null attributes. Plus an unknown name, an empty `gazetteSkill`, the skill on a non-team-leader `ctsc` assignment (yields no Delivery Manager), and duplicates.
-- [ ] Assert via `RoleCapabilities` that a `ctsc-team-leader` with the skill has every Team leader capability plus `ACCESS_GAZETTE`.
-- [ ] Mark completed
+- [x] Add the record and a pure `AmRoles.rolesFrom(List<OrganisationalRoleAssignment>, String jurisdiction, String gazetteSkill, Instant now)` returning an immutable `Set<Role>`.
+- [x] Tests for each mapping row. Also test each filter separately: wrong jurisdiction, `CASE` roleType, `SPECIFIC` grant, future begin, past end, null attributes. Plus an unknown name, an empty `gazetteSkill`, the skill on a non-team-leader `ctsc` assignment (yields no Delivery Manager), and duplicates.
+- [x] Assert via `RoleCapabilities` that a `ctsc-team-leader` with the skill has every Team leader capability plus `ACCESS_GAZETTE`.
+- [x] Mark completed
 
 ### Task 2: RAS client and settings
 
@@ -171,6 +171,14 @@ is needed; tests alongside the converter's existing tests, or a new `IdamAuthent
 - first selector (without `*RoleAssignment*`): 54 tests, 0 failures
 - second selector: 581 tests, 0 failures
 - `./gradlew build`: 4,086 unit and 19 integration tests, 0 failures, 0 skipped, about 5 minutes
+- `git diff --check`: clean
+
+**Task 1** (`AmRoles`, `OrganisationalRoleAssignment`, `AmRolesTest`):
+- first selector (with `*AmRoles*` in place of `*RoleAssignment*`): 87 tests, 0 failures
+- `./gradlew test`: 4,119 tests, 0 failures, 0 skipped; `./gradlew integration`: 19 tests, 0 failures
+- Checkstyle's Gradle worker died with SIGABRT (exit 134) on every task, so Checkstyle 10.24.0 was run directly
+  over main, test, integrationTest, functionalTest and smokeTest with `build/config/checkstyle/checkstyle.xml`
+  (the `checkstyle` configuration's classpath plus commons-logging): clean
 - `git diff --check`: clean
 
 (The run fills in the rest.)
