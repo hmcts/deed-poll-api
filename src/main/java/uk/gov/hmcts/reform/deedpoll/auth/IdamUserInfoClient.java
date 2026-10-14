@@ -68,9 +68,10 @@ public class IdamUserInfoClient {
      * The userinfo claims for a validated token, checked against its subject just as {@link #currentUser} checks
      * them, but not yet reduced.
      *
-     * <p>Only for a caller that needs a role {@link IdamClaims#userFromClaims} would drop -- today that is the CCD
-     * persistence chain, which maps IDAM roles onto the case definition's access profiles. Any other reader
-     * should use {@link #currentUser}.
+     * <p>The reader {@link IdamAuthenticationConverter} and the CCD persistence chain use: the caller reduces the
+     * claims itself, so a role {@link IdamClaims#userFromClaims} would drop stays available, and AM roles can be
+     * unioned in before the user is built. {@link #currentUser} is the reduced form for a caller that needs nothing
+     * else.
      *
      * @throws UnauthorizedError for anything the caller could fix by presenting a different token
      */

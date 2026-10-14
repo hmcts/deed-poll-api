@@ -269,6 +269,17 @@ deedpoll:
     # - `report` is the default for one release only, while the role is registered and assigned (OWASP plan 01,
     #   Task 4). Task 5 changes it to `enforce`, and Task 12 removes report mode.
     staff-gate: ${STAFF_GATE_MODE:report}
+  roles:
+    # A second source of the caller's roles: their organisational role assignments in AM (RoleAssignmentProperties).
+    # Off until CRD/JRD profiles exist and RAS admits deed_poll_api's S2S name. A RAS failure falls back to the IDAM
+    # roles, never to more.
+    am:
+      enabled: ${ROLE_ASSIGNMENT_ENABLED:false}
+      url: ${ROLE_ASSIGNMENT_URL:http://localhost:4096}
+      # Only assignments carrying this attributes.jurisdiction count: ctsc and ctsc-team-leader are shared names.
+      jurisdiction: ${ROLE_ASSIGNMENT_JURISDICTION:DEEDPOLL}
+      # The ctsc-team-leader authorisation that makes a Delivery Manager. Empty until RD allocates it: none from AM.
+      gazette-skill: ${ROLE_ASSIGNMENT_GAZETTE_SKILL:}
   gazette:
     # Enables provisioned previews and new confirmed sends. Recovery runs independently while disabled.
     enabled: ${GAZETTE_ENABLED:false}

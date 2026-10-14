@@ -132,7 +132,7 @@ worth knowing before calling them:
 - **No role gate anywhere below these routes.** Any authenticated staff caller may raise, read, withdraw, close
   and record a confirmation: in the process this replaces, anybody who works a case can email a Master and action
   the reply, and anybody can read the applicant's reply out of the shared inbox. The
-  judicial role is the one that is different — `Role.JUDICIAL`, which IDAM does not issue yet — and it gates
+  judicial role is the one that is different — `Role.JUDICIAL`, which IDAM does not issue and only the off-by-default AM role source can grant — and it gates
   the two transitions that are not on this surface.
 
 **Every successful referral transition writes exactly one case note**, attributed to whoever caused it, because
@@ -244,7 +244,7 @@ cannot be reused for the judiciary by accident. An ArchUnit rule asserts the sep
 | POST | `/judicial/referrals/{referralId}/claim` | Claim a pool referral — it becomes theirs and drops off every other judge's |
 | POST | `/judicial/referrals/{referralId}/direction` | Record a direction — `decision`, optional `directionsText`, and `publishToGazette` |
 
-Every route requires `Role.JUDICIAL`, which **IDAM does not issue yet**, enforced in the domain rather than by a
+Every route requires `Role.JUDICIAL`, which **IDAM does not issue** (only the off-by-default AM role source can grant it), enforced in the domain rather than by a
 route matcher — so the whole surface fails closed for every token in existence today. Five rules are the surface:
 
 - **Keyed on the referral, never on the case.** There is no `{caseId}` in a judicial URL, because a judge does
@@ -339,7 +339,7 @@ so that an unconfigured environment refuses every token** rather than trusting a
 | `IDAM_API_ISSUER_URL` | The IDAM issuer. Endpoints are discovered from it, never configured |
 | `IDAM_API_AUDIENCES` | Comma-separated `aud` values that are ours. Empty refuses everything |
 
-Roles come from `/o/userinfo`, not from the token, and the lookup is uncached. The application maps
+IDAM roles come from `/o/userinfo`, not from the token, and the lookup is uncached; with `ROLE_ASSIGNMENT_ENABLED` true, AM role assignments are unioned in (see below). The application maps
 verified roles to explicit capabilities:
 
 | Role claim | Privileges |
@@ -361,6 +361,23 @@ Ordinary case fields, conditions and visibility are unchanged. Background delive
 admission evidence and does not reauthorise an already admitted request. See the
 [permission contract and rollout](docs/plans/completed/20261009-team-leader-delivery-manager.md).
 Release owners should also use the [API release handoff](docs/STAFF-ROLE-RELEASE.md).
+
+AM's organisational role assignments can be a second source of those same roles. This is off by default.
+When enabled, `ctsc` adds caseworker, `ctsc-team-leader` adds Team leader (and Delivery Manager if it carries
+the Gazette skill), and `judge`/`fee-paid-judge` add judicial. Only `ORGANISATION` assignments in the configured
+jurisdiction and inside their begin/end window count. They are read from RAS once per request, uncached. If RAS
+fails, the caller keeps their IDAM roles and nothing more. The CCD system user and `/ccd-persistence/**` never
+consult it.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ROLE_ASSIGNMENT_ENABLED` | `false` | Ask RAS at all. The chart sets it false explicitly |
+| `ROLE_ASSIGNMENT_URL` | `http://localhost:4096` | RAS's base URL; set by flux per environment |
+| `ROLE_ASSIGNMENT_JURISDICTION` | `DEEDPOLL` | The `attributes.jurisdiction` an assignment must carry |
+| `ROLE_ASSIGNMENT_GAZETTE_SKILL` | empty | The `ctsc-team-leader` authorisation that grants Delivery Manager; empty grants none |
+
+Enabling it also needs the outbound S2S settings (`IDAM_S2S_AUTH_URL`, `DEED_POLL_API_S2S_SECRET`) and RAS
+admitting `deed_poll_api`. See `CLAUDE.md` for the activation order.
 
 `/ccd-persistence/**` is the exception, with a chain of its own: it is where CCD's data-store calls this
 service back, so it admits an S2S token verified as `ccd_data` and nobody else, plus an IDAM user whose role
