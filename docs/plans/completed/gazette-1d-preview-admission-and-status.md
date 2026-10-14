@@ -1,12 +1,12 @@
 # Gazette preview, admission validation and status APIs
 
-> Superseded access decision (9 October 2026): [Team leader and Delivery Manager contract](completed/20261009-team-leader-delivery-manager.md)
+> Superseded access decision (9 October 2026): [Team leader and Delivery Manager contract](20261009-team-leader-delivery-manager.md)
 > governs staff permissions. All Gazette entry points, including the named ready worklist/count and
 > saved-query execution, require Delivery Manager alone. Team leader and temporary legacy admin retain
 > non-Gazette casework capabilities only. Earlier admin-access wording below is historical; other
 > delivery, idempotency and recovery decisions remain applicable.
 
-Execution slice 2 of [the send/recovery contract](gazette-1b-send-and-recovery-contract.md),
+Execution slice 2 of [the send/recovery contract](../gazette-1b-send-and-recovery-contract.md),
 parent task 4b. Implementation date: 9 October 2026. Worktree branch:
 `feat/gazette-preview-status`.
 

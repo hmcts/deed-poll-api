@@ -814,9 +814,9 @@ Activation still requires Notify provisioning, support ownership and controlled
 recipient/download evidence. See the [delivery and recovery runbook](docs/GAZETTE-RECOVERY.md).
 
 See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md),
-[ledger evidence](docs/plans/gazette-1c-request-ledger-and-guards.md) and
-[preview/status implementation](docs/plans/gazette-1d-preview-admission-and-status.md), and
-[delivery/recovery evidence](docs/plans/gazette-1e-delivery-and-recovery.md).
+[ledger evidence](docs/plans/completed/gazette-1c-request-ledger-and-guards.md) and
+[preview/status implementation](docs/plans/completed/gazette-1d-preview-admission-and-status.md), and
+[delivery/recovery evidence](docs/plans/completed/gazette-1e-delivery-and-recovery.md).
 
 ### The OpenAPI document
 

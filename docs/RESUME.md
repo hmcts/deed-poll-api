@@ -4,7 +4,7 @@
 contract into master (`801e949`). The isolated `feat/gazette-delivery-recovery` worktree
 implements parent 4c/4d: all-file preparation, one-shot delivery, committed outcomes
 and independent bounded recovery. Sending stays disabled by default. See
-[execution scope and validation](plans/gazette-1e-delivery-and-recovery.md) and the
+[execution scope and validation](plans/completed/gazette-1e-delivery-and-recovery.md) and the
 [recovery/release procedure](GAZETTE-RECOVERY.md).
 Next: refresh the admin OpenAPI client, then implement preview/confirmation, stable
 request keys, typed outcomes and request detail/full membership. Provisioning,

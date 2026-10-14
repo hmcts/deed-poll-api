@@ -1,12 +1,12 @@
 # Gazette one-shot delivery and recovery
 
-> Superseded access decision (9 October 2026): [Team leader and Delivery Manager contract](completed/20261009-team-leader-delivery-manager.md)
+> Superseded access decision (9 October 2026): [Team leader and Delivery Manager contract](20261009-team-leader-delivery-manager.md)
 > governs staff permissions. All Gazette entry points, including the named ready worklist/count and
 > saved-query execution, require Delivery Manager alone. Team leader and temporary legacy admin retain
 > non-Gazette casework capabilities only. Earlier admin-access wording below is historical; other
 > delivery, idempotency and recovery decisions remain applicable.
 
-Execution slice 3 of [the send/recovery contract](gazette-1b-send-and-recovery-contract.md),
+Execution slice 3 of [the send/recovery contract](../gazette-1b-send-and-recovery-contract.md),
 parent tasks 4c/4d. Started 9 October 2026 from master `801e949` (merged PR #92),
 in `.worktrees/deed-poll-api-gazette-delivery`, branch `feat/gazette-delivery-recovery`.
 Other agents' checkouts and the shared documentation repository are not modified.
@@ -126,7 +126,7 @@ these were corrected before the full green run. No live services were used.
 
 Refresh the admin client from the generated API artifact, then implement confirmed
 selection, stable request keys, typed outcomes and request list/detail/full-membership
-views. Follow [the runbook](../GAZETTE-RECOVERY.md) for the meaning of pending and
+views. Follow [the runbook](../../GAZETTE-RECOVERY.md) for the meaning of pending and
 uncertain outcomes. Keep the current ready-list predicate, including reserved rows;
 preview/admission explain why a reserved case cannot be sent again.
 
