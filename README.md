@@ -34,6 +34,8 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 Thirty-four caseworker operations across twenty-one paths, plus five judicial ones on a namespace of their
 own (below), three privileged CCD-attempt ones (see [Repairing attempts](#repairing-attempts)), and eight
 Delivery Manager-only Gazette operations (see [Gazette publication foundation](#gazette-publication-foundation)).
+`GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
+`capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
 `/swagger-ui.html` is the authority; this table is the map — and `OpenAPIPublisherTest` asserts each count,
 so a route added without a row here is a count that stops agreeing with the spec.
 

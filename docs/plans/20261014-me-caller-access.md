@@ -169,12 +169,12 @@ controller test).
 
 Files: `CLAUDE.md`, `README.md`, this plan's Execution notes.
 
-- [ ] Add `api/caller/{controller,dto}` to `CLAUDE.md`'s Layout table, with one line on why it sits outside both
+- [x] Add `api/caller/{controller,dto}` to `CLAUDE.md`'s Layout table, with one line on why it sits outside both
       staff areas. Add to the security rules section: the allowlist, decision 3 and decision 6.
-- [ ] `README.md`: one line on `GET /me` where the other surfaces are listed.
-- [ ] Record the validation counts, the Checkstyle result and the branch SHA in Execution notes. Don't claim any
+- [x] `README.md`: one line on `GET /me` where the other surfaces are listed.
+- [x] Record the validation counts, the Checkstyle result and the branch SHA in Execution notes. Don't claim any
       live verification.
-- [ ] Mark completed
+- [x] Mark completed
 
 ## Execution notes
 
@@ -213,6 +213,17 @@ Files: `CLAUDE.md`, `README.md`, this plan's Execution notes.
   tasks excluded: 4,172 unit and 19 integration tests, 0 failures, 0 skipped
 - Checkstyle run directly over all five source sets: 0 warnings (one long line found and fixed first)
 - `git diff --check`: clean
+
+**Task 3** (`CLAUDE.md` Layout row and a `GET /me` security section, one `README.md` paragraph), measured on
+`feat/me-capabilities` at `5df1039` plus this documentation-only commit:
+- first selector (with `*CallerAccess*`): 85 tests, 0 failures
+- second selector: 601 tests, 0 failures
+- `./gradlew build` failed only in `checkstyleFunctionalTest` and `checkstyleIntegrationTest` (worker SIGABRT,
+  exit 134); with every Checkstyle task excluded: 4,172 unit and 19 integration tests, 0 failures, 0 skipped
+- Checkstyle 10 run directly over main, test, integrationTest, functionalTest and smokeTest with
+  `build/config/checkstyle/checkstyle.xml`: 0 warnings
+- `git diff --check`: clean
+- no live verification: nothing was called in any deployed environment, and admin has not consumed `/me` yet
 
 ## Post-Completion
 
