@@ -41,7 +41,7 @@ notify/                           the GOV.UK Notify outbox: compose, enqueue, dr
 notify/DocumentUploads            turns the document ids frozen on an outbox row into Notify uploads at drain
                                   time — a time-limited download link, never an attachment; the row is read and
                                   never rewritten, because a token expires and would be at rest in the database
-auth/                             IDAM resource-server wiring (transport)
+auth/                             IDAM resource-server wiring (transport), plus the RAS client behind deedpoll.roles.am
 entity/, repository/              JPA over a Flyway-owned schema
 ccd/                             the decentralised CCD case type, its persistence handler and view, the one
                                   linking operation with its attempt ledger, the case-list sweep that calls it, and

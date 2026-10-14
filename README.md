@@ -132,7 +132,7 @@ worth knowing before calling them:
 - **No role gate anywhere below these routes.** Any authenticated staff caller may raise, read, withdraw, close
   and record a confirmation: in the process this replaces, anybody who works a case can email a Master and action
   the reply, and anybody can read the applicant's reply out of the shared inbox. The
-  judicial role is the one that is different — `Role.JUDICIAL`, which IDAM does not issue yet — and it gates
+  judicial role is the one that is different — `Role.JUDICIAL`, which IDAM does not issue and only the off-by-default AM role source can grant — and it gates
   the two transitions that are not on this surface.
 
 **Every successful referral transition writes exactly one case note**, attributed to whoever caused it, because
@@ -244,7 +244,7 @@ cannot be reused for the judiciary by accident. An ArchUnit rule asserts the sep
 | POST | `/judicial/referrals/{referralId}/claim` | Claim a pool referral — it becomes theirs and drops off every other judge's |
 | POST | `/judicial/referrals/{referralId}/direction` | Record a direction — `decision`, optional `directionsText`, and `publishToGazette` |
 
-Every route requires `Role.JUDICIAL`, which **IDAM does not issue yet**, enforced in the domain rather than by a
+Every route requires `Role.JUDICIAL`, which **IDAM does not issue** (only the off-by-default AM role source can grant it), enforced in the domain rather than by a
 route matcher — so the whole surface fails closed for every token in existence today. Five rules are the surface:
 
 - **Keyed on the referral, never on the case.** There is no `{caseId}` in a judicial URL, because a judge does
@@ -339,7 +339,7 @@ so that an unconfigured environment refuses every token** rather than trusting a
 | `IDAM_API_ISSUER_URL` | The IDAM issuer. Endpoints are discovered from it, never configured |
 | `IDAM_API_AUDIENCES` | Comma-separated `aud` values that are ours. Empty refuses everything |
 
-Roles come from `/o/userinfo`, not from the token, and the lookup is uncached. The application maps
+IDAM roles come from `/o/userinfo`, not from the token, and the lookup is uncached; with `ROLE_ASSIGNMENT_ENABLED` true, AM role assignments are unioned in (see below). The application maps
 verified roles to explicit capabilities:
 
 | Role claim | Privileges |
