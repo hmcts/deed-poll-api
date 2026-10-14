@@ -128,10 +128,10 @@ recorded in the repo's earlier plans. Record actual test counts.
 `application.yaml`; new `src/test/.../auth/RoleAssignmentClientTest.java` (WireMock, in the style of
 `IdamUserInfoClientTest`).
 
-- [ ] Implement the client with `IdamHttp`'s `RestClient` construction and the existing `AuthTokenGenerator`. It returns parsed assignments, an empty list for 404, and throws a dedicated exception for other failures.
-- [ ] Add the `deedpoll.roles.am` block to `application.yaml` with the decision 5 defaults and environment variables.
-- [ ] WireMock tests: both headers are sent, and the path uses the subject; 200 parsing, 404 empty, 500, a malformed body and a connection refusal; extra unknown fields are ignored.
-- [ ] Mark completed
+- [x] Implement the client with `IdamHttp`'s `RestClient` construction and the existing `AuthTokenGenerator`. It returns parsed assignments, an empty list for 404, and throws a dedicated exception for other failures.
+- [x] Add the `deedpoll.roles.am` block to `application.yaml` with the decision 5 defaults and environment variables.
+- [x] WireMock tests: both headers are sent, and the path uses the subject; 200 parsing, 404 empty, 500, a malformed body and a connection refusal; extra unknown fields are ignored.
+- [x] Mark completed
 
 ### Task 3: Union AM roles into the authenticated caller
 
@@ -179,6 +179,17 @@ is needed; tests alongside the converter's existing tests, or a new `IdamAuthent
 - Checkstyle's Gradle worker died with SIGABRT (exit 134) on every task, so Checkstyle 10.24.0 was run directly
   over main, test, integrationTest, functionalTest and smokeTest with `build/config/checkstyle/checkstyle.xml`
   (the `checkstyle` configuration's classpath plus commons-logging): clean
+- `git diff --check`: clean
+
+**Task 2** (`RoleAssignmentProperties`, `RoleAssignmentClient`, `RoleAssignmentUnavailable`, `RoleAssignmentClientTest`):
+- the properties are registered on `SecurityConfiguration`; no client bean yet, which Task 3 adds with the converter
+- a non-2xx failure keeps no cause, because a response exception's message carries RAS's body
+- an unreadable `beginTime`/`endTime` fails the whole answer, so a garbled expiry cannot read as "never ends"
+- first selector (with `*AmRoles*` added): 102 tests, 0 failures
+- second selector: 581 tests, 0 failures
+- `./gradlew build` with the Checkstyle tasks excluded: 4,134 unit and 19 integration tests, 0 failures, 0 skipped
+- Checkstyle's Gradle worker died with SIGILL (exit 134), so Checkstyle was run directly over all five source sets,
+  on the `checkstyle` configuration's classpath (printed by an init script) plus commons-logging: clean
 - `git diff --check`: clean
 
 (The run fills in the rest.)

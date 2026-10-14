@@ -24,6 +24,7 @@ import uk.gov.hmcts.reform.deedpoll.auth.IdamDiscovery;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamJwtDecoder;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamProperties;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamUserInfoClient;
+import uk.gov.hmcts.reform.deedpoll.auth.RoleAssignmentProperties;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdCallerAuthenticationConverter;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdProperties;
 import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile;
@@ -72,7 +73,7 @@ import java.util.List;
  */
 @Configuration
 @EnableWebSecurity
-@EnableConfigurationProperties(IdamProperties.class)
+@EnableConfigurationProperties({IdamProperties.class, RoleAssignmentProperties.class})
 public class SecurityConfiguration {
 
     /**
