@@ -70,7 +70,8 @@ public class IdamUserInfoClient {
      *
      * <p>The reader {@link IdamAuthenticationConverter} and the CCD persistence chain use: the caller reduces the
      * claims itself, so a role {@link IdamClaims#userFromClaims} would drop stays available, and AM roles can be
-     * unioned in before the user is built. {@link #currentUser} is the reduced form for a caller that needs nothing else.
+     * unioned in before the user is built. {@link #currentUser} is the reduced form for a caller that needs nothing
+     * else.
      *
      * @throws UnauthorizedError for anything the caller could fix by presenting a different token
      */

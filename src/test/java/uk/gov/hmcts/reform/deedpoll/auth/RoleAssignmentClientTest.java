@@ -83,7 +83,7 @@ class RoleAssignmentClientTest {
 
     @Test
     @DisplayName("a redirect carrying a list is a failure, and is not followed")
-    void aRedirectIsAFailure() {
+    void treatsARedirectAsAFailure() {
         RAS.stubFor(get(urlPathMatching("/am/role-assignments/actors/.*")).willReturn(aResponse()
             .withStatus(302)
             .withHeader("Location", RAS.baseUrl() + "/elsewhere")
