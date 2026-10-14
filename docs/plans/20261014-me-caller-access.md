@@ -149,21 +149,21 @@ Files: new `config/CallerAccessSecurityTest.java` (copy `RoleAssignmentSecurityT
 set-up) and new `config/CallerAccessOpenApiTest.java` (booting the whole context, as `CLAUDE.md` requires for a
 controller test).
 
-- [ ] HTTP tests with stub IDAM:
+- [x] HTTP tests with stub IDAM:
   - a caseworker, a Team leader, a Delivery Manager, a legacy admin, a judge and a roleless token each get the
     expected JSON
   - no token gets 401
   - the response has exactly the keys `staff`, `judicial` and `capabilities`
   - `Cache-Control` contains `no-store`
-- [ ] With `deedpoll.security.staff-gate=report` (the default): a roleless caller gets `staff: false` from `/me`, and
+- [x] With `deedpoll.security.staff-gate=report` (the default): a roleless caller gets `staff: false` from `/me`, and
       the same caller's `GET /caseworker/no-such-route` is 404, so the gate admitted them. Assert both, so decision 3
       is pinned.
-- [ ] With `deedpoll.roles.am.enabled=true`, an IDAM-only `caseworker-deedpoll` caller and WireMock RAS:
+- [x] With `deedpoll.roles.am.enabled=true`, an IDAM-only `caseworker-deedpoll` caller and WireMock RAS:
   - a `ctsc-team-leader` + Gazette-skill assignment gives `ACCESS_GAZETTE`
   - RAS answering 500 gives the IDAM-only answer
-- [ ] OpenAPI: `/v3/api-docs` has `GET /me` with `operationId` `getCallerAccess`, the three required properties, and
+- [x] OpenAPI: `/v3/api-docs` has `GET /me` with `operationId` `getCallerAccess`, the three required properties, and
       a `capabilities` item enum equal to `Capability.values()`. That's the drift guard for admin's spec refresh.
-- [ ] Mark completed
+- [x] Mark completed
 
 ### Task 3: Documentation and handoff
 
@@ -197,6 +197,21 @@ Files: `CLAUDE.md`, `README.md`, this plan's Execution notes.
 - `./gradlew build` failed only in `checkstyleFunctionalTest` (worker SIGILL/SIGABRT, exit 134); with the Checkstyle
   tasks excluded: 4,160 unit and 19 integration tests, 0 failures, 0 skipped
 - Checkstyle run directly over all five source sets: 0 warnings (one long Javadoc line found and fixed first)
+- `git diff --check`: clean
+
+**Task 2** (`CallerAccessSecurityTest`, `CallerAccessOpenApiTest`):
+- one context for the security test: AM on, the gate mode left unset so the report-mode probe runs on
+  `application.yaml`'s default, and RAS answering 404 (no assignments) unless a test stubs otherwise, so the role
+  cases are IDAM's word alone
+- the legacy admin is stubbed by its claim value rather than `Role.DEEDPOLL_ADMIN`, which is deprecated and would add
+  a deprecation note
+- body keys are read through `JsonNode.properties()`, because Jackson 2.21 deprecates `fieldNames()`
+- the OpenAPI test follows a `$ref` if springdoc emits one, so it holds whether the enum is inlined or a component
+- first selector (with `*CallerAccess*`): 85 tests, 0 failures (12 new: 11 security, 1 OpenAPI)
+- second selector: 601 tests, 0 failures
+- `./gradlew build` failed only in `checkstyleFunctionalTest` (worker SIGABRT, exit 134); with the Checkstyle
+  tasks excluded: 4,172 unit and 19 integration tests, 0 failures, 0 skipped
+- Checkstyle run directly over all five source sets: 0 warnings (one long line found and fixed first)
 - `git diff --check`: clean
 
 ## Post-Completion
