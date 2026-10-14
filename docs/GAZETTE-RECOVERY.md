@@ -82,7 +82,7 @@ the request to Sent. Expiry alone does not stop the original process.
 
 ## Investigating uncertainty
 
-1. Use the admin-only request list/detail and complete membership endpoints to
+1. Use the Delivery Manager-only request list/detail and complete membership endpoints to
    capture batch ID, state, submission time, frozen recipient and references.
    After a lost HTTP response, repeat the original key **and exact body**, or read
    the known batch ID. A 200 response is terminal, not necessarily successful.

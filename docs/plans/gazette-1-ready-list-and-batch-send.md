@@ -22,9 +22,9 @@ Dynamics original is silent on it — so unlike `domain/deedpoll`, nothing here 
 
 The ready list/history, production spreadsheet generator and persistent recipient
 settings are merged (PRs #80, #87, #88 and #89). The internal
-[request ledger and guards](gazette-1c-request-ledger-and-guards.md) are now implemented
-with the [preview and status slice](gazette-1d-preview-admission-and-status.md).
-The [delivery/recovery slice](gazette-1e-delivery-and-recovery.md) connects fresh
+[request ledger and guards](completed/gazette-1c-request-ledger-and-guards.md) are now implemented
+with the [preview and status slice](completed/gazette-1d-preview-admission-and-status.md).
+The [delivery/recovery slice](completed/gazette-1e-delivery-and-recovery.md) connects fresh
 confirmed HTTP submissions behind `GAZETTE_ENABLED=false` by default.
 Use [Gazette batch send and recovery contract](gazette-1b-send-and-recovery-contract.md)
 for the next slices. It replaces the former single-transaction email design:
@@ -58,14 +58,16 @@ original fixed chart recipient and single-template proposal below.
 
 - [x] Implement the production generator and cleaned runtime templates.
 - [x] Validate the generator and full API build; see [validation evidence](gazette-spreadsheet-validation.md).
-- [ ] Complete Task 4's independent send/recovery design and implementation.
+- [x] Complete Task 4's independent send/recovery design and implementation
+  (PRs #90, #91, #92 and #93).
 
 ## Recipient settings slice — 8 October 2026
 
 `GET` and `PUT /caseworker/gazette-settings` now provide the admin-editable
 recipient contract, independently of batch sending. V33 seeds an unset singleton
-at revision 0 and adds its change audit. The domain requires `DEEDPOLL_ADMIN` for
-both operations and takes change attribution from the authenticated caller.
+at revision 0 and adds its change audit. The domain requires `ACCESS_GAZETTE`
+(Delivery Manager only, since PR #100) for both operations and takes change
+attribution from the authenticated caller.
 Updates validate one address, lock the singleton and require the original revision;
 stale edits return 409, including concurrent initial edits. A current unchanged
 address is a no-op. Both the new settings and their audit row commit atomically.
@@ -73,8 +75,10 @@ OpenAPI publishes the exact keyed request and response, without caller subjects.
 
 - [x] Implement persistent settings, validation, role gate and attribution.
 - [x] Publish the read/update contract for the admin editor.
-- [ ] Integrate the settings revision into send confirmation and snapshot the
+- [x] Integrate the settings revision into send confirmation and snapshot the
   accepted recipient for retries and batch audit. Settings writes send no email.
+  Confirmation requires `recipientRevision`, and V34 freezes `recipient_email` and
+  `recipient_revision` on each request (PRs #91 and #92).
 
 See [recipient settings validation](gazette-recipient-settings-validation.md).
 This supersedes the original fixed chart recipient below; Notify provisioning,
@@ -219,7 +223,11 @@ Repeat POSTs, concurrent settlement and repeated recovery add no duplicate notes
 A note failure rolls back that local transition, never the remote email; a durable
 send-start marker prevents recovery from sending again. See the new contract.
 
-### 8. Every Gazette-specific operation is gated on `Role.DEEDPOLL_ADMIN`, refusing everyone else with 403
+### 8. Every Gazette-specific operation is gated on `Capability.ACCESS_GAZETTE`, refusing everyone else with 403
+
+> Updated 14 October 2026: PR #100 replaced the original `Role.DEEDPOLL_ADMIN` gate with
+> `Capability.ACCESS_GAZETTE`, which only Delivery Manager holds. It also gates the named
+> `readyForPublication` filter in api, so the list-level paragraph below is historical.
 
 Not a presentational check. `readyForPublication` as a filter value is visible to anyone who can call the case
 list at all (the same as every other filter), so the **list-level gate belongs to admin's own `/judicial`-style
@@ -310,15 +318,16 @@ See `gazette-1a-task3-validation.md`.
 Implement the ordered slices in [the new contract](gazette-1b-send-and-recovery-contract.md):
 
 - [x] 4a — Request ledger, state transitions, legacy compatibility and case guards
-  ([implementation and validation](gazette-1c-request-ledger-and-guards.md)).
+  ([implementation and validation](completed/gazette-1c-request-ledger-and-guards.md)).
 - [x] 4b — Preview/admission, status and full-membership APIs; regenerate OpenAPI
-  ([implementation and validation](gazette-1d-preview-admission-and-status.md)).
+  ([implementation and validation](completed/gazette-1d-preview-admission-and-status.md)).
 - [x] 4c — One-shot Notify delivery, all-file preparation and bounded recovery.
 - [x] 4d — Fault-injection, races and recovery evidence; no automatic uncertain resend.
-  See [delivery/recovery evidence](gazette-1e-delivery-and-recovery.md).
+  See [delivery/recovery evidence](completed/gazette-1e-delivery-and-recovery.md).
 
-The next executable slice is the admin contract refresh and confirmation/status journey.
-New sending remains disabled by default pending the release prerequisites. Successful local
+The admin contract refresh and confirmation/status journey shipped in deed-poll-admin
+PRs #165 and #166 (9 October 2026). What remains is Task 5's release review and the
+release prerequisites. New sending remains disabled by default until those are met. Successful local
 settlement updates every case/date/note atomically; external email acceptance is
 never covered by that transaction.
 

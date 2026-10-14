@@ -10,9 +10,9 @@ Design revision: 1, 8 October 2026. **Implementation plan, not a published API.*
 Based on API master `7ff8352` (recipient settings PR #89) and admin master
 `5cd70ad` (PR #163). This replaces the transactional-email proposal in the
 [parent plan](gazette-1-ready-list-and-batch-send.md), decisions 2–7 and Task 4.
-The ledger and [preview/status slice](gazette-1d-preview-admission-and-status.md) now
+The ledger and [preview/status slice](completed/gazette-1d-preview-admission-and-status.md) now
 implement the persistence and HTTP contract. The
-[delivery/recovery slice](gazette-1e-delivery-and-recovery.md) connects confirmed
+[delivery/recovery slice](completed/gazette-1e-delivery-and-recovery.md) connects confirmed
 submissions behind the disabled-by-default flag and adds independent recovery.
 
 The business rules already agreed are one Notify email per batch, adult/minor
@@ -48,7 +48,8 @@ and `deedpoll_notification`: those own correspondence for one case per row.
 
 ## Confirmation and proposed HTTP contract
 
-All operations below require the verified `DEEDPOLL_ADMIN` role in the domain.
+All operations below require the verified `ACCESS_GAZETTE` capability in the domain
+(Delivery Manager only, since PR #100; originally `DEEDPOLL_ADMIN`).
 Unknown and inaccessible records have the existing not-found behavior. An opaque
 batch UUID is public; IDAM subjects, request keys, lease owners, upload tokens and
 raw provider exception messages are never published. Responses use UTC timestamps.
@@ -286,8 +287,8 @@ provider retention duration still needs provisioning. Never retain expiring file
 
 Each slice gets a separate execution plan and PR; completing this design does not
 check off its code. Slices 1–3 are implemented; see the
-[ledger evidence](gazette-1c-request-ledger-and-guards.md) and
-[preview/status evidence](gazette-1d-preview-admission-and-status.md). Implement in this order:
+[ledger evidence](completed/gazette-1c-request-ledger-and-guards.md) and
+[preview/status evidence](completed/gazette-1d-preview-admission-and-status.md). Implement in this order:
 
 1. **Request ledger and guards:** migration, states, unique key/case reservations,
    legacy backfill/key handling, deletion and relevant case-writer guards, atomic
