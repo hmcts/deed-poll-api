@@ -69,5 +69,34 @@ Baseline, 14 October 2026, on `be3291a` with the commands above: 4,086 test / 19
 no failures, errors or skips, and Checkstyle clean. Both test tasks executed rather than reporting
 UP-TO-DATE.
 
-To be recorded after the review: findings, what was fixed, what was dismissed and why, and the
-final test counts.
+### Review runs, 14 October 2026
+
+1. **ralphex `--mode external --base-ref d5a0523`, first attempt: crashed.** Copilot's Bearer
+   redaction left an unescaped quote in a `tool.shell_output` event (it was reading `GazetteNotify`),
+   and the launcher's adapter refused the line. Fixed in the workspace adapter; nothing in this repo.
+2. **ralphex, second attempt: "NO ISSUES FOUND" in 2m58s over 179 files (+11,592/-727).** The
+   reviewer ran under a throwaway sandbox HOME, so no session record survives to show what it read.
+   That is too short to be a review of that diff, and it is **not counted** as the release review.
+3. **Direct Copilot CLI run: the review of record.** `gpt-6-astra` (confirmed from the event
+   stream, not by asking it), read-only (`--deny-tool write`, `shell(git push)` denied), given the 64
+   main-code files in scope (3,879 lines), their tests, and this plan's intentional-design list.
+   It ran 17:51:51 to 17:56:31 UTC with 98 tool calls. Two findings.
+
+### Findings
+
+**F1, valid, not fixed here: attribution can be an IDAM subject.**
+`GazetteRequestLedger` (admission) stores `caller.name()` as `submittedBy`, and it is published, as are
+`sentBy`, the case notes and the settings' `updatedBy`. When the token carries no `name`,
+`given_name` or `family_name`, `IdamClaims.displayNameFrom` falls back to `sub`. That fallback is
+service-wide and deliberate (9cec400: traceable rather than misattributed to the service account),
+so every audit column in the service shares it. But it contradicts this contract's "IDAM subjects
+… are never published" in exactly that edge case, and no Gazette test covers a caller without a
+name. Fixing it is a choice between service-wide and Gazette-only, so it waits on a decision.
+
+**F2, by design, temporary: the staff gate's report mode logs the subject.**
+`StaffGate` logs `subject=` for a caller outside the staff roles, before the Gazette capability check
+refuses them with 403. This is OWASP plan 01 Task 4's deliberate one-release report mode
+(`STAFF_GATE_MODE`, default `report`). Task 5 switches to `enforce` and Task 12 removes it. It is
+not Gazette-specific, but **Gazette must not be enabled anywhere the gate is still in report mode.**
+
+No code changed on this branch, so the baseline above stands as the final count.
