@@ -46,14 +46,16 @@ Two things cftlib found that no WireMock test could have, both repeated here bec
 
 The durable importer credentials already exist in `deed-poll-aat` as
 `definition-importer-username` and `definition-importer-password`. Account/client provisioning still
-depends on IDAM #1016 being merged and synchronized. Authenticate through the dedicated `deed-poll-api`
+depends on [IDAM #1023](https://github.com/hmcts/idam-access-config/pull/1023) (which replaced #1016)
+being merged and synchronized. Authenticate through the dedicated `deed-poll-api`
 OAuth client using `api-idam-client-secret`, with its registered redirect
 `http://deed-poll-api-aat.service.core-compute-aat.internal/receiver` and scopes `openid profile roles`.
 Use the importer credentials for administration, not the runtime system-user credentials.
 
 Definition store requires both user and service authorization. Use deed-poll's own `deed_poll_api` S2S
-identity once AAT-only Flux #48113 reconciles; Flux #48117 must also reconcile to admit it to definition
-store. The AAT definition-store endpoint is
+identity, registered by [service-auth-provider-app #1140](https://github.com/hmcts/service-auth-provider-app/pull/1140)
+(merged 2026-10-13; Flux #48113 was closed unmerged). Flux #48117, merged 2026-10-12, admits it to
+definition store. The AAT definition-store endpoint is
 `http://ccd-definition-store-api-aat.service.core-compute-aat.internal`. Do not borrow `ccd_admin`, PCS
 or another service's S2S key to bypass an absent allowlist entry.
 
