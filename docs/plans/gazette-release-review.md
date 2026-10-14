@@ -100,3 +100,12 @@ refuses them with 403. This is OWASP plan 01 Task 4's deliberate one-release rep
 not Gazette-specific, but **Gazette must not be enabled anywhere the gate is still in report mode.**
 
 No code changed on this branch, so the baseline above stands as the final count.
+
+### Scope note: api#103 (merged after this review)
+
+The review covered `be3291a`. api#103 changed no capability, role, staff-gate, claims or Gazette file,
+so `ACCESS_GAZETTE` still belongs to Delivery Manager alone. It does add a second route **to** Delivery
+Manager: an AM `ORGANISATION` assignment for `ctsc-team-leader`, jurisdiction `DEEDPOLL`, in date,
+carrying the configured Gazette skill (`AmRoles.addRoles`), unioned with the IDAM roles. That route is
+off today, because `ROLE_ASSIGNMENT_ENABLED` defaults to `false` and a blank
+`ROLE_ASSIGNMENT_GAZETTE_SKILL` matches nothing. **Review the AM grant path before enabling either.**
