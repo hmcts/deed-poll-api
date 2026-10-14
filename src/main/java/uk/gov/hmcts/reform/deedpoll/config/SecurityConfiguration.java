@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.DispatcherType;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -18,18 +19,22 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 import uk.gov.hmcts.reform.authorisation.ServiceAuthorisationApi;
 import uk.gov.hmcts.reform.authorisation.filters.ServiceAuthFilter;
+import uk.gov.hmcts.reform.authorisation.generators.AuthTokenGenerator;
 import uk.gov.hmcts.reform.authorisation.validators.ServiceAuthTokenValidator;
+import uk.gov.hmcts.reform.deedpoll.auth.AmRoleSource;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamAuthenticationConverter;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamDiscovery;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamJwtDecoder;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamProperties;
 import uk.gov.hmcts.reform.deedpoll.auth.IdamUserInfoClient;
+import uk.gov.hmcts.reform.deedpoll.auth.RoleAssignmentClient;
 import uk.gov.hmcts.reform.deedpoll.auth.RoleAssignmentProperties;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdCallerAuthenticationConverter;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdProperties;
 import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile;
 import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollRoleMapping;
 
+import java.time.Clock;
 import java.util.List;
 
 /**
@@ -143,9 +148,30 @@ public class SecurityConfiguration {
         return new IdamUserInfoClient(discovery);
     }
 
+    /**
+     * The RAS lookup, with S2S minted only when a lookup is made: {@link ServiceAuthConfiguration}'s generator is
+     * lazy, and with {@code deedpoll.roles.am.enabled} off nothing here asks for it.
+     */
     @Bean
-    public IdamAuthenticationConverter idamAuthenticationConverter(IdamUserInfoClient userInfoClient) {
-        return new IdamAuthenticationConverter(userInfoClient);
+    public RoleAssignmentClient roleAssignmentClient(RoleAssignmentProperties properties,
+                                                     ObjectProvider<AuthTokenGenerator> serviceTokens) {
+        return new RoleAssignmentClient(properties, () -> serviceTokens.getObject().generate());
+    }
+
+    @Bean
+    public AmRoleSource amRoleSource(RoleAssignmentProperties properties, RoleAssignmentClient client,
+                                     CcdProperties ccdProperties) {
+        return new AmRoleSource(properties, client, ccdProperties.systemRole(), Clock.systemUTC());
+    }
+
+    /**
+     * The caller for every chain but {@code /ccd-persistence/**}, whose converter stays IDAM-only until the case
+     * definition maps AM roles (plan 20261014, decision 8).
+     */
+    @Bean
+    public IdamAuthenticationConverter idamAuthenticationConverter(IdamUserInfoClient userInfoClient,
+                                                                   AmRoleSource amRoleSource) {
+        return new IdamAuthenticationConverter(userInfoClient, amRoleSource);
     }
 
     /**

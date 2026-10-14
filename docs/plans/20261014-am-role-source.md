@@ -139,17 +139,17 @@ recorded in the repo's earlier plans. Record actual test counts.
 `git grep -n "new IdamAuthenticationConverter"`); `domain/auth/CurrentUser.java` only if a "with extra roles" factory
 is needed; tests alongside the converter's existing tests, or a new `IdamAuthenticationConverterTest`.
 
-- [ ] When enabled and the caller isn't the system user, fetch, map and union the roles into the `CurrentUser` and `IdamAuthentication` authorities, one RAS call per conversion. Keep identity (subject, name) from IDAM.
-- [ ] Apply decision 4's fallback and logging. Never log the token or the raw response.
-- [ ] Tests:
+- [x] When enabled and the caller isn't the system user, fetch, map and union the roles into the `CurrentUser` and `IdamAuthentication` authorities, one RAS call per conversion. Keep identity (subject, name) from IDAM.
+- [x] Apply decision 4's fallback and logging. Never log the token or the raw response.
+- [x] Tests:
   - disabled makes no RAS call;
   - the system user makes no call;
   - a `ctsc`-only AM user with only `caseworker-deedpoll` in IDAM has `CASEWORKER`;
   - a team leader with the skill can access Gazette;
   - a RAS 500 falls back to IDAM-only roles, and a 404 gives IDAM-only roles with no warning;
   - an IDAM legacy admin plus an AM ctsc user unions correctly.
-- [ ] Add an HTTP-level test through the real filter chain, with stub IDAM and stub RAS. A `ctsc-team-leader`+skill user reaches a Gazette endpoint. The same user with RAS failing gets 403 there, but still passes the staff gate if their IDAM roles allow it.
-- [ ] Mark completed
+- [x] Add an HTTP-level test through the real filter chain, with stub IDAM and stub RAS. A `ctsc-team-leader`+skill user reaches a Gazette endpoint. The same user with RAS failing gets 403 there, but still passes the staff gate if their IDAM roles allow it.
+- [x] Mark completed
 
 ### Task 4: Chart, documentation and handoff
 
@@ -190,6 +190,21 @@ is needed; tests alongside the converter's existing tests, or a new `IdamAuthent
 - `./gradlew build` with the Checkstyle tasks excluded: 4,134 unit and 19 integration tests, 0 failures, 0 skipped
 - Checkstyle's Gradle worker died with SIGILL (exit 134), so Checkstyle was run directly over all five source sets,
   on the `checkstyle` configuration's classpath (printed by an init script) plus commons-logging: clean
+- `git diff --check`: clean
+
+**Task 3** (`AmRoleSource`, `IdamAuthenticationConverter`, `SecurityConfiguration` beans, `IdamAuthenticationConverterTest`,
+`RoleAssignmentSecurityTest`):
+- `AmRoleSource` holds the switch, the system-user skip (`deedpoll.ccd.system-role` among the raw IDAM roles) and the
+  fallback; the converter now reads IDAM's raw claims once and unions in declaration order, identity from IDAM
+- the WARN names the first 12 hex digits of the subject's SHA-256 and RAS's status (or `none`), never the cause,
+  because a client exception's message carries the request URL and the URL carries the subject
+- S2S is minted through an `ObjectProvider`, so the lazy generator is never created while the switch is off
+- the HTTP test sets `deedpoll.security.staff-gate=enforce`, because the default is `report`
+- first selector (with `*AmRoles*` added): 117 tests, 0 failures
+- second selector: 585 tests, 0 failures
+- `./gradlew build` with the Checkstyle tasks excluded: 4,149 unit and 19 integration tests, 0 failures, 0 skipped
+- Checkstyle's Gradle worker died with SIGILL (exit 134) again, so Checkstyle was run directly over all five source
+  sets as in Task 2: clean
 - `git diff --check`: clean
 
 (The run fills in the rest.)
