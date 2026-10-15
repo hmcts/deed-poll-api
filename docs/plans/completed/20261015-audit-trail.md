@@ -298,3 +298,18 @@ was verified against a live environment.
   (7 years for events; with the case for values).
 - A later infra plan adds a least-privilege runtime DB role (decision 3's residual risk).
 - The caseworker timeline's read endpoint is that plan's work.
+
+### Post-run verification (Gale, 2026-10-15)
+
+ralphex completed all 7 tasks, the internal review and the external review (Copilot `gpt-6-astra`, against
+`origin/master`). External round 1 raised two findings, both fixed in `727d0f4`:
+- generated deeds and owned-staging promotions bypassed the upload audit;
+- note and witness edits snapshotted before-values without a row lock.
+
+Round 2 found none. **Neither review pass built or tested its fixes**, so this was verified afterwards:
+- Checkstyle failed on 5 warnings from `727d0f4`: three long lines, and two test mocks declared too early. Fixed in
+  the next commit.
+- A forced rerun (`cleanTest cleanIntegration build`; a plain `build` reported both test tasks UP-TO-DATE and ran
+  nothing): **4,242 test / 20 integration, no failures, errors or skips**. Checkstyle clean, `git diff --check` clean,
+  `openapi.json` unchanged.
+
