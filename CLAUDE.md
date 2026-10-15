@@ -39,6 +39,8 @@ domain/savedqueries               saved and shared case-list queries — NOT a p
 domain/referrals                  referrals to the judiciary and the applicant's confirmation — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
 domain/auth                       CurrentUser, IdamClaims, Role — transport-independent
+domain/audit                      the append-only audit trail (V36): AuditTrail, its AuditAction vocabulary, ReadAudit
+                                  — NOT a port
 notify/                           the GOV.UK Notify outbox: compose, enqueue, drain — NOT a port
 notify/DocumentUploads            turns the document ids frozen on an outbox row into Notify uploads at drain
                                   time — a time-limited download link, never an attachment; the row is read and
@@ -140,6 +142,34 @@ allocates the service code; CRD/JRD profiles exist; only then `ROLE_ASSIGNMENT_E
   never add the whole `test.output` to cftlib's classpath, because its package scan would run the entire unit suite
   inside the CFT stack. Update the pinned spec, response provenance and stub together after a verified change.
 
+- **A new write path must call `AuditTrail`, and a new write route must say what it records.** V36's
+  `deedpoll_audit_event` holds who (the IDAM subject and display name), when, the `AuditAction`, the entity, the case
+  and the field *names*, plus `detail` restricted to `AuditEntry`'s allowlisted keys; it holds no applicant data and
+  is kept for 7 years. `deedpoll_audit_event_value` holds the before/after values (decision 5's text encoding, a
+  row only for a changed field), which are applicant data disposed with the case, so `AuditTrail` refuses values on
+  an entity with no case (saved queries, Gazette settings and batches record names only). `record` is
+  `MANDATORY`: it joins the change's transaction, so a change whose audit insert fails rolls back, and it refuses a
+  user write with no subject — only an explicitly system write uses `AuditActor.system()`. Reads (`CASE_VIEWED`,
+  `DOCUMENT_DOWNLOADED`; never lists or searches) go through `ReadAudit` in their own transaction: a case view fails
+  open, a download fails closed. `AuditAction` is the vocabulary and has no DB check constraint; renaming one leaves
+  seven years of rows under the old name. Every `POST`/`PUT`/`PATCH`/`DELETE` handler under `api.caseworker` and
+  `api.judicial` carries `@AuditedAs(action)` or sits in `WriteEndpointAuditCoverageTest`'s four-entry exemption
+  list (email preview, Gazette preview, saved-query selection PUT/DELETE); the annotation records nothing, so the
+  test proves a route is classified, not that its service actually records — a service write that skips `AuditTrail`
+  fails no test unless one is written for it. Never put a token, secret, session id, cookie or email address in an
+  event, its `detail` or a log line.
+- **The audit tables are append-only, with exactly two ways to delete.** Row triggers refuse UPDATE and DELETE on
+  both tables unless the transaction-local `deedpoll.audit_disposal` is `on`, and TRUNCATE always. Only the
+  `SECURITY DEFINER` functions `deedpoll_audit_dispose_case_values(case_id)` and
+  `deedpoll_audit_dispose_events_before(cutoff)` set it, and each turns it off before returning; `EXECUTE` is revoked
+  from `PUBLIC`. Nothing schedules them yet — retain-and-dispose will. Never set the setting from application code
+  to unstick a delete, and a case delete leaves its events (and, until disposal, its values). **Residual risk:**
+  until a least-privilege runtime role exists, the api's own login owns the tables and can drop the triggers; they
+  stop accidents, not a determined owner.
+- **Authentication and authorisation failures are logged by `auth/SecurityEvents`**, with MDC keys `security.event`,
+  `subject`, `path` and `reason` removed before it returns. `reason` is an OAuth2 error code or a fixed word, never
+  token text or an error description. The entry point and access-denied handler on both chains wrap the existing
+  ones, so status codes, bodies and `WWW-Authenticate` stay as they were; S2S refusals are not logged.
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks
   wrong, stop and report it — do not "fix" it.

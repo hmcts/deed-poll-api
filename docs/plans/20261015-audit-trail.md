@@ -203,11 +203,11 @@ container-backed test on `AbstractPostgresContainerTest`.
 
 ### Task 7: Documentation and handoff
 
-- [ ] Document the audit tables, the vocabulary, the controlled disposal path and its residual risk in `CLAUDE.md`
+- [x] Document the audit tables, the vocabulary, the controlled disposal path and its residual risk in `CLAUDE.md`
   ("Rules that break things silently if ignored": a new write path must call `AuditTrail`, and the guard test enforces
   it).
-- [ ] Record the validation counts and the branch SHA in Execution notes. Do not claim any live verification.
-- [ ] Mark completed
+- [x] Record the validation counts and the branch SHA in Execution notes. Do not claim any live verification.
+- [x] Mark completed
 
 ## Execution notes
 
@@ -282,6 +282,15 @@ drop. The main chain keeps `StaffAccessDeniedHandler` for its body. `DomainError
 and are not logged. `SecurityEventLoggingTest` (6 full-context MockMvc cases, among them a stand-in route that
 throws `ForbiddenError`) was seen failing first, 6 of 6. Validation: 4,240 test / 20 integration, no failures, errors
 or skips; Checkstyle clean; `openapi.json` unchanged.
+
+Task 7, 2026-10-15: `CLAUDE.md` lists `domain/audit` in the layout and adds three rules: a new write path must call
+`AuditTrail` and a new write route must carry `@AuditedAs` or a named exemption (the guard proves classification, not
+that the service records); the tables are append-only with exactly two disposal functions, unscheduled, and the
+residual risk that the api's login owns them; and `SecurityEvents` logs identifiers only, leaving responses unchanged.
+Documentation only, so no test was written first. Validation on branch `feat/audit-trail`, from `193f333` (the
+documentation commit follows it): 4,240 test / 20 integration, no failures, errors or skips; Checkstyle clean;
+`git diff --check` clean; `openapi.json` unchanged. Every result here is local (WireMock and Testcontainers); nothing
+was verified against a live environment.
 
 ## Post-Completion
 
