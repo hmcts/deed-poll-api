@@ -4,21 +4,37 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.ccd.SupportingDocumentReference;
+import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentOwner;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUploadAudit;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
+
+import java.nio.charset.StandardCharsets;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState.AttachUncertain;
 import static uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState.Attached;
@@ -37,6 +53,50 @@ class DocumentStorageStatesTest {
 
     private final DeedPollSupportingDocumentRepository documents = mock(DeedPollSupportingDocumentRepository.class);
     private final DocumentStorageStates states = new DocumentStorageStates(null, documents, null, null);
+
+    @Test
+    @DisplayName("a claim records its row's upload under the caller who made it, in the same transaction as the save")
+    void claimRecordsTheUpload() {
+        DeedPollRepository deedPolls = mock(DeedPollRepository.class);
+        DeedPollSupportingDocumentTypeRepository types = mock(DeedPollSupportingDocumentTypeRepository.class);
+        DocumentUploadAudit uploadAudit = mock(DocumentUploadAudit.class);
+        DeedPoll parent = new DeedPoll();
+        ReflectionTestUtils.setField(parent, "id", RECORD);
+        ReflectionTestUtils.setField(parent, "ccdCaseReference", "1234567890123456");
+        DeedPollSupportingDocumentType type = new DeedPollSupportingDocumentType();
+        when(deedPolls.findById(RECORD)).thenReturn(Optional.of(parent));
+        when(types.findById("type-1")).thenReturn(Optional.of(type));
+        when(documents.save(any(DeedPollSupportingDocument.class))).thenAnswer(call -> {
+            DeedPollSupportingDocument saved = call.getArgument(0);
+            saved.setId("document-1");
+            return saved;
+        });
+        AuditActor actor = new AuditActor("subject-1", "A Caseworker", false);
+        DocumentUpload upload = DocumentUpload.of(RECORD, "type-1",
+            UploadedFile.of("%PDF".getBytes(StandardCharsets.UTF_8), "birth.pdf", "application/pdf"),
+            Optional.empty(), Optional.empty());
+
+        new DocumentStorageStates(deedPolls, documents, types, uploadAudit).claim(upload, actor);
+
+        verify(uploadAudit).uploaded(any(DeedPollSupportingDocument.class), eq(actor));
+    }
+
+    @Test
+    @DisplayName("a claim refused for a missing case records nothing")
+    void refusedClaimRecordsNothing() {
+        DeedPollRepository deedPolls = mock(DeedPollRepository.class);
+        DocumentUploadAudit uploadAudit = mock(DocumentUploadAudit.class);
+        when(deedPolls.findById(RECORD)).thenReturn(Optional.empty());
+        DocumentUpload upload = DocumentUpload.of(RECORD, "type-1",
+            UploadedFile.of("%PDF".getBytes(StandardCharsets.UTF_8), "birth.pdf", "application/pdf"),
+            Optional.empty(), Optional.empty());
+
+        assertThatThrownBy(() -> new DocumentStorageStates(deedPolls, documents,
+            null, uploadAudit).claim(upload, AuditActor.system())).isInstanceOf(
+            NotFoundError.class);
+
+        verifyNoInteractions(uploadAudit);
+    }
 
     @ParameterizedTest
     @EnumSource(value = DocumentStorageState.class, names = {"Uploaded", "AttachUncertain"})
