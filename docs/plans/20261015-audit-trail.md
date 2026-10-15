@@ -124,12 +124,12 @@ same source sets, and fails on any warning, as the Gradle task does. Neither fil
 **Files:** new `src/main/resources/db/migration/V36__audit_trail.sql`; `health/DeedPollSchema.java`; a new
 container-backed test on `AbstractPostgresContainerTest`.
 
-- [ ] Write decision 2's tables and indexes, and decision 3's triggers and functions.
-- [ ] Container tests: an insert into each table works. UPDATE and DELETE on each table raise, and TRUNCATE raises.
+- [x] Write decision 2's tables and indexes, and decision 3's triggers and functions.
+- [x] Container tests: an insert into each table works. UPDATE and DELETE on each table raise, and TRUNCATE raises.
   The two functions delete exactly what they should (one case's values; events before the cutoff, and their values).
   After a function returns, a plain DELETE in the same transaction still raises.
-- [ ] `DeedPollSchemaHealthTest` and `EntityMappingTest` pass.
-- [ ] Mark completed
+- [x] `DeedPollSchemaHealthTest` and `EntityMappingTest` pass.
+- [x] Mark completed
 
 ### Task 2: `AuditTrail`, `AuditAction` and the actor
 
@@ -214,6 +214,11 @@ container-backed test on `AbstractPostgresContainerTest`.
 Baseline, 2026-10-15, on `e8907d0` (#105's merge), with the validation commands above: 4,176 test / 19 integration,
 no failures, errors or skips. Both test tasks executed, and Checkstyle was clean. The highest migration is V35, and
 there are 27 write mappings.
+
+Task 1, 2026-10-15: V36 adds both tables, the append-only triggers and the two disposal functions (each turns the
+setting off again before returning; `EXECUTE` is revoked from `PUBLIC`). `AuditTrailMigrationTest` (12 cases) was
+seen failing first. `SdkMigrationOrderTest` now expects V1 to V36. Validation: 4,188 test / 19 integration, no
+failures, errors or skips; Checkstyle clean.
 
 ## Post-Completion
 
