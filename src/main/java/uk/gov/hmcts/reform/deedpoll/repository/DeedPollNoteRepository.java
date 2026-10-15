@@ -38,5 +38,6 @@ public interface DeedPollNoteRepository extends JpaRepository<DeedPollNote, Stri
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select e from DeedPollNote e where e.id = :id and e.deedPoll.id = :deedPollId")
-    Optional<DeedPollNote> findByIdAndDeedPollIdForUpdate(@Param("id") String id, @Param("deedPollId") String deedPollId);
+    Optional<DeedPollNote> findByIdAndDeedPollIdForUpdate(@Param("id") String id,
+                                                         @Param("deedPollId") String deedPollId);
 }

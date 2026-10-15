@@ -58,8 +58,8 @@ class DocumentStorageStatesTest {
     @DisplayName("a claim records its row's upload under the caller who made it, in the same transaction as the save")
     void claimRecordsTheUpload() {
         DeedPollRepository deedPolls = mock(DeedPollRepository.class);
-        DeedPollSupportingDocumentTypeRepository types = mock(DeedPollSupportingDocumentTypeRepository.class);
-        DocumentUploadAudit uploadAudit = mock(DocumentUploadAudit.class);
+        final DeedPollSupportingDocumentTypeRepository types = mock(DeedPollSupportingDocumentTypeRepository.class);
+        final DocumentUploadAudit uploadAudit = mock(DocumentUploadAudit.class);
         DeedPoll parent = new DeedPoll();
         ReflectionTestUtils.setField(parent, "id", RECORD);
         ReflectionTestUtils.setField(parent, "ccdCaseReference", "1234567890123456");

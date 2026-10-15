@@ -134,7 +134,7 @@ public class WitnessService {
             .orElseThrow(() -> new NotFoundError("Witness " + id + " not found"));
     }
 
-    /** The witness under a row lock, so the values an audit event records as replaced are the ones actually replaced. */
+    /** The witness under a row lock, so the values an audit records as replaced are the ones actually replaced. */
     private DeedPollWitness findWitnessForUpdate(String deedPollId, String id) {
         return witnesses.findByIdAndDeedPollIdForUpdate(id, deedPollId)
             .orElseThrow(() -> new NotFoundError("Witness " + id + " not found"));

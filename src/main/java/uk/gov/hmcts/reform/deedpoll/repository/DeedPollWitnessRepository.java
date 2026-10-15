@@ -39,5 +39,6 @@ public interface DeedPollWitnessRepository extends JpaRepository<DeedPollWitness
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select e from DeedPollWitness e where e.id = :id and e.deedPoll.id = :deedPollId")
-    Optional<DeedPollWitness> findByIdAndDeedPollIdForUpdate(@Param("id") String id, @Param("deedPollId") String deedPollId);
+    Optional<DeedPollWitness> findByIdAndDeedPollIdForUpdate(@Param("id") String id,
+                                                         @Param("deedPollId") String deedPollId);
 }
