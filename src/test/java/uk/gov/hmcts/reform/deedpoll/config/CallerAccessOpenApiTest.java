@@ -43,6 +43,8 @@ class CallerAccessOpenApiTest extends AbstractPostgresContainerTest {
         JsonNode document = json.readTree(mvc.perform(get("/v3/api-docs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
 
+        assertThat(document.path("paths").path("/me").properties()).extracting(Map.Entry::getKey)
+            .as("/me publishes one read and nothing else").containsExactly("get");
         JsonNode operation = document.path("paths").path("/me").path("get");
         assertThat(operation.path("operationId").asText()).isEqualTo("getCallerAccess");
 

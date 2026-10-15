@@ -226,6 +226,21 @@ Files: `CLAUDE.md`, `README.md`, this plan's Execution notes.
 - review fixes landed at `8024f97` after the documentation commit `3a86707`; the counts above were not re-measured
 - no live verification: nothing was called in any deployed environment, and admin has not consumed `/me` yet
 
+**Direct external review and fix, 2026-10-15 (Wren):** the Ralphex external review returned NO ISSUES FOUND in under
+two minutes against a stale local `master` (a 321-file diff), so it was not counted. A direct read-only Copilot
+GPT-6 Astra review scoped to `22f3d7f..1e40ae4` read 34 files in full (record: `local-notes/deed-poll-api/me-direct-*`).
+It found one medium issue: the H1 exemption pinned the path `/me` but not its method, so a later
+`@PostMapping("/me")` would pass every guard. Fixed by:
+- `StaffAccessRulesTest.theAllowlistedPathIsOneGet`, which requires exactly one handler on `/me`, answering GET only.
+  Mutation-checked: adding `@PostMapping("/me")` fails this test alone (`Expected size: 1 but was: 2`).
+- `CallerAccessOpenApiTest`, which now requires `/me` to publish only `get`.
+- `SecurityConfiguration`, which matches the allowlist as `HttpMethod.GET` (intent only; the tests are the guard).
+- `StaffAccessRulesTest.meAnswersARolelessCallerUnderEnforce`, covering decision 3 under `enforce` too. The 401 test
+  now also asserts `no-store`.
+
+Measured after the fix: first selector 87, second 604, `./gradlew build` (Checkstyle tasks excluded) 4,175 unit
+and 19 integration tests, 0 failures, 0 skipped; direct Checkstyle 0 warnings; `git diff --check` clean.
+
 ## Post-Completion
 
 Not Ralphex checkboxes:

@@ -14,11 +14,14 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -75,9 +78,8 @@ class StaffAccessRulesTest {
     @Test
     @DisplayName("every route this service maps is inside a staff area, apart from the public root and the allowlist")
     void everyRouteIsInAStaffArea() {
-        List<String> patterns = handlerMapping.getHandlerMethods().entrySet().stream()
-            .filter(entry -> entry.getValue().getBeanType().getName().startsWith(APPLICATION_PACKAGE))
-            .flatMap(entry -> entry.getKey().getPatternValues().stream())
+        List<String> patterns = applicationMappings().stream()
+            .flatMap(mapping -> mapping.getPatternValues().stream())
             .toList();
 
         assertThat(patterns).as("the application's routes").isNotEmpty()
@@ -93,6 +95,43 @@ class StaffAccessRulesTest {
     @DisplayName("the routes any authenticated caller may reach are exactly /me, so another is a reviewed change")
     void anyAuthenticatedPathsAreExactlyMe() {
         assertThat(SecurityConfiguration.ANY_AUTHENTICATED_PATHS).containsExactly("/me");
+    }
+
+    /**
+     * The allowlist names a path, and the path is what {@link #everyRouteIsInAStaffArea} exempts, so on its own it
+     * would exempt any handler later mapped there: a {@code @PostMapping("/me")}, or a {@code @RequestMapping} with
+     * no method, would reach every authenticated token with no change to the reviewed set. What was agreed is one
+     * read, so that is what is pinned: exactly one handler, and it answers GET alone.
+     */
+    @Test
+    @DisplayName("the allowlisted path has exactly one handler, and it answers GET alone")
+    void theAllowlistedPathIsOneGet() {
+        List<RequestMappingInfo> allowlisted = applicationMappings().stream()
+            .filter(mapping -> mapping.getPatternValues().stream()
+                .anyMatch(List.of(SecurityConfiguration.ANY_AUTHENTICATED_PATHS)::contains))
+            .toList();
+
+        assertThat(allowlisted).as("handlers mapped to an allowlisted path").hasSize(1);
+        assertThat(allowlisted.get(0).getPatternValues()).containsExactly("/me");
+        assertThat(allowlisted.get(0).getMethodsCondition().getMethods()).containsExactly(RequestMethod.GET);
+    }
+
+    @Test
+    @DisplayName("with the gate enforcing, /me still tells a roleless caller they are not staff, rather than refusing")
+    void meAnswersARolelessCallerUnderEnforce() throws Exception {
+        as(List.of("caseworker-divorce"), "/me")
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.staff").value(false))
+            .andExpect(jsonPath("$.judicial").value(false))
+            .andExpect(jsonPath("$.capabilities").isEmpty());
+        as(List.of("caseworker-divorce"), CASEWORKER_PATH).andExpect(status().isForbidden());
+    }
+
+    private List<RequestMappingInfo> applicationMappings() {
+        return handlerMapping.getHandlerMethods().entrySet().stream()
+            .filter(entry -> entry.getValue().getBeanType().getName().startsWith(APPLICATION_PACKAGE))
+            .map(Map.Entry::getKey)
+            .toList();
     }
 
     @Test

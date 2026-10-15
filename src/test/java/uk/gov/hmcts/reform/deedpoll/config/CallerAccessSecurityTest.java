@@ -139,7 +139,9 @@ class CallerAccessSecurityTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("refuses a request with no token, as everywhere else")
     void refusesNoToken() throws Exception {
-        mvc.perform(get("/me")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/me"))
+            .andExpect(status().isUnauthorized())
+            .andExpect(header().string(HttpHeaders.CACHE_CONTROL, containsString("no-store")));
     }
 
     @Test

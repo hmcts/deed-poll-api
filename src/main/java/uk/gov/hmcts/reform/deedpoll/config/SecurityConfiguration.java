@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.env.Environment;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -108,9 +109,10 @@ public class SecurityConfiguration {
      * The only business paths outside every {@link StaffArea}: any authenticated caller may call them.
      *
      * <p>{@code /me} answers what the caller may do, so a caller every area refuses must still reach it, to be told
-     * "signed in, but no access" rather than left to read a 403. It is matched with {@code authenticated()} ahead of
-     * {@code anyRequest()}, the same outcome stated as intent, and {@code StaffAccessRulesTest} admits these routes
-     * and pins this set, so adding one is a reviewed change. Not {@link #PUBLIC_PATHS}: no token is still 401.
+     * "signed in, but no access" rather than left to read a 403. It is matched as a GET with {@code authenticated()}
+     * ahead of {@code anyRequest()}, the same outcome stated as intent. {@code StaffAccessRulesTest} admits these
+     * routes, pins this set, and pins {@code /me} to one GET handler, so adding a path or a method is a reviewed
+     * change. Not {@link #PUBLIC_PATHS}: no token is still 401.
      */
     static final String[] ANY_AUTHENTICATED_PATHS = {
         "/me"
@@ -275,7 +277,7 @@ public class SecurityConfiguration {
                 .requestMatchers(CCD_SDK_PATHS).denyAll()
                 .requestMatchers(StaffArea.JUDICIAL.pattern()).hasAnyAuthority(StaffArea.JUDICIAL.authorities())
                 .requestMatchers(StaffArea.CASEWORKER.pattern()).access(caseworkerGate.manager())
-                .requestMatchers(ANY_AUTHENTICATED_PATHS).authenticated()
+                .requestMatchers(HttpMethod.GET, ANY_AUTHENTICATED_PATHS).authenticated()
                 .anyRequest().authenticated())
             .exceptionHandling(errors -> errors.accessDeniedHandler(new StaffAccessDeniedHandler(objectMapper)))
             .oauth2ResourceServer(resourceServer -> resourceServer
