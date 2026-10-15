@@ -4,10 +4,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntities;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntry;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
@@ -18,6 +25,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 
 /**
@@ -38,8 +46,10 @@ import java.util.stream.Collectors;
  * {@code NeedsRepair}, so two admins acting at once make one move between them and the second is told so with a 409.
  *
  * <p><strong>Gated on {@link Capability#REPAIR_CCD} here, in the domain</strong>, as {@code JudicialReferralService}
- * gates on {@code Role.JUDICIAL}: anyone else is a 403 before anything is read. No transaction of its own, because
- * each ledger call is one, and a repair that shared one with its read could not report a lost race truthfully.
+ * gates on {@code Role.JUDICIAL}: anyone else is a 403 before anything is read. No transaction around the whole
+ * repair, because a repair that shared one with its read could not report a lost race truthfully. The move alone
+ * shares one, short, with its audit event, so a move is never made without the event and the event never recorded
+ * for a move that was not made.
  *
  * <p><strong>Every move is logged, made or refused</strong>, in fixed prose: the attempt id, the move and the
  * outcome. Never the admin: the id leads to the row, which records the latest repairer, and a subject in a log line
@@ -72,9 +82,13 @@ public class CcdAttemptRepairs {
     private static final String INVALID_FILTER = "CCD attempt list filter is not valid";
 
     private final CcdCreationAttempts attempts;
+    private final AuditTrail audit;
+    private final TransactionTemplate transaction;
 
-    public CcdAttemptRepairs(CcdCreationAttempts attempts) {
+    public CcdAttemptRepairs(CcdCreationAttempts attempts, AuditTrail audit, PlatformTransactionManager transactions) {
         this.attempts = attempts;
+        this.audit = audit;
+        this.transaction = new TransactionTemplate(transactions);
     }
 
     /**
@@ -108,7 +122,8 @@ public class CcdAttemptRepairs {
 
         CcdAttemptRow before = found(id, RECONCILE_AGAIN);
         requireNeedsRepair(before, RECONCILE_AGAIN);
-        if (!attempts.reconcileAgain(id, repairer)) {
+        if (!audited(AuditAction.CCD_ATTEMPT_RECONCILED, caller, before, CcdCreationAttemptStatus.AwaitingConfirmation,
+                     () -> attempts.reconcileAgain(id, repairer))) {
             throw lostRace(id, RECONCILE_AGAIN, false);
         }
         return made(id, RECONCILE_AGAIN);
@@ -131,7 +146,8 @@ public class CcdAttemptRepairs {
         CcdAttemptRow before = found(id, RETRY_FROM_SCRATCH);
         requireNeedsRepair(before, RETRY_FROM_SCRATCH);
         requireNothingSubmitted(before);
-        if (!attempts.retryFromScratch(id, repairer)) {
+        if (!audited(AuditAction.CCD_ATTEMPT_RETRIED, caller, before, CcdCreationAttemptStatus.Pending,
+                     () -> attempts.retryFromScratch(id, repairer))) {
             throw lostRace(id, RETRY_FROM_SCRATCH, true);
         }
         return made(id, RETRY_FROM_SCRATCH);
@@ -159,6 +175,22 @@ public class CcdAttemptRepairs {
             throw new InvalidInputError(INVALID_FILTER, List.of(new FieldError("status", "is one of " + accepted)));
         }
         return named;
+    }
+
+    /** Makes the move and, if it was made, records it, in one transaction. */
+    private boolean audited(AuditAction action, CurrentUser caller, CcdAttemptRow before,
+                            CcdCreationAttemptStatus toState, BooleanSupplier move) {
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            if (!move.getAsBoolean()) {
+                return false;
+            }
+            audit.record(AuditEntry.of(action, AuditActor.of(caller), AuditEntities.CCD_ATTEMPT,
+                                       before.id().toString(), before.deedPollId())
+                             .withDetail("fromState", before.status().name())
+                             .withDetail("toState", toState.name()),
+                         List.of());
+            return true;
+        }));
     }
 
     /** An attempt id; one that is not a UUID is an id nothing was stored under, and is answered as unknown. */

@@ -154,7 +154,8 @@ class ConfirmationSecurityTest {
         notes = mock(NoteService.class);
         service = new ReferralService(deedPolls, referrals, notes,
                                       new ReferralProperties(Duration.ofHours(2)),
-                                      mock(EntityManager.class));
+                                      mock(EntityManager.class),
+                                      mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
 
         when(referrals.save(any())).thenAnswer(call -> call.getArgument(0));
     }

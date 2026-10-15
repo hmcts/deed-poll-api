@@ -10,6 +10,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.PatchField;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
@@ -22,7 +23,9 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -49,6 +52,9 @@ import java.util.Optional;
  * <p>The blob itself lives behind {@link DocumentStore}: the local filesystem by default, for development, or CDAM
  * (plan 03a) when {@code deedpoll.documents.store} is {@code cdam}. A CDAM upload is not one step inside a
  * transaction, so it goes through {@link RemoteDocumentUploads} instead; see {@link #uploadDocument}.
+ *
+ * <p><strong>Not a port: every write records one audit event</strong>, through {@link DocumentUploadAudit}, in the
+ * write's transaction. The metadata create, update and delete have no route, so they are the service account's.
  *
  * <p>The service returns entities, not view models, exactly as the reference does. Formatting is
  * {@link DocumentsView}'s job, and the caseworker API maps to its own DTOs.
@@ -111,7 +117,9 @@ public class DocumentService {
         document.setStorageKey(dto.storageKey());
         document.setOriginalName(dto.originalName());
         document.setMimeType(dto.mimeType());
-        return documents.save(document);
+        DeedPollSupportingDocument saved = documents.save(document);
+        uploadAudit.created(saved);
+        return saved;
     }
 
     /**
@@ -161,6 +169,7 @@ public class DocumentService {
     @Transactional
     public DeedPollSupportingDocument updateDocument(String deedPollId, String id, UpdateDocumentInput dto) {
         DeedPollSupportingDocument document = findDocument(deedPollId, id);
+        final Map<String, Object> before = DocumentUploadAudit.metadata(document);
         // Resolved before anything is written, so a bad type cannot leave a half-applied patch behind.
         Optional<DeedPollSupportingDocumentType> type = dto.documentTypeId().present()
             ? Optional.of(requireType(dto.documentTypeId().value()))
@@ -176,7 +185,21 @@ public class DocumentService {
         // finds a changed property -- so an empty patch, or one resending the values already stored, would
         // leave modifiedOn where it was. The reference's `prisma.update` writes @updatedAt on every call.
         document.setModifiedOn(AuditClock.now());
-        return documents.save(document);
+        DeedPollSupportingDocument saved = documents.save(document);
+        uploadAudit.updated(before, saved, patched(dto));
+        return saved;
+    }
+
+    /** The fields a metadata patch named, in the order the patch declares them. */
+    private static List<String> patched(UpdateDocumentInput dto) {
+        Map<String, PatchField<?>> named = new LinkedHashMap<>();
+        named.put("direction", dto.direction());
+        named.put("name", dto.name());
+        named.put("documentTypeId", dto.documentTypeId());
+        named.put("storageKey", dto.storageKey());
+        named.put("originalName", dto.originalName());
+        named.put("mimeType", dto.mimeType());
+        return named.entrySet().stream().filter(field -> field.getValue().present()).map(Map.Entry::getKey).toList();
     }
 
     /**
@@ -212,6 +235,7 @@ public class DocumentService {
         RemoteDocumentUploads remote = remoteUploads.getIfAvailable();
         Runnable removal = remote == null ? () -> {
         } : remote.removal(document);
+        uploadAudit.deleted(document);
         documents.delete(document);
         removeBlobOnceTheDeleteCommits(id, storageKey, removal);
     }

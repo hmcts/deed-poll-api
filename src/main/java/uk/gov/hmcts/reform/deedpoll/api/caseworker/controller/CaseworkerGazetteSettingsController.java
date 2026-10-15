@@ -6,9 +6,11 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.GazetteSettingsResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.UpdateGazetteSettingsRequest;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteSettingsService;
 
 @RestController
@@ -34,6 +36,7 @@ public class CaseworkerGazetteSettingsController {
             + "Supply the revision read with the form; stale revisions "
             + "return 409 without changes. Each changed address increments revision and records attribution. "
             + "Saving the current address at the current revision is a no-op. No email is sent.")
+    @AuditedAs(AuditAction.GAZETTE_SETTINGS_CHANGED)
     @PutMapping
     public GazetteSettingsResponse update(@RequestBody UpdateGazetteSettingsRequest request) {
         return GazetteSettingsResponse.from(service.update(CurrentUsers.required(), request.fields()));

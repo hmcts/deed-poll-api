@@ -7,11 +7,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialDirectionRequest;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialMyReferralsResponse;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialPoolResponse;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialReferralDetail;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 
@@ -154,6 +156,7 @@ public class JudicialReferralController {
      * referral that is not {@code Open} -- one another judge got to first, or one already decided -- is api-2's
      * 409, which is the honest answer to a stale dashboard rather than a silent re-claim.
      */
+    @AuditedAs(AuditAction.REFERRAL_CLAIMED)
     @PostMapping("/{referralId}/claim")
     public JudicialReferralDetail claim(@PathVariable("referralId") String referralId) {
         return JudicialReferralDetail.of(judicial.claim(referralId, CurrentUsers.required()));
@@ -176,6 +179,7 @@ public class JudicialReferralController {
      * the inactivity sweep and possibly since claimed by somebody else -- and 400 for a direction the schema
      * refuses, naming each offending field.
      */
+    @AuditedAs(AuditAction.REFERRAL_DIRECTED)
     @PostMapping("/{referralId}/direction")
     public JudicialReferralDetail direction(@PathVariable("referralId") String referralId,
                                             @RequestBody JudicialDirectionRequest request) {

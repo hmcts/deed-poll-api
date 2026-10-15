@@ -13,6 +13,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.audit;
 public enum AuditAction {
     CASE_CREATED,
     CASE_UPDATED,
+    CASE_DELETED,
     NOTE_CREATED,
     NOTE_UPDATED,
     NOTE_DELETED,
@@ -20,6 +21,9 @@ public enum AuditAction {
     WITNESS_UPDATED,
     WITNESS_DELETED,
     DOCUMENT_UPLOADED,
+    DOCUMENT_CREATED,
+    DOCUMENT_UPDATED,
+    DOCUMENT_DELETED,
     REFERRAL_CREATED,
     REFERRAL_WITHDRAWN,
     REFERRAL_CLOSED,

@@ -10,10 +10,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CreateWitnessRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.UpdateWitnessRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.WitnessResponse;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
 
 import java.util.List;
@@ -88,6 +90,7 @@ public class CaseworkerWitnessController {
      * API and any form cannot disagree about what a witness is. Values are stored as submitted and not trimmed,
      * which is the reference's own choice and is argued there.
      */
+    @AuditedAs(AuditAction.WITNESS_CREATED)
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public WitnessResponse create(@PathVariable("id") String id, @RequestBody CreateWitnessRequest request) {
@@ -113,6 +116,7 @@ public class CaseworkerWitnessController {
      * the domain already has a name for. An explicit null is a 400 instead of a clear, because none of the four
      * columns can hold one.
      */
+    @AuditedAs(AuditAction.WITNESS_UPDATED)
     @PatchMapping("/{witnessId}")
     public WitnessResponse update(@PathVariable("id") String id,
                                   @PathVariable("witnessId") String witnessId,
@@ -139,6 +143,7 @@ public class CaseworkerWitnessController {
      * other. Deleting twice 404s on the second call for an Administrator, because absence is reported by
      * throwing -- not idempotent in the strict HTTP sense, and consistent with the reads.
      */
+    @AuditedAs(AuditAction.WITNESS_DELETED)
     @DeleteMapping("/{witnessId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable("id") String id, @PathVariable("witnessId") String witnessId) {

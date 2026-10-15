@@ -166,17 +166,17 @@ container-backed test on `AbstractPostgresContainerTest`.
 **Files:** referral, judicial, email, saved-query, Gazette settings and send, and CCD-attempt services. A new
 `api/WriteEndpointAuditCoverageTest.java`, plus a fixture controller in the test source set.
 
-- [ ] Audit the following:
+- [x] Audit the following:
   - referral create, withdraw, close and confirm;
   - judicial claim and direction;
   - email send (`detail.templateId`, no value rows for the email body);
   - saved-query create, update and delete (field names only, decision 4);
   - Gazette settings and send (decision 11);
   - CCD attempt reconciliation and retry.
-- [ ] `WriteEndpointAuditCoverageTest` reflects over every write mapping and asserts that each maps to an
+- [x] `WriteEndpointAuditCoverageTest` reflects over every write mapping and asserts that each maps to an
   `AuditAction` or is in decision 10's exemption list. Prove it fails on the fixture controller's unclassified mapping.
-- [ ] All 27 current mappings are classified.
-- [ ] Mark completed
+- [x] All 27 current mappings are classified.
+- [x] Mark completed
 
 ### Task 5: Read audit
 
@@ -241,6 +241,24 @@ null new value. `CaseWriteAuditTest` (9 container cases) and the integration `Au
 subject that only `actor_id` refuses) were seen failing first. Validation: 4,217 test / 20 integration, no failures,
 errors or skips; Checkstyle clean; `openapi.json` unchanged. Task 4 still needs an action for case delete and for
 document metadata create, update and delete, which the vocabulary does not have yet.
+
+Task 4, 2026-10-15: referral create, withdraw, close, confirm, claim and direction record one `Referral` event each,
+with the columns set, their values and `fromState`/`toState` (a confirmation carries `outcome` and no transition);
+`touch` and the lapse sweep record none. A fresh email enqueue records `EMAIL_SENT` with `detail.templateId` and no
+fields or values; an idempotent repeat records nothing. Saved-query create, update and delete record field names only,
+with no case; selection records nothing. A Gazette settings change records `GAZETTE_SETTINGS_CHANGED` on entity id `1`,
+`fields={recipientEmail}`, no values. A settlement as sent records one `GAZETTE_NOTICE_SENT` per member with
+`detail.batchId`, as the admitted submitter. A CCD repair shares one short transaction with its event
+(`CcdAttemptRepairs` wraps the ledger move in a `TransactionTemplate`), so a lost race records nothing. Task 3's gap
+is closed too: `CASE_DELETED` and `DOCUMENT_CREATED`/`UPDATED`/`DELETED` were added, recorded as the service account
+because no route reaches them. Each audited handler carries `@AuditedAs(action)` (`api/AuditedAs`, a statement that
+records nothing); `WriteEndpointAuditCoverageTest` scans `api.caseworker` and `api.judicial` for `@RestController`s,
+finds 27 write mappings, 23 audited and decision 10's 4 exempt, and refuses an exempt mapping that also claims an
+action. It was seen failing on `UnclassifiedWriteFixture`'s unannotated `DELETE`, and, with one annotation stripped
+for a run, on `PUT /caseworker/gazette-settings`. `RemainingWriteAuditTest` (8 container cases) plus new assertions in
+`GazetteRequestLedgerTest` and `SendIdempotencyTest` were written with the change rather than seen failing first.
+Three mocked `save` stubs now allocate an id, as a real save does. Validation: 4,229 test / 20 integration, no
+failures, errors or skips; Checkstyle clean; `openapi.json` unchanged.
 
 ## Post-Completion
 

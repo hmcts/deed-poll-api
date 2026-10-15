@@ -43,9 +43,10 @@ class GazettePermissionsTest {
         GazetteSettingsRepository settings = mock(GazetteSettingsRepository.class);
         GazetteNoticeBatchRepository batches = mock(GazetteNoticeBatchRepository.class);
         GazetteNoticeBatchCaseRepository members = mock(GazetteNoticeBatchCaseRepository.class);
-        GazetteRequestLedger ledger = new GazetteRequestLedger(requests, cases, notes, transactions, configuration);
+        GazetteRequestLedger ledger = new GazetteRequestLedger(requests, cases, notes, transactions, configuration,
+            mock(AuditTrail.class));
         GazettePreviews previews = new GazettePreviews(cases, requests, settings, configuration);
-        GazetteSettingsService settingsService = new GazetteSettingsService(settings);
+        GazetteSettingsService settingsService = new GazetteSettingsService(settings, mock(AuditTrail.class));
         GazetteNoticeHistory history = new GazetteNoticeHistory(batches, members);
         UUID key = UUID.randomUUID();
 

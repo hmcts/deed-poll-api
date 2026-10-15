@@ -11,10 +11,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CreateSavedQueryRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SavedQueryResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.UpdateSavedQueryRequest;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQueryService;
 
 import java.util.List;
@@ -94,6 +96,7 @@ public class CaseworkerSavedQueryController {
      * query for yourself is every caseworker's right; publishing one to the library is not. Stated here rather
      * than gated here -- the rule is the service's, like every other rule about who may do what.
      */
+    @AuditedAs(AuditAction.SAVED_QUERY_CREATED)
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public SavedQueryResponse create(@RequestBody CreateSavedQueryRequest request) {
@@ -127,6 +130,7 @@ public class CaseworkerSavedQueryController {
      * the query at all still gets the 404 first, so the refusal never confirms that an id names something
      * publishable.
      */
+    @AuditedAs(AuditAction.SAVED_QUERY_UPDATED)
     @PatchMapping("/{id}")
     public SavedQueryResponse update(@PathVariable("id") String id,
                                      @RequestBody UpdateSavedQueryRequest request) {
@@ -146,6 +150,7 @@ public class CaseworkerSavedQueryController {
      * throwing. Not idempotent in the strict HTTP sense, and consistent with the reads -- and deliberately
      * unlike {@code DELETE .../selection}, where unselecting something already unselected is not a mistake.
      */
+    @AuditedAs(AuditAction.SAVED_QUERY_DELETED)
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable("id") String id) {

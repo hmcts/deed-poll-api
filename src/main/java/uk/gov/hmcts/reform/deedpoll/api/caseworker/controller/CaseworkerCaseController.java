@@ -8,10 +8,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CreateCaseRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SavedCaseResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.UpdateCaseRequest;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 
 /**
@@ -66,6 +68,7 @@ public class CaseworkerCaseController {
      * known sharp edge, and nothing is written when it happens, because the year is derived before the counter
      * is touched.
      */
+    @AuditedAs(AuditAction.CASE_CREATED)
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public SavedCaseResponse create(@RequestBody CreateCaseRequest request) {
@@ -83,6 +86,7 @@ public class CaseworkerCaseController {
      * <p>No check for a missing case, for the reason the read controller gives: the domain reports absence by
      * throwing, so a branch here would be unreachable.
      */
+    @AuditedAs(AuditAction.CASE_UPDATED)
     @PatchMapping("/{id}")
     public SavedCaseResponse update(@PathVariable("id") String id, @RequestBody UpdateCaseRequest request) {
         return SavedCaseResponse.from(

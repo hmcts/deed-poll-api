@@ -13,6 +13,12 @@ public final class AuditEntities {
     public static final String NOTE = "Note";
     public static final String WITNESS = "Witness";
     public static final String DOCUMENT = "Document";
+    public static final String REFERRAL = "Referral";
+    public static final String NOTIFICATION = "Notification";
+    public static final String SAVED_QUERY = "SavedQuery";
+    public static final String GAZETTE_SETTINGS = "GazetteSettings";
+    public static final String GAZETTE_REQUEST = "GazetteRequest";
+    public static final String CCD_ATTEMPT = "CcdCreationAttempt";
 
     private AuditEntities() {
     }

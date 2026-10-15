@@ -66,7 +66,8 @@ class SavedQuerySelectionTest {
     void createService() {
         savedQueries = mock(SavedQueryRepository.class);
         selections = mock(SavedQuerySelectionRepository.class);
-        service = new SavedQueryService(savedQueries, selections);
+        service = new SavedQueryService(savedQueries, selections,
+            mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
     }
 
     @Nested

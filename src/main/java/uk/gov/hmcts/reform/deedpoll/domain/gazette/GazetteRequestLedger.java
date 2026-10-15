@@ -7,6 +7,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntities;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntry;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
@@ -41,13 +46,16 @@ public class GazetteRequestLedger {
     private final NoteService notes;
     private final GazetteConfiguration configuration;
     private final TransactionTemplate transaction;
+    private final AuditTrail audit;
 
     public GazetteRequestLedger(GazetteRequestRepository requests, DeedPollRepository cases, NoteService notes,
-                                PlatformTransactionManager transactions, GazetteConfiguration configuration) {
+                                PlatformTransactionManager transactions, GazetteConfiguration configuration,
+                                AuditTrail audit) {
         this.requests = requests;
         this.cases = cases;
         this.notes = notes;
         this.configuration = configuration;
+        this.audit = audit;
         this.transaction = new TransactionTemplate(transactions);
     }
 
@@ -190,7 +198,12 @@ public class GazetteRequestLedger {
         });
     }
 
-    /** Local acceptance settlement only. This method never invokes the provider. */
+    /**
+     * Local acceptance settlement only. This method never invokes the provider.
+     *
+     * <p>Settling as sent records one audit event per member case, attributed to the request's admitted submitter --
+     * never to whichever worker settled it -- in the settlement's own transaction.
+     */
     public boolean sent(Claim claim, UUID providerId, Integer version) {
         Objects.requireNonNull(providerId);
         if (version != null && version < 1) {
@@ -225,6 +238,11 @@ public class GazetteRequestLedger {
             requests.sentEvidence(row, now);
             for (String id : requests.members(row.id())) {
                 note(id, row, "Notice of publication sent to the London Gazette.");
+                audit.record(AuditEntry.of(AuditAction.GAZETTE_NOTICE_SENT,
+                                           new AuditActor(row.submittedById(), row.submittedByName(), false),
+                                           AuditEntities.GAZETTE_REQUEST, row.id().toString(), id)
+                                 .withDetail("batchId", row.id().toString()),
+                             List.of());
             }
             requests.finish(row.id(), GazetteRequestState.Sent, null, now);
             return true;

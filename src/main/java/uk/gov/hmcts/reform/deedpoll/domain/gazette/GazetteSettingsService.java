@@ -5,6 +5,11 @@ import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntities;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntry;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
@@ -15,7 +20,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/** Admin-only configuration with atomic change attribution and protection against stale edit forms. */
+/**
+ * Admin-only configuration with atomic change attribution and protection against stale edit forms.
+ *
+ * <p>A change also records one audit event naming {@code recipientEmail}, with no values: the settings belong to no
+ * case, so a value could never be disposed, and V33's own history table already holds the addresses.
+ */
 @Service
 public class GazetteSettingsService {
 
@@ -42,10 +52,17 @@ public class GazetteSettingsService {
     /** One domain label: up to 63 characters, alphanumeric at both ends, hyphens only inside. */
     private static final Pattern DOMAIN_LABEL = Pattern.compile("[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?");
 
-    private final GazetteSettingsRepository repository;
+    /**
+     * The settings are one row, {@code id = 1}, and the trail names it so.
+     */
+    private static final String SETTINGS_ID = "1";
 
-    public GazetteSettingsService(GazetteSettingsRepository repository) {
+    private final GazetteSettingsRepository repository;
+    private final AuditTrail audit;
+
+    public GazetteSettingsService(GazetteSettingsRepository repository, AuditTrail audit) {
         this.repository = repository;
+        this.audit = audit;
     }
 
     @Transactional(readOnly = true)
@@ -82,6 +99,10 @@ public class GazetteSettingsService {
         GazetteSettings next = new GazetteSettings(
             email, Math.incrementExact(revision), AuditClock.now(), caller.name());
         repository.change(previous, next, subject);
+        audit.record(AuditEntry.of(AuditAction.GAZETTE_SETTINGS_CHANGED, AuditActor.of(caller),
+                                   AuditEntities.GAZETTE_SETTINGS, SETTINGS_ID, null)
+                         .withFields(List.of("recipientEmail")),
+                     List.of());
         return next;
     }
 

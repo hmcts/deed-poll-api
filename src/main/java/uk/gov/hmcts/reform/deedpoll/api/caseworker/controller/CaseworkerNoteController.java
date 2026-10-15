@@ -10,10 +10,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CreateNoteRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.NoteResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.UpdateNoteRequest;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 
 import java.util.List;
@@ -85,6 +87,7 @@ public class CaseworkerNoteController {
      * stored and a blank one is refused, both in {@code NoteSchemas} rather than here, so the API and the SSR
      * form cannot disagree about what counts as a note.
      */
+    @AuditedAs(AuditAction.NOTE_CREATED)
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public NoteResponse create(@PathVariable("id") String id, @RequestBody CreateNoteRequest request) {
@@ -110,6 +113,7 @@ public class CaseworkerNoteController {
      * cannot rewrite who wrote a note. The reference deletes that key from its patch; here there is nothing to
      * delete.
      */
+    @AuditedAs(AuditAction.NOTE_UPDATED)
     @PatchMapping("/{noteId}")
     public NoteResponse update(@PathVariable("id") String id,
                                @PathVariable("noteId") String noteId,
@@ -136,6 +140,7 @@ public class CaseworkerNoteController {
      * absence by throwing. Not idempotent in the strict HTTP sense, and consistent with the reads. A refusal is a
      * 403 and not a 404: a caseworker is entitled to know the note is there and that they may not remove it.
      */
+    @AuditedAs(AuditAction.NOTE_DELETED)
     @DeleteMapping("/{noteId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable("id") String id, @PathVariable("noteId") String noteId) {

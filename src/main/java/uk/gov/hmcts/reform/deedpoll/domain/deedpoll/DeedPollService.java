@@ -473,6 +473,10 @@ public class DeedPollService {
             throw new ConflictError("This case is part of Gazette publication audit evidence and cannot be deleted.");
         }
         deedPolls.delete(requireDeedPoll(id));
+        // The service account's, as the other short forms are: no route deletes a case, so no caller can be named.
+        // No values: the case's value rows are disposed with it, so the event says only that it went.
+        audit.record(AuditEntry.of(AuditAction.CASE_DELETED, AuditActor.system(), AuditEntities.CASE, id, id),
+                     List.of());
     }
 
     /**
