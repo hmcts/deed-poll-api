@@ -115,6 +115,20 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
             .containsEntry("recipient_email", "new@example.com").containsEntry("changed_by_id", StubIdam.SUBJECT);
     }
 
+    /*
+      Release review F1, accepted 14 October 2026: with no name claims, IdamClaims' service-wide fallback makes the
+      subject the attribution, so it is published here. Pinned so a change to either side is a decision, not a drift.
+    */
+    @Test
+    void publishesTheSubjectAsAttributionWhenIdamSuppliesNoName() throws Exception {
+        IDAM.stubUserInfoBody("""
+            {"sub": "%s", "roles": ["%s"]}
+            """.formatted(StubIdam.SUBJECT, Role.DELIVERY_MANAGER.claimValue()));
+
+        save("{\"recipientEmail\":\"gazette@example.com\",\"revision\":0}")
+            .andExpect(status().isOk()).andExpect(jsonPath("$.updatedBy").value(StubIdam.SUBJECT));
+    }
+
     @Test
     void unchangedSaveIsANoopAndStaleSaveCannotOverwrite() throws Exception {
         String body = "{\"recipientEmail\":\"gazette@example.com\",\"revision\":0}";

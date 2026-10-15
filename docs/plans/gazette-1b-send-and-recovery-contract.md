@@ -53,6 +53,12 @@ All operations below require the verified `ACCESS_GAZETTE` capability in the dom
 Unknown and inaccessible records have the existing not-found behavior. An opaque
 batch UUID is public; IDAM subjects, request keys, lease owners, upload tokens and
 raw provider exception messages are never published. Responses use UTC timestamps.
+One exception, accepted at release review (F1, 14 October 2026): attribution
+(`submittedBy`, `sentBy`, `updatedBy`, note authors) is the caller's display name, and
+`IdamClaims` falls back to the subject when IDAM supplies no `name`, `given_name` or
+`family_name`. That fallback is service-wide and deliberate (traceable rather than
+misattributed), so Gazette publishes a subject only in that case. The subject columns
+(`submitted_by_id` and similar) are never published.
 
 | Operation | Request | Result |
 |---|---|---|
@@ -243,7 +249,7 @@ existing V31 membership, deduplicating cases that appear in multiple historical
 batches without deleting evidence. Existing batches stay readable without invented
 recipient/provider facts. Unique state/receipt/note keys make repeated settlement
 or recovery idempotent. Recovery-owned notes use the original verified submitter's
-stored display attribution; subjects remain private.
+stored display attribution; subject columns remain private (see the F1 exception above).
 
 Full membership uses database pagination (default 25, maximum 100), sorted by
 frozen reference then case ID, returning `cases: [{caseId, referenceNumber}]` and
