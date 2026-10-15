@@ -15,6 +15,7 @@ import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingSweep;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.ReadAudit;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseQuery;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseResults;
@@ -69,15 +70,19 @@ public class CaseworkerReadController {
      */
     private final CcdLinkingSweep linkingSweep;
 
+    private final ReadAudit readAudit;
+
     public CaseworkerReadController(DeedPollService deedPolls,
                                     DocumentTypeService documentTypes,
                                     NotificationOutbox outbox,
-                                    CcdLinkingSweep linkingSweep) {
+                                    CcdLinkingSweep linkingSweep,
+                                    ReadAudit readAudit) {
 
         this.deedPolls = deedPolls;
         this.documentTypes = documentTypes;
         this.outbox = outbox;
         this.linkingSweep = linkingSweep;
+        this.readAudit = readAudit;
     }
 
     /**
@@ -286,10 +291,15 @@ public class CaseworkerReadController {
      * <p>One call and one response, not four. The reference fetches the children with the case and the detail
      * page depends on having them: it renders the notes and documents subgrids and the witness block from the
      * same record it renders the tabs from.
+     *
+     * <p>Recorded as {@code CASE_VIEWED} once the case is found, so an unknown id records nothing. The record fails
+     * open: a case that could not be recorded is still answered -- see {@link ReadAudit}.
      */
     @GetMapping("/cases/{id}")
     public CaseDetailResponse caseDetail(@PathVariable("id") String id) {
-        return CaseDetailResponse.from(deedPolls.findDeedPoll(id));
+        CaseDetailResponse detail = CaseDetailResponse.from(deedPolls.findDeedPoll(id));
+        readAudit.caseViewed(detail.id(), CurrentUsers.required());
+        return detail;
     }
 
     /**

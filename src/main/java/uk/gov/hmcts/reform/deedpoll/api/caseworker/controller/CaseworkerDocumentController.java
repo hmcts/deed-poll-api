@@ -190,12 +190,15 @@ public class CaseworkerDocumentController {
      * mid-stream error breaks the connection rather than answering 500. That is the correct outcome, and the
      * reference records it: a truncated download is visible to the client, whereas a 200 carrying half a file is
      * not.
+     *
+     * <p>Recorded as {@code DOCUMENT_DOWNLOADED} before the file is opened, and refused if it cannot be: see
+     * {@code DocumentService.downloadDocument}'s three-argument form.
      */
     @GetMapping("/{documentId}/file")
     public ResponseEntity<Resource> file(@PathVariable("id") String id,
                                          @PathVariable("documentId") String documentId) {
 
-        DocumentDownload download = documents.downloadDocument(id, documentId);
+        DocumentDownload download = documents.downloadDocument(id, documentId, CurrentUsers.required());
         DeedPollSupportingDocument document = download.document();
         MediaType contentType = contentType(document.getMimeType());
 

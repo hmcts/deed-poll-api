@@ -12,6 +12,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.PatchField;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.ReadAudit;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
@@ -74,6 +75,7 @@ public class DocumentService {
     private final DocumentStore store;
     private final ObjectProvider<RemoteDocumentUploads> remoteUploads;
     private final DocumentUploadAudit uploadAudit;
+    private final ReadAudit readAudit;
     private final TransactionTemplate inTransaction;
     private final TransactionTemplate readOnly;
 
@@ -83,6 +85,7 @@ public class DocumentService {
                            DocumentStore store,
                            ObjectProvider<RemoteDocumentUploads> remoteUploads,
                            DocumentUploadAudit uploadAudit,
+                           ReadAudit readAudit,
                            PlatformTransactionManager transactions) {
         this.deedPolls = deedPolls;
         this.documents = documents;
@@ -90,6 +93,7 @@ public class DocumentService {
         this.store = store;
         this.remoteUploads = remoteUploads;
         this.uploadAudit = uploadAudit;
+        this.readAudit = readAudit;
         // PROPAGATION_REQUIRED, the @Transactional default: a filesystem upload joins a caller's transaction, as
         // DeedDocumentService.storeDeed's, exactly as it did when the method carried the annotation.
         this.inTransaction = new TransactionTemplate(transactions);
@@ -358,6 +362,22 @@ public class DocumentService {
      */
     public DocumentDownload downloadDocument(String deedPollId, String id) {
         DeedPollSupportingDocument document = readableDocument(deedPollId, id);
+        return new DocumentDownload(document, store.open(locator(document)));
+    }
+
+    /**
+     * {@link #downloadDocument(String, String)} for a member of staff, recorded as {@code DOCUMENT_DOWNLOADED}.
+     *
+     * <p>The row is committed after the checks and <strong>before the store is opened</strong>, so a refused
+     * download records nothing and a download that could not be recorded opens nothing: it fails closed. The
+     * service's own reads (the outbox, deed regeneration checks) use the two-argument form and record nothing,
+     * because nobody downloaded anything.
+     *
+     * @throws NotFoundError as {@link #downloadDocument(String, String)} does
+     */
+    public DocumentDownload downloadDocument(String deedPollId, String id, CurrentUser reader) {
+        DeedPollSupportingDocument document = readableDocument(deedPollId, id);
+        readAudit.documentDownloaded(deedPollId, document.getId(), reader);
         return new DocumentDownload(document, store.open(locator(document)));
     }
 

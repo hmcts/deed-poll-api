@@ -183,10 +183,10 @@ container-backed test on `AbstractPostgresContainerTest`.
 **Files:** `api/caseworker/controller/CaseworkerReadController.java` (`GET /caseworker/cases/{id}`) and
 `CaseworkerDocumentController.java` (the file download). Their tests.
 
-- [ ] `CASE_VIEWED` on a case read; `DOCUMENT_DOWNLOADED` on a file download (decision 9).
-- [ ] Tests: one row per read. A forced failure still returns the case and logs `audit.write.failed`. A forced failure
+- [x] `CASE_VIEWED` on a case read; `DOCUMENT_DOWNLOADED` on a file download (decision 9).
+- [x] Tests: one row per read. A forced failure still returns the case and logs `audit.write.failed`. A forced failure
   on download refuses the download.
-- [ ] Mark completed
+- [x] Mark completed
 
 ### Task 6: Authentication and authorisation failure logging
 
@@ -259,6 +259,15 @@ for a run, on `PUT /caseworker/gazette-settings`. `RemainingWriteAuditTest` (8 c
 `GazetteRequestLedgerTest` and `SendIdempotencyTest` were written with the change rather than seen failing first.
 Three mocked `save` stubs now allocate an id, as a real save does. Validation: 4,229 test / 20 integration, no
 failures, errors or skips; Checkstyle clean; `openapi.json` unchanged.
+
+Task 5, 2026-10-15: `domain/audit/ReadAudit` holds both reads. `caseViewed` records after the case is found (an
+unknown id records nothing) and fails open: it catches, logs `audit.read.unrecorded` alongside `AuditTrail`'s
+`audit.write.failed`, and the case is answered. `DocumentService.downloadDocument(caseId, id, reader)`, the
+controller's form, records `DOCUMENT_DOWNLOADED` (entity `Document`, in the case) after the ownership and readiness
+checks and before the store is opened, so a failure propagates and nothing is opened. The two-argument form, used by
+the outbox and the deed paths, records nothing. `ReadAuditTest` (5 MockMvc container cases, forced with a
+256-character subject) was seen failing first, 4 of 5; the not-found case passed before the change, as expected.
+Validation: 4,234 test / 20 integration, no failures, errors or skips; Checkstyle clean; `openapi.json` unchanged.
 
 ## Post-Completion
 
