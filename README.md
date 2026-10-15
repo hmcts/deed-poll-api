@@ -34,11 +34,15 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 Thirty-four caseworker operations across twenty-one paths, plus five judicial ones on a namespace of their
 own (below), three privileged CCD-attempt ones (see [Repairing attempts](#repairing-attempts)), and eight
 Delivery Manager-only Gazette operations (see [Gazette publication foundation](#gazette-publication-foundation)).
+`GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
+`capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
 `/swagger-ui.html` is the authority; this table is the map — and `OpenAPIPublisherTest` asserts each count,
-so a route added without a row here is a count that stops agreeing with the spec.
+so a route added without a row here is a count that stops agreeing with the spec. `/me` and `/` are the only
+documented paths outside the counted surfaces; `documentsNoUnlistedPath` allowlists them by name.
 
 | Method | Path | What it does |
 |---|---|---|
+| GET | `/me` | The caller's own access: `staff` and `judicial` (does each area admit their roles) plus `capabilities` in `Capability` order. Any authenticated caller, `no-store`, no identity; a caller with no deed-poll role gets `false`, `false`, `[]` rather than 403 |
 | GET | `/caseworker/cases` | The case list — a `filter` key (one of seven tabs), `where` conditions, a `q` search term, `sort`, `page` and `size`. The default order is newest first except `awaitingConfirmation` (longest wait first) and `readyForPublication` (oldest enrolment first) |
 | GET | `/caseworker/cases/field-rules` | Show / hide / mandate rules for a `type`, `migrated` and `publishToGazette` |
 | GET | `/caseworker/cases/{id}` | One case **with** its notes, witnesses and documents — one call, not four |

@@ -1,5 +1,7 @@
 # Resume state — where the next session picks up
 
+**GET /me, 2026-10-14:** `GET /me` (`getCallerAccess`) is implemented on `feat/me-capabilities` and not live-verified. It is read-only, outside both staff areas, carries no identity and answers `Cache-Control: no-store`. Next: open the PR, then admin refreshes its api spec and reads `/me` at login and token refresh in place of `capabilitiesFor(roles)`. Operation counts are unchanged. See [the plan](plans/20261014-me-caller-access.md).
+
 **Gazette delivery/recovery, 2026-10-09:** PR #92 merged the ledger and preview/status
 contract into master (`801e949`). The isolated `feat/gazette-delivery-recovery` worktree
 implements parent 4c/4d: all-file preparation, one-shot delivery, committed outcomes

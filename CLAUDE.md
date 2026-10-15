@@ -32,6 +32,8 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations 
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
 api/judicial/{controller,dto}     the judicial surface — 5 operations, keyed on the referral, never on the case
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
+api/caller/{controller,dto}       GET /me, the caller's own areas and capabilities — outside both staff areas,
+                                  because a caller with no deed-poll role must be told so rather than refused
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
 domain/referrals                  referrals to the judiciary and the applicant's confirmation — NOT a port
@@ -66,6 +68,19 @@ and case visibility remain unchanged. Neither new role grants judicial or system
 Saved-query private visibility and ownership still use the subject. Background Gazette completion
 uses durable admitted authority; never rewrite historical attribution. See the
 [permission plan](docs/plans/completed/20261009-team-leader-delivery-manager.md) for migration and rollout.
+
+### `GET /me`, the one route outside a staff area
+
+`SecurityConfiguration.ANY_AUTHENTICATED_PATHS` is exactly `{"/me"}`, matched `.authenticated()` ahead of
+`anyRequest()`, and `StaffAccessRulesTest` asserts both that set and that every other route sits in a `StaffArea`.
+Adding a path there is a reviewed change, not a way round the H1 check. `/me` is not public: no token is 401.
+- **The flags reflect roles, never the StaffGate mode.** `staff` and `judicial` are `StaffArea.admits` over the
+  authenticated authorities, so in `report` mode a roleless caller still reaches `/caseworker/**` while `/me` says
+  `staff: false`. That is deliberate: the admin app is right for the day `enforce` arrives.
+- **No identity.** No subject, name, raw role names, AM assignments or role source, and `Cache-Control: no-store`.
+  Admin has identity from IDAM; a second route publishing the subject is the leak the Gazette review found.
+- Capabilities are `RoleCapabilities.forRoles` in `Capability` declaration order, so a new `Capability` reaches
+  admin with no change here, and `CallerAccessOpenApiTest` holds the published enum to `Capability.values()`.
 
 ### AM as a second role source (off by default)
 

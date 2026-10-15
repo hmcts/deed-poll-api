@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.env.Environment;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -51,6 +52,9 @@ import java.util.List;
  * failure mode of forgetting is silent. The allowlist is infrastructure only -- the Always-On root endpoint,
  * the probes and the published spec -- and every business route, {@code /caseworker/**} and later
  * {@code /citizen/**} alike, is authenticated because it is not on it.
+ *
+ * <p>Every business route is also inside a {@link StaffArea}, with one named exception:
+ * {@link #ANY_AUTHENTICATED_PATHS}, the caller's own {@code GET /me}, which any token may read.
  *
  * <p><strong>Two chains, and the second is narrow on purpose.</strong> {@code /ccd-persistence/**} is the one path
  * not called by a person through a frontend. Data-store calls it, presenting its own S2S token and forwarding a
@@ -99,6 +103,19 @@ public class SecurityConfiguration {
         "/swagger-ui.html",
         "/swagger-ui/**",
         "/favicon.ico"
+    };
+
+    /**
+     * The only business paths outside every {@link StaffArea}: any authenticated caller may call them.
+     *
+     * <p>{@code /me} answers what the caller may do, so a caller every area refuses must still reach it, to be told
+     * "signed in, but no access" rather than left to read a 403. It is matched as a GET with {@code authenticated()}
+     * ahead of {@code anyRequest()}, the same outcome stated as intent. {@code StaffAccessRulesTest} admits these
+     * routes, pins this set, and pins {@code /me} to one GET handler, so adding a path or a method is a reviewed
+     * change. Not {@link #PUBLIC_PATHS}: no token is still 401.
+     */
+    static final String[] ANY_AUTHENTICATED_PATHS = {
+        "/me"
     };
 
     /**
@@ -234,8 +251,9 @@ public class SecurityConfiguration {
      * issued could reach the caseworker surface (OWASP finding H1). The judicial area is enforced outright, because
      * its services already refuse a non-judge and the rule changes no outcome. The caseworker area goes through
      * {@link StaffGate}, which reports before it enforces: see {@code deedpoll.security.staff-gate}.
-     * {@code anyRequest().authenticated()} stays as the fallback for the empty citizen namespace and unknown paths.
-     * A new top-level prefix is caught by {@code StaffAccessRulesTest} rather than by a {@code denyAll()}.
+     * {@link #ANY_AUTHENTICATED_PATHS} are authenticated by name. {@code anyRequest().authenticated()} stays as the
+     * fallback for the empty citizen namespace and unknown paths. A new top-level prefix is caught by
+     * {@code StaffAccessRulesTest} rather than by a {@code denyAll()}.
      */
     @Bean
     @SuppressWarnings("PMD.SignatureDeclareThrowsException")
@@ -259,6 +277,7 @@ public class SecurityConfiguration {
                 .requestMatchers(CCD_SDK_PATHS).denyAll()
                 .requestMatchers(StaffArea.JUDICIAL.pattern()).hasAnyAuthority(StaffArea.JUDICIAL.authorities())
                 .requestMatchers(StaffArea.CASEWORKER.pattern()).access(caseworkerGate.manager())
+                .requestMatchers(HttpMethod.GET, ANY_AUTHENTICATED_PATHS).authenticated()
                 .anyRequest().authenticated())
             .exceptionHandling(errors -> errors.accessDeniedHandler(new StaffAccessDeniedHandler(objectMapper)))
             .oauth2ResourceServer(resourceServer -> resourceServer
