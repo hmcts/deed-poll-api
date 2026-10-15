@@ -6,8 +6,10 @@ import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.ccd.SupportingDocumentReference;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentOwner;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUploadAudit;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
@@ -46,13 +48,16 @@ public class DocumentStorageStates {
     private final DeedPollRepository deedPolls;
     private final DeedPollSupportingDocumentRepository documents;
     private final DeedPollSupportingDocumentTypeRepository types;
+    private final DocumentUploadAudit uploadAudit;
 
     public DocumentStorageStates(DeedPollRepository deedPolls,
                                  DeedPollSupportingDocumentRepository documents,
-                                 DeedPollSupportingDocumentTypeRepository types) {
+                                 DeedPollSupportingDocumentTypeRepository types,
+                                 DocumentUploadAudit uploadAudit) {
         this.deedPolls = deedPolls;
         this.documents = documents;
         this.types = types;
+        this.uploadAudit = uploadAudit;
     }
 
     /**
@@ -80,13 +85,13 @@ public class DocumentStorageStates {
      * Commits the upload's row as {@code UploadPending}, having sent nothing yet, with its first upload counted.
      *
      * <p>The case, the type and the case's readiness are all checked first, in that order, so a refused upload
-     * leaves no row behind and sends nothing.
+     * leaves no row behind and sends nothing. The row's audit event commits with it.
      *
      * @throws NotFoundError if there is no such case, or no such document type
      * @throws uk.gov.hmcts.reform.deedpoll.domain.ConflictError if the case has no CCD case yet
      */
     @Transactional
-    public Claim claim(DocumentUpload upload) {
+    public Claim claim(DocumentUpload upload, AuditActor actor) {
         DeedPoll parent = deedPolls.findById(upload.deedPollId())
             .orElseThrow(() -> new NotFoundError("DeedPoll " + upload.deedPollId() + " not found"));
         DeedPollSupportingDocumentType type = types.findById(upload.documentTypeId())
@@ -99,6 +104,7 @@ public class DocumentStorageStates {
         row.setStorageUploadAttempts((short) 1);
         row.setStorageAttemptedOn(AuditClock.now());
         DeedPollSupportingDocument saved = documents.save(row);
+        uploadAudit.uploaded(saved, actor);
         return new Claim(parent.getId(), saved.getId(), owner);
     }
 

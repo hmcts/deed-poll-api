@@ -8,10 +8,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CreateReferralRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.RecordConfirmationRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.ReferralResponse;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 
 import java.util.List;
@@ -106,6 +108,7 @@ public class CaseworkerReferralController {
      * about the payload is wrong, and the same request succeeds unchanged once the live referral is closed or
      * withdrawn. A case whose referrals are all terminal may be referred again.
      */
+    @AuditedAs(AuditAction.REFERRAL_CREATED)
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ReferralResponse create(@PathVariable("id") String id, @RequestBody CreateReferralRequest request) {
@@ -147,6 +150,7 @@ public class CaseworkerReferralController {
      * question still has its own callers -- the one-live-referral guard above and {@code currentReferralState} --
      * and answering it differently to serve this route would move both.
      */
+    @AuditedAs(AuditAction.REFERRAL_WITHDRAWN)
     @PostMapping("/{referralId}/withdrawal")
     public ReferralResponse withdraw(@PathVariable("id") String id,
                                      @PathVariable("referralId") String referralId) {
@@ -175,6 +179,7 @@ public class CaseworkerReferralController {
      * {@code Claimed} referral would take it out of the pool with no direction on it, and closing a
      * {@code Withdrawn} one would relabel an abandoned referral as an actioned one.
      */
+    @AuditedAs(AuditAction.REFERRAL_CLOSED)
     @PostMapping("/{referralId}/closure")
     public ReferralResponse close(@PathVariable("id") String id,
                                   @PathVariable("referralId") String referralId) {
@@ -210,6 +215,7 @@ public class CaseworkerReferralController {
      * <p>200 with the referral carrying its four confirmation columns, so a client re-rendering the tab has the
      * answer, its date and its author without a second read.
      */
+    @AuditedAs(AuditAction.REFERRAL_CONFIRMED)
     @PostMapping("/{referralId}/confirmation")
     public ReferralResponse recordConfirmation(@PathVariable("id") String id,
                                                @PathVariable("referralId") String referralId,

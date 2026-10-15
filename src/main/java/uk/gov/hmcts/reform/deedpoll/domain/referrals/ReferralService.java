@@ -7,6 +7,12 @@ import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntities;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntry;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditValue;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
@@ -22,6 +28,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.StaleClaim;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -157,6 +164,11 @@ import java.util.stream.Collectors;
  * {@link #refreshAwaitingConfirmation}, on the same recompute-from-truth terms and in the same transaction. That
  * one is public rather than private because the write that starts the wait is the email send, in another package.
  *
+ * <p><strong>Not a port either: every caller's write records one audit event</strong>, in its own transaction, so
+ * a transition whose event cannot be recorded does not commit. It names the referral columns the write set, with
+ * their before and after, and the state it moved between. {@link #touch} records none, because it is a judge reading,
+ * and {@link #reclaimStaleClaims()} none, because no person did it and its note already says so.
+ *
  * <p>The service returns entities, not view models, as {@code NoteService} does. Mapping to DTOs is the
  * controller's job.
  */
@@ -189,6 +201,7 @@ public class ReferralService {
     private final ReferralRepository referrals;
     private final NoteService notes;
     private final ReferralProperties properties;
+    private final AuditTrail audit;
 
     /**
      * For one thing only: bringing a referral loaded earlier in the transaction up to the row the lock now
@@ -200,12 +213,14 @@ public class ReferralService {
                            ReferralRepository referrals,
                            NoteService notes,
                            ReferralProperties properties,
-                           EntityManager entityManager) {
+                           EntityManager entityManager,
+                           AuditTrail audit) {
         this.deedPolls = deedPolls;
         this.referrals = referrals;
         this.notes = notes;
         this.properties = properties;
         this.entityManager = entityManager;
+        this.audit = audit;
     }
 
     /**
@@ -247,6 +262,12 @@ public class ReferralService {
         referral.setModifiedBy(caller.name());
 
         Referral saved = referrals.save(referral);
+        audit(AuditAction.REFERRAL_CREATED, caller, deedPollId, saved, null, List.of(
+            AuditValue.created("state", saved.getState()),
+            AuditValue.created("reasons", String.join(",", saved.getReasons())),
+            AuditValue.created("notes", saved.getNotes()),
+            AuditValue.created("urgency", saved.getUrgency()),
+            AuditValue.created("urgencyReason", saved.getUrgencyReason())));
         notes.createNote(deedPollId, new CreateNoteInput(ReferralNotes.raised(dto)), caller.noteAuthor());
         refreshCurrentReferralState(deedPollId);
         return saved;
@@ -380,6 +401,7 @@ public class ReferralService {
             throw new ConflictError(refusedWithdrawal(id, referral.getState()));
         }
 
+        final ReferralState fromState = referral.getState();
         referral.setState(ReferralState.Withdrawn);
         referral.setModifiedBy(caller.name());
         // Stamped here rather than left to @PreUpdate, for the reason WitnessService and SavedQueryService
@@ -389,6 +411,8 @@ public class ReferralService {
         referral.setModifiedOn(AuditClock.now());
 
         Referral saved = referrals.save(referral);
+        audit(AuditAction.REFERRAL_WITHDRAWN, caller, deedPollId, saved, fromState,
+              List.of(AuditValue.of("state", fromState, saved.getState())));
         notes.createNote(deedPollId, new CreateNoteInput(ReferralNotes.withdrawn(saved)), caller.noteAuthor());
         // Withdrawn is terminal, so this normally writes NULL: the case has no referral in play again, and is
         // referable again. A push that set the case to Withdrawn would be the drift CurrentReferralState warns of.
@@ -446,6 +470,7 @@ public class ReferralService {
         }
 
         LocalDateTime now = AuditClock.now();
+        final ReferralState fromState = referral.getState();
         referral.setState(ReferralState.Claimed);
         // The subject owns it; the name is what a caseworker reading the case sees. Both are written here and
         // only one of them is ever compared again.
@@ -459,6 +484,8 @@ public class ReferralService {
         referral.setModifiedOn(now);
 
         Referral saved = referrals.save(referral);
+        audit(AuditAction.REFERRAL_CLAIMED, caller, deedPollId, saved, fromState,
+              List.of(AuditValue.of("state", fromState, saved.getState())));
         // The claiming judge, not the service account: a person did this, and noteAuthor() is what puts their
         // name in createdBy -- which is why the prose says "claimed by the judiciary" rather than naming them
         // a second time.
@@ -549,6 +576,11 @@ public class ReferralService {
         Referral referral = requireHeldBy(findReferralForUpdate(deedPollId, id), id, caller);
 
         LocalDateTime now = AuditClock.now();
+        final ReferralState fromState = referral.getState();
+        final List<AuditValue> before = List.of(
+            AuditValue.of("decision", referral.getDecision(), direction.decision()),
+            AuditValue.of("directionsText", referral.getDirectionsText(), direction.directionsText().orElse(null)),
+            AuditValue.of("publishToGazette", referral.getPublishToGazette(), direction.publishToGazette()));
         referral.setState(ReferralState.Decided);
         referral.setDecision(direction.decision());
         referral.setDirectionsText(direction.directionsText().orElse(null));
@@ -565,6 +597,9 @@ public class ReferralService {
         referral.setModifiedOn(now);
 
         Referral saved = referrals.save(referral);
+        List<AuditValue> values = new ArrayList<>(List.of(AuditValue.of("state", fromState, saved.getState())));
+        values.addAll(before);
+        audit(AuditAction.REFERRAL_DIRECTED, caller, deedPollId, saved, fromState, values);
         // Composed from the saved referral rather than from the input, so the note reads the decision and the
         // Gazette answer as they were stored -- and is written inside this transaction, so a rolled-back
         // direction leaves no note announcing one.
@@ -622,6 +657,7 @@ public class ReferralService {
                 + " and can only be closed once it is " + ReferralState.Decided);
         }
 
+        final ReferralState fromState = referral.getState();
         referral.setState(ReferralState.Closed);
         referral.setModifiedBy(caller.name());
         // Stamped rather than left to @PreUpdate, for the reason withdraw's is: Hibernate fires @PreUpdate
@@ -629,6 +665,8 @@ public class ReferralService {
         referral.setModifiedOn(AuditClock.now());
 
         Referral saved = referrals.save(referral);
+        audit(AuditAction.REFERRAL_CLOSED, caller, deedPollId, saved, fromState,
+              List.of(AuditValue.of("state", fromState, saved.getState())));
         // The caseworker who actioned the direction, not the judge who gave it: decidedBy on the row still says
         // who directed it, and this note's createdBy is who carried it out.
         notes.createNote(deedPollId,
@@ -716,6 +754,9 @@ public class ReferralService {
         referral.setModifiedOn(now);
 
         Referral saved = referrals.save(referral);
+        audit(AuditAction.REFERRAL_CONFIRMED, caller, deedPollId, saved, saved.getState(),
+              List.of(AuditValue.created("confirmationOutcome", saved.getConfirmationOutcome())),
+              saved.getConfirmationOutcome().name());
         // Composed from the saved referral rather than from the input, so the note reads the outcome as it was
         // stored -- and written inside this transaction, so a rolled-back recording leaves no note announcing one.
         notes.createNote(deedPollId,
@@ -781,6 +822,32 @@ public class ReferralService {
             deedPolls.refreshCurrentReferralStates(reclaimedCases, LIVE_STATES);
         }
         return reclaimed;
+    }
+
+    private void audit(AuditAction action, CurrentUser caller, String deedPollId, Referral saved,
+                       ReferralState fromState, List<AuditValue> values) {
+        audit(action, caller, deedPollId, saved, fromState, values, null);
+    }
+
+    /**
+     * Records one caller's write to a referral: the columns it set, their values, the state transition if it made
+     * one, and for a confirmation the applicant's answer as its outcome.
+     */
+    private void audit(AuditAction action, CurrentUser caller, String deedPollId, Referral saved,
+                       ReferralState fromState, List<AuditValue> values, String outcome) {
+        AuditEntry entry = AuditEntry.of(action, AuditActor.of(caller), AuditEntities.REFERRAL,
+                                         saved.getId().toString(), deedPollId)
+            .withFields(values.stream().map(AuditValue::field).toList());
+        if (fromState != saved.getState()) {
+            if (fromState != null) {
+                entry = entry.withDetail("fromState", fromState.name());
+            }
+            entry = entry.withDetail("toState", saved.getState().name());
+        }
+        if (outcome != null) {
+            entry = entry.withDetail("outcome", outcome);
+        }
+        audit.record(entry, values);
     }
 
     /**

@@ -9,6 +9,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUploadAudit;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
@@ -37,11 +39,13 @@ public class DeedPreparations {
     private final JdbcTemplate jdbc;
     private final CorrespondenceDocumentReader reader;
     private final TransactionTemplate transaction;
+    private final DocumentUploadAudit uploadAudit;
 
     public DeedPreparations(DeedPollRepository cases, DeedPollSupportingDocumentRepository documents,
                             DeedDocumentService deeds, DeedGenerator generator, StagedPayloads payloads,
                             JdbcTemplate jdbc, PlatformTransactionManager transactions,
-                            CorrespondenceDocumentReader reader) {
+                            CorrespondenceDocumentReader reader,
+                            DocumentUploadAudit uploadAudit) {
         this.cases = cases;
         this.documents = documents;
         this.deeds = deeds;
@@ -49,6 +53,7 @@ public class DeedPreparations {
         this.payloads = payloads;
         this.jdbc = jdbc;
         this.reader = reader;
+        this.uploadAudit = uploadAudit;
         this.transaction = new TransactionTemplate(transactions);
     }
 
@@ -115,6 +120,8 @@ public class DeedPreparations {
         document.setSizeBytes(generated.size());
         document.setStorageState(DocumentStorageState.UploadPending);
         documents.saveAndFlush(document);
+        // The generated deed is the service's own write, as on the filesystem store; the event commits with the row.
+        uploadAudit.uploaded(document, AuditActor.system());
         String checksum = payloads.retain(document.getId(), generated.content());
         jdbc.update("""
             INSERT INTO deedpoll_deedpreparation

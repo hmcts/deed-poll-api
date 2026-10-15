@@ -56,6 +56,10 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
     private static final CurrentUser LIST_READER =
         CurrentUser.currentUser(List.of(Role.CASEWORKER), "Staff", "subject");
 
+    /** The audit trail refuses a user's write with no subject, so every context here carries one. */
+    private static final String SUBJECT = "caseworker-subject";
+    private static final WriteContext ADMIN = new WriteContext(true, null, SUBJECT);
+
     /** createDeedPoll cannot allocate a reference without a Date Received to derive the year. */
     private static final String RECEIVED = "2026-07-01T00:00:00.000Z";
 
@@ -348,7 +352,8 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
         @Test
         @DisplayName("drops privacy from a non-admin patch")
         void dropsPrivacyFromANonAdminPatch() {
-            deedPollService.updateDeedPoll(caseId, patch("privacy", Privacy.Private), new WriteContext(false, null));
+            deedPollService.updateDeedPoll(caseId, patch("privacy", Privacy.Private),
+                new WriteContext(false, null, SUBJECT));
 
             assertThat(stored(caseId).getPrivacy()).isEqualTo(Privacy.Normal);
         }
@@ -366,7 +371,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
         @Test
         @DisplayName("lets an admin set privacy")
         void letsAnAdminSetPrivacy() {
-            deedPollService.updateDeedPoll(caseId, patch("privacy", Privacy.Private), WriteContext.admin());
+            deedPollService.updateDeedPoll(caseId, patch("privacy", Privacy.Private), ADMIN);
 
             assertThat(stored(caseId).getPrivacy()).isEqualTo(Privacy.Private);
         }
@@ -380,7 +385,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
             deedPollService.updateDeedPoll(
                 caseId,
                 patch("privacy", Privacy.Private, "newForename", "Ada"),
-                new WriteContext(false, null));
+                new WriteContext(false, null, SUBJECT));
 
             assertThat(stored(caseId).getPrivacy()).isEqualTo(Privacy.Normal);
             assertThat(stored(caseId).getNewForename()).isEqualTo("Ada");
@@ -389,7 +394,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
         @Test
         @DisplayName("leaves a non-admin patch that does not mention privacy alone")
         void leavesAPatchThatDoesNotMentionPrivacyAlone() {
-            deedPollService.updateDeedPoll(caseId, patch("newForename", "Ada"), new WriteContext(false, null));
+            deedPollService.updateDeedPoll(caseId, patch("newForename", "Ada"), new WriteContext(false, null, SUBJECT));
 
             assertThat(stored(caseId).getPrivacy()).isEqualTo(Privacy.Normal);
             assertThat(stored(caseId).getNewForename()).isEqualTo("Ada");
@@ -407,7 +412,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
             deedPollService.updateDeedPoll(
                 privateCase,
                 patch("privacy", Privacy.Normal),
-                new WriteContext(false, null));
+                new WriteContext(false, null, SUBJECT));
 
             assertThat(stored(privateCase).getPrivacy()).isEqualTo(Privacy.Private);
         }
@@ -430,7 +435,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
         void ignoresANonAdminRequestForPrivateOnAnUnknownTypeCase() {
             DeedPoll created = deedPollService.createDeedPoll(
                 patch("type", DeedPollType.Unknown, "privacy", Privacy.Private, "dateReceived", RECEIVED),
-                new WriteContext(false, null)).deedPoll();
+                new WriteContext(false, null, SUBJECT)).deedPoll();
 
             assertThat(created.getPrivacy()).isEqualTo(Privacy.Normal);
         }
@@ -440,7 +445,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
         void ignoresANonAdminRequestForPrivateWithNoType() {
             DeedPoll created = deedPollService.createDeedPoll(
                 patch("privacy", Privacy.Private, "dateReceived", RECEIVED),
-                new WriteContext(false, null)).deedPoll();
+                new WriteContext(false, null, SUBJECT)).deedPoll();
 
             assertThat(created.getPrivacy()).isEqualTo(Privacy.Normal);
         }
@@ -452,7 +457,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
             // authorisation check.
             DeedPoll created = deedPollService.createDeedPoll(
                 patch("type", DeedPollType.MinorTransgender, "dateReceived", RECEIVED),
-                new WriteContext(false, null)).deedPoll();
+                new WriteContext(false, null, SUBJECT)).deedPoll();
 
             assertThat(created.getPrivacy()).isEqualTo(Privacy.Private);
         }
@@ -462,7 +467,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
         void letsAnAdminCreateAnUnknownTypeCaseAsPrivate() {
             DeedPoll created = deedPollService.createDeedPoll(
                 patch("type", DeedPollType.Unknown, "privacy", Privacy.Private, "dateReceived", RECEIVED),
-                WriteContext.admin()).deedPoll();
+                ADMIN).deedPoll();
 
             assertThat(created.getPrivacy()).isEqualTo(Privacy.Private);
         }
@@ -478,7 +483,7 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
                     "type", DeedPollType.DeedOfRelinquishment,
                     "privacy", Privacy.Normal,
                     "dateReceived", RECEIVED),
-                new WriteContext(false, null)).deedPoll();
+                new WriteContext(false, null, SUBJECT)).deedPoll();
 
             assertThat(created.getPrivacy()).isEqualTo(Privacy.Normal);
         }
@@ -593,14 +598,14 @@ class DeedPollServiceTest extends AbstractPostgresContainerTest {
         // `delete data.createdBy`.
         DeedPoll created = deedPollService.createDeedPoll(
             patch("dateReceived", RECEIVED),
-            new WriteContext(false, "A Caseworker")).deedPoll();
+            new WriteContext(false, "A Caseworker", SUBJECT)).deedPoll();
         assertThat(created.getCreatedBy()).isEqualTo("A Caseworker");
         assertThat(created.getModifiedBy()).isEqualTo("A Caseworker");
 
         deedPollService.updateDeedPoll(
             created.getId(),
             patch("newForename", "Ada"),
-            new WriteContext(false, "B Caseworker"));
+            new WriteContext(false, "B Caseworker", SUBJECT));
 
         assertThat(stored(created.getId()).getCreatedBy()).isEqualTo("A Caseworker");
         assertThat(stored(created.getId()).getModifiedBy()).isEqualTo("B Caseworker");

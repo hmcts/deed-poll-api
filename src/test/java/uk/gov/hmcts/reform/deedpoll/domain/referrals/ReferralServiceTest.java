@@ -13,6 +13,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
@@ -161,6 +162,9 @@ class ReferralServiceTest {
         // records the row, because an INSERT is what makes the new referral visible to the state projection.
         when(referrals.save(any())).thenAnswer(call -> {
             Referral written = call.getArgument(0);
+            if (written.getId() == null) {
+                written.setId(UUID.randomUUID());
+            }
             if (rows.stream().noneMatch(row -> row == written)) {
                 rows.add(written);
             }
@@ -199,7 +203,7 @@ class ReferralServiceTest {
      */
     private ReferralService serviceWithClaimExpiry(Duration window) {
         return new ReferralService(deedPolls, referrals, notes, new ReferralProperties(window),
-                                   mock(EntityManager.class));
+                                   mock(EntityManager.class), mock(AuditTrail.class));
     }
 
     /** The case exists, so the parent check passes. */

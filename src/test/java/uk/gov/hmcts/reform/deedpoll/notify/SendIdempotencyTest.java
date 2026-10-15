@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
@@ -94,6 +95,9 @@ class SendIdempotencyTest extends AbstractPostgresContainerTest {
     @Autowired
     private PlatformTransactionManager transactionManager;
 
+    @Autowired
+    private JdbcTemplate jdbc;
+
     @BeforeEach
     @AfterEach
     void clearTables() {
@@ -123,6 +127,15 @@ class SendIdempotencyTest extends AbstractPostgresContainerTest {
         // One email owed, so the Notes grid says it once. A second marker would leave the case reading as though
         // the applicant had been written to twice, and notes are never revised.
         assertThat(chaseNotes(caseId)).hasSize(1);
+        // And the trail records it once, naming the template and the caseworker, never the body.
+        assertThat(jdbc.queryForList("SELECT actor_id, entity_id, detail ->> 'templateId' AS template_id, "
+            + "array_length(fields, 1) AS fields FROM deedpoll_audit_event WHERE case_id = ? AND action = 'EMAIL_SENT'",
+                                     caseId))
+            .singleElement().satisfies(event -> assertThat(event)
+                .containsEntry("actor_id", "caseworker-1")
+                .containsEntry("entity_id", first.id().toString())
+                .containsEntry("template_id", "CHASE_MISSING_DOCUMENTS")
+                .containsEntry("fields", null));
     }
 
     @Test

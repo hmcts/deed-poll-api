@@ -15,7 +15,10 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
+import org.springframework.security.oauth2.server.resource.web.access.BearerTokenAccessDeniedHandler;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
+import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 import uk.gov.hmcts.reform.authorisation.ServiceAuthorisationApi;
@@ -221,6 +224,7 @@ public class SecurityConfiguration {
 
         ServiceAuthFilter serviceAuthFilter = new ServiceAuthFilter(
             new ServiceAuthTokenValidator(serviceAuthorisationApi), CCD_PERSISTENCE_CALLERS);
+        AuthenticationEntryPoint entryPoint = loggingEntryPoint();
         String[] grantedProfiles = DeedPollRoleMapping.granted().stream()
             .map(DeedPollAccessProfile::getRole)
             .toArray(String[]::new);
@@ -231,7 +235,11 @@ public class SecurityConfiguration {
             .securityMatcher(PathPatternRequestMatcher.withDefaults().matcher(CCD_PERSISTENCE_PATH))
             .addFilterBefore(serviceAuthFilter, BearerTokenAuthenticationFilter.class)
             .authorizeHttpRequests(requests -> requests.anyRequest().hasAnyAuthority(grantedProfiles))
+            .exceptionHandling(errors -> errors
+                .authenticationEntryPoint(entryPoint)
+                .accessDeniedHandler(new LoggingAccessDeniedHandler(new BearerTokenAccessDeniedHandler())))
             .oauth2ResourceServer(resourceServer -> resourceServer
+                .authenticationEntryPoint(entryPoint)
                 .jwt(jwt -> jwt
                     .decoder(jwtDecoder)
                     .jwtAuthenticationConverter(new CcdCallerAuthenticationConverter(
@@ -266,6 +274,7 @@ public class SecurityConfiguration {
         throws Exception {
 
         StaffGate caseworkerGate = new StaffGate(StaffArea.CASEWORKER, StaffGate.Mode.of(staffGateMode));
+        AuthenticationEntryPoint entryPoint = loggingEntryPoint();
 
         return http
             .authorizeHttpRequests(requests -> requests
@@ -279,8 +288,11 @@ public class SecurityConfiguration {
                 .requestMatchers(StaffArea.CASEWORKER.pattern()).access(caseworkerGate.manager())
                 .requestMatchers(HttpMethod.GET, ANY_AUTHENTICATED_PATHS).authenticated()
                 .anyRequest().authenticated())
-            .exceptionHandling(errors -> errors.accessDeniedHandler(new StaffAccessDeniedHandler(objectMapper)))
+            .exceptionHandling(errors -> errors
+                .authenticationEntryPoint(entryPoint)
+                .accessDeniedHandler(new LoggingAccessDeniedHandler(new StaffAccessDeniedHandler(objectMapper))))
             .oauth2ResourceServer(resourceServer -> resourceServer
+                .authenticationEntryPoint(entryPoint)
                 .jwt(jwt -> jwt
                     .decoder(jwtDecoder)
                     .jwtAuthenticationConverter(authenticationConverter)))
@@ -290,5 +302,14 @@ public class SecurityConfiguration {
             .formLogin(AbstractHttpConfigurer::disable)
             .logout(AbstractHttpConfigurer::disable)
             .build();
+    }
+
+    /**
+     * Spring's bearer challenge, logged first (audit plan, decision 12). Set on the resource server, which uses it
+     * for a token that fails verification, and on the chain's exception handling, which uses it for no token at all.
+     * The S2S filter's own refusals on {@code /ccd-persistence/**} answer before either and are not logged here.
+     */
+    private static AuthenticationEntryPoint loggingEntryPoint() {
+        return new LoggingAuthenticationEntryPoint(new BearerTokenAuthenticationEntryPoint());
     }
 }

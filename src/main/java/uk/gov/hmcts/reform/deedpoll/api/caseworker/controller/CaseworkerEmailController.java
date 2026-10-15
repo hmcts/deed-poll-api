@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseEmailsResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.EmailPreviewResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.PreviewEmailRequest;
@@ -14,6 +15,7 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SendEmailRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SentEmailResponse;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.notify.CaseEmailService;
 import uk.gov.hmcts.reform.deedpoll.notify.EmailTemplate;
 import uk.gov.hmcts.reform.deedpoll.notify.NotificationOutbox;
@@ -160,6 +162,7 @@ public class CaseworkerEmailController {
      * <p>A missing or unparseable key is a 400 naming the header, not a guess: a generated substitute would make
      * every retry a new send, which is the behaviour this replaced.
      */
+    @AuditedAs(AuditAction.EMAIL_SENT)
     @PostMapping("/{template}")
     public SentEmailResponse send(@PathVariable("id") String id,
                                   @PathVariable("template") String template,

@@ -4,6 +4,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
@@ -42,9 +43,10 @@ class GazettePermissionsTest {
         GazetteSettingsRepository settings = mock(GazetteSettingsRepository.class);
         GazetteNoticeBatchRepository batches = mock(GazetteNoticeBatchRepository.class);
         GazetteNoticeBatchCaseRepository members = mock(GazetteNoticeBatchCaseRepository.class);
-        GazetteRequestLedger ledger = new GazetteRequestLedger(requests, cases, notes, transactions, configuration);
+        GazetteRequestLedger ledger = new GazetteRequestLedger(requests, cases, notes, transactions, configuration,
+            mock(AuditTrail.class));
         GazettePreviews previews = new GazettePreviews(cases, requests, settings, configuration);
-        GazetteSettingsService settingsService = new GazetteSettingsService(settings);
+        GazetteSettingsService settingsService = new GazetteSettingsService(settings, mock(AuditTrail.class));
         GazetteNoticeHistory history = new GazetteNoticeHistory(batches, members);
         UUID key = UUID.randomUUID();
 
@@ -67,7 +69,7 @@ class GazettePermissionsTest {
         CurrentUser caller = CurrentUser.currentUser(roles, "Staff", "subject");
         DeedPollRepository cases = mock(DeedPollRepository.class);
         ReferenceNumberService references = mock(ReferenceNumberService.class);
-        DeedPollService service = new DeedPollService(cases, references);
+        DeedPollService service = new DeedPollService(cases, references, mock(AuditTrail.class));
         ListFilters.ListFilter filter = ListFilters.filterFor("readyForPublication");
         CaseQuery query = CaseQuery.parse(List.of("type:is:Adult"));
 

@@ -77,6 +77,8 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
     private DeedPollService caseService;
     @Autowired
     private DocumentStorageStates states;
+    @Autowired
+    private uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUploadAudit uploadAudit;
     private final List<String> createdCases = new ArrayList<>();
     private final List<String> stages = new ArrayList<>();
     private final MovingClock clock = new MovingClock();
@@ -140,7 +142,7 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
             return cases.lockForDeedPreparation(call.getArgument(0));
         }).when(observedCases).lockForDeedPreparation(owner.id());
         var replica = new OwnedStaging(jdbc, transactions, StagingPolicyTest.policy(2, 6, 2), payloads,
-            observedCases, documents, types, Optional.of(remote), reader, clock);
+            observedCases, documents, types, Optional.of(remote), reader, uploadAudit, clock);
         try (var executor = Executors.newFixedThreadPool(2)) {
             var requests = new ArrayList<java.util.concurrent.Future<?>>();
             new TransactionTemplate(transactions).executeWithoutResult(status -> {
@@ -282,6 +284,10 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
             .isEqualTo(document);
         verify(store, times(1)).save(any());
         assertThat(documents.findById(document).orElseThrow().getOriginalName()).isEqualTo("original.pdf");
+        assertThat(jdbc.queryForObject("""
+            SELECT count(*) FROM deedpoll_audit_event
+            WHERE entity_id = ? AND action = 'DOCUMENT_UPLOADED' AND actor_id = ?
+            """, Long.class, document, owner.subject())).isEqualTo(1L);
         assertThatThrownBy(() -> staging.remove(owner, stage.id())).isInstanceOf(ConflictError.class);
     }
 
@@ -427,7 +433,7 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
         var stopped = mock(CdamDocumentUploads.class);
         doThrow(new SimulatedDeath()).when(stopped).continuePrepared(anyString(), anyString(), any());
         var beforeClaim = new OwnedStaging(jdbc, transactions, StagingPolicyTest.policy(2, 6, 2),
-            payloads, cases, documents, types, Optional.of(stopped), reader, clock);
+            payloads, cases, documents, types, Optional.of(stopped), reader, uploadAudit, clock);
         assertThatThrownBy(() -> beforeClaim.promote(owner, stage.id(), owner.id(), typeId))
             .isInstanceOf(SimulatedDeath.class);
         var reserved = documents.findByDeedPollIdOrderByCreatedOnAsc(owner.id()).getFirst();
@@ -506,7 +512,8 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
         new TransactionTemplate(transactions).executeWithoutResult(status -> payloads.retain(preparation, new byte[3]));
         long used = jdbc.queryForObject("SELECT sum(\"sizeBytes\") FROM deedpoll_stagedpayload", Long.class);
         var bounded = new OwnedStaging(jdbc, transactions, StagingPolicyTest.policy(2, 6, 2),
-            new StagedPayloads(jdbc, used + 3), cases, documents, types, Optional.of(remote), reader, clock);
+            new StagedPayloads(jdbc, used + 3), cases, documents, types, Optional.of(remote), reader,
+            uploadAudit, clock);
         var first = owner();
         var second = owner();
         var results = race(() -> admit(bounded, first, UUID.randomUUID()),
@@ -521,7 +528,7 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
         var policy = new StagingPolicy(true, 50000000, 5, 50000000, 50000000, Duration.ofHours(1),
             Duration.ofHours(2), 60000, 10, 26214400, Duration.ofSeconds(10));
         var bounded = new OwnedStaging(jdbc, transactions, policy, new StagedPayloads(jdbc, 50000000),
-            cases, documents, types, Optional.of(remote), reader, clock);
+            cases, documents, types, Optional.of(remote), reader, uploadAudit, clock);
         var owner = owner();
         for (int i = 0; i < 3; i++) {
             var receipt = bounded.admit(owner, UUID.randomUUID(),
@@ -563,7 +570,7 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
 
     private OwnedStaging replica(StagingPolicy policy) {
         return new OwnedStaging(jdbc, transactions, policy, payloads, cases, documents, types,
-            Optional.of(remote), reader, clock);
+            Optional.of(remote), reader, uploadAudit, clock);
     }
 
     private StageOwner owner() {

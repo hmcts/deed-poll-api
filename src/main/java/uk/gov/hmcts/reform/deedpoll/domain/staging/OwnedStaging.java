@@ -13,7 +13,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUploadAudit;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
@@ -49,6 +51,7 @@ public class OwnedStaging {
     private final DeedPollSupportingDocumentTypeRepository types;
     private final Optional<CdamDocumentUploads> uploads;
     private final CorrespondenceDocumentReader reader;
+    private final DocumentUploadAudit uploadAudit;
     private final Clock clock;
 
     @Autowired
@@ -56,15 +59,17 @@ public class OwnedStaging {
                         StagedPayloads payloads, DeedPollRepository cases,
                         DeedPollSupportingDocumentRepository documents,
                         DeedPollSupportingDocumentTypeRepository types, Optional<CdamDocumentUploads> uploads,
-                        CorrespondenceDocumentReader reader) {
-        this(jdbc, transactions, policy, payloads, cases, documents, types, uploads, reader, Clock.systemUTC());
+                        CorrespondenceDocumentReader reader, DocumentUploadAudit uploadAudit) {
+        this(jdbc, transactions, policy, payloads, cases, documents, types, uploads, reader, uploadAudit,
+            Clock.systemUTC());
     }
 
     public OwnedStaging(JdbcTemplate jdbc, PlatformTransactionManager transactions, StagingPolicy policy,
                         StagedPayloads payloads, DeedPollRepository cases,
                         DeedPollSupportingDocumentRepository documents,
                         DeedPollSupportingDocumentTypeRepository types, Optional<CdamDocumentUploads> uploads,
-                        CorrespondenceDocumentReader reader, Clock clock) {
+                        CorrespondenceDocumentReader reader, DocumentUploadAudit uploadAudit,
+                        Clock clock) {
         this.jdbc = jdbc;
         this.transaction = new TransactionTemplate(transactions);
         this.policy = policy;
@@ -74,6 +79,7 @@ public class OwnedStaging {
         this.types = types;
         this.uploads = uploads;
         this.reader = reader;
+        this.uploadAudit = uploadAudit;
         this.clock = clock;
         if (policy.enabled() && uploads.isEmpty()) {
             throw new IllegalArgumentException("Owned staging requires CDAM storage");
@@ -194,6 +200,8 @@ public class OwnedStaging {
         document.setSizeBytes(stage.size());
         document.setStorageState(DocumentStorageState.UploadPending);
         documents.saveAndFlush(document);
+        // The promoting owner is the uploader; the event commits with the reservation, before any remote work.
+        uploadAudit.uploaded(document, new AuditActor(owner.subject(), owner.subject(), false));
         jdbc.update("""
             UPDATE deedpoll_ownedstage SET state = 'Promoting', "caseId" = ?, "documentId" = ?,
                 "documentTypeId" = ? WHERE id = ?

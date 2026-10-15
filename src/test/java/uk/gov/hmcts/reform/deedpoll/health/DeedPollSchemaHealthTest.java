@@ -130,7 +130,9 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
             "deedpoll_gazette_request",
             "deedpoll_gazette_request_case",
             "deedpoll_gazette_reservation",
-            "deedpoll_gazette_request_file"
+            "deedpoll_gazette_request_file",
+            "deedpoll_audit_event",
+            "deedpoll_audit_event_value"
         );
 
         @Test

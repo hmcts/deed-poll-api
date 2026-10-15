@@ -9,6 +9,7 @@ import uk.gov.hmcts.reform.deedpoll.ccd.CaseDocumentsEvent;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingRule;
 import uk.gov.hmcts.reform.deedpoll.ccd.SupportingDocumentReference;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentOwner;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUpload;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.RemoteDocumentUploads;
@@ -73,11 +74,11 @@ public class CdamDocumentUploads implements RemoteDocumentUploads {
     }
 
     @Override
-    public DeedPollSupportingDocument upload(DocumentUpload upload) {
+    public DeedPollSupportingDocument upload(DocumentUpload upload, AuditActor actor) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("A CDAM upload must not be called inside a transaction");
         }
-        DocumentStorageStates.Claim claim = states.claim(upload);
+        DocumentStorageStates.Claim claim = states.claim(upload, actor);
         send(upload, claim);
         return attach(claim);
     }

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
@@ -93,7 +94,8 @@ class DomainErrorHandlerTest {
     void forbiddenIsA403() {
         // Kept apart deliberately: a 401 tells a caseworker to re-authenticate, and one who simply lacks the
         // admin role would do that forever without getting any further.
-        ResponseEntity<ApiError> response = handler.forbidden(new ForbiddenError("Requires the admin role"));
+        ResponseEntity<ApiError> response = handler.forbidden(new ForbiddenError("Requires the admin role"),
+            new MockHttpServletRequest("GET", "/caseworker/cases"));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(response.getBody()).isNotNull();

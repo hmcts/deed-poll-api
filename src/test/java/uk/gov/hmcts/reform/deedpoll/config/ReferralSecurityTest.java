@@ -202,9 +202,17 @@ class ReferralSecurityTest {
         notes = mock(NoteService.class);
         service = new ReferralService(deedPolls, referrals, notes,
                                       new ReferralProperties(Duration.ofHours(2)),
-                                      mock(EntityManager.class));
+                                      mock(EntityManager.class),
+                                      mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
 
-        when(referrals.save(any())).thenAnswer(call -> call.getArgument(0));
+        when(referrals.save(any())).thenAnswer(call -> {
+            // An id, as a real save allocates one: the audit event is keyed on it.
+            Referral written = call.getArgument(0);
+            if (written.getId() == null) {
+                written.setId(UUID.randomUUID());
+            }
+            return written;
+        });
         when(referrals.findStaleClaims(any(), any())).thenReturn(List.of());
     }
 

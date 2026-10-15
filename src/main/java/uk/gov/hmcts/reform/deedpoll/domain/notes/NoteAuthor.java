@@ -13,11 +13,26 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.WriteContext;
  * unattributed write is labelled as one rather than left blank. The constant is read from
  * {@link WriteContext} rather than restated, so the case and its notes cannot disagree about what an
  * unattributed write is called.
+ *
+ * <p>{@code userId} and {@code service} are not the reference's: they are what the audit trail records as the
+ * actor. A user's note carries the IDAM subject, and one with none is refused there. A note the service writes on
+ * its own behalf -- the outbox's failure note, a stale referral's release -- is {@link #service}, and may still
+ * stamp the name of the person whose action it reports.
  */
-public record NoteAuthor(String userName) {
+public record NoteAuthor(String userName, String userId, boolean service) {
 
     /** A caller with no name, attributed to the service account. */
-    public static final NoteAuthor NONE = new NoteAuthor(null);
+    public static final NoteAuthor NONE = service(null);
+
+    /** A note written by this user. */
+    public static NoteAuthor user(String userName, String userId) {
+        return new NoteAuthor(userName, userId, false);
+    }
+
+    /** A note the service writes on its own behalf, stamped with this name (or the service account's). */
+    public static NoteAuthor service(String userName) {
+        return new NoteAuthor(userName, null, true);
+    }
 
     /**
      * The name to stamp on this write.

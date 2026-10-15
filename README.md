@@ -648,6 +648,15 @@ code, both when the build itself runs inside a container that shares the host's 
   containers over the Docker bridge network in preference to their published port — see
   `ContainerDatabase` for the detail.
 
+### The audit trail
+
+V36 adds `deedpoll_audit_event` (who, when, action, entity, case and field names; kept 7 years) and
+`deedpoll_audit_event_value` (before/after values, disposed with the case). Row triggers make both append-only;
+only the two `SECURITY DEFINER` disposal functions can delete, and nothing schedules them yet. Every
+caseworker and judicial write records an event in its own transaction, so a failed audit insert rolls the change
+back. A case view is audited and fails open; a document download is audited and fails closed. Authentication and
+authorisation failures are logged by `SecurityEvents` with identifiers only. No endpoint reads the trail yet.
+
 ### Running the application
 
 Create the image of the application by executing the following command:

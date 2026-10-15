@@ -161,19 +161,22 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
      *
      * <p>Kept here rather than assembled at each call site: the two types are the same two facts a write
      * is entitled to know, and a controller that built its own could quietly pass
-     * {@code isAdmin = false} for an admin and silently drop the privacy fields.
+     * {@code isAdmin = false} for an admin and silently drop the privacy fields. The subject travels with them
+     * so the audit trail can name the actor; it is read raw rather than through {@link #requireUserId()},
+     * because whether a missing one is a refusal is the audit trail's decision, not this conversion's.
      */
     public WriteContext writeContext() {
-        return new WriteContext(can(Capability.OVERRIDE_PRIVACY), name);
+        return new WriteContext(can(Capability.OVERRIDE_PRIVACY), name, userId);
     }
 
     /**
      * This caller as the author a note write needs.
      *
      * <p>A note write has no admin-only field, so it takes the name alone -- see {@link NoteAuthor} for
-     * why that type exists rather than the whole context being handed over.
+     * why that type exists rather than the whole context being handed over. The subject travels with it for the
+     * audit trail, read raw for the reason {@link #writeContext()} gives.
      */
     public NoteAuthor noteAuthor() {
-        return new NoteAuthor(name);
+        return NoteAuthor.user(name, userId);
     }
 }

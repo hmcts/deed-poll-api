@@ -208,6 +208,12 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
         assertThat(ledger.sent(result.claim(), provider, 3)).isTrue();
         assertThat(state(result)).isEqualTo(GazetteRequestState.Sent);
         assertThat(noteCount(id)).isEqualTo(2);
+        assertThat(sentEvents(id)).singleElement().satisfies(event -> assertThat(event)
+            .containsEntry("actor_id", SUBJECT)
+            .containsEntry("actor_name", "Gazette Delivery Manager")
+            .containsEntry("entity_type", "GazetteRequest")
+            .containsEntry("entity_id", result.request().id().toString())
+            .containsEntry("batch_id", result.request().id().toString()));
         assertThat(noticeDate(id)).isNotNull();
         assertThat(reservations(id)).isOne();
         cases.updateDeedPoll(id, DeedPollPatch.of(Map.of("newForename", "Corrected")));
@@ -360,6 +366,7 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
         assertThat(race(() -> ledger.sent(result.claim(), receipt, 1), () -> ledger.sent(result.claim(), receipt, 1)))
             .containsExactly(true, true);
         assertThat(noteCount(id)).isEqualTo(2);
+        assertThat(sentEvents(id)).hasSize(1);
         assertThat(noticeDate(id)).isNotNull();
         assertThat(reservations(id)).isOne();
     }
@@ -540,6 +547,13 @@ class GazetteRequestLedgerTest extends AbstractPostgresContainerTest {
 
     private GazetteRequestState state(Reservation row) {
         return ledger.read(DELIVERY_MANAGER, row.request().id()).state();
+    }
+
+    /** The audit events a settlement as sent recorded for one member case. */
+    private List<Map<String, Object>> sentEvents(String id) {
+        return jdbc.queryForList("SELECT actor_id, actor_name, entity_type, entity_id, "
+            + "detail ->> 'batchId' AS batch_id FROM deedpoll_audit_event "
+            + "WHERE case_id = ? AND action = 'GAZETTE_NOTICE_SENT'", id);
     }
 
     private int noteCount(String id) {

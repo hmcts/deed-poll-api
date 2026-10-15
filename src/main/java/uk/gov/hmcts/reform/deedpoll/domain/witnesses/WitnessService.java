@@ -3,6 +3,12 @@ package uk.gov.hmcts.reform.deedpoll.domain.witnesses;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntities;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntry;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditValue;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
@@ -11,7 +17,10 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollWitnessRepository;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Nested CRUD for a case's witnesses and declarants.
@@ -33,7 +42,9 @@ import java.util.List;
  * {@code modifiedOn} but no {@code createdBy} / {@code modifiedBy} -- see {@code DeedPollWitness} in
  * {@code reference/deed-poll.prisma} -- so no author is threaded through these methods and there is no
  * {@code WitnessAuthor} to match {@code NoteAuthor}. Attribution for a witness change is the case's own
- * {@code modifiedBy} plus the declaration on file.
+ * {@code modifiedBy} plus the declaration on file -- and, since the audit trail, its event: each write takes the
+ * caller, records one event in its own transaction with the changed fields' before and after, and the short forms
+ * that take none are writes by the service account.
  *
  * <p>One rule here is not in the reference's service: deletion requires the Administrator role. The reference
  * expressed that as middleware in front of its route, and there is no route layer to hang it on in the domain,
@@ -53,12 +64,23 @@ import java.util.List;
 @Service
 public class WitnessService {
 
+    private static final List<String> FIELDS =
+        List.of("witnessName", "witnessAddress", "witnessOccupation", "declarant");
+
     private final DeedPollRepository deedPolls;
     private final DeedPollWitnessRepository witnesses;
+    private final AuditTrail audit;
 
-    public WitnessService(DeedPollRepository deedPolls, DeedPollWitnessRepository witnesses) {
+    public WitnessService(DeedPollRepository deedPolls, DeedPollWitnessRepository witnesses, AuditTrail audit) {
         this.deedPolls = deedPolls;
         this.witnesses = witnesses;
+        this.audit = audit;
+    }
+
+    /** Adds a witness to a case as the service account. */
+    @Transactional
+    public DeedPollWitness createWitness(String deedPollId, CreateWitnessInput dto) {
+        return createWitness(deedPollId, dto, AuditActor.system());
     }
 
     /**
@@ -67,7 +89,11 @@ public class WitnessService {
      * @throws NotFoundError if there is no such case
      */
     @Transactional
-    public DeedPollWitness createWitness(String deedPollId, CreateWitnessInput dto) {
+    public DeedPollWitness createWitness(String deedPollId, CreateWitnessInput dto, CurrentUser caller) {
+        return createWitness(deedPollId, dto, AuditActor.of(caller));
+    }
+
+    private DeedPollWitness createWitness(String deedPollId, CreateWitnessInput dto, AuditActor actor) {
         DeedPoll parent = requireCase(deedPollId);
         DeedPollWitness witness = new DeedPollWitness();
         witness.setDeedPoll(parent);
@@ -75,7 +101,9 @@ public class WitnessService {
         witness.setWitnessAddress(dto.witnessAddress());
         witness.setWitnessOccupation(dto.witnessOccupation());
         witness.setDeclarant(dto.declarant());
-        return witnesses.save(witness);
+        DeedPollWitness saved = witnesses.save(witness);
+        record(AuditAction.WITNESS_CREATED, actor, saved, FIELDS, Map.of(), fieldsOf(saved));
+        return saved;
     }
 
     /**
@@ -106,6 +134,12 @@ public class WitnessService {
             .orElseThrow(() -> new NotFoundError("Witness " + id + " not found"));
     }
 
+    /** The witness under a row lock, so the values an audit records as replaced are the ones actually replaced. */
+    private DeedPollWitness findWitnessForUpdate(String deedPollId, String id) {
+        return witnesses.findByIdAndDeedPollIdForUpdate(id, deedPollId)
+            .orElseThrow(() -> new NotFoundError("Witness " + id + " not found"));
+    }
+
     /**
      * Amends a witness.
      *
@@ -116,8 +150,19 @@ public class WitnessService {
      * @throws NotFoundError if there is no such witness, or it belongs to another case
      */
     @Transactional
+    public DeedPollWitness updateWitness(String deedPollId, String id, UpdateWitnessInput dto, CurrentUser caller) {
+        return updateWitness(deedPollId, id, dto, AuditActor.of(caller));
+    }
+
+    /** Amends a witness as the service account. */
+    @Transactional
     public DeedPollWitness updateWitness(String deedPollId, String id, UpdateWitnessInput dto) {
-        DeedPollWitness witness = findWitness(deedPollId, id);
+        return updateWitness(deedPollId, id, dto, AuditActor.system());
+    }
+
+    private DeedPollWitness updateWitness(String deedPollId, String id, UpdateWitnessInput dto, AuditActor actor) {
+        DeedPollWitness witness = findWitnessForUpdate(deedPollId, id);
+        final Map<String, Object> before = fieldsOf(witness);
         dto.witnessName().ifPresent(witness::setWitnessName);
         dto.witnessAddress().ifPresent(witness::setWitnessAddress);
         dto.witnessOccupation().ifPresent(witness::setWitnessOccupation);
@@ -126,7 +171,9 @@ public class WitnessService {
         // finds a changed property -- so an empty patch, or one resending the values already stored, would
         // leave modifiedOn where it was. The reference's `prisma.update` writes @updatedAt on every call.
         witness.setModifiedOn(AuditClock.now());
-        return witnesses.save(witness);
+        DeedPollWitness saved = witnesses.save(witness);
+        record(AuditAction.WITNESS_UPDATED, actor, saved, named(dto), before, fieldsOf(saved));
+        return saved;
     }
 
     /**
@@ -155,7 +202,38 @@ public class WitnessService {
     @Transactional
     public void removeWitness(String deedPollId, String id, CurrentUser caller) {
         caller.require(Capability.DELETE_WITNESS);
-        witnesses.delete(findWitness(deedPollId, id));
+        DeedPollWitness witness = findWitnessForUpdate(deedPollId, id);
+        witnesses.delete(witness);
+        record(AuditAction.WITNESS_DELETED, AuditActor.of(caller), witness, FIELDS, fieldsOf(witness),
+               Map.of());
+    }
+
+    /** The four fields a witness write can set, in the order the audit trail names them. */
+    private static Map<String, Object> fieldsOf(DeedPollWitness witness) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put(FIELDS.get(0), witness.getWitnessName());
+        values.put(FIELDS.get(1), witness.getWitnessAddress());
+        values.put(FIELDS.get(2), witness.getWitnessOccupation());
+        values.put(FIELDS.get(3), witness.isDeclarant());
+        return values;
+    }
+
+    /** The fields a patch names, which an absent field is not one of. */
+    private static List<String> named(UpdateWitnessInput dto) {
+        List<String> named = new ArrayList<>();
+        dto.witnessName().ifPresent(value -> named.add(FIELDS.get(0)));
+        dto.witnessAddress().ifPresent(value -> named.add(FIELDS.get(1)));
+        dto.witnessOccupation().ifPresent(value -> named.add(FIELDS.get(2)));
+        dto.declarant().ifPresent(value -> named.add(FIELDS.get(3)));
+        return named;
+    }
+
+    private void record(AuditAction action, AuditActor actor, DeedPollWitness witness, List<String> fields,
+                        Map<String, Object> before, Map<String, Object> after) {
+        audit.record(
+            AuditEntry.of(action, actor, AuditEntities.WITNESS, witness.getId(), witness.getDeedPoll().getId())
+                .withFields(fields),
+            FIELDS.stream().map(field -> AuditValue.of(field, before.get(field), after.get(field))).toList());
     }
 
     private DeedPoll requireCase(String deedPollId) {

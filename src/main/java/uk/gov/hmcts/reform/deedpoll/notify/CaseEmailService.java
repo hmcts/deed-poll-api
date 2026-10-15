@@ -14,6 +14,11 @@ import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.IncompleteDataError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntities;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntry;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedDocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations;
@@ -294,6 +299,12 @@ public class CaseEmailService {
     private final Optional<CdamDocumentUploads> remote;
     private final TransactionTemplate transaction;
 
+    /**
+     * Only to record a fresh enqueue -- see {@link #enqueue}. The event names the template and never the body: what
+     * the applicant reads is on the outbox row, and the Emails tab is where it is read.
+     */
+    private final AuditTrail audit;
+
     public CaseEmailService(DeedPollRepository deedPolls,
                            ReferralRepository referrals,
                            NotificationRepository notifications,
@@ -306,7 +317,8 @@ public class CaseEmailService {
                            ObjectMapper json,
                            PlatformTransactionManager transactions,
                            DeedPreparations preparations,
-                           Optional<CdamDocumentUploads> remote) {
+                           Optional<CdamDocumentUploads> remote,
+                           AuditTrail audit) {
 
         this.deedPolls = deedPolls;
         this.referrals = referrals;
@@ -321,6 +333,7 @@ public class CaseEmailService {
         this.transaction = new TransactionTemplate(transactions);
         this.preparations = preparations;
         this.remote = remote;
+        this.audit = audit;
     }
 
     /**
@@ -681,6 +694,10 @@ public class CaseEmailService {
         if (enqueued == 1) {
             startConfirmationClock(template, deedPollId, referralId, now, caller);
             note(deedPollId, template, caller);
+            audit.record(AuditEntry.of(AuditAction.EMAIL_SENT, AuditActor.of(caller), AuditEntities.NOTIFICATION,
+                                       id.toString(), deedPollId)
+                             .withDetail("templateId", template.name()),
+                         List.of());
             return SendReceipt.enqueued(id, recipient);
         }
 

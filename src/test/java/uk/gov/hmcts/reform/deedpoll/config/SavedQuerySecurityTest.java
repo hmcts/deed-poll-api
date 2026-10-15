@@ -84,7 +84,8 @@ class SavedQuerySecurityTest {
     void createService() {
         savedQueries = mock(SavedQueryRepository.class);
         selections = mock(SavedQuerySelectionRepository.class);
-        service = new SavedQueryService(savedQueries, selections);
+        service = new SavedQueryService(savedQueries, selections,
+            mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
     }
 
     @Nested
@@ -169,7 +170,14 @@ class SavedQuerySecurityTest {
         @Test
         @DisplayName("may save a query and select one, because neither is role-gated")
         void mayStillSaveAndSelect() {
-            when(savedQueries.save(any())).thenAnswer(call -> call.getArgument(0));
+            when(savedQueries.save(any())).thenAnswer(call -> {
+                // An id, as a real save allocates one: the audit event is keyed on it.
+                SavedQuery written = call.getArgument(0);
+                if (written.getId() == null) {
+                    written.setId(UUID.randomUUID());
+                }
+                return written;
+            });
             stored(query(true));
 
             // The half that a fail-closed test on its own would quietly break: gating these because the note and

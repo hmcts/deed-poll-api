@@ -4,6 +4,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntities;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntry;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.SavedQuery;
@@ -11,6 +16,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.SavedQuerySelection;
 import uk.gov.hmcts.reform.deedpoll.repository.SavedQueryRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.SavedQuerySelectionRepository;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -71,16 +77,23 @@ import java.util.stream.Collectors;
  * in a month is the failure mode of the spreadsheets this service replaces -- and duplication is the escape
  * hatch: a client reads one and posts a new one, which needs no endpoint because there is no invariant to
  * protect.
+ *
+ * <p><strong>Create, update and delete each record one audit event, with field names and no values.</strong> A
+ * saved query belongs to no case, and value rows are disposed by case, so a value recorded here could never be
+ * disposed. Selecting and unselecting record nothing: they are one caseworker's own list, not a change to a query.
  */
 @Service
 public class SavedQueryService {
 
     private final SavedQueryRepository savedQueries;
     private final SavedQuerySelectionRepository selections;
+    private final AuditTrail audit;
 
-    public SavedQueryService(SavedQueryRepository savedQueries, SavedQuerySelectionRepository selections) {
+    public SavedQueryService(SavedQueryRepository savedQueries, SavedQuerySelectionRepository selections,
+                             AuditTrail audit) {
         this.savedQueries = savedQueries;
         this.selections = selections;
+        this.audit = audit;
     }
 
     /**
@@ -138,7 +151,9 @@ public class SavedQueryService {
         apply(query, dto.definition());
         query.setCreatedBy(caller.name());
         query.setModifiedBy(caller.name());
-        return viewOf(savedQueries.save(query), caller);
+        SavedQuery saved = savedQueries.save(query);
+        audit(AuditAction.SAVED_QUERY_CREATED, caller, saved, created(dto));
+        return viewOf(saved, caller);
     }
 
     /**
@@ -195,7 +210,9 @@ public class SavedQueryService {
         // changed property -- so an empty patch, or one resending the stored values, would leave modifiedOn
         // where it was. The same reason WitnessService.updateWitness stamps it.
         query.setModifiedOn(AuditClock.now());
-        return viewOf(savedQueries.save(query), caller);
+        SavedQuery saved = savedQueries.save(query);
+        audit(AuditAction.SAVED_QUERY_UPDATED, caller, saved, updated(dto));
+        return viewOf(saved, caller);
     }
 
     /**
@@ -215,7 +232,57 @@ public class SavedQueryService {
      */
     @Transactional
     public void removeSavedQuery(String id, CurrentUser caller) {
-        savedQueries.delete(editable(id, caller));
+        SavedQuery query = editable(id, caller);
+        savedQueries.delete(query);
+        audit(AuditAction.SAVED_QUERY_DELETED, caller, query, List.of());
+    }
+
+    private void audit(AuditAction action, CurrentUser caller, SavedQuery query, List<String> fields) {
+        audit.record(AuditEntry.of(action, AuditActor.of(caller), AuditEntities.SAVED_QUERY,
+                                   query.getId().toString(), null).withFields(fields),
+                     List.of());
+    }
+
+    /** The fields a create set: the name and the flag always, the rest where the body carried them. */
+    private static List<String> created(CreateSavedQueryInput dto) {
+        List<String> fields = new ArrayList<>(List.of("name"));
+        dto.description().ifPresent(value -> fields.add("description"));
+        fields.add("shared");
+        SavedQueryDefinition definition = dto.definition();
+        definition.filter().ifPresent(value -> fields.add("filter"));
+        if (!definition.conditions().isEmpty()) {
+            fields.add("conditions");
+        }
+        definition.sort().ifPresent(value -> fields.add("sort"));
+        definition.searchTerm().ifPresent(value -> fields.add("searchTerm"));
+        return fields;
+    }
+
+    /** The fields a patch named, in the order the patch declares them. */
+    private static List<String> updated(UpdateSavedQueryInput dto) {
+        List<String> fields = new ArrayList<>();
+        if (dto.name().present()) {
+            fields.add("name");
+        }
+        if (dto.description().present()) {
+            fields.add("description");
+        }
+        if (dto.shared().present()) {
+            fields.add("shared");
+        }
+        if (dto.filter().present()) {
+            fields.add("filter");
+        }
+        if (dto.conditions().present()) {
+            fields.add("conditions");
+        }
+        if (dto.sort().present()) {
+            fields.add("sort");
+        }
+        if (dto.searchTerm().present()) {
+            fields.add("searchTerm");
+        }
+        return fields;
     }
 
     /**

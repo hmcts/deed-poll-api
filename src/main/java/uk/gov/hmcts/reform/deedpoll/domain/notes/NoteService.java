@@ -3,6 +3,12 @@ package uk.gov.hmcts.reform.deedpoll.domain.notes;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntities;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntry;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditValue;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
@@ -35,16 +41,24 @@ import java.util.List;
  *
  * <p>The service returns entities, not view models, exactly as the reference does. Formatting is
  * {@link NotesView}'s job, and the caseworker API will map to its own DTOs.
+ *
+ * <p><strong>Every write records one audit event</strong> in its own transaction, with the note's text before and
+ * after -- including the notes other services write as a side effect of theirs, because a note is a write to the
+ * case whoever asked for it.
  */
 @Service
 public class NoteService {
 
+    private static final String NOTE = "note";
+
     private final DeedPollRepository deedPolls;
     private final DeedPollNoteRepository notes;
+    private final AuditTrail audit;
 
-    public NoteService(DeedPollRepository deedPolls, DeedPollNoteRepository notes) {
+    public NoteService(DeedPollRepository deedPolls, DeedPollNoteRepository notes, AuditTrail audit) {
         this.deedPolls = deedPolls;
         this.notes = notes;
+        this.audit = audit;
     }
 
     /** Creates a note attributed to the service account. */
@@ -69,7 +83,9 @@ public class NoteService {
         // `unmodified` flag is what distinguishes the two, from the timestamps.
         note.setCreatedBy(author.author());
         note.setModifiedBy(author.author());
-        return notes.save(note);
+        DeedPollNote saved = notes.save(note);
+        record(AuditAction.NOTE_CREATED, AuditActor.of(author), saved, List.of(NOTE), null, saved.getNote());
+        return saved;
     }
 
     /**
@@ -100,6 +116,12 @@ public class NoteService {
             .orElseThrow(() -> new NotFoundError("Note " + id + " not found"));
     }
 
+    /** The note under a row lock, so the values an audit event records as replaced are the ones actually replaced. */
+    private DeedPollNote findNoteForUpdate(String deedPollId, String id) {
+        return notes.findByIdAndDeedPollIdForUpdate(id, deedPollId)
+            .orElseThrow(() -> new NotFoundError("Note " + id + " not found"));
+    }
+
     /** Amends a note as the service account. */
     @Transactional
     public DeedPollNote updateNote(String deedPollId, String id, UpdateNoteInput dto) {
@@ -117,7 +139,8 @@ public class NoteService {
      */
     @Transactional
     public DeedPollNote updateNote(String deedPollId, String id, UpdateNoteInput dto, NoteAuthor author) {
-        DeedPollNote note = findNote(deedPollId, id);
+        DeedPollNote note = findNoteForUpdate(deedPollId, id);
+        final String before = note.getNote();
         dto.note().ifPresent(note::setNote);
         note.setModifiedBy(author.author());
         // Stamped here rather than left to @PreUpdate. Hibernate only fires @PreUpdate when its dirty check
@@ -127,7 +150,10 @@ public class NoteService {
         // it had never been touched. The reference's `prisma.update` writes @updatedAt unconditionally, and
         // UpdateNoteRequest promises the same ("an empty patch re-stamps modifiedBy").
         note.setModifiedOn(AuditClock.now());
-        return notes.save(note);
+        DeedPollNote saved = notes.save(note);
+        record(AuditAction.NOTE_UPDATED, AuditActor.of(author), saved,
+               dto.note().isPresent() ? List.of(NOTE) : List.of(), before, saved.getNote());
+        return saved;
     }
 
     /**
@@ -158,7 +184,17 @@ public class NoteService {
     @Transactional
     public void removeNote(String deedPollId, String id, CurrentUser caller) {
         caller.require(Capability.DELETE_NOTE);
-        notes.delete(findNote(deedPollId, id));
+        DeedPollNote note = findNoteForUpdate(deedPollId, id);
+        notes.delete(note);
+        record(AuditAction.NOTE_DELETED, AuditActor.of(caller), note, List.of(NOTE), note.getNote(), null);
+    }
+
+    /** A note has one field: an event names it when the write did, and carries its before and after. */
+    private void record(AuditAction action, AuditActor actor, DeedPollNote note, List<String> fields,
+                        String before, String after) {
+        audit.record(AuditEntry.of(action, actor, AuditEntities.NOTE, note.getId(), note.getDeedPoll().getId())
+                         .withFields(fields),
+                     List.of(AuditValue.of(NOTE, before, after)));
     }
 
     private DeedPoll requireCase(String deedPollId) {

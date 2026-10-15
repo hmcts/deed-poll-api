@@ -166,7 +166,7 @@ public class NotificationDeliveryTransactions {
     private void note(Notification row) {
         notes.createNote(row.getDeedPollId(),
                          new CreateNoteInput(EmailNotes.couldNotBeSent(row.getTemplate())),
-                         new NoteAuthor(row.getCreatedBy()));
+                         NoteAuthor.service(row.getCreatedBy()));
     }
 
     /** The verdict and what Notify said, which is what a human reading the Email tab needs. */

@@ -79,7 +79,8 @@ class CcdAttemptRepairsTest {
     @BeforeEach
     void setUp() {
         attempts = mock(CcdCreationAttempts.class);
-        repairs = new CcdAttemptRepairs(attempts);
+        repairs = new CcdAttemptRepairs(attempts, mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
+            mock(org.springframework.transaction.PlatformTransactionManager.class));
         logs = new ListAppender<>();
         logger = (Logger) LoggerFactory.getLogger(CcdAttemptRepairs.class);
         logs.start();

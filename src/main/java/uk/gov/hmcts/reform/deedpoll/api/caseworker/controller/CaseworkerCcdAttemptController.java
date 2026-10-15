@@ -6,10 +6,12 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CcdAttemptListResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CcdAttemptResponse;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdAttemptRepairs;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 
 /**
@@ -58,6 +60,7 @@ public class CaseworkerCcdAttemptController {
      *
      * <p>200 with the attempt as it now stands.
      */
+    @AuditedAs(AuditAction.CCD_ATTEMPT_RECONCILED)
     @PostMapping("/{attemptId}/reconciliation")
     public CcdAttemptResponse reconciliation(@PathVariable("attemptId") String attemptId) {
         return CcdAttemptResponse.from(repairs.reconcileAgain(attemptId, CurrentUsers.required()));
@@ -70,6 +73,7 @@ public class CaseworkerCcdAttemptController {
      *
      * <p>200 with the attempt as it now stands.
      */
+    @AuditedAs(AuditAction.CCD_ATTEMPT_RETRIED)
     @PostMapping("/{attemptId}/retry")
     public CcdAttemptResponse retry(@PathVariable("attemptId") String attemptId) {
         return CcdAttemptResponse.from(repairs.retryFromScratch(attemptId, CurrentUsers.required()));

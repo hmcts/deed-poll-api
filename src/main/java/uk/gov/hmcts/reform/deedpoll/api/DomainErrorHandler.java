@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api;
 
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
+import uk.gov.hmcts.reform.deedpoll.auth.SecurityEvents;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
@@ -86,9 +88,13 @@ public class DomainErrorHandler {
      *
      * <p>Not collapsed into the 401: a caseworker whose token has simply expired needs to re-authenticate,
      * and one without the admin role never will succeed however often they do.
+     *
+     * <p>Logged as {@code authz.denied} with the caller's subject and the path, as a refusal by the chain is
+     * (audit plan, decision 12). The message is not logged: it is the domain's sentence, not an identifier.
      */
     @ExceptionHandler(ForbiddenError.class)
-    public ResponseEntity<ApiError> forbidden(ForbiddenError error) {
+    public ResponseEntity<ApiError> forbidden(ForbiddenError error, HttpServletRequest request) {
+        SecurityEvents.denied(request.getRequestURI(), SecurityEvents.DOMAIN_RULE);
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ApiError.of(error.getMessage()));
     }
 

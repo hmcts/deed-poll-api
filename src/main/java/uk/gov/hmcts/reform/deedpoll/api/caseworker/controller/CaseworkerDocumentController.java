@@ -17,7 +17,10 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DocumentResponse;
+import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentDownload;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
@@ -137,13 +140,14 @@ public class CaseworkerDocumentController {
      * else's case by adding {@code deedPollId} to the body. There is nowhere for such a field to land:
      * {@link UploadFormInput} has no component for it.
      */
+    @AuditedAs(AuditAction.DOCUMENT_UPLOADED)
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
     public DocumentResponse upload(@PathVariable("id") String id, MultipartHttpServletRequest request) {
         UploadFormInput form = DocumentSchemas.parseUploadForm(formFields(request));
         UploadedFile file = uploadedFile(request);
 
-        return DocumentResponse.from(documents.uploadDocument(id, form, file));
+        return DocumentResponse.from(documents.uploadDocument(id, form, file, CurrentUsers.required()));
     }
 
     /**
@@ -186,12 +190,15 @@ public class CaseworkerDocumentController {
      * mid-stream error breaks the connection rather than answering 500. That is the correct outcome, and the
      * reference records it: a truncated download is visible to the client, whereas a 200 carrying half a file is
      * not.
+     *
+     * <p>Recorded as {@code DOCUMENT_DOWNLOADED} before the file is opened, and refused if it cannot be: see
+     * {@code DocumentService.downloadDocument}'s three-argument form.
      */
     @GetMapping("/{documentId}/file")
     public ResponseEntity<Resource> file(@PathVariable("id") String id,
                                          @PathVariable("documentId") String documentId) {
 
-        DocumentDownload download = documents.downloadDocument(id, documentId);
+        DocumentDownload download = documents.downloadDocument(id, documentId, CurrentUsers.required());
         DeedPollSupportingDocument document = download.document();
         MediaType contentType = contentType(document.getMimeType());
 

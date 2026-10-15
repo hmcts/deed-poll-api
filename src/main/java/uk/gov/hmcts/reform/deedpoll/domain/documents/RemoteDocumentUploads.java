@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.domain.documents;
 
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 
 /**
@@ -14,7 +15,8 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 public interface RemoteDocumentUploads {
 
     /**
-     * Uploads, attaches and records one document, answering its row as it stands at the end.
+     * Uploads, attaches and records one document, answering its row as it stands at the end. The commit that first
+     * writes the row records its audit event, attributed to {@code actor}.
      *
      * @throws IllegalStateException if called inside a transaction, where no remote call may be made
      * @throws uk.gov.hmcts.reform.deedpoll.domain.NotFoundError if there is no such case, or no such document type
@@ -22,7 +24,7 @@ public interface RemoteDocumentUploads {
      * @throws uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError if the store did not take the document, or
      *     its answer was lost; the row records which
      */
-    DeedPollSupportingDocument upload(DocumentUpload upload);
+    DeedPollSupportingDocument upload(DocumentUpload upload, AuditActor actor);
 
     /**
      * What the store needs done once the delete of this row commits, beyond removing the file: read now, inside the

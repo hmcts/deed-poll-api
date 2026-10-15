@@ -169,7 +169,8 @@ class CaseEmailServiceTest {
             deedPolls, referrals, notifications, documents, notify, properties, referralService, caseNotes,
             deeds, new ObjectMapper(),
                 mock(org.springframework.transaction.PlatformTransactionManager.class),
-                mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty());
+                mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty(),
+                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
     }
 
     @Nested
@@ -444,7 +445,8 @@ class CaseEmailServiceTest {
                 new NotifyProperties("https://notify.invalid", "", Map.of(), "", null), referralService, caseNotes,
                 deeds, new ObjectMapper(),
                 mock(org.springframework.transaction.PlatformTransactionManager.class),
-                mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty());
+                mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty(),
+                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
             storedCase();
             refusedReferral();
 
@@ -473,7 +475,8 @@ class CaseEmailServiceTest {
                 deeds,
                 new ObjectMapper(),
                 mock(org.springframework.transaction.PlatformTransactionManager.class),
-                mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty());
+                mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty(),
+                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
             storedCase();
             refusedReferralFor(ReferralReason.NonPublication);
 
@@ -1258,7 +1261,8 @@ class CaseEmailServiceTest {
                 deedPolls, referrals, notifications, documents, stub.client(), stub.properties(), referralService,
                 caseNotes, deeds, new ObjectMapper(),
                 mock(org.springframework.transaction.PlatformTransactionManager.class),
-                mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty());
+                mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty(),
+                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
         }
 
         @AfterEach
@@ -1814,7 +1818,8 @@ class CaseEmailServiceTest {
                                      null),
                 referralService, caseNotes, deeds, new ObjectMapper(),
                 mock(org.springframework.transaction.PlatformTransactionManager.class),
-                mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty());
+                mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty(),
+                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
         }
 
     }

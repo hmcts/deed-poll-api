@@ -10,6 +10,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.PatchField;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.ReadAudit;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
@@ -20,7 +24,9 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -48,6 +54,9 @@ import java.util.Optional;
  * (plan 03a) when {@code deedpoll.documents.store} is {@code cdam}. A CDAM upload is not one step inside a
  * transaction, so it goes through {@link RemoteDocumentUploads} instead; see {@link #uploadDocument}.
  *
+ * <p><strong>Not a port: every write records one audit event</strong>, through {@link DocumentUploadAudit}, in the
+ * write's transaction. The metadata create, update and delete have no route, so they are the service account's.
+ *
  * <p>The service returns entities, not view models, exactly as the reference does. Formatting is
  * {@link DocumentsView}'s job, and the caseworker API maps to its own DTOs.
  */
@@ -65,6 +74,8 @@ public class DocumentService {
     private final DeedPollSupportingDocumentTypeRepository types;
     private final DocumentStore store;
     private final ObjectProvider<RemoteDocumentUploads> remoteUploads;
+    private final DocumentUploadAudit uploadAudit;
+    private final ReadAudit readAudit;
     private final TransactionTemplate inTransaction;
     private final TransactionTemplate readOnly;
 
@@ -73,12 +84,16 @@ public class DocumentService {
                            DeedPollSupportingDocumentTypeRepository types,
                            DocumentStore store,
                            ObjectProvider<RemoteDocumentUploads> remoteUploads,
+                           DocumentUploadAudit uploadAudit,
+                           ReadAudit readAudit,
                            PlatformTransactionManager transactions) {
         this.deedPolls = deedPolls;
         this.documents = documents;
         this.types = types;
         this.store = store;
         this.remoteUploads = remoteUploads;
+        this.uploadAudit = uploadAudit;
+        this.readAudit = readAudit;
         // PROPAGATION_REQUIRED, the @Transactional default: a filesystem upload joins a caller's transaction, as
         // DeedDocumentService.storeDeed's, exactly as it did when the method carried the annotation.
         this.inTransaction = new TransactionTemplate(transactions);
@@ -106,7 +121,9 @@ public class DocumentService {
         document.setStorageKey(dto.storageKey());
         document.setOriginalName(dto.originalName());
         document.setMimeType(dto.mimeType());
-        return documents.save(document);
+        DeedPollSupportingDocument saved = documents.save(document);
+        uploadAudit.created(saved);
+        return saved;
     }
 
     /**
@@ -156,6 +173,7 @@ public class DocumentService {
     @Transactional
     public DeedPollSupportingDocument updateDocument(String deedPollId, String id, UpdateDocumentInput dto) {
         DeedPollSupportingDocument document = findDocument(deedPollId, id);
+        final Map<String, Object> before = DocumentUploadAudit.metadata(document);
         // Resolved before anything is written, so a bad type cannot leave a half-applied patch behind.
         Optional<DeedPollSupportingDocumentType> type = dto.documentTypeId().present()
             ? Optional.of(requireType(dto.documentTypeId().value()))
@@ -171,7 +189,21 @@ public class DocumentService {
         // finds a changed property -- so an empty patch, or one resending the values already stored, would
         // leave modifiedOn where it was. The reference's `prisma.update` writes @updatedAt on every call.
         document.setModifiedOn(AuditClock.now());
-        return documents.save(document);
+        DeedPollSupportingDocument saved = documents.save(document);
+        uploadAudit.updated(before, saved, patched(dto));
+        return saved;
+    }
+
+    /** The fields a metadata patch named, in the order the patch declares them. */
+    private static List<String> patched(UpdateDocumentInput dto) {
+        Map<String, PatchField<?>> named = new LinkedHashMap<>();
+        named.put("direction", dto.direction());
+        named.put("name", dto.name());
+        named.put("documentTypeId", dto.documentTypeId());
+        named.put("storageKey", dto.storageKey());
+        named.put("originalName", dto.originalName());
+        named.put("mimeType", dto.mimeType());
+        return named.entrySet().stream().filter(field -> field.getValue().present()).map(Map.Entry::getKey).toList();
     }
 
     /**
@@ -207,18 +239,36 @@ public class DocumentService {
         RemoteDocumentUploads remote = remoteUploads.getIfAvailable();
         Runnable removal = remote == null ? () -> {
         } : remote.removal(document);
+        uploadAudit.deleted(document);
         documents.delete(document);
         removeBlobOnceTheDeleteCommits(id, storageKey, removal);
     }
 
-    /** Uploads a file with the form's own options, which is the shape a multipart request arrives in. */
+    /**
+     * Uploads a file for this caller with the form's own options, which is the shape a multipart request arrives in.
+     */
+    public DeedPollSupportingDocument uploadDocument(String deedPollId, UploadFormInput form, UploadedFile file,
+                                                    CurrentUser caller) {
+        return upload(deedPollId, form.documentTypeId(), file, form.name(), form.direction(), AuditActor.of(caller));
+    }
+
+    /** As the service account, with the form's own options. */
     public DeedPollSupportingDocument uploadDocument(String deedPollId, UploadFormInput form, UploadedFile file) {
         return uploadDocument(deedPollId, form.documentTypeId(), file, form.name(), form.direction());
     }
 
-    /** Uploads a file, taking the default direction and the file's own name. */
+    /** As the service account, taking the default direction and the file's own name. */
     public DeedPollSupportingDocument uploadDocument(String deedPollId, String documentTypeId, UploadedFile file) {
         return uploadDocument(deedPollId, documentTypeId, file, Optional.empty(), Optional.empty());
+    }
+
+    /** As the service account, with every option given. */
+    public DeedPollSupportingDocument uploadDocument(String deedPollId,
+                                                    String documentTypeId,
+                                                    UploadedFile file,
+                                                    Optional<String> name,
+                                                    Optional<DocumentDirection> direction) {
+        return upload(deedPollId, documentTypeId, file, name, direction, AuditActor.system());
     }
 
     /**
@@ -243,26 +293,30 @@ public class DocumentService {
      * be given one. A caller that already holds a transaction -- {@code DeedDocumentService.storeDeed} -- therefore
      * works on the filesystem store only; moving generated deeds onto CDAM is plan 03b's.
      *
+     * <p><strong>Either way, the row's first commit carries its audit event</strong> ({@link DocumentUploadAudit}),
+     * so no uploaded row exists without one.
+     *
      * @throws InvalidInputError if there is no file
      * @throws NotFoundError if there is no such case, or no such document type
      */
-    public DeedPollSupportingDocument uploadDocument(String deedPollId,
-                                                    String documentTypeId,
-                                                    UploadedFile file,
-                                                    Optional<String> name,
-                                                    Optional<DocumentDirection> direction) {
+    private DeedPollSupportingDocument upload(String deedPollId,
+                                              String documentTypeId,
+                                              UploadedFile file,
+                                              Optional<String> name,
+                                              Optional<DocumentDirection> direction,
+                                              AuditActor actor) {
         if (file == null) {
             throw new InvalidInputError("Select a file to upload");
         }
         DocumentUpload upload = DocumentUpload.of(deedPollId, documentTypeId, file, name, direction);
         RemoteDocumentUploads remote = remoteUploads.getIfAvailable();
         if (remote != null) {
-            return remote.upload(upload);
+            return remote.upload(upload, actor);
         }
-        return inTransaction.execute(status -> storeAndRecord(upload));
+        return inTransaction.execute(status -> storeAndRecord(upload, actor));
     }
 
-    private DeedPollSupportingDocument storeAndRecord(DocumentUpload upload) {
+    private DeedPollSupportingDocument storeAndRecord(DocumentUpload upload, AuditActor actor) {
         DeedPoll parent = requireCase(upload.deedPollId());
         DeedPollSupportingDocumentType type = requireType(upload.documentTypeId());
 
@@ -271,7 +325,9 @@ public class DocumentService {
 
         DeedPollSupportingDocument document = upload.newRow(parent, type);
         document.setStorageKey(storageKey);
-        return documents.save(document);
+        DeedPollSupportingDocument saved = documents.save(document);
+        uploadAudit.uploaded(saved, actor);
+        return saved;
     }
 
     /**
@@ -306,6 +362,22 @@ public class DocumentService {
      */
     public DocumentDownload downloadDocument(String deedPollId, String id) {
         DeedPollSupportingDocument document = readableDocument(deedPollId, id);
+        return new DocumentDownload(document, store.open(locator(document)));
+    }
+
+    /**
+     * {@link #downloadDocument(String, String)} for a member of staff, recorded as {@code DOCUMENT_DOWNLOADED}.
+     *
+     * <p>The row is committed after the checks and <strong>before the store is opened</strong>, so a refused
+     * download records nothing and a download that could not be recorded opens nothing: it fails closed. The
+     * service's own reads (the outbox, deed regeneration checks) use the two-argument form and record nothing,
+     * because nobody downloaded anything.
+     *
+     * @throws NotFoundError as {@link #downloadDocument(String, String)} does
+     */
+    public DocumentDownload downloadDocument(String deedPollId, String id, CurrentUser reader) {
+        DeedPollSupportingDocument document = readableDocument(deedPollId, id);
+        readAudit.documentDownloaded(deedPollId, document.getId(), reader);
         return new DocumentDownload(document, store.open(locator(document)));
     }
 

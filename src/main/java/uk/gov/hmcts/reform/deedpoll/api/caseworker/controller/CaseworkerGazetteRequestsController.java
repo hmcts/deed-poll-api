@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.GazetteError;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.GazetteMembersResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.GazettePreviewResponse;
@@ -22,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.PreviewGazetteRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SubmitGazetteRequest;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteBodies;
@@ -76,6 +78,7 @@ public class CaseworkerGazetteRequestsController {
         content = @Content(schema = @Schema(implementation = GazetteStatusResponse.class)))
     @ApiResponse(responseCode = "409", content = @Content(schema = @Schema(implementation = GazetteError.class)))
     @ApiResponse(responseCode = "503", content = @Content(schema = @Schema(implementation = GazetteError.class)))
+    @AuditedAs(AuditAction.GAZETTE_NOTICE_SENT)
     @PostMapping("/gazette-notices")
     public ResponseEntity<GazetteStatusResponse> submit(@RequestBody SubmitGazetteRequest body,
                                                        @RequestHeader("Idempotency-Key") String header) {
