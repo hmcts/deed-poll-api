@@ -50,6 +50,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 class NoteServiceTest extends AbstractPostgresContainerTest {
 
+    private static final NoteAuthor STEVE = NoteAuthor.user("Steve Newman", "steve-subject");
+    private static final NoteAuthor JORDAN = NoteAuthor.user("Jordan Blake", "jordan-subject");
+
     /** createDeedPoll cannot allocate a reference number without a Date Received to derive the year. */
     private static final String RECEIVED = "2026-07-01T00:00:00.000Z";
 
@@ -116,7 +119,7 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
     void createsANoteScopedToItsParent() {
         String caseId = storedCase();
 
-        DeedPollNote created = noteService.createNote(caseId, create("hello"), new NoteAuthor("Steve Newman"));
+        DeedPollNote created = noteService.createNote(caseId, create("hello"), STEVE);
 
         DeedPollNote saved = stored(created.getId());
         assertThat(saved.getNote()).isEqualTo("hello");
@@ -144,9 +147,9 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
         // deleting createdBy from the patch. Here it is structural: UpdateNoteInput cannot carry createdBy,
         // so the patch has no way to express it.
         String caseId = storedCase();
-        String noteId = noteService.createNote(caseId, create("original"), new NoteAuthor("Steve Newman")).getId();
+        String noteId = noteService.createNote(caseId, create("original"), STEVE).getId();
 
-        noteService.updateNote(caseId, noteId, update("amended"), new NoteAuthor("Jordan Blake"));
+        noteService.updateNote(caseId, noteId, update("amended"), JORDAN);
 
         DeedPollNote saved = stored(noteId);
         assertThat(saved.getNote()).isEqualTo("amended");
@@ -310,9 +313,9 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
         // Not a reference block: the reference's schema test proves an empty patch parses, and this proves
         // what the service then does with one -- the absent-versus-present distinction reaching the write.
         String caseId = storedCase();
-        String noteId = noteService.createNote(caseId, create("original"), new NoteAuthor("Steve Newman")).getId();
+        String noteId = noteService.createNote(caseId, create("original"), STEVE).getId();
 
-        noteService.updateNote(caseId, noteId, new UpdateNoteInput(Optional.empty()), new NoteAuthor("Jordan Blake"));
+        noteService.updateNote(caseId, noteId, new UpdateNoteInput(Optional.empty()), JORDAN);
 
         DeedPollNote saved = stored(noteId);
         assertThat(saved.getNote()).isEqualTo("original");
@@ -330,13 +333,13 @@ class NoteServiceTest extends AbstractPostgresContainerTest {
         // had never been edited. Every other test here switches author between the create and the patch,
         // which always makes the entity dirty and hid this.
         String caseId = storedCase();
-        String noteId = noteService.createNote(caseId, create("original"), new NoteAuthor("Steve Newman")).getId();
+        String noteId = noteService.createNote(caseId, create("original"), STEVE).getId();
         LocalDateTime createdOn = stored(noteId).getCreatedOn();
         // timestamp(3): two writes inside the same millisecond would store the same value, so the assertion
         // below would be a coin toss rather than a test.
         Thread.sleep(2);
 
-        noteService.updateNote(caseId, noteId, new UpdateNoteInput(Optional.empty()), new NoteAuthor("Steve Newman"));
+        noteService.updateNote(caseId, noteId, new UpdateNoteInput(Optional.empty()), STEVE);
 
         DeedPollNote saved = stored(noteId);
         assertThat(saved.getCreatedOn()).isEqualTo(createdOn);

@@ -269,7 +269,7 @@ public class GazetteRequestLedger {
     }
 
     private void note(String id, GazetteRequest row, String text) {
-        notes.createNote(id, new CreateNoteInput(text), new NoteAuthor(row.submittedByName()));
+        notes.createNote(id, new CreateNoteInput(text), NoteAuthor.user(row.submittedByName(), row.submittedById()));
     }
 
     private <T> T commit(Supplier<T> action) {

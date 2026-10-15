@@ -152,14 +152,14 @@ container-backed test on `AbstractPostgresContainerTest`.
 **Files:** `domain/deedpoll/DeedPollService.java`, `domain/notes/NoteService.java`, the witness service, and
 `DocumentService`'s upload. Their tests.
 
-- [ ] Case create and update: `fields` are the request's set field names, the values are the changed fields' before
+- [x] Case create and update: `fields` are the request's set field names, the values are the changed fields' before
   and after, and `detail` carries the state transition.
-- [ ] Note create, update and delete, and witness create, update and delete: the same pattern.
-- [ ] Document upload: the document's metadata fields only. Never the file content.
-- [ ] Service tests: one event per write, with the subject, name, action, ids and field names, and value rows only for
+- [x] Note create, update and delete, and witness create, update and delete: the same pattern.
+- [x] Document upload: the document's metadata fields only. Never the file content.
+- [x] Service tests: one event per write, with the subject, name, action, ids and field names, and value rows only for
   changed fields.
-- [ ] An integration test: a forced audit failure rolls back the case update.
-- [ ] Mark completed
+- [x] An integration test: a forced audit failure rolls back the case update.
+- [x] Mark completed
 
 ### Task 4: The remaining writes, and the classification guard
 
@@ -228,6 +228,19 @@ refuses value rows on an entity with no case (decision 4), and its `audit.write.
 class name but never its message. `AuditTrailTest` (11 container cases) and `AuditValueTest` (9) were seen failing
 first. `AuditTrailTest`'s read case commits one row, under a fresh UUID, by design. Validation: 4,208 test /
 19 integration, no failures, errors or skips; Checkstyle clean; `openapi.json` unchanged.
+
+Task 3, 2026-10-15: `DeedPollService`, `NoteService`, `WitnessService` and both upload paths record one event in the
+write's own transaction. A case event names the request's fields; its values cover those and every field the gates
+changed, plus `displayReference`, and `detail` carries `fromState`/`toState` only when the derived state moved. A
+context with no subject is refused (`WriteContext.admin()` is gone); the no-context short forms are the service
+account. `NoteAuthor` now carries the subject and a `service` flag: the outbox's failure note is a service write, and
+the Gazette ledger's notes are the submitter's. Witness create and update take the caller. `DocumentUploadAudit`
+records upload metadata only (name, direction, type, original name, MIME type, size) in the transaction that first
+writes the row, which for CDAM is `DocumentStorageStates.claim`. Notes and witness deletes write the old values with a
+null new value. `CaseWriteAuditTest` (9 container cases) and the integration `AuditFailureRollbackTest` (a 256-character
+subject that only `actor_id` refuses) were seen failing first. Validation: 4,217 test / 20 integration, no failures,
+errors or skips; Checkstyle clean; `openapi.json` unchanged. Task 4 still needs an action for case delete and for
+document metadata create, update and delete, which the vocabulary does not have yet.
 
 ## Post-Completion
 

@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DocumentResponse;
+import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentDownload;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
@@ -143,7 +144,7 @@ public class CaseworkerDocumentController {
         UploadFormInput form = DocumentSchemas.parseUploadForm(formFields(request));
         UploadedFile file = uploadedFile(request);
 
-        return DocumentResponse.from(documents.uploadDocument(id, form, file));
+        return DocumentResponse.from(documents.uploadDocument(id, form, file, CurrentUsers.required()));
     }
 
     /**

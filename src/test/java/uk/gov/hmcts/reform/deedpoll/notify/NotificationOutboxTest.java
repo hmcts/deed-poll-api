@@ -207,7 +207,7 @@ class NotificationOutboxTest {
             verify(notes).createNote(
                 "a-case",
                 new CreateNoteInput(EmailNotes.couldNotBeSent(EmailTemplate.APPLICATION_REJECTED)),
-                new NoteAuthor("A Caseworker"));
+                NoteAuthor.service("A Caseworker"));
             verify(notes, times(1)).createNote(anyString(), any(), any());
         }
 
@@ -225,7 +225,7 @@ class NotificationOutboxTest {
             verify(notes).createNote(
                 "a-case",
                 new CreateNoteInput(EmailNotes.couldNotBeSent(EmailTemplate.APPLICATION_REJECTED)),
-                new NoteAuthor("A Caseworker"));
+                NoteAuthor.service("A Caseworker"));
         }
 
         @Test

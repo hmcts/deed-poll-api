@@ -10,17 +10,27 @@ import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntities;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntry;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditValue;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * CRUD for a case, orchestrating every derived rule on the way in.
@@ -41,6 +51,12 @@ import java.util.Map;
  * <p>The reference also deletes {@code createdBy} from an update patch, so a caller cannot rewrite who
  * created a record. Here it cannot be in a patch at all -- {@link DeedPollFields} does not make it
  * writable -- so the deletion has nothing to delete.
+ *
+ * <p><strong>Not a port: every create and update records one audit event</strong>, in the write's own transaction,
+ * so a write whose event cannot be recorded does not commit. It names the fields the request set, carries the
+ * before and after of every field the write changed -- including one a gate cleared, which the request never
+ * named -- and the state transition the derivation made. The short forms that take no context are writes by the
+ * service account; a context with no subject is a user's, and is refused.
  */
 @Service
 public class DeedPollService {
@@ -83,16 +99,19 @@ public class DeedPollService {
 
     private final DeedPollRepository deedPolls;
     private final ReferenceNumberService referenceNumbers;
+    private final AuditTrail audit;
 
-    public DeedPollService(DeedPollRepository deedPolls, ReferenceNumberService referenceNumbers) {
+    public DeedPollService(DeedPollRepository deedPolls, ReferenceNumberService referenceNumbers,
+                           AuditTrail audit) {
         this.deedPolls = deedPolls;
         this.referenceNumbers = referenceNumbers;
+        this.audit = audit;
     }
 
     /** Creates a case as the service account, non-admin. */
     @Transactional
     public DeedPollWithComputed createDeedPoll(DeedPollPatch dto) {
-        return createDeedPoll(dto, WriteContext.DEFAULT);
+        return create(dto, WriteContext.DEFAULT, AuditActor.system());
     }
 
     /**
@@ -106,6 +125,10 @@ public class DeedPollService {
      */
     @Transactional
     public DeedPollWithComputed createDeedPoll(DeedPollPatch dto, WriteContext ctx) {
+        return create(dto, ctx, AuditActor.of(ctx));
+    }
+
+    private DeedPollWithComputed create(DeedPollPatch dto, WriteContext ctx, AuditActor actor) {
         DeedPollPatch data = dto.copy().coerceDates();
 
         // Create-time defaults ported from the workflows (minor gives marital status Single;
@@ -157,7 +180,9 @@ public class DeedPollService {
         record.setCreatedBy(ctx.author());
         record.setModifiedBy(ctx.author());
 
-        return Computed.withComputed(deedPolls.save(record));
+        DeedPoll saved = deedPolls.save(record);
+        audit(AuditAction.CASE_CREATED, actor, saved, dto, data, Map.of(), null);
+        return Computed.withComputed(saved);
     }
 
     /** Every case, newest first, each with its derived day counts. */
@@ -323,7 +348,7 @@ public class DeedPollService {
     /** Updates a case as the service account, non-admin. */
     @Transactional
     public DeedPollWithComputed updateDeedPoll(String id, DeedPollPatch dto) {
-        return updateDeedPoll(id, dto, WriteContext.DEFAULT);
+        return update(id, dto, WriteContext.DEFAULT, AuditActor.system());
     }
 
     /**
@@ -342,12 +367,18 @@ public class DeedPollService {
      */
     @Transactional
     public DeedPollWithComputed updateDeedPoll(String id, DeedPollPatch dto, WriteContext ctx) {
+        return update(id, dto, ctx, AuditActor.of(ctx));
+    }
+
+    private DeedPollWithComputed update(String id, DeedPollPatch dto, WriteContext ctx, AuditActor actor) {
         DeedPoll record = requireDeedPollForUpdate(id);
         if (deedPolls.hasActiveGazetteRequest(id)) {
             throw new ConflictError(
                 "This case has a London Gazette request in progress. Check its status before editing.");
         }
         DeedPollPatch data = dto.copy().coerceDates();
+        final Map<String, Object> before = DeedPollFields.readAll(record);
+        final DeedPollState fromState = record.getState();
 
         // If Type is part of this update, recompute the prefix from the new type, preserving the existing
         // year and serial (a DP-to-DR flip re-prefixes; the serial is never re-allocated). A Date Received
@@ -412,7 +443,9 @@ public class DeedPollService {
         // reference's `prisma.update` writes @updatedAt on every call.
         record.setModifiedOn(AuditClock.now());
 
-        return Computed.withComputed(deedPolls.save(record));
+        DeedPoll saved = deedPolls.save(record);
+        audit(AuditAction.CASE_UPDATED, actor, saved, dto, data, before, fromState);
+        return Computed.withComputed(saved);
     }
 
     /**
@@ -501,6 +534,37 @@ public class DeedPollService {
             case ListFilters.ReadyForPublication ready ->
                 deedPolls.findAll(CaseSpecifications.criterion(ready), order(ListFilters.OLDEST_ENROLLED_FIRST));
         };
+    }
+
+    /**
+     * Records a case write: the fields the request set, and a value for every field the write changed.
+     *
+     * <p>The values cover the patch as applied as well as the request, because the gates write fields the request
+     * never named -- a type changed to Adult clears the four minor fields -- and an audit trail that missed those
+     * would show a change of type with the minor's details silently gone. {@code displayReference} is included
+     * for the same reason: a change of type re-prefixes it. The derived state is not a field anybody set, so it
+     * travels as the transition in {@code detail}, and only when it moved.
+     *
+     * @param before the stored fields before the write, empty for a create
+     * @param fromState the stored state before the write, null for a create
+     */
+    private void audit(AuditAction action, AuditActor actor, DeedPoll saved, DeedPollPatch dto, DeedPollPatch data,
+                       Map<String, Object> before, DeedPollState fromState) {
+        final Map<String, Object> after = DeedPollFields.readAll(saved);
+        Set<String> changed = new LinkedHashSet<>(dto.fields());
+        changed.addAll(data.fields());
+        changed.add("displayReference");
+        AuditEntry entry = AuditEntry.of(action, actor, AuditEntities.CASE, saved.getId(), saved.getId())
+            .withFields(dto.fields());
+        if (!Objects.equals(fromState, saved.getState())) {
+            if (fromState != null) {
+                entry = entry.withDetail("fromState", fromState.name());
+            }
+            entry = entry.withDetail("toState", saved.getState().name());
+        }
+        audit.record(entry, changed.stream()
+            .map(field -> AuditValue.of(field, before.get(field), after.get(field)))
+            .toList());
     }
 
     private DeedPoll requireDeedPoll(String id) {

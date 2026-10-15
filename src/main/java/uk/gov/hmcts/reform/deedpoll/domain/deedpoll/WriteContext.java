@@ -32,11 +32,6 @@ public record WriteContext(boolean isAdmin, String userName, String userId) {
     /** A non-admin caller with no name or subject, attributed to the service account. */
     public static final WriteContext DEFAULT = new WriteContext(false, null, null);
 
-    /** An admin caller with no name or subject. */
-    public static WriteContext admin() {
-        return new WriteContext(true, null, null);
-    }
-
     /** The name to stamp on this write. */
     public String author() {
         return userName == null || userName.isBlank() ? SERVICE_ACCOUNT_NAME : userName;

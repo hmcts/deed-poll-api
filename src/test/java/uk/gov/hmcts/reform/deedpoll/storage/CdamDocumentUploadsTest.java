@@ -7,6 +7,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import uk.gov.hmcts.reform.deedpoll.ccd.CaseDocumentsEvent;
 import uk.gov.hmcts.reform.deedpoll.ccd.SupportingDocumentReference;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentOwner;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentToStore;
@@ -51,6 +52,8 @@ import static uk.gov.hmcts.reform.deedpoll.storage.CdamDocumentStoreTest.noRespo
  */
 class CdamDocumentUploadsTest {
 
+    private static final AuditActor ACTOR = AuditActor.system();
+
     private static final UUID RETRY_ID = UUID.fromString("5f0c2a7e-3a1b-4d2e-8c9f-0a1b2c3d4e5f");
     private static final String CASE = "1234567890123456";
 
@@ -69,11 +72,11 @@ class CdamDocumentUploadsTest {
         var states = mock(DocumentStorageStates.class);
         var claim = new DocumentStorageStates.Claim("record-1", "document-1",
             new DocumentOwner("record-1", Optional.of(CASE)));
-        when(states.claim(any())).thenReturn(claim);
+        when(states.claim(any(), any())).thenReturn(claim);
         when(store.save(any())).thenReturn(new StorageReceipt(CDAM_ID.toString(), Optional.of(HASH)));
         var failure = new IllegalStateException("local read failed");
         when(states.references(claim)).thenThrow(failure);
-        assertThatThrownBy(() -> new CdamDocumentUploads(states, store, event).upload(upload()))
+        assertThatThrownBy(() -> new CdamDocumentUploads(states, store, event).upload(upload(), ACTOR))
             .isSameAs(failure);
         verifyNoInteractions(event);
         verify(states, org.mockito.Mockito.never()).attachUncertain(any());
@@ -85,7 +88,7 @@ class CdamDocumentUploadsTest {
         var claim = new DocumentStorageStates.Claim("record-1", "document-1",
             new DocumentOwner("record-1", Optional.of(CASE)));
         var attached = document(Attached, CASE);
-        when(states.claim(any())).thenReturn(claim);
+        when(states.claim(any(), any())).thenReturn(claim);
         when(store.save(any())).thenReturn(receipt(CDAM_ID));
         when(states.references(claim)).thenReturn(List.of()).thenThrow(
             new IllegalStateException("cannot attach from Attached"));
@@ -93,7 +96,7 @@ class CdamDocumentUploadsTest {
         when(states.attached(claim)).thenReturn(attached);
         doThrow(noResponse()).when(event).submit(any(), anyList());
 
-        assertThat(new CdamDocumentUploads(states, store, event).upload(upload())).isSameAs(attached);
+        assertThat(new CdamDocumentUploads(states, store, event).upload(upload(), ACTOR)).isSameAs(attached);
 
         verify(event, times(1)).submit(any(), anyList());
         verify(states, times(1)).attachUncertain(claim);
@@ -109,7 +112,7 @@ class CdamDocumentUploadsTest {
             row.state = state;
             throw new IllegalStateException("lost answer");
         }).when(event).submit(any(), anyList());
-        assertThatThrownBy(() -> uploads.upload(upload()))
+        assertThatThrownBy(() -> uploads.upload(upload(), ACTOR))
             .isInstanceOf(UpstreamFailureError.class)
             .hasMessage("The document is no longer awaiting attachment. Review its storage outcome before retrying.");
         assertThat(row.state).isEqualTo(state);
@@ -170,7 +173,7 @@ class CdamDocumentUploadsTest {
     void happyPath() {
         when(store.save(any())).thenReturn(receipt(CDAM_ID));
 
-        uploads.upload(upload());
+        uploads.upload(upload(), ACTOR);
 
         assertThat(row.state).isEqualTo(Attached);
         assertThat(row.token).isNull();
@@ -185,7 +188,7 @@ class CdamDocumentUploadsTest {
     void uploadsForTheClaimedOwner() {
         when(store.save(any())).thenReturn(receipt(CDAM_ID));
 
-        uploads.upload(upload());
+        uploads.upload(upload(), ACTOR);
 
         verify(store).save(org.mockito.ArgumentMatchers.argThat((DocumentToStore d) ->
             d.owner().ccdCaseReference().equals(Optional.of(CASE)) && d.filename().equals("birth.pdf")));
@@ -196,7 +199,7 @@ class CdamDocumentUploadsTest {
     void caseNotReady() {
         row.ready = false;
 
-        assertThatThrownBy(() -> uploads.upload(upload())).isInstanceOf(ConflictError.class);
+        assertThatThrownBy(() -> uploads.upload(upload(), ACTOR)).isInstanceOf(ConflictError.class);
 
         assertThat(row.state).isNull();
         verifyNoInteractions(store, event);
@@ -207,7 +210,7 @@ class CdamDocumentUploadsTest {
     void refusedUpload() {
         when(store.save(any())).thenThrow(CdamUploadFailure.nothingStored("Upload refused: CDAM answered HTTP 400"));
 
-        assertThatThrownBy(() -> uploads.upload(upload())).isInstanceOf(UpstreamFailureError.class);
+        assertThatThrownBy(() -> uploads.upload(upload(), ACTOR)).isInstanceOf(UpstreamFailureError.class);
 
         assertThat(row.state).isEqualTo(Failed);
         verify(store, times(1)).save(any());
@@ -223,7 +226,7 @@ class CdamDocumentUploadsTest {
         doThrow(new CaseDocumentsEvent.NotSubmitted("Not submitted: CCD answered HTTP 404"))
             .when(event).submit(any(), anyList());
 
-        assertThatThrownBy(() -> uploads.upload(upload())).isInstanceOf(UpstreamFailureError.class);
+        assertThatThrownBy(() -> uploads.upload(upload(), ACTOR)).isInstanceOf(UpstreamFailureError.class);
 
         assertThat(row.history).containsSubsequence(UploadPending, UploadUncertain, UploadPending, Uploaded);
         assertThat(row.cdamId).isEqualTo(RETRY_ID);
@@ -238,7 +241,7 @@ class CdamDocumentUploadsTest {
             .thenThrow(CdamUploadFailure.uncertain("Upload outcome unknown: no response from CDAM"))
             .thenReturn(receipt(RETRY_ID));
 
-        uploads.upload(upload());
+        uploads.upload(upload(), ACTOR);
 
         assertThat(row.state).isEqualTo(Attached);
         assertThat(row.cdamId).isEqualTo(RETRY_ID);
@@ -250,7 +253,7 @@ class CdamDocumentUploadsTest {
     void twoLostUploads() {
         when(store.save(any())).thenThrow(CdamUploadFailure.uncertain("Upload outcome unknown: no response from CDAM"));
 
-        assertThatThrownBy(() -> uploads.upload(upload()))
+        assertThatThrownBy(() -> uploads.upload(upload(), ACTOR))
             .isInstanceOf(UpstreamFailureError.class)
             .hasMessage(CdamDocumentUploads.UPLOAD_LOST);
 
@@ -266,7 +269,7 @@ class CdamDocumentUploadsTest {
         when(store.save(any())).thenReturn(receipt(CDAM_ID));
         doThrow(noResponse()).doNothing().when(event).submit(any(), anyList());
 
-        uploads.upload(upload());
+        uploads.upload(upload(), ACTOR);
 
         assertThat(row.history).containsSubsequence(Uploaded, AttachUncertain, Attached);
         assertThat(row.token).isNull();
@@ -279,7 +282,7 @@ class CdamDocumentUploadsTest {
         when(store.save(any())).thenReturn(receipt(CDAM_ID));
         doThrow(noResponse()).when(event).submit(any(), anyList());
 
-        assertThatThrownBy(() -> uploads.upload(upload()))
+        assertThatThrownBy(() -> uploads.upload(upload(), ACTOR))
             .isInstanceOf(UpstreamFailureError.class)
             .hasMessage(CdamDocumentUploads.ATTACH_LOST);
 
@@ -294,7 +297,7 @@ class CdamDocumentUploadsTest {
         when(store.save(any())).thenReturn(receipt(CDAM_ID));
         doThrow(answered(422)).when(event).submit(any(), anyList());
 
-        assertThatThrownBy(() -> uploads.upload(upload()))
+        assertThatThrownBy(() -> uploads.upload(upload(), ACTOR))
             .isInstanceOf(UpstreamFailureError.class)
             .hasMessage(CdamDocumentUploads.ATTACH_REFUSED);
 
@@ -310,7 +313,7 @@ class CdamDocumentUploadsTest {
         doThrow(noResponse()).doThrow(new CaseDocumentsEvent.NotSubmitted("Not submitted: CCD answered HTTP 404"))
             .when(event).submit(any(), anyList());
 
-        assertThatThrownBy(() -> uploads.upload(upload()))
+        assertThatThrownBy(() -> uploads.upload(upload(), ACTOR))
             .isInstanceOf(UpstreamFailureError.class)
             .hasMessage(CdamDocumentUploads.ATTACH_LOST);
 
@@ -326,7 +329,7 @@ class CdamDocumentUploadsTest {
             throw noResponse();
         }).when(event).submit(any(), anyList());
 
-        uploads.upload(upload());
+        uploads.upload(upload(), ACTOR);
 
         assertThat(row.state).isEqualTo(Attached);
         assertThat(row.history).doesNotContain(AttachUncertain, Failed);
@@ -342,7 +345,7 @@ class CdamDocumentUploadsTest {
             throw answered(422);
         }).when(event).submit(any(), anyList());
 
-        uploads.upload(upload());
+        uploads.upload(upload(), ACTOR);
 
         assertThat(row.state).isEqualTo(Attached);
         assertThat(row.history).doesNotContain(Failed);
@@ -401,7 +404,7 @@ class CdamDocumentUploadsTest {
     void refusedInsideATransaction() {
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try {
-            assertThatThrownBy(() -> uploads.upload(upload())).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> uploads.upload(upload(), ACTOR)).isInstanceOf(IllegalStateException.class);
         } finally {
             TransactionSynchronizationManager.setActualTransactionActive(false);
         }
@@ -424,7 +427,7 @@ class CdamDocumentUploadsTest {
         String removedFrom;
 
         Row() {
-            super(null, null, null);
+            super(null, null, null, null);
         }
 
         private Claim theClaim() {
@@ -443,7 +446,7 @@ class CdamDocumentUploadsTest {
         }
 
         @Override
-        public Claim claim(DocumentUpload upload) {
+        public Claim claim(DocumentUpload upload, AuditActor actor) {
             DocumentStorageRule.requireCaseReady(ready ? Optional.of(CASE) : Optional.empty());
             state = UploadPending;
             history.add(UploadPending);

@@ -91,7 +91,7 @@ public class CaseworkerWitnessController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public WitnessResponse create(@PathVariable("id") String id, @RequestBody CreateWitnessRequest request) {
-        return WitnessResponse.from(witnesses.createWitness(id, request.toInput()));
+        return WitnessResponse.from(witnesses.createWitness(id, request.toInput(), CurrentUsers.required()));
     }
 
     /**
@@ -118,7 +118,7 @@ public class CaseworkerWitnessController {
                                   @PathVariable("witnessId") String witnessId,
                                   @RequestBody UpdateWitnessRequest request) {
 
-        return WitnessResponse.from(witnesses.updateWitness(id, witnessId, request.toInput()));
+        return WitnessResponse.from(witnesses.updateWitness(id, witnessId, request.toInput(), CurrentUsers.required()));
     }
 
     /**

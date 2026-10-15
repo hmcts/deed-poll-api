@@ -36,7 +36,7 @@ class DocumentStorageStatesTest {
     private static final String HASH = "hash-token";
 
     private final DeedPollSupportingDocumentRepository documents = mock(DeedPollSupportingDocumentRepository.class);
-    private final DocumentStorageStates states = new DocumentStorageStates(null, documents, null);
+    private final DocumentStorageStates states = new DocumentStorageStates(null, documents, null, null);
 
     @ParameterizedTest
     @EnumSource(value = DocumentStorageState.class, names = {"Uploaded", "AttachUncertain"})

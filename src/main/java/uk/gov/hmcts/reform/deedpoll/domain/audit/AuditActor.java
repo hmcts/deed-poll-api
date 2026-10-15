@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.audit;
 
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.WriteContext;
+import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 
 /**
  * Who an audit event is attributed to: the caller's IDAM subject and display name, or the service itself.
@@ -17,6 +18,11 @@ public record AuditActor(String id, String name, boolean service) {
      */
     public static AuditActor of(WriteContext context) {
         return new AuditActor(context.userId(), context.author(), false);
+    }
+
+    /** The writer of a note: the service when it wrote on its own behalf, otherwise the user it names. */
+    public static AuditActor of(NoteAuthor author) {
+        return author.service() ? system() : new AuditActor(author.userId(), author.author(), false);
     }
 
     /** The caller behind any other write or a read. */

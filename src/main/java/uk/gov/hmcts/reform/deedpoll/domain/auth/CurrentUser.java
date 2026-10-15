@@ -173,9 +173,10 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
      * This caller as the author a note write needs.
      *
      * <p>A note write has no admin-only field, so it takes the name alone -- see {@link NoteAuthor} for
-     * why that type exists rather than the whole context being handed over.
+     * why that type exists rather than the whole context being handed over. The subject travels with it for the
+     * audit trail, read raw for the reason {@link #writeContext()} gives.
      */
     public NoteAuthor noteAuthor() {
-        return new NoteAuthor(name);
+        return NoteAuthor.user(name, userId);
     }
 }

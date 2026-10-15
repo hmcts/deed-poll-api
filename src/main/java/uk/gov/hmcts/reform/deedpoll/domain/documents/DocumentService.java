@@ -10,6 +10,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
@@ -65,6 +67,7 @@ public class DocumentService {
     private final DeedPollSupportingDocumentTypeRepository types;
     private final DocumentStore store;
     private final ObjectProvider<RemoteDocumentUploads> remoteUploads;
+    private final DocumentUploadAudit uploadAudit;
     private final TransactionTemplate inTransaction;
     private final TransactionTemplate readOnly;
 
@@ -73,12 +76,14 @@ public class DocumentService {
                            DeedPollSupportingDocumentTypeRepository types,
                            DocumentStore store,
                            ObjectProvider<RemoteDocumentUploads> remoteUploads,
+                           DocumentUploadAudit uploadAudit,
                            PlatformTransactionManager transactions) {
         this.deedPolls = deedPolls;
         this.documents = documents;
         this.types = types;
         this.store = store;
         this.remoteUploads = remoteUploads;
+        this.uploadAudit = uploadAudit;
         // PROPAGATION_REQUIRED, the @Transactional default: a filesystem upload joins a caller's transaction, as
         // DeedDocumentService.storeDeed's, exactly as it did when the method carried the annotation.
         this.inTransaction = new TransactionTemplate(transactions);
@@ -211,14 +216,31 @@ public class DocumentService {
         removeBlobOnceTheDeleteCommits(id, storageKey, removal);
     }
 
-    /** Uploads a file with the form's own options, which is the shape a multipart request arrives in. */
+    /**
+     * Uploads a file for this caller with the form's own options, which is the shape a multipart request arrives in.
+     */
+    public DeedPollSupportingDocument uploadDocument(String deedPollId, UploadFormInput form, UploadedFile file,
+                                                    CurrentUser caller) {
+        return upload(deedPollId, form.documentTypeId(), file, form.name(), form.direction(), AuditActor.of(caller));
+    }
+
+    /** As the service account, with the form's own options. */
     public DeedPollSupportingDocument uploadDocument(String deedPollId, UploadFormInput form, UploadedFile file) {
         return uploadDocument(deedPollId, form.documentTypeId(), file, form.name(), form.direction());
     }
 
-    /** Uploads a file, taking the default direction and the file's own name. */
+    /** As the service account, taking the default direction and the file's own name. */
     public DeedPollSupportingDocument uploadDocument(String deedPollId, String documentTypeId, UploadedFile file) {
         return uploadDocument(deedPollId, documentTypeId, file, Optional.empty(), Optional.empty());
+    }
+
+    /** As the service account, with every option given. */
+    public DeedPollSupportingDocument uploadDocument(String deedPollId,
+                                                    String documentTypeId,
+                                                    UploadedFile file,
+                                                    Optional<String> name,
+                                                    Optional<DocumentDirection> direction) {
+        return upload(deedPollId, documentTypeId, file, name, direction, AuditActor.system());
     }
 
     /**
@@ -243,26 +265,30 @@ public class DocumentService {
      * be given one. A caller that already holds a transaction -- {@code DeedDocumentService.storeDeed} -- therefore
      * works on the filesystem store only; moving generated deeds onto CDAM is plan 03b's.
      *
+     * <p><strong>Either way, the row's first commit carries its audit event</strong> ({@link DocumentUploadAudit}),
+     * so no uploaded row exists without one.
+     *
      * @throws InvalidInputError if there is no file
      * @throws NotFoundError if there is no such case, or no such document type
      */
-    public DeedPollSupportingDocument uploadDocument(String deedPollId,
-                                                    String documentTypeId,
-                                                    UploadedFile file,
-                                                    Optional<String> name,
-                                                    Optional<DocumentDirection> direction) {
+    private DeedPollSupportingDocument upload(String deedPollId,
+                                              String documentTypeId,
+                                              UploadedFile file,
+                                              Optional<String> name,
+                                              Optional<DocumentDirection> direction,
+                                              AuditActor actor) {
         if (file == null) {
             throw new InvalidInputError("Select a file to upload");
         }
         DocumentUpload upload = DocumentUpload.of(deedPollId, documentTypeId, file, name, direction);
         RemoteDocumentUploads remote = remoteUploads.getIfAvailable();
         if (remote != null) {
-            return remote.upload(upload);
+            return remote.upload(upload, actor);
         }
-        return inTransaction.execute(status -> storeAndRecord(upload));
+        return inTransaction.execute(status -> storeAndRecord(upload, actor));
     }
 
-    private DeedPollSupportingDocument storeAndRecord(DocumentUpload upload) {
+    private DeedPollSupportingDocument storeAndRecord(DocumentUpload upload, AuditActor actor) {
         DeedPoll parent = requireCase(upload.deedPollId());
         DeedPollSupportingDocumentType type = requireType(upload.documentTypeId());
 
@@ -271,7 +297,9 @@ public class DocumentService {
 
         DeedPollSupportingDocument document = upload.newRow(parent, type);
         document.setStorageKey(storageKey);
-        return documents.save(document);
+        DeedPollSupportingDocument saved = documents.save(document);
+        uploadAudit.uploaded(saved, actor);
+        return saved;
     }
 
     /**
