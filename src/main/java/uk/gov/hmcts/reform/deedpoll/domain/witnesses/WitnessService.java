@@ -134,6 +134,12 @@ public class WitnessService {
             .orElseThrow(() -> new NotFoundError("Witness " + id + " not found"));
     }
 
+    /** The witness under a row lock, so the values an audit event records as replaced are the ones actually replaced. */
+    private DeedPollWitness findWitnessForUpdate(String deedPollId, String id) {
+        return witnesses.findByIdAndDeedPollIdForUpdate(id, deedPollId)
+            .orElseThrow(() -> new NotFoundError("Witness " + id + " not found"));
+    }
+
     /**
      * Amends a witness.
      *
@@ -155,7 +161,7 @@ public class WitnessService {
     }
 
     private DeedPollWitness updateWitness(String deedPollId, String id, UpdateWitnessInput dto, AuditActor actor) {
-        DeedPollWitness witness = findWitness(deedPollId, id);
+        DeedPollWitness witness = findWitnessForUpdate(deedPollId, id);
         final Map<String, Object> before = fieldsOf(witness);
         dto.witnessName().ifPresent(witness::setWitnessName);
         dto.witnessAddress().ifPresent(witness::setWitnessAddress);
@@ -196,7 +202,7 @@ public class WitnessService {
     @Transactional
     public void removeWitness(String deedPollId, String id, CurrentUser caller) {
         caller.require(Capability.DELETE_WITNESS);
-        DeedPollWitness witness = findWitness(deedPollId, id);
+        DeedPollWitness witness = findWitnessForUpdate(deedPollId, id);
         witnesses.delete(witness);
         record(AuditAction.WITNESS_DELETED, AuditActor.of(caller), witness, FIELDS, fieldsOf(witness),
                Map.of());

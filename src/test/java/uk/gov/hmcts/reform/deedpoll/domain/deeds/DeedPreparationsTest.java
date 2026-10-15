@@ -44,6 +44,8 @@ class DeedPreparationsTest extends AbstractPostgresContainerTest {
     @Autowired
     private DeedDocumentService deeds;
     @Autowired
+    private uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentUploadAudit uploadAudit;
+    @Autowired
     private DeedGenerator generator;
     @Autowired
     private StagedPayloads payloads;
@@ -70,6 +72,13 @@ class DeedPreparationsTest extends AbstractPostgresContainerTest {
     void preparedUploadClaimCommitsOnceAndAttachedRowsDoNotClaimAgain() {
         String id = linkedCase();
         PreparedDeed prepared = preparations.prepare(id, DeedTemplate.ADULT);
+        assertThat(jdbc.queryForObject(
+            "SELECT count(*) FROM deedpoll_audit_event WHERE entity_id = ? AND action = 'DOCUMENT_UPLOADED'",
+            Long.class, prepared.documentId())).isEqualTo(1L);
+        preparations.prepare(id, DeedTemplate.ADULT);
+        assertThat(jdbc.queryForObject(
+            "SELECT count(*) FROM deedpoll_audit_event WHERE entity_id = ? AND action = 'DOCUMENT_UPLOADED'",
+            Long.class, prepared.documentId())).isEqualTo(1L);
         storageStates.claimPrepared(id, prepared.documentId());
         var claimed = documents.findById(prepared.documentId()).orElseThrow();
         assertThat(claimed.getStorageUploadAttempts()).isEqualTo((short) 1);
@@ -176,7 +185,8 @@ class DeedPreparationsTest extends AbstractPostgresContainerTest {
         byte[] original = preparations.content(id, first.documentId());
         assertThat(StagedPayloads.checksum(original)).isEqualTo(first.checksum());
         jdbc.update("UPDATE deedpoll_deedpoll SET \"newForename\" = 'Changed' WHERE id = ?", id);
-        var restarted = new DeedPreparations(cases, documents, deeds, generator, payloads, jdbc, transactions, reader);
+        var restarted = new DeedPreparations(cases, documents, deeds, generator, payloads, jdbc, transactions,
+            reader, uploadAudit);
         assertThat(restarted.prepare(id, DeedTemplate.ADULT)).isEqualTo(first);
         assertThat(restarted.content(id, first.documentId())).isEqualTo(original);
         original[0] = 0;
@@ -297,7 +307,7 @@ class DeedPreparationsTest extends AbstractPostgresContainerTest {
     void absentCapacityRollsBackDocumentTypePayloadAndReservation() {
         String id = linkedCase();
         var disabled = new DeedPreparations(cases, documents, deeds, generator,
-            new StagedPayloads(jdbc, 0), jdbc, transactions, reader);
+            new StagedPayloads(jdbc, 0), jdbc, transactions, reader, uploadAudit);
         assertThatThrownBy(() -> disabled.prepare(id, DeedTemplate.ADULT)).isInstanceOf(ConflictError.class);
         assertThat(documents.findByDeedPollIdOrderByCreatedOnAsc(id)).isEmpty();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_deedpreparation WHERE \"deedPollId\" = ?",
@@ -313,7 +323,7 @@ class DeedPreparationsTest extends AbstractPostgresContainerTest {
         long alreadyUsed = jdbc.queryForObject("SELECT coalesce(sum(\"sizeBytes\"), 0) FROM deedpoll_stagedpayload",
             Long.class);
         var bounded = new DeedPreparations(cases, documents, deeds, generator,
-            new StagedPayloads(jdbc, capacity + alreadyUsed), jdbc, transactions, reader);
+            new StagedPayloads(jdbc, capacity + alreadyUsed), jdbc, transactions, reader, uploadAudit);
         List<Object> results = race(() -> reserveOrRefusal(bounded, first), () -> reserveOrRefusal(bounded, second));
         assertThat(results.stream().filter(PreparedDeed.class::isInstance)).hasSize(1);
         assertThat(results.stream().filter(ConflictError.class::isInstance)).hasSize(1);

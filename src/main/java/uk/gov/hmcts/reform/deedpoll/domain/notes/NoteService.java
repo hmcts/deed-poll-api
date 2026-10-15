@@ -116,6 +116,12 @@ public class NoteService {
             .orElseThrow(() -> new NotFoundError("Note " + id + " not found"));
     }
 
+    /** The note under a row lock, so the values an audit event records as replaced are the ones actually replaced. */
+    private DeedPollNote findNoteForUpdate(String deedPollId, String id) {
+        return notes.findByIdAndDeedPollIdForUpdate(id, deedPollId)
+            .orElseThrow(() -> new NotFoundError("Note " + id + " not found"));
+    }
+
     /** Amends a note as the service account. */
     @Transactional
     public DeedPollNote updateNote(String deedPollId, String id, UpdateNoteInput dto) {
@@ -133,7 +139,7 @@ public class NoteService {
      */
     @Transactional
     public DeedPollNote updateNote(String deedPollId, String id, UpdateNoteInput dto, NoteAuthor author) {
-        DeedPollNote note = findNote(deedPollId, id);
+        DeedPollNote note = findNoteForUpdate(deedPollId, id);
         final String before = note.getNote();
         dto.note().ifPresent(note::setNote);
         note.setModifiedBy(author.author());
@@ -178,7 +184,7 @@ public class NoteService {
     @Transactional
     public void removeNote(String deedPollId, String id, CurrentUser caller) {
         caller.require(Capability.DELETE_NOTE);
-        DeedPollNote note = findNote(deedPollId, id);
+        DeedPollNote note = findNoteForUpdate(deedPollId, id);
         notes.delete(note);
         record(AuditAction.NOTE_DELETED, AuditActor.of(caller), note, List.of(NOTE), note.getNote(), null);
     }
