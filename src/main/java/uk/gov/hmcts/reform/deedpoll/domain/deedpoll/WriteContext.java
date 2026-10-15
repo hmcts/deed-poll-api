@@ -8,12 +8,16 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
  * <p>Ported from the {@code WriteContext} type in {@code reference/ts/deed-poll/service.ts}.
  * {@code userName} is the display name recorded in {@code createdBy} / {@code modifiedBy}.
  *
+ * <p>{@code userId} is the caller's IDAM subject, which the reference's context does not have. It is what the audit
+ * trail records as the actor, and nothing authorises on it here: a user-initiated write with no subject is a bug,
+ * and {@code AuditTrail} refuses it rather than attributing the change to nobody.
+ *
  * <p>{@link #DEFAULT} is a non-admin with no name, matching the reference's
  * {@code DEFAULT_WRITE_CONTEXT}. That default is load-bearing rather than convenient: an internal caller
  * that forgets to pass a context must not get the permissive branch, and there is a ported test for
  * exactly that.
  */
-public record WriteContext(boolean isAdmin, String userName) {
+public record WriteContext(boolean isAdmin, String userName, String userId) {
 
     /**
      * Fallback author for a write with no identified user.
@@ -25,12 +29,12 @@ public record WriteContext(boolean isAdmin, String userName) {
      */
     public static final String SERVICE_ACCOUNT_NAME = CurrentUser.SERVICE_ACCOUNT_NAME;
 
-    /** A non-admin caller with no name, attributed to the service account. */
-    public static final WriteContext DEFAULT = new WriteContext(false, null);
+    /** A non-admin caller with no name or subject, attributed to the service account. */
+    public static final WriteContext DEFAULT = new WriteContext(false, null, null);
 
-    /** An admin caller with no name. */
+    /** An admin caller with no name or subject. */
     public static WriteContext admin() {
-        return new WriteContext(true, null);
+        return new WriteContext(true, null, null);
     }
 
     /** The name to stamp on this write. */

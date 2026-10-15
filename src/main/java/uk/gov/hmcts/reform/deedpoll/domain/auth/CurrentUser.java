@@ -161,10 +161,12 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
      *
      * <p>Kept here rather than assembled at each call site: the two types are the same two facts a write
      * is entitled to know, and a controller that built its own could quietly pass
-     * {@code isAdmin = false} for an admin and silently drop the privacy fields.
+     * {@code isAdmin = false} for an admin and silently drop the privacy fields. The subject travels with them
+     * so the audit trail can name the actor; it is read raw rather than through {@link #requireUserId()},
+     * because whether a missing one is a refusal is the audit trail's decision, not this conversion's.
      */
     public WriteContext writeContext() {
-        return new WriteContext(can(Capability.OVERRIDE_PRIVACY), name);
+        return new WriteContext(can(Capability.OVERRIDE_PRIVACY), name, userId);
     }
 
     /**

@@ -136,16 +136,16 @@ container-backed test on `AbstractPostgresContainerTest`.
 **Files:** new `domain/audit/AuditAction.java`, `AuditEntry.java`, `AuditValue.java` and `AuditTrail.java`
 (JdbcTemplate); `domain/deedpoll/WriteContext.java` and its callers.
 
-- [ ] Add `userId` to `WriteContext` (decision 8), and update every construction.
-- [ ] `AuditTrail.record(entry, values)` with `MANDATORY` propagation (decision 7). `recordRead(entry)` with
+- [x] Add `userId` to `WriteContext` (decision 8), and update every construction.
+- [x] `AuditTrail.record(entry, values)` with `MANDATORY` propagation (decision 7). `recordRead(entry)` with
   `REQUIRES_NEW` (decision 9).
-- [ ] Tests:
+- [x] Tests:
   - `record` outside a transaction throws `IllegalTransactionStateException`;
   - a user write with no subject throws;
   - `audit.write.failed` is logged and rethrown when the insert fails;
   - the encoding rules in decision 5 are covered;
   - no value rows are written for an unchanged field.
-- [ ] Mark completed
+- [x] Mark completed
 
 ### Task 3: Audit case, note, witness and document writes, with values
 
@@ -219,6 +219,15 @@ Task 1, 2026-10-15: V36 adds both tables, the append-only triggers and the two d
 setting off again before returning; `EXECUTE` is revoked from `PUBLIC`). `AuditTrailMigrationTest` (12 cases) was
 seen failing first. `SdkMigrationOrderTest` now expects V1 to V36. Validation: 4,188 test / 19 integration, no
 failures, errors or skips; Checkstyle clean.
+
+Task 2, 2026-10-15: `WriteContext` carries `userId`, set only by `CurrentUser.writeContext()` (the defaults carry
+none). `domain/audit` adds `AuditAction` (each action marked read or write, so `record` and `recordRead` refuse each
+other's), `AuditActor` (a user, or `system()` as the service account), `AuditEntry` (detail keys allowlisted at
+construction) and `AuditValue` (decision 5's encoding; `changed()` compares the encoded forms). `AuditTrail` also
+refuses value rows on an entity with no case (decision 4), and its `audit.write.failed` line carries the exception's
+class name but never its message. `AuditTrailTest` (11 container cases) and `AuditValueTest` (9) were seen failing
+first. `AuditTrailTest`'s read case commits one row, under a fresh UUID, by design. Validation: 4,208 test /
+19 integration, no failures, errors or skips; Checkstyle clean; `openapi.json` unchanged.
 
 ## Post-Completion
 

@@ -164,13 +164,14 @@ class CurrentUserTest {
     class WriteContexts {
 
         @Test
-        @DisplayName("carries both the admin flag and the author into a case write")
+        @DisplayName("carries the admin flag, the author and the subject into a case write")
         void carriesTheAdminFlagAndAuthor() {
             WriteContext context = CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "A Caseworker", SUBJECT)
                 .writeContext();
 
             assertThat(context.isAdmin()).isTrue();
             assertThat(context.author()).isEqualTo("A Caseworker");
+            assertThat(context.userId()).isEqualTo(SUBJECT);
         }
 
         @Test
@@ -187,6 +188,7 @@ class CurrentUserTest {
             CurrentUser user = CurrentUser.ANONYMOUS;
 
             assertThat(user.writeContext().author()).isEqualTo(CurrentUser.SERVICE_ACCOUNT_NAME);
+            assertThat(user.writeContext().userId()).isNull();
             assertThat(user.noteAuthor().author()).isEqualTo(CurrentUser.SERVICE_ACCOUNT_NAME);
         }
 
