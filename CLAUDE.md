@@ -109,10 +109,17 @@ never yields a Delivery Manager.
 - **The CCD system user never calls RAS**, and `/ccd-persistence/**` (`CcdCallerAuthenticationConverter`) stays
   IDAM-only. CCD document access for AM-only users needs a later definition change.
 
-Activation, none of it done in this repo: flux sets `ROLE_ASSIGNMENT_URL` and mounts the S2S secret; RAS adds
-`deed_poll_api` to `ROLE_ASSIGNMENT_S2S_AUTHORISED_SERVICES`; `ROLE_ASSIGNMENT_GAZETTE_SKILL` is set once RD
-allocates the service code; CRD/JRD profiles exist; only then `ROLE_ASSIGNMENT_ENABLED=true`. See
-`docs/plans/20261014-am-role-source.md`.
+Activation, none of it done in this repo:
+- RAS adds `deed_poll_api` to `ROLE_ASSIGNMENT_S2S_AUTHORISED_SERVICES`.
+- RD allocates the service code, and CRD/JRD profiles exist.
+- Then one flux PR to `apps/deed-poll/deed-poll-api/aat.yaml` sets `ROLE_ASSIGNMENT_URL`,
+  `ROLE_ASSIGNMENT_GAZETTE_SKILL` and `ROLE_ASSIGNMENT_ENABLED=true`.
+
+**The outbound S2S secret is already in place in AAT, and only there.** deed-poll-infra copies
+`microservicekey-deed-poll-api` from `s2s-aat` into `deed-poll-aat` as `api-s2s-secret`, and that `aat.yaml` (#48052)
+mounts it as `DEED_POLL_API_S2S_SECRET`, alongside the IDAM client and system-user secrets and the CCD/CDAM URLs.
+**Do not add it to the chart's `values.yaml`**: no other vault has it, so every other environment's deploy would fail.
+The same secret serves data-store, CDAM and RAS. See `docs/plans/20261014-am-role-source.md`.
 
 ## Rules that break things silently if ignored
 
