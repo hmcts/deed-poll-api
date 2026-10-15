@@ -192,14 +192,14 @@ container-backed test on `AbstractPostgresContainerTest`.
 
 **Files:** `config/SecurityConfiguration.java` (both chains), `api/DomainErrorHandler.java`; MockMvc tests.
 
-- [ ] Wire a delegating entry point and an access-denied handler into both chains, delegating to Spring's
+- [x] Wire a delegating entry point and an access-denied handler into both chains, delegating to Spring's
   `BearerTokenAuthenticationEntryPoint` and `AccessDeniedHandlerImpl` (decision 12).
-- [ ] Log the subject in `DomainErrorHandler.forbidden`.
-- [ ] Tests:
+- [x] Log the subject in `DomainErrorHandler.forbidden`.
+- [x] Tests:
   - a 401 still carries `WWW-Authenticate: Bearer`, and its log event has a reason but no token text;
   - a 403 logs the subject and path;
   - the MDC is cleared after the request.
-- [ ] Mark completed
+- [x] Mark completed
 
 ### Task 7: Documentation and handoff
 
@@ -268,6 +268,20 @@ checks and before the store is opened, so a failure propagates and nothing is op
 the outbox and the deed paths, records nothing. `ReadAuditTest` (5 MockMvc container cases, forced with a
 256-character subject) was seen failing first, 4 of 5; the not-found case passed before the change, as expected.
 Validation: 4,234 test / 20 integration, no failures, errors or skips; Checkstyle clean; `openapi.json` unchanged.
+
+Task 6, 2026-10-15: `auth/SecurityEvents` writes every line, setting `security.event`, `subject`, `path` and `reason`
+in the MDC and removing them in a `finally` before it returns. `LoggingAuthenticationEntryPoint` wraps Spring's
+`BearerTokenAuthenticationEntryPoint` on both chains, set both on the resource server (a token that fails
+verification) and on exception handling (no token). Its `reason` is the OAuth2 error code, `missing_token` or
+`authentication_failed`, never the error description. `LoggingAccessDeniedHandler` logs `authz.denied` with
+`reason=access_rule` and delegates to whichever handler the chain already used. One deviation from the task text: on
+`/ccd-persistence/**` that handler is `BearerTokenAccessDeniedHandler`, not `AccessDeniedHandlerImpl`, because the
+current 403 there carries `WWW-Authenticate: Bearer`, which the test proved before the change and the Impl would
+drop. The main chain keeps `StaffAccessDeniedHandler` for its body. `DomainErrorHandler.forbidden` logs
+`reason=domain_rule` with the security context's subject. The S2S filter's own refusals answer before either handler
+and are not logged. `SecurityEventLoggingTest` (6 full-context MockMvc cases, among them a stand-in route that
+throws `ForbiddenError`) was seen failing first, 6 of 6. Validation: 4,240 test / 20 integration, no failures, errors
+or skips; Checkstyle clean; `openapi.json` unchanged.
 
 ## Post-Completion
 
