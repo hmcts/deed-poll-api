@@ -143,6 +143,22 @@ class DeploymentChartConformanceTest {
             .exists();
     }
 
+    @Test
+    void storageGuardReceivesTheDeploymentEnvironment() throws IOException {
+        assertThat(environment()).containsEntry("ENVIRONMENT_NAME", "{{ .Values.global.environment }}");
+        assertThat(read(APPLICATION_YAML)).contains("environment-name: ${ENVIRONMENT_NAME:}");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void previewNamesItsEnvironmentExplicitly() throws IOException {
+        Map<String, Object> values = new Yaml().loadAs(
+            read(CHART_DIR.resolve("values.preview.template.yaml")), Map.class);
+        Map<String, Object> java = (Map<String, Object>) values.get("java");
+        Map<String, Object> environment = (Map<String, Object>) java.get("environment");
+        assertThat(environment).containsEntry("ENVIRONMENT_NAME", "preview");
+    }
+
     @SuppressWarnings("unchecked")
     private static Map<String, Object> chart() throws IOException {
         return new Yaml().loadAs(read(CHART_DIR.resolve("Chart.yaml")), Map.class);

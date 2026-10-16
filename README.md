@@ -438,7 +438,9 @@ an upload against an unlinked case returns 409. Only `Attached` rows are downloa
 
 | Environment variable | Default | Purpose |
 |---|---|---|
-| `DOCUMENT_STORE` | `filesystem` | Exactly `filesystem` or `cdam`; any other value refuses startup |
+| `DOCUMENT_STORE` | `filesystem` | Exactly `filesystem` or `cdam`; any other value refuses startup. Filesystem also requires the environment guard below |
+| `ENVIRONMENT_NAME` | empty locally; chart uses `global.environment` | Filesystem permits only `aat`, `preview`, `demo`, `ithc`, `perftest`, or an empty name with `CLUSTER_NAME` absent. Preview explicitly sets `preview` |
+| `CLUSTER_NAME` | unset locally; supplied by Flux | Its presence (even empty) prevents an unnamed deployment being treated as a local run |
 | `DOCUMENT_STORE_ROOT` | `data/documents` | Local development directory, gitignored |
 | `CASE_DOCUMENT_AM_URL` | `http://localhost:4455` (chart: placeholder) | CDAM endpoint; local/default values are refused when CDAM is enabled outside local tests |
 | `DOCUMENT_URL_BASE` | `http://dm-store:8080` | Reference URL base accepted by data-store's document URL validator; not a binary download destination |
@@ -465,11 +467,20 @@ Later drains use a separate case-scoped service reader with fresh system/S2S cre
 still use the staff token, with no fallback on denial. Claims, send-start and outcomes commit separately;
 a possibly-sent email stops for investigation (including emails without documents).
 
-> **Development only, and it must not reach a deployed environment.** Pod disk is ephemeral, replicas
+> **Filesystem storage is temporary and never permitted in production.** The startup guard allows only the
+> exact non-production names above, or an unnamed local run with `CLUSTER_NAME` absent. Unknown names, case
+> variations and an unnamed cluster deployment refuse startup. Spring profiles do not bypass it; there is no
+> bypass switch. This allowance is not approval to hold real applicant documents in non-production.
+> Pod disk is ephemeral, replicas
 > do not share a volume, and the chart declares none — a deployed environment running this loses every
 > uploaded file on the next restart and serves 404s from whichever replica did not receive the upload.
 > CDAM uploads, generated deeds and correspondence reads are implemented and proven locally. Existing
 > filesystem migration remains 03c. Switching backends does not migrate files in either direction.
+
+Ship the guard and chart environment setting together. Before any rollout replaces a pod, inventory document
+rows by store and filesystem file counts per pod (aggregate counts only), and resolve any preservation needs.
+This change does not alter replicas, migrate documents or activate CDAM. After deployment, verify API startup,
+admin readiness and upload/download round trips; local tests and chart rendering do not replace these checks.
 
 ### Durable preparation and owned staging configuration
 

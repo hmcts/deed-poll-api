@@ -4,10 +4,11 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.openfeign.EnableFeignClients;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import uk.gov.hmcts.reform.ccd.document.am.feign.CaseDocumentClientApi;
 
 /**
- * Registers {@link DocumentStoreProperties}, and CDAM's Feign client when the CDAM store is selected.
+ * Registers the store properties and environment guard, and CDAM's Feign client when the CDAM store is selected.
  *
  * <p>{@link CaseDocumentClientApi} is registered here and nowhere else, at {@code case_document_am.url}. The client
  * library's own {@code CaseDocumentManagementClientAutoConfiguration} would scan its whole package and add a health
@@ -18,6 +19,7 @@ import uk.gov.hmcts.reform.ccd.document.am.feign.CaseDocumentClientApi;
  */
 @Configuration
 @EnableConfigurationProperties(DocumentStoreProperties.class)
+@Import(DocumentStoreEnvironmentGuard.class)
 public class DocumentStoreConfiguration {
 
     /** CDAM's client, only when documents go to CDAM. */

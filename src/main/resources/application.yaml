@@ -262,6 +262,8 @@ case_document_am:
   url: ${CASE_DOCUMENT_AM_URL:http://localhost:4455}
 
 deedpoll:
+  # Empty is local only when CLUSTER_NAME is absent. Deployed filesystem storage uses a strict allowlist.
+  environment-name: ${ENVIRONMENT_NAME:}
   security:
     # The /caseworker/** membership gate (SecurityConfiguration, StaffGate).
     # - `report` logs "staff-gate report subject=..." for a caller outside StaffArea.CASEWORKER's roles
@@ -329,7 +331,7 @@ deedpoll:
     # A zero or negative value refuses to start rather than releasing every claim as it is made.
     claim-expiry: ${DEEDPOLL_REFERRAL_CLAIM_EXPIRY:PT2H}
   documents:
-    # Where LocalFilesystemDocumentStore keeps uploaded blobs. Development only: local disk does
+    # Where LocalFilesystemDocumentStore keeps uploaded blobs. Local/allowlisted non-production only: local disk does
     # not survive AKS, because pods are ephemeral and replicas do not share a volume. Real
     # storage is CDAM, in plan 03, which adds an implementation beside the local one.
     local-store-root: ${DOCUMENT_STORE_ROOT:data/documents}

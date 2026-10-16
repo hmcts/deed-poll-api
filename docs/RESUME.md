@@ -1,5 +1,14 @@
 # Resume state — where the next session picks up
 
+**Filesystem storage guard, 2026-10-16 (OWASP Plan 05 Task 4):** startup now refuses filesystem storage unless
+`ENVIRONMENT_NAME` is exactly `aat`, `preview`, `demo`, `ithc` or `perftest`, or is empty with `CLUSTER_NAME`
+absent for local use. There is no profile bypass or override switch. The chart supplies the name, with an
+explicit preview override. CDAM onboarding checks remain unchanged. Before rollout replaces any pod, record
+aggregate document-row/file inventories and resolve preservation needs. Live preview startup, AAT readiness
+and upload/download checks remain deployment verification; no replica changes or CDAM activation are included.
+Local verification: `cleanTest build` passed with 4,272 main-suite tests and 20 integration tests, no skips,
+and no Checkstyle violations. Helm lint and chart-java 6.1.1 rendering passed for AAT, preview and production.
+
 **Audit trail, 2026-10-15:** the append-only audit trail (V36 `deedpoll_audit_event` and `deedpoll_audit_event_value`, `AuditTrail`, `ReadAudit`, `SecurityEvents`) is implemented on `feat/audit-trail` and not live-verified. Every caseworker and judicial write records an event in its own transaction, so a failed audit insert rolls the change back; case views fail open and document downloads fail closed. Next: open the PR; retain-and-dispose schedules the two disposal functions; a later plan adds a read endpoint. See [the plan](plans/20261015-audit-trail.md).
 
 **GET /me, 2026-10-14:** `GET /me` (`getCallerAccess`) is implemented on `feat/me-capabilities` and not live-verified. It is read-only, outside both staff areas, carries no identity and answers `Cache-Control: no-store`. Next: open the PR, then admin refreshes its api spec and reads `/me` at login and token refresh in place of `capabilitiesFor(roles)`. Operation counts are unchanged. See [the plan](plans/20261014-me-caller-access.md).

@@ -125,6 +125,12 @@ The same secret serves data-store, CDAM and RAS. See `docs/plans/20261014-am-rol
 
 ## Rules that break things silently if ignored
 
+- **Filesystem document storage must never run in production; there is no bypass switch.**
+  `DocumentStoreEnvironmentGuard`, imported by `DocumentStoreConfiguration`, allows exactly `aat`, `preview`,
+  `demo`, `ithc`, `perftest`, or an empty `ENVIRONMENT_NAME` with `CLUSTER_NAME` absent for local use. A present
+  but empty cluster name is not local. Profiles do not bypass the guard. Keep the chart's `ENVIRONMENT_NAME`
+  binding with the guard; the preview override names `preview` even when Jenkins uses `global.environment=aat`.
+  Inventory existing filesystem files before pod replacement; allowing non-production does not make disk durable.
 - **The CDAM hash token is transient.** Keep it only while `Uploaded`/`AttachUncertain`; never log, project or
   publish it. An uncertain upload gets exactly one fresh upload within the same request (two sends total), then
   stays uncertain. There is no background retry or operator resume endpoint in 03a. Never send `permanent=true`:
