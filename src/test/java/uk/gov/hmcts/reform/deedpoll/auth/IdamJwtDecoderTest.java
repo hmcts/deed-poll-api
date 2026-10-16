@@ -115,6 +115,20 @@ class IdamJwtDecoderTest {
     }
 
     @Test
+    @DisplayName("matches a configured upper-case scheme to the token's issuer, which Spring reads lower-case")
+    void matchesAnUpperCaseConfiguredScheme() {
+        String configured = "HTTPS" + FORGEROCK.substring("https".length());
+        assertThat(decoder(configured).decode(tokenFrom(FORGEROCK)).getIssuer()).hasToString(FORGEROCK);
+    }
+
+    @Test
+    @DisplayName("reads a token's upper-case scheme as Spring always has, for any trusted issuer")
+    void readsATokensSchemeAsSpringDoes() {
+        String upperScheme = "HTTPS" + FORGEROCK.substring("https".length());
+        assertThat(decoder(FORGEROCK).decode(tokenFrom(upperScheme)).getIssuer()).hasToString(FORGEROCK);
+    }
+
+    @Test
     @DisplayName("refuses a near miss of the discovered issuer too")
     void refusesANearMissOfTheMainIssuer() {
         assertRefusedForIssuer(decoder(FORGEROCK), tokenFrom(IDAM.issuerUrl() + "/"));

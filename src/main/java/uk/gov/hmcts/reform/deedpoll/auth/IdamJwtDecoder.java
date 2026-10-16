@@ -121,9 +121,11 @@ public class IdamJwtDecoder implements JwtDecoder {
      * <p>That validator cannot simply be added once per issuer, because {@link DelegatingOAuth2TokenValidator}
      * requires every member to pass. Nor is Spring's multi-issuer resolver the answer: it discovers a key set per
      * issuer, and these are several names for the one key set discovered from the main issuer -- an additional
-     * issuer is never fetched from. The comparison is exact, so no prefix, case or trailing slash matches, and
-     * the failure reads {@code The iss claim is not valid} as it did. {@code toString()} because Spring may hand
-     * the claim over as a {@code URL}, which is why its own validator does the same.
+     * issuer is never fetched from. The comparison is exact on what Spring hands over, so no prefix, host case,
+     * path or trailing slash matches, and the failure reads {@code The iss claim is not valid} as it did. Spring
+     * converts the claim through {@code URI.toURL().toExternalForm()} first, which lower-cases the scheme only, as it
+     * always has for the main issuer; {@link IdamProperties} converts each configured entry the same way, so the two
+     * sides compare alike. {@code toString()} because the claim may arrive as a {@code URL}.
      */
     static JwtClaimValidator<Object> issuerValidator(List<String> trustedIssuers) {
         return new JwtClaimValidator<>(JwtClaimNames.ISS,

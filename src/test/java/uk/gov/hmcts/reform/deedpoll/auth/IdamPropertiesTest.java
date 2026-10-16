@@ -116,8 +116,8 @@ class IdamPropertiesTest {
     }
 
     @Test
-    @DisplayName("accepts an upper-case HTTPS scheme, as discovery does for the main issuer")
-    void acceptsUpperCaseHttpsScheme() {
-        assertThat(additionalIssuers("HTTPS://idam.example/o")).containsExactly("HTTPS://idam.example/o");
+    @DisplayName("lower-cases an upper-case HTTPS scheme, as Spring does to a token's iss, and keeps the host's case")
+    void normalisesTheSchemeAsSpringDoes() {
+        assertThat(additionalIssuers("HTTPS://Idam.example/o")).containsExactly("https://Idam.example/o");
     }
 }

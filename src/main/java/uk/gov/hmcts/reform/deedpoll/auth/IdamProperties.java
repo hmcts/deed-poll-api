@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.auth;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -59,11 +60,27 @@ public record IdamProperties(String issuerUrl, List<String> audiences, List<Stri
             }
             requireHttps(issuer, position);
             String withoutSlash = issuer.endsWith("/") ? issuer.substring(0, issuer.length() - 1) : issuer;
-            if (!issuers.contains(withoutSlash)) {
-                issuers.add(withoutSlash);
+            String normalised = asSpringReadsIt(withoutSlash, position);
+            if (!issuers.contains(normalised)) {
+                issuers.add(normalised);
             }
         }
         return List.copyOf(issuers);
+    }
+
+    /**
+     * The entry as Spring will present a token's {@code iss}, so the two sides compare alike.
+     *
+     * <p>Spring's claim-set converter reads {@code iss} through {@code URI.toURL().toExternalForm()} before any
+     * validator sees it, which lower-cases the scheme and changes nothing else. Unconverted, an entry written
+     * {@code HTTPS://...} would never equal the claim it names, and every token would fail with nothing to say why.
+     */
+    private static String asSpringReadsIt(String issuer, int position) {
+        try {
+            return URI.create(issuer).toURL().toExternalForm();
+        } catch (IllegalArgumentException | MalformedURLException e) {
+            throw invalid(position);
+        }
     }
 
     /**

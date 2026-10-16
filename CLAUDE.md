@@ -132,8 +132,9 @@ not the discovered `hmcts-access` one. Linking signs in as the system user with 
 forwards it to `/ccd-persistence`, so without the setting every CCD link is a 401. **It is a name, not a trust
 root.** Keys still come only from discovery of `IDAM_API_ISSUER_URL`, nothing is fetched for an additional issuer,
 and a token signed by any other key fails before its issuer is read. A configured entry is trimmed and loses one trailing
-`/`, but a token's `iss` is compared exactly inside Spring's own `JwtClaimValidator`, with no prefix, case or slash
-leniency. Each entry must be an absolute `https` URL or start-up fails. The chart's `values.yaml` leaves it unset; only AAT's flux sets it. See
+`/`, and is converted as Spring converts a token's `iss` (`URI.toURL().toExternalForm()`, which lower-cases the
+scheme only), so the two sides compare alike. The comparison is then exact inside Spring's own `JwtClaimValidator`:
+no prefix, host case, path or slash leniency. Configure the issuer exactly as tokens carry it. Each entry must be an absolute `https` URL or start-up fails. The chart's `values.yaml` leaves it unset; only AAT's flux sets it. See
 `docs/plans/20261016-additional-idam-issuers.md`.
 
 ## Rules that break things silently if ignored

@@ -197,3 +197,12 @@ Not Ralphex checkboxes:
 - after merge, a flux PR adding `IDAM_API_ADDITIONAL_ISSUERS` (the ForgeRock URL above) to
   `apps/deed-poll/deed-poll-api/aat.yaml`
 - then re-run CCD-SMOKE step 2.3 and continue to step 3
+
+**Direct external review and fix, 2026-10-16 (Wren).** The Ralphex external pass returned NO ISSUES FOUND in 54 seconds,
+so it wasn't counted. A direct read-only Copilot GPT-6 Astra review read 25 files in full (record:
+`local-notes/deed-poll-api/issuers-direct-*`). It found that Spring converts a token's `iss` through
+`URI.toURL().toExternalForm()` before any validator, which lower-cases the scheme. So "exact" was exact on the converted
+value, and a configured `HTTPS://…` entry could never match. That was confirmed in the JDK and by a new test. The fix
+converts each configured entry the same way in `IdamProperties`, corrects the wording, and adds tests. The behaviour
+for a token is Spring's, unchanged and as it always was for the main issuer. Re-measured: first selector 128, second
+612, `./gradlew build` (Checkstyle tasks excluded) as below, direct Checkstyle 0 warnings.
