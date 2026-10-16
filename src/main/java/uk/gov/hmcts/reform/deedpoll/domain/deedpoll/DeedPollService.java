@@ -100,12 +100,14 @@ public class DeedPollService {
     private final DeedPollRepository deedPolls;
     private final ReferenceNumberService referenceNumbers;
     private final AuditTrail audit;
+    private final CaseListStatementTimeout listTimeout;
 
     public DeedPollService(DeedPollRepository deedPolls, ReferenceNumberService referenceNumbers,
-                           AuditTrail audit) {
+                           AuditTrail audit, CaseListStatementTimeout listTimeout) {
         this.deedPolls = deedPolls;
         this.referenceNumbers = referenceNumbers;
         this.audit = audit;
+        this.listTimeout = listTimeout;
     }
 
     /** Creates a case as the service account, non-admin. */
@@ -273,6 +275,8 @@ public class DeedPollService {
                                      CaseSort sort,
                                      CasePaging paging) {
         requireFilterAccess(caller, filter);
+        // Before the first statement, for the page, its count and the reference match alike.
+        listTimeout.apply();
         Page<DeedPoll> found = deedPolls.findAll(
             CaseSpecifications.matching(filter, query, search),
             PageRequest.of(paging.index(), paging.size(), order(sort)));

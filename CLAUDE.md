@@ -197,6 +197,22 @@ no prefix, host case, path or slash leniency. Configure the issuer exactly as to
   `subject`, `path` and `reason` removed before it returns. `reason` is an OAuth2 error code or a fixed word, never
   token text or an error description. The entry point and access-denied handler on both chains wrap the existing
   ones, so status codes, bodies and `WWW-Authenticate` stay as they were; S2S refusals are not logged.
+- **`RateLimitFilter` belongs to `securityFilterChain` only, directly after `AuthorizationFilter`, and is
+  never a bean or an interceptor.** After authorisation, so a refused caller spends nothing and adds no row. It keys on the verified `sub` (never an address: staff share NAT egress, and
+  a token with no `sub` shares `no-subject`). A `HandlerInterceptor` would run after `DispatcherServlet.checkMultipart`
+  had already read the 25 MB body, and a `Filter` bean would be registered on every path, `ccdPersistenceFilterChain`'s
+  included. **Nothing ahead of it may call `getParameter`**, because on a multipart request that parses the body,
+  which is why the filter reads the raw query string. The six routes are in `RateLimitBucket`, written as the
+  controllers write them, and `RateLimitRoutesTest` fails if one stops matching a handler. `OpenAPIRateLimits`
+  publishes 429 from that same list. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, default `observe` in yaml and the
+  chart) switches **only** the V37 budgets. **Three limits enforce from day one, whatever the mode:** the per-pod
+  in-flight upload `Semaphore` (429, `Retry-After: 5`, released in `finally`), the per-case, per-template daily
+  email cap in `CaseEmailService`, and the case list's transaction-local statement timeout. The email cap answers
+  409 rather than 429, and **the replay check comes before the cap**. At the cap, `replayOrRefuse` asks for this
+  key's row and the exclusion-group occupant first and answers as `resolveRefusedInsert` would, so a retried
+  `Idempotency-Key` is still 200 with `enqueued: false`. Reordering that turns a caseworker's retry into a refusal.
+  No limit may refuse inside `outbox.drain()` or the linking sweep. A counter failure admits the request. Switch
+  the mode per environment in flux and never in the chart default. See `docs/RATE-LIMITS.md`.
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks
   wrong, stop and report it — do not "fix" it.

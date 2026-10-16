@@ -668,6 +668,15 @@ code, both when the build itself runs inside a container that shares the host's 
   containers over the Docker bridge network in preference to their published port — see
   `ContainerDatabase` for the detail.
 
+### Abuse limits
+
+V37 adds `deedpoll_request_budget`, the per-subject counters behind `429` on search, email preview, email send,
+upload and the Gazette routes. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, default `observe`) switches only
+those budgets. Three limits enforce whatever the mode: the per-pod in-flight upload cap
+(`RATE_LIMIT_UPLOAD_IN_FLIGHT`), the daily per-case, per-template email cap (`EMAIL_MAX_PER_CASE_PER_TEMPLATE_PER_DAY`,
+default 3; a fourth distinct-key send is a `409`, a replayed key is still `200`) and the case list statement
+timeout (`LIST_STATEMENT_TIMEOUT`). See [docs/RATE-LIMITS.md](docs/RATE-LIMITS.md).
+
 ### The audit trail
 
 V36 adds `deedpoll_audit_event` (who, when, action, entity, case and field names; kept 7 years) and
@@ -737,7 +746,7 @@ There are two Kubernetes probes and they deliberately do not check the same thin
 ```
   {"status":"UP","components":{
     "db":{"status":"UP"},
-    "deedPollSchema":{"status":"UP","details":{"tables":14}},
+    "deedPollSchema":{"status":"UP","details":{"tables":25}},
     "readinessState":{"status":"UP"}}}
 ```
 

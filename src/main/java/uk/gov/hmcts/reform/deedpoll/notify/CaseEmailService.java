@@ -305,6 +305,11 @@ public class CaseEmailService {
      */
     private final AuditTrail audit;
 
+    /**
+     * Only for the daily cap -- see {@link #underTheDailyCap}.
+     */
+    private final EmailCapProperties cap;
+
     public CaseEmailService(DeedPollRepository deedPolls,
                            ReferralRepository referrals,
                            NotificationRepository notifications,
@@ -318,7 +323,8 @@ public class CaseEmailService {
                            PlatformTransactionManager transactions,
                            DeedPreparations preparations,
                            Optional<CdamDocumentUploads> remote,
-                           AuditTrail audit) {
+                           AuditTrail audit,
+                           EmailCapProperties cap) {
 
         this.deedPolls = deedPolls;
         this.referrals = referrals;
@@ -334,6 +340,7 @@ public class CaseEmailService {
         this.preparations = preparations;
         this.remote = remote;
         this.audit = audit;
+        this.cap = cap;
     }
 
     /**
@@ -563,8 +570,8 @@ public class CaseEmailService {
      * @throws NotFoundError if there is no such case
      * @throws ConflictError if the case is in no state to send this email, this request id has already been used
      *     on this case for a different email, the email that contradicts this one has already been asked for on
-     *     the same referral or on the same case, the case already holds the other deed, or the applicant answered
-     *     ④ while it was being sent
+     *     the same referral or on the same case, the case already holds the other deed, the applicant answered
+     *     ④ while it was being sent, or the case has already been owed this template its daily cap of times
      * @throws IncompleteDataError if the case has no applicant email address
      * @throws uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError if the slots are not acceptable
      */
@@ -679,6 +686,10 @@ public class CaseEmailService {
         LocalDateTime now = AuditClock.now();
         String personalisation = asJson(composed.personalisation());
 
+        if (!underTheDailyCap(deedPollId, template, now)) {
+            return replayOrRefuse(deedPollId, template, requestId, referralId, recipient, personalisation);
+        }
+
         int enqueued = notifications.enqueue(
             id,
             deedPollId,
@@ -702,6 +713,48 @@ public class CaseEmailService {
         }
 
         return resolveRefusedInsert(deedPollId, template, requestId, referralId, recipient, personalisation);
+    }
+
+    /**
+     * Whether this case may be owed one more of this template today: decision 8 of the abuse-limits plan.
+     *
+     * <p>Rows from the 24 hours before {@code now}, less definite refusals, against
+     * {@code deedpoll.email.max-per-case-per-template-per-day}. Whatever the rate-limit mode says, because it protects
+     * one applicant from being written to over and over rather than protecting the service.
+     *
+     * <p><strong>Two concurrent sends with different keys may overshoot by one.</strong> A local send reads the case
+     * without locking its row, so two journeys can both count two and both insert. (A CDAM forms send counts under
+     * {@code lockForDeedPreparation}, but its exclusion group allows one row per case anyway.) Locking the case for
+     * every send to close that would serialise sends with every other writer of the case, for a cap whose purpose is
+     * to stop the fourth, fifth and fiftieth send rather than to be exact about the fourth.
+     */
+    private boolean underTheDailyCap(String deedPollId, EmailTemplate template, LocalDateTime now) {
+        return notifications.countTowardsDailyCap(deedPollId, template.name(), now.minusHours(24))
+            < cap.maxPerCasePerTemplatePerDay();
+    }
+
+    /**
+     * A send at the cap: still a replay or an exclusion-group answer where the insert would have been refused anyway,
+     * and the cap's 409 only where it would have written a row.
+     *
+     * <p><strong>The replay comes first, and that is the rule.</strong> A caseworker retrying a journey whose row
+     * already exists is answered with that row, exactly as {@link #resolveRefusedInsert} would have answered the
+     * refused insert, so the cap never turns a retry into a refusal. The same holds for a group occupant: V15's and
+     * V20's answers are unchanged by the cap, because asking first is asking what the insert would have met.
+     */
+    private SendReceipt replayOrRefuse(String deedPollId,
+                                       EmailTemplate template,
+                                       UUID requestId,
+                                       UUID referralId,
+                                       String recipient,
+                                       String personalisation) {
+
+        if (notifications.findByDeedPollIdAndRequestId(deedPollId, requestId).isPresent()
+            || occupantOfTheGroupSlot(deedPollId, referralId, template).isPresent()) {
+            return resolveRefusedInsert(deedPollId, template, requestId, referralId, recipient, personalisation);
+        }
+        log.info("Case {} has reached the daily cap for {}, so nothing was enqueued", deedPollId, template.key());
+        throw new ConflictError(cap.refusal());
     }
 
     /**
