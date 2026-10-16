@@ -48,8 +48,8 @@ class IdamUserInfoClientTest {
     private static IdamUserInfoClient client() {
         MockEnvironment environment = new MockEnvironment();
         environment.setProperty("spring.profiles.active", "test");
-        return new IdamUserInfoClient(
-            new IdamDiscovery(new IdamProperties(IDAM.issuerUrl(), List.of(StubIdam.AUDIENCE)), environment));
+        IdamProperties properties = new IdamProperties(IDAM.issuerUrl(), List.of(StubIdam.AUDIENCE), List.of());
+        return new IdamUserInfoClient(new IdamDiscovery(properties, environment));
     }
 
     @Test

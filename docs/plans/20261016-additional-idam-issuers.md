@@ -104,17 +104,17 @@ If Checkstyle's Gradle worker dies with SIGILL or SIGABRT, run Checkstyle direct
 Files: `auth/IdamProperties.java`, `auth/IdamJwtDecoder.java`, `application.yaml`, plus tests next to each. No new
 validator class (decision 3).
 
-- [ ] Add `additionalIssuers` to `IdamProperties`, per decisions 1–2. Unit tests:
+- [x] Add `additionalIssuers` to `IdamProperties`, per decisions 1–2. Unit tests:
   - trimming, empties dropped, trailing slash
   - a non-`https`, relative or unparseable entry fails, naming `IDAM_API_ADDITIONAL_ISSUERS`
-- [ ] In `IdamJwtDecoder.build`, replace `JwtIssuerValidator` with the `JwtClaimValidator` of decision 3, in the same
+- [x] In `IdamJwtDecoder.build`, replace `JwtIssuerValidator` with the `JwtClaimValidator` of decision 3, in the same
       position in the chain. Comment the property in `application.yaml`.
-- [ ] Tests on the decoder's issuer check, using `StubIdam` tokens:
+- [x] Tests on the decoder's issuer check, using `StubIdam` tokens:
   - the main issuer passes, and an additional issuer passes
   - refused: an unlisted issuer, a missing `iss`, a prefix or suffix of a listed issuer, a different case,
     and a trailing slash difference
   - the refusal's description is still `The iss claim is not valid`
-- [ ] Mark completed
+- [x] Mark completed
 
 ### Task 2: Prove it through the decoder and the filter chains
 
@@ -148,6 +148,19 @@ Files: the existing `IdamJwtDecoder`/security tests, or a new `config/Additional
 - first selector: 95 tests, 0 failures
 - second selector: 606 tests, 0 failures
 - `./gradlew build`, Checkstyle tasks excluded: 4,242 unit and 20 integration tests, 0 failures, 0 skipped
+
+**Task 1** (`IdamProperties`, `IdamJwtDecoder`, `application.yaml`, `IdamPropertiesTest`, new `IdamJwtDecoderTest`):
+- a bad entry fails binding with `IDAM_API_ADDITIONAL_ISSUERS entry N is not an absolute https URL`, naming its
+  position and never the value; an upper-case `HTTPS` scheme is accepted, as discovery accepts it
+- de-duplication happens in `IdamProperties` and again when the decoder puts the discovered issuer first
+- the decoder test can't cover an additional issuer equal to the main one, because the stub issuer is cleartext and
+  an additional issuer must be `https`; the properties test covers de-duplication
+- first selector: 120 tests, 0 failures
+- second selector: 606 tests, 0 failures
+- `./gradlew build` failed only in `checkstyleFunctionalTest` (worker SIGILL/SIGABRT, exit 134); with the Checkstyle
+  tasks excluded: 4,267 unit and 20 integration tests, 0 failures, 0 skipped
+- Checkstyle run directly over all five source sets: 0 warnings
+- `git diff --check`: clean
 
 ## Post-Completion
 

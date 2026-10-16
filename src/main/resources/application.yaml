@@ -153,6 +153,12 @@ idam:
     # map, where a list would have to be JSON-encoded into a string. Empty means every token is
     # refused -- an unset value must not be the permissive case.
     audiences: ${IDAM_API_AUDIENCES:}
+    # Further `iss` values accepted on tokens the discovered key set signs. AAT's password-grant tokens -- the
+    # linking system user's, and so every /ccd-persistence call data-store makes on its behalf -- carry ForgeRock's
+    # internal issuer rather than the discovered one. A name only: keys still come from issuer-url's discovery
+    # alone, and nothing is fetched from these. Comma-separated, each an absolute https URL, or start-up fails.
+    # Empty by default, so only an environment that sets it accepts more than the discovered issuer.
+    additional-issuers: ${IDAM_API_ADDITIONAL_ISSUERS:}
     # IDAM's base URL, for the one caller that is not the resource server: the CCD SDK's IdamService, which
     # resolves the user data-store forwards on /ccd-persistence/** through idam-java-client's /o/userinfo. The
     # resource server discovers its endpoints from issuer-url instead. The default is a local stack's, and reaches
