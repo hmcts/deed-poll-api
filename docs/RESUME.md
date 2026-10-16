@@ -1,5 +1,20 @@
 # Resume state — where the next session picks up
 
+**CCD in AAT, 2026-10-16:** `docs/CCD-SMOKE.md` steps 1–3 ran in AAT and answered as written. `DEEDPOLL` v1 is
+imported, eight roles are registered at PUBLIC, and the linking sweep is on at one record per list request
+(cnp-flux-config#48332). KBDP2026-00001 and -00002 are linked to CCD cases. It took #108 (additional IDAM issuers),
+cnp-flux-config#48329 and #111 (chart bump) to get there; see the smoke doc's "AAT run" section. CDAM stays off.
+Production needs a linking backfill plan before CDAM is enabled.
+
+**Download invariants, 2026-10-16 (OWASP Plan 05 Task 5):** tests now assert `nosniff`, the inert sandbox
+CSP and `no-store` for all six allowed upload types through both the real filesystem store and the CDAM
+WireMock upload/attach/download journey. Disposition follows the recorded MIME type: PDF/JPEG/PNG types
+are inline; Word/TIFF types are attachments. This does not verify file contents. Conflicting CDAM upload
+metadata and download headers do not override the recorded client metadata or the API's response policy.
+A separate invariant test checks that the inline allowlist is a subset of upload types; the request-based
+tests pin Word/TIFF attachment behaviour. Production code is unchanged.
+Baseline at `474e409`: 4,305 main-suite + 20 integration tests. Local `cleanTest build`:
+4,312 + 20, zero failures/errors/skips, Checkstyle clear (local ARM launcher workaround only).
 **Abuse limits, 2026-10-16:** per-subject request budgets (V37 `deedpoll_request_budget`, `RateLimitFilter`, modes `off`/`observe`/`enforce`, default `observe`), the per-pod in-flight upload cap, the daily per-case per-template email cap and the case list statement timeout are implemented on `feat/abuse-limits` and not live-verified. The last three enforce whatever the mode. Next: open the PR; deploy to AAT in `observe`; tune each limit from the logged p99; switch AAT to `enforce`; record the production Notify limits; admin refreshes its api spec for the six 429s. See [the plan](plans/completed/20261016-abuse-limits.md) and [RATE-LIMITS.md](RATE-LIMITS.md).
 
 **Upload content checks, 2026-10-16 (OWASP Plan 05 Tasks 1–3):** `feat/document-content-policy` adds one
