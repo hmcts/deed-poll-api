@@ -169,7 +169,8 @@ class NotificationSecurityTest {
             deeds,
             JSON, mock(org.springframework.transaction.PlatformTransactionManager.class),
             mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty(),
-                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
+                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
+                new EmailCapProperties(null));
     }
 
     @Test

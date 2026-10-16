@@ -20,7 +20,7 @@ import uk.gov.service.notify.NotificationClient;
  * alternative is a service that will not start because of a feature nobody in that environment is using yet.
  */
 @Configuration
-@EnableConfigurationProperties(NotifyProperties.class)
+@EnableConfigurationProperties({NotifyProperties.class, EmailCapProperties.class})
 public class NotifyConfiguration {
 
     @Bean

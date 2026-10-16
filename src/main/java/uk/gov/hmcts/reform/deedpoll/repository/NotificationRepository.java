@@ -139,6 +139,23 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
     Optional<Notification> findByDeedPollIdAndRequestId(String deedPollId, UUID requestId);
 
     /**
+     * The rows of one template on one case created since {@code since}, as {@code CaseEmailService}'s daily cap
+     * counts them: everything except a definite refusal, by the same predicate the blocking reads use, because a
+     * {@code PERMANENT} failure reached nobody and every other row may have.
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT count(*)
+          FROM "deedpoll_notification"
+         WHERE "deedPollId" = :deedPollId
+           AND "template" = :template
+           AND "createdOn" >= :since
+           AND ("state" <> 'Failed' OR "failureVerdict" IS DISTINCT FROM 'PERMANENT')
+        """)
+    long countTowardsDailyCap(@Param("deedPollId") String deedPollId,
+                              @Param("template") String template,
+                              @Param("since") LocalDateTime since);
+
+    /**
      * Enqueues one owed email, unless this case has already had this request or this referral has already had an
      * email of this exclusion group.
      *

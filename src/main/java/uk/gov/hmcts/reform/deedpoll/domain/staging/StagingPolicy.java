@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.staging;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadContentPolicy;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
 
@@ -37,6 +38,7 @@ public record StagingPolicy(boolean enabled, long maxTotalBytes, int recordMaxFi
             || file.originalName().chars().anyMatch(c -> Character.isISOControl(c) || c == '/' || c == '\\')) {
             throw new ConflictError("The staged file has invalid content size or metadata");
         }
+        UploadContentPolicy.verify(file);
     }
 
     public int maxFiles(StageOwner owner) {

@@ -275,7 +275,7 @@ class CaseWriteAuditTest extends AbstractPostgresContainerTest {
         void upload() {
             String id = createdCase(patch("dateReceived", RECEIVED));
             String typeId = documentTypes.createDocumentType(CreateDocumentTypeInput.named("Audit type")).getId();
-            byte[] content = "the file's own bytes".getBytes(StandardCharsets.UTF_8);
+            byte[] content = "%PDF-1.4 the file's own bytes".getBytes(StandardCharsets.UTF_8);
 
             DeedPollSupportingDocument uploaded = documents.uploadDocument(
                 id, new UploadFormInput(typeId, Optional.of("Passport"), Optional.empty()),

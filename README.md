@@ -524,19 +524,43 @@ A **second, smaller limit** applies to anything sent to an applicant: GOV.UK Not
 file and its size — the client's own 413 names neither, and the refusal is what a caseworker reads on the Emails
 tab.
 
-The accepted-type list is also `UploadPolicy`'s, and it is the client's *declared* MIME type, so treat
-it as hygiene rather than as a security control. A narrower list decides which types are served
-`inline` rather than as an attachment (`CaseworkerDocumentController.INLINE_MIME_TYPES`); every
-download is served under `Content-Security-Policy: default-src 'none'; sandbox`, because a PDF is an
-active-content format and a browser PDF viewer runs embedded scripts.
+The accepted declared types in `UploadPolicy` are PDF, JPEG, PNG, TIFF and Word DOCX. Legacy binary
+Word `.doc` is refused (policy agreed 2026-10-16); existing documents are not rescanned or deleted.
+Admin's matching allowlist is only a browser-facing convenience. `UploadContentPolicy` is authoritative:
+`DocumentService` checks bytes before storage, and `StagingPolicy` checks before quota/payload persistence.
+Content refusals are HTTP 400 with a `file` field error. The 25 MiB upload cap is unchanged.
+
+Images and PDFs must match their declared type's signature. PDF name checks, including `#xx` escapes,
+refuse `/Encrypt`, `/JavaScript`, `/JS`, `/Launch`, `/EmbeddedFile`, `/RichMedia` and `/XFA`. This is an
+interim tripwire, **not a complete PDF parser**: compressed object streams can hide active names, and
+matching names in comments or stream data can cause refusals. Signature checks do not prove an image
+or PDF is well-formed or harmless. OLE containers are refused with guidance to upload an unencrypted `.docx`:
+their signature cannot distinguish legacy `.doc` from encrypted DOCX. Non-Word or malformed ZIP packages
+get a format-mismatch message, not a claim that macros were found. ZIP-based DOCX must have a normal
+Word main part and no macro/ActiveX parts, `word/embeddings/` parts or external attached-template,
+OLE-object or frame relationships. Ordinary external hyperlinks are allowed, never fetched by inspection.
+
+DOCX inspection first bounds expansion to 25 MiB per entry, 50 MiB total and 1,000 entries, with at least
+a 1% compressed/expanded ratio for entries over 100,000 bytes. POI's process-wide ratio, entry-size and
+entry-count guards are set at application startup, before singleton reader beans are created, by
+`DocumentParserConfiguration`; loading the first DOCX no longer changes global parser behaviour.
+The limits are never weakened per request. Malformed or
+unsupported packages fail closed. Refusal logging contains only a fixed format category, never parser
+exceptions, filenames or bytes. These checks do not replace CDAM malware scanning or activate CDAM.
+
+A narrower list decides which types are served `inline` rather than as an attachment
+(`CaseworkerDocumentController.INLINE_MIME_TYPES`); every download is served under
+`Content-Security-Policy: default-src 'none'; sandbox`. Download classification still uses stored MIME
+metadata: these admission checks do not make later metadata edits safe. The separate metadata-integrity
+follow-up must guard any future metadata PATCH route; there is no such public route today.
 
 Download headers are independent of the backing store: filesystem and CDAM responses both carry
 `X-Content-Type-Options: nosniff` and `Cache-Control: no-store` alongside that CSP. Disposition follows
 the recorded MIME type: PDF, JPEG and PNG types are inline; Word and TIFF types are attachments.
-This is not verification of the actual file contents: uploads currently record the client's declared type.
-Regression tests exercise all six declared upload types against the real local store and the CDAM WireMock
-journey, including conflicting upstream upload metadata and download headers. These local tests do not
-establish live CDAM onboarding or malware scanning.
+The download path does not re-inspect file contents; new admissions pass the content policy above before
+the declared type is recorded. Regression tests exercise the five accepted types plus historical `.doc`
+metadata against the real local store and the CDAM WireMock journey, including conflicting upstream upload
+metadata and download headers. These local tests do not establish live CDAM onboarding or malware scanning.
 
 ## Plugins
 
@@ -668,6 +692,15 @@ code, both when the build itself runs inside a container that shares the host's 
   containers over the Docker bridge network in preference to their published port — see
   `ContainerDatabase` for the detail.
 
+### Abuse limits
+
+V37 adds `deedpoll_request_budget`, the per-subject counters behind `429` on search, email preview, email send,
+upload and the Gazette routes. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, default `observe`) switches only
+those budgets. Three limits enforce whatever the mode: the per-pod in-flight upload cap
+(`RATE_LIMIT_UPLOAD_IN_FLIGHT`), the daily per-case, per-template email cap (`EMAIL_MAX_PER_CASE_PER_TEMPLATE_PER_DAY`,
+default 3; a fourth distinct-key send is a `409`, a replayed key is still `200`) and the case list statement
+timeout (`LIST_STATEMENT_TIMEOUT`). See [docs/RATE-LIMITS.md](docs/RATE-LIMITS.md).
+
 ### The audit trail
 
 V36 adds `deedpoll_audit_event` (who, when, action, entity, case and field names; kept 7 years) and
@@ -737,7 +770,7 @@ There are two Kubernetes probes and they deliberately do not check the same thin
 ```
   {"status":"UP","components":{
     "db":{"status":"UP"},
-    "deedPollSchema":{"status":"UP","details":{"tables":14}},
+    "deedPollSchema":{"status":"UP","details":{"tables":25}},
     "readinessState":{"status":"UP"}}}
 ```
 

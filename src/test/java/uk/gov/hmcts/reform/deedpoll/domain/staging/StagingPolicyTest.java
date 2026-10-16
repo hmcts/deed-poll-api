@@ -3,6 +3,8 @@ package uk.gov.hmcts.reform.deedpoll.domain.staging;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
+import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
 
 import java.time.Duration;
@@ -66,7 +68,7 @@ class StagingPolicyTest {
         var draft = new StageOwner(StageOwner.Kind.DRAFT, "draft", "subject");
         var record = new StageOwner(StageOwner.Kind.RECORD, "case", "subject");
         var policy = policy(3, 30000000, 2);
-        byte[] bytes = new byte[7340033];
+        byte[] bytes = uk.gov.hmcts.reform.deedpoll.support.DocumentFixtures.paddedPdf(7340033);
         assertThatThrownBy(() -> policy.validate(draft, UploadedFile.of(bytes, "file.pdf", "application/pdf")))
             .isInstanceOf(ConflictError.class);
         policy.validate(record, UploadedFile.of(bytes, "file.pdf", "application/pdf"));
@@ -82,5 +84,16 @@ class StagingPolicyTest {
         assertThatThrownBy(() -> new StageOwner(StageOwner.Kind.DRAFT, "draft", ""))
             .isInstanceOf(IllegalArgumentException.class);
         assertThat(draft.toString()).doesNotContain("draft", "subject");
+    }
+
+    @Test
+    void contentMismatchIsAFileValidationErrorForBothOwnerKinds() {
+        for (StageOwner.Kind kind : StageOwner.Kind.values()) {
+            var owner = new StageOwner(kind, "owner", "subject");
+            assertThatThrownBy(() -> policy(3, 30000000, 2).validate(owner,
+                UploadedFile.of(new byte[]{'M', 'Z'}, "evidence.pdf", "application/pdf")))
+                .isInstanceOfSatisfying(InvalidInputError.class,
+                    error -> assertThat(error.errors()).containsExactly(new FieldError("file", error.getMessage())));
+        }
     }
 }

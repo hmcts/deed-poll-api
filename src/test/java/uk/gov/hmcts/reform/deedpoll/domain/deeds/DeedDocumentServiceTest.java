@@ -246,7 +246,7 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
         other.setName("Evidence of citizenship");
         String otherId = documentService.uploadDocument(
             caseId, types.save(other).getId(),
-            UploadedFile.of("a passport scan".getBytes(StandardCharsets.UTF_8),
+            UploadedFile.of("%PDF-1.4 a passport scan".getBytes(StandardCharsets.UTF_8),
                             "citizenship.pdf", "application/pdf")).getId();
 
         DeedPollSupportingDocument deed = deedDocuments.storeDeed(caseId, DeedTemplate.ADULT);
@@ -271,7 +271,7 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
         deedType.setName("LOC020 Change of name deed");
         String misfiledId = documentService.uploadDocument(
             caseId, types.save(deedType).getId(),
-            UploadedFile.of("a signed deed coming back".getBytes(StandardCharsets.UTF_8),
+            UploadedFile.of("%PDF-1.4 a signed deed coming back".getBytes(StandardCharsets.UTF_8),
                             "returned-deed.pdf", "application/pdf")).getId();
         assertThat(stored(caseId, misfiledId).getDirection()).isEqualTo(DocumentDirection.Incoming);
 

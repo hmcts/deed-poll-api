@@ -288,6 +288,36 @@ deedpoll:
       jurisdiction: ${ROLE_ASSIGNMENT_JURISDICTION:DEEDPOLL}
       # The ctsc-team-leader authorisation that makes a Delivery Manager. Empty until RD allocates it: none from AM.
       gazette-skill: ${ROLE_ASSIGNMENT_GAZETTE_SKILL:}
+  rate-limit:
+    # Per-identity budgets on search, email preview, email send and upload (RateLimitFilter, abuse-limits plan).
+    # - `off` counts nothing; `observe` counts and logs "rate_limit bucket=... mode=observe ..." for each request
+    #   `enforce` would refuse, and refuses nothing; `enforce` answers those with 429 and Retry-After.
+    # - `observe` until AAT business testing has shown per-subject peaks, the limits are tuned, and the switch is
+    #   made environment by environment, AAT first.
+    mode: ${RATE_LIMIT_MODE:observe}
+    # Fixed windows, counted per IDAM subject in deedpoll_request_budget (V37). A search is a case list read carrying
+    # `q` or `where`; an unfiltered list read is never counted.
+    buckets:
+      search:
+        limit: ${RATE_LIMIT_SEARCH_LIMIT:120}
+        window: ${RATE_LIMIT_SEARCH_WINDOW:1m}
+      email-preview:
+        limit: ${RATE_LIMIT_EMAIL_PREVIEW_LIMIT:30}
+        window: ${RATE_LIMIT_EMAIL_PREVIEW_WINDOW:10m}
+      email-send:
+        limit: ${RATE_LIMIT_EMAIL_SEND_LIMIT:20}
+        window: ${RATE_LIMIT_EMAIL_SEND_WINDOW:1h}
+      upload:
+        limit: ${RATE_LIMIT_UPLOAD_LIMIT:30}
+        window: ${RATE_LIMIT_UPLOAD_WINDOW:10m}
+    # Uploads one pod admits at once, each up to 25 MB in memory. Refused with 429 and Retry-After: 5 in every mode,
+    # `off` included, because it protects the heap rather than throughput.
+    upload-in-flight: ${RATE_LIMIT_UPLOAD_IN_FLIGHT:4}
+  list:
+    # The longest one statement of the case list read may run (CaseListStatementTimeout, abuse-limits plan). Set
+    # transaction-locally, so no other query on the connection inherits it. Over it, the read fails as any failed
+    # database read does. Below 1ms refuses to start, because Postgres reads 0 as no timeout.
+    statement-timeout: ${LIST_STATEMENT_TIMEOUT:5s}
   gazette:
     # Enables provisioned previews and new confirmed sends. Recovery runs independently while disabled.
     enabled: ${GAZETTE_ENABLED:false}
@@ -336,6 +366,11 @@ deedpoll:
     # here, as an ISO-8601 duration, once there is real judicial behaviour to observe: PT30M, PT4H.
     # A zero or negative value refuses to start rather than releasing every claim as it is made.
     claim-expiry: ${DEEDPOLL_REFERRAL_CLAIM_EXPIRY:PT2H}
+  email:
+    # How many rows of one template one case may hold from the last 24 hours, not counting permanent refusals
+    # (CaseEmailService, abuse-limits plan). Over it is a 409; a replay of an earlier Idempotency-Key is still a 200.
+    # Enforced whatever deedpoll.rate-limit.mode says. Below 1 refuses to start.
+    max-per-case-per-template-per-day: ${EMAIL_MAX_PER_CASE_PER_TEMPLATE_PER_DAY:3}
   documents:
     # Where LocalFilesystemDocumentStore keeps uploaded blobs. Local/allowlisted non-production only: local disk does
     # not survive AKS, because pods are ephemeral and replicas do not share a volume. Real

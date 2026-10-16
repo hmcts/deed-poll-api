@@ -25,6 +25,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.Notification;
@@ -170,7 +171,8 @@ class CaseEmailServiceTest {
             deeds, new ObjectMapper(),
                 mock(org.springframework.transaction.PlatformTransactionManager.class),
                 mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty(),
-                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
+                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
+                new EmailCapProperties(null));
     }
 
     @Nested
@@ -446,7 +448,8 @@ class CaseEmailServiceTest {
                 deeds, new ObjectMapper(),
                 mock(org.springframework.transaction.PlatformTransactionManager.class),
                 mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty(),
-                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
+                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
+                new EmailCapProperties(null));
             storedCase();
             refusedReferral();
 
@@ -476,7 +479,8 @@ class CaseEmailServiceTest {
                 new ObjectMapper(),
                 mock(org.springframework.transaction.PlatformTransactionManager.class),
                 mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty(),
-                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
+                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
+                new EmailCapProperties(null));
             storedCase();
             refusedReferralFor(ReferralReason.NonPublication);
 
@@ -1262,7 +1266,8 @@ class CaseEmailServiceTest {
                 caseNotes, deeds, new ObjectMapper(),
                 mock(org.springframework.transaction.PlatformTransactionManager.class),
                 mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty(),
-                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
+                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
+                new EmailCapProperties(null));
         }
 
         @AfterEach
@@ -1819,7 +1824,8 @@ class CaseEmailServiceTest {
                 referralService, caseNotes, deeds, new ObjectMapper(),
                 mock(org.springframework.transaction.PlatformTransactionManager.class),
                 mock(uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations.class), Optional.empty(),
-                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
+                mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
+                new EmailCapProperties(null));
         }
 
     }
@@ -2486,6 +2492,127 @@ class CaseEmailServiceTest {
             // And it is not the row id either: the row is this service's identifier for the email and the request
             // id is the caller's for the journey, and conflating them would make a retry look like a new row.
             assertThat(id.getValue()).isNotEqualTo(REQUEST_ID);
+        }
+
+        /**
+         * Decision 8's cap on one template to one case in a day, and the order it is consulted in.
+         *
+         * <p>Nested here because the cap is one more answer a send can give without inserting, and it has to come
+         * after this class's replay answers: a caseworker retrying their own send must never be told the case has had
+         * too many.
+         */
+        @Nested
+        @DisplayName("the per-case, per-template daily cap")
+        class DailyCap {
+
+            @Test
+            @DisplayName("409s a fourth journey's send in the fixed sentence, and inserts nothing")
+            void refusesTheFourthDistinctSend() {
+                chasedCase();
+                sentToday(3);
+
+                assertThatThrownBy(() -> emails.send(
+                    CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots(REQUIRED), ANOTHER_REQUEST_ID, CASEWORKER))
+                    .isInstanceOf(ConflictError.class)
+                    .hasMessage("This email has already been sent 3 times for this case today");
+
+                neverEnqueues();
+                verifyNoInteractions(caseNotes);
+            }
+
+            @Test
+            @DisplayName("enqueues a third journey's send, which is under the cap")
+            void enqueuesUnderTheCap() {
+                chasedCase();
+                sentToday(2);
+                enqueueAnswers(1);
+
+                assertThat(emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots(REQUIRED),
+                                       ANOTHER_REQUEST_ID, CASEWORKER).enqueued())
+                    .isTrue();
+            }
+
+            @Test
+            @DisplayName("answers a replay with its own row at the cap, never with the cap's 409")
+            void replayAtTheCapIsStillItsOwnRow() {
+                chasedCase();
+                sentToday(3);
+                Notification existing = alreadySentUnderThisRequest(REQUIRED);
+
+                SendReceipt receipt = emails.send(
+                    CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots(REQUIRED), REQUEST_ID, CASEWORKER);
+
+                assertThat(receipt.id()).isEqualTo(existing.getId());
+                assertThat(receipt.enqueued()).isFalse();
+                verifyNoInteractions(caseNotes);
+            }
+
+            @Test
+            @DisplayName("still 409s a reused key at the cap as a reused key, not as the cap")
+            void reusedKeyAtTheCapKeepsItsOwnSentence() {
+                chasedCase();
+                sentToday(3);
+                alreadySentUnderThisRequest("Your birth certificate.");
+
+                assertThatThrownBy(() -> emails.send(
+                    CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS,
+                    slots("Your birth certificate, and your marriage certificate."), REQUEST_ID, CASEWORKER))
+                    .isInstanceOf(ConflictError.class)
+                    .hasMessage(CaseEmailService.REQUEST_ALREADY_USED);
+            }
+
+            @Test
+            @DisplayName("answers the exclusion group's occupant at the cap as V15 always has")
+            void theExclusionGroupAnswersFirst() {
+                storedCase();
+                refusedReferral();
+                sentToday(EmailTemplate.APPLICATION_REJECTED, 3);
+                Notification occupant =
+                    blocking(EmailTemplate.APPLICATION_REJECTED, LocalDateTime.of(2026, 6, 3, 9, 30));
+
+                SendReceipt receipt = emails.send(
+                    CASE_ID, EmailTemplate.APPLICATION_REJECTED, Map.of(), ANOTHER_REQUEST_ID, CASEWORKER);
+
+                assertThat(receipt.id()).isEqualTo(occupant.getId());
+                assertThat(receipt.enqueued()).isFalse();
+                neverEnqueues();
+            }
+
+            @Test
+            @DisplayName("counts this case's rows of this template over the 24 hours before the send")
+            void countsTheLastDayOfThisTemplate() {
+                chasedCase();
+                enqueueAnswers(1);
+                LocalDateTime before = AuditClock.now();
+
+                emails.send(CASE_ID, EmailTemplate.CHASE_MISSING_DOCUMENTS, slots(REQUIRED), REQUEST_ID, CASEWORKER);
+
+                ArgumentCaptor<LocalDateTime> since = ArgumentCaptor.forClass(LocalDateTime.class);
+                verify(notifications).countTowardsDailyCap(
+                    eq(CASE_ID), eq(EmailTemplate.CHASE_MISSING_DOCUMENTS.name()), since.capture());
+                assertThat(since.getValue())
+                    .isBetween(before.minusHours(24).minusMinutes(1), before.minusHours(24).plusMinutes(1));
+            }
+
+            @Test
+            @DisplayName("speaks the configured cap, and refuses a cap below one")
+            void theCapIsConfigurable() {
+                assertThat(new EmailCapProperties(null).maxPerCasePerTemplatePerDay())
+                    .isEqualTo(EmailCapProperties.MAX_PER_CASE_PER_TEMPLATE_PER_DAY);
+                assertThat(new EmailCapProperties(1).refusal())
+                    .isEqualTo("This email has already been sent 1 time for this case today");
+                assertThatThrownBy(() -> new EmailCapProperties(0))
+                    .isInstanceOf(IllegalArgumentException.class);
+            }
+
+            private void sentToday(long rows) {
+                sentToday(EmailTemplate.CHASE_MISSING_DOCUMENTS, rows);
+            }
+
+            private void sentToday(EmailTemplate template, long rows) {
+                when(notifications.countTowardsDailyCap(eq(CASE_ID), eq(template.name()), any()))
+                    .thenReturn(rows);
+            }
         }
 
         private Map<String, Object> slots(String documentsRequired) {

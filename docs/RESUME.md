@@ -15,6 +15,29 @@ A separate invariant test checks that the inline allowlist is a subset of upload
 tests pin Word/TIFF attachment behaviour. Production code is unchanged.
 Baseline at `474e409`: 4,305 main-suite + 20 integration tests. Local `cleanTest build`:
 4,312 + 20, zero failures/errors/skips, Checkstyle clear (local ARM launcher workaround only).
+**Abuse limits, 2026-10-16:** per-subject request budgets (V37 `deedpoll_request_budget`, `RateLimitFilter`, modes `off`/`observe`/`enforce`, default `observe`), the per-pod in-flight upload cap, the daily per-case per-template email cap and the case list statement timeout are implemented on `feat/abuse-limits` and not live-verified. The last three enforce whatever the mode. Next: open the PR; deploy to AAT in `observe`; tune each limit from the logged p99; switch AAT to `enforce`; record the production Notify limits; admin refreshes its api spec for the six 429s. See [the plan](plans/completed/20261016-abuse-limits.md) and [RATE-LIMITS.md](RATE-LIMITS.md).
+
+**Upload content checks, 2026-10-16 (OWASP Plan 05 Tasks 1–3):** `feat/document-content-policy` adds one
+content policy before document storage and owned-staging persistence. Steve approved dropping legacy `.doc`,
+refusing encrypted PDF/DOCX and refusing the specified active-content indicators. Signature checks, bounded
+DOCX package inspection and escaped PDF-name checks are covered by adversarial fixtures and admission tests.
+These are interim controls, not antivirus/full PDF parsing; limitations and ZIP budgets are in README.
+The coordinated admin branch `fix/document-content-types` removes `.doc` and updates the upload hint.
+No CDAM activation, live deployment, existing-file migration or metadata-integrity fix is included.
+Task 9 mock fidelity and metadata integrity remain separate follow-ups. #110 is merged; API #112 now targets
+master, with admin #188 as its companion. The CDAM fixtures use typed bytes; historical `.doc` coverage seeds
+legacy metadata without permitting new `.doc` uploads. No download-header assertion is removed.
+Gale's review corrections distinguish format mismatches from known unsafe Word features and give OLE
+containers neutral format guidance. POI limits now apply during startup before reader beans, not on the
+first DOCX upload. Tests cover startup ordering and the exact 50 MiB expanded-total boundary while proving
+all other archive/upload budgets pass. No acceptance rule or limit has been relaxed.
+
+**Download invariants, 2026-10-16 (OWASP Plan 05 Task 5):** tests assert `nosniff`, the inert sandbox
+CSP and `no-store` for the five accepted types plus historical `.doc` metadata through both the real
+filesystem store and CDAM WireMock journey. Disposition follows the recorded MIME type: PDF/JPEG/PNG types
+are inline; Word/TIFF types are attachments. Conflicting CDAM upload metadata and download headers do not
+override the recorded client metadata or the API's response policy. A separate invariant test checks that
+the inline allowlist is a subset of upload types; the request-based tests pin Word/TIFF attachment behaviour.
 No live CDAM calls or separate `cftlibTest` run; live download verification remains the onboarding gate.
 
 **Filesystem storage guard, 2026-10-16 (OWASP Plan 05 Task 4):** startup now refuses filesystem storage unless
