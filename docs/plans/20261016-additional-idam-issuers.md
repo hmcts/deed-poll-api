@@ -135,12 +135,12 @@ Files: the existing `IdamJwtDecoder`/security tests, or a new `config/Additional
 
 ### Task 3: Documentation and handoff
 
-- [ ] `CLAUDE.md`: one paragraph on `IDAM_API_ADDITIONAL_ISSUERS`. Explain why (password-grant tokens carry
+- [x] `CLAUDE.md`: one paragraph on `IDAM_API_ADDITIONAL_ISSUERS`. Explain why (password-grant tokens carry
       ForgeRock's internal issuer; the system user and `/ccd-persistence` depend on it) and that keys still come
       only from the main issuer's discovery.
-- [ ] Record the validation counts, the Checkstyle result and the branch SHA in Execution notes. Don't claim
+- [x] Record the validation counts, the Checkstyle result and the branch SHA in Execution notes. Don't claim
       any live verification.
-- [ ] Mark completed
+- [x] Mark completed
 
 ## Execution notes
 
@@ -177,6 +177,18 @@ Files: the existing `IdamJwtDecoder`/security tests, or a new `config/Additional
   tasks excluded: 4,273 unit and 20 integration tests, 0 failures, 0 skipped
 - Checkstyle run directly over all five source sets: 0 warnings
 - `git diff --check`: clean
+
+**Task 3** (`CLAUDE.md`: a section, "Additional IDAM issuers (empty by default)", after the AM role source),
+measured on the branch at `848e721` plus this documentation change:
+- documentation only, so the counts match Task 2's
+- first selector: 121 tests, 0 failures
+- second selector: 612 tests, 0 failures
+- `./gradlew build` failed only in `checkstyleIntegrationTest` (worker SIGABRT, exit 134); with the Checkstyle
+  tasks excluded: 4,273 unit and 20 integration tests, 0 failures, 0 skipped
+- Checkstyle 10.24.0 run directly over all five source sets: 0 warnings
+- `git diff --check`: clean
+- nothing has been verified live. AAT still refuses the ForgeRock issuer until the flux change in Post-Completion
+  sets `IDAM_API_ADDITIONAL_ISSUERS`
 
 ## Post-Completion
 
