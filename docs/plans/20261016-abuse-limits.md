@@ -117,11 +117,11 @@ same source sets, and fails on any warning, as the Gradle task does. Neither fil
 **Files:** new `V37__request_budget.sql`; `health/DeedPollSchema.java`; a `RequestBudget` repository; a
 container-backed test on `AbstractPostgresContainerTest`.
 
-- [ ] Write decision 2's table and upsert; return the count and the window's end, for `Retry-After`.
-- [ ] Container tests: the count increments within a window and resets in a new one; two subjects and two buckets
+- [x] Write decision 2's table and upsert; return the count and the window's end, for `Retry-After`.
+- [x] Container tests: the count increments within a window and resets in a new one; two subjects and two buckets
   are independent; two concurrent transactions on one row both count (no lost update).
-- [ ] `DeedPollSchemaHealthTest` and `EntityMappingTest` pass.
-- [ ] Mark completed
+- [x] `DeedPollSchemaHealthTest` and `EntityMappingTest` pass.
+- [x] Mark completed (build green: 4312 unit, 20 integration, 0 failed; `RequestBudgetRepository` in `repository/`; `SdkMigrationOrderTest` now expects V1 to V37)
 
 ### Task 2: The rate-limit filter, modes and 429
 
