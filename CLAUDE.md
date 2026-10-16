@@ -145,6 +145,11 @@ no prefix, host case, path or slash leniency. Configure the issuer exactly as to
   but empty cluster name is not local. Profiles do not bypass the guard. Keep the chart's `ENVIRONMENT_NAME`
   binding with the guard; the preview override names `preview` even when Jenkins uses `global.environment=aat`.
   Inventory existing filesystem files before pod replacement; allowing non-production does not make disk durable.
+- **Upload content checks precede persistence.** Keep `UploadContentPolicy.verify` in both `DocumentService`
+  and `StagingPolicy`; new admission paths must not bypass it. PDF/JPEG/PNG/TIFF/DOCX are accepted declared
+  types, not legacy `.doc`. Signatures and the PDF active-name tripwire are not antivirus or full parsing.
+  DOCX package checks use bounded expansion and process-wide POI limits; never weaken them per request.
+  Log only fixed refusal categories, not names, bytes or parser diagnostics. See README for the exact limits.
 - **The CDAM hash token is transient.** Keep it only while `Uploaded`/`AttachUncertain`; never log, project or
   publish it. An uncertain upload gets exactly one fresh upload within the same request (two sends total), then
   stays uncertain. There is no background retry or operator resume endpoint in 03a. Never send `permanent=true`:

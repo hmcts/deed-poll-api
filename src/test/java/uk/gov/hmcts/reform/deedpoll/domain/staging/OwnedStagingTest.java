@@ -54,6 +54,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -82,7 +83,9 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
     private final List<String> createdCases = new ArrayList<>();
     private final List<String> stages = new ArrayList<>();
     private final MovingClock clock = new MovingClock();
-    private final UploadedFile file = UploadedFile.of(new byte[]{1, 2, 3}, "original.pdf", "application/pdf");
+    // Three-byte JPEG signature keeps the existing quota-boundary assertions exact.
+    private final UploadedFile file = UploadedFile.of(new byte[]{(byte) 255, (byte) 216, (byte) 255},
+        "original.jpg", "image/jpeg");
     private CdamDocumentStore store;
     private CaseDocumentsEvent event;
     private CorrespondenceDocumentReader reader;
@@ -245,9 +248,10 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
         clock.advance(Duration.ofMinutes(30));
         assertThat(replica(StagingPolicyTest.policy(2, 6, 2)).admit(owner, operation, file)).isEqualTo(first);
         assertThatThrownBy(() -> staging.admit(owner, operation,
-            UploadedFile.of(new byte[]{4, 5, 6}, "original.pdf", "application/pdf"))).isInstanceOf(ConflictError.class);
+            UploadedFile.of(new byte[]{(byte) 255, (byte) 216, (byte) 255, 0}, "original.jpg", "image/jpeg")))
+            .isInstanceOf(ConflictError.class);
         assertThatThrownBy(() -> staging.admit(owner, operation,
-            UploadedFile.of(file.content(), "changed.pdf", "application/pdf"))).isInstanceOf(ConflictError.class);
+            UploadedFile.of(file.content(), "changed.jpg", "image/jpeg"))).isInstanceOf(ConflictError.class);
         assertThatThrownBy(() -> jdbc.update("UPDATE deedpoll_stagedpayload SET content = ? WHERE id = ?",
             new byte[]{4, 5, 6}, first.id())).isInstanceOf(org.springframework.dao.DataAccessException.class);
         assertThatThrownBy(() -> jdbc.update("UPDATE deedpoll_ownedstage SET \"expiresOn\" = now() WHERE id = ?",
@@ -283,7 +287,7 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
         assertThat(replica(StagingPolicyTest.policy(2, 6, 2)).promote(owner, stage.id(), owner.id(), typeId))
             .isEqualTo(document);
         verify(store, times(1)).save(any());
-        assertThat(documents.findById(document).orElseThrow().getOriginalName()).isEqualTo("original.pdf");
+        assertThat(documents.findById(document).orElseThrow().getOriginalName()).isEqualTo("original.jpg");
         assertThat(jdbc.queryForObject("""
             SELECT count(*) FROM deedpoll_audit_event
             WHERE entity_id = ? AND action = 'DOCUMENT_UPLOADED' AND actor_id = ?
@@ -532,7 +536,8 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
         var owner = owner();
         for (int i = 0; i < 3; i++) {
             var receipt = bounded.admit(owner, UUID.randomUUID(),
-                UploadedFile.of(new byte[10000000], "large.pdf", "application/pdf"));
+                UploadedFile.of(uk.gov.hmcts.reform.deedpoll.support.DocumentFixtures.paddedPdf(10000000),
+                    "large.pdf", "application/pdf"));
             stages.add(receipt.id());
         }
         String preparation = UUID.randomUUID().toString();
@@ -543,6 +548,19 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
         assertThat(bounded.expire()).isEqualTo(2);
         assertThat(retained(preparation)).isTrue();
         assertThat(bounded.expire()).isOne();
+    }
+
+    @Test
+    void contentRefusalDoesNotReserveQuotaOrPersistPayload() {
+        long before = jdbc.queryForObject("SELECT count(*) FROM deedpoll_ownedstage", Long.class);
+        long payloadsBefore = jdbc.queryForObject("SELECT count(*) FROM deedpoll_stagedpayload", Long.class);
+        assertThatThrownBy(() -> staging.admit(owner(), UUID.randomUUID(),
+            UploadedFile.of(new byte[]{'M', 'Z'}, "evidence.pdf", "application/pdf")))
+            .isInstanceOf(uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError.class);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_ownedstage", Long.class)).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_stagedpayload", Long.class))
+            .isEqualTo(payloadsBefore);
+        verify(store, never()).save(any());
     }
 
     @Test

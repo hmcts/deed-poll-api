@@ -28,8 +28,7 @@ class UploadPolicyTest {
     @Test
     @DisplayName("accepts PDF, the common scan formats and Word")
     void acceptsPdfScanFormatsAndWord() {
-        for (String type : List.of("application/pdf", "image/jpeg", "image/png", "image/tiff",
-            "application/msword")) {
+        for (String type : List.of("application/pdf", "image/jpeg", "image/png", "image/tiff")) {
             assertThat(UploadPolicy.isAllowedUploadType(type)).as(type).isTrue();
         }
         assertThat(UploadPolicy.isAllowedUploadType(
@@ -39,6 +38,7 @@ class UploadPolicyTest {
     @Test
     @DisplayName("rejects an executable and anything else not on the list")
     void rejectsAnythingNotOnTheList() {
+        assertThat(UploadPolicy.isAllowedUploadType("application/msword")).isFalse();
         assertThat(UploadPolicy.isAllowedUploadType("application/x-msdownload")).isFalse();
         assertThat(UploadPolicy.isAllowedUploadType("application/zip")).isFalse();
         assertThat(UploadPolicy.isAllowedUploadType("")).isFalse();
@@ -155,7 +155,7 @@ class UploadPolicyTest {
     @Test
     @DisplayName("exposes the accepted set for anything that needs to list it")
     void exposesTheAcceptedSet() {
-        assertThat(UploadPolicy.ALLOWED_UPLOAD_MIME_TYPES).hasSize(6);
+        assertThat(UploadPolicy.ALLOWED_UPLOAD_MIME_TYPES).hasSize(5);
     }
 
     @Test
