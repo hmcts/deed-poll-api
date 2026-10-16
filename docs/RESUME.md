@@ -1,5 +1,7 @@
 # Resume state — where the next session picks up
 
+**Abuse limits, 2026-10-16:** per-subject request budgets (V37 `deedpoll_request_budget`, `RateLimitFilter`, modes `off`/`observe`/`enforce`, default `observe`), the per-pod in-flight upload cap, the daily per-case per-template email cap and the case list statement timeout are implemented on `feat/abuse-limits` and not live-verified. The last three enforce whatever the mode. Next: open the PR; deploy to AAT in `observe`; tune each limit from the logged p99; switch AAT to `enforce`; record the production Notify limits; admin refreshes its api spec for the six 429s. See [the plan](plans/20261016-abuse-limits.md) and [RATE-LIMITS.md](RATE-LIMITS.md).
+
 **Download invariants, 2026-10-16 (OWASP Plan 05 Task 5):** tests now assert `nosniff`, the inert sandbox
 CSP and `no-store` for all six allowed upload types through both the real filesystem store and the CDAM
 WireMock upload/attach/download journey. Disposition follows the recorded MIME type: PDF/JPEG/PNG types

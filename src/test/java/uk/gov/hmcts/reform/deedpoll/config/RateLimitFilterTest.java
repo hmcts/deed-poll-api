@@ -249,6 +249,14 @@ class RateLimitFilterTest {
     }
 
     @Test
+    @DisplayName("a HEAD search spends the search budget, because MVC answers it from the GET handler")
+    void headSearchIsCounted() throws Exception {
+        run(filter(RateLimitProperties.Mode.ENFORCE), request("HEAD", "/caseworker/cases", "q=x"));
+
+        verify(budget).spend(eq(SUBJECT), eq("search"), any(), any());
+    }
+
+    @Test
     @DisplayName("a token with no sub spends from the one shared no-subject bucket")
     void noSubjectSharesOneBucket() throws Exception {
         signIn(null);

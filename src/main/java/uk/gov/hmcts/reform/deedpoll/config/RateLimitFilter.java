@@ -183,8 +183,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
     static Optional<RateLimitBucket> bucketOf(HttpServletRequest request) {
         PathContainer path = RequestPath.parse(request.getRequestURI(), request.getContextPath())
             .pathWithinApplication();
+        // Spring MVC answers HEAD from the GET handler, so a HEAD list read costs what a GET does.
+        String method = "HEAD".equalsIgnoreCase(request.getMethod()) ? "GET" : request.getMethod();
         for (Matcher matcher : MATCHERS) {
-            if (matcher.route.method().matches(request.getMethod()) && matcher.pattern.matches(path)) {
+            if (matcher.route.method().matches(method) && matcher.pattern.matches(path)) {
                 return matcher.bucket != RateLimitBucket.SEARCH || isSearch(request.getQueryString())
                     ? Optional.of(matcher.bucket)
                     : Optional.empty();
