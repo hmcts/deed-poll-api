@@ -64,7 +64,7 @@ class IdamDiscoveryTest {
     }
 
     private static IdamDiscovery discovery(String issuerUrl, Environment environment) {
-        return new IdamDiscovery(new IdamProperties(issuerUrl, List.of(StubIdam.AUDIENCE)), environment);
+        return new IdamDiscovery(new IdamProperties(issuerUrl, List.of(StubIdam.AUDIENCE), List.of()), environment);
     }
 
     @Test

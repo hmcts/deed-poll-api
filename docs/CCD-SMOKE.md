@@ -28,6 +28,7 @@ Each of these is onboarding and belongs to Steve; the plan's Dependencies sectio
 | `deed_poll_api` allowed to call definition store for controlled import | AAT `DEFINITION_STORE_S2S_AUTHORISED_SERVICES`; Flux #48117 supplies the missing caller entry |
 | Roles/profiles registered in definition store | `deed-poll-system-update`, `DEED_POLL_SYSTEM`, `caseworker-deedpoll`, `caseworker-deedpoll-admin`, `caseworker-deedpoll-judicial`, `DEED_POLL_READER`, all at `PUBLIC` |
 | The API accepts the system client's token audience | `IDAM_API_AUDIENCES` includes `deed-poll-api` alongside `deed-poll-admin` in AAT |
+| The API accepts the system user's token issuer | `IDAM_API_ADDITIONAL_ISSUERS` lists AAT's ForgeRock issuer (flux `aat.yaml` only); without it every CCD link is a 401 |
 | data-store → our `.internal` address reachable | network (`azure-platform-terraform#3161` created the address) |
 
 Two things cftlib found that no WireMock test could have, both repeated here because both fail quietly:

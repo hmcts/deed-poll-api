@@ -342,6 +342,7 @@ so that an unconfigured environment refuses every token** rather than trusting a
 |---|---|
 | `IDAM_API_ISSUER_URL` | The IDAM issuer. Endpoints are discovered from it, never configured |
 | `IDAM_API_AUDIENCES` | Comma-separated `aud` values that are ours. Empty refuses everything |
+| `IDAM_API_ADDITIONAL_ISSUERS` | Optional comma-separated absolute `https` `iss` values accepted besides the discovered one (AAT's ForgeRock issuer). A name, not a trust root. Empty by default |
 
 IDAM roles come from `/o/userinfo`, not from the token, and the lookup is uncached; with `ROLE_ASSIGNMENT_ENABLED` true, AM role assignments are unioned in (see below). The application maps
 verified roles to explicit capabilities:

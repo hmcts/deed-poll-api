@@ -123,6 +123,20 @@ mounts it as `DEED_POLL_API_S2S_SECRET`, alongside the IDAM client and system-us
 **Do not add it to the chart's `values.yaml`**: no other vault has it, so every other environment's deploy would fail.
 The same secret serves data-store, CDAM and RAS. See `docs/plans/20261014-am-role-source.md`.
 
+### Additional IDAM issuers (empty by default)
+
+`IDAM_API_ADDITIONAL_ISSUERS` (`idam.api.additional-issuers`) lists further `iss` values the one `JwtDecoder` accepts,
+and so both chains accept them. It exists because AAT's password-grant tokens carry ForgeRock's internal issuer
+(`https://forgerock-am.service.core-compute-idam-aat2.internal:8443/openam/oauth2/realms/root/realms/hmcts`),
+not the discovered `hmcts-access` one. Linking signs in as the system user with such a token, and data-store
+forwards it to `/ccd-persistence`, so without the setting every CCD link is a 401. **It is a name, not a trust
+root.** Keys still come only from discovery of `IDAM_API_ISSUER_URL`, nothing is fetched for an additional issuer,
+and a token signed by any other key fails before its issuer is read. A configured entry is trimmed and loses one trailing
+`/`, and is converted as Spring converts a token's `iss` (`URI.toURL().toExternalForm()`, which lower-cases the
+scheme only), so the two sides compare alike. The comparison is then exact inside Spring's own `JwtClaimValidator`:
+no prefix, host case, path or slash leniency. Configure the issuer exactly as tokens carry it. Each entry must be an absolute `https` URL or start-up fails. The chart's `values.yaml` leaves it unset; only AAT's flux sets it. See
+`docs/plans/20261016-additional-idam-issuers.md`.
+
 ## Rules that break things silently if ignored
 
 - **The CDAM hash token is transient.** Keep it only while `Uploaded`/`AttachUncertain`; never log, project or
