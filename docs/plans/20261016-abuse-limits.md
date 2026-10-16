@@ -147,11 +147,11 @@ chart's `values.yaml`; the OpenAPI document.
 
 ### Task 4: The per-case, per-template email cap
 
-- [ ] The 4th distinct-key send of one template to one case within 24 hours is a 409 with the fixed sentence.
-- [ ] A replay of an earlier key still answers 200 with `enqueued: false`, including when the cap is reached.
-- [ ] `PERMANENT` failures do not count; a row 25 hours old does not count; another template does not count.
-- [ ] The V15/V20 exclusive-group behaviour is unchanged (existing tests stay green).
-- [ ] Mark completed
+- [x] The 4th distinct-key send of one template to one case within 24 hours is a 409 with the fixed sentence.
+- [x] A replay of an earlier key still answers 200 with `enqueued: false`, including when the cap is reached.
+- [x] `PERMANENT` failures do not count; a row 25 hours old does not count; another template does not count.
+- [x] The V15/V20 exclusive-group behaviour is unchanged (existing tests stay green).
+- [x] Mark completed (build green: 4371 unit, 20 integration, 0 failed; `EmailCapProperties` under `deedpoll.email`; the cap is consulted before the insert, and at the cap a replay or exclusion-group occupant still gets `resolveRefusedInsert`'s answer; the local send does not lock the case, so concurrent journeys may overshoot by one, said in a comment; no OpenAPI change)
 
 ### Task 5: The statement timeout on the list read
 

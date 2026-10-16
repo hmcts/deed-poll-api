@@ -361,6 +361,11 @@ deedpoll:
     # here, as an ISO-8601 duration, once there is real judicial behaviour to observe: PT30M, PT4H.
     # A zero or negative value refuses to start rather than releasing every claim as it is made.
     claim-expiry: ${DEEDPOLL_REFERRAL_CLAIM_EXPIRY:PT2H}
+  email:
+    # How many rows of one template one case may hold from the last 24 hours, not counting permanent refusals
+    # (CaseEmailService, abuse-limits plan). Over it is a 409; a replay of an earlier Idempotency-Key is still a 200.
+    # Enforced whatever deedpoll.rate-limit.mode says. Below 1 refuses to start.
+    max-per-case-per-template-per-day: ${EMAIL_MAX_PER_CASE_PER_TEMPLATE_PER_DAY:3}
   documents:
     # Where LocalFilesystemDocumentStore keeps uploaded blobs. Local/allowlisted non-production only: local disk does
     # not survive AKS, because pods are ephemeral and replicas do not share a volume. Real

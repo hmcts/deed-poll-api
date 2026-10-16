@@ -1356,6 +1356,31 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
+        @DisplayName("a fourth chase in a day is a 409, and a replay of an earlier journey is still its own 200")
+        void theFourthChaseInADayIsRefused() throws Exception {
+            // Decision 8 over HTTP and real Postgres: three journeys are three reminders, a fourth is refused in the
+            // fixed sentence, and the cap never turns a caseworker's retry of an earlier journey into a refusal.
+            String caseId = chasedCase();
+            NOTIFY.stubSend(StubNotify.NOTIFICATION_ID, "We need more information", "Please send your papers.");
+            UUID firstJourney = UUID.randomUUID();
+            final String first = sentId(authorised(post(chaseSendOf(caseId)), slots(REQUIRED), firstJourney));
+            sentId(authorised(post(chaseSendOf(caseId)), slots(REQUIRED), UUID.randomUUID()));
+            sentId(authorised(post(chaseSendOf(caseId)), slots(REQUIRED), UUID.randomUUID()));
+
+            authorised(post(chaseSendOf(caseId)), slots(REQUIRED), UUID.randomUUID())
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("This email has already been sent 3 times for this case today"));
+
+            authorised(post(chaseSendOf(caseId)), slots(REQUIRED), firstJourney)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(first))
+                .andExpect(jsonPath("$.enqueued").value(false));
+
+            assertThat(notifications.count()).isEqualTo(3);
+            assertThat(emailNotes(caseId)).hasSize(3);
+        }
+
+        @Test
         @DisplayName("409s a case that is not waiting for documents, and 400s a chase with nothing in the slot")
         void refusesWhatItCannotSend() throws Exception {
             // The two refusals a generic tab has to render, and they are different things: the first is about the
