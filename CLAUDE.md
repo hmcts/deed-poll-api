@@ -197,8 +197,8 @@ no prefix, host case, path or slash leniency. Configure the issuer exactly as to
   `subject`, `path` and `reason` removed before it returns. `reason` is an OAuth2 error code or a fixed word, never
   token text or an error description. The entry point and access-denied handler on both chains wrap the existing
   ones, so status codes, bodies and `WWW-Authenticate` stay as they were; S2S refusals are not logged.
-- **`RateLimitFilter` belongs to `securityFilterChain` only, directly after `BearerTokenAuthenticationFilter`, and is
-  never a bean or an interceptor.** It keys on the verified `sub` (never an address: staff share NAT egress, and
+- **`RateLimitFilter` belongs to `securityFilterChain` only, directly after `AuthorizationFilter`, and is
+  never a bean or an interceptor.** After authorisation, so a refused caller spends nothing and adds no row. It keys on the verified `sub` (never an address: staff share NAT egress, and
   a token with no `sub` shares `no-subject`). A `HandlerInterceptor` would run after `DispatcherServlet.checkMultipart`
   had already read the 25 MB body, and a `Filter` bean would be registered on every path, `ccdPersistenceFilterChain`'s
   included. **Nothing ahead of it may call `getParameter`**, because on a multipart request that parses the body,

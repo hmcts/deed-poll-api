@@ -38,6 +38,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
  * it fails, so a 429 for one proves nothing read it, and the first request, admitted, shows that it would have failed.
  *
  * <p>Enforced, with an upload limit of one, set through the bucket's property key so that binding is under test too.
+ * The staff gate is enforced as well, so a caller it refuses can be shown to spend nothing.
  * The counter table is shared by every context on the container, so each test starts it empty.
  */
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -64,6 +65,7 @@ class RateLimitSecurityTest extends AbstractPostgresContainerTest {
         registry.add("idam.api.audiences", () -> StubIdam.AUDIENCE);
         registry.add("deedpoll.rate-limit.mode", () -> "enforce");
         registry.add("deedpoll.rate-limit.buckets.upload.limit", () -> "1");
+        registry.add("deedpoll.security.staff-gate", () -> "enforce");
     }
 
     @LocalServerPort
@@ -137,12 +139,21 @@ class RateLimitSecurityTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("the filter is on the staff chain, after bearer authentication, and not on the CCD persistence chain")
+    @DisplayName("a caller the staff gate refuses is the chain's 403, and spends nothing")
+    void aRefusedCallerSpendsNothing() throws Exception {
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "A Judge", List.of(Role.JUDICIAL.claimValue()));
+
+        assertThat(send(get("/caseworker/cases?q=Smith")).statusCode()).isEqualTo(403);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM \"deedpoll_request_budget\"", Integer.class)).isZero();
+    }
+
+    @Test
+    @DisplayName("the filter is on the staff chain, after authorisation, and not on the CCD persistence chain")
     void onlyTheStaffChainLimits() {
         List<String> staff = staffChain.getFilters().stream().map(filter -> filter.getClass().getSimpleName())
             .toList();
         assertThat(staff).contains("RateLimitFilter");
-        assertThat(staff.indexOf("RateLimitFilter")).isEqualTo(staff.indexOf("BearerTokenAuthenticationFilter") + 1);
+        assertThat(staff.indexOf("RateLimitFilter")).isEqualTo(staff.indexOf("AuthorizationFilter") + 1);
 
         assertThat(ccdPersistenceChain.getFilters()).noneMatch(RateLimitFilter.class::isInstance);
     }

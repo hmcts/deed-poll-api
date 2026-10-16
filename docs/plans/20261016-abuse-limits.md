@@ -43,7 +43,8 @@ Agreed with Steve on 2026-10-15 (the plan) and 2026-10-16 (the numbers).
    - The table never grows past users × 4, so there is no cleanup job. It is correct across replicas and survives
      restarts. Not bucket4j (a new dependency, and per-pod) and not Redis (the api has no Redis client).
 3. **One servlet filter, `RateLimitFilter`, in `SecurityConfiguration.securityFilterChain` only, after
-   `BearerTokenAuthenticationFilter`.**
+   `AuthorizationFilter`** (changed from after `BearerTokenAuthenticationFilter` in post-run review, so a caller the
+   staff gate refuses spends nothing and adds no row).
    - It reads `sub` from the authenticated JWT. A token with no `sub` uses one shared `no-subject` bucket.
    - It must be a filter, not a `HandlerInterceptor`: `DispatcherServlet.checkMultipart` parses the 25 MB body before
      interceptors run. Nothing before it in the chain may read request parameters of a multipart upload.
