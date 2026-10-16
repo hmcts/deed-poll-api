@@ -14,7 +14,7 @@ This is the **api half** of OWASP plan 06 (deed-poll-admin `owasp-remediation-06
 authoritative: admin's limiter, a later plan, is for UX and admin's own pods only. **I3** (four-eyes on irreversible
 emails) is not built.
 
-Current state at `origin/master` `5fffecd`: no limiter, throttle or bucket4j anywhere; no statement timeout except
+Current state at `origin/master` `474e409`: no limiter, throttle or bucket4j anywhere; no statement timeout except
 `OwnedStaging`'s; the latest migration is V36.
 
 ## Decisions: implement these, do not revisit
@@ -77,12 +77,9 @@ Agreed with Steve on 2026-10-15 (the plan) and 2026-10-16 (the numbers).
 
 ## Constraints
 
-- **Another open PR, deed-poll-api#108 (`feat/additional-idam-issuers`), changes nearby files and will be rebased
-  over.** It does not touch `SecurityConfiguration` or add a migration. Do not edit any of its files:
-  `auth/IdamJwtDecoder`, `auth/IdamProperties`, the `idam.api` block of `application.yaml`, and the tests
-  `IdamJwtDecoderTest`, `IdamPropertiesTest`, `IdamDiscoveryTest`, `IdamUserInfoClientTest`, `StubIdam`,
-  `AdditionalIssuerSecurityTest` and `SecurityEventLoggingTest`. Put this plan's tests in new test classes, and its
-  properties under `deedpoll.`. Do not construct `IdamProperties` in a new test; its constructor changes in #108.
+- **deed-poll-api#108 (additional IDAM issuers) merged just before this plan.** Leave its work alone: `auth/IdamJwtDecoder`,
+  `auth/IdamProperties` (now three constructor arguments: issuerUrl, audiences, additionalIssuers) and the `idam.api`
+  block of `application.yaml`. Put this plan's tests in new test classes, and its properties under `deedpoll.`.
 - `CcdCreationAttemptRepositoryTest` ("an attempt that ran out of tries on refusals may be retried from scratch")
   fails intermittently and is unrelated to this plan. If it alone fails, re-run once. Do not change it.
 - Run every Gradle command in the foreground. Never background a build: a session that ends mid-build is restarted,
