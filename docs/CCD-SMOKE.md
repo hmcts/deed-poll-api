@@ -1,8 +1,11 @@
 # CCD foundation — the operator-run AAT smoke procedure
 
-Written 2026-09-27 by plan 02's Task 9, and step 3 rewritten the same day by plan 02b's Task 6. **This is a procedure, not evidence: none of it has been run**, and none of
-it can be until every item in [plan 02's Dependencies](plans/completed/deed-poll-api-02-ccd-foundation.md#dependencies--outside-this-plan-and-not-ralphex-work)
-is done. What *has* been proved is the code, against WireMock and against the in-process cftlib stack
+Written 2026-09-27 by plan 02's Task 9, and step 3 rewritten the same day by plan 02b's Task 6.
+
+**Steps 1–3 were run in AAT on 2026-10-16, and answered as written** once three fixes landed (see "AAT run, 2026-10-16"
+below). Before that date this was a procedure, not evidence; it still is for every other environment, and none of
+it can run anywhere until every item in [plan 02's Dependencies](plans/completed/deed-poll-api-02-ccd-foundation.md#dependencies--outside-this-plan-and-not-ralphex-work)
+is done there. What *has* been proved is the code, against WireMock and against the in-process cftlib stack
 (`./gradlew cftlibTest`, `CcdLinkingCftlibTest`), on placeholder identifiers throughout.
 
 Run it by hand, in order, and stop at the first step that does not answer as written. Every step names what it
@@ -69,8 +72,8 @@ artifact checksum and import job ID only. These requests are prepared, not evide
 | 1 | IDAM `POST /o/token`, password grant using the importer and `deed-poll-api` client | 200 with an access token; no automatic retry of failed credentials |
 | 2 | IDAM `GET /o/userinfo`, using that bearer token | Roles include `ccd-admin` and `ccd-import`; do not record the account's personal fields |
 | 3 | S2S `POST /lease` for `deed_poll_api` using a fresh OTP, then `GET /details` | Both 200; details returns `deed_poll_api` |
-| 4 | Definition store `GET /api/user-roles/deed-poll-system-update,DEED_POLL_SYSTEM,caseworker-deedpoll,caseworker-deedpoll-admin,caseworker-deedpoll-judicial,DEED_POLL_READER` with `Authorization` and `ServiceAuthorization` | Determine which roles exist and confirm every existing entry is `PUBLIC` |
-| 5 | For each missing role only, `POST /api/user-role` with `role` and `security_classification: PUBLIC`, using the same headers | 201; then GET again and verify all six entries. On conflict, reread rather than overwriting; stop if an existing classification differs |
+| 4 | Definition store `GET /api/user-roles/deed-poll-system-update,DEED_POLL_SYSTEM,caseworker-deedpoll,caseworker-deedpoll-admin,caseworker-deedpoll-judicial,caseworker-deedpoll-team-leader,caseworker-deedpoll-delivery-manager,DEED_POLL_READER` with `Authorization` and `ServiceAuthorization` | Determine which roles exist and confirm every existing entry is `PUBLIC` |
+| 5 | For each missing role only, `POST /api/user-role` with `role` and `security_classification: PUBLIC`, using the same headers | 201; then GET again and verify all eight entries. On conflict, reread rather than overwriting; stop if an existing classification differs |
 | 6 | `POST /import?reindex=false&deleteOldIndex=false`, multipart field `file`, both authorization headers, and a newly recorded UUID in `X-Import-Job-Id` | 201 plus the import job ID; then read the job and definition back |
 | 7 | `GET /import-jobs/{id}` and `GET /api/data/case-type/DEEDPOLL` with both authorization headers | Job is `COMPLETED`; imported definition has the agreed jurisdiction, role mapping, events and fields |
 
@@ -101,7 +104,7 @@ state and document event, and CRUD on `supportingDocuments` (D permits collectio
 The role mapping must map `idam:deed-poll-system-update` to that profile. The three staff roles
 `caseworker-deedpoll`, `caseworker-deedpoll-admin`, and `caseworker-deedpoll-judicial` map to
 `DEED_POLL_READER`: R only on the case type, Registered state and supportingDocuments. No staff event,
-mutation, history or identifier-field grants. Register all six names above at PUBLIC before import.
+mutation, history or identifier-field grants. Register all eight names (row 4) at PUBLIC before import: #100 added Team leader and Delivery Manager to the reader mappings.
 Do not assign the system role/profile to staff. Ordinary caseworkers need the new product role assigned
 in IDAM; a previously roleless account cannot pass CCD read checks. Refresh its login after assignment.
 
@@ -194,3 +197,40 @@ submission may have reached CCD.
 
 Write what ran, when, against which identifiers and with what answer into `docs/RESUME.md`. Only then does
 "CCD works in AAT" become a statement anybody should repeat.
+
+## AAT run, 2026-10-16
+
+| Step | Answer |
+|---|---|
+| 1 | Importer password grant 200 with `ccd-admin`/`ccd-import`; S2S `deed_poll_api` 200; all eight roles absent, then registered at PUBLIC (201 ×8); import job `366dc535-f40b-4e3e-a8f3-feffa19aef87` COMPLETED with no warnings: `DEEDPOLL` v1, ACLs as above |
+| 2 | System user holds `deed-poll-system-update`; `/ccd-persistence` 401 without S2S and 403 with our own; bearer-only caseworker call 200 |
+| 3 | With the sweep on at `CCD_LINKING_SWEEP_MAX_RECORDS=1`, two list requests linked KBDP2026-00001 → `1792169527531407` and KBDP2026-00002 → `1792169662102725`, both `Registered` with `deedPollId` and `deedPollReference` set; no second case for either |
+
+Three things stood between step 1 and step 3, each now fixed and each worth knowing in the next environment:
+
+- **Password-grant tokens carry ForgeRock's internal issuer.** Step 2's bearer-only call was 401 "The iss claim is
+  not valid" until #108 added `IDAM_API_ADDITIONAL_ISSUERS` and flux set it for AAT (cnp-flux-config#48329). Without
+  it every link is a 401, because data-store forwards the system user's token to `/ccd-persistence`.
+- **A chart `values.yaml` change without a `Chart.yaml` version bump never reaches a flux environment.** Flux's
+  HelmChart reconciles on `ChartVersion`, so #109's new `ENVIRONMENT_NAME` stayed out of the pod, its guard refused to
+  start, and AAT silently stayed on the previous image until #111 bumped the chart. Compare `GET /info`'s commit with
+  the flux image tag when a deploy seems to have no effect.
+- Sweep switch-on is cnp-flux-config#48332 (`CCD_LINKING_SWEEP_ENABLED=true`, `MAX_RECORDS=1`).
+
+Traps when checking:
+
+- **Data-store's legacy search (`GET /caseworkers/{uid}/jurisdictions/DEEDPOLL/case-types/DEEDPOLL/cases`) returns
+  `[]` for decentralised cases**: their data lives in this service's database. Read by reference instead, with
+  `GET /cases/{reference}`, `experimental: true` and `Accept: application/vnd.uk.gov.hmcts.ccd-data-store-api.case.v2+json`
+  (anything else is a 406).
+- **`ERROR ... MessagePublisher Case type DEEDPOLL is not known` on every event is not a failed link.** The SDK's
+  `DefinitionRegistry` loads definitions only from the relative path `build/cftlib/definition-snapshots`, absent in a
+  deployed image, so `MessagePublisher` skips publishing the event to `message_queue_candidates` and returns. Linking
+  succeeds; no CCD case event is published. Nothing in deed poll consumes them today; anything that would (work
+  allocation, for example) needs this resolved first.
+
+**Linking runs inside the case-list request, one record per request, oldest first** (about 1.5 s per link in AAT).
+That comfortably keeps up with new records day to day, but a large backlog — every historical record at production
+go-live — would take days to link and would hold new records behind it, and with CDAM on an unlinked record's uploads
+are refused (409, case not ready). Production needs a planned backfill before CDAM is enabled; it is a release gate in
+the documentation repo's deployment readiness checklist.
