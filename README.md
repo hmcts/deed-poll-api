@@ -553,10 +553,10 @@ follow-up must guard any future metadata PATCH route; there is no such public ro
 Download headers are independent of the backing store: filesystem and CDAM responses both carry
 `X-Content-Type-Options: nosniff` and `Cache-Control: no-store` alongside that CSP. Disposition follows
 the recorded MIME type: PDF, JPEG and PNG types are inline; Word and TIFF types are attachments.
-This is not verification of the actual file contents: uploads currently record the client's declared type.
-Regression tests exercise all six declared upload types against the real local store and the CDAM WireMock
-journey, including conflicting upstream upload metadata and download headers. These local tests do not
-establish live CDAM onboarding or malware scanning.
+The download path does not re-inspect file contents; new admissions pass the content policy above before
+the declared type is recorded. Regression tests exercise the five accepted types plus historical `.doc`
+metadata against the real local store and the CDAM WireMock journey, including conflicting upstream upload
+metadata and download headers. These local tests do not establish live CDAM onboarding or malware scanning.
 
 ## Plugins
 

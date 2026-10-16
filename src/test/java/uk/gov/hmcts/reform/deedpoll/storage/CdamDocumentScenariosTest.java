@@ -49,6 +49,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
+import uk.gov.hmcts.reform.deedpoll.support.DocumentFixtures;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -299,8 +300,9 @@ class CdamDocumentScenariosTest extends AbstractPostgresContainerTest {
               "_links": {"self": {"href": "%s"}, "binary": {"href": "%s/binary"}}
             }]}
             """.formatted(HASH, href, href))));
-        // These tests exercise transport, not content verification. Distinct bytes prove the remote read.
-        byte[] bytes = ("stored fixture for " + mimeType).getBytes(StandardCharsets.UTF_8);
+        // Admit typed fixtures while retaining download coverage for historical legacy-Word metadata.
+        String uploadType = "application/msword".equals(mimeType) ? DocumentFixtures.DOCX : mimeType;
+        byte[] bytes = DocumentFixtures.bytes(uploadType);
         CDAM.stubFor(get(urlPathEqualTo("/cases/documents/" + FIRST + "/binary"))
             .willReturn(aResponse().withStatus(200).withBody(bytes)
                 // Upstream headers must not replace the API's own document response policy.
@@ -314,11 +316,16 @@ class CdamDocumentScenariosTest extends AbstractPostgresContainerTest {
         String caller = IDAM.accessToken();
         headers.setBearerAuth(caller);
         mockMvc.perform(multipart("/caseworker/cases/" + record + "/documents")
-                .file(new MockMultipartFile("file", filename, mimeType, bytes))
+                .file(new MockMultipartFile("file", filename, uploadType, bytes))
                 .param("documentTypeId", newType()).headers(headers))
             .andExpect(status().isCreated());
         DeedPollSupportingDocument row = onlyRow();
         assertThat(row.getStorageState()).isEqualTo(DocumentStorageState.Attached);
+        assertThat(row.getMimeType()).isEqualTo(uploadType);
+        if (!uploadType.equals(mimeType)) {
+            row.setMimeType(mimeType);
+            documents.saveAndFlush(row);
+        }
         assertThat(row.getMimeType()).isEqualTo(mimeType);
         assertThat(row.getOriginalName()).isEqualTo(filename);
 
