@@ -205,4 +205,7 @@ so it wasn't counted. A direct read-only Copilot GPT-6 Astra review read 25 file
 value, and a configured `HTTPS://…` entry could never match. That was confirmed in the JDK and by a new test. The fix
 converts each configured entry the same way in `IdamProperties`, corrects the wording, and adds tests. The behaviour
 for a token is Spring's, unchanged and as it always was for the main issuer. Re-measured: first selector 128, second
-612, `./gradlew build` (Checkstyle tasks excluded) as below, direct Checkstyle 0 warnings.
+612, `./gradlew build` (Checkstyle tasks excluded) 4,275 unit and 20 integration tests with 0 failures, direct Checkstyle 0
+warnings. One build hit an intermittent `CcdCreationAttemptRepositoryTest` failure ("an attempt that ran out of tries on
+refusals may be retried from scratch": an empty Optional). It passed 3/3 alone and in the re-run build. This branch
+touches no `ccd/`, repository or migration code; recorded as a pre-existing flake.
