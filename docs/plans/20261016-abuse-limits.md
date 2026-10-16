@@ -79,6 +79,9 @@ Agreed with Steve on 2026-10-15 (the plan) and 2026-10-16 (the numbers).
 
 - **Base this branch on `origin/master` after Wren's `feat/additional-idam-issuers` merges.** That branch changes
   `SecurityConfiguration` too. If it has not merged, stop and say so.
+  - That branch adds `idam.api.additional-issuers` to `application.yaml` and changes `auth/StubIdam` and
+    `SecurityEventLoggingTest`. Do not edit `StubIdam` or `SecurityEventLoggingTest`; put this plan's tests in new
+    test classes. Put this plan's properties under `deedpoll.`, never under `idam.`
 - Run every Gradle command in the foreground. Never background a build: a session that ends mid-build is restarted,
   and the restart builds over it and wipes its results.
 - Never key a limit on IP or `X-Forwarded-For`. Staff share NAT egress.
