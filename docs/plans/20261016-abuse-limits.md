@@ -162,12 +162,14 @@ chart's `values.yaml`; the OpenAPI document.
 
 ### Task 6: Documentation and handoff
 
-- [ ] `CLAUDE.md`: one rule under "Rules that break things silently", covering the filter's chain placement, the
+- [x] `CLAUDE.md`: one rule under "Rules that break things silently", covering the filter's chain placement, the
   replay-before-cap order, the modes, and what enforces from day one.
-- [ ] `docs/`: how to read the `rate_limit` lines in App Insights, and how to switch mode per environment.
-- [ ] A note that admin's next OpenAPI spec refresh will break its pinned `operation.responses` assertions
+- [x] `docs/`: how to read the `rate_limit` lines in App Insights, and how to switch mode per environment.
+- [x] A note that admin's next OpenAPI spec refresh will break its pinned `operation.responses` assertions
   (`contract.test.ts`), and must absorb all six 429s in one refresh.
-- [ ] Mark completed
+- [x] Mark completed (`docs/RATE-LIMITS.md`; the note found that admin's `contract.test.ts` as of 2026-10-16 pins
+  `operation.responses` only on `GET /caseworker/gazette-notices`, which is not limited, so it records that the six
+  429s go in one refresh rather than claiming a pinned assertion breaks; build green: 4375 unit, 20 integration, 0 failed after one re-run of the known-intermittent `CcdCreationAttemptRepositoryTest`)
 
 ## Post-Completion
 
