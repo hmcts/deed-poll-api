@@ -167,8 +167,15 @@ public final class StubIdam {
 
     /** A token that is well-formed and correctly addressed, but signed by a key IDAM does not publish. */
     public String tokenSignedByAnotherKey() {
-        return sign(otherKey, claims -> {
+        return tokenSignedByAnotherKey(claims -> {
         });
+    }
+
+    /**
+     * As {@link #tokenSignedByAnotherKey()}, with something about its claims changed -- an issuer, say.
+     */
+    public String tokenSignedByAnotherKey(Consumer<JWTClaimsSet.Builder> customise) {
+        return sign(otherKey, customise);
     }
 
     private String sign(RSAKey key, Consumer<JWTClaimsSet.Builder> customise) {

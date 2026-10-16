@@ -147,6 +147,27 @@ class SecurityEventLoggingTest {
     }
 
     @Test
+    @DisplayName("ForgeRock's issuer, with no additional issuers configured: 401 invalid_token, logged as before")
+    void unlistedForgeRockIssuer() throws Exception {
+        String token = IDAM.accessToken(claims -> claims.issuer(AdditionalIssuerSecurityTest.FORGEROCK));
+
+        MvcResult result = mockMvc.perform(get("/caseworker/document-types").headers(bearer(token)))
+            .andExpect(status().isUnauthorized())
+            .andReturn();
+
+        assertThat(result.getResponse().getHeader(HttpHeaders.WWW_AUTHENTICATE))
+            .startsWith("Bearer error=\"invalid_token\"")
+            .contains("The iss claim is not valid");
+        ILoggingEvent event = onlyEvent();
+        assertThat(event.getMDCPropertyMap()).containsExactlyInAnyOrderEntriesOf(Map.of(
+            "security.event", "auth.unauthenticated",
+            "path", "/caseworker/document-types",
+            "reason", "invalid_token"));
+        assertNoTokenText(event, token);
+        assertMdcCleared();
+    }
+
+    @Test
     @DisplayName("a chain refusal: the 403 and its body are unchanged, and the subject and path are logged")
     void chainRefusal() throws Exception {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of(Role.CASEWORKER.claimValue()));

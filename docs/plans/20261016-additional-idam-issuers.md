@@ -121,17 +121,17 @@ validator class (decision 3).
 Files: the existing `IdamJwtDecoder`/security tests, or a new `config/AdditionalIssuerSecurityTest.java`, using
 `StubIdam.accessToken(customise)`.
 
-- [ ] With `idam.api.additional-issuers` unset: a token whose `iss` is the ForgeRock URL is refused with 401 on
+- [x] With `idam.api.additional-issuers` unset: a token whose `iss` is the ForgeRock URL is refused with 401 on
       `/caseworker/document-types`, and `auth.unauthenticated` is emitted (decision 6).
-- [ ] With it set to the ForgeRock URL:
+- [x] With it set to the ForgeRock URL:
   - that token is admitted, with the same body as a main-issuer token
   - a token with another unlisted issuer is still refused with 401, and the event is emitted
   - a ForgeRock-issuer token signed by a key **outside** the stub's key set is refused (decision 4)
   - a ForgeRock-issuer token with the wrong audience is still refused
-- [ ] `/ccd-persistence`: with S2S `ccd_data` allowed by the existing stubs and the additional issuer set, a
+- [x] `/ccd-persistence`: with S2S `ccd_data` allowed by the existing stubs and the additional issuer set, a
       ForgeRock-issuer token gets past authentication. Assert it isn't the 401 an unlisted issuer gets. Copy the
       existing `CcdPersistenceSecurityTest` set-up.
-- [ ] Mark completed
+- [x] Mark completed
 
 ### Task 3: Documentation and handoff
 
@@ -159,6 +159,22 @@ Files: the existing `IdamJwtDecoder`/security tests, or a new `config/Additional
 - second selector: 606 tests, 0 failures
 - `./gradlew build` failed only in `checkstyleFunctionalTest` (worker SIGILL/SIGABRT, exit 134); with the Checkstyle
   tasks excluded: 4,267 unit and 20 integration tests, 0 failures, 0 skipped
+- Checkstyle run directly over all five source sets: 0 warnings
+- `git diff --check`: clean
+
+**Task 2** (new `config/AdditionalIssuerSecurityTest`, one test added to `SecurityEventLoggingTest`, and a
+`StubIdam.tokenSignedByAnotherKey(customise)` overload):
+- the unset case is in `SecurityEventLoggingTest`, which needs no database because the 401 comes before any
+  controller: it covers a ForgeRock-issuer token on `/caseworker/document-types`, `The iss claim is not valid`, and
+  `auth.unauthenticated` with reason `invalid_token`
+- the set case runs against Postgres, so the ForgeRock-issuer and main-issuer bodies from `/caseworker/document-types`
+  can be compared. The ForgeRock token gets the same body, with no security event. An unlisted issuer, a foreign key
+  and a wrong audience each get 401 plus one `auth.unauthenticated`. On `/ccd-persistence/cases`, the ForgeRock
+  system user reaches the SDK's 400 for the missing `Idempotency-Key`, while an unlisted issuer gets 401
+- first selector: 121 tests, 0 failures
+- second selector: 612 tests, 0 failures
+- `./gradlew build` again failed only in `checkstyleFunctionalTest` (worker SIGABRT, exit 134); with the Checkstyle
+  tasks excluded: 4,273 unit and 20 integration tests, 0 failures, 0 skipped
 - Checkstyle run directly over all five source sets: 0 warnings
 - `git diff --check`: clean
 
