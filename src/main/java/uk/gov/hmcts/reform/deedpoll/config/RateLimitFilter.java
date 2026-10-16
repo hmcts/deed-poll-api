@@ -37,7 +37,8 @@ import java.util.concurrent.Semaphore;
  *
  * <p><strong>A filter in {@code SecurityConfiguration.securityFilterChain}, after {@code AuthorizationFilter}, and
  * nowhere else.</strong> After, because the key is the verified token's {@code sub}, never an address (staff share NAT
- * egress), and because only an admitted request should spend: a caller the staff gate refuses adds no budget row. A filter rather than a {@code HandlerInterceptor}, because
+ * egress), and because only an admitted request should spend: a caller the staff gate refuses adds no budget row.
+ * A filter rather than a {@code HandlerInterceptor}, because
  * {@code DispatcherServlet.checkMultipart} parses a 25 MB upload before any interceptor runs, and the point of the
  * upload budget is to refuse before that. For the same reason this class never calls {@code getParameter}: on a
  * multipart request Tomcat answers it by parsing the body, so the search test reads the raw query string. It is not a

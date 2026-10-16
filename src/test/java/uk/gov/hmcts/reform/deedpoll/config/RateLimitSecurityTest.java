@@ -140,7 +140,7 @@ class RateLimitSecurityTest extends AbstractPostgresContainerTest {
 
     @Test
     @DisplayName("a caller the staff gate refuses is the chain's 403, and spends nothing")
-    void aRefusedCallerSpendsNothing() throws Exception {
+    void refusedCallerSpendsNothing() throws Exception {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "A Judge", List.of(Role.JUDICIAL.claimValue()));
 
         assertThat(send(get("/caseworker/cases?q=Smith")).statusCode()).isEqualTo(403);
