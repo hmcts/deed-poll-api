@@ -31,7 +31,7 @@ public class OpenAPIRateLimits {
                 for (RateLimitBucket.Route route : bucket.routes()) {
                     Operation operation = operation(openApi, route);
                     if (operation != null) {
-                        operation.getResponses().computeIfAbsent(TOO_MANY_REQUESTS, key -> tooManyRequests());
+                        operation.getResponses().computeIfAbsent(TOO_MANY_REQUESTS, key -> tooManyRequests(bucket));
                     }
                 }
             }
@@ -46,13 +46,21 @@ public class OpenAPIRateLimits {
         return item.readOperationsMap().get(PathItem.HttpMethod.valueOf(route.method().name()));
     }
 
-    private static ApiResponse tooManyRequests() {
-        return new ApiResponse()
-            .description("This caller has used this operation's allowance for the current window. Wait the "
+    private static ApiResponse tooManyRequests(RateLimitBucket bucket) {
+        String description = bucket == RateLimitBucket.UPLOAD
+            ? "This caller has used this operation's allowance for the current window, which is refused only "
+                + "when rate limiting is enforced; or too many uploads are already in progress on this instance, "
+                + "which is refused whatever the mode, with Retry-After 5. Wait the number of seconds in "
+                + "Retry-After before trying again. The body is the usual error object, in fixed wording."
+            : "This caller has used this operation's allowance for the current window. Wait the "
                 + "number of seconds in Retry-After before trying again. Only refused when rate limiting is "
-                + "enforced. The body is the usual error object, in fixed wording.")
+                + "enforced. The body is the usual error object, in fixed wording.";
+        return new ApiResponse()
+            .description(description)
             .addHeaderObject(HttpHeaders.RETRY_AFTER, new Header()
-                .description("Whole seconds until the window ends.")
+                .description(bucket == RateLimitBucket.UPLOAD
+                    ? "Whole seconds until the window ends, or 5 when too many uploads are in progress."
+                    : "Whole seconds until the window ends.")
                 .schema(new IntegerSchema()));
     }
 }

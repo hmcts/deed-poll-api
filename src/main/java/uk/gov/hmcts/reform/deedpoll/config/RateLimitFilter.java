@@ -30,6 +30,7 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Semaphore;
 
 /**
  * Per-identity budgets on search, email preview, email send and upload (OWASP M6, abuse-limits plan).
@@ -49,6 +50,15 @@ import java.util.Optional;
  * <p>The spend commits on its own before the request runs, so a request that then fails still counts. A counter that
  * cannot answer admits the request and logs the exception's class: a database blip must not become a 429 storm, and
  * the request is about to need the same database anyway.
+ *
+ * <p><strong>The in-flight upload cap enforces in every mode, {@code off} included</strong>, because it protects this
+ * pod's heap rather than anybody's throughput: each upload can hold 25 MB in memory. It is per pod, one
+ * {@link Semaphore} per filter, and there is one filter per pod. An upload within its budget takes a permit without
+ * waiting, or is refused with 429 and {@code Retry-After: 5}; the permit is released in {@code finally}, so a
+ * controller that throws gives it back. It is taken after the budget, so an upload the budget refuses holds none,
+ * and only by a verified caller, so an anonymous upload still gets the chain's 401. Its log line has decision 6's
+ * shape under the bucket {@value #UPLOAD_IN_FLIGHT} and always says {@code mode=enforce}, because it always refuses;
+ * its count is the upload that would have been one too many.
  */
 public class RateLimitFilter extends OncePerRequestFilter {
 
@@ -60,6 +70,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
      */
     public static final String NO_SUBJECT = "no-subject";
 
+    /**
+     * The bucket the in-flight cap logs under; not a {@link RateLimitBucket}, because nothing stores or spends it.
+     */
+    static final String UPLOAD_IN_FLIGHT = "upload-in-flight";
+
+    /**
+     * Decision 7's fixed {@code Retry-After} for the in-flight cap: an upload in progress is over in seconds.
+     */
+    private static final Duration UPLOAD_RETRY_AFTER = Duration.ofSeconds(5);
+
     private static final Logger LOG = LoggerFactory.getLogger(RateLimitFilter.class);
 
     private static final List<Matcher> MATCHERS = matchers();
@@ -68,6 +88,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final RequestBudgetRepository budget;
     private final ObjectMapper json;
     private final Clock clock;
+    private final Semaphore uploadsInFlight;
 
     public RateLimitFilter(RateLimitProperties properties, RequestBudgetRepository budget, ObjectMapper json,
                            Clock clock) {
@@ -75,16 +96,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
         this.budget = budget;
         this.json = json;
         this.clock = clock;
+        this.uploadsInFlight = new Semaphore(properties.uploadInFlight());
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
         throws ServletException, IOException {
 
-        if (properties.mode() == RateLimitProperties.Mode.OFF) {
-            chain.doFilter(request, response);
-            return;
-        }
         Optional<RateLimitBucket> bucket = bucketOf(request);
         Optional<String> subject = bucket.isPresent() ? subjectOf() : Optional.empty();
         if (bucket.isEmpty() || subject.isEmpty()) {
@@ -92,12 +110,29 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
-        Optional<Duration> refusal = spend(subject.get(), bucket.get());
-        if (refusal.isPresent() && properties.mode() == RateLimitProperties.Mode.ENFORCE) {
-            refuse(response, refusal.get());
+        if (properties.mode() != RateLimitProperties.Mode.OFF) {
+            Optional<Duration> refusal = spend(subject.get(), bucket.get());
+            if (refusal.isPresent() && properties.mode() == RateLimitProperties.Mode.ENFORCE) {
+                refuse(response, refusal.get());
+                return;
+            }
+        }
+        if (bucket.get() != RateLimitBucket.UPLOAD) {
+            chain.doFilter(request, response);
             return;
         }
-        chain.doFilter(request, response);
+        if (!uploadsInFlight.tryAcquire()) {
+            LOG.warn("rate_limit bucket={} mode={} subject={} count={} limit={}", UPLOAD_IN_FLIGHT,
+                     RateLimitProperties.Mode.ENFORCE.key(), subject.get(), properties.uploadInFlight() + 1,
+                     properties.uploadInFlight());
+            refuse(response, UPLOAD_RETRY_AFTER);
+            return;
+        }
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            uploadsInFlight.release();
+        }
     }
 
     /**

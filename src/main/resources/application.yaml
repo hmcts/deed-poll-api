@@ -310,6 +310,9 @@ deedpoll:
       upload:
         limit: ${RATE_LIMIT_UPLOAD_LIMIT:30}
         window: ${RATE_LIMIT_UPLOAD_WINDOW:10m}
+    # Uploads one pod admits at once, each up to 25 MB in memory. Refused with 429 and Retry-After: 5 in every mode,
+    # `off` included, because it protects the heap rather than throughput.
+    upload-in-flight: ${RATE_LIMIT_UPLOAD_IN_FLIGHT:4}
   gazette:
     # Enables provisioned previews and new confirmed sends. Recovery runs independently while disabled.
     enabled: ${GAZETTE_ENABLED:false}

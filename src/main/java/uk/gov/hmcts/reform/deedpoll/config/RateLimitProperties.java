@@ -16,13 +16,21 @@ import java.util.Objects;
  * only what it changes. A limit or window that cannot be a budget stops start-up rather than silently becoming one.
  *
  * @param mode    {@code off}, {@code observe} or {@code enforce}; unset is {@code observe}
- * @param buckets per-bucket limits, keyed by {@link RateLimitBucket#key()} in the property name
+ * @param buckets        per-bucket limits, keyed by {@link RateLimitBucket#key()} in the property name
+ * @param uploadInFlight the uploads one pod admits at once, whatever the mode; unset is {@value #UPLOAD_IN_FLIGHT}
  */
 @ConfigurationProperties(prefix = "deedpoll.rate-limit")
-public record RateLimitProperties(Mode mode, Map<RateLimitBucket, Budget> buckets) {
+public record RateLimitProperties(Mode mode, Map<RateLimitBucket, Budget> buckets, Integer uploadInFlight) {
+
+    /** Decision 7's default: four uploads, each up to 25 MB in memory, per pod. */
+    public static final int UPLOAD_IN_FLIGHT = 4;
 
     public RateLimitProperties {
         mode = mode == null ? Mode.OBSERVE : mode;
+        uploadInFlight = uploadInFlight == null ? UPLOAD_IN_FLIGHT : uploadInFlight;
+        if (uploadInFlight < 1) {
+            throw new IllegalArgumentException("the in-flight upload cap must be at least 1");
+        }
         Map<RateLimitBucket, Budget> resolved = new EnumMap<>(RateLimitBucket.class);
         for (RateLimitBucket bucket : RateLimitBucket.values()) {
             Budget configured = buckets == null ? null : buckets.get(bucket);

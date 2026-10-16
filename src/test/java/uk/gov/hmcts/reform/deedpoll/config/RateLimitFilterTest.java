@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.Part;
 import org.junit.jupiter.api.AfterEach;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.QueryTimeoutException;
 import org.springframework.mock.web.MockFilterChain;
@@ -25,6 +27,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.RequestBudgetRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.RequestBudgetRepository.Spend;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -35,8 +38,14 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -281,8 +290,119 @@ class RateLimitFilterTest {
         verify(budget).spend(SUBJECT, "search", NOW, Duration.ofSeconds(90));
     }
 
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(RateLimitProperties.Mode.class)
+    @DisplayName("with one permit held by an upload mid-flight, a second upload is a 429 with Retry-After: 5")
+    void theInFlightCapRefusesInEveryMode(RateLimitProperties.Mode mode) throws Exception {
+        RateLimitFilter filter = withOnePermit(mode);
+        CountDownLatch inFlight = new CountDownLatch(1);
+        CountDownLatch finish = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            final Future<?> first = pool.submit(() -> {
+                signIn(SUBJECT);
+                filter.doFilter(upload(), new MockHttpServletResponse(), (request, response) -> {
+                    inFlight.countDown();
+                    await(finish);
+                });
+                return null;
+            });
+            assertThat(inFlight.await(10, TimeUnit.SECONDS)).as("the first upload is in flight").isTrue();
+
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            MockFilterChain chain = new MockFilterChain();
+            filter.doFilter(upload(), response, chain);
+
+            assertThat(chain.getRequest()).as("the second upload never reaches the controller").isNull();
+            assertThat(response.getStatus()).isEqualTo(429);
+            assertThat(response.getHeader("Retry-After")).isEqualTo("5");
+            assertThat(new ObjectMapper().readTree(response.getContentAsString()).path("error").asText())
+                .isEqualTo(RateLimitFilter.REFUSAL);
+            assertThat(onlyLine()).isEqualTo(
+                "rate_limit bucket=upload-in-flight mode=enforce subject=a-caseworker count=2 limit=1");
+
+            finish.countDown();
+            first.get(10, TimeUnit.SECONDS);
+        } finally {
+            finish.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("the in-flight cap counts uploads only: another limited route is admitted while the permit is held")
+    void theInFlightCapIsUploadsOnly() throws Exception {
+        RateLimitFilter filter = withOnePermit(RateLimitProperties.Mode.OFF);
+
+        filter.doFilter(upload(), new MockHttpServletResponse(), (request, response) ->
+            assertThat(run(filter, send()).getRequest()).as("a send during an upload").isNotNull());
+    }
+
+    @Test
+    @DisplayName("the permit is released after an upload succeeds and after one throws")
+    void thePermitIsReleased() throws Exception {
+        RateLimitFilter filter = withOnePermit(RateLimitProperties.Mode.OFF);
+
+        assertThat(run(filter, upload()).getRequest()).as("an upload that succeeds").isNotNull();
+        assertThat(run(filter, upload()).getRequest()).as("the next, after the success").isNotNull();
+
+        assertThatThrownBy(() -> filter.doFilter(upload(), new MockHttpServletResponse(), (request, response) -> {
+            throw new IllegalStateException("the controller failed");
+        })).isInstanceOf(IllegalStateException.class);
+        assertThat(run(filter, upload()).getRequest()).as("the next, after the failure").isNotNull();
+
+        assertThatThrownBy(() -> filter.doFilter(upload(), new MockHttpServletResponse(), (request, response) -> {
+            throw new IOException("the client went away");
+        })).isInstanceOf(IOException.class);
+        assertThat(run(filter, upload()).getRequest()).as("the next, after an I/O failure").isNotNull();
+        assertThat(logs.list).as("nothing was refused").isEmpty();
+    }
+
+    @Test
+    @DisplayName("an upload refused by its budget takes no permit")
+    void budgetRefusalTakesNoPermit() throws Exception {
+        Map<RateLimitBucket, RateLimitProperties.Budget> buckets = new EnumMap<>(RateLimitBucket.class);
+        buckets.put(RateLimitBucket.UPLOAD, new RateLimitProperties.Budget(1, Duration.ofMinutes(10)));
+        RateLimitFilter filter = new RateLimitFilter(
+            new RateLimitProperties(RateLimitProperties.Mode.ENFORCE, buckets, 1), budget, new ObjectMapper(),
+            Clock.fixed(NOW, ZoneOffset.UTC));
+
+        filter.doFilter(upload(), new MockHttpServletResponse(), (request, response) -> {
+            MockHttpServletResponse refused = new MockHttpServletResponse();
+            filter.doFilter(upload(), refused, new MockFilterChain());
+            assertThat(refused.getHeader("Retry-After")).as("the budget's refusal, not the cap's").isNotEqualTo("5");
+        });
+        counts.clear();
+        assertThat(run(filter, upload()).getRequest()).as("the permit came back once").isNotNull();
+    }
+
+    @Test
+    @DisplayName("an unauthenticated upload takes no permit, so the chain's 401 is unchanged")
+    void anUnauthenticatedUploadTakesNoPermit() throws Exception {
+        RateLimitFilter filter = withOnePermit(RateLimitProperties.Mode.ENFORCE);
+
+        filter.doFilter(upload(), new MockHttpServletResponse(), (request, response) -> {
+            SecurityContextHolder.clearContext();
+            assertThat(run(filter, upload()).getRequest()).as("an anonymous upload is left alone").isNotNull();
+        });
+    }
+
+    private RateLimitFilter withOnePermit(RateLimitProperties.Mode mode) {
+        return new RateLimitFilter(new RateLimitProperties(mode, Map.of(), 1), budget, new ObjectMapper(),
+                                   Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupted);
+        }
+    }
+
     private RateLimitFilter filter(RateLimitProperties.Mode mode) {
-        return new RateLimitFilter(new RateLimitProperties(mode, Map.of()), budget, new ObjectMapper(),
+        return new RateLimitFilter(new RateLimitProperties(mode, Map.of(), null), budget, new ObjectMapper(),
                                    Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -290,11 +410,12 @@ class RateLimitFilterTest {
                                    Duration window) {
         Map<RateLimitBucket, RateLimitProperties.Budget> buckets = new EnumMap<>(RateLimitBucket.class);
         buckets.put(bucket, new RateLimitProperties.Budget(limit, window));
-        return new RateLimitFilter(new RateLimitProperties(mode, buckets), budget, new ObjectMapper(),
+        return new RateLimitFilter(new RateLimitProperties(mode, buckets, null), budget, new ObjectMapper(),
                                    Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
-    private static MockFilterChain run(RateLimitFilter filter, MockHttpServletRequest request) throws Exception {
+    private static MockFilterChain run(RateLimitFilter filter, MockHttpServletRequest request)
+        throws IOException, ServletException {
         MockFilterChain chain = new MockFilterChain();
         filter.doFilter(request, new MockHttpServletResponse(), chain);
         return chain;

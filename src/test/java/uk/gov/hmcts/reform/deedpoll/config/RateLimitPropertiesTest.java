@@ -32,7 +32,7 @@ class RateLimitPropertiesTest {
     @Test
     @DisplayName("nothing configured is observe mode with decision 1's numbers")
     void defaults() {
-        RateLimitProperties properties = new RateLimitProperties(null, null);
+        RateLimitProperties properties = new RateLimitProperties(null, null, null);
 
         assertThat(properties.mode()).isEqualTo(RateLimitProperties.Mode.OBSERVE);
         assertThat(properties.budget(RateLimitBucket.SEARCH))
@@ -54,6 +54,15 @@ class RateLimitPropertiesTest {
             .isInstanceOf(BindException.class);
         assertThatThrownBy(() -> new RateLimitProperties.Budget(5, Duration.ZERO))
             .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("the in-flight upload cap binds from upload-in-flight, is 4 when unset, and is at least one")
+    void uploadInFlight() {
+        assertThat(bind(Map.of("deedpoll.rate-limit.upload-in-flight", "2")).uploadInFlight()).isEqualTo(2);
+        assertThat(new RateLimitProperties(null, null, null).uploadInFlight()).isEqualTo(4);
+        assertThatThrownBy(() -> bind(Map.of("deedpoll.rate-limit.upload-in-flight", "0")))
+            .isInstanceOf(BindException.class);
     }
 
     private static RateLimitProperties bind(Map<String, String> values) {

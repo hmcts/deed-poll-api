@@ -76,6 +76,10 @@ class RateLimitRoutesTest extends AbstractPostgresContainerTest {
                 if (!response.isMissingNode()) {
                     with429.add(operation.getKey().toUpperCase(Locale.ROOT) + " " + path.getKey());
                     assertThat(response.path("headers").has("Retry-After")).isTrue();
+                    boolean upload = "/caseworker/cases/{id}/documents".equals(path.getKey());
+                    assertThat(response.path("description").asText().contains("whatever the mode"))
+                        .as("only the upload's 429 says it is refused in every mode: %s", path.getKey())
+                        .isEqualTo(upload);
                 }
             }
         }
@@ -84,11 +88,12 @@ class RateLimitRoutesTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("ships in observe mode, with decision 1's numbers")
+    @DisplayName("ships in observe mode, with decision 1's numbers and four upload permits")
     void shipsObserving() {
         assertThat(properties.mode()).isEqualTo(RateLimitProperties.Mode.OBSERVE);
         assertThat(properties.buckets()).allSatisfy(
             (bucket, budget) -> assertThat(budget).isEqualTo(bucket.defaultBudget()));
+        assertThat(properties.uploadInFlight()).as("decision 7's four permits").isEqualTo(4);
     }
 
     private static List<String> routes() {

@@ -141,9 +141,9 @@ chart's `values.yaml`; the OpenAPI document.
 
 ### Task 3: The in-flight upload cap
 
-- [ ] With one permit and one upload blocked mid-flight, a second gets 429 with `Retry-After: 5`, in every mode.
-- [ ] The permit is released after a success **and** after a thrown error.
-- [ ] Mark completed
+- [x] With one permit and one upload blocked mid-flight, a second gets 429 with `Retry-After: 5`, in every mode.
+- [x] The permit is released after a success **and** after a thrown error.
+- [x] Mark completed (build green: 4362 unit, 20 integration, 0 failed; cap is per authenticated caller only, taken after the budget so a budget refusal holds no permit, logged as `bucket=upload-in-flight mode=enforce`; the upload's 429 description in OpenAPI now says it is refused whatever the mode, with no other document change)
 
 ### Task 4: The per-case, per-template email cap
 
