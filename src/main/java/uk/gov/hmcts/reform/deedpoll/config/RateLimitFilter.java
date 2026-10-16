@@ -29,6 +29,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.Semaphore;
 
@@ -189,11 +190,27 @@ public class RateLimitFilter extends OncePerRequestFilter {
         for (Matcher matcher : MATCHERS) {
             if (matcher.route.method().matches(method) && matcher.pattern.matches(path)) {
                 return matcher.bucket != RateLimitBucket.SEARCH || isSearch(request.getQueryString())
+                    || carriesForm(request.getContentType())
                     ? Optional.of(matcher.bucket)
                     : Optional.empty();
             }
         }
         return Optional.empty();
+    }
+
+    /**
+     * Whether a request carries a form body, whose fields Spring adds to the parameters the list controller reads.
+     *
+     * <p>Spring's multipart resolver accepts a multipart body on any method, so a {@code GET} with no query string
+     * could otherwise carry its {@code q} or {@code where} in the body and search without spending. No list read the
+     * admin app makes has a body, so counting every such request as a search costs a real caller nothing.
+     */
+    static boolean carriesForm(String contentType) {
+        if (contentType == null) {
+            return false;
+        }
+        String type = contentType.trim().toLowerCase(Locale.ROOT);
+        return type.startsWith("multipart/") || type.startsWith("application/x-www-form-urlencoded");
     }
 
     /**

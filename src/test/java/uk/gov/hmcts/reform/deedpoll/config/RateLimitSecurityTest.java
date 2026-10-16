@@ -105,6 +105,22 @@ class RateLimitSecurityTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("a list read carrying its search in a multipart body still spends from the search budget")
+    void multipartSearchSpends() throws Exception {
+        String body = "--x\r\n"
+            + "Content-Disposition: form-data; name=\"q\"\r\n\r\n"
+            + "Smith\r\n"
+            + "--x--\r\n";
+        HttpRequest request = authorised(HttpRequest.newBuilder(uri("/caseworker/cases"))
+            .header("Content-Type", "multipart/form-data; boundary=x")
+            .method("GET", HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)));
+
+        send(request);
+
+        assertThat(count("search")).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("an over-budget upload is a 429 before Tomcat parses the multipart or the controller is reached")
     void anOverBudgetUploadIsRefusedUnparsed() throws Exception {
         HttpResponse<String> admitted = send(upload(MALFORMED));
