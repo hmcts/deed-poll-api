@@ -181,3 +181,25 @@ Manual, not for this run:
 - After AAT business testing, tune the limits to roughly 3× the observed per-subject p99 and switch to `enforce`, AAT
   first (OWASP plan 06 Task 11).
 - The admin half: the 429 page, admin's Redis limiter and its upload in-flight cap (OWASP plan 06 Tasks 7–10).
+
+### Post-run verification (Gale, 2026-10-16)
+
+The ralphex run (claude-copilot-astra) completed Tasks 1–6. Its first attempt stopped in Task 2 on a Bedrock content
+filter false positive and resumed cleanly. Its final review step ended `FAILED` only because the review agent's JVM
+hit SIGILL (no `-XX:UseSVE=0`), so it could not test its own last fix (the HEAD bypass). Verified and changed by hand:
+
+- **The HEAD fix holds:** a clean build of the run's tip gave 4,396 tests, 0 failures.
+- **The filter moved after `AuthorizationFilter`** (decision 3 above). Before, any valid IDAM token, including one the
+  staff gate refuses, spent budget and wrote a row. `RateLimitSecurityTest.refusedCallerSpendsNothing` enforces the
+  gate and fails with the old placement (one row written).
+- **A multipart body bypassed the search budget**, found by a direct read-only Copilot `gpt-6-astra` review of all
+  changed source files: `GET /caseworker/cases` with no query string but a multipart field `q` searched without
+  spending. A list read with a form body now counts as a search; `multipartSearchSpends` was red before the fix.
+- Path variants the review listed as untested (matrix parameters, encoded paths, a trailing slash, case) are refused by
+  Spring Security's `StrictHttpFirewall` or by Spring 6's exact matching before they could reach the controller.
+- Rebased onto `d6263d3` (#111); the chart moves to 0.0.24 because `values.yaml` changed.
+- Final: `./gradlew cleanTest cleanIntegration build` 4,398 tests, 0 failures, 0 skipped; checkstyle OK;
+  `git diff --check` clean.
+
+Not changed, by choice: each default is declared both in Java and in `application.yaml` (the run's simplification
+review); and two concurrent distinct-key sends may overshoot the email cap by one, as decision 8 accepts.

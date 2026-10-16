@@ -1,6 +1,6 @@
 # Abuse limits: reading them and switching them
 
-The api half of OWASP plan 06 (M6, L13), built by `docs/plans/20261016-abuse-limits.md`. Four limits, and each one is
+The api half of OWASP plan 06 (M6, L13), built by `docs/plans/completed/20261016-abuse-limits.md`. Four limits, and each one is
 either switchable or not:
 
 | Limit | Where | Answer | Mode |
