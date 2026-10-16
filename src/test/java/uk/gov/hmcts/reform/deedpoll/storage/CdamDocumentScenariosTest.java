@@ -295,10 +295,10 @@ class CdamDocumentScenariosTest extends AbstractPostgresContainerTest {
         String href = CDAM.baseUrl() + "/cases/documents/" + FIRST;
         CDAM.stubFor(post(urlPathEqualTo("/cases/documents")).willReturn(okJson("""
             {"documents": [{
-              "originalDocumentName": "%s", "mimeType": "%s", "hashToken": "%s",
+              "originalDocumentName": "upstream.html", "mimeType": "text/html", "hashToken": "%s",
               "_links": {"self": {"href": "%s"}, "binary": {"href": "%s/binary"}}
             }]}
-            """.formatted(filename, mimeType, HASH, href, href))));
+            """.formatted(HASH, href, href))));
         // These tests exercise transport, not content verification. Distinct bytes prove the remote read.
         byte[] bytes = ("stored fixture for " + mimeType).getBytes(StandardCharsets.UTF_8);
         CDAM.stubFor(get(urlPathEqualTo("/cases/documents/" + FIRST + "/binary"))
@@ -319,6 +319,8 @@ class CdamDocumentScenariosTest extends AbstractPostgresContainerTest {
             .andExpect(status().isCreated());
         DeedPollSupportingDocument row = onlyRow();
         assertThat(row.getStorageState()).isEqualTo(DocumentStorageState.Attached);
+        assertThat(row.getMimeType()).isEqualTo(mimeType);
+        assertThat(row.getOriginalName()).isEqualTo(filename);
 
         mockMvc.perform(download(fileOf(record, row.getId()), caller))
             .andExpect(status().isOk())
