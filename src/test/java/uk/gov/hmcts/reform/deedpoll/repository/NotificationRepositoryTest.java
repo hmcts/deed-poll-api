@@ -566,6 +566,45 @@ class NotificationRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("counts a template's rows on a case in the last day, less permanent refusals, towards the cap")
+    void countsTowardsTheDailyCap() {
+        DeedPoll deedPoll = persistedCase();
+        final DeedPoll otherCase = persistedCase();
+        final LocalDateTime since = NOW.minusHours(24);
+        enqueueChase(deedPoll, NOW.minusHours(1));
+        enqueueChase(deedPoll, NOW.minusHours(23));
+        // Each of these is outside the cap, for its own reason: older than a day, permanently refused, another
+        // template, another case.
+        enqueueChase(deedPoll, NOW.minusHours(25));
+        UUID refusedId = enqueueChase(deedPoll, NOW.minusMinutes(5));
+        Notification refused = notifications.findById(refusedId).orElseThrow();
+        refused.setState(NotificationState.Failed);
+        refused.setFailureVerdict(NotificationFailureVerdict.PERMANENT);
+        assertThat(notifications.enqueue(UUID.randomUUID(), deedPoll.getId(), UUID.randomUUID(), null,
+                                         FORMS_ADULT_TEMPLATE, FORMS_GROUP, RECIPIENT, PERSONALISATION, NOW,
+                                         "A Caseworker"))
+            .isOne();
+        enqueueChase(otherCase, NOW);
+        entityManager.flush();
+
+        assertThat(notifications.countTowardsDailyCap(deedPoll.getId(), CHASE_TEMPLATE, since)).isEqualTo(2);
+
+        // A failure Notify did not definitely refuse may have reached the applicant, so it still counts.
+        // Read again: each enqueue above clears the persistence context, so the first copy is detached.
+        notifications.findById(refusedId).orElseThrow().setFailureVerdict(NotificationFailureVerdict.TECHNICAL);
+        entityManager.flush();
+        assertThat(notifications.countTowardsDailyCap(deedPoll.getId(), CHASE_TEMPLATE, since)).isEqualTo(3);
+    }
+
+    private UUID enqueueChase(DeedPoll deedPoll, LocalDateTime createdOn) {
+        UUID id = UUID.randomUUID();
+        assertThat(notifications.enqueue(id, deedPoll.getId(), UUID.randomUUID(), null, CHASE_TEMPLATE,
+                                         CHASE_GROUP, RECIPIENT, PERSONALISATION, createdOn, "A Caseworker"))
+            .isOne();
+        return id;
+    }
+
+    @Test
     @DisplayName("enqueues a second chase under a request of its own, because a reminder is legitimate")
     void enqueuesASecondChaseUnderItsOwnRequest() {
         DeedPoll deedPoll = persistedCase();

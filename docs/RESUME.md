@@ -1,5 +1,7 @@
 # Resume state — where the next session picks up
 
+**Abuse limits, 2026-10-16:** per-subject request budgets (V37 `deedpoll_request_budget`, `RateLimitFilter`, modes `off`/`observe`/`enforce`, default `observe`), the per-pod in-flight upload cap, the daily per-case per-template email cap and the case list statement timeout are implemented on `feat/abuse-limits` and not live-verified. The last three enforce whatever the mode. Next: open the PR; deploy to AAT in `observe`; tune each limit from the logged p99; switch AAT to `enforce`; record the production Notify limits; admin refreshes its api spec for the six 429s. See [the plan](plans/completed/20261016-abuse-limits.md) and [RATE-LIMITS.md](RATE-LIMITS.md).
+
 **Upload content checks, 2026-10-16 (OWASP Plan 05 Tasks 1–3):** `feat/document-content-policy` adds one
 content policy before document storage and owned-staging persistence. Steve approved dropping legacy `.doc`,
 refusing encrypted PDF/DOCX and refusing the specified active-content indicators. Signature checks, bounded

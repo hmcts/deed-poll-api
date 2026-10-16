@@ -18,6 +18,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
 import org.springframework.security.oauth2.server.resource.web.access.BearerTokenAccessDeniedHandler;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
@@ -37,6 +38,7 @@ import uk.gov.hmcts.reform.deedpoll.ccd.CcdCallerAuthenticationConverter;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdProperties;
 import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile;
 import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollRoleMapping;
+import uk.gov.hmcts.reform.deedpoll.repository.RequestBudgetRepository;
 
 import java.time.Clock;
 import java.util.List;
@@ -85,7 +87,7 @@ import java.util.List;
  */
 @Configuration
 @EnableWebSecurity
-@EnableConfigurationProperties({IdamProperties.class, RoleAssignmentProperties.class})
+@EnableConfigurationProperties({IdamProperties.class, RoleAssignmentProperties.class, RateLimitProperties.class})
 public class SecurityConfiguration {
 
     /**
@@ -262,6 +264,11 @@ public class SecurityConfiguration {
      * {@link #ANY_AUTHENTICATED_PATHS} are authenticated by name. {@code anyRequest().authenticated()} stays as the
      * fallback for the empty citizen namespace and unknown paths. A new top-level prefix is caught by
      * {@code StaffAccessRulesTest} rather than by a {@code denyAll()}.
+     *
+     * <p>{@link RateLimitFilter} sits directly after authorisation, so it keys on the verified {@code sub} and only a
+     * request the chain has admitted spends: a caller refused here costs no budget row. It is on this chain only,
+     * because {@code /ccd-persistence/**} is service traffic. Nothing ahead of it may read a request parameter,
+     * because on a multipart upload that parses the body the upload budget exists to refuse.
      */
     @Bean
     @SuppressWarnings("PMD.SignatureDeclareThrowsException")
@@ -269,6 +276,8 @@ public class SecurityConfiguration {
                                                   JwtDecoder jwtDecoder,
                                                   IdamAuthenticationConverter authenticationConverter,
                                                   ObjectMapper objectMapper,
+                                                  RateLimitProperties rateLimits,
+                                                  RequestBudgetRepository requestBudget,
                                                   @Value("${deedpoll.security.staff-gate:enforce}")
                                                   String staffGateMode)
         throws Exception {
@@ -277,6 +286,8 @@ public class SecurityConfiguration {
         AuthenticationEntryPoint entryPoint = loggingEntryPoint();
 
         return http
+            .addFilterAfter(new RateLimitFilter(rateLimits, requestBudget, objectMapper, Clock.systemUTC()),
+                            AuthorizationFilter.class)
             .authorizeHttpRequests(requests -> requests
                 // The error page renders the failure of a request that has already been authorised, and the
                 // container dispatches to it after the security context has been cleared. Authorising the
