@@ -77,11 +77,14 @@ Agreed with Steve on 2026-10-15 (the plan) and 2026-10-16 (the numbers).
 
 ## Constraints
 
-- **Base this branch on `origin/master` after Wren's `feat/additional-idam-issuers` merges.** That branch changes
-  `SecurityConfiguration` too. If it has not merged, stop and say so.
-  - That branch adds `idam.api.additional-issuers` to `application.yaml` and changes `auth/StubIdam` and
-    `SecurityEventLoggingTest`. Do not edit `StubIdam` or `SecurityEventLoggingTest`; put this plan's tests in new
-    test classes. Put this plan's properties under `deedpoll.`, never under `idam.`
+- **Another open PR, deed-poll-api#108 (`feat/additional-idam-issuers`), changes nearby files and will be rebased
+  over.** It does not touch `SecurityConfiguration` or add a migration. Do not edit any of its files:
+  `auth/IdamJwtDecoder`, `auth/IdamProperties`, the `idam.api` block of `application.yaml`, and the tests
+  `IdamJwtDecoderTest`, `IdamPropertiesTest`, `IdamDiscoveryTest`, `IdamUserInfoClientTest`, `StubIdam`,
+  `AdditionalIssuerSecurityTest` and `SecurityEventLoggingTest`. Put this plan's tests in new test classes, and its
+  properties under `deedpoll.`. Do not construct `IdamProperties` in a new test; its constructor changes in #108.
+- `CcdCreationAttemptRepositoryTest` ("an attempt that ran out of tries on refusals may be retried from scratch")
+  fails intermittently and is unrelated to this plan. If it alone fails, re-run once. Do not change it.
 - Run every Gradle command in the foreground. Never background a build: a session that ends mid-build is restarted,
   and the restart builds over it and wipes its results.
 - Never key a limit on IP or `X-Forwarded-For`. Staff share NAT egress.
