@@ -12,6 +12,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -72,6 +74,8 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -276,6 +280,57 @@ class CdamDocumentScenariosTest extends AbstractPostgresContainerTest {
             .withQueryParam("permanent", equalTo("false")));
         CDAM.verify(0, deleteRequestedFor(urlPathMatching("/cases/documents/.*"))
             .withQueryParam("permanent", equalTo("true")));
+    }
+
+    @ParameterizedTest(name = "CDAM serves {0} as {2} with inert, non-cacheable headers")
+    @CsvSource({
+        "application/pdf, a.pdf, inline",
+        "image/jpeg, a.jpg, inline",
+        "image/png, a.png, inline",
+        "image/tiff, a.tif, attachment",
+        "application/msword, a.doc, attachment",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document, a.docx, attachment"
+    })
+    void downloadSecurityHeaders(String mimeType, String filename, String disposition) throws Exception {
+        String href = CDAM.baseUrl() + "/cases/documents/" + FIRST;
+        CDAM.stubFor(post(urlPathEqualTo("/cases/documents")).willReturn(okJson("""
+            {"documents": [{
+              "originalDocumentName": "%s", "mimeType": "%s", "hashToken": "%s",
+              "_links": {"self": {"href": "%s"}, "binary": {"href": "%s/binary"}}
+            }]}
+            """.formatted(filename, mimeType, HASH, href, href))));
+        // These tests exercise transport, not content verification. Distinct bytes prove the remote read.
+        byte[] bytes = ("stored fixture for " + mimeType).getBytes(StandardCharsets.UTF_8);
+        CDAM.stubFor(get(urlPathEqualTo("/cases/documents/" + FIRST + "/binary"))
+            .willReturn(aResponse().withStatus(200).withBody(bytes)
+                // Upstream headers must not replace the API's own document response policy.
+                .withHeader("Content-Type", "text/html")
+                .withHeader("Content-Disposition", "inline; filename=\"upstream.html\"")
+                .withHeader("X-Content-Type-Options", "invalid")
+                .withHeader("Content-Security-Policy", "default-src *")
+                .withHeader("Cache-Control", "public, max-age=3600")));
+        String record = linkedRecord();
+        HttpHeaders headers = new HttpHeaders();
+        String caller = IDAM.accessToken();
+        headers.setBearerAuth(caller);
+        mockMvc.perform(multipart("/caseworker/cases/" + record + "/documents")
+                .file(new MockMultipartFile("file", filename, mimeType, bytes))
+                .param("documentTypeId", newType()).headers(headers))
+            .andExpect(status().isCreated());
+        DeedPollSupportingDocument row = onlyRow();
+        assertThat(row.getStorageState()).isEqualTo(DocumentStorageState.Attached);
+
+        mockMvc.perform(download(fileOf(record, row.getId()), caller))
+            .andExpect(status().isOk())
+            .andExpect(content().bytes(bytes))
+            .andExpect(content().contentType(mimeType))
+            .andExpect(header().stringValues(HttpHeaders.CONTENT_DISPOSITION,
+                disposition + "; filename=\"" + filename + "\""))
+            .andExpect(header().stringValues("X-Content-Type-Options", "nosniff"))
+            .andExpect(header().stringValues("Content-Security-Policy", "default-src 'none'; sandbox"))
+            .andExpect(header().stringValues(HttpHeaders.CACHE_CONTROL, "no-store"));
+        CDAM.verify(1, getRequestedFor(urlPathEqualTo("/cases/documents/" + FIRST + "/binary"))
+            .withHeader("Authorization", equalTo("Bearer " + caller)));
     }
 
     @Test
