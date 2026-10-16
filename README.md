@@ -534,13 +534,17 @@ Images and PDFs must match their declared type's signature. PDF name checks, inc
 refuse `/Encrypt`, `/JavaScript`, `/JS`, `/Launch`, `/EmbeddedFile`, `/RichMedia` and `/XFA`. This is an
 interim tripwire, **not a complete PDF parser**: compressed object streams can hide active names, and
 matching names in comments or stream data can cause refusals. Signature checks do not prove an image
-or PDF is well-formed or harmless. Encrypted OLE-wrapped DOCX is refused; ZIP-based DOCX must have a normal
+or PDF is well-formed or harmless. OLE containers are refused with guidance to upload an unencrypted `.docx`:
+their signature cannot distinguish legacy `.doc` from encrypted DOCX. Non-Word or malformed ZIP packages
+get a format-mismatch message, not a claim that macros were found. ZIP-based DOCX must have a normal
 Word main part and no macro/ActiveX parts, `word/embeddings/` parts or external attached-template,
 OLE-object or frame relationships. Ordinary external hyperlinks are allowed, never fetched by inspection.
 
 DOCX inspection first bounds expansion to 25 MiB per entry, 50 MiB total and 1,000 entries, with at least
 a 1% compressed/expanded ratio for entries over 100,000 bytes. POI's process-wide ratio, entry-size and
-entry-count guards are also set once to those limits; they are never weakened per request. Malformed or
+entry-count guards are set at application startup, before singleton reader beans are created, by
+`DocumentParserConfiguration`; loading the first DOCX no longer changes global parser behaviour.
+The limits are never weakened per request. Malformed or
 unsupported packages fail closed. Refusal logging contains only a fixed format category, never parser
 exceptions, filenames or bytes. These checks do not replace CDAM malware scanning or activate CDAM.
 

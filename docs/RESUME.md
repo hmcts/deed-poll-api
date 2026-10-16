@@ -7,9 +7,13 @@ DOCX package inspection and escaped PDF-name checks are covered by adversarial f
 These are interim controls, not antivirus/full PDF parsing; limitations and ZIP budgets are in README.
 The coordinated admin branch `fix/document-content-types` removes `.doc` and updates the upload hint.
 No CDAM activation, live deployment, existing-file migration or metadata-integrity fix is included.
-Task 9 mock fidelity and metadata integrity remain separate follow-ups. This branch is stacked on #110:
-merge its tests-only changes first. Its CDAM fixtures now use typed bytes; historical `.doc` coverage seeds
+Task 9 mock fidelity and metadata integrity remain separate follow-ups. #110 is merged; API #112 now targets
+master, with admin #188 as its companion. The CDAM fixtures use typed bytes; historical `.doc` coverage seeds
 legacy metadata without permitting new `.doc` uploads. No download-header assertion is removed.
+Gale's review corrections distinguish format mismatches from known unsafe Word features and give OLE
+containers neutral format guidance. POI limits now apply during startup before reader beans, not on the
+first DOCX upload. Tests cover startup ordering and the exact 50 MiB expanded-total boundary while proving
+all other archive/upload budgets pass. No acceptance rule or limit has been relaxed.
 
 **Download invariants, 2026-10-16 (OWASP Plan 05 Task 5):** tests assert `nosniff`, the inert sandbox
 CSP and `no-store` for the five accepted types plus historical `.doc` metadata through both the real

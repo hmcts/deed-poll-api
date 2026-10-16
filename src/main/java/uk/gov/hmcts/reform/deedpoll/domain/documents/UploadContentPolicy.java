@@ -15,6 +15,7 @@ import java.util.Set;
 public final class UploadContentPolicy {
     public static final String MISMATCH = "The file's contents don't match a PDF, image or Word document";
     public static final String ENCRYPTED = "Upload a file that is not encrypted or password-protected";
+    public static final String WORD_FORMAT = "Upload an unencrypted Word document saved in .docx format";
     public static final String ACTIVE_PDF = "Upload a PDF without scripts, embedded files or active content";
     public static final String UNSAFE_WORD = "Upload a DOCX without macros, embedded objects or external templates";
     private static final Logger LOG = LoggerFactory.getLogger(UploadContentPolicy.class);
@@ -49,14 +50,17 @@ public final class UploadContentPolicy {
 
     private static void verifyWord(byte[] bytes) {
         if (startsWith(bytes, 208, 207, 17, 224, 161, 177, 26, 225)) {
-            refuse("ole", ENCRYPTED);
+            // OLE also identifies legacy .doc: the signature alone cannot establish encryption.
+            refuse("ole", WORD_FORMAT);
         }
         requirePrefix(bytes, "docx", 80, 75, 3, 4);
         try {
             DocxContentPolicy.verify(bytes);
+        } catch (DocxContentPolicy.UnsafeContent rejected) {
+            refuse("docx", UNSAFE_WORD);
         } catch (IOException | InvalidFormatException | RuntimeException rejected) {
             // Parser diagnostics can contain attacker-controlled package names. Do not log the exception.
-            refuse("docx", UNSAFE_WORD);
+            refuse("docx", MISMATCH);
         }
     }
 

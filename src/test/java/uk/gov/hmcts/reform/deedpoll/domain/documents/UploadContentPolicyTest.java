@@ -62,12 +62,12 @@ class UploadContentPolicyTest {
     }
 
     @Test
-    @DisplayName("legacy Word is refused, and OLE-wrapped DOCX gets an encrypted-file message")
+    @DisplayName("OLE-wrapped uploads get format guidance without claiming to detect encryption")
     void refusesLegacyWordAndOleDisguisedAsDocx() {
         byte[] ole = {(byte) 0xd0, (byte) 0xcf, 0x11, (byte) 0xe0, (byte) 0xa1, (byte) 0xb1, 0x1a, (byte) 0xe1};
         assertThatThrownBy(() -> verify(ole, "application/msword")).isInstanceOf(InvalidInputError.class);
         assertThatThrownBy(() -> verify(ole, DocumentFixtures.DOCX)).isInstanceOf(InvalidInputError.class)
-            .hasMessageContaining("password-protected");
+            .hasMessage("Upload an unencrypted Word document saved in .docx format");
     }
 
     @ParameterizedTest
@@ -75,7 +75,7 @@ class UploadContentPolicyTest {
     @ValueSource(strings = {"word/vbaProject.bin", "word/activeX/activeX1.bin", "word/embeddings/oleObject1.bin"})
     void refusesDangerousWordParts(String path) {
         assertThatThrownBy(() -> verify(DocumentFixtures.docx(Map.of(path, "payload")), DocumentFixtures.DOCX))
-            .isInstanceOf(InvalidInputError.class);
+            .isInstanceOf(InvalidInputError.class).hasMessage(UploadContentPolicy.UNSAFE_WORD);
     }
 
     @ParameterizedTest
@@ -90,16 +90,30 @@ class UploadContentPolicyTest {
             </Relationships>
             """.formatted(type);
         assertThatThrownBy(() -> verify(DocumentFixtures.docx(Map.of("word/_rels/document.xml.rels", relationships)),
-            DocumentFixtures.DOCX)).isInstanceOf(InvalidInputError.class);
+            DocumentFixtures.DOCX)).isInstanceOf(InvalidInputError.class).hasMessage(UploadContentPolicy.UNSAFE_WORD);
     }
 
     @Test
     @DisplayName("non-Word ZIPs and highly compressed DOCX packages are refused")
     void refusesNonWordZipAndZipBomb() {
         assertThatThrownBy(() -> verify(DocumentFixtures.zip(Map.of("hello.txt", "hello")), DocumentFixtures.DOCX))
-            .isInstanceOf(InvalidInputError.class);
+            .isInstanceOf(InvalidInputError.class).hasMessage(UploadContentPolicy.MISMATCH);
         assertThatThrownBy(() -> verify(DocumentFixtures.docx(Map.of("word/large.xml", "a".repeat(2_000_000))),
             DocumentFixtures.DOCX)).isInstanceOf(InvalidInputError.class);
+    }
+
+    @Test
+    @DisplayName("a valid OPC package with a non-Word main part gets the format-mismatch message")
+    void nonWordPackageIsAFormatMismatch() {
+        String types = """
+            <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+              <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+              <Override PartName="/word/document.xml"
+                ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+            </Types>
+            """;
+        assertThatThrownBy(() -> verify(DocumentFixtures.docx(Map.of("[Content_Types].xml", types)),
+            DocumentFixtures.DOCX)).isInstanceOf(InvalidInputError.class).hasMessage(UploadContentPolicy.MISMATCH);
     }
 
     @Test

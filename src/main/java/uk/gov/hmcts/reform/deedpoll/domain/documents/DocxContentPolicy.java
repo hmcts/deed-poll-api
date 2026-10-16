@@ -24,8 +24,8 @@ final class DocxContentPolicy {
     private static final int MAX_ENTRIES = 1000;
     private static final double MIN_RATIO = 0.01;
 
-    static {
-        // POI bounds are process-wide. Set once, never weaken them around an individual request.
+    static void configureParserLimits() {
+        // Called during application startup, before reader beans; never around an individual request.
         ZipSecureFile.setMinInflateRatio(MIN_RATIO);
         ZipSecureFile.setMaxEntrySize(MAX_ENTRY_BYTES);
         ZipSecureFile.setMaxFileCount(MAX_ENTRIES);
@@ -57,7 +57,7 @@ final class DocxContentPolicy {
     private static void checkPart(PackagePart part) throws InvalidFormatException {
         String name = part.getPartName().getName().toLowerCase(Locale.ROOT);
         String type = part.getContentType().toLowerCase(Locale.ROOT);
-        require(!name.endsWith("/vbaproject.bin") && !name.contains("/activex/")
+        requireSafe(!name.endsWith("/vbaproject.bin") && !name.contains("/activex/")
             && !name.startsWith("/word/embeddings/") && !type.contains("vbaproject")
             && !type.contains("macroenabled") && !type.contains("activex"));
         if (!part.isRelationshipPart()) {
@@ -69,7 +69,7 @@ final class DocxContentPolicy {
 
     private static void checkRelationship(PackageRelationship relationship) {
         String type = relationship.getRelationshipType();
-        require(relationship.getTargetMode() != TargetMode.EXTERNAL
+        requireSafe(relationship.getTargetMode() != TargetMode.EXTERNAL
             || !(type.endsWith("/attachedTemplate") || type.endsWith("/oleObject") || type.endsWith("/frame")));
     }
 
@@ -101,5 +101,16 @@ final class DocxContentPolicy {
         if (!accepted) {
             throw new IllegalArgumentException("Unsupported document package");
         }
+    }
+
+    private static void requireSafe(boolean accepted) {
+        if (!accepted) {
+            throw new UnsafeContent();
+        }
+    }
+
+    /** A known forbidden feature, distinct from a malformed or non-Word package. */
+    static final class UnsafeContent extends RuntimeException {
+        private static final long serialVersionUID = 1L;
     }
 }

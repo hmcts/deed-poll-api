@@ -148,7 +148,8 @@ no prefix, host case, path or slash leniency. Configure the issuer exactly as to
 - **Upload content checks precede persistence.** Keep `UploadContentPolicy.verify` in both `DocumentService`
   and `StagingPolicy`; new admission paths must not bypass it. PDF/JPEG/PNG/TIFF/DOCX are accepted declared
   types, not legacy `.doc`. Signatures and the PDF active-name tripwire are not antivirus or full parsing.
-  DOCX package checks use bounded expansion and process-wide POI limits; never weaken them per request.
+  DOCX package checks use bounded expansion and process-wide POI limits, set by `DocumentParserConfiguration`
+  before reader beans are created at startup; never weaken them per request or defer them to a first upload.
   Log only fixed refusal categories, not names, bytes or parser diagnostics. See README for the exact limits.
 - **The CDAM hash token is transient.** Keep it only while `Uploaded`/`AttachUncertain`; never log, project or
   publish it. An uncertain upload gets exactly one fresh upload within the same request (two sends total), then
