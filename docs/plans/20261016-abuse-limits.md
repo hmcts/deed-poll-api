@@ -128,16 +128,16 @@ container-backed test on `AbstractPostgresContainerTest`.
 **Files:** a `RateLimitFilter` and a `RateLimitProperties` record; `SecurityConfiguration`; `application.yaml`; the
 chart's `values.yaml`; the OpenAPI document.
 
-- [ ] Each of decision 1's six routes counts in its bucket; an unfiltered list read does not; `q` and `where` each
+- [x] Each of decision 1's six routes counts in its bucket; an unfiltered list read does not; `q` and `where` each
   make a list read count.
-- [ ] `enforce`: request N+1 gets 429, `Retry-After` within the window, the fixed `ApiError` wording. `observe`: 200
+- [x] `enforce`: request N+1 gets 429, `Retry-After` within the window, the fixed `ApiError` wording. `observe`: 200
   and decision 6's log line. `off`: nothing counted.
-- [ ] An over-budget upload is refused **without** the multipart being parsed: assert the controller was never
+- [x] An over-budget upload is refused **without** the multipart being parsed: assert the controller was never
   reached and no part was read.
-- [ ] The CCD persistence chain is unaffected. A token with no `sub` uses the shared bucket.
-- [ ] A test fails if a bucket's route pattern matches no controller mapping.
-- [ ] OpenAPI publishes 429 on the six operations, and nowhere else.
-- [ ] Mark completed
+- [x] The CCD persistence chain is unaffected. A token with no `sub` uses the shared bucket.
+- [x] A test fails if a bucket's route pattern matches no controller mapping.
+- [x] OpenAPI publishes 429 on the six operations, and nowhere else.
+- [x] Mark completed (build green: 4353 unit, 20 integration, 0 failed; the OpenAPI diff against the pre-change document is exactly six 429 responses with Retry-After; buckets and routes in `RateLimitBucket`; 429 published by `OpenAPIRateLimits`)
 
 ### Task 3: The in-flight upload cap
 

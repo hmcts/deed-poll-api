@@ -288,6 +288,28 @@ deedpoll:
       jurisdiction: ${ROLE_ASSIGNMENT_JURISDICTION:DEEDPOLL}
       # The ctsc-team-leader authorisation that makes a Delivery Manager. Empty until RD allocates it: none from AM.
       gazette-skill: ${ROLE_ASSIGNMENT_GAZETTE_SKILL:}
+  rate-limit:
+    # Per-identity budgets on search, email preview, email send and upload (RateLimitFilter, abuse-limits plan).
+    # - `off` counts nothing; `observe` counts and logs "rate_limit bucket=... mode=observe ..." for each request
+    #   `enforce` would refuse, and refuses nothing; `enforce` answers those with 429 and Retry-After.
+    # - `observe` until AAT business testing has shown per-subject peaks, the limits are tuned, and the switch is
+    #   made environment by environment, AAT first.
+    mode: ${RATE_LIMIT_MODE:observe}
+    # Fixed windows, counted per IDAM subject in deedpoll_request_budget (V37). A search is a case list read carrying
+    # `q` or `where`; an unfiltered list read is never counted.
+    buckets:
+      search:
+        limit: ${RATE_LIMIT_SEARCH_LIMIT:120}
+        window: ${RATE_LIMIT_SEARCH_WINDOW:1m}
+      email-preview:
+        limit: ${RATE_LIMIT_EMAIL_PREVIEW_LIMIT:30}
+        window: ${RATE_LIMIT_EMAIL_PREVIEW_WINDOW:10m}
+      email-send:
+        limit: ${RATE_LIMIT_EMAIL_SEND_LIMIT:20}
+        window: ${RATE_LIMIT_EMAIL_SEND_WINDOW:1h}
+      upload:
+        limit: ${RATE_LIMIT_UPLOAD_LIMIT:30}
+        window: ${RATE_LIMIT_UPLOAD_WINDOW:10m}
   gazette:
     # Enables provisioned previews and new confirmed sends. Recovery runs independently while disabled.
     enabled: ${GAZETTE_ENABLED:false}
