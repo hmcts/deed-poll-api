@@ -546,7 +546,10 @@ class CaseworkerDocumentControllerTest extends AbstractPostgresContainerTest {
             authorised(get(fileUrl(caseId, documentId)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION,
-                    "inline; filename=\"" + filename + "\""));
+                    "inline; filename=\"" + filename + "\""))
+                .andExpect(header().stringValues("X-Content-Type-Options", "nosniff"))
+                .andExpect(header().stringValues("Content-Security-Policy", "default-src 'none'; sandbox"))
+                .andExpect(header().stringValues(HttpHeaders.CACHE_CONTROL, "no-store"));
         }
 
         @ParameterizedTest(name = "{0} is served as an attachment")
@@ -563,7 +566,10 @@ class CaseworkerDocumentControllerTest extends AbstractPostgresContainerTest {
             authorised(get(fileUrl(caseId, documentId)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION,
-                    "attachment; filename=\"" + filename + "\""));
+                    "attachment; filename=\"" + filename + "\""))
+                .andExpect(header().stringValues("X-Content-Type-Options", "nosniff"))
+                .andExpect(header().stringValues("Content-Security-Policy", "default-src 'none'; sandbox"))
+                .andExpect(header().stringValues(HttpHeaders.CACHE_CONTROL, "no-store"));
         }
 
         @Test

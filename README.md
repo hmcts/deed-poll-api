@@ -530,6 +530,14 @@ it as hygiene rather than as a security control. A narrower list decides which t
 download is served under `Content-Security-Policy: default-src 'none'; sandbox`, because a PDF is an
 active-content format and a browser PDF viewer runs embedded scripts.
 
+Download headers are independent of the backing store: filesystem and CDAM responses both carry
+`X-Content-Type-Options: nosniff` and `Cache-Control: no-store` alongside that CSP. Disposition follows
+the recorded MIME type: PDF, JPEG and PNG types are inline; Word and TIFF types are attachments.
+This is not verification of the actual file contents: uploads currently record the client's declared type.
+Regression tests exercise all six declared upload types against the real local store and the CDAM WireMock
+journey, including conflicting upstream upload metadata and download headers. These local tests do not
+establish live CDAM onboarding or malware scanning.
+
 ## Plugins
 
 The project contains the following plugins:

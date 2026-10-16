@@ -1,5 +1,16 @@
 # Resume state — where the next session picks up
 
+**Download invariants, 2026-10-16 (OWASP Plan 05 Task 5):** tests now assert `nosniff`, the inert sandbox
+CSP and `no-store` for all six allowed upload types through both the real filesystem store and the CDAM
+WireMock upload/attach/download journey. Disposition follows the recorded MIME type: PDF/JPEG/PNG types
+are inline; Word/TIFF types are attachments. This does not verify file contents. Conflicting CDAM upload
+metadata and download headers do not override the recorded client metadata or the API's response policy.
+A separate invariant test checks that the inline allowlist is a subset of upload types; the request-based
+tests pin Word/TIFF attachment behaviour. Production code is unchanged.
+Baseline at `474e409`: 4,305 main-suite + 20 integration tests. Local `cleanTest build`:
+4,312 + 20, zero failures/errors/skips, Checkstyle clear (local ARM launcher workaround only).
+No live CDAM calls or separate `cftlibTest` run; live download verification remains the onboarding gate.
+
 **Filesystem storage guard, 2026-10-16 (OWASP Plan 05 Task 4):** startup now refuses filesystem storage unless
 `ENVIRONMENT_NAME` is exactly `aat`, `preview`, `demo`, `ithc` or `perftest`, or is empty with `CLUSTER_NAME`
 absent for local use. There is no profile bypass or override switch. The chart supplies the name, with an
