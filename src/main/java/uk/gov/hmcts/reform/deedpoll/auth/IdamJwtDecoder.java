@@ -107,12 +107,12 @@ public class IdamJwtDecoder implements JwtDecoder {
      * The discovered issuer first, then the configured additional ones, without repeats.
      *
      * <p>A {@code List} rather than a {@code Set}, because {@code Set.of(...).contains(null)} throws where this
-     * must answer false -- though {@link #issuerValidator} checks for null first anyway.
+     * must answer false.
      */
     private List<String> trustedIssuers(IdamMetadata metadata) {
-        return List.copyOf(Stream.concat(Stream.of(metadata.issuer()), properties.additionalIssuers().stream())
-                               .distinct()
-                               .toList());
+        return Stream.concat(Stream.of(metadata.issuer()), properties.additionalIssuers().stream())
+            .distinct()
+            .toList();
     }
 
     /**
