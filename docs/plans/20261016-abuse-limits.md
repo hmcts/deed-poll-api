@@ -155,10 +155,10 @@ chart's `values.yaml`; the OpenAPI document.
 
 ### Task 5: The statement timeout on the list read
 
-- [ ] Against the Testcontainers Postgres: a forced slow list query (a 1 ms timeout, or a test seam) fails through the
+- [x] Against the Testcontainers Postgres: a forced slow list query (a 1 ms timeout, or a test seam) fails through the
   existing unavailable path, and the next request on the same connection is unaffected (the setting is
   transaction-local).
-- [ ] Mark completed
+- [x] Mark completed (build green: 4375 unit, 20 integration, 0 failed; `CaseListStatementTimeout` sets it at the start of the paged `findDeedPolls`, covering the page, its count and the reference match; the "existing unavailable path" is Boot's default 500, since no handler maps database failures, so no handler or status was added; the slow query is forced by a second connection holding an ACCESS EXCLUSIVE lock; `LIST_STATEMENT_TIMEOUT` is not in the chart; no OpenAPI change)
 
 ### Task 6: Documentation and handoff
 

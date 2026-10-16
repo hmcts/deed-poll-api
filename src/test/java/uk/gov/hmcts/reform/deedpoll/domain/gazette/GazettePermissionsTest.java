@@ -7,6 +7,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseListStatementTimeout;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseQuery;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
@@ -69,7 +70,8 @@ class GazettePermissionsTest {
         CurrentUser caller = CurrentUser.currentUser(roles, "Staff", "subject");
         DeedPollRepository cases = mock(DeedPollRepository.class);
         ReferenceNumberService references = mock(ReferenceNumberService.class);
-        DeedPollService service = new DeedPollService(cases, references, mock(AuditTrail.class));
+        DeedPollService service = new DeedPollService(cases, references, mock(AuditTrail.class),
+            mock(CaseListStatementTimeout.class));
         ListFilters.ListFilter filter = ListFilters.filterFor("readyForPublication");
         CaseQuery query = CaseQuery.parse(List.of("type:is:Adult"));
 

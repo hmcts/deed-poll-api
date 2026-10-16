@@ -313,6 +313,11 @@ deedpoll:
     # Uploads one pod admits at once, each up to 25 MB in memory. Refused with 429 and Retry-After: 5 in every mode,
     # `off` included, because it protects the heap rather than throughput.
     upload-in-flight: ${RATE_LIMIT_UPLOAD_IN_FLIGHT:4}
+  list:
+    # The longest one statement of the case list read may run (CaseListStatementTimeout, abuse-limits plan). Set
+    # transaction-locally, so no other query on the connection inherits it. Over it, the read fails as any failed
+    # database read does. Below 1ms refuses to start, because Postgres reads 0 as no timeout.
+    statement-timeout: ${LIST_STATEMENT_TIMEOUT:5s}
   gazette:
     # Enables provisioned previews and new confirmed sends. Recovery runs independently while disabled.
     enabled: ${GAZETTE_ENABLED:false}
