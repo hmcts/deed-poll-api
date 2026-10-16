@@ -61,17 +61,17 @@ public final class UploadPolicy {
     /**
      * PDF, the common scan formats, and Word for documents produced by the court.
      *
-     * <p><strong>Hygiene, not security.</strong> This is the {@code Content-Type} the client puts on the
+     * <p>This is the {@code Content-Type} the client puts on the
      * multipart part, which a client can simply lie about. It stops an accidental upload of the wrong thing
-     * and keeps obvious executables out; it does not verify that the bytes are what they claim. Real
-     * inspection and virus scanning belong with CDAM in plan 03.
+     * and keeps obvious executables out. {@link UploadContentPolicy} additionally checks signatures and
+     * rejects encrypted/active documents at upload and staging; malware scanning still belongs with CDAM.
+     * Legacy binary Word (.doc) is not accepted (Steve's decision, 2026-10-16).
      */
     public static final Set<String> ALLOWED_UPLOAD_MIME_TYPES = Set.of(
         "application/pdf",
         "image/jpeg",
         "image/png",
         "image/tiff",
-        "application/msword",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
 
     private UploadPolicy() {

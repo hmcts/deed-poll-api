@@ -83,7 +83,7 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
 
     /** The reference's `file` fixture. */
     private static final UploadedFile FILE =
-        UploadedFile.of("pdf".getBytes(StandardCharsets.UTF_8), "birth.pdf", "application/pdf");
+        UploadedFile.of("%PDF-1.4".getBytes(StandardCharsets.UTF_8), "birth.pdf", "application/pdf");
 
     /**
      * Blobs go to a throwaway directory, never to the developer's own {@code data/documents}.
@@ -394,7 +394,7 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
         assertThat(saved.getStorageKey()).isNotBlank();
         assertThat(saved.getOriginalName()).isEqualTo("birth.pdf");
         assertThat(saved.getMimeType()).isEqualTo("application/pdf");
-        assertThat(saved.getSizeBytes()).isEqualTo(3);
+        assertThat(saved.getSizeBytes()).isEqualTo(FILE.size());
         verify(store).save(new DocumentToStore(
             FILE.content(), "birth.pdf", "application/pdf", new DocumentOwner(caseId, Optional.empty())));
     }

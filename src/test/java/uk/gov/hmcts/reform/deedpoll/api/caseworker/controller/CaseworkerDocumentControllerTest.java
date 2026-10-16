@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMultipartHttpServletRequestBuilder;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
+import uk.gov.hmcts.reform.deedpoll.support.DocumentFixtures;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.PatchField;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
@@ -433,19 +434,38 @@ class CaseworkerDocumentControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.errors[0].field").value("file"));
         }
 
+        @ParameterizedTest
+        @CsvSource({
+            "application/pdf, MZ renamed executable",
+            "application/pdf, %PDF-1.7 /Encrypt 1 0 R",
+            "application/pdf, %PDF-1.7 /JavaScript 1 0 R",
+            "image/png, <svg/>",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document, not a Word package",
+            "application/msword, legacy Word"
+        })
+        @DisplayName("content refusals are 400s on file before any blob or document row is stored")
+        void refusesUnsafeContentBeforeStorage(String mimeType, String contents) throws Exception {
+            authorised(multipart("/caseworker/cases/" + newCase() + "/documents")
+                .file(new MockMultipartFile("file", "evidence", mimeType, contents.getBytes(StandardCharsets.UTF_8)))
+                .param("documentTypeId", newType()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("file"));
+            assertThat(documents.count()).isZero();
+            verify(store, never()).save(any());
+        }
+
         @ParameterizedTest(name = "accepts {0}")
         @CsvSource({
             "application/pdf, a.pdf",
             "image/jpeg, a.jpg",
             "image/png, a.png",
             "image/tiff, a.tif",
-            "application/msword, a.doc",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document, a.docx"
         })
         @DisplayName("accepts every type the upload policy allows")
         void acceptsEveryAllowedType(String mimeType, String filename) throws Exception {
             authorised(multipart("/caseworker/cases/" + newCase() + "/documents")
-                .file(new MockMultipartFile("file", filename, mimeType, PDF_BYTES))
+                .file(new MockMultipartFile("file", filename, mimeType, DocumentFixtures.bytes(mimeType)))
                 .param("documentTypeId", newType()))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.mimeType").value(mimeType));
@@ -760,10 +780,17 @@ class CaseworkerDocumentControllerTest extends AbstractPostgresContainerTest {
      * exactly what the header-sanitising tests are about.
      */
     private String uploaded(String caseId, String filename, String mimeType) {
-        return documentService
-            .uploadDocument(caseId, newType(), UploadedFile.of(PDF_BYTES, filename, mimeType),
+        // Retain the download regression for historical .doc metadata without admitting new legacy uploads.
+        String uploadType = "application/msword".equals(mimeType) ? DocumentFixtures.DOCX : mimeType;
+        byte[] bytes = "application/pdf".equals(uploadType) ? PDF_BYTES : DocumentFixtures.bytes(uploadType);
+        String id = documentService
+            .uploadDocument(caseId, newType(), UploadedFile.of(bytes, filename, uploadType),
                 Optional.empty(), Optional.empty())
             .getId();
+        if (!uploadType.equals(mimeType)) {
+            setMimeType(caseId, id, mimeType);
+        }
+        return id;
     }
 
     private void setMimeType(String caseId, String documentId, String mimeType) {

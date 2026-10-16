@@ -308,6 +308,7 @@ public class DocumentService {
         if (file == null) {
             throw new InvalidInputError("Select a file to upload");
         }
+        UploadContentPolicy.verify(file);
         DocumentUpload upload = DocumentUpload.of(deedPollId, documentTypeId, file, name, direction);
         RemoteDocumentUploads remote = remoteUploads.getIfAvailable();
         if (remote != null) {
