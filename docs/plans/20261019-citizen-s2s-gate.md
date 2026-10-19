@@ -120,7 +120,7 @@ code. The `cleanTest` in the build command stops a second run from reporting UP-
 Files: `config/SecurityConfiguration.java`, a new `config/CitizenSecurityTest.java` (modelled on
 `CcdPersistenceSecurityTest`), and `config/StaffAccessRulesTest.java`.
 
-- [ ] Write `CitizenSecurityTest` first. Boot the whole context (profiles `config-gen`, `test`, no database), with
+- [x] Write `CitizenSecurityTest` first. Boot the whole context (profiles `config-gen`, `test`, no database), with
       `StubIdam` and `StubS2s`, and an `@Import`ed stand-in controller mapped at `/citizen/stand-in` (GET and POST)
       that echoes 200. Cases:
   - no `ServiceAuthorization` → **401**, and the stand-in is not reached
@@ -133,16 +133,16 @@ Files: `config/SecurityConfiguration.java`, a new `config/CitizenSecurityTest.ja
   - an unknown path under `/citizen/**` with no S2S → **401**, not 404 (authorisation before routing)
   - **Unchanged elsewhere:** `/caseworker/…` with a `deed_poll_web` S2S token and no bearer → 401;
     `/ccd-persistence/…` with a `deed_poll_web` token → 403, its own allowlist; `/health` still public
-- [ ] Run it and record which cases fail before the chain exists (expect: the S2S-only `deed_poll_web` case and the
+- [x] Run it and record which cases fail before the chain exists (expect: the S2S-only `deed_poll_web` case and the
       wrong-service cases. Today an IDAM bearer admits and S2S is ignored).
-- [ ] Implement `citizenFilterChain` per decisions 1–7. Add `CITIZEN_PATH` and `CITIZEN_CALLERS` beside the CCD
+- [x] Implement `citizenFilterChain` per decisions 1–7. Add `CITIZEN_PATH` and `CITIZEN_CALLERS` beside the CCD
       constants, each with a Javadoc saying why.
-- [ ] In `StaffAccessRulesTest.everyRouteIsInAStaffArea`, admit routes under `/citizen/` (decision 8). Add a test
+- [x] In `StaffAccessRulesTest.everyRouteIsInAStaffArea`, admit routes under `/citizen/` (decision 8). Add a test
       that `CITIZEN_CALLERS` is exactly `["deed_poll_web"]`, so widening it is a reviewed change.
-- [ ] **Mutation check, then restore:** temporarily add `"xui_webapp"` to `CITIZEN_CALLERS` and confirm the 403 case
+- [x] **Mutation check, then restore:** temporarily add `"xui_webapp"` to `CITIZEN_CALLERS` and confirm the 403 case
       fails. Temporarily remove the `@Order(2)` chain bean and confirm the S2S-only and bearer-only cases fail. Record
       both in Execution notes. Restore before committing.
-- [ ] Run the validation commands. Record counts.
+- [x] Run the validation commands. Record counts.
 
 ### Task 2: Words and the cross-reference
 
@@ -171,6 +171,23 @@ Files: `config/SecurityConfiguration.java` (Javadoc only), `config/ServiceAuthCo
 Planning 2026-10-19 (Fern, with Steve). Base `origin/master` `93c2dd3`. Baseline measured before execution: see
 Validation Commands. `./gradlew build` with Checkstyle included fails on the baseline at `checkstyleMain`/
 `checkstyleFunctionalTest` (worker SIGILL), an environment fault that the direct Checkstyle run replaces.
+
+Task 1, 2026-10-19:
+- Red, before the chain: `CitizenSecurityTest` 12 tests, 8 failed. deed_poll_web S2S-only GET/POST and unprefixed
+  gave 401; `xui_webapp` and `deed_poll_api` gave 401, not 403; a caseworker bearer alone gave 200; S2S plus
+  bearer gave 200 as the IDAM subject; an unknown path with deed_poll_web gave 401, not 404. `/health` gave 503:
+  config-gen has no database, so the case now asserts "not 401/403" (the chain let the probe answer). Passing
+  already: no S2S, unverifiable S2S, `/caseworker` and `/judicial` with S2S only, `/ccd-persistence` 403.
+- Green: `citizenFilterChain` (`@Order(2)`), `CITIZEN_PATH` and `CITIZEN_CALLERS`. The filter is placed before
+  `AuthorizationFilter`, and `permitAll()` carries the comment. The chain has no resource server. Logging handlers
+  are set, but the S2S filter answers first.
+  `StaffAccessRulesTest` admits `/citizen/` routes and pins `CITIZEN_CALLERS` to `["deed_poll_web"]`.
+- Mutation 1, `CITIZEN_CALLERS` plus `"xui_webapp"`: the `xui_webapp` 403 case failed (200), and so did the pin test.
+  Mutation 2, `@Bean` removed from `citizenFilterChain`: 7 of 12 failed, including S2S-only (401) and
+  bearer-only (200). Both were restored.
+- Validation: the focused run had 251 tests in 40 classes; the build had 4,539 unit tests in 496 classes plus
+  22 integration tests in 4. All had 0 failures, 0 errors and 0 skipped. Direct Checkstyle reported 0 WARN and
+  0 ERROR, and `git diff --check` was clean.
 
 ## Post-Completion
 

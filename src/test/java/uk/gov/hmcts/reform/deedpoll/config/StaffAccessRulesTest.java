@@ -44,6 +44,7 @@ class StaffAccessRulesTest {
     private static final String CASEWORKER_PATH = "/caseworker/no-such-route";
     private static final String JUDICIAL_PATH = "/judicial/no-such-route";
     private static final String APPLICATION_PACKAGE = "uk.gov.hmcts.reform.deedpoll";
+    private static final String CITIZEN_PREFIX = "/citizen/";
 
     private static final StubIdam IDAM = new StubIdam();
 
@@ -76,7 +77,7 @@ class StaffAccessRulesTest {
     }
 
     @Test
-    @DisplayName("every route this service maps is inside a staff area, apart from the public root and the allowlist")
+    @DisplayName("every route is inside a staff area, the citizen namespace, the public root or the allowlist")
     void everyRouteIsInAStaffArea() {
         List<String> patterns = applicationMappings().stream()
             .flatMap(mapping -> mapping.getPatternValues().stream())
@@ -85,9 +86,12 @@ class StaffAccessRulesTest {
         assertThat(patterns).as("the application's routes").isNotEmpty()
             .anyMatch(pattern -> pattern.startsWith(StaffArea.CASEWORKER.prefix() + "/"))
             .anyMatch(pattern -> pattern.startsWith(StaffArea.JUDICIAL.prefix() + "/"));
+        // /citizen/** has its own S2S-only chain, so a route there is gated by where it lives, not by a StaffArea.
         assertThat(patterns)
-            .as("a route outside every StaffArea is open to any IDAM token: add it to StaffArea or the allowlist")
+            .as("a route outside every StaffArea and /citizen/ is open to any IDAM token: add it to StaffArea, "
+                + "move it under /citizen/, or add it to the allowlist")
             .allMatch(pattern -> "/".equals(pattern) || StaffArea.of(pattern).isPresent()
+                || pattern.startsWith(CITIZEN_PREFIX)
                 || List.of(SecurityConfiguration.ANY_AUTHENTICATED_PATHS).contains(pattern));
     }
 
@@ -95,6 +99,13 @@ class StaffAccessRulesTest {
     @DisplayName("the routes any authenticated caller may reach are exactly /me, so another is a reviewed change")
     void anyAuthenticatedPathsAreExactlyMe() {
         assertThat(SecurityConfiguration.ANY_AUTHENTICATED_PATHS).containsExactly("/me");
+    }
+
+    @Test
+    @DisplayName("the services that may call /citizen/** are exactly deed_poll_web, so another is a reviewed change")
+    void citizenCallersAreExactlyTheWebApp() {
+        assertThat(SecurityConfiguration.CITIZEN_CALLERS).containsExactly("deed_poll_web");
+        assertThat(SecurityConfiguration.CITIZEN_PATH).isEqualTo(CITIZEN_PREFIX + "**");
     }
 
     /**

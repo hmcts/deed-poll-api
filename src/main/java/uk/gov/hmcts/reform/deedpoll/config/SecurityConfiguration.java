@@ -10,6 +10,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -18,7 +19,9 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
 import org.springframework.security.oauth2.server.resource.web.access.BearerTokenAccessDeniedHandler;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
+import org.springframework.security.web.access.AccessDeniedHandlerImpl;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
@@ -143,6 +146,23 @@ public class SecurityConfiguration {
     static final List<String> CCD_PERSISTENCE_CALLERS = List.of("ccd_data");
 
     /**
+     * The namespace {@code deed-poll-web} calls on behalf of an anonymous citizen. {@link #citizenFilterChain} admits
+     * it for {@link #CITIZEN_CALLERS} on their S2S token alone, and nobody else, before any endpoint exists here, so
+     * the first one is protected by where it lives.
+     */
+    static final String CITIZEN_PATH = "/citizen/**";
+
+    /**
+     * The only services that may call {@link #CITIZEN_PATH}: the citizen frontend, and nothing else.
+     *
+     * <p>A constant for {@link #CCD_PERSISTENCE_CALLERS}'s reason: it belongs to one path, and widening it is a
+     * reviewed code change, which {@code StaffAccessRulesTest} pins. This service's own name is absent. Nothing here
+     * calls its own citizen surface, so a {@code deed_poll_api} token at this path is a mistake or a way round the
+     * frontend.
+     */
+    static final List<String> CITIZEN_CALLERS = List.of("deed_poll_web");
+
+    /**
      * The routes the CCD SDK maps that nobody may call.
      *
      * <p>{@code /callbacks/**} is the generator's callback controller, which a decentralised case type does not use.
@@ -246,6 +266,60 @@ public class SecurityConfiguration {
                     .decoder(jwtDecoder)
                     .jwtAuthenticationConverter(new CcdCallerAuthenticationConverter(
                         userInfoClient, DeedPollRoleMapping.from(ccdProperties)))))
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .csrf(AbstractHttpConfigurer::disable)
+            .httpBasic(AbstractHttpConfigurer::disable)
+            .formLogin(AbstractHttpConfigurer::disable)
+            .logout(AbstractHttpConfigurer::disable)
+            .build();
+    }
+
+    /**
+     * {@code /citizen/**}, and nothing else: {@code deed-poll-web}'s S2S token, and no user at all.
+     *
+     * <p>{@link #ccdPersistenceFilterChain}'s service half without its user half. Ordered after it and ahead of
+     * {@link #securityFilterChain}, which must come last; the two matchers do not overlap.
+     *
+     * <ul>
+     *   <li><strong>The service is the gate.</strong> {@link ServiceAuthFilter} answers a missing or unverifiable
+     *       {@code ServiceAuthorization} with 401, and a verified service outside {@link #CITIZEN_CALLERS} with 403,
+     *       before the authorisation filter runs. Built here and never declared as a bean, for the reason
+     *       {@link #ccdPersistenceFilterChain} gives.</li>
+     *   <li><strong>No user.</strong> The citizen is anonymous to this service, so there is no resource server: the
+     *       chain never reads {@code Authorization}. An IDAM token on its own is the 401 a missing S2S token gets, and
+     *       one sent beside {@code deed-poll-web}'s is ignored, never resolved into a caller.</li>
+     * </ul>
+     *
+     * <p>{@code RateLimitFilter} is not here: it keys on an IDAM {@code sub}, which this chain has none of. Citizen
+     * rate limiting belongs to the plan that adds the endpoints.
+     *
+     * <p>The S2S filter's refusals answer before Spring's exception handling and are not logged by
+     * {@code SecurityEvents}, as on {@code /ccd-persistence/**}; the library logs its own at INFO and WARN. The
+     * logging handlers are set all the same, so a later rule that refuses inside the chain is logged without anyone
+     * remembering to.
+     */
+    @Bean
+    @Order(2)
+    @SuppressWarnings("PMD.SignatureDeclareThrowsException")
+    public SecurityFilterChain citizenFilterChain(HttpSecurity http, ServiceAuthorisationApi serviceAuthorisationApi)
+        throws Exception {
+
+        ServiceAuthFilter serviceAuthFilter = new ServiceAuthFilter(
+            new ServiceAuthTokenValidator(serviceAuthorisationApi), CITIZEN_CALLERS);
+
+        return http
+            // A path-pattern matcher stated outright, for the reason ccdPersistenceFilterChain gives.
+            .securityMatcher(PathPatternRequestMatcher.withDefaults().matcher(CITIZEN_PATH))
+            .addFilterBefore(serviceAuthFilter, AuthorizationFilter.class)
+            .authorizeHttpRequests(requests -> requests
+                // Not an open door: a request reaches this point only once serviceAuthFilter has verified its S2S
+                // token and found the service in CITIZEN_CALLERS. Everything else was answered 401 or 403 above.
+                .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
+                .anyRequest().permitAll())
+            .exceptionHandling(errors -> errors
+                .authenticationEntryPoint(
+                    new LoggingAuthenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+                .accessDeniedHandler(new LoggingAccessDeniedHandler(new AccessDeniedHandlerImpl())))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .csrf(AbstractHttpConfigurer::disable)
             .httpBasic(AbstractHttpConfigurer::disable)
