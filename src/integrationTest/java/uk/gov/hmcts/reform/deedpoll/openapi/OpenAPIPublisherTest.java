@@ -454,6 +454,18 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .as("the pool still answers with its own envelope")
             .isEqualTo("#/components/schemas/JudicialPoolResponse");
 
+        // The application a judge reads (2026-10-19): its witnesses and documents, and none of the case's
+        // identity or payment data. The full list is JudicialApplicationViewTest's; this is that it is published.
+        JsonNode application = spec.at("/components/schemas/JudicialApplicationView/properties");
+        assertThat(application.fieldNames()).toIterable()
+            .contains("privacy", "applicantEmail", "witnesses", "documents")
+            .doesNotContain("id", "referencenumber", "feeReference", "refundAmount", "refundReference");
+        assertThat(spec.at("/components/schemas/JudicialWitness/properties").fieldNames()).toIterable()
+            .doesNotContain("id");
+        assertThat(spec.at("/components/schemas/JudicialDocument/properties").fieldNames()).toIterable()
+            .contains("id", "documentType", "uploadedOn")
+            .doesNotContain("storageKey", "hasFile");
+
         // And the subject columns are nowhere in the document at all, asserted over the whole of it rather than
         // field by field: the two names are searched as text, so a schema this test does not know about cannot
         // publish them either.
@@ -1093,7 +1105,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
         // And no judicial schema publishes any of it, asserted over the whole document: a judge decided the
         // non-publication request and has no part in what the applicant then chose.
-        for (String judicial : List.of("JudicialReferralSummary", "JudicialReferralDetail", "JudicialCaseView")) {
+        List<String> judicialSchemas =
+            List.of("JudicialReferralSummary", "JudicialReferralDetail", "JudicialApplicationView");
+        for (String judicial : judicialSchemas) {
             JsonNode properties = spec.at("/components/schemas/" + judicial + "/properties");
             assertThat(properties.isObject()).as("%s is published at all", judicial).isTrue();
             List<String> names = new ArrayList<>();

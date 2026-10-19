@@ -15,11 +15,13 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.IdamClaims;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
@@ -155,6 +157,8 @@ class JudicialSecurityTest {
     private ReferralRepository referrals;
     private ReferralService transitions;
     private NoteService notes;
+    private WitnessService witnesses;
+    private DocumentService documents;
     private JudicialReferralService service;
 
     @BeforeEach
@@ -162,7 +166,9 @@ class JudicialSecurityTest {
         referrals = mock(ReferralRepository.class);
         transitions = mock(ReferralService.class);
         notes = mock(NoteService.class);
-        service = new JudicialReferralService(referrals, transitions, notes);
+        witnesses = mock(WitnessService.class);
+        documents = mock(DocumentService.class);
+        service = new JudicialReferralService(referrals, transitions, notes, witnesses, documents);
 
         // An empty timeline rather than the mock's null: the read wraps the notes in a view, so a judge admitted
         // by the gate has to be able to get all the way to an answer for the refusals to mean anything.
@@ -253,7 +259,7 @@ class JudicialSecurityTest {
     private void verifyNothingHappened() {
         verifyNoInteractions(referrals);
         verifyNoInteractions(transitions);
-        verifyNoInteractions(notes);
+        verifyNoInteractions(notes, witnesses, documents);
     }
 
     /** No transition ran, whatever else the request did on the way to being refused. */

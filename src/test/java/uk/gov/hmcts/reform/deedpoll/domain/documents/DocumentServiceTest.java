@@ -274,6 +274,35 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("readableDocuments lists only the rows a download would serve: no metadata-only, no other store's")
+    void readableDocumentsListsOnlyWhatADownloadWouldServe() {
+        String caseId = storedCase();
+        String typeId = storedType();
+        DeedPollSupportingDocument uploaded = documentService.uploadDocument(caseId, typeId, FILE);
+        documentService.createDocument(caseId,
+            CreateDocumentInput.metadata(DocumentDirection.Incoming, "Not arrived yet", typeId));
+        var remote = documentService.createDocument(caseId,
+            CreateDocumentInput.metadata(DocumentDirection.Incoming, "Held in CDAM", typeId));
+        transactions.executeWithoutResult(status -> {
+            var row = documents.findById(remote.getId()).orElseThrow();
+            UUID cdamId = UUID.randomUUID();
+            row.setStorageState(DocumentStorageState.Attached);
+            row.setCdamDocumentId(cdamId);
+            row.setStorageKey(cdamId.toString());
+            documents.saveAndFlush(row);
+        });
+
+        List<DeedPollSupportingDocument> readable = documentService.readableDocuments(caseId);
+
+        // The judicial list (design decision 2): a row with no file, and one this filesystem store did not
+        // write, would each be a link whose download 404s.
+        assertThat(readable).extracting(DeedPollSupportingDocument::getId).containsExactly(uploaded.getId());
+        assertThat(readable).allSatisfy(document ->
+            assertThat(document.getDocumentType().getName()).isEqualTo("Birth certificate"));
+        assertThatThrownBy(() -> documentService.readableDocuments("nope")).isInstanceOf(NotFoundError.class);
+    }
+
+    @Test
     @DisplayName("findDocument 404s across parents")
     void findDocumentRefusesADocumentBelongingToAnotherCase() {
         String owner = storedCase();

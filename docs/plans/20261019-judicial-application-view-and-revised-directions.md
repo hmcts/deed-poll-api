@@ -137,14 +137,20 @@ is missing, stop and say so rather than editing `build.gradle`. Record the actua
 `JudicialReferralDetail`; `JudicialReferralService` (load witnesses and readable documents with the case);
 `NamespaceSeparationSecurityTest`; the OpenAPI document.
 
-- [ ] Tests (red first):
+- [x] Tests (red first):
   - the record's components are exactly design decision 1's list;
   - none of the excluded names appears on any judicial DTO, by reflection over `api.judicial.dto`;
   - `NamespaceSeparationSecurityTest` still passes;
   - a referral on a private case returns the full view;
   - a document with no attached file is not listed.
-- [ ] Remove `JudicialCaseView` once nothing uses it, and update its Javadoc's reasoning into the new record
+- [x] Remove `JudicialCaseView` once nothing uses it, and update its Javadoc's reasoning into the new record
   (decision 8 superseded by the 2026-10-19 business decisions, and why).
+  2026-10-19: `build` green, `test` 4433 tests, `integration` 20 tests, 0 failures/errors/skipped; `checkstyle.sh`
+  OK; `git diff --check` clean. Documents come from the new `DocumentService.readableDocuments`, which applies
+  `readableDocument`'s file and store checks. The excluded-names test allows `id`, `createdOn` and `createdBy` only
+  where they describe the referral, a note or a document, not the case. **Open question for the business:**
+  `applicantAddress1`/`2`, `representativeAddress1`/`2`, the declaration multiselects, `publishToLondonGazette`,
+  `migratedRecord` and `retainPermanently` are on neither list, so they are left out (see the record's Javadoc).
 
 ### Task 2: Judicial document download, and CASE_VIEWED
 

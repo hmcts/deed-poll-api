@@ -11,7 +11,9 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
@@ -130,13 +132,19 @@ public class JudicialReferralService {
     private final ReferralRepository referrals;
     private final ReferralService referralService;
     private final NoteService notes;
+    private final WitnessService witnesses;
+    private final DocumentService documents;
 
     public JudicialReferralService(ReferralRepository referrals,
                                    ReferralService referralService,
-                                   NoteService notes) {
+                                   NoteService notes,
+                                   WitnessService witnesses,
+                                   DocumentService documents) {
         this.referrals = referrals;
         this.referralService = referralService;
         this.notes = notes;
+        this.witnesses = witnesses;
+        this.documents = documents;
     }
 
     /**
@@ -451,16 +459,23 @@ public class JudicialReferralService {
     }
 
     /**
-     * One referral, its application and that application's timeline -- what every method here answers with.
+     * One referral, its application and that application's timeline, witnesses and readable documents -- what
+     * every method here answers with.
      *
      * <p>The same three things after a claim or a direction as after a read, because the judicial surface has one
      * representation of a referral and a transition's answer is that representation: the screen a judge sees next
      * is the papers, so a leaner write response would only cost them the read they are about to make. The
      * application is passed in rather than re-navigated, since {@code Referral.deedPoll} is {@code LAZY} and the
      * caller has already resolved it join-fetched.
+     *
+     * <p>The documents are {@link DocumentService#readableDocuments} rather than every row, so the list a judge is
+     * shown and the download they then make apply one rule (design decision 2 of the 2026-10-19 plan): a row with
+     * no file, or one another store wrote, is not offered as a link that would 404.
      */
     private JudicialReferralView view(Referral referral, DeedPoll application) {
-        return new JudicialReferralView(referral, application, notes.findNotes(application.getId()));
+        String caseId = application.getId();
+        return new JudicialReferralView(referral, application,
+            notes.findNotes(caseId), witnesses.findWitnesses(caseId), documents.readableDocuments(caseId));
     }
 
     /**

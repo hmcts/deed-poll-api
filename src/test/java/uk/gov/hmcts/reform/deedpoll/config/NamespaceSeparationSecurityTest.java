@@ -18,9 +18,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>Asserted rather than remembered, which is the whole reason the citizen namespace is created empty in plan
  * 01 task 12 and the judicial one has its own DTOs from the start: the three audiences are not the same shape of
  * the same thing. A caseworker sees every field on a case, including the admin-only privacy fields; a citizen
- * sees their own application; a judge sees the deliberately narrow projection they need to direct a referral --
- * the reference, the application type, the old and new names, and the referral's own reasons, notes and urgency,
- * and none of the payment references, internal audit trails or admin-only privacy editability. A DTO reused
+ * sees their own application; a judge sees the application as the 2026-10-19 business decisions widened it --
+ * its details, witnesses and readable documents, and the referral's own reasons, notes and urgency -- and none of
+ * the case id, payment and refund data, or the office's processing record. A DTO reused
  * across two of those is one added field away from exposing the first audience's data to the second, and at the
  * time the reuse looks like sensible deduplication rather than a disclosure.
  *
@@ -60,9 +60,9 @@ class NamespaceSeparationSecurityTest {
      * <p>This is the pair that is a disclosure rather than a tidiness question, and it is why the judiciary got
      * a namespace instead of a role-gated slice of {@code /caseworker/**}: {@code CaseDetailResponse} carries
      * every field a caseworker sees, so a judicial endpoint returning one is one field away from putting the
-     * administrative and privacy fields in front of a judge. The judicial application view is a separate, narrow
-     * projection, and "separate" has to mean a different type rather than an alias -- which is what a bytecode
-     * rule can say and a convention cannot.
+     * payment, refund and processing fields in front of a judge. The judicial application view is a separate
+     * projection with its own field list, and "separate" has to mean a different type rather than an alias --
+     * which is what a bytecode rule can say and a convention cannot.
      */
     @Test
     @DisplayName("no judicial class depends on a caseworker DTO")

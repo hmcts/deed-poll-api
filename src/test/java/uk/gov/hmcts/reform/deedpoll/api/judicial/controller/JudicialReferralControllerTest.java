@@ -30,14 +30,21 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollNoteRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollWitnessRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
@@ -71,7 +78,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * container-free in {@code JudicialReferralServiceTest}, which runs on the Jenkins agent where this class is
  * excluded ({@code INTEGRATION_TESTS_ENABLED=false}, no Docker). What this class adds is the wiring: that
  * {@code /judicial/**} is authenticated by omission, that the role gate is a 403 and an invisible referral a 404,
- * that the narrow projection really is what goes on the wire, and that the mutating read -- the sweep on the pool
+ * that the judicial projection really is what goes on the wire, and that the mutating read -- the sweep on the pool
  * and the claim refresh on the detail -- happens through a real transaction.
  *
  * <p><strong>The two writes are here for a third reason: which status code each of api-2's refusals becomes.</strong>
@@ -172,6 +179,15 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     @Autowired
     private ReferenceCounterRepository referenceCounters;
 
+    @Autowired
+    private DeedPollWitnessRepository witnesses;
+
+    @Autowired
+    private DeedPollSupportingDocumentRepository documents;
+
+    @Autowired
+    private DeedPollSupportingDocumentTypeRepository documentTypes;
+
     @BeforeEach
     void setUp() {
         clearTables();
@@ -187,6 +203,9 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     private void clearTables() {
         referrals.deleteAll();
         notes.deleteAll();
+        witnesses.deleteAll();
+        documents.deleteAll();
+        documentTypes.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
     }
@@ -747,7 +766,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     class ReadReferral {
 
         @Test
-        @DisplayName("returns the referral, the narrow application view and the case's notes")
+        @DisplayName("returns the referral, the application view and the case's notes")
         void returnsTheReferralAndItsApplication() throws Exception {
             String caseId = named(newCase(), "Robin");
             String referralId = raise(caseId, Urgency.Urgent);
@@ -761,7 +780,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.urgency").value(Urgency.Urgent.name()))
                 .andExpect(jsonPath("$.urgencyReason").value("Hearing listed"))
                 .andExpect(jsonPath("$.createdOn").exists())
-                // The narrow projection: which application, what kind, and which name is changing to which.
+                // Which application, what kind, and which name is changing to which.
                 .andExpect(jsonPath("$.application.displayReference").exists())
                 .andExpect(jsonPath("$.application.type").value(DeedPollType.Adult.name()))
                 .andExpect(jsonPath("$.application.oldForename").value("Robin"))
@@ -779,7 +798,38 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("publishes none of the administrative or payment fields, and no entity")
+        @DisplayName("returns a private case's details, witnesses and attached documents, as the business decided")
+        void returnsThePrivateCaseInFull() throws Exception {
+            String caseId = named(newCase(), "Robin");
+            administrative(caseId);
+            witnessed(caseId);
+            String attached = documented(caseId, "Birth certificate, scanned", "stored-blob");
+            documented(caseId, "Not arrived yet", null);
+            String referralId = raise(caseId, Urgency.Normal);
+
+            authorised(get(POOL + "/" + referralId))
+                .andExpect(status().isOk())
+                // Business decisions 1 and 2 of 2026-10-19: contact details and privacy, shown read-only.
+                .andExpect(jsonPath("$.application.privacy").value(Privacy.Private.name()))
+                .andExpect(jsonPath("$.application.applicantEmail").value("applicant@example.com"))
+                .andExpect(jsonPath("$.application.applicantTelephone").value("020 7946 0000"))
+                .andExpect(jsonPath("$.application.dateReceived").exists())
+                // The witness, with no id.
+                .andExpect(jsonPath("$.application.witnesses.length()").value(1))
+                .andExpect(jsonPath("$.application.witnesses[0].witnessName").value("A Witness"))
+                .andExpect(jsonPath("$.application.witnesses[0].declarant").value(true))
+                .andExpect(jsonPath("$.application.witnesses[0].id").doesNotExist())
+                // Only the document with a file: the row with none would be a link whose download 404s.
+                .andExpect(jsonPath("$.application.documents.length()").value(1))
+                .andExpect(jsonPath("$.application.documents[0].id").value(attached))
+                .andExpect(jsonPath("$.application.documents[0].name").value("Birth certificate, scanned"))
+                .andExpect(jsonPath("$.application.documents[0].documentType").value("Birth certificate"))
+                .andExpect(jsonPath("$.application.documents[0].uploadedOn").exists())
+                .andExpect(jsonPath("$.application.documents[0].storageKey").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("publishes none of the case's identity, payment or processing fields, and no entity")
         void publishesNoneOfTheExcludedFields() throws Exception {
             String caseId = named(newCase(), "Robin");
             administrative(caseId);
@@ -787,23 +837,26 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
             String body = authorised(get(POOL + "/" + referralId))
                 .andExpect(status().isOk())
-                // Decision 8's exclusions, asserted on the response rather than trusted to the record's field
-                // list: no payment or fee references, no privacy administration, no applicant contact details,
-                // no workflow dates, and no internal audit trail.
+                // Design decision 1's exclusions, asserted on the response rather than trusted to the record's
+                // field list: no case identity, no payment or refund data, no processing record.
+                .andExpect(jsonPath("$.application.id").doesNotExist())
+                .andExpect(jsonPath("$.application.referencenumber").doesNotExist())
                 .andExpect(jsonPath("$.application.feeReference").doesNotExist())
                 .andExpect(jsonPath("$.application.refundReference").doesNotExist())
                 .andExpect(jsonPath("$.application.refundAmount").doesNotExist())
-                .andExpect(jsonPath("$.application.privacy").doesNotExist())
-                .andExpect(jsonPath("$.application.applicantEmail").doesNotExist())
-                .andExpect(jsonPath("$.application.applicantTelephone").doesNotExist())
-                .andExpect(jsonPath("$.application.applicantAddress1").doesNotExist())
-                .andExpect(jsonPath("$.application.dateReceived").doesNotExist())
+                .andExpect(jsonPath("$.application.dateOfRefund").doesNotExist())
+                .andExpect(jsonPath("$.application.returnReason").doesNotExist())
+                .andExpect(jsonPath("$.application.onlineApplicationReference").doesNotExist())
+                .andExpect(jsonPath("$.application.postCounter").doesNotExist())
+                .andExpect(jsonPath("$.application.currentReferralState").doesNotExist())
+                .andExpect(jsonPath("$.application.awaitingConfirmationSince").doesNotExist())
+                .andExpect(jsonPath("$.application.dateReferred").doesNotExist())
+                .andExpect(jsonPath("$.application.createdOn").doesNotExist())
                 .andExpect(jsonPath("$.application.createdBy").doesNotExist())
                 .andExpect(jsonPath("$.application.modifiedBy").doesNotExist())
                 .andExpect(jsonPath("$.application.notes").doesNotExist())
-                .andExpect(jsonPath("$.application.witnesses").doesNotExist())
-                // And no case id, because a judicial URL must not be able to carry one.
-                .andExpect(jsonPath("$.application.id").doesNotExist())
+                // Named by neither list, so left out until the business answers.
+                .andExpect(jsonPath("$.application.applicantAddress1").doesNotExist())
                 // The referral's own audit trail goes the same way, and so does the sweep's bookkeeping.
                 .andExpect(jsonPath("$.createdBy").doesNotExist())
                 .andExpect(jsonPath("$.modifiedBy").doesNotExist())
@@ -818,7 +871,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             // disclosure would consist of, and a field renamed on the way out would slip past a name assertion.
             assertThat(body)
                 .doesNotContain("FEE-2026-1")
-                .doesNotContain("applicant@example.com")
+                .doesNotContain("REFUND-2026-1")
                 .doesNotContain(caseId);
         }
 
@@ -1330,14 +1383,51 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         return caseId;
     }
 
-    /** The fields decision 8 excludes, populated so that their absence from the response means something. */
+    /**
+     * Contact details, privacy, and payment data, populated so that the presence of the first two and the
+     * absence of the third from the response each mean something.
+     */
     private void administrative(String caseId) {
         DeedPoll application = deedPolls.findById(caseId).orElseThrow();
         application.setFeeReference("FEE-2026-1");
         application.setApplicantEmail("applicant@example.com");
         application.setApplicantTelephone("020 7946 0000");
         application.setPrivacy(Privacy.Private);
+        application.setRefundReference("REFUND-2026-1");
         deedPolls.saveAndFlush(application);
+    }
+
+    /** One witness on the case, written onto the table as the case fixtures are. */
+    private void witnessed(String caseId) {
+        DeedPollWitness witness = new DeedPollWitness();
+        witness.setDeedPoll(deedPolls.findById(caseId).orElseThrow());
+        witness.setWitnessName("A Witness");
+        witness.setWitnessAddress("1 High Street");
+        witness.setWitnessOccupation("Teacher");
+        witness.setDeclarant(true);
+        witnesses.saveAndFlush(witness);
+    }
+
+    /**
+     * A supporting document on the case, with a storage key or with none.
+     *
+     * <p>A key and no blob is enough here: the listing applies the download's file and store checks without
+     * opening anything, and the download itself is another test's.
+     */
+    private String documented(String caseId, String name, String storageKey) {
+        DeedPollSupportingDocumentType type = documentTypes.findAll().stream().findFirst().orElseGet(() -> {
+            DeedPollSupportingDocumentType created = new DeedPollSupportingDocumentType();
+            created.setName("Birth certificate");
+            return documentTypes.saveAndFlush(created);
+        });
+        DeedPollSupportingDocument document = new DeedPollSupportingDocument();
+        document.setDeedPoll(deedPolls.findById(caseId).orElseThrow());
+        document.setDocumentType(type);
+        document.setDirection(DocumentDirection.Incoming);
+        document.setName(name);
+        document.setStorageKey(storageKey);
+        document.setMimeType(storageKey == null ? null : "application/pdf");
+        return documents.saveAndFlush(document).getId();
     }
 
     /**
