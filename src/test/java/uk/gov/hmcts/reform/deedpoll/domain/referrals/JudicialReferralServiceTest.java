@@ -1080,6 +1080,64 @@ class JudicialReferralServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("withdraw")
+    class Withdraw {
+
+        @Test
+        @DisplayName("refuses a caseworker and an admin, before resolving or recording anything")
+        void refusesANonJudicialCaller() {
+            for (CurrentUser caller : List.of(CASEWORKER, ADMIN)) {
+                assertThatThrownBy(() -> service.withdraw(REFERRAL_ID.toString(), caller))
+                    .isInstanceOf(ForbiddenError.class)
+                    .hasMessageContaining(Role.JUDICIAL.claimValue());
+            }
+
+            referrals.verifyNothingRead();
+            verifyNoInteractions(referralService, notes);
+        }
+
+        @Test
+        @DisplayName("hands the transition the case resolved from the referral")
+        void delegatesToTheTransition() {
+            stored(ReferralState.Decided, JUDGE);
+            Referral claimed = referral(ReferralState.Claimed, JUDGE);
+            when(referralService.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE)).thenReturn(claimed);
+
+            JudicialReferralView view = service.withdraw(REFERRAL_ID.toString(), JUDGE);
+
+            verify(referralService).withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+            assertThat(view.referral()).isSameAs(claimed);
+            verify(referralService, never()).reclaimStaleClaims();
+            verify(referralService, never()).touch(any(), any(), any());
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s a referral the office has finished with, without withdrawing anything")
+        void notFoundForATerminalReferral(ReferralState terminal) {
+            stored(terminal, JUDGE);
+
+            assertThatThrownBy(() -> service.withdraw(REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).withdrawDirection(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("404s a direction another judge gave, in the words an unknown id gets")
+        void notFoundForAnotherJudgesDirection() {
+            stored(ReferralState.Decided, JUDGE);
+
+            assertThatThrownBy(() -> service.withdraw(REFERRAL_ID.toString(), OTHER_JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).withdrawDirection(any(), any(), any());
+        }
+    }
+
     /**
      * A referral of {@link #CASE_ID} in the given state, stored where the judicial read can find it.
      *

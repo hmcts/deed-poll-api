@@ -471,6 +471,30 @@ public class JudicialReferralService {
     }
 
     /**
+     * The directing judge taking their direction back while the office has not yet closed the referral, so that
+     * they can direct it again with {@link #direct} (business decision 5 of the 2026-10-19 plan).
+     *
+     * <p>{@link ReferralService#withdrawDirection} owns the rule and asks visibility again under the row lock, as
+     * {@link #revise} does. It does not sweep: the referral becomes this judge's claim, with its inactivity clock
+     * restarted, and from then on the sweep treats it as it treats any other claim.
+     *
+     * @param referralId the referral, as it appears in the path
+     * @param caller the judge who gave the direction
+     * @return the referral, {@code Claimed} by the same judge with no direction on it
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws NotFoundError if there is no such referral, or this caller may not see it
+     * @throws ConflictError if this caller may see it but it is not a direction of theirs
+     */
+    @Transactional
+    public JudicialReferralView withdraw(String referralId, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+
+        Referral referral = visible(referralId, caller);
+        DeedPoll application = referral.getDeedPoll();
+        return view(referralService.withdrawDirection(application.getId(), referralId, caller), application);
+    }
+
+    /**
      * One supporting document of the application behind a referral this judge may see, recorded as
      * {@code DOCUMENT_DOWNLOADED} before it is opened (design decision 3 of the 2026-10-19 plan).
      *

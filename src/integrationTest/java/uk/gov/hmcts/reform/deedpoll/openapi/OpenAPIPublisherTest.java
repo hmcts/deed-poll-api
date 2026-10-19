@@ -121,6 +121,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/judicial/referrals/{referralId}",
         "/judicial/referrals/{referralId}/claim",
         "/judicial/referrals/{referralId}/direction",
+        "/judicial/referrals/{referralId}/direction/withdraw",
         "/judicial/referrals/{referralId}/documents/{documentId}/file"
     );
 
@@ -267,14 +268,14 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * The seven judicial operations, published and counted apart from the caseworker surface's thirty-four.
+     * The eight judicial operations, published and counted apart from the caseworker surface's thirty-four.
      *
      * <p>Both halves for the reason the caseworker assertion gives: a count cannot tell a new verb on a known
      * path from a new path, and a path list cannot tell a route that was removed from one that never existed.
      *
-     * <p><strong>Seven operations across six paths</strong> -- the shared pool, this judge's own work, one referral
-     * and one of its documents' files each carry a {@code GET}, a referral's claim and its direction each carry
-     * a {@code POST}, and the direction a {@code PUT} that revises it.
+     * <p><strong>Eight operations across seven paths</strong> -- the shared pool, this judge's own work, one referral
+     * and one of its documents' files each carry a {@code GET}, a referral's claim, its direction and the direction's
+     * withdrawal each carry a {@code POST}, and the direction a {@code PUT} that revises it.
      * There is no third write and no judicial closure: closing a referral is the office's acknowledgement that
      * the direction has been actioned, so it lives on the caseworker surface and its absence here is the decision
      * rather than an omission.
@@ -284,9 +285,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      * {@code deed-poll-admin} generates its client from this document: an unpublished route is an unbuildable
      * screen, and the personal list exists precisely because a judge who claimed a referral could not find it
      * again. The document download (2026-10-19) moved it to six, reached through the referral and never the case,
-     * and revising a direction to seven.
+     * revising a direction to seven, and withdrawing one to eight.
      */
-    @DisplayName("Documents the seven judicial operations, separately from the caseworker count")
+    @DisplayName("Documents the eight judicial operations, separately from the caseworker count")
     @Test
     void documentsTheJudicialOperations() throws Exception {
         JsonNode paths = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -301,7 +302,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         long operations = JUDICIAL_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(7);
+        assertThat(operations).isEqualTo(8);
 
         // The personal list is a path of its own and not a verb on the pool's, which is what a reader of the
         // count above cannot see: `/judicial/referrals` still carries exactly one operation, so `mine` cannot
@@ -359,7 +360,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      *
      * <p><strong>Added because the two counts above cannot see an addition.</strong> Each sums the operations of
      * the paths its own list names, so a brand-new path is simply not counted: the caseworker total stays 33, the
-     * judicial total stays 7, both assertions pass, and an undocumented route reaches
+     * judicial total stays 8, both assertions pass, and an undocumented route reaches
      * {@code deed-poll-admin}'s generated client without anything failing. Found while adding {@code mine},
      * which had to be written into {@link #JUDICIAL_PATHS} by hand for the count to move at all.
      *

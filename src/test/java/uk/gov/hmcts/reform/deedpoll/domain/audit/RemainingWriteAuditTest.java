@@ -196,6 +196,46 @@ class RemainingWriteAuditTest extends AbstractPostgresContainerTest {
         }
 
         @Test
+        @DisplayName("a withdrawn direction is a transition back to Claimed, and a new direction is recorded afresh")
+        void withdrawnDirection() {
+            String caseId = createdCase();
+            String referralId = raised(caseId);
+            referrals.claim(caseId, referralId, JUDGE);
+            referrals.decide(caseId, referralId,
+                             new DirectionInput(MasterDecision.Approved, Optional.of("Proceed"), true), JUDGE);
+
+            referrals.withdrawDirection(caseId, referralId, JUDGE);
+            referrals.decide(caseId, referralId,
+                             new DirectionInput(MasterDecision.Rejected, Optional.of("Refuse"), false), JUDGE);
+
+            List<Event> events = referralEvents(caseId).subList(1, 5);
+            assertThat(events).extracting(event -> event.row().get("action"))
+                .containsExactly("REFERRAL_CLAIMED", "REFERRAL_DIRECTED", "REFERRAL_DIRECTION_WITHDRAWN",
+                                 "REFERRAL_DIRECTED");
+            // The original direction, exactly as it was recorded: nothing in the trail is overwritten.
+            assertThat(events.get(1).values()).containsExactly(
+                Arrays.asList("decision", null, "Approved"),
+                Arrays.asList("directionsText", null, "Proceed"),
+                Arrays.asList("publishToGazette", null, "true"),
+                List.of("state", "Claimed", "Decided"));
+            assertThat(events.get(2).row())
+                .containsEntry("actor_id", "judge-subject")
+                .containsEntry("fields", "state,decision,directionsText,publishToGazette")
+                .containsEntry("from_state", "Decided")
+                .containsEntry("to_state", "Claimed");
+            assertThat(events.get(2).values()).containsExactly(
+                Arrays.asList("decision", "Approved", null),
+                Arrays.asList("directionsText", "Proceed", null),
+                Arrays.asList("publishToGazette", "true", null),
+                List.of("state", "Decided", "Claimed"));
+            assertThat(events.get(3).values()).containsExactly(
+                Arrays.asList("decision", null, "Rejected"),
+                Arrays.asList("directionsText", null, "Refuse"),
+                Arrays.asList("publishToGazette", null, "false"),
+                List.of("state", "Claimed", "Decided"));
+        }
+
+        @Test
         @DisplayName("a confirmation records the outcome, and no transition")
         void confirmation() {
             String caseId = createdCase();

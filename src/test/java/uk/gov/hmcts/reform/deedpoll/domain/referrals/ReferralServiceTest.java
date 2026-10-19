@@ -1750,6 +1750,214 @@ class ReferralServiceTest {
     }
 
     @Nested
+    @DisplayName("withdrawing a direction")
+    class WithdrawingADirection {
+
+        /** When the claim behind the direction was made, well before the test runs. */
+        private static final Duration CLAIMED_AGO = Duration.ofHours(30);
+
+        /** A referral the given judge claimed and then directed: an approval with publication. */
+        private Referral storedDirection(CurrentUser judge) {
+            Referral referral = storedClaim(judge, CLAIMED_AGO);
+            referral.setState(ReferralState.Decided);
+            referral.setDecision(MasterDecision.Approved);
+            referral.setDirectionsText("Granted");
+            referral.setPublishToGazette(true);
+            referral.setDecisionDate(LocalDateTime.parse("2026-09-02T11:00:00"));
+            referral.setDecidedById(judge.userId());
+            referral.setDecidedBy(judge.name());
+            return referral;
+        }
+
+        @Test
+        @DisplayName("moves Decided back to Claimed by the same judge, clears the direction and flags the change")
+        void returnsTheReferralToTheJudgesClaim() {
+            Referral referral = storedDirection(JUDGE);
+            final LocalDateTime claimedAt = referral.getClaimedAt();
+            final LocalDateTime before = AuditClock.now();
+
+            service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            Referral written = saved();
+            assertThat(written.getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(written.getClaimedById()).isEqualTo("judge-3");
+            assertThat(written.getClaimedBy()).isEqualTo("District Judge Bell");
+            // A fresh claim: its inactivity clock restarts now rather than lapsing at once on the old claim's.
+            assertThat(written.getClaimedAt()).isAfter(claimedAt).isBetween(before, AuditClock.now());
+            assertThat(written.getLastTouchedAt()).isBetween(before, AuditClock.now());
+            assertThat(written.getDecision()).isNull();
+            assertThat(written.getDirectionsText()).isNull();
+            assertThat(written.getPublishToGazette()).isNull();
+            assertThat(written.getDecisionDate()).isNull();
+            assertThat(written.getDecidedBy()).isNull();
+            assertThat(written.getDecidedById()).isNull();
+            assertThat(written.getDirectionChangedAt()).isBetween(before, AuditClock.now());
+            assertThat(written.getModifiedBy()).isEqualTo("District Judge Bell");
+        }
+
+        @Test
+        @DisplayName("writes one case note attributed to the judge, naming the direction it withdrew")
+        void writesACaseNote() {
+            storedDirection(JUDGE);
+
+            service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            NoteWritten note = noteWritten();
+            assertThat(note.author().author()).isEqualTo("District Judge Bell");
+            assertThat(note.deedPollId()).isEqualTo(CASE_ID);
+            assertThat(note.text()).isEqualTo(
+                "Judicial direction withdrawn for referral raised on 1 September 2026, reasons: Minor."
+                    + " The withdrawn decision was: Approved. Publish to the London Gazette: Yes."
+                    + " The referral is back with the judge to direct again.");
+        }
+
+        @Test
+        @DisplayName("recomputes both of the case's read-models in the same call")
+        void recomputesTheReadModels() {
+            storedDirection(JUDGE);
+
+            service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            // Claimed now: the case leaves the "returned -- action needed" queue.
+            assertThat(caseColumnWritten(CASE_ID)).isEqualTo(ReferralState.Claimed);
+            InOrder order = inOrder(deedPolls);
+            order.verify(deedPolls).lockForConfirmationRecompute(CASE_ID);
+            order.verify(deedPolls).writeAwaitingConfirmationSince(eq(CASE_ID), any());
+        }
+
+        @Test
+        @DisplayName("leaves the confirmation columns as they were")
+        void leavesTheConfirmationColumnsAlone() {
+            Referral referral = storedDirection(JUDGE);
+            LocalDateTime asked = LocalDateTime.parse("2026-09-03T10:00:00");
+            referral.setConfirmationRequestedAt(asked);
+
+            service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            assertThat(saved().getConfirmationRequestedAt()).isEqualTo(asked);
+            assertThat(saved().getConfirmationOutcome()).isNull();
+        }
+
+        @Test
+        @DisplayName("is a claim the judge can direct again with decide")
+        void canBeDirectedAgain() {
+            storedDirection(JUDGE);
+            service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            Referral redirected = service.decide(CASE_ID, REFERRAL_ID.toString(),
+                                                 direction("Rejected", "Refused", false), JUDGE);
+
+            assertThat(redirected.getState()).isEqualTo(ReferralState.Decided);
+            assertThat(redirected.getDecision()).isEqualTo(MasterDecision.Rejected);
+            assertThat(redirected.getDecidedById()).isEqualTo("judge-3");
+            assertThat(redirected.getDirectionChangedAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("is swept back to the pool once it lapses, as any other claim is")
+        void lapsesLikeAnyOtherClaim() {
+            Referral referral = storedDirection(JUDGE);
+            rowsInTheDatabase(referral);
+            service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            // Just withdrawn, so its clock has only just started: nothing to reclaim.
+            assertThat(service.reclaimStaleClaims()).isZero();
+
+            referral.setLastTouchedAt(AuditClock.now().minus(CLAIM_EXPIRY).minusMinutes(1));
+            assertThat(service.reclaimStaleClaims()).isEqualTo(1);
+            assertThat(referral.getState()).isEqualTo(ReferralState.Open);
+            assertThat(referral.getClaimedById()).isNull();
+        }
+
+        @Test
+        @DisplayName("refuses a caseworker before looking the referral up")
+        void refusesACaseworker() {
+            storedDirection(JUDGE);
+
+            assertThatThrownBy(() -> service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), CASEWORKER))
+                .isInstanceOf(ForbiddenError.class)
+                .hasMessageContaining(Role.JUDICIAL.claimValue());
+
+            verify(referrals, never()).findByIdAndDeedPollIdForUpdate(any(), anyString());
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("409s the judge's own claim, which has no direction yet to withdraw")
+        void conflictsOnAClaim() {
+            storedClaim(JUDGE, Duration.ofMinutes(5));
+
+            assertThatThrownBy(() -> service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " is " + ReferralState.Claimed
+                    + " and its direction can only be withdrawn while it is " + ReferralState.Decided
+                    + " by the judge who gave it");
+
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("409s a pool referral, which every judge can see and nobody has directed")
+        void conflictsOnAPoolReferral() {
+            stored(ReferralState.Open);
+
+            assertThatThrownBy(() -> service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(ConflictError.class);
+
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("404s another judge's direction, in the words an unknown referral gets")
+        void notFoundForAnotherJudgesDirection() {
+            Referral referral = storedDirection(OTHER_JUDGE);
+
+            assertThatThrownBy(() -> service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            assertThat(referral.getState()).isEqualTo(ReferralState.Decided);
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("404s a namesake of the judge who gave it, because the subject is what owns it")
+        void notFoundForANamesake() {
+            storedDirection(JUDGE);
+
+            assertThatThrownBy(() -> service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), NAMESAKE_JUDGE))
+                .isInstanceOf(NotFoundError.class);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s once the office has finished with it, even to its author")
+        void notFoundOnceFinished(ReferralState state) {
+            Referral referral = storedDirection(JUDGE);
+            referral.setState(state);
+
+            assertThatThrownBy(() -> service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("404s a referral addressed through another case")
+        void notFoundThroughAnotherCase() {
+            storedDirection(JUDGE);
+
+            assertThatThrownBy(() -> service.withdrawDirection(OTHER_CASE_ID, REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(NotFoundError.class);
+        }
+    }
+
+    @Nested
     @DisplayName("closing a referral")
     class Closing {
 

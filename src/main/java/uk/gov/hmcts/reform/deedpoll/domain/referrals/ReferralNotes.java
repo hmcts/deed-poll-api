@@ -190,6 +190,22 @@ public final class ReferralNotes {
     }
 
     /**
+     * The note for a judge withdrawing the direction they gave, so that they can give a new one: what the withdrawn
+     * direction decided, and whether it would have gone in the Gazette.
+     *
+     * <p>Composed from the referral <em>before</em> the withdrawal clears its decision, because the caseworker who may
+     * already be acting on that direction needs to know which one is no longer the judge's answer. The summary is
+     * {@link #directionRecorded}'s, for its reasons: never the direction text. It says the referral is back with the
+     * judge, because a withdrawn direction is a live claim again and the "returned -- action needed" queue drops it.
+     */
+    public static String directionWithdrawn(Referral referral) {
+        return "Judicial direction withdrawn for referral " + identifies(referral) + "."
+            + " The withdrawn decision was: " + decision(referral) + "."
+            + " Publish to the London Gazette: " + gazette(referral) + "."
+            + " The referral is back with the judge to direct again.";
+    }
+
+    /**
      * The note for the office acknowledging that a returned direction has been carried out.
      *
      * <p>The one lifecycle step that no column records at all after the fact: closing writes

@@ -651,7 +651,7 @@ public class ReferralService {
     @Transactional
     public Referral reviseDirection(String deedPollId, String id, DirectionInput direction, CurrentUser caller) {
         caller.requireAnyRole(Role.JUDICIAL);
-        Referral referral = requireDirectedBy(findReferralForUpdate(deedPollId, id), id, caller);
+        Referral referral = requireDirectedBy(findReferralForUpdate(deedPollId, id), id, "revised", caller);
 
         LocalDateTime now = AuditClock.now();
         final ReferralState fromState = referral.getState();
@@ -676,6 +676,71 @@ public class ReferralService {
         notes.createNote(deedPollId,
                          new CreateNoteInput(ReferralNotes.directionRevised(saved)),
                          caller.noteAuthor());
+        refreshCurrentReferralState(deedPollId);
+        refreshAwaitingConfirmation(deedPollId);
+        return saved;
+    }
+
+    /**
+     * The judge who directed a referral taking that direction back, so that they can give a new one with
+     * {@link #decide} (design decision 6 of the 2026-10-19 plan).
+     *
+     * <p>The same precondition as {@link #reviseDirection}, decided the same way under the same lock: {@code Decided}
+     * and directed by this caller, a 404 for anything this judge may not see -- including a referral the office has
+     * just closed -- and a 409 for what they can see and did not direct.
+     *
+     * <p>{@code Decided -> Claimed}, held by the same judge: {@code claimedById} and {@code claimedBy} are left as
+     * they were, {@code claimedAt} and {@code lastTouchedAt} restart now. The decision, {@code directionsText},
+     * {@code publishToGazette}, {@code decisionDate}, {@code decidedBy} and {@code decidedById} are cleared, because
+     * a claim carries no direction. {@code directionChangedAt} is set and never cleared.
+     *
+     * <p><strong>The consequence to keep visible:</strong> a withdrawn direction is a live claim again, so
+     * {@link #reclaimStaleClaims()} returns it to the shared pool after {@link ReferralProperties#claimExpiry()} of
+     * inactivity, exactly as it would any other claim. That is decided, not an oversight; the sweep is unchanged.
+     *
+     * <p>One {@code REFERRAL_DIRECTION_WITHDRAWN} event with old and new values of the state, decision,
+     * {@code directionsText} and {@code publishToGazette}, as {@link #decide} records, and one case note authored by
+     * the judge, composed from the direction being withdrawn. Both read-models are recomputed in this transaction:
+     * the case leaves the "returned -- action needed" queue, and the confirmation columns are left as they are.
+     *
+     * @throws ForbiddenError    if the caller does not hold {@link Role#JUDICIAL}
+     * @throws UnauthorizedError if the caller carries no stable subject, so they can have directed nothing
+     * @throws NotFoundError     if there is no such referral, it belongs to another case, or this judge may not see
+     *                           it under the lock
+     * @throws ConflictError     if this judge may see it but it is not a direction of theirs
+     */
+    @Transactional
+    public Referral withdrawDirection(String deedPollId, String id, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+        Referral referral = requireDirectedBy(findReferralForUpdate(deedPollId, id), id, "withdrawn", caller);
+
+        LocalDateTime now = AuditClock.now();
+        final ReferralState fromState = referral.getState();
+        final List<AuditValue> values = List.of(
+            AuditValue.of("state", fromState, ReferralState.Claimed),
+            AuditValue.of("decision", referral.getDecision(), null),
+            AuditValue.of("directionsText", referral.getDirectionsText(), null),
+            AuditValue.of("publishToGazette", referral.getPublishToGazette(), null));
+        // Composed before the columns are cleared: the note says which direction is no longer the judge's answer.
+        final String note = ReferralNotes.directionWithdrawn(referral);
+        referral.setState(ReferralState.Claimed);
+        referral.setDecision(null);
+        referral.setDirectionsText(null);
+        referral.setPublishToGazette(null);
+        referral.setDecisionDate(null);
+        referral.setDecidedBy(null);
+        referral.setDecidedById(null);
+        // claimedById and claimedBy are left alone: visibleTo has established the direction is this caller's, and
+        // decide required the same subject to hold the claim it directed.
+        referral.setClaimedAt(now);
+        referral.setLastTouchedAt(now);
+        referral.setDirectionChangedAt(now);
+        referral.setModifiedBy(caller.name());
+        referral.setModifiedOn(now);
+
+        Referral saved = referrals.save(referral);
+        audit(AuditAction.REFERRAL_DIRECTION_WITHDRAWN, caller, deedPollId, saved, fromState, values);
+        notes.createNote(deedPollId, new CreateNoteInput(note), caller.noteAuthor());
         refreshCurrentReferralState(deedPollId);
         refreshAwaitingConfirmation(deedPollId);
         return saved;
@@ -1024,16 +1089,16 @@ public class ReferralService {
      * trusted from the judicial surface's unlocked read: a referral closed between that read and this one is
      * invisible now, and the answer is {@link #invisibleToJudge}'s 404. {@link JudicialReferralService#visibleTo} is
      * the rule rather than a copy of it, so the two cannot disagree. A visible referral that is not this judge's
-     * direction is the 409.
+     * direction is the 409, naming what was attempted ({@code "revised"} or {@code "withdrawn"}).
      */
-    private static Referral requireDirectedBy(Referral referral, String id, CurrentUser caller) {
+    private static Referral requireDirectedBy(Referral referral, String id, String attempted, CurrentUser caller) {
         if (!JudicialReferralService.visibleTo(referral, caller)) {
             throw invisibleToJudge(id);
         }
         // Visible and Decided means decidedById is this caller's subject: that is what visibleTo admits.
         if (referral.getState() != ReferralState.Decided) {
             throw new ConflictError("Referral " + id + " is " + referral.getState()
-                + " and its direction can only be revised while it is " + ReferralState.Decided
+                + " and its direction can only be " + attempted + " while it is " + ReferralState.Decided
                 + " by the judge who gave it");
         }
         return referral;

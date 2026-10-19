@@ -266,6 +266,32 @@ class ReferralNotesTest {
     }
 
     @Test
+    @DisplayName("a withdrawn direction names the decision it withdrew, and says the judge has the referral back")
+    void withdrawnDirectionNamesTheWithdrawnDecision() {
+        String text = ReferralNotes.directionWithdrawn(decided(
+            List.of("Minor", "Other"), LocalDateTime.parse("2026-09-01T09:30:00"),
+            MasterDecision.Approved, false));
+
+        assertThat(text)
+            .isEqualTo("Judicial direction withdrawn for referral raised on 1 September 2026,"
+                + " reasons: Minor, Other. The withdrawn decision was: Approved."
+                + " Publish to the London Gazette: No. The referral is back with the judge to direct again.");
+    }
+
+    @Test
+    @DisplayName("a withdrawn direction note never quotes the direction itself, however long it is")
+    void withdrawnDirectionNoteNeverQuotesTheDirectionItself() {
+        Referral referral = decided(
+            EVERY_REASON, LocalDateTime.parse("2026-09-01T09:30:00"), MasterDecision.Approved, true);
+        referral.setDirectionsText("d".repeat(ReferralSchemas.MAX_DIRECTIONS_LENGTH));
+
+        String text = ReferralNotes.directionWithdrawn(referral);
+
+        assertThat(text).doesNotContain("dd");
+        assertThat(NoteForm.validateNoteText(text)).isEmpty();
+    }
+
+    @Test
     @DisplayName("an actioned direction says which referral's, and does not repeat the decision")
     void actionedDirectionSaysWhichReferrals() {
         String text = ReferralNotes.directionActioned(decided(

@@ -209,14 +209,22 @@ is missing, stop and say so rather than editing `build.gradle`. Record the actua
 
 **Files:** `ReferralService.withdrawDirection`; `JudicialReferralService`; controller `POST …/withdraw`; tests.
 
-- [ ] Tests (red first):
+- [x] Tests (red first):
   - `Decided` → `Claimed` by the same judge, with decision columns cleared and `directionChangedAt` set;
   - one `REFERRAL_DIRECTION_WITHDRAWN` event and one note;
   - the judge can then direct again with `POST`, which writes `REFERRAL_DIRECTED`;
   - the referral appears under `/judicial/referrals/mine` as `Claimed`;
   - the read-models are recomputed;
   - the same refusals as Task 4.
-- [ ] A test that the inactivity sweep treats the withdrawn-direction claim like any other claim (design decision 6).
+- [x] A test that the inactivity sweep treats the withdrawn-direction claim like any other claim (design decision 6).
+  2026-10-19: `build` green, `test` 4521 tests, `integration` 20 tests, 0 failures/errors/skipped; `checkstyle.sh`
+  OK; `git diff --check` clean. `ReferralService.withdrawDirection` shares `requireDirectedBy` with revise (its 409
+  now names the attempted verb), so refusals and the close race are decided identically under the row lock. The note
+  is composed before the columns are cleared, so it names the withdrawn decision and Gazette answer. The sweep is
+  proved in both `ReferralServiceTest` and, against Postgres, `JudicialReferralControllerTest` (a lapsed withdrawn
+  claim returns to the pool, a fresh one stays, the flag survives). Counts: 29 writes (25 audited),
+  `JudicialSecurityTest` eight operations, `OpenAPIPublisherTest` eight judicial operations across seven paths.
+  Tests were written alongside the change rather than seen red first.
 
 ### Task 6: OpenAPI, documentation, handoff
 
