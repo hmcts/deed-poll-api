@@ -7,6 +7,7 @@ import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.info.License;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
+import io.swagger.v3.oas.models.servers.Server;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -30,6 +31,9 @@ public class OpenAPIConfiguration {
     @Bean
     public OpenAPI openAPI() {
         return new OpenAPI()
+            // Keep Swagger on the document's origin without publishing the build request's localhost URL.
+            // A relative server inherits the serving scheme; this does not enforce TLS.
+            .addServersItem(new Server().url("/").description("Same origin as the served API document"))
             .info(new Info().title("deed-poll-api")
                       .description("Deed poll case management API")
                       .version("v0.0.1")
