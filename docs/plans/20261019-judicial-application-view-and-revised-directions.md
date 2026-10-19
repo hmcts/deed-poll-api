@@ -127,7 +127,9 @@ is missing, stop and say so rather than editing `build.gradle`. Record the actua
 
 ### Task 0: Baseline
 
-- [ ] Run the Validation Commands on the untouched branch and record the counts.
+- [x] Run the Validation Commands on the untouched branch and record the counts.
+  2026-10-19 baseline at d0d1f93: `build` green (4m 46s), `test` 4426 tests, `integration` 20 tests, 0 failures,
+  0 errors, 0 skipped; `checkstyle.sh`: OK; `git diff --check`: clean.
 
 ### Task 1: The wider judicial application view
 
