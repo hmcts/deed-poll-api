@@ -1236,7 +1236,7 @@ class ReferralServiceTest {
         @Test
         @DisplayName("refuses a judicial caller with no subject at all, and writes nothing")
         void refusesACallerWithNoSubject() {
-            Referral referral = storedClaim(JUDGE, Duration.ofMinutes(5));
+            final Referral referral = storedClaim(JUDGE, Duration.ofMinutes(5));
 
             // 401 rather than the 409 a wrong holder gets: the caller has not been identified well enough to be
             // told whose referral it is. Compared the other way round -- the column against the caller -- this

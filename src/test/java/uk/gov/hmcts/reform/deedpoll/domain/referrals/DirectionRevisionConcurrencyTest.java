@@ -9,6 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
@@ -47,6 +48,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       revised, and the trail and the timeline say only that the direction was actioned.</li>
  *   <li><strong>Revise first.</strong> The close queues, then closes the revised direction, so what the office
  *       actioned is what the row and the flag say the judge last directed.</li>
+ *   <li><strong>Close, then withdraw.</strong> As close-first: the withdraw is a 404 and the actioned direction is
+ *       left intact.</li>
+ *   <li><strong>Withdraw first.</strong> The close queues and finds a {@code Claimed} referral with no direction,
+ *       so it is a conflict: the office cannot action a direction the judge has just withdrawn.</li>
  * </ul>
  *
  * <p>Not {@code @Transactional}: the point is what two separate committed transactions leave behind.
@@ -142,6 +147,60 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
             .extracting(note -> note.getNote().contains("revised") ? "revised" : "actioned")
             .containsExactlyInAnyOrder("revised", "actioned");
         assertThat(deedPolls.findById(caseId).orElseThrow().getCurrentReferralState()).isNull();
+    }
+
+    @Test
+    @DisplayName("a close that commits first makes the waiting withdraw a 404, and the direction stays as actioned")
+    void closeFirstThenWithdraw() throws Exception {
+        String caseId = storedCase();
+        String referralId = directedReferral(caseId);
+
+        Outcome outcome = second(
+            () -> service.close(caseId, referralId, ADA),
+            () -> judicial.withdraw(referralId, MARION));
+
+        assertThat(outcome.first()).isNull();
+        assertThat(outcome.second())
+            .isInstanceOf(NotFoundError.class)
+            .hasMessage("Referral " + referralId + " not found");
+        assertThat(outcome.secondWaited()).isTrue();
+
+        Referral stored = referrals.findById(UUID.fromString(referralId)).orElseThrow();
+        assertThat(stored.getState()).isEqualTo(ReferralState.Closed);
+        assertThat(stored.getDecision()).isEqualTo(MasterDecision.Approved);
+        assertThat(stored.getDecidedById()).isEqualTo(MARION.userId());
+        assertThat(stored.getDirectionChangedAt()).isNull();
+        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId))
+            .singleElement()
+            .satisfies(note -> assertThat(note.getNote()).contains("marked as actioned"));
+    }
+
+    @Test
+    @DisplayName("a withdraw that commits first leaves nothing to action, so the waiting close is a conflict")
+    void withdrawFirst() throws Exception {
+        String caseId = storedCase();
+        String referralId = directedReferral(caseId);
+
+        Outcome outcome = second(
+            () -> judicial.withdraw(referralId, MARION),
+            () -> service.close(caseId, referralId, ADA));
+
+        assertThat(outcome.first()).isNull();
+        assertThat(outcome.second()).isInstanceOf(ConflictError.class);
+        assertThat(outcome.secondWaited()).isTrue();
+
+        // The office must not have actioned a direction the judge had already withdrawn.
+        Referral stored = referrals.findById(UUID.fromString(referralId)).orElseThrow();
+        assertThat(stored.getState()).isEqualTo(ReferralState.Claimed);
+        assertThat(stored.getClaimedById()).isEqualTo(MARION.userId());
+        assertThat(stored.getDecision()).isNull();
+        assertThat(stored.getDirectionsText()).isNull();
+        assertThat(stored.getPublishToGazette()).isNull();
+        assertThat(stored.getDecidedById()).isNull();
+        assertThat(stored.getDirectionChangedAt()).isNotNull();
+        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId))
+            .singleElement()
+            .satisfies(note -> assertThat(note.getNote()).contains("Judicial direction withdrawn"));
     }
 
     /** What each transaction threw, in the order given, and whether the second finished after the first committed. */

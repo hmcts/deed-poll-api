@@ -1078,6 +1078,17 @@ class JudicialReferralServiceTest {
 
             verify(referralService, never()).reviseDirection(any(), any(), any(), any());
         }
+
+        @Test
+        @DisplayName("refuses a judge with no subject, rather than 404ing or 409ing them, and revises nothing")
+        void refusesACallerWithNoSubject() {
+            stored(ReferralState.Decided, JUDGE);
+
+            assertThatThrownBy(() -> service.revise(REFERRAL_ID.toString(), REFUSAL, UNIDENTIFIED_JUDGE))
+                .isInstanceOf(UnauthorizedError.class);
+
+            verify(referralService, never()).reviseDirection(any(), any(), any(), any());
+        }
     }
 
     @Nested
@@ -1135,6 +1146,28 @@ class JudicialReferralServiceTest {
                 .hasMessage("Referral " + REFERRAL_ID + " not found");
 
             verify(referralService, never()).withdrawDirection(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("refuses a judge with no subject, rather than 404ing or 409ing them, and withdraws nothing")
+        void refusesACallerWithNoSubject() {
+            stored(ReferralState.Decided, JUDGE);
+
+            assertThatThrownBy(() -> service.withdraw(REFERRAL_ID.toString(), UNIDENTIFIED_JUDGE))
+                .isInstanceOf(UnauthorizedError.class);
+
+            verify(referralService, never()).withdrawDirection(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("refuses a judge with no subject a document of a claimed referral, and opens nothing")
+        void refusesADocumentToACallerWithNoSubject() {
+            stored(ReferralState.Claimed, JUDGE);
+
+            assertThatThrownBy(() -> service.document(REFERRAL_ID.toString(), "document-1", UNIDENTIFIED_JUDGE))
+                .isInstanceOf(UnauthorizedError.class);
+
+            verifyNoInteractions(documents);
         }
     }
 
