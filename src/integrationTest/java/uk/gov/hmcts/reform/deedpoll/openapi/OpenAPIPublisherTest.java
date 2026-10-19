@@ -143,6 +143,25 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     private MockMvc mvc;
 
     @Test
+    void publishesOnlyHttpsServersEvenWhenGeneratedOverHttp() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+
+        assertThat(spec.path("servers").size()).isPositive();
+        // Include path/operation overrides: either can replace the secure global default.
+        for (JsonNode servers : spec.findValues("servers")) {
+            assertThat(servers.isArray()).isTrue();
+            assertThat(servers.size()).isPositive();
+            for (JsonNode server : servers) {
+                assertThat(server.path("url").asText()).startsWith("https://");
+            }
+        }
+        assertThat(spec.at("/servers/0/variables/environment/default").asText()).isEqualTo("aat");
+        assertThat(spec.at("/components/securitySchemes/bearerAuth/scheme").asText()).isEqualTo("bearer");
+        assertThat(spec.at("/security/0/bearerAuth").isArray()).isTrue();
+    }
+
+    @Test
     void documentsDeliveryManagerGazetteHistoryWithoutPrivateIdentities() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());

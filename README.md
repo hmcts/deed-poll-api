@@ -910,6 +910,14 @@ somebody remembering to add it. `OpenAPIPublisherTest` writes the document to
 `OPENAPI_OUTPUT_PATH` to an absolute filename in an existing worktree-specific evidence directory. It asserts the caseworker, judicial and admin surfaces —
 both operation counts and every path — rather than merely being served.
 
+`OpenAPIConfiguration` declares the private HTTPS server template explicitly, with `environment`
+defaulting to `aat`. Generating the document over HTTP must not advertise HTTP for bearer credentials.
+The publisher test also rejects insecure server overrides at path or operation level.
+This describes the required client-facing transport; it does not enable TLS on Spring Boot or ingress.
+Before clients use it, Platform Ops must provision a trusted certificate matching the private hostname
+and verify encryption through any proxy/backend hops. AAT's private endpoint presented a mismatched
+`*.aat.platform.hmcts.net` certificate on 19 October 2026; it is not yet ready for HTTPS clients.
+
 **Nothing currently consumes that file.** The enabled `integration` source set produces it during
 Jenkins `check` and a local `./gradlew integration`, but `Jenkinsfile_CNP` has no publishing step.
 Restoring the publish to
