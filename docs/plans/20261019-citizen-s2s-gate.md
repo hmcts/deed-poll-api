@@ -149,15 +149,15 @@ Files: `config/SecurityConfiguration.java`, a new `config/CitizenSecurityTest.ja
 Files: `config/SecurityConfiguration.java` (Javadoc only), `config/ServiceAuthConfiguration.java` (Javadoc only),
 `api/citizen/controller/package-info.java`, `docs/plans/fees-and-pay-1-ways-to-pay-card.md`, `CLAUDE.md`.
 
-- [ ] Update the four Javadoc passages in decision 9 so they describe three chains and the S2S-only citizen boundary.
-- [ ] `fees-and-pay-1`: decision 10, and nothing more.
-- [ ] `CLAUDE.md`: in the security/auth section, add one short paragraph:
+- [x] Update the four Javadoc passages in decision 9 so they describe three chains and the S2S-only citizen boundary.
+- [x] `fees-and-pay-1`: decision 10, and nothing more.
+- [x] `CLAUDE.md`: in the security/auth section, add one short paragraph:
   - `/citizen/**` has its own chain;
   - only `deed_poll_web` S2S tokens are admitted, and IDAM bearers are ignored;
   - the allowlist is a reviewed constant;
   - the first citizen endpoint needs no extra security wiring, but still needs its own rate limiting and
     OpenAPI scheme in the endpoints' plan.
-- [ ] Run the validation commands.
+- [x] Run the validation commands.
 
 ### Task 3: Handoff
 
@@ -188,6 +188,15 @@ Task 1, 2026-10-19:
 - Validation: the focused run had 251 tests in 40 classes; the build had 4,539 unit tests in 496 classes plus
   22 integration tests in 4. All had 0 failures, 0 errors and 0 skipped. Direct Checkstyle reported 0 WARN and
   0 ERROR, and `git diff --check` was clean.
+
+Task 2, 2026-10-19:
+- Javadoc only: `SecurityConfiguration`'s class Javadoc ("Authenticated by default" no longer claims `/citizen/**`;
+  "Two chains" is now "Three chains") and `securityFilterChain`'s (no longer the citizen fallback),
+  `ServiceAuthConfiguration` (two inbound checks), and `api/citizen/controller/package-info.java` (behind the
+  citizen chain, and still owing its own rate limiting and OpenAPI scheme). `fees-and-pay-1` Task 1's service-only
+  chain box ticked with the cross-reference. `CLAUDE.md` gained a `/citizen/**` paragraph under Staff permissions.
+- Validation: focused run 251 tests in 40 classes; build 4,539 unit tests in 496 classes plus 22 integration tests
+  in 4, all 0 failures, 0 errors, 0 skipped. Direct Checkstyle 0 WARN/ERROR; `git diff --check` clean.
 
 ## Post-Completion
 

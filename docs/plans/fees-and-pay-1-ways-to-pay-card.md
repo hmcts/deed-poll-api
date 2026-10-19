@@ -166,8 +166,9 @@ and integration test totals at the start and end of the plan.
       behind the existing `DocumentStore` seam; this plan does not solve CDAM
 - [ ] Define citizen request/response DTOs explicitly. Do not accept the mock's generic answer bag directly
       into an entity; map and validate every supported journey field at the boundary
-- [ ] Implement a separate service-only security chain for `/citizen/**`, accepting only configured trusted
+- [x] Implement a separate service-only security chain for `/citizen/**`, accepting only configured trusted
       callers and proving that an IDAM bearer token alone cannot enter it
+      (delivered by `docs/plans/completed/20261019-citizen-s2s-gate.md`)
 - [ ] Add a separate service-only callback route, for example
       `PUT /callbacks/payments/service-request`, accepting `payment_app` and no citizen/caseworker token
 - [ ] Keep `/caseworker/**` and `/judicial/**` on their current IDAM resource-server chain

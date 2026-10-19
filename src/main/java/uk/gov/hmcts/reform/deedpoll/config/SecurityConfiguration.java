@@ -58,16 +58,19 @@ import java.util.List;
  * rather than a rule per namespace, which is the decision the reference makes and for the same reason: a
  * route added tomorrow is then protected by omission rather than protected when someone remembers, and the
  * failure mode of forgetting is silent. The allowlist is infrastructure only -- the Always-On root endpoint,
- * the probes and the published spec -- and every business route, {@code /caseworker/**} and later
- * {@code /citizen/**} alike, is authenticated because it is not on it.
+ * the probes and the published spec -- and every staff route is authenticated because it is not on it.
+ * {@code /citizen/**} is not on it either; it is closed by its own chain, which wants a service, not a user.
  *
  * <p>Every business route is also inside a {@link StaffArea}, with one named exception:
  * {@link #ANY_AUTHENTICATED_PATHS}, the caller's own {@code GET /me}, which any token may read.
  *
- * <p><strong>Two chains, and the second is narrow on purpose.</strong> {@code /ccd-persistence/**} is the one path
- * not called by a person through a frontend. Data-store calls it, presenting its own S2S token and forwarding a
- * user's, so it has a chain of its own ({@link #ccdPersistenceFilterChain}) that requires both. Every other path,
- * that one's siblings included, is in {@link #securityFilterChain} and requires no S2S at all.
+ * <p><strong>Three chains, and the first two are narrow on purpose.</strong> {@code /ccd-persistence/**} is not
+ * called by a person through a frontend. Data-store calls it, presenting its own S2S token and forwarding a
+ * user's, so it has a chain of its own ({@link #ccdPersistenceFilterChain}) that requires both.
+ * {@code /citizen/**} is called by {@code deed-poll-web} for a citizen this service never authenticates, so its
+ * chain ({@link #citizenFilterChain}) requires {@code deed_poll_web}'s S2S token and no user: an IDAM bearer there
+ * is never read, and on its own is a 401. Every other path, those two's siblings included, is in
+ * {@link #securityFilterChain} and requires no S2S at all.
  *
  * <p>A consequence worth knowing: an unknown path answers 401 rather than 404, because authorisation happens
  * before routing. That is the right way round -- which paths exist is not something an unauthenticated caller
@@ -329,14 +332,14 @@ public class SecurityConfiguration {
     }
 
     /**
-     * Every path not claimed by {@link #ccdPersistenceFilterChain}.
+     * Every path not claimed by {@link #ccdPersistenceFilterChain} or {@link #citizenFilterChain}.
      *
      * <p>Authentication alone was the rule for every staff route until the {@link StaffArea} rules, so any token IDAM
      * issued could reach the caseworker surface (OWASP finding H1). The judicial area is enforced outright, because
      * its services already refuse a non-judge and the rule changes no outcome. The caseworker area goes through
      * {@link StaffGate}, which reports before it enforces: see {@code deedpoll.security.staff-gate}.
      * {@link #ANY_AUTHENTICATED_PATHS} are authenticated by name. {@code anyRequest().authenticated()} stays as the
-     * fallback for the empty citizen namespace and unknown paths. A new top-level prefix is caught by
+     * fallback for unknown paths; {@code /citizen/**} never reaches it. A new top-level prefix is caught by
      * {@code StaffAccessRulesTest} rather than by a {@code denyAll()}.
      *
      * <p>{@link RateLimitFilter} sits directly after authorisation, so it keys on the verified {@code sub} and only a

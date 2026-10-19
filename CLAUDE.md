@@ -137,6 +137,15 @@ scheme only), so the two sides compare alike. The comparison is then exact insid
 no prefix, host case, path or slash leniency. Configure the issuer exactly as tokens carry it. Each entry must be an absolute `https` URL or start-up fails. The chart's `values.yaml` leaves it unset; only AAT's flux sets it. See
 `docs/plans/20261016-additional-idam-issuers.md`.
 
+### `/citizen/**` has its own chain, and wants a service, not a user
+
+`SecurityConfiguration.citizenFilterChain` (`@Order(2)`) admits a request only once `ServiceAuthFilter` has verified
+an S2S token for a service in `CITIZEN_CALLERS`, which is exactly `["deed_poll_web"]`. There is no resource server,
+so an IDAM bearer is never read: alone it is a 401, beside a valid S2S token it is ignored. The allowlist is a
+constant that `StaffAccessRulesTest` pins, so widening it is a reviewed change. The first citizen endpoint needs no
+security wiring, but still needs its own rate limiting (`RateLimitFilter` keys on an IDAM `sub` and is not on this
+chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/plans/completed/20261019-citizen-s2s-gate.md`.
+
 ## Rules that break things silently if ignored
 
 - **Filesystem document storage must never run in production; there is no bypass switch.**
