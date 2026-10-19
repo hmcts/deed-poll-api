@@ -8,8 +8,6 @@ import io.swagger.v3.oas.models.info.License;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
 import io.swagger.v3.oas.models.servers.Server;
-import io.swagger.v3.oas.models.servers.ServerVariable;
-import io.swagger.v3.oas.models.servers.ServerVariables;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -33,13 +31,9 @@ public class OpenAPIConfiguration {
     @Bean
     public OpenAPI openAPI() {
         return new OpenAPI()
-            // Do not derive a credential-bearing server URL from the HTTP request used by the publisher.
-            // This declares the required transport; deployment must provision a matching TLS certificate.
-            .addServersItem(new Server()
-                .url("https://deed-poll-api-{environment}.service.core-compute-{environment}.internal")
-                .description("Private API TLS endpoint; requires a trusted certificate for the selected host")
-                .variables(new ServerVariables().addServerVariable("environment", new ServerVariable()
-                    ._default("aat").description("Target deployment environment"))))
+            // Keep Swagger on the document's origin without publishing the build request's localhost URL.
+            // A relative server inherits the serving scheme; this does not enforce TLS.
+            .addServersItem(new Server().url("/").description("Same origin as the served API document"))
             .info(new Info().title("deed-poll-api")
                       .description("Deed poll case management API")
                       .version("v0.0.1")

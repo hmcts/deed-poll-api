@@ -143,22 +143,36 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     private MockMvc mvc;
 
     @Test
-    void publishesOnlyHttpsServersEvenWhenGeneratedOverHttp() throws Exception {
-        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
-            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+    void publishesSameOriginServersForHttpAndHttpsDocuments() throws Exception {
+        for (boolean secure : List.of(false, true)) {
+            JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs").secure(secure))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
 
-        assertThat(spec.path("servers").size()).isPositive();
-        // Include path/operation overrides: either can replace the secure global default.
-        for (JsonNode servers : spec.findValues("servers")) {
-            assertThat(servers.isArray()).isTrue();
-            assertThat(servers.size()).isPositive();
-            for (JsonNode server : servers) {
-                assertThat(server.path("url").asText()).startsWith("https://");
+            assertSameOriginServers(spec.path("servers"));
+            // Check only server declarations, not schema properties that happen to be named "servers".
+            for (JsonNode path : spec.path("paths")) {
+                if (path.has("servers")) {
+                    assertSameOriginServers(path.get("servers"));
+                }
+                for (String method : List.of("get", "put", "post", "delete", "options", "head", "patch", "trace")) {
+                    JsonNode operation = path.path(method);
+                    if (operation.has("servers")) {
+                        assertSameOriginServers(operation.get("servers"));
+                    }
+                }
             }
+            assertThat(spec.at("/components/securitySchemes/bearerAuth/scheme").asText()).isEqualTo("bearer");
+            assertThat(spec.at("/security/0/bearerAuth").isArray()).isTrue();
         }
-        assertThat(spec.at("/servers/0/variables/environment/default").asText()).isEqualTo("aat");
-        assertThat(spec.at("/components/securitySchemes/bearerAuth/scheme").asText()).isEqualTo("bearer");
-        assertThat(spec.at("/security/0/bearerAuth").isArray()).isTrue();
+    }
+
+    private static void assertSameOriginServers(JsonNode servers) {
+        assertThat(servers.isArray()).isTrue();
+        assertThat(servers.size()).isPositive();
+        for (JsonNode server : servers) {
+            assertThat(server.path("url").asText()).isEqualTo("/");
+            assertThat(server.has("variables")).isFalse();
+        }
     }
 
     @Test

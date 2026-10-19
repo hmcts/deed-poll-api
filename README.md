@@ -910,13 +910,17 @@ somebody remembering to add it. `OpenAPIPublisherTest` writes the document to
 `OPENAPI_OUTPUT_PATH` to an absolute filename in an existing worktree-specific evidence directory. It asserts the caseworker, judicial and admin surfaces —
 both operation counts and every path — rather than merely being served.
 
-`OpenAPIConfiguration` declares the private HTTPS server template explicitly, with `environment`
-defaulting to `aat`. Generating the document over HTTP must not advertise HTTP for bearer credentials.
-The publisher test also rejects insecure server overrides at path or operation level.
-This describes the required client-facing transport; it does not enable TLS on Spring Boot or ingress.
-Before clients use it, Platform Ops must provision a trusted certificate matching the private hostname
-and verify encryption through any proxy/backend hops. AAT's private endpoint presented a mismatched
-`*.aat.platform.hmcts.net` certificate on 19 October 2026; it is not yet ready for HTTPS clients.
+`OpenAPIConfiguration` declares `servers: [{ url: "/" }]`, resolved against the origin serving the API
+document ([OpenAPI relative URLs](https://spec.openapis.org/oas/v3.1.0.html#relative-references-in-urls)).
+Swagger's requests therefore stay on that host and scheme instead of a generated localhost URL or a
+fixed environment. The publisher test checks global, path and operation server declarations for both
+HTTP and HTTPS document requests. Consumers of a downloaded artifact must supply their API base URL;
+admin already uses `DEED_POLL_API_URL` independently of this metadata.
+
+This is a documentation correction, not TLS enforcement: a document served over HTTP still resolves
+to HTTP. No runtime TLS rollout is required for this change. Fortify acceptance of the relative URL
+must be retested; transport security still needs verified deployment/network evidence before finding
+`3B96C2B66F875E1E836CEAB415F8EA96` can be closed.
 
 **Nothing currently consumes that file.** The enabled `integration` source set produces it during
 Jenkins `check` and a local `./gradlew integration`, but `Jenkinsfile_CNP` has no publishing step.
