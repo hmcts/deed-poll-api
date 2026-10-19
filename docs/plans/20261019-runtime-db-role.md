@@ -31,7 +31,9 @@ compromises the pod. The pod still holds the owner password for Flyway, and its 
    which is the owner when `spring.flyway.user` is set and the primary DataSource otherwise, so nothing changes for
    other services. **This plan does not make that change and must not work around it here** (`CLAUDE.md`: never define
    a `FlywayMigrationStrategy`). Check: the SDK version on this branch contains the fix (read the class from the
-   resolved jar). If it does not, stop and say so.
+   resolved jar). If it does not, stop and say so. **Raised 2026-10-19:** hmcts/dtsse-ccd-config-generator#1289
+   (master, 8.x) and #1290 (the `[7.x]` backport, the line this repo is on). Wait for the 7.x release that includes
+   #1290.
 2. **The SDK version bump itself is not part of this plan.** The api is on `hmcts.ccd.sdk` 7.1.0. A bump has caught
    this repo before (Jackson 3, the floated elasticsearch-java; see `verifyNoJackson3`). If prerequisite 1 needs a
    newer SDK than the branch has, stop: the bump is its own change.
