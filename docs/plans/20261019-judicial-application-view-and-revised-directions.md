@@ -228,11 +228,18 @@ is missing, stop and say so rather than editing `build.gradle`. Record the actua
 
 ### Task 6: OpenAPI, documentation, handoff
 
-- [ ] OpenAPI: the wider application, the document route, `PUT` and withdraw, `directionChangedAt`, and the
+- [x] OpenAPI: the wider application, the document route, `PUT` and withdraw, `directionChangedAt`, and the
   sweep consequence in withdraw's description. Note that the admin spec refresh carries the whole document.
-- [ ] `CLAUDE.md` and `docs/RESUME.md`: the judicial view is now wide by decision of 2026-10-19 (list and
+  `@Operation` descriptions on the referral read, the document download, direct, revise and withdraw (default
+  operation ids kept); `@Schema` descriptions on `directionChangedAt` in both referral responses and on
+  `application`; the `JudicialDirectionRequest` description now covers `PUT`. Pinned by
+  `OpenAPIPublisherTest.documentsTheJudicialApplicationViewAndRevisedDirections`. The admin refresh should take the
+  whole document, not only the judicial paths, because `ReferralResponse` changed too.
+- [x] `CLAUDE.md` and `docs/RESUME.md`: the judicial view is now wide by decision of 2026-10-19 (list and
   exclusions), revision rules, and the withdraw/sweep consequence.
-- [ ] Final Validation Commands with counts.
+- [x] Final Validation Commands with counts.
+  2026-10-19: `build` green, `test` 4521 tests, `integration` 21 tests, 0 failures/errors/skipped; `checkstyle.sh`
+  OK; `git diff --check` clean.
 
 ## Post-Completion (not for ralphex)
 

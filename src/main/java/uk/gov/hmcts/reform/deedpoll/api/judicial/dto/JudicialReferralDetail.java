@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.judicial.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralView;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
@@ -73,7 +74,12 @@ public record JudicialReferralDetail(
     Boolean publishToGazette,
     LocalDateTime decisionDate,
     String decidedBy,
+    @Schema(nullable = true, description = "When the judge last revised or withdrew their direction, or null if "
+        + "it stands as first given. Set by both and never cleared: a fact about the referral's history, and the "
+        + "earlier direction is on the audit trail.")
     LocalDateTime directionChangedAt,
+    @Schema(description = "The application behind the referral, resolved from it: its details, witnesses and "
+        + "readable documents. Never a case id, and no payment or refund data.")
     JudicialApplicationView application,
     List<JudicialCaseNote> caseNotes) {
 

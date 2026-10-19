@@ -1,5 +1,17 @@
 # Resume state — where the next session picks up
 
+**Judicial application view and revisable directions, 2026-10-19:** on `plan/judicial-application-view`, not
+pushed and not live-verified. By the business's decisions of 2026-10-19, judges see the whole application
+(`JudicialApplicationView`: details, witnesses, readable documents; no case id, no payment or refund data, no
+office processing record) and download its documents through the referral. The directing judge may revise
+(`PUT …/direction`) or withdraw (`POST …/direction/withdraw`) their direction until the office closes the
+referral; both set V38's never-cleared `directionChangedAt`, write a case note and a new audit event. A withdrawn
+direction is a live claim, so the inactivity sweep can return it to the pool. Judicial operations: **5 → 8**
+(seven paths); caseworker 34 unchanged. Open business question: address lines, declaration multiselects,
+`publishToLondonGazette`, `migratedRecord` and `retainPermanently` are on neither list and are left out. Next: open
+the PR; then the admin plan refreshes its api spec from the whole document. CDAM: confirm a judge's download is
+authorised in AAT before CDAM is switched on. See [the plan](plans/20261019-judicial-application-view-and-revised-directions.md).
+
 **CCD in AAT, 2026-10-16:** `docs/CCD-SMOKE.md` steps 1–3 ran in AAT and answered as written. `DEEDPOLL` v1 is
 imported, eight roles are registered at PUBLIC, and the linking sweep is on at one record per list request
 (cnp-flux-config#48332). KBDP2026-00001 and -00002 are linked to CCD cases. It took #108 (additional IDAM issuers),
@@ -387,7 +399,7 @@ row; its failed history remains unchanged when the replacement is sent.
 |---|---|
 | Flyway migrations | **24 on `master`** (V1–V24): plan 02 added V21 (`ccdCaseReference`) and V22 (the creation-attempt ledger), and plan 02b added V23 and V24 (see its section above). Earlier wording, kept for the per-migration detail — V14 adds the nullable referral owner subjects, V15 the notification exclusion group, V16 the referral's four confirmation columns, V17 the case's `awaitingConfirmationSince` read-model and V18 the correction to V16's partial index. `email-case-notes` adds none; **`notify-6` adds V19**, the notification's non-null `requestId` with a per-row backfill and a `("deedPollId", "requestId")` unique index; **`notify-4b` adds V20**, the partial `("deedPollId", "exclusionGroup")` key over the groups `EmailExclusionGroup.exclusivePerCase()` names — which is what stops one applicant being sent both deeds |
 | Caseworker endpoints | **34 across 21 paths** on `master`, over eight controllers under `api/caseworker/controller/`. `OpenAPIPublisherTest` asserts both figures, and on `notify-6` re-asserts the 34 **inside the test that proves the new send header is published**, because a header is the kind of change that looks like it should have added an operation |
-| Judicial endpoints | **5**, `referrals-api-6` having merged — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
+| Judicial endpoints | **5** on `master`, `referrals-api-6` having merged — the shared pool, this judge's own `Claimed`/`Decided` work, one referral, claim, direction; **8** on `plan/judicial-application-view` (2026-10-19), adding the document download and revising or withdrawing a direction. Gated on `Role.JUDICIAL`, **which IDAM still does not issue** (see IDAM below) |
 | `/citizen/**` | exists, empty, shares no DTO with the other two namespaces |
 | Tests | **2,935 on `notify-4b`** — `test` 2,922 across 361 result files + `integration` 13 across 3, 0 failures / 0 errors / 0 skipped (measured 2026-09-25 from `build/test-results/` after `./gradlew build`, following two review passes: the first added the XML-illegal-character rules, the storeDeed refusal, the sender's document short-circuit and the `application.yaml` template-key conformance; the second added the deed-type mis-filing refusal, the patched-direction refusal and Notify's 1–78-week retention range). `notify-6` reads **2,729** (2,716 + 13), `email-case-notes` **2,622** and `master` 2,580 + 12. The branches are not stacked, so figures from one are never cumulative with another's |
 | Docker-free CI | **1,923 unit tests on `notify-4b`** across 254 classes, measured with `INTEGRATION_TESTS_ENABLED=false`; the other **999** are in the container-backed classes, notify-4b having added two (`DeedDocumentServiceTest` and the forms nest of `CaseworkerEmailControllerTest` — the latter pre-existing as a class). `notify-6` reads 1,739 of 2,716 in 33 classes. Everything about the deed generator, the routing, the escaping and the exclusion-group flag runs in CI: the container-backed rules are the enqueue statement's conflict paths and the stored-once-per-case claim, and each has a container-free companion. `build.gradle` carries the history and instructs the next plan to re-measure |

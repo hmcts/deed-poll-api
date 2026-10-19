@@ -540,7 +540,8 @@ public class OpenAPIWriteBodies {
     }
 
     /**
-     * The one judicial body: a judge's direction, with two required fields and one optional.
+     * The one judicial body: a judge's direction, with two required fields and one optional, taken by both the
+     * direction {@code POST} and the {@code PUT} that revises it.
      *
      * <p>The decision vocabulary is {@link MasterDecision}'s and the cap is
      * {@link ReferralSchemas#MAX_DIRECTIONS_LENGTH}, so both reach the document from what enforces them.
@@ -578,11 +579,13 @@ public class OpenAPIWriteBodies {
         direction.addRequiredItem(DECISION_FIELD);
         direction.addRequiredItem(GAZETTE_FIELD);
         direction.setAdditionalProperties(true);
-        direction.setDescription("The holding judge's direction on a referral, recorded once and complete -- "
-            + "there is no draft and no patch, because the check-your-answers page and the attestation are the "
-            + "admin's. Permitted only on a referral this caller currently holds, so a referral withdrawn under "
-            + "them or taken back by the inactivity sweep is a 409 rather than a late direction on a referral "
-            + "that moved on. The referral comes from the path and the case is resolved from it -- a judicial "
+        direction.setDescription("A judge's direction on a referral, always complete -- there is no draft and "
+            + "no patch, because the check-your-answers page and the attestation are the admin's. POST records "
+            + "it on a referral this caller currently holds, so a referral withdrawn under them or taken back by "
+            + "the inactivity sweep is a 409 rather than a late direction on a referral that moved on. PUT "
+            + "replaces the whole of a direction this caller gave, while the referral is Decided and not yet "
+            + "closed, and is validated identically. The referral comes from the path and the case is resolved "
+            + "from it -- a judicial "
             + "URL carries no case id -- and the state, decidedBy and decisionDate come from the transition, "
             + "the token and the clock, so all of them are ignored rather than refused, as any unknown key is.");
     }

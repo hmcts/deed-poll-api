@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.judicial.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -150,6 +151,11 @@ public class JudicialReferralController {
      * transaction, as the caseworker case view records it. It fails open: a view that could not be recorded is still
      * answered -- see {@link ReadAudit}. The claim answers with the same papers and does not record it again.
      */
+    @Operation(summary = "Read a referral and the whole application behind it",
+        description = "Requires the judicial role. The referral, the whole application (details, witnesses and "
+            + "the documents a download would serve, but no case id and no payment or refund data), and its notes. "
+            + "Recorded as CASE_VIEWED. 404, in the words an unknown id gets, for a referral this judge may not "
+            + "see: one held or directed by another judge, and every referral once it is closed or withdrawn.")
     @GetMapping("/{referralId}")
     public JudicialReferralDetail referral(@PathVariable("referralId") String referralId) {
         CurrentUser caller = CurrentUsers.required();
@@ -171,6 +177,14 @@ public class JudicialReferralController {
      * <p>The response and its headers are {@link DocumentFileResponses#of}, the caseworker download's own. Recorded
      * as {@code DOCUMENT_DOWNLOADED} before the file is opened, and refused if it cannot be: it fails closed.
      */
+    @Operation(summary = "Download one of the application's supporting documents",
+        description = "Requires the judicial role. The documentId is one of the referral's "
+            + "application.documents. Any judge may open the documents of an Open referral, the holder those of a "
+            + "Claimed one and the directing judge those of a Decided one. Recorded as DOCUMENT_DOWNLOADED before "
+            + "the file is opened, and refused if that cannot be recorded. Served with the caseworker download's "
+            + "headers: the recorded MIME type, its disposition and Cache-Control: no-store. 404 for a referral "
+            + "this judge may not see, and for a document that is not this referral's case's or has no readable "
+            + "file.")
     @GetMapping("/{referralId}/documents/{documentId}/file")
     public ResponseEntity<Resource> document(@PathVariable("referralId") String referralId,
                                              @PathVariable("documentId") String documentId) {
@@ -218,6 +232,10 @@ public class JudicialReferralController {
      * refuses, naming each offending field.
      */
     @AuditedAs(AuditAction.REFERRAL_DIRECTED)
+    @Operation(summary = "Record a direction on a referral this judge holds",
+        description = "Requires the judicial role. The referral must be Claimed by this judge, else 409, and "
+            + "becomes Decided. 404 for a referral this judge may not see; 400 for a body the schema refuses, "
+            + "naming each field. Also how a judge directs again after withdrawing their direction.")
     @PostMapping("/{referralId}/direction")
     public JudicialReferralDetail direction(@PathVariable("referralId") String referralId,
                                             @RequestBody JudicialDirectionRequest request) {
@@ -240,6 +258,13 @@ public class JudicialReferralController {
      * in the {@code POST}'s words.
      */
     @AuditedAs(AuditAction.REFERRAL_DIRECTION_REVISED)
+    @Operation(summary = "Revise the direction this judge gave",
+        description = "Requires the judicial role. Permitted while the referral is Decided and this judge directed "
+            + "it, which is until the office closes it; a visible referral that is not their direction (the pool, "
+            + "or their own claim) is 409, and a closed one is 404. Takes the direction POST's body and refuses "
+            + "it in the same words (400). Replaces the decision, directionsText and publishToGazette, moves "
+            + "decisionDate to now, keeps decidedBy as first signed, and sets directionChangedAt. The original "
+            + "direction stays on the audit trail; the caseworker is told by a case note and directionChangedAt.")
     @PutMapping("/{referralId}/direction")
     public JudicialReferralDetail reviseDirection(@PathVariable("referralId") String referralId,
                                                   @RequestBody JudicialDirectionRequest request) {
@@ -260,6 +285,13 @@ public class JudicialReferralController {
      * including one the office closed -- and 409 for one they can see that is not a direction of theirs.
      */
     @AuditedAs(AuditAction.REFERRAL_DIRECTION_WITHDRAWN)
+    @Operation(summary = "Withdraw the direction this judge gave, to direct again",
+        description = "Requires the judicial role. No body. Permitted while the referral is Decided and this judge "
+            + "directed it; otherwise 409, or 404 once closed. The referral returns to Claimed, held by the same "
+            + "judge, with the decision, directionsText, publishToGazette, decisionDate and decidedBy cleared, and "
+            + "directionChangedAt set. The judge directs again with POST .../direction. A withdrawn direction is "
+            + "a live claim again: if the judge does not direct it within the claim's inactivity window, the "
+            + "inactivity sweep returns it to the shared pool, where any judge may claim it.")
     @PostMapping("/{referralId}/direction/withdraw")
     public JudicialReferralDetail withdrawDirection(@PathVariable("referralId") String referralId) {
         return JudicialReferralDetail.of(judicial.withdraw(referralId, CurrentUsers.required()));

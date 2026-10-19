@@ -316,6 +316,62 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
+     * What the 2026-10-19 judicial changes publish: the wider application, the document route, revising and
+     * withdrawing a direction, and the {@code directionChangedAt} flag on both referral responses.
+     *
+     * <p>Asserted on the descriptions rather than only on the paths because {@code deed-poll-admin} writes its
+     * screens from this document, and two of the rules are not visible in a schema: a revision keeps the first
+     * signature, and <strong>a withdrawn direction is a live claim again</strong>, which the inactivity sweep can
+     * return to the pool (design decision 6). A judge who withdraws and walks away loses the referral, and the
+     * admin has to be able to say so.
+     */
+    @DisplayName("Documents the wider judicial application, its documents, and revising or withdrawing a direction")
+    @Test
+    void documentsTheJudicialApplicationViewAndRevisedDirections() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                          .andExpect(status().isOk())
+                                          .andReturn()
+                                          .getResponse()
+                                          .getContentAsByteArray());
+
+        String referral = "/paths/~1judicial~1referrals~1{referralId}";
+        assertThat(spec.at(referral + "/get/description").asText())
+            .contains("whole application", "CASE_VIEWED", "404");
+
+        JsonNode file = spec.at("/paths/~1judicial~1referrals~1{referralId}~1documents~1{documentId}~1file/get");
+        assertThat(file.at("/description").asText())
+            .contains("application.documents", "DOCUMENT_DOWNLOADED", "404");
+
+        JsonNode direction = spec.at(referral.replace("}", "}~1direction"));
+        assertThat(direction.at("/post/requestBody/content/application~1json/schema/$ref").asText())
+            .isEqualTo("#/components/schemas/JudicialDirectionRequest");
+        assertThat(direction.at("/put/requestBody/content/application~1json/schema/$ref").asText())
+            .as("the revision takes the direction's own body")
+            .isEqualTo("#/components/schemas/JudicialDirectionRequest");
+        assertThat(direction.at("/put/description").asText())
+            .contains("Decided", "409", "directionChangedAt", "audit");
+
+        JsonNode withdraw = spec.at(referral.replace("}", "}~1direction~1withdraw") + "/post");
+        assertThat(withdraw.has("requestBody")).as("withdrawing takes no body").isFalse();
+        assertThat(withdraw.at("/description").asText())
+            .contains("Claimed", "directionChangedAt", "inactivity sweep", "pool");
+
+        assertThat(spec.at("/components/schemas/JudicialDirectionRequest/description").asText())
+            .contains("PUT");
+
+        for (String schema : List.of("ReferralResponse", "JudicialReferralDetail")) {
+            JsonNode changed = spec.at("/components/schemas/" + schema + "/properties/directionChangedAt");
+            assertThat(changed.at("/format").asText()).as("%s publishes the flag", schema).isEqualTo("date-time");
+            assertThat(changed.at("/description").asText()).as("%s describes the flag", schema)
+                .contains("revised or withdrew", "never cleared");
+        }
+
+        assertThat(spec.at("/components/schemas/JudicialReferralDetail/properties/application/description")
+                       .asText())
+            .contains("payment");
+    }
+
+    /**
      * The three CCD attempt operations -- the list and the two repairs -- and what their schemas never carry.
      *
      * <p>The schema half is the disclosure rule on the published contract: {@code deed-poll-admin} generates its
