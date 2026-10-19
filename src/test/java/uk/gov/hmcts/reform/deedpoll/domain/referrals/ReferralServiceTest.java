@@ -1244,6 +1244,10 @@ class ReferralServiceTest {
             for (Runnable write : writesOnAHeldReferral(UNIDENTIFIED_JUDGE)) {
                 assertThatThrownBy(write::run).isInstanceOf(UnauthorizedError.class);
             }
+            assertThatThrownBy(() -> service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), approval(),
+                UNIDENTIFIED_JUDGE)).isInstanceOf(UnauthorizedError.class);
+            assertThatThrownBy(() -> service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(),
+                UNIDENTIFIED_JUDGE)).isInstanceOf(UnauthorizedError.class);
 
             assertThat(referral.getState()).isEqualTo(ReferralState.Claimed);
             verify(referrals, never()).save(any());
