@@ -433,6 +433,11 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
             .isNull();
         assertThat(reloaded.getConfirmationReceivedAt()).isNull();
         assertThat(reloaded.getConfirmationRecordedBy()).isNull();
+        // And V38's flag: a referral whose direction nobody has revised or withdrawn, which is every one written
+        // before that migration and almost every one after it.
+        assertThat(reloaded.getDirectionChangedAt())
+            .as("never revised or withdrawn")
+            .isNull();
 
         // And V9's column defaults to null rather than to a state, which is what makes "no active referral"
         // expressible at all. Null here even though the referral above is Open, because persisting a
@@ -480,6 +485,8 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         referral.setDecisionDate(LocalDateTime.of(2026, 4, 1, 11, 15));
         referral.setDecidedBy("District Judge Example");
         referral.setDecidedById("idam-subject-9f3");
+        // V38's flag, later than the decision because it records the judge changing it afterwards.
+        referral.setDirectionChangedAt(LocalDateTime.of(2026, 4, 2, 8, 45));
         entityManager.persist(referral);
 
         entityManager.flush();
@@ -511,12 +518,33 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         assertThat(reloaded.getPublishToGazette()).isTrue();
         assertThat(reloaded.getDecisionDate()).isEqualTo(LocalDateTime.of(2026, 4, 1, 11, 15));
         assertThat(reloaded.getDecidedBy()).isEqualTo("District Judge Example");
+        // Mixed case like the rest, so only this statement proves the name.
+        assertThat(reloaded.getDirectionChangedAt())
+            .as("when the judge last revised or withdrew the direction")
+            .isEqualTo(LocalDateTime.of(2026, 4, 2, 8, 45));
 
         // V8 adds columns and touches nothing on the case. The flat block stays the pre-migration
         // snapshot, so recording a direction on the referral leaves it saying what it always said.
         DeedPoll reloadedCase = entityManager.find(DeedPoll.class, deedPoll.getId());
         assertThat(reloadedCase.getMasterDecision()).isEqualTo(MasterDecision.Rejected);
         assertThat(reloadedCase.isPublishToLondonGazette()).isFalse();
+    }
+
+    @Test
+    @DisplayName("V38's directionChangedAt is a nullable timestamp on the referral table")
+    void directionChangedAtIsANullableTimestamp() {
+        // Nullable because it is a fact that most referrals never acquire: a NOT NULL would have to invent a change
+        // for every direction that stood as given, and for every referral without one.
+        List<?> column = entityManager.createNativeQuery(
+                "select data_type, is_nullable from information_schema.columns"
+                    + " where table_schema = 'public' and table_name = 'deedpoll_referral'"
+                    + " and column_name = 'directionChangedAt'")
+            .getResultList();
+
+        assertThat(column).hasSize(1);
+        Object[] row = (Object[]) column.get(0);
+        assertThat(row[0]).isEqualTo("timestamp without time zone");
+        assertThat(row[1]).isEqualTo("YES");
     }
 
     /**

@@ -177,7 +177,11 @@ is missing, stop and say so rather than editing `build.gradle`. Record the actua
 **Files:** `V38__referral_direction_changed_at.sql`; `Referral`; `ReferralResponse`; `JudicialReferralDetail`;
 `SdkMigrationOrderTest` (V1 to V38); `EntityMappingTest`.
 
-- [ ] Container test: the column exists, is nullable, and round-trips.
+- [x] Container test: the column exists, is nullable, and round-trips.
+  2026-10-19: `build` green, `test` 4456 tests, `integration` 20 tests, 0 failures/errors/skipped; `checkstyle.sh`
+  OK; `git diff --check` clean. `EntityMappingTest` checks `information_schema` (timestamp, nullable), null on a
+  fresh referral and the value on a decided one; `SdkMigrationOrderTest` now expects V1 to V38. Nothing writes the
+  column yet (Tasks 4 and 5). It sits after `decidedBy` in both `ReferralResponse` and `JudicialReferralDetail`.
 
 ### Task 4: Revise a direction
 

@@ -52,6 +52,8 @@ import java.util.List;
  *     because absent and false are different answers
  * @param decisionDate when the direction was recorded, or null
  * @param decidedBy who recorded it, which is this caller or null
+ * @param directionChangedAt when this judge last revised or withdrew their direction, or null if it stands as
+ *     first given. Never cleared, so a withdrawn direction keeps it while the referral is claimed again
  * @param application the judicial view of the case, with its witnesses and readable documents, resolved from
  *     the referral rather than named by the caller
  * @param caseNotes the application's notes, newest first, read-only
@@ -71,6 +73,7 @@ public record JudicialReferralDetail(
     Boolean publishToGazette,
     LocalDateTime decisionDate,
     String decidedBy,
+    LocalDateTime directionChangedAt,
     JudicialApplicationView application,
     List<JudicialCaseNote> caseNotes) {
 
@@ -92,6 +95,7 @@ public record JudicialReferralDetail(
             referral.getPublishToGazette(),
             referral.getDecisionDate(),
             referral.getDecidedBy(),
+            referral.getDirectionChangedAt(),
             JudicialApplicationView.from(view.application(), view.witnesses(), view.documents()),
             JudicialCaseNote.from(view.caseNotes()));
     }

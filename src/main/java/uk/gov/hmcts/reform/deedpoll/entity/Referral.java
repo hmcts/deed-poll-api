@@ -31,7 +31,8 @@ import java.util.UUID;
  * A referral of a case to the judiciary: {@code deedpoll_referral}, from {@code V6__referrals.sql},
  * with the claim and direction columns {@code V8__referral_claim_and_direction.sql} adds, the two owner
  * subjects {@code V14__referral_owner_subjects.sql} adds, and the confirmation columns
- * {@code V16__referral_confirmation.sql} adds.
+ * {@code V16__referral_confirmation.sql} adds, and the direction-changed flag
+ * {@code V38__referral_direction_changed_at.sql} adds.
  *
  * <p><strong>Not a port.</strong> Like {@link SavedQuery}, this has no model in
  * {@code reference/deed-poll.prisma}. The source store held one referral inline on the case,
@@ -193,6 +194,17 @@ public class Referral {
      */
     @Column(name = "decidedById")
     private String decidedById;
+
+    /**
+     * When the directing judge last revised or withdrew their direction, from
+     * {@code V38__referral_direction_changed_at.sql}.
+     *
+     * <p>The caseworker's flag that the direction in front of them is not the one first given. Never cleared once
+     * set, because it is a fact about the referral's history; the old and new values are in the audit trail.
+     * Null on every referral whose direction stood as given.
+     */
+    @Column(name = "directionChangedAt")
+    private LocalDateTime directionChangedAt;
 
     /**
      * When the applicant was asked to confirm whether they still want the deed enrolled, from
