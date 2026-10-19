@@ -613,6 +613,140 @@ public class ReferralService {
     }
 
     /**
+     * The judge who directed a referral replacing that direction, while the office has not yet closed it (business
+     * decision 5 of the 2026-10-19 plan).
+     *
+     * <p><strong>Permitted only on a {@code Decided} referral whose {@code decidedById} is the caller.</strong>
+     * Anything this judge may not see under the lock -- another judge's direction, a namesake's, and above all a
+     * referral the office closed or withdrew a moment ago -- is the judicial surface's own 404, in its words
+     * ({@link #invisibleToJudge}). That is what settles a close racing a revise: whichever takes the row lock second
+     * re-reads the first's committed row, so a revise after a close is a 404, as any later request would be, and a
+     * close after a revise actions the revised direction. Anything the judge <em>can</em> see and that is not a
+     * direction of theirs -- the pool, or their own claim -- is a 409: they are looking at it, and a 404 would be a
+     * lie they cannot act on.
+     *
+     * <p>It replaces the decision, {@code directionsText} and {@code publishToGazette}, moves {@code decisionDate}
+     * to now and keeps {@code decidedBy}/{@code decidedById}: the direction is still the same judge's, signed as it
+     * was first given. {@code directionChangedAt} is set, and
+     * nothing ever clears it: it is the flag that tells the caseworker the direction they may already be acting on
+     * has changed, and it is a fact about the referral's history rather than its current state. The claim's own
+     * columns stay as they were.
+     *
+     * <p><strong>The first direction stays on record.</strong> This is a new {@code REFERRAL_DIRECTION_REVISED}
+     * event carrying old and new values of the same four fields {@link #decide} records, and the earlier
+     * {@code REFERRAL_DIRECTED} event is never touched; the trail is append-only. One case note, authored by the
+     * judge and composed like {@link #decide}'s, so the timeline says when the direction changed. Both read-models
+     * are recomputed in this transaction (design decision 10): the state stays {@code Decided}, and the confirmation
+     * columns are left alone, but each recompute is the rule rather than an assumption about what this write did.
+     *
+     * <p>No email and no Gazette change: a revised {@code publishToGazette} changes the referral only, and the
+     * caseworker acts on the flag as on any direction.
+     *
+     * @throws ForbiddenError    if the caller does not hold {@link Role#JUDICIAL}
+     * @throws UnauthorizedError if the caller carries no stable subject, so they can have directed nothing
+     * @throws NotFoundError     if there is no such referral, it belongs to another case, or this judge may not see
+     *                           it under the lock
+     * @throws ConflictError     if this judge may see it but it is not a direction of theirs
+     */
+    @Transactional
+    public Referral reviseDirection(String deedPollId, String id, DirectionInput direction, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+        Referral referral = requireDirectedBy(findReferralForUpdate(deedPollId, id), id, "revised", caller);
+
+        LocalDateTime now = AuditClock.now();
+        final ReferralState fromState = referral.getState();
+        final List<AuditValue> values = List.of(
+            AuditValue.of("state", fromState, fromState),
+            AuditValue.of("decision", referral.getDecision(), direction.decision()),
+            AuditValue.of("directionsText", referral.getDirectionsText(), direction.directionsText().orElse(null)),
+            AuditValue.of("publishToGazette", referral.getPublishToGazette(), direction.publishToGazette()));
+        referral.setDecision(direction.decision());
+        referral.setDirectionsText(direction.directionsText().orElse(null));
+        referral.setPublishToGazette(direction.publishToGazette());
+        referral.setDecisionDate(now);
+        // decidedBy and decidedById are left alone: requireDirectedBy has established the subject is this caller's,
+        // and the signature is the one the direction was first given under.
+        referral.setDirectionChangedAt(now);
+        referral.setLastTouchedAt(now);
+        referral.setModifiedBy(caller.name());
+        referral.setModifiedOn(now);
+
+        Referral saved = referrals.save(referral);
+        audit(AuditAction.REFERRAL_DIRECTION_REVISED, caller, deedPollId, saved, fromState, values);
+        notes.createNote(deedPollId,
+                         new CreateNoteInput(ReferralNotes.directionRevised(saved)),
+                         caller.noteAuthor());
+        refreshCurrentReferralState(deedPollId);
+        refreshAwaitingConfirmation(deedPollId);
+        return saved;
+    }
+
+    /**
+     * The judge who directed a referral taking that direction back, so that they can give a new one with
+     * {@link #decide} (design decision 6 of the 2026-10-19 plan).
+     *
+     * <p>The same precondition as {@link #reviseDirection}, decided the same way under the same lock: {@code Decided}
+     * and directed by this caller, a 404 for anything this judge may not see -- including a referral the office has
+     * just closed -- and a 409 for what they can see and did not direct.
+     *
+     * <p>{@code Decided -> Claimed}, held by the same judge: {@code claimedById} and {@code claimedBy} are left as
+     * they were, {@code claimedAt} and {@code lastTouchedAt} restart now. The decision, {@code directionsText},
+     * {@code publishToGazette}, {@code decisionDate}, {@code decidedBy} and {@code decidedById} are cleared, because
+     * a claim carries no direction. {@code directionChangedAt} is set and never cleared.
+     *
+     * <p><strong>The consequence to keep visible:</strong> a withdrawn direction is a live claim again, so
+     * {@link #reclaimStaleClaims()} returns it to the shared pool after {@link ReferralProperties#claimExpiry()} of
+     * inactivity, exactly as it would any other claim. That is decided, not an oversight; the sweep is unchanged.
+     *
+     * <p>One {@code REFERRAL_DIRECTION_WITHDRAWN} event with old and new values of the state, decision,
+     * {@code directionsText} and {@code publishToGazette}, as {@link #decide} records, and one case note authored by
+     * the judge, composed from the direction being withdrawn. Both read-models are recomputed in this transaction:
+     * the case leaves the "returned -- action needed" queue, and the confirmation columns are left as they are.
+     *
+     * @throws ForbiddenError    if the caller does not hold {@link Role#JUDICIAL}
+     * @throws UnauthorizedError if the caller carries no stable subject, so they can have directed nothing
+     * @throws NotFoundError     if there is no such referral, it belongs to another case, or this judge may not see
+     *                           it under the lock
+     * @throws ConflictError     if this judge may see it but it is not a direction of theirs
+     */
+    @Transactional
+    public Referral withdrawDirection(String deedPollId, String id, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+        Referral referral = requireDirectedBy(findReferralForUpdate(deedPollId, id), id, "withdrawn", caller);
+
+        LocalDateTime now = AuditClock.now();
+        final ReferralState fromState = referral.getState();
+        final List<AuditValue> values = List.of(
+            AuditValue.of("state", fromState, ReferralState.Claimed),
+            AuditValue.of("decision", referral.getDecision(), null),
+            AuditValue.of("directionsText", referral.getDirectionsText(), null),
+            AuditValue.of("publishToGazette", referral.getPublishToGazette(), null));
+        // Composed before the columns are cleared: the note says which direction is no longer the judge's answer.
+        final String note = ReferralNotes.directionWithdrawn(referral);
+        referral.setState(ReferralState.Claimed);
+        referral.setDecision(null);
+        referral.setDirectionsText(null);
+        referral.setPublishToGazette(null);
+        referral.setDecisionDate(null);
+        referral.setDecidedBy(null);
+        referral.setDecidedById(null);
+        // claimedById and claimedBy are left alone: visibleTo has established the direction is this caller's, and
+        // decide required the same subject to hold the claim it directed.
+        referral.setClaimedAt(now);
+        referral.setLastTouchedAt(now);
+        referral.setDirectionChangedAt(now);
+        referral.setModifiedBy(caller.name());
+        referral.setModifiedOn(now);
+
+        Referral saved = referrals.save(referral);
+        audit(AuditAction.REFERRAL_DIRECTION_WITHDRAWN, caller, deedPollId, saved, fromState, values);
+        notes.createNote(deedPollId, new CreateNoteInput(note), caller.noteAuthor());
+        refreshCurrentReferralState(deedPollId);
+        refreshAwaitingConfirmation(deedPollId);
+        return saved;
+    }
+
+    /**
      * The caseworker acknowledging that a returned direction has been actioned.
      *
      * <p>{@code Decided -> Closed}, and this is the transition that drops the referral off the "returned --
@@ -946,6 +1080,38 @@ public class ReferralService {
                 + " -- it is " + referral.getState());
         }
         return referral;
+    }
+
+    /**
+     * The referral, if it is a direction this caller gave and the office has not yet closed.
+     *
+     * <p>Asked under the lock, of the row the lock protects, so visibility is decided again here rather than
+     * trusted from the judicial surface's unlocked read: a referral closed between that read and this one is
+     * invisible now, and the answer is {@link #invisibleToJudge}'s 404. {@link JudicialReferralService#visibleTo} is
+     * the rule rather than a copy of it, so the two cannot disagree. A visible referral that is not this judge's
+     * direction is the 409, naming what was attempted ({@code "revised"} or {@code "withdrawn"}).
+     */
+    private static Referral requireDirectedBy(Referral referral, String id, String attempted, CurrentUser caller) {
+        if (!JudicialReferralService.visibleTo(referral, caller)) {
+            throw invisibleToJudge(id);
+        }
+        // Visible and Decided means decidedById is this caller's subject: that is what visibleTo admits.
+        if (referral.getState() != ReferralState.Decided) {
+            throw new ConflictError("Referral " + id + " is " + referral.getState()
+                + " and its direction can only be " + attempted + " while it is " + ReferralState.Decided
+                + " by the judge who gave it");
+        }
+        return referral;
+    }
+
+    /**
+     * The judicial surface's one refusal for a referral a judge may not see, in the words an unknown id gets.
+     *
+     * <p>The same text as the lookup's own 404, so a judge cannot tell a referral closed under them from one that
+     * never existed, exactly as {@code JudicialReferralService.visible} promises.
+     */
+    private static NotFoundError invisibleToJudge(String id) {
+        return new NotFoundError("Referral " + id + " not found");
     }
 
     /**

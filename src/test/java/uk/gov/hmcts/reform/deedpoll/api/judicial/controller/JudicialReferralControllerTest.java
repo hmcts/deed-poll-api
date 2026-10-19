@@ -30,14 +30,21 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollNoteRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeedPollWitnessRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
@@ -55,6 +62,7 @@ import static org.hamcrest.Matchers.not;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -71,7 +79,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * container-free in {@code JudicialReferralServiceTest}, which runs on the Jenkins agent where this class is
  * excluded ({@code INTEGRATION_TESTS_ENABLED=false}, no Docker). What this class adds is the wiring: that
  * {@code /judicial/**} is authenticated by omission, that the role gate is a 403 and an invisible referral a 404,
- * that the narrow projection really is what goes on the wire, and that the mutating read -- the sweep on the pool
+ * that the judicial projection really is what goes on the wire, and that the mutating read -- the sweep on the pool
  * and the claim refresh on the detail -- happens through a real transaction.
  *
  * <p><strong>The two writes are here for a third reason: which status code each of api-2's refusals becomes.</strong>
@@ -172,6 +180,15 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     @Autowired
     private ReferenceCounterRepository referenceCounters;
 
+    @Autowired
+    private DeedPollWitnessRepository witnesses;
+
+    @Autowired
+    private DeedPollSupportingDocumentRepository documents;
+
+    @Autowired
+    private DeedPollSupportingDocumentTypeRepository documentTypes;
+
     @BeforeEach
     void setUp() {
         clearTables();
@@ -187,6 +204,9 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     private void clearTables() {
         referrals.deleteAll();
         notes.deleteAll();
+        witnesses.deleteAll();
+        documents.deleteAll();
+        documentTypes.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
     }
@@ -747,7 +767,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     class ReadReferral {
 
         @Test
-        @DisplayName("returns the referral, the narrow application view and the case's notes")
+        @DisplayName("returns the referral, the application view and the case's notes")
         void returnsTheReferralAndItsApplication() throws Exception {
             String caseId = named(newCase(), "Robin");
             String referralId = raise(caseId, Urgency.Urgent);
@@ -761,7 +781,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.urgency").value(Urgency.Urgent.name()))
                 .andExpect(jsonPath("$.urgencyReason").value("Hearing listed"))
                 .andExpect(jsonPath("$.createdOn").exists())
-                // The narrow projection: which application, what kind, and which name is changing to which.
+                // Which application, what kind, and which name is changing to which.
                 .andExpect(jsonPath("$.application.displayReference").exists())
                 .andExpect(jsonPath("$.application.type").value(DeedPollType.Adult.name()))
                 .andExpect(jsonPath("$.application.oldForename").value("Robin"))
@@ -779,7 +799,38 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("publishes none of the administrative or payment fields, and no entity")
+        @DisplayName("returns a private case's details, witnesses and attached documents, as the business decided")
+        void returnsThePrivateCaseInFull() throws Exception {
+            String caseId = named(newCase(), "Robin");
+            administrative(caseId);
+            witnessed(caseId);
+            String attached = documented(caseId, "Birth certificate, scanned", "stored-blob");
+            documented(caseId, "Not arrived yet", null);
+            String referralId = raise(caseId, Urgency.Normal);
+
+            authorised(get(POOL + "/" + referralId))
+                .andExpect(status().isOk())
+                // Business decisions 1 and 2 of 2026-10-19: contact details and privacy, shown read-only.
+                .andExpect(jsonPath("$.application.privacy").value(Privacy.Private.name()))
+                .andExpect(jsonPath("$.application.applicantEmail").value("applicant@example.com"))
+                .andExpect(jsonPath("$.application.applicantTelephone").value("020 7946 0000"))
+                .andExpect(jsonPath("$.application.dateReceived").exists())
+                // The witness, with no id.
+                .andExpect(jsonPath("$.application.witnesses.length()").value(1))
+                .andExpect(jsonPath("$.application.witnesses[0].witnessName").value("A Witness"))
+                .andExpect(jsonPath("$.application.witnesses[0].declarant").value(true))
+                .andExpect(jsonPath("$.application.witnesses[0].id").doesNotExist())
+                // Only the document with a file: the row with none would be a link whose download 404s.
+                .andExpect(jsonPath("$.application.documents.length()").value(1))
+                .andExpect(jsonPath("$.application.documents[0].id").value(attached))
+                .andExpect(jsonPath("$.application.documents[0].name").value("Birth certificate, scanned"))
+                .andExpect(jsonPath("$.application.documents[0].documentType").value("Birth certificate"))
+                .andExpect(jsonPath("$.application.documents[0].uploadedOn").exists())
+                .andExpect(jsonPath("$.application.documents[0].storageKey").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("publishes none of the case's identity, payment or processing fields, and no entity")
         void publishesNoneOfTheExcludedFields() throws Exception {
             String caseId = named(newCase(), "Robin");
             administrative(caseId);
@@ -787,23 +838,26 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
             String body = authorised(get(POOL + "/" + referralId))
                 .andExpect(status().isOk())
-                // Decision 8's exclusions, asserted on the response rather than trusted to the record's field
-                // list: no payment or fee references, no privacy administration, no applicant contact details,
-                // no workflow dates, and no internal audit trail.
+                // Design decision 1's exclusions, asserted on the response rather than trusted to the record's
+                // field list: no case identity, no payment or refund data, no processing record.
+                .andExpect(jsonPath("$.application.id").doesNotExist())
+                .andExpect(jsonPath("$.application.referencenumber").doesNotExist())
                 .andExpect(jsonPath("$.application.feeReference").doesNotExist())
                 .andExpect(jsonPath("$.application.refundReference").doesNotExist())
                 .andExpect(jsonPath("$.application.refundAmount").doesNotExist())
-                .andExpect(jsonPath("$.application.privacy").doesNotExist())
-                .andExpect(jsonPath("$.application.applicantEmail").doesNotExist())
-                .andExpect(jsonPath("$.application.applicantTelephone").doesNotExist())
-                .andExpect(jsonPath("$.application.applicantAddress1").doesNotExist())
-                .andExpect(jsonPath("$.application.dateReceived").doesNotExist())
+                .andExpect(jsonPath("$.application.dateOfRefund").doesNotExist())
+                .andExpect(jsonPath("$.application.returnReason").doesNotExist())
+                .andExpect(jsonPath("$.application.onlineApplicationReference").doesNotExist())
+                .andExpect(jsonPath("$.application.postCounter").doesNotExist())
+                .andExpect(jsonPath("$.application.currentReferralState").doesNotExist())
+                .andExpect(jsonPath("$.application.awaitingConfirmationSince").doesNotExist())
+                .andExpect(jsonPath("$.application.dateReferred").doesNotExist())
+                .andExpect(jsonPath("$.application.createdOn").doesNotExist())
                 .andExpect(jsonPath("$.application.createdBy").doesNotExist())
                 .andExpect(jsonPath("$.application.modifiedBy").doesNotExist())
                 .andExpect(jsonPath("$.application.notes").doesNotExist())
-                .andExpect(jsonPath("$.application.witnesses").doesNotExist())
-                // And no case id, because a judicial URL must not be able to carry one.
-                .andExpect(jsonPath("$.application.id").doesNotExist())
+                // Named by neither list, so left out until the business answers.
+                .andExpect(jsonPath("$.application.applicantAddress1").doesNotExist())
                 // The referral's own audit trail goes the same way, and so does the sweep's bookkeeping.
                 .andExpect(jsonPath("$.createdBy").doesNotExist())
                 .andExpect(jsonPath("$.modifiedBy").doesNotExist())
@@ -818,7 +872,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             // disclosure would consist of, and a field renamed on the way out would slip past a name assertion.
             assertThat(body)
                 .doesNotContain("FEE-2026-1")
-                .doesNotContain("applicant@example.com")
+                .doesNotContain("REFUND-2026-1")
                 .doesNotContain(caseId);
         }
 
@@ -1303,6 +1357,309 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
     }
 
+    @Nested
+    @DisplayName("PUT /judicial/referrals/{referralId}/direction")
+    class ReviseDirection {
+
+        /** A different answer from the one directedBy records, in every field. */
+        private static final String REFUSAL = """
+            {"decision": "Rejected", "directionsText": "Refused on reflection", "publishToGazette": false}""";
+
+        @Test
+        @DisplayName("replaces the direction this judge gave, keeps their signature and flags the change")
+        void revisesADirection() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+            Referral first = stored(mine);
+
+            authorised(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value(ReferralState.Decided.name()))
+                .andExpect(jsonPath("$.decision").value(MasterDecision.Rejected.name()))
+                .andExpect(jsonPath("$.directionsText").value("Refused on reflection"))
+                .andExpect(jsonPath("$.publishToGazette").value(false))
+                .andExpect(jsonPath("$.decidedBy").value(JUDGE_NAME))
+                .andExpect(jsonPath("$.directionChangedAt").exists());
+
+            Referral revised = stored(mine);
+            assertThat(revised.getDecision()).isEqualTo(MasterDecision.Rejected);
+            assertThat(revised.getDecisionDate()).isAfterOrEqualTo(first.getDecisionDate());
+            assertThat(revised.getDirectionChangedAt()).isNotNull();
+            assertThat(revised.getDecidedById()).isEqualTo(JUDGE_SUBJECT);
+            // The case's read-model still reads Decided: the referral is still waiting for the office.
+            assertThat(deedPolls.findById(caseOf(mine)).orElseThrow().getCurrentReferralState())
+                .isEqualTo(ReferralState.Decided);
+            assertThat(notes.findAll())
+                .filteredOn(note -> note.getNote().contains("Judicial direction revised"))
+                .singleElement()
+                .satisfies(note -> {
+                    assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME);
+                    assertThat(note.getNote()).contains("Decision: " + MasterDecision.Rejected.name(),
+                                                        "Publish to the London Gazette: No");
+                    assertThat(note.getNote()).doesNotContain("Refused on reflection");
+                });
+        }
+
+        @Test
+        @DisplayName("400s an invalid body with the same messages the POST gives")
+        void refusesAnInvalidDirectionAsThePostDoes() throws Exception {
+            String body = """
+                {"decision": "approved", "publishToGazette": "false"}""";
+            String claimed = claimedBy(JUDGE_NAME);
+            String posted = authorised(post(POOL + "/" + claimed + "/direction")
+                                           .contentType(APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andReturn().getResponse().getContentAsString();
+
+            String mine = directedBy(JUDGE_NAME);
+            authorised(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().json(posted, true));
+
+            assertThat(stored(mine).getDecision()).isEqualTo(MasterDecision.Approved);
+            assertThat(stored(mine).getDirectionChangedAt()).isNull();
+        }
+
+        @Test
+        @DisplayName("409s this judge's own claim, which has no direction to revise yet")
+        void conflictsOnAClaim() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            authorised(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString("can only be revised while it is Decided")));
+
+            assertThat(stored(mine).getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(stored(mine).getDecision()).isNull();
+        }
+
+        @Test
+        @DisplayName("404s another judge's direction, and revises nothing")
+        void notFoundForAnotherJudgesDirection() throws Exception {
+            String theirs = directedBy(OTHER_JUDGE_NAME);
+
+            authorised(put(POOL + "/" + theirs + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + theirs + " not found"));
+
+            assertThat(stored(theirs).getDecision()).isEqualTo(MasterDecision.Approved);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s a referral the office has finished with, even to the judge who directed it")
+        void notFoundOnceFinished(ReferralState state) throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+            moveTo(mine, state);
+
+            authorised(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + mine + " not found"));
+
+            assertThat(stored(mine).getDecision()).isEqualTo(MasterDecision.Approved);
+            assertThat(stored(mine).getDirectionChangedAt()).isNull();
+        }
+
+        @Test
+        @DisplayName("403s a caseworker token, and revises nothing")
+        void refusesACaseworker() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+            asCaseworker();
+
+            authorised(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isForbidden());
+
+            assertThat(stored(mine).getDecision()).isEqualTo(MasterDecision.Approved);
+        }
+
+        @Test
+        @DisplayName("401s without a token")
+        void refusesAnUnauthenticatedCaller() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+
+            mockMvc.perform(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isUnauthorized());
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /judicial/referrals/{referralId}/direction/withdraw")
+    class WithdrawDirection {
+
+        /** A different answer from the one directedBy records, in every field. */
+        private static final String REFUSAL = """
+            {"decision": "Rejected", "directionsText": "Refused on reflection", "publishToGazette": false}""";
+
+        private String withdraw(String referralId) {
+            return POOL + "/" + referralId + "/direction/withdraw";
+        }
+
+        @Test
+        @DisplayName("hands the referral back to the judge who directed it as their claim, with no direction on it")
+        void withdrawsADirection() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+
+            authorised(post(withdraw(mine)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value(ReferralState.Claimed.name()))
+                .andExpect(jsonPath("$.claimedBy").value(JUDGE_NAME))
+                .andExpect(jsonPath("$.decision").doesNotExist())
+                .andExpect(jsonPath("$.directionsText").doesNotExist())
+                .andExpect(jsonPath("$.decidedBy").doesNotExist())
+                .andExpect(jsonPath("$.directionChangedAt").exists());
+
+            Referral withdrawn = stored(mine);
+            assertThat(withdrawn.getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(withdrawn.getClaimedById()).isEqualTo(JUDGE_SUBJECT);
+            assertThat(withdrawn.getDecision()).isNull();
+            assertThat(withdrawn.getPublishToGazette()).isNull();
+            assertThat(withdrawn.getDecisionDate()).isNull();
+            assertThat(withdrawn.getDecidedById()).isNull();
+            assertThat(withdrawn.getDirectionChangedAt()).isNotNull();
+            // The case leaves the "returned -- action needed" queue: its referral is back with the judiciary.
+            assertThat(deedPolls.findById(caseOf(mine)).orElseThrow().getCurrentReferralState())
+                .isEqualTo(ReferralState.Claimed);
+            assertThat(notes.findAll())
+                .filteredOn(note -> note.getNote().contains("Judicial direction withdrawn"))
+                .singleElement()
+                .satisfies(note -> {
+                    assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME);
+                    assertThat(note.getNote()).contains("The withdrawn decision was: " + MasterDecision.Approved.name(),
+                                                        "Publish to the London Gazette: Yes");
+                    assertThat(note.getNote()).doesNotContain("Granted, publication as usual");
+                });
+        }
+
+        @Test
+        @DisplayName("lists the withdrawn direction under this judge's own work as a claim")
+        void appearsUnderMineAsClaimed() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+
+            authorised(post(withdraw(mine))).andExpect(status().isOk());
+
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals.length()").value(1))
+                .andExpect(jsonPath("$.referrals[0].id").value(mine))
+                .andExpect(jsonPath("$.referrals[0].state").value(ReferralState.Claimed.name()));
+        }
+
+        @Test
+        @DisplayName("lets the judge direct it again with the ordinary POST, and keeps the flag")
+        void directsAgainAfterwards() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+            authorised(post(withdraw(mine))).andExpect(status().isOk());
+            LocalDateTime changed = stored(mine).getDirectionChangedAt();
+
+            authorised(post(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value(ReferralState.Decided.name()))
+                .andExpect(jsonPath("$.decision").value(MasterDecision.Rejected.name()))
+                .andExpect(jsonPath("$.decidedBy").value(JUDGE_NAME))
+                .andExpect(jsonPath("$.directionChangedAt").exists());
+
+            Referral redirected = stored(mine);
+            assertThat(redirected.getDecidedById()).isEqualTo(JUDGE_SUBJECT);
+            assertThat(redirected.getDirectionChangedAt()).isEqualTo(changed);
+            assertThat(deedPolls.findById(caseOf(mine)).orElseThrow().getCurrentReferralState())
+                .isEqualTo(ReferralState.Decided);
+        }
+
+        @Test
+        @DisplayName("is a claim like any other to the inactivity sweep, which returns it to the pool once it lapses")
+        void lapsesLikeAnyOtherClaim() throws Exception {
+            String lapsing = directedBy(JUDGE_NAME);
+            String fresh = directedBy(JUDGE_NAME);
+            authorised(post(withdraw(lapsing))).andExpect(status().isOk());
+            authorised(post(withdraw(fresh))).andExpect(status().isOk());
+            lapse(lapsing);
+
+            assertThat(referralService.reclaimStaleClaims()).isEqualTo(1);
+
+            Referral released = stored(lapsing);
+            assertThat(released.getState()).isEqualTo(ReferralState.Open);
+            assertThat(released.getClaimedById()).isNull();
+            // The flag survives the sweep: it is a fact about the referral's history.
+            assertThat(released.getDirectionChangedAt()).isNotNull();
+            assertThat(stored(fresh).getState()).isEqualTo(ReferralState.Claimed);
+            authorised(get(POOL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals[?(@.id == '" + lapsing + "')]").exists());
+        }
+
+        @Test
+        @DisplayName("409s this judge's own claim, which has no direction to withdraw")
+        void conflictsOnAClaim() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            authorised(post(withdraw(mine)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString("can only be withdrawn while it is Decided")));
+
+            assertThat(stored(mine).getDirectionChangedAt()).isNull();
+        }
+
+        @Test
+        @DisplayName("404s another judge's direction, and withdraws nothing")
+        void notFoundForAnotherJudgesDirection() throws Exception {
+            String theirs = directedBy(OTHER_JUDGE_NAME);
+
+            authorised(post(withdraw(theirs)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + theirs + " not found"));
+
+            assertThat(stored(theirs).getState()).isEqualTo(ReferralState.Decided);
+            assertThat(stored(theirs).getDecision()).isEqualTo(MasterDecision.Approved);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s a referral the office has finished with, even to the judge who directed it")
+        void notFoundOnceFinished(ReferralState state) throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+            moveTo(mine, state);
+
+            authorised(post(withdraw(mine)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + mine + " not found"));
+
+            assertThat(stored(mine).getState()).isEqualTo(state);
+            assertThat(stored(mine).getDecision()).isEqualTo(MasterDecision.Approved);
+            assertThat(stored(mine).getDirectionChangedAt()).isNull();
+        }
+
+        @Test
+        @DisplayName("404s an unknown referral in the same words")
+        void notFoundForAnUnknownReferral() throws Exception {
+            authorised(post(withdraw(UNKNOWN_ID)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + UNKNOWN_ID + " not found"));
+        }
+
+        @Test
+        @DisplayName("403s a caseworker token, and withdraws nothing")
+        void refusesACaseworker() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+            asCaseworker();
+
+            authorised(post(withdraw(mine))).andExpect(status().isForbidden());
+
+            assertThat(stored(mine).getState()).isEqualTo(ReferralState.Decided);
+        }
+
+        @Test
+        @DisplayName("401s without a token")
+        void refusesAnUnauthenticatedCaller() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+
+            mockMvc.perform(post(withdraw(mine))).andExpect(status().isUnauthorized());
+        }
+    }
+
+    /** The case a referral was raised on, read in a session of its own because the association is lazy. */
+    private String caseOf(String referralId) {
+        return referrals.findWithCaseById(UUID.fromString(referralId)).orElseThrow().getDeedPoll().getId();
+    }
+
     /** A stored case with a Date Received, which is all reference-number allocation needs. */
     private String newCase() {
         return deedPollService.createDeedPoll(DeedPollPatch.of(Map.of("dateReceived", RECEIVED)))
@@ -1330,14 +1687,51 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         return caseId;
     }
 
-    /** The fields decision 8 excludes, populated so that their absence from the response means something. */
+    /**
+     * Contact details, privacy, and payment data, populated so that the presence of the first two and the
+     * absence of the third from the response each mean something.
+     */
     private void administrative(String caseId) {
         DeedPoll application = deedPolls.findById(caseId).orElseThrow();
         application.setFeeReference("FEE-2026-1");
         application.setApplicantEmail("applicant@example.com");
         application.setApplicantTelephone("020 7946 0000");
         application.setPrivacy(Privacy.Private);
+        application.setRefundReference("REFUND-2026-1");
         deedPolls.saveAndFlush(application);
+    }
+
+    /** One witness on the case, written onto the table as the case fixtures are. */
+    private void witnessed(String caseId) {
+        DeedPollWitness witness = new DeedPollWitness();
+        witness.setDeedPoll(deedPolls.findById(caseId).orElseThrow());
+        witness.setWitnessName("A Witness");
+        witness.setWitnessAddress("1 High Street");
+        witness.setWitnessOccupation("Teacher");
+        witness.setDeclarant(true);
+        witnesses.saveAndFlush(witness);
+    }
+
+    /**
+     * A supporting document on the case, with a storage key or with none.
+     *
+     * <p>A key and no blob is enough here: the listing applies the download's file and store checks without
+     * opening anything, and the download itself is another test's.
+     */
+    private String documented(String caseId, String name, String storageKey) {
+        DeedPollSupportingDocumentType type = documentTypes.findAll().stream().findFirst().orElseGet(() -> {
+            DeedPollSupportingDocumentType created = new DeedPollSupportingDocumentType();
+            created.setName("Birth certificate");
+            return documentTypes.saveAndFlush(created);
+        });
+        DeedPollSupportingDocument document = new DeedPollSupportingDocument();
+        document.setDeedPoll(deedPolls.findById(caseId).orElseThrow());
+        document.setDocumentType(type);
+        document.setDirection(DocumentDirection.Incoming);
+        document.setName(name);
+        document.setStorageKey(storageKey);
+        document.setMimeType(storageKey == null ? null : "application/pdf");
+        return documents.saveAndFlush(document).getId();
     }
 
     /**

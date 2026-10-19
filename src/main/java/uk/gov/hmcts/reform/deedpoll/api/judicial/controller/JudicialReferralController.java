@@ -1,38 +1,47 @@
 package uk.gov.hmcts.reform.deedpoll.api.judicial.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import org.springframework.core.io.Resource;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
+import uk.gov.hmcts.reform.deedpoll.api.DocumentFileResponses;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialDirectionRequest;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialMyReferralsResponse;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialPoolResponse;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialReferralDetail;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.ReadAudit;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralView;
 
 /**
- * What a judge does, all five of it: read the shared pool, read their own outstanding work, open a referral they may
- * see, claim one, and direct one they hold.
+ * What a judge does, all eight of it: read the shared pool, read their own outstanding work, open a referral they
+ * may see, download one of its supporting documents, claim one, direct one they hold, and revise or withdraw a
+ * direction they gave.
  *
- * <p><strong>Three reads and two writes.</strong> The fifth operation is the personal list, and it completes the
+ * <p><strong>Four reads and four writes.</strong> The fifth operation is the personal list, and it completes the
  * judicial boundary rather than widening it: visibility always admitted a judge's own {@code Claimed} and
  * {@code Decided} referrals, and until there was a list of them a successful claim removed the referral from the
  * only page that linked to it. Its membership is the same predicate as that visibility, so the list cannot offer a
  * referral whose own link would answer 404.
  *
- * <p><strong>The two writes add no transition logic.</strong> Claiming and directing are {@code ReferralService}
- * transitions -- api-2's, with the {@code Open}-only guard, the holder-only guard and every column they stamp --
- * and these handlers translate a path, a body and a {@code CurrentUser} into a call and the answer or its
- * {@code ConflictError} into a response. There is no third judicial write: a judge does not edit case data, add
- * notes, raise or withdraw referrals, or close one, because closing is the office's acknowledgement that the
- * direction has been actioned.
+ * <p><strong>The writes add no transition logic.</strong> Claiming, directing, revising and withdrawing are
+ * {@code ReferralService} transitions -- api-2's, with the {@code Open}-only guard, the holder-only guard and every
+ * column they stamp, and the 2026-10-19 revision and withdrawal with their directing-judge guard -- and these
+ * handlers translate a path, a body and a {@code CurrentUser} into a call and the answer or its
+ * {@code ConflictError} into a response. A judge does not edit case data, add notes, raise or withdraw referrals,
+ * or close one, because closing is the office's acknowledgement that the direction has been actioned.
  *
  * <p>Keyed on the referral and never on the case -- see this package's documentation for why, and what replaces
  * the case-scoping the caseworker surface relies on. Every handler here passes the caller to the domain, and the
@@ -44,7 +53,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
  * {@code CaseDetailResponse} carries every field a caseworker sees and reuse would be a disclosure dressed as
  * deduplication.
  *
- * <p>No route here is annotated as requiring authentication, and all five do: {@code SecurityConfiguration}
+ * <p>No route here is annotated as requiring authentication, and all eight do: {@code SecurityConfiguration}
  * authenticates {@code anyRequest()} that is not on a short infrastructure allowlist, so {@code /judicial/**} was
  * protected the moment it existed. An unauthenticated caller is a 401 before routing; a caseworker token is a 403
  * from the domain's role gate; a referral this judge may not see is a 404.
@@ -54,9 +63,11 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 public class JudicialReferralController {
 
     private final JudicialReferralService judicial;
+    private final ReadAudit readAudit;
 
-    public JudicialReferralController(JudicialReferralService judicial) {
+    public JudicialReferralController(JudicialReferralService judicial, ReadAudit readAudit) {
         this.judicial = judicial;
+        this.readAudit = readAudit;
     }
 
     /**
@@ -134,10 +145,51 @@ public class JudicialReferralController {
      * <p>Reading a referral this judge holds refreshes the claim's inactivity clock (decision 7) and reading a
      * pool referral touches nothing. That is the domain's decision and not this handler's, which is why the
      * distinction is not visible here.
+     *
+     * <p><strong>Recorded as {@code CASE_VIEWED}</strong> (design decision 4 of the 2026-10-19 plan), because the
+     * judge now sees the whole application. After the read, so a refused referral records nothing, and outside its
+     * transaction, as the caseworker case view records it. It fails open: a view that could not be recorded is still
+     * answered -- see {@link ReadAudit}. The claim answers with the same papers and does not record it again.
      */
+    @Operation(summary = "Read a referral and the whole application behind it",
+        description = "Requires the judicial role. The referral, the whole application (details, witnesses and "
+            + "the documents a download would serve, but no case id and no payment or refund data), and its notes. "
+            + "Recorded as CASE_VIEWED. 404, in the words an unknown id gets, for a referral this judge may not "
+            + "see: one held or directed by another judge, and every referral once it is closed or withdrawn.")
     @GetMapping("/{referralId}")
     public JudicialReferralDetail referral(@PathVariable("referralId") String referralId) {
-        return JudicialReferralDetail.of(judicial.referral(referralId, CurrentUsers.required()));
+        CurrentUser caller = CurrentUsers.required();
+        JudicialReferralView view = judicial.referral(referralId, caller);
+        readAudit.caseViewed(view.application().getId(), caller);
+        return JudicialReferralDetail.of(view);
+    }
+
+    /**
+     * Streams one of the application's supporting documents, reached through the referral and never through the
+     * case.
+     *
+     * <p>The document ids are the ones the referral's {@code application.documents} lists. The domain resolves the
+     * referral, refuses one this judge may not see with the referral read's own 404, and serves only a readable
+     * document of that referral's case: another case's document is the document's 404, exactly as on the caseworker
+     * route. So any judge may open the documents of an {@code Open} referral, the holder those of a {@code Claimed}
+     * one, the directing judge those of a {@code Decided} one, and nobody once the office closes it.
+     *
+     * <p>The response and its headers are {@link DocumentFileResponses#of}, the caseworker download's own. Recorded
+     * as {@code DOCUMENT_DOWNLOADED} before the file is opened, and refused if it cannot be: it fails closed.
+     */
+    @Operation(summary = "Download one of the application's supporting documents",
+        description = "Requires the judicial role. The documentId is one of the referral's "
+            + "application.documents. Any judge may open the documents of an Open referral, the holder those of a "
+            + "Claimed one and the directing judge those of a Decided one. Recorded as DOCUMENT_DOWNLOADED before "
+            + "the file is opened, and refused if that cannot be recorded. Served with the caseworker download's "
+            + "headers: the recorded MIME type, its disposition and Cache-Control: no-store. 404 for a referral "
+            + "this judge may not see, and for a document that is not this referral's case's or has no readable "
+            + "file.")
+    @GetMapping("/{referralId}/documents/{documentId}/file")
+    public ResponseEntity<Resource> document(@PathVariable("referralId") String referralId,
+                                             @PathVariable("documentId") String documentId) {
+
+        return DocumentFileResponses.of(judicial.document(referralId, documentId, CurrentUsers.required()));
     }
 
     /**
@@ -180,11 +232,68 @@ public class JudicialReferralController {
      * refuses, naming each offending field.
      */
     @AuditedAs(AuditAction.REFERRAL_DIRECTED)
+    @Operation(summary = "Record a direction on a referral this judge holds",
+        description = "Requires the judicial role. The referral must be Claimed by this judge, else 409, and "
+            + "becomes Decided. 404 for a referral this judge may not see; 400 for a body the schema refuses, "
+            + "naming each field. Also how a judge directs again after withdrawing their direction.")
     @PostMapping("/{referralId}/direction")
     public JudicialReferralDetail direction(@PathVariable("referralId") String referralId,
                                             @RequestBody JudicialDirectionRequest request) {
 
         return JudicialReferralDetail.of(
             judicial.direct(referralId, request.toInput(), CurrentUsers.required()));
+    }
+
+    /**
+     * The judge who directed a referral replacing that direction, until the office closes it.
+     *
+     * <p>A {@code PUT} on the direction the {@code POST} created, with the same body and the same validation: what
+     * changes is the whole direction, so the replacement is the whole of it too. The decision date moves to now, the
+     * signature stays the original judge's, and {@code directionChangedAt} is set so the caseworker can see the
+     * direction changed. The first direction stays on the audit trail.
+     *
+     * <p>Four answers, all the domain's: 403 without the judicial role, 404 for a referral this judge may not see --
+     * including one the office closed, even a moment before this request took the row lock -- 409 for one they can
+     * see that is not a direction of theirs (the pool, or their own claim), and 400 for a body the schema refuses,
+     * in the {@code POST}'s words.
+     */
+    @AuditedAs(AuditAction.REFERRAL_DIRECTION_REVISED)
+    @Operation(summary = "Revise the direction this judge gave",
+        description = "Requires the judicial role. Permitted while the referral is Decided and this judge directed "
+            + "it, which is until the office closes it; a visible referral that is not their direction (the pool, "
+            + "or their own claim) is 409, and a closed one is 404. Takes the direction POST's body and refuses "
+            + "it in the same words (400). Replaces the decision, directionsText and publishToGazette, moves "
+            + "decisionDate to now, keeps decidedBy as first signed, and sets directionChangedAt. The original "
+            + "direction stays on the audit trail; the caseworker is told by a case note and directionChangedAt.")
+    @PutMapping("/{referralId}/direction")
+    public JudicialReferralDetail reviseDirection(@PathVariable("referralId") String referralId,
+                                                  @RequestBody JudicialDirectionRequest request) {
+
+        return JudicialReferralDetail.of(
+            judicial.revise(referralId, request.toInput(), CurrentUsers.required()));
+    }
+
+    /**
+     * The judge who directed a referral taking that direction back, so that they can give a new one with the
+     * direction {@code POST}, until the office closes it.
+     *
+     * <p>No body: the referral goes back to {@code Claimed}, held by the same judge, with no direction on it, and
+     * {@code directionChangedAt} is set. <strong>A withdrawn direction is a live claim again</strong>, so if the judge
+     * does not direct it again the inactivity sweep returns it to the shared pool, as it would any other claim.
+     *
+     * <p>The same answers as revising: 403 without the judicial role, 404 for a referral this judge may not see --
+     * including one the office closed -- and 409 for one they can see that is not a direction of theirs.
+     */
+    @AuditedAs(AuditAction.REFERRAL_DIRECTION_WITHDRAWN)
+    @Operation(summary = "Withdraw the direction this judge gave, to direct again",
+        description = "Requires the judicial role. No body. Permitted while the referral is Decided and this judge "
+            + "directed it; otherwise 409, or 404 once closed. The referral returns to Claimed, held by the same "
+            + "judge, with the decision, directionsText, publishToGazette, decisionDate and decidedBy cleared, and "
+            + "directionChangedAt set. The judge directs again with POST .../direction. A withdrawn direction is "
+            + "a live claim again: if the judge does not direct it within the claim's inactivity window, the "
+            + "inactivity sweep returns it to the shared pool, where any judge may claim it.")
+    @PostMapping("/{referralId}/direction/withdraw")
+    public JudicialReferralDetail withdrawDirection(@PathVariable("referralId") String referralId) {
+        return JudicialReferralDetail.of(judicial.withdraw(referralId, CurrentUsers.required()));
     }
 }

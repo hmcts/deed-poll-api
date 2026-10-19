@@ -15,11 +15,13 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.IdamClaims;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
@@ -132,16 +134,21 @@ class JudicialSecurityTest {
     /** An id of the right shape that nothing was stored under: the other half of every 404 comparison. */
     private static final UUID UNKNOWN_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
 
+    /** A document id, which is only ever accepted under a referral the caller may see. */
+    private static final String DOCUMENT_ID = "66666666-6666-6666-6666-666666666666";
+
     /**
      * How many judicial operations have a route today.
      *
      * <p>{@link #operations()} is the service's surface, and the two now agree: {@code mine} was gated before it was
      * published -- safe for the reason the transitions were before the judicial controller existed, because a gate on
-     * a surface nobody can reach refuses everybody -- and publishing its route moved this line. Written as a number
-     * rather than derived, so a handler arriving without a gated service method behind it fails here instead of
-     * following whatever the controller happens to declare.
+     * a surface nobody can reach refuses everybody -- and publishing its route moved this line. The document download
+     * (2026-10-19) moved it again, and so did revising a direction (a {@code PUT} beside the {@code POST}) and
+     * withdrawing one. Written
+     * as a number rather than derived, so a handler arriving without a gated service method behind it fails here
+     * instead of following whatever the controller happens to declare.
      */
-    private static final int ROUTED_OPERATIONS = 5;
+    private static final int ROUTED_OPERATIONS = 8;
 
     /** Every judicial path, as a caller would type it: what the allowlist must not match. */
     private static final List<String> JUDICIAL_PATHS = List.of(
@@ -150,11 +157,15 @@ class JudicialSecurityTest {
         "/judicial/referrals/mine",
         "/judicial/referrals/" + REFERRAL_ID,
         "/judicial/referrals/" + REFERRAL_ID + "/claim",
-        "/judicial/referrals/" + REFERRAL_ID + "/direction");
+        "/judicial/referrals/" + REFERRAL_ID + "/direction",
+        "/judicial/referrals/" + REFERRAL_ID + "/direction/withdraw",
+        "/judicial/referrals/" + REFERRAL_ID + "/documents/" + DOCUMENT_ID + "/file");
 
     private ReferralRepository referrals;
     private ReferralService transitions;
     private NoteService notes;
+    private WitnessService witnesses;
+    private DocumentService documents;
     private JudicialReferralService service;
 
     @BeforeEach
@@ -162,7 +173,9 @@ class JudicialSecurityTest {
         referrals = mock(ReferralRepository.class);
         transitions = mock(ReferralService.class);
         notes = mock(NoteService.class);
-        service = new JudicialReferralService(referrals, transitions, notes);
+        witnesses = mock(WitnessService.class);
+        documents = mock(DocumentService.class);
+        service = new JudicialReferralService(referrals, transitions, notes, witnesses, documents);
 
         // An empty timeline rather than the mock's null: the read wraps the notes in a view, so a judge admitted
         // by the gate has to be able to get all the way to an answer for the refusals to mean anything.
@@ -172,8 +185,8 @@ class JudicialSecurityTest {
     /**
      * One judicial operation, named so a failure says which of them let a caller through or refused one wrongly.
      *
-     * @param keyedOnAReferral whether it names a referral -- three do, and the other two are the lists they are
-     *                         reached from, so the visibility questions below are asked of those three
+     * @param keyedOnAReferral whether it names a referral -- four do, and the other two are the lists they are
+     *                         reached from, so the visibility questions below are asked of those four
      */
     private record Operation(String name, boolean keyedOnAReferral, BiConsumer<String, CurrentUser> apply) {
 
@@ -203,10 +216,18 @@ class JudicialSecurityTest {
                           (referralId, caller) -> service.mine(caller, JudicialReferralService.FIRST_POOL_PAGE)),
             new Operation("referral", true, (referralId, caller) -> service.referral(referralId, caller)),
             new Operation("claim", true, (referralId, caller) -> service.claim(referralId, caller)),
-            new Operation("direct", true, (referralId, caller) -> service.direct(referralId, direction(), caller)));
+            new Operation("direct", true, (referralId, caller) -> service.direct(referralId, direction(), caller)),
+            // The directing judge replacing their own direction: the same gate and the same visibility.
+            new Operation("revise", true, (referralId, caller) -> service.revise(referralId, direction(), caller)),
+            // And taking it back to direct again: the same gate and the same visibility.
+            new Operation("withdraw", true, (referralId, caller) -> service.withdraw(referralId, caller)),
+            // A supporting document, reached through the referral and never through the case: the same gate and
+            // the same visibility, so it is asked every question the other three referral operations are.
+            new Operation("document", true,
+                          (referralId, caller) -> service.document(referralId, DOCUMENT_ID, caller)));
     }
 
-    /** The three operations that name a referral, which are the ones visibility has anything to say about. */
+    /** The four operations that name a referral, which are the ones visibility has anything to say about. */
     private List<Operation> referralOperations() {
         return operations().stream().filter(Operation::keyedOnAReferral).toList();
     }
@@ -253,7 +274,7 @@ class JudicialSecurityTest {
     private void verifyNothingHappened() {
         verifyNoInteractions(referrals);
         verifyNoInteractions(transitions);
-        verifyNoInteractions(notes);
+        verifyNoInteractions(notes, witnesses, documents);
     }
 
     /** No transition ran, whatever else the request did on the way to being refused. */
@@ -261,6 +282,9 @@ class JudicialSecurityTest {
         verify(transitions, never()).claim(anyString(), anyString(), any());
         verify(transitions, never()).touch(anyString(), anyString(), any());
         verify(transitions, never()).decide(anyString(), anyString(), any(), any());
+        verify(transitions, never()).reviseDirection(anyString(), anyString(), any(), any());
+        verify(transitions, never()).withdrawDirection(anyString(), anyString(), any());
+        verify(documents, never()).downloadDocument(anyString(), anyString(), any());
     }
 
     @Nested

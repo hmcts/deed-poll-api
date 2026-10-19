@@ -476,7 +476,7 @@ class ConfirmationSecurityTest {
             note.setCreatedOn(LocalDateTime.parse("2026-05-20T11:05:00"));
 
             JudicialReferralDetail detail = JudicialReferralDetail.of(
-                new JudicialReferralView(referral, referral.getDeedPoll(), List.of(note)));
+                new JudicialReferralView(referral, referral.getDeedPoll(), List.of(note), List.of(), List.of()));
 
             assertThat(detail.caseNotes()).extracting(JudicialCaseNote::note).containsExactly(text);
             // Both halves, named, so a change to either composer is what fails here rather than the wrapper: the

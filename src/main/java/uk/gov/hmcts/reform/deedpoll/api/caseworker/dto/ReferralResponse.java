@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
@@ -70,6 +71,9 @@ import java.util.List;
  * @param decisionDate when the direction was recorded, or null
  * @param decidedBy the judge who recorded it, which is not necessarily {@code modifiedBy} -- the caseworker who
  *     closes the referral afterwards becomes that
+ * @param directionChangedAt when the judge last revised or withdrew their direction, or null if it stands as first
+ *     given. The flag that the direction to action is not the original one; never cleared, and the earlier values
+ *     are in the audit trail
  * @param confirmationRequestedAt when the applicant was asked whether they still want the deed enrolled, or null
  *     -- which is every referral that was never asked. Stamped as the confirmation email is owed, in the same
  *     transaction as the outbox row, so it is when the office asked rather than when Notify accepted
@@ -99,6 +103,10 @@ public record ReferralResponse(
     Boolean publishToGazette,
     LocalDateTime decisionDate,
     String decidedBy,
+    @Schema(nullable = true, description = "When the judge last revised or withdrew their direction, or null if "
+        + "it stands as first given. Set by both and never cleared: a fact about the referral's history, and the "
+        + "earlier direction is on the audit trail.")
+    LocalDateTime directionChangedAt,
     LocalDateTime confirmationRequestedAt,
     ConfirmationOutcome confirmationOutcome,
     LocalDateTime confirmationReceivedAt,
@@ -125,6 +133,7 @@ public record ReferralResponse(
             referral.getPublishToGazette(),
             referral.getDecisionDate(),
             referral.getDecidedBy(),
+            referral.getDirectionChangedAt(),
             referral.getConfirmationRequestedAt(),
             referral.getConfirmationOutcome(),
             referral.getConfirmationReceivedAt(),

@@ -387,11 +387,15 @@ class ReferralSecurityTest {
         }
 
         /**
-         * Neither judicial route names a case, which is the other half of decision 2.
+         * No judicial route names a case, which is the other half of decision 2.
          *
          * <p>The repository rules above are about what can be <em>asked</em>; this is about what can be
          * <em>said</em>. A judicial handler taking a case id would let a judge name an application directly, and
          * the visibility check -- which is about a referral -- would have nothing to say about it.
+         *
+         * <p>A document id is the one other path variable (the 2026-10-19 document download), and only beside a
+         * referral id: the document is accepted only under a referral this caller can see, and only from that
+         * referral's case.
          */
         @Test
         @DisplayName("every judicial route is keyed on the referral, and no judicial handler takes a case id")
@@ -410,7 +414,12 @@ class ReferralSecurityTest {
 
                 assertThat(pathVariables)
                     .as("%s names a referral or nothing, and never a case", handler.getName())
-                    .isSubsetOf("referralId");
+                    .isSubsetOf("referralId", "documentId");
+                if (pathVariables.contains("documentId")) {
+                    assertThat(pathVariables)
+                        .as("%s names its document only under a referral", handler.getName())
+                        .containsExactly("referralId", "documentId");
+                }
             }
         }
 

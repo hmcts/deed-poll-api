@@ -20,11 +20,16 @@ import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
+import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
@@ -117,6 +122,8 @@ class JudicialReferralServiceTest {
     private ReferralRepositoryStub referrals;
     private ReferralService referralService;
     private NoteService notes;
+    private WitnessService witnesses;
+    private DocumentService documents;
     private JudicialReferralService service;
 
     @BeforeEach
@@ -124,7 +131,9 @@ class JudicialReferralServiceTest {
         referrals = new ReferralRepositoryStub();
         referralService = mock(ReferralService.class);
         notes = mock(NoteService.class);
-        service = new JudicialReferralService(referrals.repository(), referralService, notes);
+        witnesses = mock(WitnessService.class);
+        documents = mock(DocumentService.class);
+        service = new JudicialReferralService(referrals.repository(), referralService, notes, witnesses, documents);
     }
 
     /**
@@ -655,6 +664,27 @@ class JudicialReferralServiceTest {
             verify(notes).findNotes(CASE_ID);
         }
 
+        @Test
+        @DisplayName("returns a private case's witnesses and readable documents in full, as for any other case")
+        void returnsThePrivateCaseInFull() {
+            Referral referral = stored(ReferralState.Open, JUDGE);
+            referral.getDeedPoll().setPrivacy(Privacy.Private);
+            DeedPollWitness witness = new DeedPollWitness();
+            DeedPollSupportingDocument document = new DeedPollSupportingDocument();
+            when(witnesses.findWitnesses(CASE_ID)).thenReturn(List.of(witness));
+            when(documents.readableDocuments(CASE_ID)).thenReturn(List.of(document));
+
+            JudicialReferralView view = service.referral(REFERRAL_ID.toString(), JUDGE);
+
+            // Business decision 2: privacy restricts no read here, so a private case is the same whole view.
+            assertThat(view.application().getPrivacy()).isEqualTo(Privacy.Private);
+            assertThat(view.witnesses()).containsExactly(witness);
+            // The readable documents and not every row: which rows those are is DocumentService's rule, the
+            // same one its download applies, so a judge is never listed a document their download would 404.
+            assertThat(view.documents()).containsExactly(document);
+            verify(documents, never()).findDocuments(any());
+        }
+
         @ParameterizedTest
         @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
         @DisplayName("404s a terminal referral even for the judge who directed it, and reads no notes")
@@ -666,8 +696,8 @@ class JudicialReferralServiceTest {
                 .hasMessage(NOT_FOUND);
 
             // The refusal comes before the case is reached at all, so an invisible referral does not even cause
-            // its application's timeline to be loaded.
-            verifyNoInteractions(notes);
+            // its application's timeline, witnesses or documents to be loaded.
+            verifyNoInteractions(notes, witnesses, documents);
             verifyNoInteractions(referralService);
         }
 
@@ -984,6 +1014,160 @@ class JudicialReferralServiceTest {
             assertThatThrownBy(() -> service.direct(REFERRAL_ID.toString(), APPROVAL, JUDGE))
                 .isInstanceOf(ConflictError.class)
                 .hasMessageContaining("not claimed by");
+        }
+    }
+
+    @Nested
+    @DisplayName("revise")
+    class Revise {
+
+        private static final DirectionInput REFUSAL =
+            new DirectionInput(MasterDecision.Rejected, Optional.of("Refused on reflection"), false);
+
+        @Test
+        @DisplayName("refuses a caseworker and an admin, before resolving or recording anything")
+        void refusesANonJudicialCaller() {
+            for (CurrentUser caller : List.of(CASEWORKER, ADMIN)) {
+                assertThatThrownBy(() -> service.revise(REFERRAL_ID.toString(), REFUSAL, caller))
+                    .isInstanceOf(ForbiddenError.class)
+                    .hasMessageContaining(Role.JUDICIAL.claimValue());
+            }
+
+            referrals.verifyNothingRead();
+            verifyNoInteractions(referralService, notes);
+        }
+
+        @Test
+        @DisplayName("hands the transition the direction and the case resolved from the referral")
+        void delegatesToTheTransition() {
+            stored(ReferralState.Decided, JUDGE);
+            Referral revised = referral(ReferralState.Decided, JUDGE);
+            when(referralService.reviseDirection(CASE_ID, REFERRAL_ID.toString(), REFUSAL, JUDGE))
+                .thenReturn(revised);
+
+            JudicialReferralView view = service.revise(REFERRAL_ID.toString(), REFUSAL, JUDGE);
+
+            verify(referralService).reviseDirection(CASE_ID, REFERRAL_ID.toString(), REFUSAL, JUDGE);
+            assertThat(view.referral()).isSameAs(revised);
+            // A decided referral has no claim, so nothing here may sweep or touch one.
+            verify(referralService, never()).reclaimStaleClaims();
+            verify(referralService, never()).touch(any(), any(), any());
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s a referral the office has finished with, without revising anything")
+        void notFoundForATerminalReferral(ReferralState terminal) {
+            stored(terminal, JUDGE);
+
+            assertThatThrownBy(() -> service.revise(REFERRAL_ID.toString(), REFUSAL, JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).reviseDirection(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("404s a direction another judge gave, in the words an unknown id gets")
+        void notFoundForAnotherJudgesDirection() {
+            stored(ReferralState.Decided, JUDGE);
+
+            assertThatThrownBy(() -> service.revise(REFERRAL_ID.toString(), REFUSAL, OTHER_JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).reviseDirection(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("refuses a judge with no subject, rather than 404ing or 409ing them, and revises nothing")
+        void refusesACallerWithNoSubject() {
+            stored(ReferralState.Decided, JUDGE);
+
+            assertThatThrownBy(() -> service.revise(REFERRAL_ID.toString(), REFUSAL, UNIDENTIFIED_JUDGE))
+                .isInstanceOf(UnauthorizedError.class);
+
+            verify(referralService, never()).reviseDirection(any(), any(), any(), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("withdraw")
+    class Withdraw {
+
+        @Test
+        @DisplayName("refuses a caseworker and an admin, before resolving or recording anything")
+        void refusesANonJudicialCaller() {
+            for (CurrentUser caller : List.of(CASEWORKER, ADMIN)) {
+                assertThatThrownBy(() -> service.withdraw(REFERRAL_ID.toString(), caller))
+                    .isInstanceOf(ForbiddenError.class)
+                    .hasMessageContaining(Role.JUDICIAL.claimValue());
+            }
+
+            referrals.verifyNothingRead();
+            verifyNoInteractions(referralService, notes);
+        }
+
+        @Test
+        @DisplayName("hands the transition the case resolved from the referral")
+        void delegatesToTheTransition() {
+            stored(ReferralState.Decided, JUDGE);
+            Referral claimed = referral(ReferralState.Claimed, JUDGE);
+            when(referralService.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE)).thenReturn(claimed);
+
+            JudicialReferralView view = service.withdraw(REFERRAL_ID.toString(), JUDGE);
+
+            verify(referralService).withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+            assertThat(view.referral()).isSameAs(claimed);
+            verify(referralService, never()).reclaimStaleClaims();
+            verify(referralService, never()).touch(any(), any(), any());
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s a referral the office has finished with, without withdrawing anything")
+        void notFoundForATerminalReferral(ReferralState terminal) {
+            stored(terminal, JUDGE);
+
+            assertThatThrownBy(() -> service.withdraw(REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).withdrawDirection(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("404s a direction another judge gave, in the words an unknown id gets")
+        void notFoundForAnotherJudgesDirection() {
+            stored(ReferralState.Decided, JUDGE);
+
+            assertThatThrownBy(() -> service.withdraw(REFERRAL_ID.toString(), OTHER_JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).withdrawDirection(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("refuses a judge with no subject, rather than 404ing or 409ing them, and withdraws nothing")
+        void refusesACallerWithNoSubject() {
+            stored(ReferralState.Decided, JUDGE);
+
+            assertThatThrownBy(() -> service.withdraw(REFERRAL_ID.toString(), UNIDENTIFIED_JUDGE))
+                .isInstanceOf(UnauthorizedError.class);
+
+            verify(referralService, never()).withdrawDirection(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("refuses a judge with no subject a document of a claimed referral, and opens nothing")
+        void refusesADocumentToACallerWithNoSubject() {
+            stored(ReferralState.Claimed, JUDGE);
+
+            assertThatThrownBy(() -> service.document(REFERRAL_ID.toString(), "document-1", UNIDENTIFIED_JUDGE))
+                .isInstanceOf(UnauthorizedError.class);
+
+            verifyNoInteractions(documents);
         }
     }
 

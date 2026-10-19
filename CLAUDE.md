@@ -30,7 +30,7 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations 
                                   and /caseworker/gazette-notices (1 history GET, counted apart)
                                   and /caseworker/gazette-settings (Delivery Manager-only GET/PUT)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
-api/judicial/{controller,dto}     the judicial surface — 5 operations, keyed on the referral, never on the case
+api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 api/caller/{controller,dto}       GET /me, the caller's own areas and capabilities — outside both staff areas,
                                   because a caller with no deed-poll role must be told so rather than refused
@@ -397,8 +397,34 @@ no prefix, host case, path or slash leniency. Configure the issuer exactly as to
   (`/caseworker/cases/{id}/…`); a judicial URL carries a referral id and no case id at all, so
   `JudicialReferralService.visibleTo` stands where the parent id stands — the pool, plus this judge's own
   `Claimed`/`Decided` referrals — which `GET /judicial/referrals/mine` is the list of. Anything else is **404**,
-  in the same words an unknown id gets; the only 403 is the `Role.JUDICIAL` gate. Its five operations must not
-  reuse a caseworker DTO, and an ArchUnit rule fails the build if one does.
+  in the same words an unknown id gets; the only 403 is the `Role.JUDICIAL` gate. Its eight operations must not
+  reuse a caseworker DTO, and an ArchUnit rule fails the build if one does. Every new judicial read or write goes
+  through `JudicialReferralService.visible`, so a closed or withdrawn referral is that same 404.
+- **The judicial application view is wide by decision of 2026-10-19, and still not a case.**
+  `JudicialApplicationView` replaced the eight-field `JudicialCaseView` (decision 8 of 2026-09-17, superseded):
+  details, contact details, representative, nationality, minor and parent details, privacy (read-only), the
+  previous system's referral fields, witnesses as `JudicialWitness` (no id) and documents as `JudicialDocument`
+  (only rows `DocumentService.readableDocuments` would serve). **Excluded, and pinned by `JudicialApplicationViewTest`
+  over every judicial DTO:** the case `id` and `referencenumber`, payment and refund data (`feeReference`,
+  `refundAmount`, `dateOfRefund`, `refundReference`), and the office's processing record (audit columns,
+  `postCounter`, `onlineApplicationReference`, the day counts, both referral read-models, `returnReason`, the
+  workflow dates). The address lines, declaration multiselects, `publishToLondonGazette`, `migratedRecord` and
+  `retainPermanently` are on neither list and left out until the business answers; never add a field by choosing.
+  Opening a referral records `CASE_VIEWED` (fail-open); `GET /judicial/referrals/{referralId}/documents/{documentId}/file`
+  records `DOCUMENT_DOWNLOADED` (fail-closed) and answers with `api/DocumentFileResponses`, the caseworker download's
+  own headers. Any judge who can see an `Open` referral can open its documents.
+- **The directing judge may revise or withdraw their direction until the office closes the referral.**
+  `PUT /judicial/referrals/{referralId}/direction` (the `POST`'s body and validation) and
+  `POST …/direction/withdraw` (no body) both require `Decided` with `decidedById` = caller, decided by
+  `ReferralService.requireDirectedBy` **under the row lock**, which re-asks `visibleTo` so a close that commits
+  first makes the judge's write a 404; any other visible referral is 409. Revise replaces the decision,
+  `directionsText` and `publishToGazette`, moves `decisionDate` and keeps `decidedBy`/`decidedById` as first signed.
+  Withdraw returns the referral to `Claimed` by the same judge with the direction columns cleared, and the judge
+  directs again with `POST`. Both set V38's `directionChangedAt`, which is **never cleared** and is the caseworker's
+  flag (with a case note from `ReferralNotes`), record `REFERRAL_DIRECTION_REVISED`/`_WITHDRAWN` with old and new
+  values, and recompute both read-models. No email, and no Gazette code changes. **A withdrawn direction is a live
+  claim again:** if the judge does not direct it, the inactivity sweep returns it to the pool like any other claim.
+  That is deliberate and published in withdraw's OpenAPI description; do not special-case the sweep.
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
   only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback

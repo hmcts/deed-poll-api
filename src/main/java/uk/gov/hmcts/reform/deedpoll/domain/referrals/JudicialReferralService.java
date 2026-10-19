@@ -11,7 +11,10 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentDownload;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
@@ -21,15 +24,15 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * What a judge may see, the two lists they work from, and the two things they write.
+ * What a judge may see, the two lists they work from, the documents they may open, and the three things they write.
  *
  * <p><strong>A separate unit from {@link ReferralService} on purpose, and it adds no transition.</strong> Every
  * state change the judicial surface performs is a call into one of that service's transitions -- {@code claim},
- * {@code touch}, {@code decide} -- which keeps one place owning how a referral changes state. What lives here
- * is the half of the judicial surface that service has no notion of: <em>who may see which referral</em>, the two
- * cross-case lists a judge works from -- the shared pool and their own outstanding work -- and the resolution of
- * one referral id to the application and the notes behind it. Every method here is the judicial persona's, and
- * none is reachable by a caseworker token.
+ * {@code touch}, {@code decide}, {@code reviseDirection} -- which keeps one place owning how a referral changes
+ * state. What lives here is the half of the judicial surface that service has no notion of: <em>who may see which
+ * referral</em>, the two cross-case lists a judge works from -- the shared pool and their own outstanding work --
+ * and the resolution of one referral id to the application, the notes and the documents behind it. Every method
+ * here is the judicial persona's, and none is reachable by a caseworker token.
  *
  * <p><strong>{@link #claim} and {@link #direct} are that resolution in front of a transition, and nothing
  * else.</strong> Neither guards a state, stamps a column or writes a note: the {@code Open}-only rule, the
@@ -130,13 +133,19 @@ public class JudicialReferralService {
     private final ReferralRepository referrals;
     private final ReferralService referralService;
     private final NoteService notes;
+    private final WitnessService witnesses;
+    private final DocumentService documents;
 
     public JudicialReferralService(ReferralRepository referrals,
                                    ReferralService referralService,
-                                   NoteService notes) {
+                                   NoteService notes,
+                                   WitnessService witnesses,
+                                   DocumentService documents) {
         this.referrals = referrals;
         this.referralService = referralService;
         this.notes = notes;
+        this.witnesses = witnesses;
+        this.documents = documents;
     }
 
     /**
@@ -435,6 +444,88 @@ public class JudicialReferralService {
     }
 
     /**
+     * The directing judge replacing their direction while the office has not yet closed the referral (business
+     * decision 5 of the 2026-10-19 plan).
+     *
+     * <p>{@link ReferralService#reviseDirection} owns the rule -- {@code Decided} and directed by this caller -- and
+     * asks visibility again under the row lock, so a close that commits while this request waits for the lock is the
+     * same 404 as one that committed before {@link #visible} read the row. Like {@link #direct}, this resolves the
+     * referral without a case id, refuses an invisible one, and does not sweep: a decided referral holds no claim.
+     *
+     * @param referralId the referral, as it appears in the path
+     * @param direction the replacement direction, validated as the first one was
+     * @param caller the judge who gave the direction
+     * @return the referral carrying the revised direction
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws NotFoundError if there is no such referral, or this caller may not see it
+     * @throws ConflictError if this caller may see it but it is not a direction of theirs
+     */
+    @Transactional
+    public JudicialReferralView revise(String referralId, DirectionInput direction, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+
+        Referral referral = visible(referralId, caller);
+        DeedPoll application = referral.getDeedPoll();
+        return view(referralService.reviseDirection(application.getId(), referralId, direction, caller),
+                    application);
+    }
+
+    /**
+     * The directing judge taking their direction back while the office has not yet closed the referral, so that
+     * they can direct it again with {@link #direct} (business decision 5 of the 2026-10-19 plan).
+     *
+     * <p>{@link ReferralService#withdrawDirection} owns the rule and asks visibility again under the row lock, as
+     * {@link #revise} does. It does not sweep: the referral becomes this judge's claim, with its inactivity clock
+     * restarted, and from then on the sweep treats it as it treats any other claim.
+     *
+     * @param referralId the referral, as it appears in the path
+     * @param caller the judge who gave the direction
+     * @return the referral, {@code Claimed} by the same judge with no direction on it
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws NotFoundError if there is no such referral, or this caller may not see it
+     * @throws ConflictError if this caller may see it but it is not a direction of theirs
+     */
+    @Transactional
+    public JudicialReferralView withdraw(String referralId, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+
+        Referral referral = visible(referralId, caller);
+        DeedPoll application = referral.getDeedPoll();
+        return view(referralService.withdrawDirection(application.getId(), referralId, caller), application);
+    }
+
+    /**
+     * One supporting document of the application behind a referral this judge may see, recorded as
+     * {@code DOCUMENT_DOWNLOADED} before it is opened (design decision 3 of the 2026-10-19 plan).
+     *
+     * <p><strong>The case comes from the referral, never from the caller.</strong> {@link #visible} resolves it and
+     * refuses an invisible referral with the same 404 every judicial operation gives, so every judge may open the
+     * documents of an {@code Open} referral (business decision 3), only the holder those of a {@code Claimed} one,
+     * and nobody once it is {@code Closed} or {@code Withdrawn}. The document is then
+     * {@link DocumentService#downloadDocument(String, String, CurrentUser)} scoped to that case: a document of
+     * another case is the document's own 404, as on the caseworker route, and a failed audit insert opens nothing.
+     *
+     * <p><strong>Not {@code @Transactional}, and it touches no claim.</strong> The store may be CDAM, a remote call
+     * that must not hold a database transaction open, and the referral is read join-fetched so its case id needs no
+     * session. Refreshing the claim's inactivity clock is a write, and the read of the referral that lists these
+     * documents has already made it.
+     *
+     * @param referralId the referral, as it appears in the path
+     * @param documentId the document, as it appears in the path
+     * @param caller the judge downloading it
+     * @return the document and its open stream, which the caller closes
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws NotFoundError if there is no such referral, this caller may not see it, or the document is not a
+     *     readable document of its case
+     */
+    public DocumentDownload document(String referralId, String documentId, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+
+        Referral referral = visible(referralId, caller);
+        return documents.downloadDocument(referral.getDeedPoll().getId(), documentId, caller);
+    }
+
+    /**
      * The referral this id names, if this caller may see it -- and the same 404 for every way they may not.
      *
      * <p>The filter is part of the lookup rather than a branch after it, so there is one exit for "you cannot
@@ -451,16 +542,23 @@ public class JudicialReferralService {
     }
 
     /**
-     * One referral, its application and that application's timeline -- what every method here answers with.
+     * One referral, its application and that application's timeline, witnesses and readable documents -- what
+     * every method here answers with.
      *
      * <p>The same three things after a claim or a direction as after a read, because the judicial surface has one
      * representation of a referral and a transition's answer is that representation: the screen a judge sees next
      * is the papers, so a leaner write response would only cost them the read they are about to make. The
      * application is passed in rather than re-navigated, since {@code Referral.deedPoll} is {@code LAZY} and the
      * caller has already resolved it join-fetched.
+     *
+     * <p>The documents are {@link DocumentService#readableDocuments} rather than every row, so the list a judge is
+     * shown and the download they then make apply one rule (design decision 2 of the 2026-10-19 plan): a row with
+     * no file, or one another store wrote, is not offered as a link that would 404.
      */
     private JudicialReferralView view(Referral referral, DeedPoll application) {
-        return new JudicialReferralView(referral, application, notes.findNotes(application.getId()));
+        String caseId = application.getId();
+        return new JudicialReferralView(referral, application,
+            notes.findNotes(caseId), witnesses.findWitnesses(caseId), documents.readableDocuments(caseId));
     }
 
     /**

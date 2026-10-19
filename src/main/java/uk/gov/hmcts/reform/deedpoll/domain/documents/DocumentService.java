@@ -148,6 +148,20 @@ public class DocumentService {
     }
 
     /**
+     * The documents of a case a download would serve, oldest first, each with its type loaded.
+     *
+     * <p>{@link #findDocuments} narrowed by the same file and store checks {@link #readableDocument} makes, so a
+     * list built from this offers no link whose download would 404. The judicial application view is the caller:
+     * a judge is shown attached files only.
+     *
+     * @throws NotFoundError if there is no such case
+     */
+    @Transactional(readOnly = true)
+    public List<DeedPollSupportingDocument> readableDocuments(String deedPollId) {
+        return findDocuments(deedPollId).stream().filter(this::servable).toList();
+    }
+
+    /**
      * One document of one case, with its type loaded.
      *
      * @throws NotFoundError if there is no such document, or it belongs to another case
@@ -390,13 +404,24 @@ public class DocumentService {
                     return found;
                 }))
             .orElseThrow(() -> new NotFoundError("Document " + id + " not found"));
-        if (document.getStorageKey() == null || document.getStorageKey().isBlank()) {
+        if (!hasFile(document)) {
             throw new NotFoundError("This document has no attached file");
         }
         if (!store.serves(document.getStorageState())) {
             throw new NotFoundError(NOT_IN_THIS_STORE);
         }
         return document;
+    }
+
+    /**
+     * Whether {@link #readableDocument} would serve this row: it has a file, and this store wrote it.
+     */
+    private boolean servable(DeedPollSupportingDocument document) {
+        return hasFile(document) && store.serves(document.getStorageState());
+    }
+
+    private static boolean hasFile(DeedPollSupportingDocument document) {
+        return document.getStorageKey() != null && !document.getStorageKey().isBlank();
     }
 
     /**

@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.judicial.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralView;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
@@ -10,8 +11,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * One referral as the judge who may see it reads it: the referral, the narrow application view, and the
- * application's timeline.
+ * One referral as the judge who may see it reads it: the referral, the application with its witnesses and
+ * documents, and the application's timeline.
  *
  * <p>One response for what is one screen. A judge opening a referral is deciding what to direct, and the reasons
  * it was raised, the names it is about and what the office has recorded are all inputs to that -- so they arrive
@@ -30,7 +31,7 @@ import java.util.List;
  * without being able to tell them who else holds anything.
  *
  * <p><strong>No {@code createdBy}, {@code modifiedBy} or {@code modifiedOn}, and no {@code lastTouchedAt}.</strong>
- * The first three are the internal audit trail decision 8 excludes -- which caseworker raised the referral and
+ * The first three are the internal audit trail the judicial view excludes -- which caseworker raised the referral and
  * who last saved the row is not an input to a direction -- and {@code lastTouchedAt} is the inactivity sweep's
  * bookkeeping, which the caseworker response leaves out for the same reason. {@code createdOn} stays, because how
  * long a referral has waited is a fact about the referral that a judge is entitled to weigh.
@@ -52,8 +53,10 @@ import java.util.List;
  *     because absent and false are different answers
  * @param decisionDate when the direction was recorded, or null
  * @param decidedBy who recorded it, which is this caller or null
- * @param application the narrow judicial view of the case, resolved from the referral rather than named by the
- *     caller
+ * @param directionChangedAt when this judge last revised or withdrew their direction, or null if it stands as
+ *     first given. Never cleared, so a withdrawn direction keeps it while the referral is claimed again
+ * @param application the judicial view of the case, with its witnesses and readable documents, resolved from
+ *     the referral rather than named by the caller
  * @param caseNotes the application's notes, newest first, read-only
  */
 public record JudicialReferralDetail(
@@ -71,7 +74,13 @@ public record JudicialReferralDetail(
     Boolean publishToGazette,
     LocalDateTime decisionDate,
     String decidedBy,
-    JudicialCaseView application,
+    @Schema(nullable = true, description = "When the judge last revised or withdrew their direction, or null if "
+        + "it stands as first given. Set by both and never cleared: a fact about the referral's history, and the "
+        + "earlier direction is on the audit trail.")
+    LocalDateTime directionChangedAt,
+    @Schema(description = "The application behind the referral, resolved from it: its details, witnesses and "
+        + "readable documents. Never a case id, and no payment or refund data.")
+    JudicialApplicationView application,
     List<JudicialCaseNote> caseNotes) {
 
     /** The referral, its application and its timeline, as the domain resolved them for this judge. */
@@ -92,7 +101,8 @@ public record JudicialReferralDetail(
             referral.getPublishToGazette(),
             referral.getDecisionDate(),
             referral.getDecidedBy(),
-            JudicialCaseView.from(view.application()),
+            referral.getDirectionChangedAt(),
+            JudicialApplicationView.from(view.application(), view.witnesses(), view.documents()),
             JudicialCaseNote.from(view.caseNotes()));
     }
 }

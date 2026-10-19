@@ -120,7 +120,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/judicial/referrals/mine",
         "/judicial/referrals/{referralId}",
         "/judicial/referrals/{referralId}/claim",
-        "/judicial/referrals/{referralId}/direction"
+        "/judicial/referrals/{referralId}/direction",
+        "/judicial/referrals/{referralId}/direction/withdraw",
+        "/judicial/referrals/{referralId}/documents/{documentId}/file"
     );
 
     /**
@@ -299,13 +301,14 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * The five judicial operations, published and counted apart from the caseworker surface's thirty-four.
+     * The eight judicial operations, published and counted apart from the caseworker surface's thirty-four.
      *
      * <p>Both halves for the reason the caseworker assertion gives: a count cannot tell a new verb on a known
      * path from a new path, and a path list cannot tell a route that was removed from one that never existed.
      *
-     * <p><strong>Five operations across five paths</strong> -- the shared pool, this judge's own work and one
-     * referral each carry a {@code GET}, and a referral's claim and its direction each carry a {@code POST}.
+     * <p><strong>Eight operations across seven paths</strong> -- the shared pool, this judge's own work, one referral
+     * and one of its documents' files each carry a {@code GET}, a referral's claim, its direction and the direction's
+     * withdrawal each carry a {@code POST}, and the direction a {@code PUT} that revises it.
      * There is no third write and no judicial closure: closing a referral is the office's acknowledgement that
      * the direction has been actioned, so it lives on the caseworker surface and its absence here is the decision
      * rather than an omission.
@@ -314,9 +317,10 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      * follow-up that moves the contract. The number is asserted here rather than only listed because
      * {@code deed-poll-admin} generates its client from this document: an unpublished route is an unbuildable
      * screen, and the personal list exists precisely because a judge who claimed a referral could not find it
-     * again.
+     * again. The document download (2026-10-19) moved it to six, reached through the referral and never the case,
+     * revising a direction to seven, and withdrawing one to eight.
      */
-    @DisplayName("Documents the five judicial operations, separately from the caseworker count")
+    @DisplayName("Documents the eight judicial operations, separately from the caseworker count")
     @Test
     void documentsTheJudicialOperations() throws Exception {
         JsonNode paths = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -331,7 +335,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         long operations = JUDICIAL_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(5);
+        assertThat(operations).isEqualTo(8);
 
         // The personal list is a path of its own and not a verb on the pool's, which is what a reader of the
         // count above cannot see: `/judicial/referrals` still carries exactly one operation, so `mine` cannot
@@ -342,6 +346,62 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         // And the caseworker count is untouched by their arrival, asserted here as well as above: the judicial
         // routes are a new surface, so the number that describes the old one must not have moved.
         assertThat(CASEWORKER_PATHS).doesNotContainAnyElementsOf(JUDICIAL_PATHS);
+    }
+
+    /**
+     * What the 2026-10-19 judicial changes publish: the wider application, the document route, revising and
+     * withdrawing a direction, and the {@code directionChangedAt} flag on both referral responses.
+     *
+     * <p>Asserted on the descriptions rather than only on the paths because {@code deed-poll-admin} writes its
+     * screens from this document, and two of the rules are not visible in a schema: a revision keeps the first
+     * signature, and <strong>a withdrawn direction is a live claim again</strong>, which the inactivity sweep can
+     * return to the pool (design decision 6). A judge who withdraws and walks away loses the referral, and the
+     * admin has to be able to say so.
+     */
+    @DisplayName("Documents the wider judicial application, its documents, and revising or withdrawing a direction")
+    @Test
+    void documentsTheJudicialApplicationViewAndRevisedDirections() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                          .andExpect(status().isOk())
+                                          .andReturn()
+                                          .getResponse()
+                                          .getContentAsByteArray());
+
+        String referral = "/paths/~1judicial~1referrals~1{referralId}";
+        assertThat(spec.at(referral + "/get/description").asText())
+            .contains("whole application", "CASE_VIEWED", "404");
+
+        JsonNode file = spec.at("/paths/~1judicial~1referrals~1{referralId}~1documents~1{documentId}~1file/get");
+        assertThat(file.at("/description").asText())
+            .contains("application.documents", "DOCUMENT_DOWNLOADED", "404");
+
+        JsonNode direction = spec.at(referral.replace("}", "}~1direction"));
+        assertThat(direction.at("/post/requestBody/content/application~1json/schema/$ref").asText())
+            .isEqualTo("#/components/schemas/JudicialDirectionRequest");
+        assertThat(direction.at("/put/requestBody/content/application~1json/schema/$ref").asText())
+            .as("the revision takes the direction's own body")
+            .isEqualTo("#/components/schemas/JudicialDirectionRequest");
+        assertThat(direction.at("/put/description").asText())
+            .contains("Decided", "409", "directionChangedAt", "audit");
+
+        JsonNode withdraw = spec.at(referral.replace("}", "}~1direction~1withdraw") + "/post");
+        assertThat(withdraw.has("requestBody")).as("withdrawing takes no body").isFalse();
+        assertThat(withdraw.at("/description").asText())
+            .contains("Claimed", "directionChangedAt", "inactivity sweep", "pool");
+
+        assertThat(spec.at("/components/schemas/JudicialDirectionRequest/description").asText())
+            .contains("PUT");
+
+        for (String schema : List.of("ReferralResponse", "JudicialReferralDetail")) {
+            JsonNode changed = spec.at("/components/schemas/" + schema + "/properties/directionChangedAt");
+            assertThat(changed.at("/format").asText()).as("%s publishes the flag", schema).isEqualTo("date-time");
+            assertThat(changed.at("/description").asText()).as("%s describes the flag", schema)
+                .contains("revised or withdrew", "never cleared");
+        }
+
+        assertThat(spec.at("/components/schemas/JudicialReferralDetail/properties/application/description")
+                       .asText())
+            .contains("payment");
     }
 
     /**
@@ -389,7 +449,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      *
      * <p><strong>Added because the two counts above cannot see an addition.</strong> Each sums the operations of
      * the paths its own list names, so a brand-new path is simply not counted: the caseworker total stays 33, the
-     * judicial total stays 5, both assertions pass, and an undocumented route reaches
+     * judicial total stays 8, both assertions pass, and an undocumented route reaches
      * {@code deed-poll-admin}'s generated client without anything failing. Found while adding {@code mine},
      * which had to be written into {@link #JUDICIAL_PATHS} by hand for the count to move at all.
      *
@@ -486,6 +546,18 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(spec.at("/paths/~1judicial~1referrals/get/responses/200/content/*~1*/schema/$ref").asText())
             .as("the pool still answers with its own envelope")
             .isEqualTo("#/components/schemas/JudicialPoolResponse");
+
+        // The application a judge reads (2026-10-19): its witnesses and documents, and none of the case's
+        // identity or payment data. The full list is JudicialApplicationViewTest's; this is that it is published.
+        JsonNode application = spec.at("/components/schemas/JudicialApplicationView/properties");
+        assertThat(application.fieldNames()).toIterable()
+            .contains("privacy", "applicantEmail", "witnesses", "documents")
+            .doesNotContain("id", "referencenumber", "feeReference", "refundAmount", "refundReference");
+        assertThat(spec.at("/components/schemas/JudicialWitness/properties").fieldNames()).toIterable()
+            .doesNotContain("id");
+        assertThat(spec.at("/components/schemas/JudicialDocument/properties").fieldNames()).toIterable()
+            .contains("id", "documentType", "uploadedOn")
+            .doesNotContain("storageKey", "hasFile");
 
         // And the subject columns are nowhere in the document at all, asserted over the whole of it rather than
         // field by field: the two names are searched as text, so a schema this test does not know about cannot
@@ -1126,7 +1198,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
         // And no judicial schema publishes any of it, asserted over the whole document: a judge decided the
         // non-publication request and has no part in what the applicant then chose.
-        for (String judicial : List.of("JudicialReferralSummary", "JudicialReferralDetail", "JudicialCaseView")) {
+        List<String> judicialSchemas =
+            List.of("JudicialReferralSummary", "JudicialReferralDetail", "JudicialApplicationView");
+        for (String judicial : judicialSchemas) {
             JsonNode properties = spec.at("/components/schemas/" + judicial + "/properties");
             assertThat(properties.isObject()).as("%s is published at all", judicial).isTrue();
             List<String> names = new ArrayList<>();
