@@ -188,7 +188,7 @@ is missing, stop and say so rather than editing `build.gradle`. Record the actua
 **Files:** `ReferralService.reviseDirection`; `JudicialReferralService`; controller `PUT`; `AuditAction`;
 `ReferralNotes`; tests.
 
-- [ ] Tests (red first):
+- [x] Tests (red first):
   - the directing judge revises: columns replaced, `decisionDate` moved, `directionChangedAt` set;
   - one `REFERRAL_DIRECTION_REVISED` audit event with old and new values, and the earlier `REFERRAL_DIRECTED`
     event untouched;
@@ -197,7 +197,13 @@ is missing, stop and say so rather than editing `build.gradle`. Record the actua
   - another judge gets 404, a `Claimed` referral 409, a `Closed` one 404, and an invalid body 400 with the same
     messages as `POST`;
   - a close and a revise racing on one referral: the second waits, and the outcome matches the order.
-- [ ] `WriteEndpointAuditCoverageTest` passes with `@AuditedAs`.
+- [x] `WriteEndpointAuditCoverageTest` passes with `@AuditedAs`.
+  2026-10-19: `build` green, `test` 4488 tests, `integration` 20 tests, 0 failures/errors/skipped; `checkstyle.sh`
+  OK; `git diff --check` clean. `ReferralService.reviseDirection` re-asks `JudicialReferralService.visibleTo` under
+  the row lock, so a close that commits while the revise waits is the judicial 404 (`DirectionRevisionConcurrencyTest`,
+  both orders); a visible referral that is not the caller's direction (pool, own claim) is 409. `decidedBy` and
+  `decidedById` are kept as first signed. Coverage counts are now 28 writes, 24 audited; `JudicialSecurityTest`
+  has seven operations and `OpenAPIPublisherTest` seven judicial operations (descriptions remain Task 6's).
 
 ### Task 5: Withdraw a direction
 

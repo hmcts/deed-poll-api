@@ -62,6 +62,7 @@ import static org.hamcrest.Matchers.not;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -1354,6 +1355,135 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
             assertThat(stored(mine).getDecision()).isNull();
         }
+    }
+
+    @Nested
+    @DisplayName("PUT /judicial/referrals/{referralId}/direction")
+    class ReviseDirection {
+
+        /** A different answer from the one directedBy records, in every field. */
+        private static final String REFUSAL = """
+            {"decision": "Rejected", "directionsText": "Refused on reflection", "publishToGazette": false}""";
+
+        @Test
+        @DisplayName("replaces the direction this judge gave, keeps their signature and flags the change")
+        void revisesADirection() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+            Referral first = stored(mine);
+
+            authorised(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value(ReferralState.Decided.name()))
+                .andExpect(jsonPath("$.decision").value(MasterDecision.Rejected.name()))
+                .andExpect(jsonPath("$.directionsText").value("Refused on reflection"))
+                .andExpect(jsonPath("$.publishToGazette").value(false))
+                .andExpect(jsonPath("$.decidedBy").value(JUDGE_NAME))
+                .andExpect(jsonPath("$.directionChangedAt").exists());
+
+            Referral revised = stored(mine);
+            assertThat(revised.getDecision()).isEqualTo(MasterDecision.Rejected);
+            assertThat(revised.getDecisionDate()).isAfterOrEqualTo(first.getDecisionDate());
+            assertThat(revised.getDirectionChangedAt()).isNotNull();
+            assertThat(revised.getDecidedById()).isEqualTo(JUDGE_SUBJECT);
+            // The case's read-model still reads Decided: the referral is still waiting for the office.
+            assertThat(deedPolls.findById(caseOf(mine)).orElseThrow().getCurrentReferralState())
+                .isEqualTo(ReferralState.Decided);
+            assertThat(notes.findAll())
+                .filteredOn(note -> note.getNote().contains("Judicial direction revised"))
+                .singleElement()
+                .satisfies(note -> {
+                    assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME);
+                    assertThat(note.getNote()).contains("Decision: " + MasterDecision.Rejected.name(),
+                                                        "Publish to the London Gazette: No");
+                    assertThat(note.getNote()).doesNotContain("Refused on reflection");
+                });
+        }
+
+        @Test
+        @DisplayName("400s an invalid body with the same messages the POST gives")
+        void refusesAnInvalidDirectionAsThePostDoes() throws Exception {
+            String body = """
+                {"decision": "approved", "publishToGazette": "false"}""";
+            String claimed = claimedBy(JUDGE_NAME);
+            String posted = authorised(post(POOL + "/" + claimed + "/direction")
+                                           .contentType(APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andReturn().getResponse().getContentAsString();
+
+            String mine = directedBy(JUDGE_NAME);
+            authorised(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().json(posted, true));
+
+            assertThat(stored(mine).getDecision()).isEqualTo(MasterDecision.Approved);
+            assertThat(stored(mine).getDirectionChangedAt()).isNull();
+        }
+
+        @Test
+        @DisplayName("409s this judge's own claim, which has no direction to revise yet")
+        void conflictsOnAClaim() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            authorised(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(containsString("can only be revised while it is Decided")));
+
+            assertThat(stored(mine).getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(stored(mine).getDecision()).isNull();
+        }
+
+        @Test
+        @DisplayName("404s another judge's direction, and revises nothing")
+        void notFoundForAnotherJudgesDirection() throws Exception {
+            String theirs = directedBy(OTHER_JUDGE_NAME);
+
+            authorised(put(POOL + "/" + theirs + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + theirs + " not found"));
+
+            assertThat(stored(theirs).getDecision()).isEqualTo(MasterDecision.Approved);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s a referral the office has finished with, even to the judge who directed it")
+        void notFoundOnceFinished(ReferralState state) throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+            moveTo(mine, state);
+
+            authorised(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + mine + " not found"));
+
+            assertThat(stored(mine).getDecision()).isEqualTo(MasterDecision.Approved);
+            assertThat(stored(mine).getDirectionChangedAt()).isNull();
+        }
+
+        @Test
+        @DisplayName("403s a caseworker token, and revises nothing")
+        void refusesACaseworker() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+            asCaseworker();
+
+            authorised(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isForbidden());
+
+            assertThat(stored(mine).getDecision()).isEqualTo(MasterDecision.Approved);
+        }
+
+        @Test
+        @DisplayName("401s without a token")
+        void refusesAnUnauthenticatedCaller() throws Exception {
+            String mine = directedBy(JUDGE_NAME);
+
+            mockMvc.perform(put(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content(REFUSAL))
+                .andExpect(status().isUnauthorized());
+        }
+    }
+
+    /** The case a referral was raised on, read in a session of its own because the association is lazy. */
+    private String caseOf(String referralId) {
+        return referrals.findWithCaseById(UUID.fromString(referralId)).orElseThrow().getDeedPoll().getId();
     }
 
     /** A stored case with a Date Received, which is all reference-number allocation needs. */

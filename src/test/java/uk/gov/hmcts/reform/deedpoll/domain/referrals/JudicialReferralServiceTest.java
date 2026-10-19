@@ -1017,6 +1017,69 @@ class JudicialReferralServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("revise")
+    class Revise {
+
+        private static final DirectionInput REFUSAL =
+            new DirectionInput(MasterDecision.Rejected, Optional.of("Refused on reflection"), false);
+
+        @Test
+        @DisplayName("refuses a caseworker and an admin, before resolving or recording anything")
+        void refusesANonJudicialCaller() {
+            for (CurrentUser caller : List.of(CASEWORKER, ADMIN)) {
+                assertThatThrownBy(() -> service.revise(REFERRAL_ID.toString(), REFUSAL, caller))
+                    .isInstanceOf(ForbiddenError.class)
+                    .hasMessageContaining(Role.JUDICIAL.claimValue());
+            }
+
+            referrals.verifyNothingRead();
+            verifyNoInteractions(referralService, notes);
+        }
+
+        @Test
+        @DisplayName("hands the transition the direction and the case resolved from the referral")
+        void delegatesToTheTransition() {
+            stored(ReferralState.Decided, JUDGE);
+            Referral revised = referral(ReferralState.Decided, JUDGE);
+            when(referralService.reviseDirection(CASE_ID, REFERRAL_ID.toString(), REFUSAL, JUDGE))
+                .thenReturn(revised);
+
+            JudicialReferralView view = service.revise(REFERRAL_ID.toString(), REFUSAL, JUDGE);
+
+            verify(referralService).reviseDirection(CASE_ID, REFERRAL_ID.toString(), REFUSAL, JUDGE);
+            assertThat(view.referral()).isSameAs(revised);
+            // A decided referral has no claim, so nothing here may sweep or touch one.
+            verify(referralService, never()).reclaimStaleClaims();
+            verify(referralService, never()).touch(any(), any(), any());
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s a referral the office has finished with, without revising anything")
+        void notFoundForATerminalReferral(ReferralState terminal) {
+            stored(terminal, JUDGE);
+
+            assertThatThrownBy(() -> service.revise(REFERRAL_ID.toString(), REFUSAL, JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).reviseDirection(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("404s a direction another judge gave, in the words an unknown id gets")
+        void notFoundForAnotherJudgesDirection() {
+            stored(ReferralState.Decided, JUDGE);
+
+            assertThatThrownBy(() -> service.revise(REFERRAL_ID.toString(), REFUSAL, OTHER_JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).reviseDirection(any(), any(), any(), any());
+        }
+    }
+
     /**
      * A referral of {@link #CASE_ID} in the given state, stored where the judicial read can find it.
      *

@@ -24,15 +24,15 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * What a judge may see, the two lists they work from, the documents they may open, and the two things they write.
+ * What a judge may see, the two lists they work from, the documents they may open, and the three things they write.
  *
  * <p><strong>A separate unit from {@link ReferralService} on purpose, and it adds no transition.</strong> Every
  * state change the judicial surface performs is a call into one of that service's transitions -- {@code claim},
- * {@code touch}, {@code decide} -- which keeps one place owning how a referral changes state. What lives here
- * is the half of the judicial surface that service has no notion of: <em>who may see which referral</em>, the two
- * cross-case lists a judge works from -- the shared pool and their own outstanding work -- and the resolution of
- * one referral id to the application, the notes and the documents behind it. Every method here is the judicial
- * persona's, and none is reachable by a caseworker token.
+ * {@code touch}, {@code decide}, {@code reviseDirection} -- which keeps one place owning how a referral changes
+ * state. What lives here is the half of the judicial surface that service has no notion of: <em>who may see which
+ * referral</em>, the two cross-case lists a judge works from -- the shared pool and their own outstanding work --
+ * and the resolution of one referral id to the application, the notes and the documents behind it. Every method
+ * here is the judicial persona's, and none is reachable by a caseworker token.
  *
  * <p><strong>{@link #claim} and {@link #direct} are that resolution in front of a transition, and nothing
  * else.</strong> Neither guards a state, stamps a column or writes a note: the {@code Open}-only rule, the
@@ -441,6 +441,33 @@ public class JudicialReferralService {
         Referral referral = visible(referralId, caller);
         DeedPoll application = referral.getDeedPoll();
         return view(referralService.decide(application.getId(), referralId, direction, caller), application);
+    }
+
+    /**
+     * The directing judge replacing their direction while the office has not yet closed the referral (business
+     * decision 5 of the 2026-10-19 plan).
+     *
+     * <p>{@link ReferralService#reviseDirection} owns the rule -- {@code Decided} and directed by this caller -- and
+     * asks visibility again under the row lock, so a close that commits while this request waits for the lock is the
+     * same 404 as one that committed before {@link #visible} read the row. Like {@link #direct}, this resolves the
+     * referral without a case id, refuses an invisible one, and does not sweep: a decided referral holds no claim.
+     *
+     * @param referralId the referral, as it appears in the path
+     * @param direction the replacement direction, validated as the first one was
+     * @param caller the judge who gave the direction
+     * @return the referral carrying the revised direction
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws NotFoundError if there is no such referral, or this caller may not see it
+     * @throws ConflictError if this caller may see it but it is not a direction of theirs
+     */
+    @Transactional
+    public JudicialReferralView revise(String referralId, DirectionInput direction, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+
+        Referral referral = visible(referralId, caller);
+        DeedPoll application = referral.getDeedPoll();
+        return view(referralService.reviseDirection(application.getId(), referralId, direction, caller),
+                    application);
     }
 
     /**

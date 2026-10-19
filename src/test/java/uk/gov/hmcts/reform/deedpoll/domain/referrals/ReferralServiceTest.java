@@ -1443,8 +1443,8 @@ class ReferralServiceTest {
                 .isInstanceOf(ConflictError.class)
                 .hasMessageContaining(state.name());
 
-            // Decided included, which is what stops a judge revising a direction they have already given: a
-            // second direction is not an amendment, it is two answers to one question.
+            // Decided included: a second POST is not an amendment, it is two answers to one question. Revising is
+            // its own transition, reviseDirection, which records the change as one.
             assertThat(referral.getState()).isEqualTo(state);
             verify(referrals, never()).save(any());
         }
@@ -1536,6 +1536,216 @@ class ReferralServiceTest {
             // block above safe even though the entity is in the transaction's session.
             verify(deedPolls).writeCurrentReferralState(CASE_ID, ReferralState.Decided);
             verifyNoMoreInteractions(deedPolls);
+        }
+    }
+
+    @Nested
+    @DisplayName("revising a direction")
+    class Revising {
+
+        /** When the direction being revised was first given, well before the test runs. */
+        private static final LocalDateTime DIRECTED_AT = LocalDateTime.parse("2026-09-02T11:00:00");
+
+        /** A referral the given judge claimed and then directed: an approval with publication. */
+        private Referral storedDirection(CurrentUser judge) {
+            Referral referral = storedClaim(judge, Duration.ofMinutes(30));
+            referral.setState(ReferralState.Decided);
+            referral.setDecision(MasterDecision.Approved);
+            referral.setDirectionsText("Granted");
+            referral.setPublishToGazette(true);
+            referral.setDecisionDate(DIRECTED_AT);
+            referral.setDecidedById(judge.userId());
+            referral.setDecidedBy(judge.name());
+            return referral;
+        }
+
+        @Test
+        @DisplayName("replaces the direction, moves the decision date and marks the referral as changed")
+        void replacesTheDirection() {
+            Referral referral = storedDirection(JUDGE);
+            final LocalDateTime claimedAt = referral.getClaimedAt();
+            final LocalDateTime before = AuditClock.now();
+
+            service.reviseDirection(CASE_ID, REFERRAL_ID.toString(),
+                                    direction("Rejected", "Refused on reflection", false), JUDGE);
+
+            Referral written = saved();
+            assertThat(written.getState()).isEqualTo(ReferralState.Decided);
+            assertThat(written.getDecision()).isEqualTo(MasterDecision.Rejected);
+            assertThat(written.getDirectionsText()).isEqualTo("Refused on reflection");
+            assertThat(written.getPublishToGazette()).isFalse();
+            assertThat(written.getDecisionDate()).isBetween(before, AuditClock.now());
+            // The flag the caseworker acts on, and never cleared: it is a fact about the referral's history.
+            assertThat(written.getDirectionChangedAt()).isBetween(before, AuditClock.now());
+            // Still this judge's direction, signed as it was, and the claim's columns as they were.
+            assertThat(written.getDecidedById()).isEqualTo("judge-3");
+            assertThat(written.getDecidedBy()).isEqualTo("District Judge Bell");
+            assertThat(written.getClaimedById()).isEqualTo("judge-3");
+            assertThat(written.getClaimedAt()).isEqualTo(claimedAt);
+            assertThat(written.getModifiedBy()).isEqualTo("District Judge Bell");
+        }
+
+        @Test
+        @DisplayName("keeps the signature's subject when the judge's display name has changed since")
+        void keepsTheSubjectAcrossARename() {
+            storedDirection(JUDGE);
+
+            service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), approval(), RENAMED_JUDGE);
+
+            // The same subject, so the same judge: the direction is theirs to revise, and its signature is the one
+            // it was first given under.
+            assertThat(saved().getDecidedById()).isEqualTo("judge-3");
+            assertThat(saved().getDecidedBy()).isEqualTo("District Judge Bell");
+        }
+
+        @Test
+        @DisplayName("writes one case note attributed to the judge, summarising the revised direction")
+        void writesACaseNote() {
+            storedDirection(JUDGE);
+
+            service.reviseDirection(CASE_ID, REFERRAL_ID.toString(),
+                                    direction("Rejected", "Refused on reflection", false), JUDGE);
+
+            NoteWritten note = noteWritten();
+            assertThat(note.author().author()).isEqualTo("District Judge Bell");
+            assertThat(note.deedPollId()).isEqualTo(CASE_ID);
+            assertThat(note.text()).isEqualTo(
+                "Judicial direction revised for referral raised on 1 September 2026, reasons: Minor."
+                    + " Decision: Rejected. Publish to the London Gazette: No."
+                    + " See the referral for the full direction.");
+        }
+
+        @Test
+        @DisplayName("summarises rather than copies the direction, so even the longest one writes its note")
+        void doesNotCopyTheDirectionsTextIntoTheNote() {
+            storedDirection(JUDGE);
+            String longest = "x".repeat(ReferralSchemas.MAX_DIRECTIONS_LENGTH);
+
+            service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), direction("Rejected", longest, false), JUDGE);
+
+            assertThat(noteWritten().text()).doesNotContain("xxx");
+            assertThat(NoteForm.validateNoteText(noteWritten().text())).isEmpty();
+            assertThat(saved().getDirectionsText()).isEqualTo(longest);
+        }
+
+        @Test
+        @DisplayName("recomputes both of the case's read-models in the same call")
+        void recomputesTheReadModels() {
+            storedDirection(JUDGE);
+
+            service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE);
+
+            assertThat(caseColumnWritten(CASE_ID)).isEqualTo(ReferralState.Decided);
+            // The case lock first and then the column, which is refreshAwaitingConfirmation's own order: a revised
+            // direction does not answer the applicant, and recomputing says so rather than assuming it.
+            InOrder order = inOrder(deedPolls);
+            order.verify(deedPolls).lockForConfirmationRecompute(CASE_ID);
+            order.verify(deedPolls).writeAwaitingConfirmationSince(eq(CASE_ID), any());
+        }
+
+        @Test
+        @DisplayName("leaves the confirmation columns as they were")
+        void leavesTheConfirmationColumnsAlone() {
+            Referral referral = storedDirection(JUDGE);
+            LocalDateTime asked = LocalDateTime.parse("2026-09-03T10:00:00");
+            referral.setConfirmationRequestedAt(asked);
+
+            service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE);
+
+            assertThat(saved().getConfirmationRequestedAt()).isEqualTo(asked);
+            assertThat(saved().getConfirmationOutcome()).isNull();
+        }
+
+        @Test
+        @DisplayName("refuses a caseworker before looking the referral up")
+        void refusesACaseworker() {
+            storedDirection(JUDGE);
+
+            assertThatThrownBy(() -> service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), approval(),
+                                                             CASEWORKER))
+                .isInstanceOf(ForbiddenError.class)
+                .hasMessageContaining(Role.JUDICIAL.claimValue());
+
+            verify(referrals, never()).findByIdAndDeedPollIdForUpdate(any(), anyString());
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("409s the judge's own claim, which has no direction yet to revise")
+        void conflictsOnAClaim() {
+            storedClaim(JUDGE, Duration.ofMinutes(5));
+
+            assertThatThrownBy(() -> service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
+                .isInstanceOf(ConflictError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " is " + ReferralState.Claimed
+                    + " and its direction can only be revised while it is " + ReferralState.Decided
+                    + " by the judge who gave it");
+
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("409s a pool referral, which every judge can see and nobody has directed")
+        void conflictsOnAPoolReferral() {
+            stored(ReferralState.Open);
+
+            assertThatThrownBy(() -> service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
+                .isInstanceOf(ConflictError.class);
+
+            verify(referrals, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("404s another judge's direction, in the words an unknown referral gets")
+        void notFoundForAnotherJudgesDirection() {
+            Referral referral = storedDirection(OTHER_JUDGE);
+
+            assertThatThrownBy(() -> service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            assertThat(referral.getDecision()).isEqualTo(MasterDecision.Approved);
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("404s a namesake of the judge who gave it, because the subject is what owns it")
+        void notFoundForANamesake() {
+            storedDirection(JUDGE);
+
+            assertThatThrownBy(() -> service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), approval(),
+                                                             NAMESAKE_JUDGE))
+                .isInstanceOf(NotFoundError.class);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
+        @DisplayName("404s once the office has closed it, as the judicial surface does, even to its author")
+        void notFoundOnceFinished(ReferralState state) {
+            // What decides a close racing a revise: the close commits, the revise's locked read sees Closed, and
+            // the judge is told what any later request would tell them.
+            Referral referral = storedDirection(JUDGE);
+            referral.setState(state);
+
+            assertThatThrownBy(() -> service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referrals, never()).save(any());
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("404s a referral addressed through another case")
+        void notFoundThroughAnotherCase() {
+            storedDirection(JUDGE);
+
+            assertThatThrownBy(() -> service.reviseDirection(OTHER_CASE_ID, REFERRAL_ID.toString(), approval(),
+                                                             JUDGE))
+                .isInstanceOf(NotFoundError.class);
         }
     }
 

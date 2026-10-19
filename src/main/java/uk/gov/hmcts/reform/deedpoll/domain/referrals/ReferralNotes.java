@@ -173,6 +173,23 @@ public final class ReferralNotes {
     }
 
     /**
+     * The note for a judge revising the direction they gave: what they now decide, and whether it now goes in the
+     * Gazette.
+     *
+     * <p>{@link #directionRecorded}'s summary, for its reasons: never the direction text, which may be longer than a
+     * note may be, and the two answers spelled out. It does not say what the answers were before: the earlier note
+     * is a few rows down in the same grid, and the audit trail holds both values. The prose differs from the
+     * recorded note's in one word so a caseworker scanning the grid can tell a revision from a first direction,
+     * which is what tells them the direction they may already be acting on has changed.
+     */
+    public static String directionRevised(Referral referral) {
+        return "Judicial direction revised for referral " + identifies(referral) + "."
+            + " Decision: " + decision(referral) + "."
+            + " Publish to the London Gazette: " + gazette(referral) + "."
+            + " See the referral for the full direction.";
+    }
+
+    /**
      * The note for the office acknowledging that a returned direction has been carried out.
      *
      * <p>The one lifecycle step that no column records at all after the fact: closing writes

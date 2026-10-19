@@ -143,11 +143,11 @@ class JudicialSecurityTest {
      * <p>{@link #operations()} is the service's surface, and the two now agree: {@code mine} was gated before it was
      * published -- safe for the reason the transitions were before the judicial controller existed, because a gate on
      * a surface nobody can reach refuses everybody -- and publishing its route moved this line. The document download
-     * (2026-10-19) moved it again. Written as a number
-     * rather than derived, so a handler arriving without a gated service method behind it fails here instead of
-     * following whatever the controller happens to declare.
+     * (2026-10-19) moved it again, and so did revising a direction (a {@code PUT} beside the {@code POST}). Written
+     * as a number rather than derived, so a handler arriving without a gated service method behind it fails here
+     * instead of following whatever the controller happens to declare.
      */
-    private static final int ROUTED_OPERATIONS = 6;
+    private static final int ROUTED_OPERATIONS = 7;
 
     /** Every judicial path, as a caller would type it: what the allowlist must not match. */
     private static final List<String> JUDICIAL_PATHS = List.of(
@@ -215,6 +215,8 @@ class JudicialSecurityTest {
             new Operation("referral", true, (referralId, caller) -> service.referral(referralId, caller)),
             new Operation("claim", true, (referralId, caller) -> service.claim(referralId, caller)),
             new Operation("direct", true, (referralId, caller) -> service.direct(referralId, direction(), caller)),
+            // The directing judge replacing their own direction: the same gate and the same visibility.
+            new Operation("revise", true, (referralId, caller) -> service.revise(referralId, direction(), caller)),
             // A supporting document, reached through the referral and never through the case: the same gate and
             // the same visibility, so it is asked every question the other three referral operations are.
             new Operation("document", true,
@@ -276,6 +278,7 @@ class JudicialSecurityTest {
         verify(transitions, never()).claim(anyString(), anyString(), any());
         verify(transitions, never()).touch(anyString(), anyString(), any());
         verify(transitions, never()).decide(anyString(), anyString(), any(), any());
+        verify(transitions, never()).reviseDirection(anyString(), anyString(), any(), any());
         verify(documents, never()).downloadDocument(anyString(), anyString(), any());
     }
 
