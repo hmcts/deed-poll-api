@@ -161,10 +161,10 @@ Files: `config/SecurityConfiguration.java` (Javadoc only), `config/ServiceAuthCo
 
 ### Task 3: Handoff
 
-- [ ] Record in Execution notes: the starting and final commits, the changed files, each task's red and green
+- [x] Record in Execution notes: the starting and final commits, the changed files, each task's red and green
       evidence, the mutation checks, and test counts from `build/test-results` after `cleanTest`. Note that the
       Fortify `4AB8588B…` justification depends on this gate.
-- [ ] Run the validation commands one last time.
+- [x] Run the validation commands one last time.
 
 ## Execution notes
 
@@ -197,6 +197,21 @@ Task 2, 2026-10-19:
   chain box ticked with the cross-reference. `CLAUDE.md` gained a `/citizen/**` paragraph under Staff permissions.
 - Validation: focused run 251 tests in 40 classes; build 4,539 unit tests in 496 classes plus 22 integration tests
   in 4, all 0 failures, 0 errors, 0 skipped. Direct Checkstyle 0 WARN/ERROR; `git diff --check` clean.
+
+Task 3, handoff, 2026-10-19:
+- Commits: starting `93c2dd3`. Then `46fda4f` (plan), `cb900ce` (Task 1, the chain), `eca754c` (Task 2, the words),
+  and this handoff commit is the final one. Diff it against `93c2dd3`.
+- Changed files: `SecurityConfiguration.java`, `ServiceAuthConfiguration.java` (Javadoc only),
+  `api/citizen/controller/package-info.java`, new `CitizenSecurityTest.java`, `StaffAccessRulesTest.java`,
+  `CLAUDE.md`, `docs/plans/fees-and-pay-1-ways-to-pay-card.md` and this plan.
+- Red/green and mutations: as recorded under Task 1 (8 of 12 red before the chain; both mutations caught and
+  restored). Task 2 changed no code; its green is the Task 2 validation above.
+- Final validation, after `cleanTest`, counted from `build/test-results`: focused run 251 tests in 40 classes;
+  build 4,539 unit tests in 496 classes plus 22 integration tests in 4. All had 0 failures, 0 errors and 0 skipped.
+  Direct Checkstyle 0 WARN/ERROR; `git diff --check` clean.
+- **The Fortify `4AB8588B32600D075862F56DBB4F5934` "Not an Issue" justification depends on this gate.** That
+  justification says the API validates the citizen caller. Weakening `citizenFilterChain`, widening `CITIZEN_CALLERS`
+  or moving `/citizen/**` back onto the IDAM chain reopens that finding.
 
 ## Post-Completion
 
