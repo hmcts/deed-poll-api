@@ -332,7 +332,8 @@ Every failure answers the same envelope — `{"error": "...", "errors": [{"field
 (`api/ApiError.java`), so a form can render a message against the input it belongs to.
 
 `/citizen/**` exists, is **empty**, and has its own controller and DTO packages. It is reserved for
-`deed-poll-web`; an ArchUnit rule (`NamespaceSeparationSecurityTest`) is what stops a later plan
+`deed-poll-web` and already sits behind an S2S-only gate (below); its first endpoint still needs its own rate
+limiting and OpenAPI security scheme. An ArchUnit rule (`NamespaceSeparationSecurityTest`) is what stops a later plan
 sharing a caseworker DTO into it.
 
 ## Authentication
@@ -394,7 +395,10 @@ consult it.
 Enabling it also needs the outbound S2S settings (`IDAM_S2S_AUTH_URL`, `DEED_POLL_API_S2S_SECRET`) and RAS
 admitting `deed_poll_api`. See `CLAUDE.md` for the activation order.
 
-`/ccd-persistence/**` is the exception, with a chain of its own: it is where CCD's data-store calls this
+`/citizen/**` is the second exception, also with a chain of its own: it admits only a verified `deed_poll_web` S2S
+token and never reads an IDAM bearer (a bearer alone is 401; another service's S2S token is 403).
+
+`/ccd-persistence/**` is the first exception, with a chain of its own: it is where CCD's data-store calls this
 service back, so it admits an S2S token verified as `ccd_data` and nobody else, plus an IDAM user whose role
 is the configured `CCD_SYSTEM_ROLE`, mapped onto the `DEED_POLL_SYSTEM` access profile. The generator's
 `/callbacks/**` routes are refused to everybody. The caseworker and judicial namespaces still need no S2S.

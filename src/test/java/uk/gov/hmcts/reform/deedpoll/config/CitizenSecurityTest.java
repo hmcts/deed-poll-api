@@ -175,6 +175,17 @@ class CitizenSecurityTest {
     }
 
     @Test
+    @DisplayName("ignores a malformed bearer sent with deed_poll_web's S2S: admitted, never read")
+    void ignoresAMalformedBearerBesideTheServiceToken() throws Exception {
+        HttpHeaders headers = service(WEB);
+        headers.setBearerAuth("not-a-jwt");
+
+        mockMvc.perform(get(PROBE).headers(headers))
+            .andExpect(status().isOk())
+            .andExpect(content().string(CitizenStandIn.ANONYMOUS));
+    }
+
+    @Test
     @DisplayName("refuses an unknown citizen path with no S2S with 401, not 404: authorisation comes before routing")
     void refusesAnUnknownPathBeforeRouting() throws Exception {
         mockMvc.perform(get("/citizen/no-such-route")).andExpect(status().isUnauthorized());
@@ -204,7 +215,7 @@ class CitizenSecurityTest {
         // config-gen has no database, so the probe itself may report 503. Public means the chain let it answer.
         int status = mockMvc.perform(get("/health")).andReturn().getResponse().getStatus();
 
-        assertThat(status).isNotIn(401, 403);
+        assertThat(status).isIn(200, 503);
     }
 
     private static HttpHeaders service(String token) {

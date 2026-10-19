@@ -31,7 +31,7 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations 
                                   and /caseworker/gazette-settings (Delivery Manager-only GET/PUT)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
 api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case
-api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
+api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web, behind the S2S-only citizenFilterChain
 api/caller/{controller,dto}       GET /me, the caller's own areas and capabilities — outside both staff areas,
                                   because a caller with no deed-poll role must be told so rather than refused
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
