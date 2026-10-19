@@ -1,5 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.api.judicial.controller;
 
+import org.springframework.core.io.Resource;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -8,20 +10,24 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
+import uk.gov.hmcts.reform.deedpoll.api.DocumentFileResponses;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialDirectionRequest;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialMyReferralsResponse;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialPoolResponse;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialReferralDetail;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.ReadAudit;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralView;
 
 /**
- * What a judge does, all five of it: read the shared pool, read their own outstanding work, open a referral they may
- * see, claim one, and direct one they hold.
+ * What a judge does, all six of it: read the shared pool, read their own outstanding work, open a referral they may
+ * see, download one of its supporting documents, claim one, and direct one they hold.
  *
- * <p><strong>Three reads and two writes.</strong> The fifth operation is the personal list, and it completes the
+ * <p><strong>Four reads and two writes.</strong> The fifth operation is the personal list, and it completes the
  * judicial boundary rather than widening it: visibility always admitted a judge's own {@code Claimed} and
  * {@code Decided} referrals, and until there was a list of them a successful claim removed the referral from the
  * only page that linked to it. Its membership is the same predicate as that visibility, so the list cannot offer a
@@ -44,7 +50,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
  * {@code CaseDetailResponse} carries every field a caseworker sees and reuse would be a disclosure dressed as
  * deduplication.
  *
- * <p>No route here is annotated as requiring authentication, and all five do: {@code SecurityConfiguration}
+ * <p>No route here is annotated as requiring authentication, and all six do: {@code SecurityConfiguration}
  * authenticates {@code anyRequest()} that is not on a short infrastructure allowlist, so {@code /judicial/**} was
  * protected the moment it existed. An unauthenticated caller is a 401 before routing; a caseworker token is a 403
  * from the domain's role gate; a referral this judge may not see is a 404.
@@ -54,9 +60,11 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 public class JudicialReferralController {
 
     private final JudicialReferralService judicial;
+    private final ReadAudit readAudit;
 
-    public JudicialReferralController(JudicialReferralService judicial) {
+    public JudicialReferralController(JudicialReferralService judicial, ReadAudit readAudit) {
         this.judicial = judicial;
+        this.readAudit = readAudit;
     }
 
     /**
@@ -134,10 +142,38 @@ public class JudicialReferralController {
      * <p>Reading a referral this judge holds refreshes the claim's inactivity clock (decision 7) and reading a
      * pool referral touches nothing. That is the domain's decision and not this handler's, which is why the
      * distinction is not visible here.
+     *
+     * <p><strong>Recorded as {@code CASE_VIEWED}</strong> (design decision 4 of the 2026-10-19 plan), because the
+     * judge now sees the whole application. After the read, so a refused referral records nothing, and outside its
+     * transaction, as the caseworker case view records it. It fails open: a view that could not be recorded is still
+     * answered -- see {@link ReadAudit}. The claim answers with the same papers and does not record it again.
      */
     @GetMapping("/{referralId}")
     public JudicialReferralDetail referral(@PathVariable("referralId") String referralId) {
-        return JudicialReferralDetail.of(judicial.referral(referralId, CurrentUsers.required()));
+        CurrentUser caller = CurrentUsers.required();
+        JudicialReferralView view = judicial.referral(referralId, caller);
+        readAudit.caseViewed(view.application().getId(), caller);
+        return JudicialReferralDetail.of(view);
+    }
+
+    /**
+     * Streams one of the application's supporting documents, reached through the referral and never through the
+     * case.
+     *
+     * <p>The document ids are the ones the referral's {@code application.documents} lists. The domain resolves the
+     * referral, refuses one this judge may not see with the referral read's own 404, and serves only a readable
+     * document of that referral's case: another case's document is the document's 404, exactly as on the caseworker
+     * route. So any judge may open the documents of an {@code Open} referral, the holder those of a {@code Claimed}
+     * one, the directing judge those of a {@code Decided} one, and nobody once the office closes it.
+     *
+     * <p>The response and its headers are {@link DocumentFileResponses#of}, the caseworker download's own. Recorded
+     * as {@code DOCUMENT_DOWNLOADED} before the file is opened, and refused if it cannot be: it fails closed.
+     */
+    @GetMapping("/{referralId}/documents/{documentId}/file")
+    public ResponseEntity<Resource> document(@PathVariable("referralId") String referralId,
+                                             @PathVariable("documentId") String documentId) {
+
+        return DocumentFileResponses.of(judicial.document(referralId, documentId, CurrentUsers.required()));
     }
 
     /**

@@ -134,16 +134,20 @@ class JudicialSecurityTest {
     /** An id of the right shape that nothing was stored under: the other half of every 404 comparison. */
     private static final UUID UNKNOWN_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
 
+    /** A document id, which is only ever accepted under a referral the caller may see. */
+    private static final String DOCUMENT_ID = "66666666-6666-6666-6666-666666666666";
+
     /**
      * How many judicial operations have a route today.
      *
      * <p>{@link #operations()} is the service's surface, and the two now agree: {@code mine} was gated before it was
      * published -- safe for the reason the transitions were before the judicial controller existed, because a gate on
-     * a surface nobody can reach refuses everybody -- and publishing its route moved this line. Written as a number
+     * a surface nobody can reach refuses everybody -- and publishing its route moved this line. The document download
+     * (2026-10-19) moved it again. Written as a number
      * rather than derived, so a handler arriving without a gated service method behind it fails here instead of
      * following whatever the controller happens to declare.
      */
-    private static final int ROUTED_OPERATIONS = 5;
+    private static final int ROUTED_OPERATIONS = 6;
 
     /** Every judicial path, as a caller would type it: what the allowlist must not match. */
     private static final List<String> JUDICIAL_PATHS = List.of(
@@ -152,7 +156,8 @@ class JudicialSecurityTest {
         "/judicial/referrals/mine",
         "/judicial/referrals/" + REFERRAL_ID,
         "/judicial/referrals/" + REFERRAL_ID + "/claim",
-        "/judicial/referrals/" + REFERRAL_ID + "/direction");
+        "/judicial/referrals/" + REFERRAL_ID + "/direction",
+        "/judicial/referrals/" + REFERRAL_ID + "/documents/" + DOCUMENT_ID + "/file");
 
     private ReferralRepository referrals;
     private ReferralService transitions;
@@ -178,8 +183,8 @@ class JudicialSecurityTest {
     /**
      * One judicial operation, named so a failure says which of them let a caller through or refused one wrongly.
      *
-     * @param keyedOnAReferral whether it names a referral -- three do, and the other two are the lists they are
-     *                         reached from, so the visibility questions below are asked of those three
+     * @param keyedOnAReferral whether it names a referral -- four do, and the other two are the lists they are
+     *                         reached from, so the visibility questions below are asked of those four
      */
     private record Operation(String name, boolean keyedOnAReferral, BiConsumer<String, CurrentUser> apply) {
 
@@ -209,10 +214,14 @@ class JudicialSecurityTest {
                           (referralId, caller) -> service.mine(caller, JudicialReferralService.FIRST_POOL_PAGE)),
             new Operation("referral", true, (referralId, caller) -> service.referral(referralId, caller)),
             new Operation("claim", true, (referralId, caller) -> service.claim(referralId, caller)),
-            new Operation("direct", true, (referralId, caller) -> service.direct(referralId, direction(), caller)));
+            new Operation("direct", true, (referralId, caller) -> service.direct(referralId, direction(), caller)),
+            // A supporting document, reached through the referral and never through the case: the same gate and
+            // the same visibility, so it is asked every question the other three referral operations are.
+            new Operation("document", true,
+                          (referralId, caller) -> service.document(referralId, DOCUMENT_ID, caller)));
     }
 
-    /** The three operations that name a referral, which are the ones visibility has anything to say about. */
+    /** The four operations that name a referral, which are the ones visibility has anything to say about. */
     private List<Operation> referralOperations() {
         return operations().stream().filter(Operation::keyedOnAReferral).toList();
     }
@@ -267,6 +276,7 @@ class JudicialSecurityTest {
         verify(transitions, never()).claim(anyString(), anyString(), any());
         verify(transitions, never()).touch(anyString(), anyString(), any());
         verify(transitions, never()).decide(anyString(), anyString(), any(), any());
+        verify(documents, never()).downloadDocument(anyString(), anyString(), any());
     }
 
     @Nested

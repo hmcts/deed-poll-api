@@ -25,14 +25,16 @@
  * including the two reads, because the pool and the judicial application view belong to the judicial persona
  * and a caseworker has their own richer surface.
  *
- * <p><strong>Five operations, on one controller, and the five are the whole judicial persona.</strong> Three reads
+ * <p><strong>Six operations, on one controller, and the six are the whole judicial persona.</strong> Four reads
  * -- the shared pool ({@code GET /judicial/referrals}), this judge's own outstanding work
- * ({@code GET /judicial/referrals/mine}) and one referral with its narrow application view and the case's notes
- * ({@code GET /judicial/referrals/&#123;referralId&#125;}) -- and two writes, claiming a pool
+ * ({@code GET /judicial/referrals/mine}), one referral with its application view, witnesses, documents and the
+ * case's notes ({@code GET /judicial/referrals/&#123;referralId&#125;}), and one of those documents' files
+ * ({@code GET .../documents/&#123;documentId&#125;/file}) -- and two writes, claiming a pool
  * referral ({@code POST .../claim}) and recording a direction on one they hold ({@code POST .../direction}).
  * Stated as a number here, unlike the caseworker package's deliberate refusal to keep a running total, because
- * five is not a tally of what has accumulated: it is decision 13's boundary, and a sixth route is a change to
- * that boundary rather than a route.
+ * six is not a tally of what has accumulated: it is decision 13's boundary, widened deliberately by the business
+ * on 2026-10-19 to the whole application and its documents, and a seventh route is a change to that boundary
+ * rather than a route.
  *
  * <p>The personal list was the boundary's missing half rather than an addition to it: {@code visibleTo} always
  * admitted a judge's own {@code Claimed} and {@code Decided} referrals, and until there was a list of them a

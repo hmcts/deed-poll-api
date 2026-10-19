@@ -549,8 +549,8 @@ unsupported packages fail closed. Refusal logging contains only a fixed format c
 exceptions, filenames or bytes. These checks do not replace CDAM malware scanning or activate CDAM.
 
 A narrower list decides which types are served `inline` rather than as an attachment
-(`CaseworkerDocumentController.INLINE_MIME_TYPES`); every download is served under
-`Content-Security-Policy: default-src 'none'; sandbox`. Download classification still uses stored MIME
+(`DocumentFileResponses.INLINE_MIME_TYPES`, shared by the caseworker and judicial downloads); every
+download is served under `Content-Security-Policy: default-src 'none'; sandbox`. Download classification still uses stored MIME
 metadata: these admission checks do not make later metadata edits safe. The separate metadata-integrity
 follow-up must guard any future metadata PATCH route; there is no such public route today.
 

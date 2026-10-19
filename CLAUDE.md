@@ -30,7 +30,7 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations 
                                   and /caseworker/gazette-notices (1 history GET, counted apart)
                                   and /caseworker/gazette-settings (Delivery Manager-only GET/PUT)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
-api/judicial/{controller,dto}     the judicial surface — 5 operations, keyed on the referral, never on the case
+api/judicial/{controller,dto}     the judicial surface — 6 operations, keyed on the referral, never on the case
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
 api/caller/{controller,dto}       GET /me, the caller's own areas and capabilities — outside both staff areas,
                                   because a caller with no deed-poll role must be told so rather than refused
@@ -397,7 +397,7 @@ no prefix, host case, path or slash leniency. Configure the issuer exactly as to
   (`/caseworker/cases/{id}/…`); a judicial URL carries a referral id and no case id at all, so
   `JudicialReferralService.visibleTo` stands where the parent id stands — the pool, plus this judge's own
   `Claimed`/`Decided` referrals — which `GET /judicial/referrals/mine` is the list of. Anything else is **404**,
-  in the same words an unknown id gets; the only 403 is the `Role.JUDICIAL` gate. Its five operations must not
+  in the same words an unknown id gets; the only 403 is the `Role.JUDICIAL` gate. Its six operations must not
   reuse a caseworker DTO, and an ArchUnit rule fails the build if one does.
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution

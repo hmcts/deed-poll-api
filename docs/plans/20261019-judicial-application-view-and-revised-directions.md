@@ -156,7 +156,7 @@ is missing, stop and say so rather than editing `build.gradle`. Record the actua
 
 **Files:** `JudicialReferralController`; a shared download-response helper used by both controllers; tests.
 
-- [ ] Tests (red first):
+- [x] Tests (red first):
   - any judge downloads a document of an `Open` referral;
   - the holder downloads one of a `Claimed` referral; another judge gets 404;
   - after `Closed`/`Withdrawn`, 404;
@@ -164,7 +164,13 @@ is missing, stop and say so rather than editing `build.gradle`. Record the actua
   - each successful download writes one `DOCUMENT_DOWNLOADED` row, and a failed audit insert serves nothing;
   - headers match the caseworker download's for every MIME type the caseworker tests cover;
   - `GET /judicial/referrals/{id}` writes `CASE_VIEWED`, and a failed insert still serves the page.
-- [ ] Non-judges get 403 on the new route, as on the rest of `/judicial/**`.
+- [x] Non-judges get 403 on the new route, as on the rest of `/judicial/**`.
+  2026-10-19: `build` green, `test` 4455 tests, `integration` 20 tests, 0 failures/errors/skipped; `checkstyle.sh`
+  OK; `git diff --check` clean. Headers live in the new shared `api/DocumentFileResponses`; the route is
+  `JudicialReferralService.document`, non-transactional and touching no claim. `CASE_VIEWED` is recorded by the
+  controller after the read, as the caseworker view does. `JudicialSecurityTest` (six operations),
+  `ReferralSecurityTest` (`documentId` allowed only beside `referralId`) and `OpenAPIPublisherTest` (six judicial
+  operations) were updated; the route's OpenAPI descriptions are Task 6's.
 
 ### Task 3: V38 and the flag
 

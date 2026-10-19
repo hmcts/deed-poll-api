@@ -11,6 +11,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentDownload;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
@@ -23,15 +24,15 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * What a judge may see, the two lists they work from, and the two things they write.
+ * What a judge may see, the two lists they work from, the documents they may open, and the two things they write.
  *
  * <p><strong>A separate unit from {@link ReferralService} on purpose, and it adds no transition.</strong> Every
  * state change the judicial surface performs is a call into one of that service's transitions -- {@code claim},
  * {@code touch}, {@code decide} -- which keeps one place owning how a referral changes state. What lives here
  * is the half of the judicial surface that service has no notion of: <em>who may see which referral</em>, the two
  * cross-case lists a judge works from -- the shared pool and their own outstanding work -- and the resolution of
- * one referral id to the application and the notes behind it. Every method here is the judicial persona's, and
- * none is reachable by a caseworker token.
+ * one referral id to the application, the notes and the documents behind it. Every method here is the judicial
+ * persona's, and none is reachable by a caseworker token.
  *
  * <p><strong>{@link #claim} and {@link #direct} are that resolution in front of a transition, and nothing
  * else.</strong> Neither guards a state, stamps a column or writes a note: the {@code Open}-only rule, the
@@ -440,6 +441,37 @@ public class JudicialReferralService {
         Referral referral = visible(referralId, caller);
         DeedPoll application = referral.getDeedPoll();
         return view(referralService.decide(application.getId(), referralId, direction, caller), application);
+    }
+
+    /**
+     * One supporting document of the application behind a referral this judge may see, recorded as
+     * {@code DOCUMENT_DOWNLOADED} before it is opened (design decision 3 of the 2026-10-19 plan).
+     *
+     * <p><strong>The case comes from the referral, never from the caller.</strong> {@link #visible} resolves it and
+     * refuses an invisible referral with the same 404 every judicial operation gives, so every judge may open the
+     * documents of an {@code Open} referral (business decision 3), only the holder those of a {@code Claimed} one,
+     * and nobody once it is {@code Closed} or {@code Withdrawn}. The document is then
+     * {@link DocumentService#downloadDocument(String, String, CurrentUser)} scoped to that case: a document of
+     * another case is the document's own 404, as on the caseworker route, and a failed audit insert opens nothing.
+     *
+     * <p><strong>Not {@code @Transactional}, and it touches no claim.</strong> The store may be CDAM, a remote call
+     * that must not hold a database transaction open, and the referral is read join-fetched so its case id needs no
+     * session. Refreshing the claim's inactivity clock is a write, and the read of the referral that lists these
+     * documents has already made it.
+     *
+     * @param referralId the referral, as it appears in the path
+     * @param documentId the document, as it appears in the path
+     * @param caller the judge downloading it
+     * @return the document and its open stream, which the caller closes
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws NotFoundError if there is no such referral, this caller may not see it, or the document is not a
+     *     readable document of its case
+     */
+    public DocumentDownload document(String referralId, String documentId, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+
+        Referral referral = visible(referralId, caller);
+        return documents.downloadDocument(referral.getDeedPoll().getId(), documentId, caller);
     }
 
     /**
