@@ -31,7 +31,7 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations 
                                   and /caseworker/gazette-settings (Delivery Manager-only GET/PUT)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
 api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case
-api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web
+api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web, behind the S2S-only citizenFilterChain
 api/caller/{controller,dto}       GET /me, the caller's own areas and capabilities — outside both staff areas,
                                   because a caller with no deed-poll role must be told so rather than refused
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
@@ -136,6 +136,15 @@ and a token signed by any other key fails before its issuer is read. A configure
 scheme only), so the two sides compare alike. The comparison is then exact inside Spring's own `JwtClaimValidator`:
 no prefix, host case, path or slash leniency. Configure the issuer exactly as tokens carry it. Each entry must be an absolute `https` URL or start-up fails. The chart's `values.yaml` leaves it unset; only AAT's flux sets it. See
 `docs/plans/20261016-additional-idam-issuers.md`.
+
+### `/citizen/**` has its own chain, and wants a service, not a user
+
+`SecurityConfiguration.citizenFilterChain` (`@Order(2)`) admits a request only once `ServiceAuthFilter` has verified
+an S2S token for a service in `CITIZEN_CALLERS`, which is exactly `["deed_poll_web"]`. There is no resource server,
+so an IDAM bearer is never read: alone it is a 401, beside a valid S2S token it is ignored. The allowlist is a
+constant that `StaffAccessRulesTest` pins, so widening it is a reviewed change. The first citizen endpoint needs no
+security wiring, but still needs its own rate limiting (`RateLimitFilter` keys on an IDAM `sub` and is not on this
+chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/plans/completed/20261019-citizen-s2s-gate.md`.
 
 ## Rules that break things silently if ignored
 

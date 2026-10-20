@@ -22,8 +22,10 @@ import uk.gov.hmcts.reform.authorisation.generators.AuthTokenGeneratorFactory;
  * so an environment that has not been given one cannot mint a token -- it would be refused anyway, and a
  * committed placeholder that happened to work somewhere is the failure worth designing out. Nothing else in
  * the library is switched on: {@code idam.s2s-authorised.services} is deliberately unset, so the library registers
- * no inbound S2S filter bean. The one inbound check, for {@code /ccd-persistence/**}, is built inside
- * {@link SecurityConfiguration#ccdPersistenceFilterChain} with its own one-service allowlist. The library's health
+ * no inbound S2S filter bean. The two inbound checks are built inside the chains they guard, each with its own
+ * one-service allowlist: {@code /ccd-persistence/**} in {@link SecurityConfiguration#ccdPersistenceFilterChain},
+ * and {@code /citizen/**}, which admits {@code deed_poll_web} alone, in
+ * {@link SecurityConfiguration#citizenFilterChain}. The library's health
  * indicator is disabled in {@code application.yaml}, because it would report on a dependency this service does
  * not have.
  */

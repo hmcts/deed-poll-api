@@ -10,6 +10,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -18,7 +19,9 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
 import org.springframework.security.oauth2.server.resource.web.access.BearerTokenAccessDeniedHandler;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
+import org.springframework.security.web.access.AccessDeniedHandlerImpl;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
@@ -55,16 +58,19 @@ import java.util.List;
  * rather than a rule per namespace, which is the decision the reference makes and for the same reason: a
  * route added tomorrow is then protected by omission rather than protected when someone remembers, and the
  * failure mode of forgetting is silent. The allowlist is infrastructure only -- the Always-On root endpoint,
- * the probes and the published spec -- and every business route, {@code /caseworker/**} and later
- * {@code /citizen/**} alike, is authenticated because it is not on it.
+ * the probes and the published spec -- and every staff route is authenticated because it is not on it.
+ * {@code /citizen/**} is not on it either; it is closed by its own chain, which wants a service, not a user.
  *
  * <p>Every business route is also inside a {@link StaffArea}, with one named exception:
  * {@link #ANY_AUTHENTICATED_PATHS}, the caller's own {@code GET /me}, which any token may read.
  *
- * <p><strong>Two chains, and the second is narrow on purpose.</strong> {@code /ccd-persistence/**} is the one path
- * not called by a person through a frontend. Data-store calls it, presenting its own S2S token and forwarding a
- * user's, so it has a chain of its own ({@link #ccdPersistenceFilterChain}) that requires both. Every other path,
- * that one's siblings included, is in {@link #securityFilterChain} and requires no S2S at all.
+ * <p><strong>Three chains, and the first two are narrow on purpose.</strong> {@code /ccd-persistence/**} is not
+ * called by a person through a frontend. Data-store calls it, presenting its own S2S token and forwarding a
+ * user's, so it has a chain of its own ({@link #ccdPersistenceFilterChain}) that requires both.
+ * {@code /citizen/**} is called by {@code deed-poll-web} for a citizen this service never authenticates, so its
+ * chain ({@link #citizenFilterChain}) requires {@code deed_poll_web}'s S2S token and no user: an IDAM bearer there
+ * is never read, and on its own is a 401. Every other path, those two's siblings included, is in
+ * {@link #securityFilterChain} and requires no S2S at all.
  *
  * <p>A consequence worth knowing: an unknown path answers 401 rather than 404, because authorisation happens
  * before routing. That is the right way round -- which paths exist is not something an unauthenticated caller
@@ -141,6 +147,23 @@ public class SecurityConfiguration {
      * decision 11), so a {@code deed_poll_api} token here is either a mistake or a way around data-store's checks.
      */
     static final List<String> CCD_PERSISTENCE_CALLERS = List.of("ccd_data");
+
+    /**
+     * The namespace {@code deed-poll-web} calls on behalf of an anonymous citizen. {@link #citizenFilterChain} admits
+     * it for {@link #CITIZEN_CALLERS} on their S2S token alone, and nobody else, before any endpoint exists here, so
+     * the first one is protected by where it lives.
+     */
+    static final String CITIZEN_PATH = "/citizen/**";
+
+    /**
+     * The only services that may call {@link #CITIZEN_PATH}: the citizen frontend, and nothing else.
+     *
+     * <p>A constant for {@link #CCD_PERSISTENCE_CALLERS}'s reason: it belongs to one path, and widening it is a
+     * reviewed code change, which {@code StaffAccessRulesTest} pins. This service's own name is absent. Nothing here
+     * calls its own citizen surface, so a {@code deed_poll_api} token at this path is a mistake or a way round the
+     * frontend.
+     */
+    static final List<String> CITIZEN_CALLERS = List.of("deed_poll_web");
 
     /**
      * The routes the CCD SDK maps that nobody may call.
@@ -255,14 +278,68 @@ public class SecurityConfiguration {
     }
 
     /**
-     * Every path not claimed by {@link #ccdPersistenceFilterChain}.
+     * {@code /citizen/**}, and nothing else: {@code deed-poll-web}'s S2S token, and no user at all.
+     *
+     * <p>{@link #ccdPersistenceFilterChain}'s service half without its user half. Ordered after it and ahead of
+     * {@link #securityFilterChain}, which must come last; the two matchers do not overlap.
+     *
+     * <ul>
+     *   <li><strong>The service is the gate.</strong> {@link ServiceAuthFilter} answers a missing or unverifiable
+     *       {@code ServiceAuthorization} with 401, and a verified service outside {@link #CITIZEN_CALLERS} with 403,
+     *       before the authorisation filter runs. Built here and never declared as a bean, for the reason
+     *       {@link #ccdPersistenceFilterChain} gives.</li>
+     *   <li><strong>No user.</strong> The citizen is anonymous to this service, so there is no resource server: the
+     *       chain never reads {@code Authorization}. An IDAM token on its own is the 401 a missing S2S token gets, and
+     *       one sent beside {@code deed-poll-web}'s is ignored, never resolved into a caller.</li>
+     * </ul>
+     *
+     * <p>{@code RateLimitFilter} is not here: it keys on an IDAM {@code sub}, which this chain has none of. Citizen
+     * rate limiting belongs to the plan that adds the endpoints.
+     *
+     * <p>The S2S filter's refusals answer before Spring's exception handling and are not logged by
+     * {@code SecurityEvents}, as on {@code /ccd-persistence/**}; the library logs its own at INFO and WARN. The
+     * logging handlers are set all the same, so a later rule that refuses inside the chain is logged without anyone
+     * remembering to.
+     */
+    @Bean
+    @Order(2)
+    @SuppressWarnings("PMD.SignatureDeclareThrowsException")
+    public SecurityFilterChain citizenFilterChain(HttpSecurity http, ServiceAuthorisationApi serviceAuthorisationApi)
+        throws Exception {
+
+        ServiceAuthFilter serviceAuthFilter = new ServiceAuthFilter(
+            new ServiceAuthTokenValidator(serviceAuthorisationApi), CITIZEN_CALLERS);
+
+        return http
+            // A path-pattern matcher stated outright, for the reason ccdPersistenceFilterChain gives.
+            .securityMatcher(PathPatternRequestMatcher.withDefaults().matcher(CITIZEN_PATH))
+            .addFilterBefore(serviceAuthFilter, AuthorizationFilter.class)
+            .authorizeHttpRequests(requests -> requests
+                // Not an open door: a request reaches this point only once serviceAuthFilter has verified its S2S
+                // token and found the service in CITIZEN_CALLERS. Everything else was answered 401 or 403 above.
+                .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
+                .anyRequest().permitAll())
+            .exceptionHandling(errors -> errors
+                .authenticationEntryPoint(
+                    new LoggingAuthenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+                .accessDeniedHandler(new LoggingAccessDeniedHandler(new AccessDeniedHandlerImpl())))
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .csrf(AbstractHttpConfigurer::disable)
+            .httpBasic(AbstractHttpConfigurer::disable)
+            .formLogin(AbstractHttpConfigurer::disable)
+            .logout(AbstractHttpConfigurer::disable)
+            .build();
+    }
+
+    /**
+     * Every path not claimed by {@link #ccdPersistenceFilterChain} or {@link #citizenFilterChain}.
      *
      * <p>Authentication alone was the rule for every staff route until the {@link StaffArea} rules, so any token IDAM
      * issued could reach the caseworker surface (OWASP finding H1). The judicial area is enforced outright, because
      * its services already refuse a non-judge and the rule changes no outcome. The caseworker area goes through
      * {@link StaffGate}, which reports before it enforces: see {@code deedpoll.security.staff-gate}.
      * {@link #ANY_AUTHENTICATED_PATHS} are authenticated by name. {@code anyRequest().authenticated()} stays as the
-     * fallback for the empty citizen namespace and unknown paths. A new top-level prefix is caught by
+     * fallback for unknown paths; {@code /citizen/**} never reaches it. A new top-level prefix is caught by
      * {@code StaffAccessRulesTest} rather than by a {@code denyAll()}.
      *
      * <p>{@link RateLimitFilter} sits directly after authorisation, so it keys on the verified {@code sub} and only a

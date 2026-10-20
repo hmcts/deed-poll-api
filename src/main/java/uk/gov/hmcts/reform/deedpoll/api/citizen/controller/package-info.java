@@ -12,7 +12,8 @@
  * the second, and the reuse would look like sensible deduplication at the time.
  *
  * <p>{@code NamespaceSeparationSecurityTest} asserts the separation rather than trusting it. Every route here
- * is authenticated by default -- see {@code SecurityConfiguration} -- so an endpoint added here is protected
- * before anybody remembers to protect it.
+ * sits behind {@code SecurityConfiguration.citizenFilterChain}, which admits only a verified {@code deed_poll_web}
+ * S2S token and never reads an IDAM bearer, so an endpoint added here is protected before anybody remembers to
+ * protect it. It still needs its own rate limiting and OpenAPI security scheme; the chain supplies neither.
  */
 package uk.gov.hmcts.reform.deedpoll.api.citizen.controller;
