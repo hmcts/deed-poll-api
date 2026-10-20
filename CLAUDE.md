@@ -210,7 +210,8 @@ no prefix, host case, path or slash leniency. Configure the issuer exactly as to
   included. **Nothing ahead of it may call `getParameter`**, because on a multipart request that parses the body,
   which is why the filter reads the raw query string. The six routes are in `RateLimitBucket`, written as the
   controllers write them, and `RateLimitRoutesTest` fails if one stops matching a handler. `OpenAPIRateLimits`
-  publishes 429 from that same list. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, default `observe` in yaml and the
+  publishes 429 from that same list. `OpenAPIForbiddenResponses` likewise publishes 403 on every `StaffArea.of` path
+  (not `/`, `/me`, `security: []` overrides or an operation's own 403); admin's copied spec needs a refresh after it changes. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, default `observe` in yaml and the
   chart) switches **only** the V37 budgets. **Three limits enforce from day one, whatever the mode:** the per-pod
   in-flight upload `Semaphore` (429, `Retry-After: 5`, released in `finally`), the per-case, per-template daily
   email cap in `CaseEmailService`, and the case list's transaction-local statement timeout. The email cap answers

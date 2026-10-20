@@ -89,6 +89,34 @@ class OpenAPIForbiddenResponsesTest {
         assertThat(openApi.getComponents().getSchemas()).isNull();
     }
 
+    @Test
+    void toleratesNoPathsAndAnOperationWithNoResponses() {
+        OpenAPI none = new OpenAPI(SpecVersion.V31);
+        underTest.forbiddenResponseCustomizer().customise(none);
+        assertThat(none.getComponents()).isNull();
+
+        Operation bare = new Operation();
+        OpenAPI openApi = new OpenAPI(SpecVersion.V31)
+            .paths(new Paths().addPathItem("/caseworker/cases", new PathItem().get(bare)));
+        underTest.forbiddenResponseCustomizer().customise(openApi);
+
+        assertThat(bare.getResponses().get("403").get$ref()).isEqualTo(REF);
+        assertThat(openApi.getComponents().getSchemas()).containsKeys("ApiError", "FieldError");
+    }
+
+    @Test
+    void doesNotOverwriteExistingComponents() {
+        ApiResponse own = new ApiResponse().description("mine");
+        OpenAPI openApi = openApi(new Paths()
+            .addPathItem("/caseworker/cases", new PathItem().get(operation())));
+        openApi.getComponents().addResponses(OpenAPIForbiddenResponses.RESPONSE_NAME, own);
+
+        underTest.forbiddenResponseCustomizer().customise(openApi);
+
+        assertThat(openApi.getComponents().getResponses().get(OpenAPIForbiddenResponses.RESPONSE_NAME))
+            .isSameAs(own);
+    }
+
     private static Operation operation() {
         return new Operation()
             .responses(new ApiResponses().addApiResponse("200", new ApiResponse().description("OK")));

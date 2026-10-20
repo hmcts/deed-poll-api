@@ -927,6 +927,13 @@ fixed environment. The publisher test checks global, path and operation server d
 HTTP and HTTPS document requests. Consumers of a downloaded artifact must supply their API base URL;
 admin already uses `DEED_POLL_API_URL` independently of this metadata.
 
+`OpenAPIForbiddenResponses` publishes a shared `Forbidden` response (the `ApiError` body) as the 403 of every
+operation under a `StaffArea`, selected by `StaffArea.of` so a new staff route is covered by being where it belongs.
+`GET /`, `GET /me`, an operation with an empty `security` override and one that already declares its own 403 are
+left alone. This documents existing behaviour only; no runtime change. `OpenAPIForbiddenResponsesTest` and
+`OpenAPIPublisherTest` assert it. The Fortify rescan and refreshing deed-poll-admin's copied `openapi.json` are
+separate follow-ups.
+
 This is a documentation correction, not TLS enforcement: a document served over HTTP still resolves
 to HTTP. No runtime TLS rollout is required for this change. Fortify acceptance of the relative URL
 must be retested; transport security still needs verified deployment/network evidence before finding
