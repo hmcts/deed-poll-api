@@ -1,5 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.config;
 
+import com.github.tomakehurst.wiremock.client.WireMock;
+import com.github.tomakehurst.wiremock.http.Fault;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -122,6 +124,53 @@ class CitizenSecurityTest {
     void refusesAnotherService(String token) throws Exception {
         mockMvc.perform(get(PROBE).headers(service(token))).andExpect(status().isForbidden());
         mockMvc.perform(post(PROBE).headers(service(token))).andExpect(status().isForbidden());
+
+        assertThat(REACHED).hasValue(0);
+    }
+
+    /**
+     * service-auth-provider failing outright, rather than answering about a token, is a refusal too. The S2S library
+     * turns an error status or a broken connection into a refused request without calling the rest of the chain, so
+     * the chain's {@code permitAll()} is never reached for a token nobody verified.
+     */
+    @ParameterizedTest
+    @ValueSource(ints = {500, 503})
+    @DisplayName("refuses deed_poll_web's token with 401 when service-auth-provider answers with an error")
+    void refusesWhenServiceAuthProviderErrors(int status) throws Exception {
+        S2S.server().stubFor(WireMock.get(urlPathEqualTo("/details")).atPriority(1)
+            .willReturn(WireMock.aResponse().withStatus(status)));
+
+        mockMvc.perform(get(PROBE).headers(service(WEB))).andExpect(status().isUnauthorized());
+
+        assertThat(REACHED).hasValue(0);
+    }
+
+    @Test
+    @DisplayName("refuses deed_poll_web's token with 401 when the connection to service-auth-provider breaks")
+    void refusesWhenServiceAuthProviderIsUnreachable() throws Exception {
+        S2S.server().stubFor(WireMock.get(urlPathEqualTo("/details")).atPriority(1)
+            .willReturn(WireMock.aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
+
+        mockMvc.perform(get(PROBE).headers(service(WEB))).andExpect(status().isUnauthorized());
+
+        assertThat(REACHED).hasValue(0);
+    }
+
+    /**
+     * Paths that could mean one thing to the citizen matcher and another to routing never reach a chain: Spring
+     * Security's request firewall rejects them with 400 first, whatever token they carry.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"/citizen/../caseworker/cases", "/citizen;x/stand-in", "//citizen/stand-in",
+        "/citizen/%2e%2e/caseworker/cases", "/citizen%2Fstand-in"})
+    @DisplayName("rejects an ambiguous citizen path with 400 before any chain, even with deed_poll_web's token")
+    void rejectsAmbiguousPaths(String path) throws Exception {
+        // The raw request URI is set directly: building one from a URI would read "//citizen" as a host, and MockMvc
+        // would then send a different path from the one under test.
+        mockMvc.perform(get(PROBE).headers(service(WEB)).with(request -> {
+            request.setRequestURI(path);
+            return request;
+        })).andExpect(status().isBadRequest());
 
         assertThat(REACHED).hasValue(0);
     }
