@@ -138,18 +138,18 @@ Record the producer commit and raw SHA-256.
 
 ### Task 1: Establish the route and response contract
 
-- [ ] Confirm you are in the API worktree `.worktrees/deed-poll-api-openapi-403` on base `93c2dd3`, and record it in
+- [x] Confirm you are in the API worktree `.worktrees/deed-poll-api-openapi-403` on base `93c2dd3`, and record it in
       Execution notes. The admin worktree is the operator's (see "Execution split").
-- [ ] Confirm the generated spec on this base still publishes the relative `/` server (API #117, merged as `21c6740`),
+- [x] Confirm the generated spec on this base still publishes the relative `/` server (API #117, merged as `21c6740`),
       and keep it so: no change here may alter `servers`.
-- [ ] Inventory generated operations, their effective security and existing responses. Record the set
+- [x] Inventory generated operations, their effective security and existing responses. Record the set
       requiring 403 and the reason for each exception, especially public operations and `GET /me`.
       Do not assume historical operation counts still apply.
-- [ ] Trace the relevant filter-chain and domain refusals to confirm status, content type and response
+- [x] Trace the relevant filter-chain and domain refusals to confirm status, content type and response
       fields. Review existing runtime tests; extend only where needed to prove representative staff and
       domain 403 responses use the documented shape without stack traces or exception details.
       Configure enforcement explicitly in tests if the current staff gate defaults to report mode.
-- [ ] Run the existing focused checks to establish a baseline. Add failing generated-spec assertions for
+- [x] Run the existing focused checks to establish a baseline. Add failing generated-spec assertions for
       the missing 403 contract, including nonempty operation coverage and the documented exceptions.
 
 ### Task 2: Publish accurate 403 responses
@@ -208,9 +208,47 @@ performed by creating this plan.
 `StaffAccessRulesTest`): 20 tests, 0 failed. `OpenAPIPublisherTest`: 19 tests, 0 failed, writing
 `/tmp/openapi-403/baseline-93c2dd3.json`. That baseline spec has **55 operations, 39 paths, 58 schemas, `servers: [{url: "/"}]`,
 and no operation declares 403**. Full build on the same commit (10-19): 4,526 unit + 22 integration, Checkstyle 0.
-**Upstream drift to account for in Task 3:** admin's current copy has 52 operations, 37 paths and 56 schemas. The
-difference is API #118's judicial application view (`93c2dd3`), which merged after admin's last refresh. It is not
-this plan's delta, so report it separately.
+**No upstream drift (corrected 2026-10-20 08:40):** admin `origin/master` `649c30e` (admin #195, merged 07:49Z) already
+carries a copy parsed-identical to this baseline (55/39/58). The earlier "52/37/56" figure was an out-of-date reading.
+So the intended admin delta is only this plan's 403 changes.
+
+**Task 1, 2026-10-20 (Ralphex iteration 1).**
+
+- Worktree `.worktrees/deed-poll-api-openapi-403`, branch `fix/openapi-forbidden-responses`, `merge-base HEAD origin/master`
+  = `93c2dd370cb4` (HEAD was the plan commit `39eaa3c` on top of it). No admin file was touched.
+- `servers` on this base is exactly `[{url: "/", description: "Same origin as the served API document"}]`, global
+  `security: [{bearerAuth: []}]`. `publishesSameOriginServersForHttpAndHttpsDocuments` already guards it and passes.
+- **Inventory (fresh spec from the working tree, parse-identical and byte-identical to `baseline-93c2dd3.json`, SHA-256
+  `dba83e5e…1fac4b`):** 55 operations on 39 paths. 53 are inside a `StaffArea` (45 `/caseworker/**`, 8 `/judicial/**`),
+  every one inheriting global bearer security with no operation override, and **none declares 403**. Existing non-2xx
+  responses are only 409/429/502/503 on six operations, all description-only except the two Gazette POSTs' 409/503,
+  which carry `GazetteError` under `*/*`.
+  `ApiError`/`FieldError` are not published as schemas. Components hold only `schemas` and `securitySchemes`.
+- **Requires 403: all 53 staff operations.** Each can be refused by the chain (judicial area always; caseworker area via
+  `StaffGate` in `enforce`, which is the code default though `application.yaml` defaults `STAFF_GATE_MODE` to `report`),
+  and by domain capability/role checks (`ForbiddenError`). The spec describes the contract in enforce mode, so the
+  report-mode yaml default does not make the 403 inaccurate. **Exceptions:** `GET /` has `security: []` (public, in
+  `PUBLIC_PATHS`); nothing can refuse it. `GET /me` is `ANY_AUTHENTICATED_PATHS`, admits every authenticated caller by
+  design, and `CallerAccessController` throws no `ForbiddenError`. `/ccd-persistence/**` and `/callbacks/**` are not in
+  the published document (separate chain / `denyAll`, SDK packages not scanned) and are out of scope.
+- **Trace.** Chain: `LoggingAccessDeniedHandler` -> `StaffAccessDeniedHandler`: 403, `Content-Type: application/json`,
+  body `ApiError.of(StaffArea.refusal())` = `{"error": "Requires one of the following roles: ..."}` (non-staff path:
+  `"Access is denied"`). Domain: `DomainErrorHandler.forbidden` -> 403, `ResponseEntity<ApiError>` (JSON),
+  `{"error": <domain sentence>}`. `ApiError` is `@JsonInclude(NON_EMPTY)`, so `errors` is omitted when empty; both
+  refusals carry only `error`. Neither path writes a trace, exception class or framework message.
+- **Runtime tests extended (enforce set explicitly where it matters):** `StaffAccessRulesTest.refusesARolelessCaller`
+  (already `staff-gate=enforce`) and `CaseworkerNoteControllerTest...refusesACaseworkerWithoutTheRole` (domain
+  `Requires capability: DELETE_NOTE`) now also assert a JSON content type and that the body has exactly one key.
+  Focused unit run (`DomainErrorHandlerTest`, `StaffAccessRulesTest`, `CaseworkerNoteControllerTest`): 66 tests, 0 failed.
+- **Red spec assertion added:** `OpenAPIPublisherTest.documentsTheForbiddenResponseOnEveryStaffOperation` selects
+  operations by `StaffArea.of(path)` (so new staff routes are covered automatically), requires each to inherit global
+  security and to declare a 403 whose `$ref`s resolve to a non-blank description, `application/json` only, and a schema
+  with exactly `error` (string) and `errors` (array of `field`/`message`); requires the operations without 403 to be
+  exactly `GET /` and `GET /me`, `GET /` to keep `security: []`, and `/me` to have no override. With failFast lifted by
+  an init script (`afterEvaluate { failFast = false }` on `integration`): **20 tests, 19 passed, 1 failed — the new one,
+  `[GET /caseworker/cases documents 403]`**. That is the intended red for Task 2. Direct Checkstyle: 0 WARN, 0 ERROR
+  (its config is only extracted by running a Gradle checkstyle task once; `checkstyleTest` was run for that and crashed
+  as documented). `git diff --check` clean.
 
 Use the workspace `scripts/cft-ralphex` launcher and the operator's selected review profile; do not rewrite
 shared Ralphex configuration. The primary execution repository is the isolated API worktree. The admin

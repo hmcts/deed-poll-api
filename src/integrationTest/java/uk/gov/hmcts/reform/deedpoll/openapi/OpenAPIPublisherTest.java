@@ -16,6 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.reform.deedpoll.api.KeyedRequestBody;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.controller.CaseworkerEmailController;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.config.StaffArea;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
@@ -488,6 +489,85 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .describedAs("a documented path in neither surface -- add it to the list for its namespace, so that "
                          + "namespace's operation count has to be restated with it")
             .containsExactlyInAnyOrderElementsOf(known);
+    }
+
+    /**
+     * Every staff operation documents the 403 its area can answer, and no other operation does.
+     *
+     * <p>Selected by {@link StaffArea}, the same table the filter chain builds its rules from, so a new staff route
+     * is covered without being listed here. Every operation in an area can be refused: the chain refuses a caller
+     * the area does not admit, and the domain refuses a member who lacks a capability, both with {@code ApiError}.
+     * The two exceptions are deliberate. {@code GET /} is public, so nothing refuses it, and {@code GET /me} admits
+     * any authenticated caller precisely so that one with no role is told so rather than refused.
+     *
+     * <p>The schema is resolved, not merely referenced: a {@code 403} key, or a {@code $ref} to a component that
+     * is not there, would satisfy a scanner and give a generated client nothing to parse.
+     */
+    @DisplayName("Documents a 403 with the error body on every staff operation, and on neither / nor /me")
+    @Test
+    void documentsTheForbiddenResponseOnEveryStaffOperation() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+
+        List<String> refusable = new ArrayList<>();
+        List<String> exempt = new ArrayList<>();
+        for (Map.Entry<String, JsonNode> path : spec.get("paths").properties()) {
+            for (String method : List.of("get", "put", "post", "delete", "patch")) {
+                JsonNode operation = path.getValue().get(method);
+                if (operation == null) {
+                    continue;
+                }
+                String name = method.toUpperCase(Locale.ROOT) + " " + path.getKey();
+                if (StaffArea.of(path.getKey()).isEmpty()) {
+                    assertThat(operation.at("/responses/403").isMissingNode()).as(name).isTrue();
+                    exempt.add(name);
+                    continue;
+                }
+                assertThat(operation.has("security")).as("%s inherits the global bearer requirement", name)
+                    .isFalse();
+                assertForbiddenResponse(spec, name, operation.at("/responses/403"));
+                refusable.add(name);
+            }
+        }
+
+        assertThat(refusable).as("staff operations").isNotEmpty();
+        assertThat(exempt).containsExactlyInAnyOrder("GET /", "GET /me");
+        assertThat(spec.at("/paths/~1/get/security").isArray()).isTrue();
+        assertThat(spec.at("/paths/~1/get/security").isEmpty()).as("GET / stays public").isTrue();
+        assertThat(spec.at("/paths/~1me/get").has("security")).as("GET /me inherits the bearer requirement")
+            .isFalse();
+    }
+
+    private static void assertForbiddenResponse(JsonNode spec, String name, JsonNode declared) {
+        assertThat(declared.isMissingNode()).as("%s documents 403", name).isFalse();
+        JsonNode response = resolve(spec, declared);
+        assertThat(response.path("description").asText()).as("%s 403 description", name).isNotBlank();
+        assertThat(response.path("content").fieldNames()).toIterable().as("%s 403 content", name)
+            .containsExactly("application/json");
+
+        JsonNode error = resolve(spec, response.at("/content/application~1json/schema"));
+        assertThat(error.path("properties").fieldNames()).toIterable().as("%s 403 schema", name)
+            .containsExactlyInAnyOrder("error", "errors");
+        assertThat(error.at("/properties/error/type").asText()).isEqualTo("string");
+        assertThat(error.at("/properties/errors/type").asText()).isEqualTo("array");
+        JsonNode fieldError = resolve(spec, error.at("/properties/errors/items"));
+        assertThat(fieldError.path("properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("field", "message");
+    }
+
+    /**
+     * Follows {@code $ref}s within the document, failing on one that points at nothing.
+     */
+    private static JsonNode resolve(JsonNode spec, JsonNode node) {
+        JsonNode current = node;
+        while (current.has("$ref")) {
+            String ref = current.get("$ref").asText();
+            assertThat(ref).startsWith("#/");
+            current = spec.at(ref.substring(1));
+            assertThat(current.isMissingNode()).as("%s resolves", ref).isFalse();
+        }
+        assertThat(current.isMissingNode()).isFalse();
+        return current;
     }
 
     /**
