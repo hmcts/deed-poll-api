@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -627,7 +628,11 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
                 // remove it. Disguising the refusal as an absence would send them to look for a note they can
                 // see on the page.
                 .andExpect(jsonPath("$.error")
-                    .value("Requires capability: DELETE_NOTE"));
+                    .value("Requires capability: DELETE_NOTE"))
+                // The shape the published 403 declares: JSON, the error sentence and nothing else -- no trace,
+                // no exception class, no message from inside the framework.
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.*", hasSize(1)));
 
             // The half that matters: the 403 alone would also pass against a handler that refused after
             // deleting, and that is the failure nothing downstream could report or undo.

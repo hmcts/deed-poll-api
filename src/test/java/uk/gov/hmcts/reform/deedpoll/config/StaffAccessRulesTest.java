@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -24,7 +25,9 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -139,7 +142,10 @@ class StaffAccessRulesTest {
     void refusesARolelessCaller() throws Exception {
         as(List.of("caseworker-divorce"), CASEWORKER_PATH)
             .andExpect(status().isForbidden())
-            .andExpect(jsonPath("$.error").value(StaffArea.CASEWORKER.refusal()));
+            .andExpect(jsonPath("$.error").value(StaffArea.CASEWORKER.refusal()))
+            // The shape the published 403 declares, and nothing beside it: no trace and no exception detail.
+            .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+            .andExpect(jsonPath("$.*", hasSize(1)));
     }
 
     @Test
