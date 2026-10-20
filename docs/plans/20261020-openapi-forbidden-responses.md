@@ -154,15 +154,15 @@ Record the producer commit and raw SHA-256.
 
 ### Task 2: Publish accurate 403 responses
 
-- [ ] Implement the small OpenAPI customization described above, selecting applicable secured operations
+- [x] Implement the small OpenAPI customization described above, selecting applicable secured operations
       and preserving existing declarations. Reuse the actual error model; ensure every reference resolves.
-- [ ] Make generated-spec tests assert description, JSON content type and schema for every applicable
+- [x] Make generated-spec tests assert description, JSON content type and schema for every applicable
       operation. Resolve response/schema references rather than accepting the mere presence of a 403 key.
-- [ ] Assert that `GET /me` and public operations do not gain an invented permission refusal and that
+- [x] Assert that `GET /me` and public operations do not gain an invented permission refusal and that
       public security overrides remain intact. Ensure new staff operations are covered automatically.
-- [ ] If using a customizer, add focused tests for preservation of an existing explicit 403 response and
+- [x] If using a customizer, add focused tests for preservation of an existing explicit 403 response and
       honoring an explicit public security override, without adding artificial production routes.
-- [ ] Verify existing successes, request contracts, 404 semantics, other errors and headers are unchanged.
+- [x] Verify existing successes, request contracts, 404 semantics, other errors and headers are unchanged.
       Run API focused checks and record the red/green evidence.
 
 ### Task 3: Generate the refreshed specification (API side only)
@@ -249,6 +249,32 @@ So the intended admin delta is only this plan's 403 changes.
   `[GET /caseworker/cases documents 403]`**. That is the intended red for Task 2. Direct Checkstyle: 0 WARN, 0 ERROR
   (its config is only extracted by running a Gradle checkstyle task once; `checkstyleTest` was run for that and crashed
   as documented). `git diff --check` clean.
+
+**Task 2, 2026-10-20 (Ralphex iteration 2).**
+
+- **Customiser:** `config/OpenAPIForbiddenResponses` (one `OpenApiCustomizer` bean, beside `OpenAPIRateLimits`). It
+  selects operations by `StaffArea.of(path)`, skips any whose own `security` is an explicit empty list, and keeps an
+  existing `403` (adds only when absent). Each selected operation gets `$ref: #/components/responses/Forbidden`; that
+  response has a description and `application/json` with `$ref: #/components/schemas/ApiError`. `ApiError` and its
+  `FieldError` are registered from the real record through swagger-core's `ModelConverters`, using the converter for
+  the document's own spec version (the 3.0 converter wrote no `type` into this 3.1 document; caught and fixed), and an
+  existing schema of the same name is not overwritten. Nothing is registered when no operation references it. No
+  security rule, handler, controller or dependency changed.
+- **Tests:** new `OpenAPIForbiddenResponsesTest` (3): staff operations reference the shared response and the error
+  model registers with `type: object`; an explicit 403 is kept (same instance) and the shared response is not added;
+  an explicit public override on a staff path, `GET /`, `GET /me` and a look-alike `/caseworkers` gain nothing and keep
+  their security. `OpenAPIPublisherTest.documentsTheForbiddenResponseOnEveryStaffOperation` additionally asserts the
+  resolved `ApiError` and `FieldError` are `object`s with string `field`/`message`.
+- **Red/green:** red was Task 1's (`[GET /caseworker/cases documents 403]`, 19/20). Green: focused unit
+  (`DomainErrorHandlerTest`, `StaffAccessRulesTest`, `OpenAPIForbiddenResponsesTest`, `OpenAPIWriteBodiesTest`,
+  `CallerAccessOpenApiTest`) 28 tests, 0 failed; `OpenAPIPublisherTest` 20 tests, 0 failed, 0 skipped. Direct
+  Checkstyle 0 WARN / 0 ERROR; `git diff --check` clean.
+- **Unchanged contracts (working-tree spec `/tmp/openapi-403/task2-wip2.json` vs `baseline-93c2dd3.json`, parsed):**
+  56 differences, all additions: 53 `.../responses/403`, `components.responses`, `components.schemas.ApiError`,
+  `components.schemas.FieldError`. No removal or changed value, so successes, request bodies, operation IDs, the
+  existing 409/429/502/503 responses and headers, `servers` and security are as before. 55 operations, 39 paths,
+  60 schemas (58 + 2). The 404 visibility refusals are runtime behaviour and untouched. That artefact is a WIP
+  check, not the Task 3 producer artefact.
 
 Use the workspace `scripts/cft-ralphex` launcher and the operator's selected review profile; do not rewrite
 shared Ralphex configuration. The primary execution repository is the isolated API worktree. The admin

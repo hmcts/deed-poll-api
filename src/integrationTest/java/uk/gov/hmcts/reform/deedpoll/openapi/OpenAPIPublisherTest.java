@@ -548,11 +548,15 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         JsonNode error = resolve(spec, response.at("/content/application~1json/schema"));
         assertThat(error.path("properties").fieldNames()).toIterable().as("%s 403 schema", name)
             .containsExactlyInAnyOrder("error", "errors");
+        assertThat(error.path("type").asText()).as("%s 403 schema type", name).isEqualTo("object");
         assertThat(error.at("/properties/error/type").asText()).isEqualTo("string");
         assertThat(error.at("/properties/errors/type").asText()).isEqualTo("array");
         JsonNode fieldError = resolve(spec, error.at("/properties/errors/items"));
         assertThat(fieldError.path("properties").fieldNames()).toIterable()
             .containsExactlyInAnyOrder("field", "message");
+        assertThat(fieldError.path("type").asText()).isEqualTo("object");
+        assertThat(fieldError.at("/properties/field/type").asText()).isEqualTo("string");
+        assertThat(fieldError.at("/properties/message/type").asText()).isEqualTo("string");
     }
 
     /**
