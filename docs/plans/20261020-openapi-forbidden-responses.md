@@ -167,13 +167,13 @@ Record the producer commit and raw SHA-256.
 
 ### Task 3: Generate the refreshed specification (API side only)
 
-- [ ] Commit the API producer change locally, generate a fresh spec from that exact commit with a unique
+- [x] Commit the API producer change locally, generate a fresh spec from that exact commit with a unique
       `OPENAPI_OUTPUT_PATH`, and record the commit, output path, command, raw SHA-256 and operation/path/schema counts.
-- [ ] Generate the baseline spec from `93c2dd3` the same way, so the comparison is between two fresh artefacts.
+- [x] Generate the baseline spec from `93c2dd3` the same way, so the comparison is between two fresh artefacts.
       Compare the parsed documents and explain every difference. The intended delta is the 403 declarations plus the
       reusable response and error schemas they need. Account separately for any upstream drift rather than weakening
       tests.
-- [ ] Record, for the operator's admin refresh: the producer commit, the artefact path and hash, the list of
+- [x] Record, for the operator's admin refresh: the producer commit, the artefact path and hash, the list of
       operations that gained a 403, the new or changed component names, and what admin's `contract.test.ts` must
       now accept (for example, a new error schema in its schema inventory). Do not edit deed-poll-admin.
 
@@ -275,6 +275,57 @@ So the intended admin delta is only this plan's 403 changes.
   existing 409/429/502/503 responses and headers, `servers` and security are as before. 55 operations, 39 paths,
   60 schemas (58 + 2). The 404 visibility refusals are runtime behaviour and untouched. That artefact is a WIP
   check, not the Task 3 producer artefact.
+
+**Task 3, 2026-10-20 (Ralphex iteration 3).**
+
+- **Producer artefact.** Commit `693c242` (`feat: publish accurate 403 responses on staff operations`), clean tree.
+  Command, from the API worktree:
+  `TESTCONTAINERS_RYUK_DISABLED=true JAVA_TOOL_OPTIONS=-XX:UseSVE=0 OPENAPI_OUTPUT_PATH=/tmp/openapi-403/producer-693c242.json ./gradlew cleanIntegration integration --tests '*OpenAPIPublisherTest' --no-daemon`
+  (`cleanIntegration` is needed: without it the task is UP-TO-DATE, the test does not run and no file is written).
+  `OpenAPIPublisherTest` 20 tests, 0 failed, 0 skipped. Output `/tmp/openapi-403/producer-693c242.json`, 93,634 bytes,
+  raw SHA-256 `7af3a4522d6718beac41844208a68cd65301b02929ebbdbf0904611cfda62868`. OpenAPI `3.1.0`; 55 operations,
+  39 paths, 60 schemas; `servers` `[{url: "/", description: "Same origin as the served API document"}]`; global
+  `security` `[{bearerAuth: []}]`. `/tmp` is not durable. If the file has gone, regenerate it from `693c242` with
+  the same command and check the hash. This iteration's commit changes only this plan, so the producer output is
+  the same at the branch head.
+- **Fresh baseline.** A temporary detached worktree `/tmp/openapi-403-base` at `93c2dd3` (removed afterwards), with the
+  same command writing `/tmp/openapi-403/baseline-93c2dd3-task3.json`: 90,448 bytes, SHA-256
+  `dba83e5e6c31f683c76430bb4e631aa865c9c1d659cdc25a3a5bc19d2e1fac4b`. That is byte-identical to the pre-run baseline
+  and to Task 1's inventory. 55 operations, 39 paths, 58 schemas.
+- **Parsed comparison (recursive key/value diff of the two documents): 56 differences, all additions, none removed or
+  changed.** 53 are `paths.<path>.<method>.responses.403`, each exactly `{"$ref": "#/components/responses/Forbidden"}`.
+  The other three are `components.responses` (new: `Forbidden`), `components.schemas.ApiError` and
+  `components.schemas.FieldError`. No upstream drift: the baseline is unchanged since before the run and
+  matches admin `origin/master` `649c30e`'s copy (see Baseline).
+- **For the operator's admin refresh** (admin `origin/master` `649c30e` read with `git show`; nothing edited):
+  - Copy from `/tmp/openapi-403/producer-693c242.json` (SHA-256 above), producer commit `693c242`.
+  - **Gained a 403 (53):** every operation except `GET /` and `GET /me`. That is all 45 `/caseworker/**` operations,
+    including the three deferred `/caseworker/ccd-attempts` ones, and all 8 `/judicial/**` operations.
+  - **New components:** `components.responses.Forbidden` (description *"The caller is not staff of this area, or
+    lacks the role or capability this operation requires. The body is the usual error object, with a fixed summary
+    in error."*, content `application/json` only, schema `$ref: #/components/schemas/ApiError`).
+    `components.schemas.ApiError` is `{type: object, properties: {error: {type: string}, errors: {type: array,
+    items: {$ref: #/components/schemas/FieldError}}}}`, and `components.schemas.FieldError` is `{type: object,
+    properties: {field: {type: string}, message: {type: string}}}`. Neither has a `required` list. No existing
+    component changed.
+  - **What `contract.test.ts` must now accept. On `649c30e`, four tests will fail on the refreshed copy:**
+    1. *"should not describe the schemas listed as unspecified"*: `wire.ts`'s `UNSPECIFIED_SCHEMAS` lists `ApiError`
+       because it was unpublished. It is now published. Move `apiErrorSchema` into `WIRE_SCHEMAS` and empty or remove
+       `UNSPECIFIED_SCHEMAS` (and update its comment).
+    2. *"should describe exactly the consumed and explicitly deferred schemas"*: `ApiError` and `FieldError` are new
+       spec names. `FieldError` is now a named schema while admin inlines it inside `apiErrorSchema`, so it needs its
+       own named zod schema in `WIRE_SCHEMAS`. That also brings both under the per-schema property-key comparison and
+       the *"strictness for every response schema"* check, so both need `STRICT_RESPONSE_PROPERTIES` entries.
+       Admin's existing shape already matches the published one (`error` string, `errors` optional array of
+       `field`/`message`).
+    3. *"should keep the complete deferred CCD definitions unchanged"*: the three `/caseworker/ccd-attempts` path
+       definitions in `deferred-contract.json` each gain `responses.403` = the `Forbidden` `$ref`. Reconcile that
+       fixture deliberately, and no other change to it is expected.
+    4. *"should publish the Gazette read …"*: its exact `operation.responses` for `GET /caseworker/gazette-notices` now
+       also has `"403": {"$ref": "#/components/responses/Forbidden"}`.
+    The plan's new admin assertions also belong here: every operation except `GET /` and `GET /me` references a
+    resolvable 403 with `application/json` and `ApiError`, and `GET /` keeps `security: []`. Check whether admin's
+    `OpenApiSpec` type declares `components.responses`, so the refs can be resolved in a typed way.
 
 Use the workspace `scripts/cft-ralphex` launcher and the operator's selected review profile; do not rewrite
 shared Ralphex configuration. The primary execution repository is the isolated API worktree. The admin
