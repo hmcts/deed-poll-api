@@ -179,11 +179,11 @@ Record the producer commit and raw SHA-256.
 
 ### Task 4: Final validation and review handoff
 
-- [ ] Run the API final gates (Validation Commands), review the API diff and confirm no runtime authorization or
+- [x] Run the API final gates (Validation Commands), review the API diff and confirm no runtime authorization or
       error-handling behaviour changed. Record test counts, skips, failures and any limits on the evidence.
-- [ ] Prepare Fortify assessment text distinguishing the confirmed documentation omission from an
+- [x] Prepare Fortify assessment text distinguishing the confirmed documentation omission from an
       unproven information leak. State that scanner closure awaits a rescan of the refreshed artifact.
-- [ ] Record the API final commit, changed files and the producer facts the admin refresh needs in Execution notes.
+- [x] Record the API final commit, changed files and the producer facts the admin refresh needs in Execution notes.
       Leave the implementation ready for the normal Ralphex review phases, which the operator runs separately.
       Do not mark reviews or a Fortify retest complete unless they actually ran.
 
@@ -326,6 +326,63 @@ So the intended admin delta is only this plan's 403 changes.
     The plan's new admin assertions also belong here: every operation except `GET /` and `GET /me` references a
     resolvable 403 with `application/json` and `ApiError`, and `GET /` keeps `security: []`. Check whether admin's
     `OpenApiSpec` type declares `components.responses`, so the refs can be resolved in a typed way.
+
+**Task 4, 2026-10-20 (Ralphex iteration 4).**
+
+- **Final gates, all run at `b0b8930` with `TESTCONTAINERS_RYUK_DISABLED=true JAVA_TOOL_OPTIONS=-XX:UseSVE=0`.**
+  Counts come from `build/test-results/{test,integration}/*.xml`.
+  - Focused unit (`DomainErrorHandlerTest`, `StaffAccessRulesTest`, `OpenAPIForbiddenResponsesTest`,
+    `CaseworkerNoteControllerTest`): 69 tests, 0 failed, 0 errors, 0 skipped.
+  - `cleanIntegration integration --tests '*OpenAPIPublisherTest'`: 20 tests, 0 failed, 0 skipped. It wrote
+    `/tmp/openapi-403/final-b0b8930.json`, SHA-256 `7af3a452…cfda62868`, which is byte-identical to the producer
+    artefact from `693c242`. So the producer output at the branch head is the recorded one.
+  - `cleanTest build -x checkstyle…`: exit 0. 4,529 unit tests (base 4,526 + 3 new in `OpenAPIForbiddenResponsesTest`)
+    and 23 integration tests (base 22 + 1 new in `OpenAPIPublisherTest`), 0 failed, 0 errors, 0 skipped. The known
+    `CorrespondenceReadTest` flake did not occur.
+  - Direct Checkstyle on all five source sets: `Audit done.`, 0 `[WARN]`, 0 `[ERROR]`. `git diff --check 93c2dd3..HEAD`
+    is clean.
+  - **Limits on the evidence:**
+    - Gradle's own Checkstyle tasks were excluded, as amended in Validation Commands, because of the SIGILL crash.
+    - No admin check ran, because those belong to the operator (see Post-Completion).
+    - Nothing ran against a live environment, and no Fortify scan ran.
+- **Diff review (`93c2dd3..HEAD`).** The only production change is the new `config/OpenAPIForbiddenResponses`, an
+  `OpenApiCustomizer` bean that only mutates the generated document. `SecurityConfiguration`, `StaffArea`/`StaffGate`,
+  the access-denied and entry-point handlers, `DomainErrorHandler`, `ApiError`, controllers, yaml, chart and
+  dependencies are untouched. The two runtime test edits only add assertions (JSON content type, single-key body).
+  Runtime authorisation and error handling are therefore unchanged. The spec delta is the 56 additions that Task 3
+  recorded.
+- **Changed files:**
+  - `src/main/java/.../config/OpenAPIForbiddenResponses.java` (new)
+  - `src/test/java/.../config/OpenAPIForbiddenResponsesTest.java` (new)
+  - `src/integrationTest/java/.../openapi/OpenAPIPublisherTest.java`
+  - `src/test/java/.../config/StaffAccessRulesTest.java`
+  - `src/test/java/.../api/caseworker/controller/CaseworkerNoteControllerTest.java`
+  - this plan
+- **Final commit:** this iteration's commit, which changes only this plan, on top of `b0b8930`. The producer commit
+  for the admin refresh stays `693c242`, with artefact `/tmp/openapi-403/producer-693c242.json`. Its SHA-256 is
+  `7af3a4522d6718beac41844208a68cd65301b02929ebbdbf0904611cfda62868`, and it has 55 operations, 39 paths and 60 schemas. The 53
+  operations that gained a 403, the new components and the four `contract.test.ts` changes are in the Task 3 notes.
+- **Fortify assessment text (draft, for Steve to submit; not submitted):**
+  > The finding states that operations in `openapi.json` inherit the global bearer requirement but do not declare a
+  > 403 response. We confirmed this as a documentation omission. Before the fix, none of the 55 published operations
+  > declared 403, although the 53 staff operations under `/caseworker/**` and `/judicial/**` can answer one. A
+  > refusal comes either from the security filter chain, when the caller is not staff of the area, or from the
+  > domain error handler, when the caller lacks a role or capability. The API now publishes a shared `Forbidden`
+  > response on each of those 53 operations. Its body is `application/json` with the `ApiError` schema, the error
+  > object the service actually returns. `GET /` is public, and `GET /me` admits any authenticated caller by design,
+  > so neither declares a 403. Source inspection and the existing runtime tests show that both refusal paths return
+  > only a fixed error sentence, with no stack trace, exception class or framework message. So no information leak
+  > is shown, and this change does not claim to fix one: it changes only the published specification, not runtime
+  > behaviour. The report gave no operation name, instance ID or rule ID, so we have not mapped the finding to a
+  > specific instance. Closure awaits a Fortify rescan of the refreshed artefact. That needs the admin copy refreshed
+  > and both changes merged first.
+- **Not done, and not claimed:**
+  - the Ralphex review phases (the operator runs them separately);
+  - the admin refresh and its validation;
+  - push, PR, merge and deployment;
+  - the Fortify rescan.
+- **Follow-up, out of scope:** the 53 staff operations still do not declare 401, although an unauthenticated call is
+  refused with 401. Record that as separate follow-up work (Development Approach item 6).
 
 Use the workspace `scripts/cft-ralphex` launcher and the operator's selected review profile; do not rewrite
 shared Ralphex configuration. The primary execution repository is the isolated API worktree. The admin
