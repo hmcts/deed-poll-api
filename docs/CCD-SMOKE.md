@@ -46,6 +46,13 @@ Two things cftlib found that no WireMock test could have, both repeated here bec
 
 ## 1. Generate and import the definition
 
+> **Outside AAT, the import is a Jenkins stage, not this hand-run procedure.** From 2026-10-21 the `ithc` branch
+> build imports DEEDPOLL through cnp-jenkins-library's "High Level Data Setup" stage, as pcs-api does (see
+> [the plan](plans/20261021-ccd-high-level-data-setup.md)). It authenticates with the platform's `ccd_gw` and
+> `ccd_gateway`, plus our own `definition-importer-*` account. That isn't the "borrowed key" this section warns
+> against, because the platform supplies it. The procedure below is how AAT was onboarded on 2026-10-16, and it stays
+> the record for AAT until master builds take the import over.
+
 ### AAT import prerequisites and request sequence — checked 2026-10-08
 
 The durable importer credentials already exist in `deed-poll-aat` as

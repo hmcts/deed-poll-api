@@ -5,9 +5,14 @@
 // four repos could change between two runs with no commit here. Bump the set together.
 @Library("Infrastructure@2.12.2") _
 
+import uk.gov.hmcts.contino.GradleBuilder
+
 def type = "java"
 def product = "deed-poll"
 def component = "api"
+
+// The library's own Gradle invocation (its init script included), as pcs-api uses for the definition generator.
+GradleBuilder builder = new GradleBuilder(this, product)
 
 withPipeline(type, product, component) {
   // The environment's Ubuntu agent image supplies Docker and grants jenkinsssh access. Include
@@ -23,4 +28,25 @@ withPipeline(type, product, component) {
   afterAlways('test') {
     junit testResults: '**/test-results/integration/*.xml', allowEmptyResults: true
   }
+
+  // CCD definition import, through the library's "High Level Data Setup" stage as pcs-api imports its own.
+  // ITHC only for now: AAT keeps its hand-run import (docs/CCD-SMOKE.md) until this has run once, and prod comes
+  // at go-live. Switching on master would re-import into AAT on every merge and then into prod.
+  // See docs/plans/20261021-ccd-high-level-data-setup.md.
+  onIthc {
+    enableHighLevelDataSetup()
+  }
+
+  before('highleveldatasetup') {
+    generateDefinitions(builder)
+  }
+}
+
+def generateDefinitions(builder) {
+  // The three identifiers the definition is generated with, as docs/CCD-SMOKE.md generates it.
+  withEnv(['CCD_CASE_TYPE_ID=DEEDPOLL', 'CCD_JURISDICTION_ID=DEEDPOLL', 'CCD_SYSTEM_ROLE=deed-poll-system-update']) {
+    builder.gradle('--rerun-tasks generateCCDConfig')
+  }
+  sh "./bin/create-xlsx.sh ${env.ENVIRONMENT}"
+  archiveArtifacts artifacts: 'build/definitions/*.xlsx'
 }
