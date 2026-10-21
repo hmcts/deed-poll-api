@@ -63,6 +63,25 @@ def configureSourceSet(String name) {
 
 ['smokeTest', 'integrationTest', 'functionalTest'].each { configureSourceSet(it) }
 
+/*
+  The CCD definition importer that Jenkins' "High Level Data Setup" stage runs as `gradle highLevelDataSetup
+  --args=<env>` (cnp-jenkins-library highLevelDataSetup.groovy). It has its own source set and classpath and shares
+  nothing with main or test in either direction. befta-fw is a large test framework, and neither the application jar,
+  the Jackson 2 rule below nor the pinned OWASP suppressions should depend on what it brings. `verifyNoJackson3` still
+  checks this set's configurations. See docs/plans/20261021-ccd-high-level-data-setup.md.
+*/
+sourceSets.create('ccdImport') { sourceSet ->
+  sourceSet.java.srcDir 'src/ccdImport/java'
+}
+
+tasks.register('highLevelDataSetup', JavaExec) {
+  group = 'ccd'
+  description = 'Imports build/definitions/CCD_Definition_DEEDPOLL_<env>.xlsx into the environment named by --args'
+  mainClass = 'uk.gov.hmcts.reform.deedpoll.ccdimport.HighLevelDataSetupApp'
+  classpath = sourceSets.ccdImport.runtimeClasspath
+  jvmArgs = ['--add-opens=java.base/java.lang.reflect=ALL-UNNAMED']
+}
+
 // Compile only this shared fixture into cftlibTest: including test.output would make cftlib's package scan run
 // the entire unit suite inside the CFT stack. The fixture is never part of the application artifact.
 sourceSets.test.java.srcDir 'src/dmStoreStub/java'
@@ -366,6 +385,13 @@ tasks.register('verifyNoJackson3') {
 tasks.named('check') { dependsOn 'verifyNoJackson3' }
 
 dependencies {
+  // The definition importer's own classpath only: see the ccdImport source set. befta-fw brings POI 4.1.2, whose
+  // xmlbeans 3.1.0 OWASP scores 7.5, so the importer takes the POI the application already ships instead.
+  ccdImportImplementation(group: 'com.github.hmcts', name: 'befta-fw', version: '9.2.11') {
+    exclude group: 'org.apache.poi'
+  }
+  ccdImportImplementation group: 'org.apache.poi', name: 'poi-ooxml', version: '5.5.1'
+
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-web'
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-actuator'
   implementation group: 'org.springframework.boot', name: 'spring-boot-starter-aop'
