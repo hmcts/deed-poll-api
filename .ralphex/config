@@ -18,3 +18,10 @@ custom_review_script = .ralphex/copilot-review.sh
 # Terminate the external review loop after 3 rounds that change nothing, rather than running to
 # the iteration cap. A reviewer that has stopped finding things is done.
 review_patience = 3
+
+# Diff reviews against origin/master, not the local master branch. Worktrees share the main clone's refs,
+# and nobody checks master out to pull it, so local master goes stale. On 2026-10-20 (deed-poll-admin E05) it was behind
+# origin, and the external review got a 148-file diff for a 4-file change and said NO ISSUES in a minute.
+# Anything that fetches keeps origin/master current; fetch before a run if the clone has been idle.
+# Same effect as `ralphex -b origin/master`, which still overrides this for a branch based elsewhere.
+default_branch = origin/master
