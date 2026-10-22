@@ -108,9 +108,9 @@ session and the next one builds over it, wiping the results.
 **Files:** `DeedPollSchemas.java`, `OpenAPIWriteBodies.java` if the note needs adding, and their tests; the case
 controller tests.
 
-- [ ] Record the execution baseline in the execution notes.
-- [ ] Add failing tests as listed in the Development Approach, for create and update, and for the published spec.
-- [ ] Implement, run focused tests and all Validation Commands, and record the results.
+- [x] Record the execution baseline in the execution notes.
+- [x] Add failing tests as listed in the Development Approach, for create and update, and for the published spec.
+- [x] Implement, run focused tests and all Validation Commands, and record the results.
 
 ### Task 2: No blank witness fields (gap 2)
 
@@ -140,6 +140,26 @@ controller tests.
 ## Execution notes
 
 (Record baseline, red/green evidence and final results here.)
+
+**Baseline (2026-10-22).** HEAD `719bd94` on `fix/textarea-limit-and-blank-witnesses`, over `origin/master`
+`ebe9843`. Full build green: `test` 4553 tests, 0 failures, 0 errors, 0 skipped; `integration` 23, 0/0/0;
+`checkstyle.sh` OK. Both gaps rechecked there: the three narrative fields were `optionalText()` (no cap), and
+`WitnessSchemas` accepted `""` and whitespace. Only `CreateCaseRequest`, `UpdateCaseRequest`,
+`CreateWitnessRequest` and `UpdateWitnessRequest` call the schemas (plus `OpenAPIWriteBodies` reading
+`writeBodyFields()` and the witness constants); `ccdImport`, `cftlib`, migrations and seeds do not, so the cap cannot
+refuse legacy data. Admin `origin/master` `7567b60` `form-input.ts` sends the trimmed text with its CRLFs kept and
+measures it with `/\r\n?/g` folded to `\n`, which is what api now does.
+
+**Task 1.** `DeedPollSchemas.NARRATIVE_MAX_LENGTH = 2000` via `narrativeText()` on `returnReason`, `referralNotes`
+and `masterDirections`; `Rule` and the public `FieldSchema` gained `lineBreaksCountOnce`, and only those three set
+it. The value is stored as sent. `OpenAPIWriteBodies` publishes `maxLength: 2000` plus a field description that a
+line break counts as one character. Tests: `DeedPollSchemasTest$NarrativeFields` (5), `CaseworkerCaseControllerTest$NarrativeCap`
+(9: create at the cap and with CRLF, create over per field with nothing written and no serial consumed, patch over per
+field leaving the stored value, patch with CRLF plus explicit null clearing, omitted field keeping a 5,000-character
+stored value), `OpenAPIWriteBodiesTest` and `OpenAPIPublisherTest` spot checks. Red: the new tests did not compile
+against the old schema; with the line-break folding switched off, 2 of `NarrativeFields` failed. Green: full build
+`test` 4567 (+14), 0 failures, 0 errors, 0 skipped; `integration` 23, 0/0/0; `checkstyle.sh` OK (after one
+single-line Javadoc fix, re-run alone).
 
 ## Post-Completion
 

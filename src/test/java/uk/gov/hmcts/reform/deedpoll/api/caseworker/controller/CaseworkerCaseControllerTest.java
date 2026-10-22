@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -42,6 +43,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -752,6 +754,108 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
             authorised(patch("/caseworker/cases/" + record.getId()), json(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.state").value(expectedState));
+        }
+    }
+
+    /** The 2,000-character cap on returnReason, referralNotes and masterDirections -- api's own, matching admin. */
+    @Nested
+    @DisplayName("the narrative fields' 2,000-character cap")
+    class NarrativeCap {
+
+        private static final String TWO_THOUSAND = "a".repeat(2000);
+
+        private static final Map<String, Function<DeedPoll, String>> NARRATIVE = Map.of(
+            "returnReason", DeedPoll::getReturnReason,
+            "referralNotes", DeedPoll::getReferralNotes,
+            "masterDirections", DeedPoll::getMasterDirections);
+
+        /** 1,990 letters and ten CRLF line breaks: 2,000 as admin and a browser count it, 2,010 UTF-16 units. */
+        private static final String TWO_THOUSAND_WITH_CRLF = ("a".repeat(199) + "\r\n").repeat(10);
+
+        @Test
+        @DisplayName("a create stores 2,000 characters, and 2,000 plus CRLF line breaks as sent")
+        void createAcceptsTheCap() throws Exception {
+            MvcResult result = authorised(post("/caseworker/cases"), json(Map.of(
+                "dateReceived", quoted(RECEIVED),
+                "returnReason", text(TWO_THOUSAND),
+                "referralNotes", text(TWO_THOUSAND_WITH_CRLF),
+                "masterDirections", text(TWO_THOUSAND))))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+            String id = objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asText();
+            DeedPoll stored = deedPolls.findById(id).orElseThrow();
+            assertThat(stored.getReturnReason()).isEqualTo(TWO_THOUSAND);
+            assertThat(stored.getReferralNotes()).isEqualTo(TWO_THOUSAND_WITH_CRLF);
+            assertThat(stored.getMasterDirections()).isEqualTo(TWO_THOUSAND);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"returnReason", "referralNotes", "masterDirections"})
+        @DisplayName("a create over the cap is a 400 naming the field, and writes nothing")
+        void createRefusesOverTheCap(String field) throws Exception {
+            authorised(post("/caseworker/cases"), json(Map.of(
+                "dateReceived", quoted(RECEIVED),
+                field, text(TWO_THOUSAND + "a"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.length()").value(1))
+                .andExpect(jsonPath("$.errors[0].field").value(field))
+                .andExpect(jsonPath("$.errors[0].message").value(field + " must be 2000 characters or fewer"));
+
+            assertThat(deedPolls.count()).as("nothing written").isZero();
+            assertThat(referenceCounters.count()).as("no serial consumed").isZero();
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"returnReason", "referralNotes", "masterDirections"})
+        @DisplayName("a patch over the cap is a 400 naming the field, and leaves the stored value alone")
+        void patchRefusesOverTheCap(String field) throws Exception {
+            DeedPoll record = newCase(Map.of(field, "Before"));
+
+            authorised(patch("/caseworker/cases/" + record.getId()), json(Map.of(
+                field, text(TWO_THOUSAND_WITH_CRLF + "a"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.length()").value(1))
+                .andExpect(jsonPath("$.errors[0].field").value(field));
+
+            assertThat(NARRATIVE.get(field).apply(deedPolls.findById(record.getId()).orElseThrow()))
+                .isEqualTo("Before");
+        }
+
+        @Test
+        @DisplayName("a patch stores 2,000 plus CRLF line breaks, and an explicit null still clears")
+        void patchAcceptsTheCapAndClears() throws Exception {
+            DeedPoll record = newCase(Map.of("returnReason", "Before", "masterDirections", "Before"));
+
+            authorised(patch("/caseworker/cases/" + record.getId()), json(Map.of(
+                "returnReason", text(TWO_THOUSAND_WITH_CRLF),
+                "masterDirections", "null")))
+                .andExpect(status().isOk());
+
+            DeedPoll stored = deedPolls.findById(record.getId()).orElseThrow();
+            assertThat(stored.getReturnReason()).isEqualTo(TWO_THOUSAND_WITH_CRLF);
+            assertThat(stored.getMasterDirections()).isNull();
+        }
+
+        @Test
+        @DisplayName("a patch that omits a field leaves a stored value over the cap alone")
+        void anOmittedFieldKeepsALongStoredValue() throws Exception {
+            // Stored through the domain, as legacy data would be: the cap is a write rule, not a migration.
+            String legacy = "a".repeat(5000);
+            DeedPoll record = newCase(Map.of("returnReason", legacy));
+
+            authorised(patch("/caseworker/cases/" + record.getId()), json(Map.of(
+                "newForename", quoted("Bea"))))
+                .andExpect(status().isOk());
+
+            DeedPoll stored = deedPolls.findById(record.getId()).orElseThrow();
+            assertThat(stored.getReturnReason()).isEqualTo(legacy);
+            assertThat(stored.getNewForename()).isEqualTo("Bea");
+        }
+
+        /** A JSON string literal, escaped by Jackson so CR and LF travel as the escapes a client sends. */
+        private String text(String value) throws Exception {
+            return objectMapper.writeValueAsString(value);
         }
     }
 

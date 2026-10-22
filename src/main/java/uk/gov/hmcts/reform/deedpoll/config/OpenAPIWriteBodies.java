@@ -222,6 +222,12 @@ public class OpenAPIWriteBodies {
         if (described.maxLength() > 0) {
             field.setMaxLength(described.maxLength());
         }
+        if (described.lineBreaksCountOnce()) {
+            // maxLength counts a CRLF as two, and the service counts it as one, as admin's form and a browser do.
+            // Without this a client trusting the document would refuse text the service accepts.
+            field.setDescription("A line break counts as one character towards maxLength, whether it is sent "
+                + "as LF, CRLF or CR.");
+        }
         if (!described.allowedValues().isEmpty()) {
             described.allowedValues().forEach(value -> addEnumValue(field, value));
         }

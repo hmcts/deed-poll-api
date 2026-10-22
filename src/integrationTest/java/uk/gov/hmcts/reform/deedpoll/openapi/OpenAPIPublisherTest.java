@@ -915,6 +915,12 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         String create = "/components/schemas/CreateCaseRequest/properties/";
         assertThat(typesOf(spec.at(create + "newForename"))).contains("string");
         assertThat(spec.at(create + "newForename/maxLength").asInt()).isEqualTo(1000);
+        // The narrative cap, api's own rule matching admin's edit form, on both bodies.
+        for (String narrative : List.of("returnReason", "referralNotes", "masterDirections")) {
+            assertThat(spec.at(create + narrative + "/maxLength").asInt()).isEqualTo(2000);
+            assertThat(spec.at("/components/schemas/UpdateCaseRequest/properties/" + narrative + "/maxLength")
+                .asInt()).isEqualTo(2000);
+        }
         assertThat(spec.at(create + "type/enum").isArray()).isTrue();
         assertThat(spec.at(create + "dateReceived/format").asText()).isEqualTo("date-time");
         assertThat(typesOf(spec.at(create + "migratedRecord"))).contains("boolean");

@@ -25,6 +25,17 @@ class OpenAPIWriteBodiesTest {
         assertThat(createCase.getType()).isEqualTo("object");
         assertThat(createCase.getProperties()).isNotEmpty();
         assertThat(createCase.getAdditionalProperties()).isEqualTo(true);
+        for (String body : new String[] {"CreateCaseRequest", "UpdateCaseRequest"}) {
+            for (String narrative : new String[] {"returnReason", "referralNotes", "masterDirections"}) {
+                Schema<?> field = schema(openApi, body).getProperties().get(narrative);
+                assertThat(field.getMaxLength()).as("%s.%s", body, narrative).isEqualTo(2000);
+                assertThat(field.getDescription()).as("%s.%s", body, narrative)
+                    .contains("line break counts as one character");
+            }
+            assertThat(schema(openApi, body).getProperties().get("masterName").getDescription())
+                .as("the line-break note is the narrative fields' alone")
+                .isNull();
+        }
 
         Schema<?> createNote = schema(openApi, "CreateNoteRequest");
         assertThat(createNote.getProperties()).containsKey("note");
