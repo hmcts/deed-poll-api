@@ -118,6 +118,10 @@ public class OpenAPIWriteBodies {
 
     private static final String NOTE_FIELD = "note";
 
+    /** What the bounds on a witness text field measure, said once for the three of them. */
+    private static final String WITNESS_TRIMMED =
+        "Trimmed first: the bounds hold for the trimmed value, which is what is stored, so a blank is refused.";
+
     /** The declarant flag, named once because both witness bodies declare it. */
     private static final String DECLARANT_FIELD = "declarant";
 
@@ -287,6 +291,11 @@ public class OpenAPIWriteBodies {
         }
     }
 
+    /** A witness text field's bounds, which hold for the trimmed value. */
+    private Schema<?> witnessText(int maxLength) {
+        return new StringSchema().minLength(1).maxLength(maxLength);
+    }
+
     private Schema<?> noteText() {
         return new StringSchema().minLength(1).maxLength(NoteForm.MAX_NOTE_LENGTH);
     }
@@ -296,8 +305,9 @@ public class OpenAPIWriteBodies {
      *
      * <p>The caps are {@link WitnessSchemas}'s own constants rather than numbers written here, for the reason the
      * class comment gives -- the document has to describe what the service enforces, not what somebody remembered
-     * it enforced. No {@code minLength}, unlike the note: a witness field is not trimmed and an empty string is
-     * accepted, which is the reference's behaviour and is argued in {@code WitnessSchemas}.
+     * it enforced. Each text field publishes {@code minLength: 1}, as the note does: it is trimmed first and a
+     * blank is refused, which is the reference's behaviour since review finding R15 and is argued in
+     * {@code WitnessSchemas}.
      */
     private void describeWitnessBodies(OpenAPI openApi) {
         Schema<?> create = schema(openApi, CREATE_WITNESS);
@@ -314,7 +324,8 @@ public class OpenAPIWriteBodies {
             create.setAdditionalProperties(true);
             create.setDescription("A witness or declarant. All four fields are required: every column is NOT "
                 + "NULL. declarant must be a JSON boolean -- the string \"true\" is refused rather than coerced. "
-                + "Values are stored as submitted and not trimmed. The case comes from the path and no author is "
+                + "The three text fields are trimmed, stored trimmed, and refused if blank; each maximum is measured "
+                + "after trimming. The case comes from the path and no author is "
                 + "recorded, so neither can be set here. Unknown keys are ignored.");
         }
 
@@ -333,13 +344,13 @@ public class OpenAPIWriteBodies {
     }
 
     private void witnessFields(Schema<?> body) {
-        body.addProperty("witnessName",
-            new StringSchema().maxLength(WitnessSchemas.MAX_WITNESS_NAME_LENGTH));
-        body.addProperty("witnessAddress",
-            new StringSchema().maxLength(WitnessSchemas.MAX_WITNESS_ADDRESS_LENGTH)
-                .description("The whole address as one free-text field, exactly as the source form holds it."));
-        body.addProperty("witnessOccupation",
-            new StringSchema().maxLength(WitnessSchemas.MAX_WITNESS_OCCUPATION_LENGTH));
+        body.addProperty("witnessName", witnessText(WitnessSchemas.MAX_WITNESS_NAME_LENGTH)
+            .description(WITNESS_TRIMMED));
+        body.addProperty("witnessAddress", witnessText(WitnessSchemas.MAX_WITNESS_ADDRESS_LENGTH)
+            .description("The whole address as one free-text field, exactly as the source form holds it. "
+                + WITNESS_TRIMMED));
+        body.addProperty("witnessOccupation", witnessText(WitnessSchemas.MAX_WITNESS_OCCUPATION_LENGTH)
+            .description(WITNESS_TRIMMED));
         body.addProperty(DECLARANT_FIELD, new BooleanSchema()
             .description("Whether this witness is the declarant. One row type covers both."));
     }

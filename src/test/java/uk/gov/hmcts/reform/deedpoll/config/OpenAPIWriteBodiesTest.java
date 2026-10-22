@@ -7,6 +7,7 @@ import io.swagger.v3.oas.models.PathItem;
 import io.swagger.v3.oas.models.Paths;
 import io.swagger.v3.oas.models.media.Schema;
 import org.junit.jupiter.api.Test;
+import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageRule;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,6 +53,15 @@ class OpenAPIWriteBodiesTest {
                 "witnessOccupation",
                 "declarant"
             );
+        for (String body : new String[] {"CreateWitnessRequest", "UpdateWitnessRequest"}) {
+            for (String text : new String[] {"witnessName", "witnessAddress", "witnessOccupation"}) {
+                Schema<?> field = schema(openApi, body).getProperties().get(text);
+                assertThat(field.getMinLength()).as("%s.%s", body, text).isEqualTo(1);
+                assertThat(field.getDescription()).as("%s.%s", body, text).contains("Trimmed first");
+            }
+        }
+        assertThat(schema(openApi, "CreateWitnessRequest").getProperties().get("witnessAddress").getMaxLength())
+            .isEqualTo(WitnessSchemas.MAX_WITNESS_ADDRESS_LENGTH);
 
         Schema<?> createSavedQuery = schema(openApi, "CreateSavedQueryRequest");
         assertThat(createSavedQuery.getRequired()).contains("name");

@@ -29,17 +29,14 @@ import java.util.Optional;
  *       recorded as an ordinary witness changes what the case means.</li>
  * </ol>
  *
- * <p><strong>Values are not trimmed</strong>, and that is deliberate rather than an omission. The notes
- * payload trims because a blank note passes an emptiness check and stores a row the grid renders blank;
- * here the reference declares plain {@code z.string().max(...)} on each field, and its test asserts that
- * {@code parse} returns exactly what it was given. Trimming would make this port store something
- * different from the specification it is being asserted against, which is a worse trade than surrounding
- * whitespace on a witness address. If it should trim, that belongs in the reference first.
- *
- * <p>For the same reason there is no emptiness check: {@code z.string()} accepts {@code ""} and the
- * reference's "requires every field" test removes keys rather than blanking them. An empty witness name
- * is a data-quality question for whichever form eventually writes one, not something this port may
- * invent.
+ * <p><strong>The three text fields are trimmed and must not be blank</strong>, as the reference's
+ * {@code z.string().trim().min(1).max(...)} says since admin review finding R15: a blank witness counted
+ * towards the enrolment-witness threshold while telling nobody who had witnessed anything. Whitespace alone
+ * is blank, because it is trimmed first; the trimmed value is what is stored; and the caps are measured after
+ * trimming, so padding a value that fits does not refuse it. The trim is JavaScript's
+ * {@code String.prototype.trim}, which zod calls, rather than Java's {@code trim()} or {@code strip()}, which
+ * strip different sets: the port strips exactly what admin strips before it sends. {@code declarant} is
+ * unchanged.
  *
  * <p>Unknown keys are stripped rather than reported, as elsewhere in the port: only the four field names
  * are read, and neither input record has anywhere to put anything else.
@@ -82,7 +79,7 @@ public final class WitnessSchemas {
      * should see all of its problems at once, and {@link InvalidInputError} carries a list for exactly
      * that.
      *
-     * @throws InvalidInputError with one entry per missing, mistyped or over-long field
+     * @throws InvalidInputError with one entry per missing, mistyped, blank or over-long field
      */
     public static CreateWitnessInput parseCreateWitness(Map<String, Object> raw) {
         List<FieldError> errors = new ArrayList<>();
@@ -173,25 +170,59 @@ public final class WitnessSchemas {
     }
 
     /**
-     * The value if it is text within its cap, or empty if it is neither.
+     * The trimmed value if it is text that is neither blank nor over its cap once trimmed, or empty if not.
      *
      * <p>Takes {@link Object} because both callers receive untrusted input: a JSON body value is untyped,
      * and two form controls sharing a name arrive as a list. A non-string is refused rather than coerced,
      * so {@code ["a", "b"]} cannot be stored as {@code "a,b"}.
      */
     private static Optional<String> requireText(Object value, int maxLength) {
-        if (!(value instanceof String string) || string.length() > maxLength) {
+        if (!(value instanceof String string)) {
             return Optional.empty();
         }
-        return Optional.of(string);
+        String trimmed = trim(string);
+        if (trimmed.isEmpty() || trimmed.length() > maxLength) {
+            return Optional.empty();
+        }
+        return Optional.of(trimmed);
     }
 
-    /** Which of the two text rules the value broke, so the message says which. */
+    /** Which of the three text rules the value broke, so the message says which. */
     private static FieldError rejectedText(String field, Object value, int maxLength) {
-        if (value instanceof String) {
-            return new FieldError(field, field + " must be " + maxLength + " characters or fewer");
+        if (!(value instanceof String string)) {
+            return new FieldError(field, field + " must be text");
         }
-        return new FieldError(field, field + " must be text");
+        if (trim(string).isEmpty()) {
+            return new FieldError(field, field + " must not be blank");
+        }
+        return new FieldError(field, field + " must be " + maxLength + " characters or fewer");
+    }
+
+    /**
+     * JavaScript's {@code String.prototype.trim}: strips the ECMAScript WhiteSpace and LineTerminator code
+     * points from both ends. That is tab, vertical tab, form feed, space, no-break space, the byte order mark,
+     * every other space separator, line feed, carriage return and the line and paragraph separators -- and,
+     * unlike Java's {@code trim()}, no other control character.
+     */
+    static String trim(String value) {
+        int start = 0;
+        int end = value.length();
+        while (start < end && isJavaScriptWhitespace(value.charAt(start))) {
+            start++;
+        }
+        while (end > start && isJavaScriptWhitespace(value.charAt(end - 1))) {
+            end--;
+        }
+        return value.substring(start, end);
+    }
+
+    private static boolean isJavaScriptWhitespace(char c) {
+        return switch (c) {
+            case '\t', '\n', '\u000B', '\f', '\r', '\uFEFF' -> true;
+            default -> Character.getType(c) == Character.SPACE_SEPARATOR
+                || Character.getType(c) == Character.LINE_SEPARATOR
+                || Character.getType(c) == Character.PARAGRAPH_SEPARATOR;
+        };
     }
 
     private static Map<String, Integer> textFields() {

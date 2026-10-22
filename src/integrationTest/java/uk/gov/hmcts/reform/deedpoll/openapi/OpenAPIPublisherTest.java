@@ -972,6 +972,14 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .isEqualTo(WitnessSchemas.MAX_WITNESS_ADDRESS_LENGTH);
         assertThat(spec.at(witness + "witnessOccupation/maxLength").asInt())
             .isEqualTo(WitnessSchemas.MAX_WITNESS_OCCUPATION_LENGTH);
+        // Trimmed and refused if blank (review finding R15), so each text field publishes a floor on both bodies.
+        for (String body : List.of("CreateWitnessRequest", "UpdateWitnessRequest")) {
+            for (String text : List.of("witnessName", "witnessAddress", "witnessOccupation")) {
+                assertThat(spec.at("/components/schemas/" + body + "/properties/" + text + "/minLength").asInt())
+                    .as("%s.%s", body, text)
+                    .isEqualTo(1);
+            }
+        }
         // A boolean and not a string: the schema refuses "true" rather than coercing it, and a document that
         // called this a string would have clients sending the one value that coerces wrongly.
         assertThat(typesOf(spec.at(witness + "declarant"))).contains("boolean");

@@ -117,8 +117,8 @@ controller tests.
 **Files:** `WitnessSchemas.java` (code and class doc), `WitnessSchemasTest.java` (port every block of the refreshed
 `reference/ts/witnesses/schemas.test.ts`), `OpenAPIWriteBodies.java`, and their tests; the witness controller tests.
 
-- [ ] Add failing tests as listed in the Development Approach, for create and update, and for the published spec.
-- [ ] Implement, run focused tests and all Validation Commands, and record the results.
+- [x] Add failing tests as listed in the Development Approach, for create and update, and for the published spec.
+- [x] Implement, run focused tests and all Validation Commands, and record the results.
 
 ### Task 3: Record and hand off
 
@@ -160,6 +160,22 @@ stored value), `OpenAPIWriteBodiesTest` and `OpenAPIPublisherTest` spot checks. 
 against the old schema; with the line-break folding switched off, 2 of `NarrativeFields` failed. Green: full build
 `test` 4567 (+14), 0 failures, 0 errors, 0 skipped; `integration` 23, 0/0/0; `checkstyle.sh` OK (after one
 single-line Javadoc fix, re-run alone).
+
+**Task 2.** `WitnessSchemas.requireText` trims each of the three text fields with a port of JavaScript's
+`String.prototype.trim` (zod's `.trim()`; Java's `trim()`/`strip()` strip different sets), refuses an empty result
+as `"<field> must not be blank"`, measures the cap after trimming and returns the trimmed value, so that is what is
+stored. Absent and `null` keep their messages; `declarant` is unchanged. Class doc rewritten. `OpenAPIWriteBodies`
+publishes `minLength: 1` and a "Trimmed first" description on the three fields of both witness bodies, and the create
+body's description no longer says values are untrimmed. `WitnessSchemasTest` ports every block of the refreshed
+`schemas.test.ts` (at-limit and one-over pairs, blank/whitespace per field, trimmed values, max after trimming, and
+the four new update blocks), plus a JavaScript-trim-set test; the old non-reference at-cap and update truthy-string
+blocks were folded into their reference counterparts. `CaseworkerWitnessControllerTest`: `doesNotTrim` became
+`storesTrimmed`; added blank refusals on create (3, nothing written) and patch (3, row and `modifiedOn` untouched) and
+a padded patch stored trimmed. `OpenAPIWriteBodiesTest` and `OpenAPIPublisherTest` assert `minLength: 1`. Red: with
+the old `WitnessSchemas`/`OpenAPIWriteBodies` (plus a `trim` stub so the tests compiled), 16 of 77 focused tests
+failed. Green: full build `test` 4582 (+15), 0 failures, 0 errors, 0 skipped; `integration` 23, 0/0/0;
+`checkstyle.sh` OK after two test-source fixes (line length, variable distance), then those two classes re-run green
+alone. The intermittent `CcdCreationAttemptRepositoryTest` did not fail.
 
 ## Post-Completion
 

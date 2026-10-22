@@ -3,6 +3,8 @@ package uk.gov.hmcts.reform.deedpoll.domain.witnesses;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 
@@ -15,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Ports every test block in {@code reference/ts/witnesses/schemas.test.ts}.
+ * Ports every test block in {@code reference/ts/witnesses/schemas.test.ts}, as re-vendored from admin 7567b60.
  *
  * <p>{@code safeParse(...).success === false} becomes "throws {@link InvalidInputError}", and where the
  * reference only checks that flag this asserts the {@link FieldError} as well -- the field name is what
@@ -74,8 +76,7 @@ class WitnessSchemasTest {
         @Test
         @DisplayName("accepts a complete witness")
         void acceptsACompleteWitness() {
-            // `expect(parse(valid)).toEqual(valid)`: the values come back exactly as submitted, which is
-            // also what pins that this port does not trim -- see WitnessSchemas for why it must not.
+            // `expect(parse(valid)).toEqual(valid)`: a value with nothing to trim comes back as submitted.
             assertThat(WitnessSchemas.parseCreateWitness(VALID))
                 .isEqualTo(new CreateWitnessInput("Sam Doe", "1 High St", "Teacher", false));
         }
@@ -93,12 +94,70 @@ class WitnessSchemasTest {
         @Test
         @DisplayName("enforces the source column lengths")
         void enforcesTheSourceColumnLengths() {
-            assertThatThrownBy(() -> WitnessSchemas.parseCreateWitness(validWith("witnessName", "a".repeat(101))))
-                .isInstanceOf(InvalidInputError.class);
-            assertThatThrownBy(() -> WitnessSchemas.parseCreateWitness(validWith("witnessAddress", "a".repeat(251))))
-                .isInstanceOf(InvalidInputError.class);
-            assertThatThrownBy(() -> WitnessSchemas.parseCreateWitness(validWith("witnessOccupation", "a".repeat(101))))
-                .isInstanceOf(InvalidInputError.class);
+            // Each field at its limit and one over: only the pair pins the boundary.
+            assertThat(WitnessSchemas.parseCreateWitness(validWith("witnessName", "a".repeat(100))).witnessName())
+                .hasSize(100);
+            assertThat(errorsFrom(() -> WitnessSchemas.parseCreateWitness(validWith("witnessName", "a".repeat(101)))))
+                .containsExactly(new FieldError("witnessName", "witnessName must be 100 characters or fewer"));
+            assertThat(WitnessSchemas.parseCreateWitness(validWith("witnessAddress", "a".repeat(250))).witnessAddress())
+                .hasSize(250);
+            assertThat(errorsFrom(() ->
+                WitnessSchemas.parseCreateWitness(validWith("witnessAddress", "a".repeat(251)))))
+                .containsExactly(new FieldError("witnessAddress", "witnessAddress must be 250 characters or fewer"));
+            assertThat(WitnessSchemas.parseCreateWitness(validWith("witnessOccupation", "a".repeat(100)))
+                .witnessOccupation()).hasSize(100);
+            assertThat(errorsFrom(() ->
+                WitnessSchemas.parseCreateWitness(validWith("witnessOccupation", "a".repeat(101)))))
+                .containsExactly(
+                    new FieldError("witnessOccupation", "witnessOccupation must be 100 characters or fewer"));
+        }
+
+        @ParameterizedTest(name = "refuses a blank or whitespace-only {0}")
+        @ValueSource(strings = {"witnessName", "witnessAddress", "witnessOccupation"})
+        void refusesABlankOrWhitespaceOnlyField(String field) {
+            FieldError blank = new FieldError(field, field + " must not be blank");
+            assertThat(errorsFrom(() -> WitnessSchemas.parseCreateWitness(validWith(field, ""))))
+                .containsExactly(blank);
+            assertThat(errorsFrom(() -> WitnessSchemas.parseCreateWitness(validWith(field, " \t\n "))))
+                .containsExactly(blank);
+        }
+
+        @Test
+        @DisplayName("sends the trimmed values")
+        void sendsTheTrimmedValues() {
+            Map<String, Object> raw = validWith("witnessName", "  Sam Doe  ");
+            raw.put("witnessAddress", "\t1 High St\n");
+            raw.put("witnessOccupation", " Teacher");
+
+            assertThat(WitnessSchemas.parseCreateWitness(raw))
+                .isEqualTo(new CreateWitnessInput("Sam Doe", "1 High St", "Teacher", false));
+        }
+
+        @Test
+        @DisplayName("measures the maximum after trimming")
+        void measuresTheMaximumAfterTrimming() {
+            Map<String, Object> raw = validWith("witnessName", " " + "a".repeat(100) + " ");
+            raw.put("witnessAddress", " " + "a".repeat(250) + " ");
+            raw.put("witnessOccupation", " " + "a".repeat(100) + " ");
+
+            CreateWitnessInput result = WitnessSchemas.parseCreateWitness(raw);
+
+            assertThat(result.witnessName()).isEqualTo("a".repeat(100));
+            assertThat(result.witnessAddress()).isEqualTo("a".repeat(250));
+            assertThat(result.witnessOccupation()).isEqualTo("a".repeat(100));
+        }
+
+        @Test
+        @DisplayName("trims what JavaScript's trim trims, and nothing else")
+        void trimsWhatJavaScriptTrims() {
+            // Not a reference block: zod's .trim() is String.prototype.trim, whose set differs from Java's trim()
+            // (which also strips every C0 control and not the no-break space) and strip() (which keeps the
+            // no-break space). Admin trims with the former before it sends, so the port must agree with it.
+            assertThat(WitnessSchemas.trim("\u00A0\uFEFF\u2028\u3000\u000B\fSam\u2029\u202F\r"))
+                .isEqualTo("Sam");
+            assertThat(WitnessSchemas.trim("\u0001Sam\u001F")).isEqualTo("\u0001Sam\u001F");
+            assertThat(errorsFrom(() -> WitnessSchemas.parseCreateWitness(validWith("witnessName", "\u00A0\u2003"))))
+                .containsExactly(new FieldError("witnessName", "witnessName must not be blank"));
         }
 
         @Test
@@ -111,22 +170,6 @@ class WitnessSchemasTest {
                 .containsExactly(new FieldError("declarant", "declarant must be true or false"));
             assertThatThrownBy(() -> WitnessSchemas.parseCreateWitness(validWith("declarant", "false")))
                 .isInstanceOf(InvalidInputError.class);
-        }
-
-        @Test
-        @DisplayName("accepts a value exactly at each column's cap")
-        void acceptsAValueExactlyAtEachCap() {
-            // Not a reference block: the reference asserts one past each cap and leaves the boundary to
-            // zod. Here the comparison is written out, so off-by-one would go unnoticed without this.
-            Map<String, Object> raw = validWith("witnessName", "a".repeat(100));
-            raw.put("witnessAddress", "a".repeat(250));
-            raw.put("witnessOccupation", "a".repeat(100));
-
-            CreateWitnessInput result = WitnessSchemas.parseCreateWitness(raw);
-
-            assertThat(result.witnessName()).hasSize(100);
-            assertThat(result.witnessAddress()).hasSize(250);
-            assertThat(result.witnessOccupation()).hasSize(100);
         }
 
         @Test
@@ -182,10 +225,48 @@ class WitnessSchemasTest {
         }
 
         @Test
+        @DisplayName("leaves declarant optional, unlike create, so a patch need not restate it")
+        void leavesDeclarantOptional() {
+            assertThat(errorsFrom(() -> WitnessSchemas.parseCreateWitness(validWithout("declarant"))))
+                .containsExactly(new FieldError("declarant", "declarant is required"));
+            assertThat(WitnessSchemas.parseUpdateWitness(payload("witnessName", "Sam Doe")))
+                .isEqualTo(new UpdateWitnessInput(
+                    Optional.of("Sam Doe"), Optional.empty(), Optional.empty(), Optional.empty()));
+        }
+
+        @Test
+        @DisplayName("still refuses a truthy string for declarant when the patch does carry it")
+        void stillRefusesATruthyStringForDeclarant() {
+            assertThat(errorsFrom(() -> WitnessSchemas.parseUpdateWitness(payload("declarant", "true"))))
+                .containsExactly(new FieldError("declarant", "declarant must be true or false"));
+            assertThat(WitnessSchemas.parseUpdateWitness(payload("declarant", false)))
+                .isEqualTo(new UpdateWitnessInput(
+                    Optional.empty(), Optional.empty(), Optional.empty(), Optional.of(false)));
+        }
+
+        @Test
+        @DisplayName("refuses a blank present field and trims a padded one")
+        void refusesABlankPresentFieldAndTrimsAPaddedOne() {
+            assertThat(errorsFrom(() -> WitnessSchemas.parseUpdateWitness(payload("witnessName", "   "))))
+                .containsExactly(new FieldError("witnessName", "witnessName must not be blank"));
+            assertThat(WitnessSchemas.parseUpdateWitness(payload("witnessAddress", " 2 Low St ")))
+                .isEqualTo(new UpdateWitnessInput(
+                    Optional.empty(), Optional.of("2 Low St"), Optional.empty(), Optional.empty()));
+        }
+
+        @Test
+        @DisplayName("leaves an omitted field out of the patch, so it is unchanged at api")
+        void leavesAnOmittedFieldOutOfThePatch() {
+            assertThat(WitnessSchemas.parseUpdateWitness(payload("declarant", true)))
+                .isEqualTo(new UpdateWitnessInput(
+                    Optional.empty(), Optional.empty(), Optional.empty(), Optional.of(true)));
+        }
+
+        @Test
         @DisplayName("still enforces lengths on present fields")
         void stillEnforcesLengthsOnPresentFields() {
-            assertThatThrownBy(() -> WitnessSchemas.parseUpdateWitness(payload("witnessName", "a".repeat(101))))
-                .isInstanceOf(InvalidInputError.class);
+            assertThat(errorsFrom(() -> WitnessSchemas.parseUpdateWitness(payload("witnessName", "a".repeat(101)))))
+                .containsExactly(new FieldError("witnessName", "witnessName must be 100 characters or fewer"));
         }
 
         @Test
@@ -209,16 +290,6 @@ class WitnessSchemasTest {
                 .containsExactly(new FieldError("declarant", "declarant cannot be null"));
             assertThat(errorsFrom(() -> WitnessSchemas.parseUpdateWitness(payload("witnessAddress", null))))
                 .containsExactly(new FieldError("witnessAddress", "witnessAddress cannot be null"));
-        }
-
-        @Test
-        @DisplayName("still refuses a truthy string for declarant")
-        void stillRefusesATruthyStringForDeclarant() {
-            // Not a reference block: the reference only re-checks the length rule on the partial schema.
-            // The type rule is the one with a wrong-data outcome rather than a rejected-write one, so it is
-            // worth asserting that `.partial()` kept it.
-            assertThatThrownBy(() -> WitnessSchemas.parseUpdateWitness(payload("declarant", "true")))
-                .isInstanceOf(InvalidInputError.class);
         }
 
         @Test
