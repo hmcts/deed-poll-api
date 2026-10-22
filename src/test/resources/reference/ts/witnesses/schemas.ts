@@ -6,7 +6,8 @@ import { z } from "zod";
  * opposed to an ordinary witness.
  *
  * The three text fields are trimmed and must not be blank (review finding R15): a blank witness counted
- * towards the enrolment-witness threshold. api itself still accepts `""`, so this is stricter than api.
+ * towards the enrolment-witness threshold. api applies the same rule since deed-poll-api#124, and its port
+ * (`WitnessSchemas`) is checked against this file.
  * The maximum is measured after trimming.
  */
 export const createWitnessSchema = z.object({
