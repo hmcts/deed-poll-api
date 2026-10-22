@@ -54,10 +54,11 @@ public class HighLevelDataSetupApp extends DataLoaderToDefinitionStore {
         }
     }
 
+    // A classpath resource name, not a path: BEFTA loads it with ClassLoader.getResource, and build.gradle puts
+    // build/definitions on this task's classpath.
     @Override
     protected List<String> getAllDefinitionFilesToLoadAt(String definitionsPath) {
-        return List.of("build/definitions/CCD_Definition_" + CASE_TYPE + "_"
-            + environment.name().toLowerCase(Locale.UK) + ".xlsx");
+        return List.of("CCD_Definition_" + CASE_TYPE + "_" + environment.name().toLowerCase(Locale.UK) + ".xlsx");
     }
 
     // Role assignments are AM's, and this service's AM role source is off; the import creates none.
