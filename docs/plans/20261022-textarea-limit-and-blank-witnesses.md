@@ -124,10 +124,11 @@ controller tests.
 
 **Files:** `AGENTS.md` or `CLAUDE.md` where they describe these schemas (only if they do), this plan.
 
-- [ ] Update any repository doc that states witnesses accept blanks or that the narrative fields are unbounded.
+- [x] Update any repository doc that states witnesses accept blanks or that the narrative fields are unbounded
+      (none does; nothing to change).
       **Reference this plan by its `docs/plans/completed/` path**, since that is where it will be once the run ends.
-- [ ] Record final commits, changed files and test counts in the execution notes.
-- [ ] Run all Validation Commands and hand off to the Ralphex review phases.
+- [x] Record final commits, changed files and test counts in the execution notes.
+- [x] Run all Validation Commands and hand off to the Ralphex review phases.
 
 ## Acceptance Criteria
 
@@ -176,6 +177,16 @@ the old `WitnessSchemas`/`OpenAPIWriteBodies` (plus a `trim` stub so the tests c
 failed. Green: full build `test` 4582 (+15), 0 failures, 0 errors, 0 skipped; `integration` 23, 0/0/0;
 `checkstyle.sh` OK after two test-source fixes (line length, variable distance), then those two classes re-run green
 alone. The intermittent `CcdCreationAttemptRepositoryTest` did not fail.
+
+**Task 3.** No repository doc (`CLAUDE.md`, `README.md`, `docs/*.md`; there is no `AGENTS.md`) states that witness
+fields accept blanks or that the three narrative fields are unbounded, so none changed; the class docs of
+`DeedPollSchemas` and `WitnessSchemas` carry the rules. Commits over `origin/master` `ebe9843`: `a9066b1`
+(re-vendor), `ebfdaf3` and `719bd94` (plan), `0811510` (Task 1), `aba4912` (Task 2), plus this one. Changed files:
+`DeedPollSchemas.java`, `WitnessSchemas.java`, `OpenAPIWriteBodies.java`; tests `DeedPollSchemasTest`,
+`WitnessSchemasTest`, `CaseworkerCaseControllerTest`, `CaseworkerWitnessControllerTest`, `OpenAPIWriteBodiesTest`,
+`OpenAPIPublisherTest`; the re-vendored `reference/ts/witnesses/schemas{,.test}.ts`; this plan. Final full build:
+`test` 4582, 0 failures, 0 errors, 0 skipped (baseline 4553); `integration` 23, 0/0/0; `checkstyle.sh` OK. The
+intermittent `CcdCreationAttemptRepositoryTest` did not fail.
 
 ## Post-Completion
 
