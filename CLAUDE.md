@@ -117,11 +117,13 @@ Activation, none of it done in this repo:
 - Then one flux PR to `apps/deed-poll/deed-poll-api/aat.yaml` sets `ROLE_ASSIGNMENT_URL`,
   `ROLE_ASSIGNMENT_GAZETTE_SKILL` and `ROLE_ASSIGNMENT_ENABLED=true`.
 
-**The outbound S2S secret is already in place in AAT, and only there.** deed-poll-infra copies
-`microservicekey-deed-poll-api` from `s2s-aat` into `deed-poll-aat` as `api-s2s-secret`, and that `aat.yaml` (#48052)
-mounts it as `DEED_POLL_API_S2S_SECRET`, alongside the IDAM client and system-user secrets and the CCD/CDAM URLs.
-**Do not add it to the chart's `values.yaml`**: no other vault has it, so every other environment's deploy would fail.
-The same secret serves data-store, CDAM and RAS. See `docs/plans/20261014-am-role-source.md`.
+**The chart mounts the outbound S2S secret, and every deployed environment has it.** deed-poll-infra copies
+`microservicekey-deed-poll-api` from `s2s-{env}` into `deed-poll-{env}` as `api-s2s-secret` in aat, demo, ithc and prod
+(`api-identity.tf`). The chart's `values.yaml` mounts it as `DEED_POLL_API_S2S_SECRET`, alongside the IDAM client and
+system-user secrets, and derives the CCD/CDAM/S2S URLs from `global.environment`. cnp-flux-config overrides only
+what genuinely differs (the ForgeRock issuer, prod's hosts and prod's secret list). **A new environment needs that
+infra gate first**, or its deploy fails on a missing secret. The same secret serves data-store, CDAM and RAS. See
+`docs/plans/20261014-am-role-source.md`.
 
 ### Additional IDAM issuers (empty by default)
 
@@ -134,7 +136,8 @@ root.** Keys still come only from discovery of `IDAM_API_ISSUER_URL`, nothing is
 and a token signed by any other key fails before its issuer is read. A configured entry is trimmed and loses one trailing
 `/`, and is converted as Spring converts a token's `iss` (`URI.toURL().toExternalForm()`, which lower-cases the
 scheme only), so the two sides compare alike. The comparison is then exact inside Spring's own `JwtClaimValidator`:
-no prefix, host case, path or slash leniency. Configure the issuer exactly as tokens carry it. Each entry must be an absolute `https` URL or start-up fails. The chart's `values.yaml` leaves it unset; only AAT's flux sets it. See
+no prefix, host case, path or slash leniency. Configure the issuer exactly as tokens carry it. Each entry must be an absolute `https` URL or start-up fails. The chart's `values.yaml` leaves it unset, because the ForgeRock host differs per environment (`idam-aat2`,
+`idam-ithc`, `idam-prod2`); each environment's flux sets its own. See
 `docs/plans/20261016-additional-idam-issuers.md`.
 
 ### `/citizen/**` has its own chain, and wants a service, not a user
@@ -251,9 +254,10 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   is replaced with a space rather than written through. `DeedPollSchemas` validates these columns by length only,
   and the generator never parses its own output, so without that the deed would be stored, frozen onto a
   notification and emailed before anybody discovered Word would not open it.
-- **Never invent the CCD case type, jurisdiction ID or system role.** They are unconfirmed. Each is one key under
-  `deedpoll.ccd` in `application.yaml` defaulting to `DEED_POLL_PLACEHOLDER`, read only through `CcdProperties`,
-  so a grep for the literal lists every external identifier this service is waiting on.
+- **Never invent a CCD identifier.** The case type and jurisdiction (`DEEDPOLL`) and system role
+  (`deed-poll-system-update`) were confirmed for AAT's onboarding on 2026-10-16, and the chart sets them. Each is
+  still one key under `deedpoll.ccd` in `application.yaml` defaulting to `DEED_POLL_PLACEHOLDER`, read only through
+  `CcdProperties`, so a run outside the chart (local, tests) stays on placeholders and a grep still finds every one.
 - **Never remove the `CoreCaseDataClientAutoConfiguration` exclusion** in `application.yaml`. The client's own
   auto-configuration adds a health indicator that calls data-store, and the unauthenticated `/health` aggregates
   every indicator, so a data-store outage would read as this service being down. `CcdConfiguration` registers
@@ -272,8 +276,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   create a second case for one record. What cannot be settled becomes `NeedsRepair`, visibly.
 - **The linking sweep is off by default, and turning it on before onboarding fails every record.**
   `CCD_LINKING_SWEEP_ENABLED` defaults to `false`, and while it is false the case list calls nothing in `ccd/`.
-  Every identifier is still `DEED_POLL_PLACEHOLDER`, so in an environment that is not onboarded every attempt is
-  refused before submission. Each list request then spends a try on the oldest unlinked records, and within
+  In an environment whose CCD is not onboarded (no DEEDPOLL definition, no system user, or no data-store routing)
+  every attempt fails before anything is created. Each list request then spends a try on the oldest unlinked records, and within
   `CCD_LINKING_MAX_ATTEMPTS` tries each one is `NeedsRepair`. Nothing is created, so an admin can retry them all
   from scratch, but only one at a time. Switching it on is the last step of `docs/CCD-SMOKE.md`'s preconditions,
   not a default to flip in yaml.
