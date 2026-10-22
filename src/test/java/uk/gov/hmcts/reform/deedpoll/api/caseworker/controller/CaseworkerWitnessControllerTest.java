@@ -1,5 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -8,6 +10,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -33,6 +36,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollWitnessRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -300,21 +304,44 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("stores the value as submitted, without trimming it")
-        void doesNotTrim() throws Exception {
-            // The opposite of the notes route, and deliberately: the reference declares a plain
-            // z.string().max(...) on each witness field and its test asserts parse returns what it was given.
-            // Trimming here would make this port store something different from its own specification.
+        @DisplayName("stores each text field trimmed, as the refreshed reference does")
+        void storesTrimmed() throws Exception {
             authorised(post("/caseworker/cases/" + newCase() + "/witnesses"),
                 """
-                {"witnessName":"  Wilma Witness  ","witnessAddress":"1 Test Street",\
-                "witnessOccupation":"Teacher","declarant":false}""")
+                {"witnessName":"  Wilma Witness  ","witnessAddress":"\\t1 Test Street\\n",\
+                "witnessOccupation":" Teacher","declarant":false}""")
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.witnessName").value("  Wilma Witness  "));
+                .andExpect(jsonPath("$.witnessName").value("Wilma Witness"))
+                .andExpect(jsonPath("$.witnessAddress").value("1 Test Street"))
+                .andExpect(jsonPath("$.witnessOccupation").value("Teacher"));
 
-            assertThat(witnesses.findAll()).singleElement()
-                .extracting(DeedPollWitness::getWitnessName)
-                .isEqualTo("  Wilma Witness  ");
+            assertThat(witnesses.findAll()).singleElement().satisfies(witness -> {
+                assertThat(witness.getWitnessName()).isEqualTo("Wilma Witness");
+                assertThat(witness.getWitnessAddress()).isEqualTo("1 Test Street");
+                assertThat(witness.getWitnessOccupation()).isEqualTo("Teacher");
+            });
+        }
+
+        @ParameterizedTest(name = "400s a blank or whitespace-only {0}, and writes nothing")
+        @ValueSource(strings = {"witnessName", "witnessAddress", "witnessOccupation"})
+        void refusesABlankField(String field) throws Exception {
+            String caseId = newCase();
+            for (String blank : new String[] {"", " \t\n "}) {
+                Map<String, Object> body = new LinkedHashMap<>(Map.of(
+                    "witnessName", "Wilma Witness",
+                    "witnessAddress", "1 Test Street",
+                    "witnessOccupation", "Teacher",
+                    "declarant", false));
+                body.put(field, blank);
+
+                authorised(post("/caseworker/cases/" + caseId + "/witnesses"), json(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errors.length()").value(1))
+                    .andExpect(jsonPath("$.errors[0].field").value(field))
+                    .andExpect(jsonPath("$.errors[0].message").value(field + " must not be blank"));
+            }
+
+            assertThat(witnesses.count()).isZero();
         }
 
         @Test
@@ -599,6 +626,46 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
             assertThat(stored(witnessId).getWitnessName()).isEqualTo("Wilma Witness");
         }
 
+        @ParameterizedTest(name = "400s a blank or whitespace-only {0} on a patch, and leaves the witness alone")
+        @ValueSource(strings = {"witnessName", "witnessAddress", "witnessOccupation"})
+        void refusesABlankPatchedField(String field) throws Exception {
+            String caseId = newCase();
+            String witnessId = addWitness(caseId, "Wilma Witness");
+            final LocalDateTime modifiedOn = stored(witnessId).getModifiedOn();
+
+            for (String blank : new String[] {"", "   "}) {
+                authorised(patch("/caseworker/cases/" + caseId + "/witnesses/" + witnessId),
+                    json(Map.of(field, blank)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errors.length()").value(1))
+                    .andExpect(jsonPath("$.errors[0].field").value(field))
+                    .andExpect(jsonPath("$.errors[0].message").value(field + " must not be blank"));
+            }
+
+            DeedPollWitness after = stored(witnessId);
+            assertThat(after.getWitnessName()).isEqualTo("Wilma Witness");
+            assertThat(after.getWitnessAddress()).isEqualTo("1 Test Street");
+            assertThat(after.getWitnessOccupation()).isEqualTo("Teacher");
+            assertThat(after.getModifiedOn()).isEqualTo(modifiedOn);
+        }
+
+        @Test
+        @DisplayName("stores a padded patched field trimmed and leaves the omitted ones as they were")
+        void storesAPaddedPatchedFieldTrimmed() throws Exception {
+            String caseId = newCase();
+            String witnessId = addWitness(caseId, "Wilma Witness");
+
+            authorised(patch("/caseworker/cases/" + caseId + "/witnesses/" + witnessId),
+                "{\"witnessAddress\":\" 2 Low St \"}")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.witnessAddress").value("2 Low St"));
+
+            DeedPollWitness amended = stored(witnessId);
+            assertThat(amended.getWitnessAddress()).isEqualTo("2 Low St");
+            assertThat(amended.getWitnessName()).isEqualTo("Wilma Witness");
+            assertThat(amended.getWitnessOccupation()).isEqualTo("Teacher");
+        }
+
         @Test
         @DisplayName("400s a patched field over its cap, applying the same rule as create")
         void refusesAnOverLongPatchedField() throws Exception {
@@ -834,6 +901,11 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
         witness.setCreatedOn(createdOn);
         witnesses.saveAll(List.of(witness));
         witnesses.flush();
+    }
+
+    /** A body built as a map, so a test can vary one field without hand-escaping JSON. */
+    private static String json(Map<String, Object> body) throws JsonProcessingException {
+        return new ObjectMapper().writeValueAsString(body);
     }
 
     /** The request, carrying a valid forwarded access token. */

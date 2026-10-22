@@ -231,4 +231,82 @@ class DeedPollSchemasTest {
                 .isInstanceOf(InvalidInputError.class);
         }
     }
+
+    /**
+     * The 2,000-character cap on the three narrative fields. <strong>Not a port</strong>: admin enforces it in its
+     * edit form rather than its domain schema, so the vendored reference still says {@code optionalText}.
+     */
+    @Nested
+    @DisplayName("narrative fields (api's own cap, matching admin's edit form)")
+    class NarrativeFields {
+
+        private static final List<String> NARRATIVE = List.of("returnReason", "referralNotes", "masterDirections");
+
+        @Test
+        @DisplayName("accept 2,000 characters on create and update")
+        void acceptTwoThousandCharacters() {
+            for (String field : NARRATIVE) {
+                String atTheCap = "a".repeat(2000);
+                assertThat(DeedPollSchemas.parseCreate(payload(field, atTheCap)).get(field)).isEqualTo(atTheCap);
+                assertThat(DeedPollSchemas.parseUpdate(payload(field, atTheCap)).get(field)).isEqualTo(atTheCap);
+            }
+        }
+
+        @Test
+        @DisplayName("refuse 2,001 characters on create and update, attributed to the field")
+        void refuseTwoThousandAndOne() {
+            for (String field : NARRATIVE) {
+                String overTheCap = "a".repeat(2001);
+                assertThatThrownBy(() -> DeedPollSchemas.parseCreate(payload(field, overTheCap)))
+                    .isInstanceOfSatisfying(InvalidInputError.class, error -> assertThat(error.errors())
+                        .singleElement()
+                        .satisfies(rejected -> {
+                            assertThat(rejected.field()).isEqualTo(field);
+                            assertThat(rejected.message()).isEqualTo(field + " must be 2000 characters or fewer");
+                        }));
+                assertThatThrownBy(() -> DeedPollSchemas.parseUpdate(payload(field, overTheCap)))
+                    .isInstanceOf(InvalidInputError.class);
+            }
+        }
+
+        @Test
+        @DisplayName("count a CRLF or a lone CR as one character, as admin and a browser do, and keep the text as sent")
+        void countALineBreakOnce() {
+            // 1,990 letters and ten line breaks: 2,000 to a browser, 2,010 UTF-16 units as CRLF on the wire.
+            String crlf = ("a".repeat(199) + "\r\n").repeat(10);
+            String cr = ("a".repeat(199) + "\r").repeat(10);
+            String lf = ("a".repeat(199) + "\n").repeat(10);
+            for (String field : NARRATIVE) {
+                for (String text : List.of(crlf, cr, lf)) {
+                    assertThat(DeedPollSchemas.parseCreate(payload(field, text)).get(field)).isEqualTo(text);
+                }
+                rejects(payload(field, crlf + "a"));
+                rejects(payload(field, cr + "a"));
+            }
+        }
+
+        @Test
+        @DisplayName("still clear on an explicit null")
+        void stillClearOnNull() {
+            for (String field : NARRATIVE) {
+                DeedPollPatch patch = DeedPollSchemas.parseUpdate(payload(field, null));
+                assertThat(patch.values()).containsEntry(field, null);
+            }
+        }
+
+        @Test
+        @DisplayName("publish the cap and the line-break rule, and no other field gains the rule")
+        void publishTheCap() {
+            Map<String, DeedPollSchemas.FieldSchema> fields = DeedPollSchemas.writeBodyFields();
+            for (String field : NARRATIVE) {
+                assertThat(fields.get(field).maxLength()).isEqualTo(DeedPollSchemas.NARRATIVE_MAX_LENGTH);
+                assertThat(fields.get(field).lineBreaksCountOnce()).isTrue();
+            }
+            assertThat(fields.entrySet().stream()
+                .filter(entry -> entry.getValue().lineBreaksCountOnce())
+                .map(Map.Entry::getKey))
+                .containsExactlyInAnyOrderElementsOf(NARRATIVE);
+            assertThat(fields.get("masterName").maxLength()).as("a neighbouring text field keeps no cap").isZero();
+        }
+    }
 }

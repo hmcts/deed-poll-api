@@ -7,6 +7,7 @@ import io.swagger.v3.oas.models.PathItem;
 import io.swagger.v3.oas.models.Paths;
 import io.swagger.v3.oas.models.media.Schema;
 import org.junit.jupiter.api.Test;
+import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageRule;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,6 +26,17 @@ class OpenAPIWriteBodiesTest {
         assertThat(createCase.getType()).isEqualTo("object");
         assertThat(createCase.getProperties()).isNotEmpty();
         assertThat(createCase.getAdditionalProperties()).isEqualTo(true);
+        for (String body : new String[] {"CreateCaseRequest", "UpdateCaseRequest"}) {
+            for (String narrative : new String[] {"returnReason", "referralNotes", "masterDirections"}) {
+                Schema<?> field = schema(openApi, body).getProperties().get(narrative);
+                assertThat(field.getMaxLength()).as("%s.%s", body, narrative).isEqualTo(2000);
+                assertThat(field.getDescription()).as("%s.%s", body, narrative)
+                    .contains("line break counts as one character");
+            }
+            assertThat(schema(openApi, body).getProperties().get("masterName").getDescription())
+                .as("the line-break note is the narrative fields' alone")
+                .isNull();
+        }
 
         Schema<?> createNote = schema(openApi, "CreateNoteRequest");
         assertThat(createNote.getProperties()).containsKey("note");
@@ -41,6 +53,15 @@ class OpenAPIWriteBodiesTest {
                 "witnessOccupation",
                 "declarant"
             );
+        for (String body : new String[] {"CreateWitnessRequest", "UpdateWitnessRequest"}) {
+            for (String text : new String[] {"witnessName", "witnessAddress", "witnessOccupation"}) {
+                Schema<?> field = schema(openApi, body).getProperties().get(text);
+                assertThat(field.getMinLength()).as("%s.%s", body, text).isEqualTo(1);
+                assertThat(field.getDescription()).as("%s.%s", body, text).contains("Trimmed first");
+            }
+        }
+        assertThat(schema(openApi, "CreateWitnessRequest").getProperties().get("witnessAddress").getMaxLength())
+            .isEqualTo(WitnessSchemas.MAX_WITNESS_ADDRESS_LENGTH);
 
         Schema<?> createSavedQuery = schema(openApi, "CreateSavedQueryRequest");
         assertThat(createSavedQuery.getRequired()).contains("name");

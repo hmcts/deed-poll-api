@@ -60,6 +60,15 @@ import java.util.regex.Pattern;
  * throwing form is ported: {@link InvalidInputError} already carries the per-field failures a
  * {@code safeParse} caller would inspect, and the ported tests assert the throw where the reference
  * asserts {@code success === false}.
+ *
+ * <p><strong>One rule is not a port.</strong> {@code returnReason}, {@code referralNotes} and
+ * {@code masterDirections} are capped at {@link #NARRATIVE_MAX_LENGTH}, which the reference does not do: admin
+ * enforces that cap in its edit form ({@code TEXTAREA_MAX_LENGTH} in {@code form-input.ts}), not in the domain
+ * schema vendored here, and api matches it so that no other client can store more than the form allows. Admin
+ * measures a textarea as a browser does, with each line break counted once, and then submits it with CRLF line
+ * breaks, so these three fields count a CRLF or a lone CR as one character; measured raw, text admin accepted
+ * would be refused here and the caseworker shown a generic failure rather than a field error. A stored value
+ * over the cap is untouched until a write carries the field.
  */
 @Slf4j
 public final class DeedPollSchemas {
@@ -69,10 +78,19 @@ public final class DeedPollSchemas {
      */
     private static final Pattern ISO_DATE = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
 
+    /** A CRLF or a lone CR, each read as one LF when a narrative field is measured. */
+    private static final Pattern LINE_BREAK = Pattern.compile("\\r\\n?");
+
     /**
      * The reference's 1000-character cap on the six name fields, from {@code nvarchar(1000)}.
      */
     private static final int NAME_MAX_LENGTH = 1000;
+
+    /**
+     * Api's own cap on the three narrative fields, matching admin's edit form -- not the reference's. Measured
+     * with each line break counted once; see the class doc.
+     */
+    public static final int NARRATIVE_MAX_LENGTH = 2000;
 
     /**
      * One past the widest amount a {@code numeric(12, 2)} column holds -- ten integral digits.
@@ -103,7 +121,8 @@ public final class DeedPollSchemas {
      * and it is about the COLUMN, not about the caller: a column with a database default has no legal
      * null, so accepting one here would only move the failure later.
      */
-    private record Rule(Kind kind, boolean nullable, int maxLength, Class<? extends Enum<?>> enumType) {
+    private record Rule(
+        Kind kind, boolean nullable, int maxLength, boolean lineBreaksCountOnce, Class<? extends Enum<?>> enumType) {
     }
 
     /**
@@ -146,9 +165,11 @@ public final class DeedPollSchemas {
      * @param type          what the field accepts
      * @param nullable      whether an explicit null is accepted, which clears the column
      * @param maxLength     the cap on a text field, or 0 for none
+     * @param lineBreaksCountOnce whether the cap counts a CRLF or a lone CR as one character
      * @param allowedValues the accepted names for an enum field, empty for any other kind
      */
-    public record FieldSchema(JsonType type, boolean nullable, int maxLength, List<String> allowedValues) {
+    public record FieldSchema(
+        JsonType type, boolean nullable, int maxLength, boolean lineBreaksCountOnce, List<String> allowedValues) {
     }
 
     /**
@@ -173,7 +194,8 @@ public final class DeedPollSchemas {
         List<String> allowed = rule.enumType() == null
             ? List.of()
             : Arrays.stream(rule.enumType().getEnumConstants()).map(Enum::name).toList();
-        return new FieldSchema(jsonType(rule.kind()), rule.nullable(), rule.maxLength(), allowed);
+        return new FieldSchema(
+            jsonType(rule.kind()), rule.nullable(), rule.maxLength(), rule.lineBreaksCountOnce(), allowed);
     }
 
     private static JsonType jsonType(Kind kind) {
@@ -229,7 +251,7 @@ public final class DeedPollSchemas {
 
     private static Object coerce(String field, Object value, Rule rule) {
         return switch (rule.kind()) {
-            case TEXT -> text(field, value, rule.maxLength());
+            case TEXT -> text(field, value, rule);
             case ENUM -> enumMember(field, value, rule.enumType());
             case BOOLEAN -> requireType(field, value, Boolean.class, "must be true or false");
             case INT -> integer(field, value);
@@ -239,11 +261,14 @@ public final class DeedPollSchemas {
         };
     }
 
-    private static String text(String field, Object value, int maxLength) {
+    private static String text(String field, Object value, Rule rule) {
         String string = requireType(field, value, String.class, "must be text");
-        if (maxLength > 0 && string.length() > maxLength) {
-            throw new FieldRejected(field + " must be " + maxLength + " characters or fewer");
+        int length = rule.lineBreaksCountOnce() ? LINE_BREAK.matcher(string).replaceAll("\n").length()
+            : string.length();
+        if (rule.maxLength() > 0 && length > rule.maxLength()) {
+            throw new FieldRejected(field + " must be " + rule.maxLength() + " characters or fewer");
         }
+        // Stored as sent: the folding is only how the text is measured.
         return string;
     }
 
@@ -486,15 +511,15 @@ public final class DeedPollSchemas {
         // --- Master / referral ---
         schema.put("referToMasterChoice", nullishEnum(ReferToMaster.class));
         schema.put("masterName", optionalText());
-        schema.put("masterDirections", optionalText());
+        schema.put("masterDirections", narrativeText());
         schema.put("masterDecision", nullishEnum(MasterDecision.class));
         schema.put("masterDateOfDecision", nullish(Kind.ISO_DATE_STRING));
         schema.put("dateDecisionDirectionsReceived", nullish(Kind.ISO_DATE_STRING));
-        schema.put("referralNotes", optionalText());
+        schema.put("referralNotes", narrativeText());
         schema.put("publishToLondonGazette", notNull(Kind.BOOLEAN));
 
         // --- Return / refund ---
-        schema.put("returnReason", optionalText());
+        schema.put("returnReason", narrativeText());
         schema.put("refundAmount", nullish(Kind.DECIMAL));
         schema.put("dateOfRefund", nullish(Kind.ISO_DATE_STRING));
         schema.put("refundReference", optionalText());
@@ -505,27 +530,34 @@ public final class DeedPollSchemas {
     }
 
     private static Rule nullish(Kind kind) {
-        return new Rule(kind, true, 0, null);
+        return new Rule(kind, true, 0, false, null);
     }
 
     private static Rule notNull(Kind kind) {
-        return new Rule(kind, false, 0, null);
+        return new Rule(kind, false, 0, false, null);
     }
 
     private static Rule optionalText() {
-        return new Rule(Kind.TEXT, true, 0, null);
+        return new Rule(Kind.TEXT, true, 0, false, null);
     }
 
     private static Rule optionalTextMax(int maxLength) {
-        return new Rule(Kind.TEXT, true, maxLength, null);
+        return new Rule(Kind.TEXT, true, maxLength, false, null);
+    }
+
+    /**
+     * Api's own rule, not the reference's: see {@link #NARRATIVE_MAX_LENGTH}.
+     */
+    private static Rule narrativeText() {
+        return new Rule(Kind.TEXT, true, NARRATIVE_MAX_LENGTH, true, null);
     }
 
     private static Rule nullishEnum(Class<? extends Enum<?>> type) {
-        return new Rule(Kind.ENUM, true, 0, type);
+        return new Rule(Kind.ENUM, true, 0, false, type);
     }
 
     private static Rule requiredEnum(Class<? extends Enum<?>> type) {
-        return new Rule(Kind.ENUM, false, 0, type);
+        return new Rule(Kind.ENUM, false, 0, false, type);
     }
 
     /**

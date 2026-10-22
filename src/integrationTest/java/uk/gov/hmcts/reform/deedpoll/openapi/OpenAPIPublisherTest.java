@@ -915,6 +915,12 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         String create = "/components/schemas/CreateCaseRequest/properties/";
         assertThat(typesOf(spec.at(create + "newForename"))).contains("string");
         assertThat(spec.at(create + "newForename/maxLength").asInt()).isEqualTo(1000);
+        // The narrative cap, api's own rule matching admin's edit form, on both bodies.
+        for (String narrative : List.of("returnReason", "referralNotes", "masterDirections")) {
+            assertThat(spec.at(create + narrative + "/maxLength").asInt()).isEqualTo(2000);
+            assertThat(spec.at("/components/schemas/UpdateCaseRequest/properties/" + narrative + "/maxLength")
+                .asInt()).isEqualTo(2000);
+        }
         assertThat(spec.at(create + "type/enum").isArray()).isTrue();
         assertThat(spec.at(create + "dateReceived/format").asText()).isEqualTo("date-time");
         assertThat(typesOf(spec.at(create + "migratedRecord"))).contains("boolean");
@@ -966,6 +972,14 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .isEqualTo(WitnessSchemas.MAX_WITNESS_ADDRESS_LENGTH);
         assertThat(spec.at(witness + "witnessOccupation/maxLength").asInt())
             .isEqualTo(WitnessSchemas.MAX_WITNESS_OCCUPATION_LENGTH);
+        // Trimmed and refused if blank (review finding R15), so each text field publishes a floor on both bodies.
+        for (String body : List.of("CreateWitnessRequest", "UpdateWitnessRequest")) {
+            for (String text : List.of("witnessName", "witnessAddress", "witnessOccupation")) {
+                assertThat(spec.at("/components/schemas/" + body + "/properties/" + text + "/minLength").asInt())
+                    .as("%s.%s", body, text)
+                    .isEqualTo(1);
+            }
+        }
         // A boolean and not a string: the schema refuses "true" rather than coercing it, and a document that
         // called this a string would have clients sending the one value that coerces wrongly.
         assertThat(typesOf(spec.at(witness + "declarant"))).contains("boolean");
