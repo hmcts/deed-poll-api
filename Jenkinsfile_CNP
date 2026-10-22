@@ -34,6 +34,9 @@ withPipeline(type, product, component) {
   // at go-live. Switching on master would re-import into AAT on every merge and then into prod.
   // See docs/plans/20261021-ccd-high-level-data-setup.md.
   onIthc {
+    // Nothing sets ENVIRONMENT before the import stage on an ithc build (pcs-api sets it the same way). It names the
+    // spreadsheet create-xlsx.sh writes and the importer reads.
+    env.ENVIRONMENT = 'ithc'
     enableHighLevelDataSetup()
   }
 
