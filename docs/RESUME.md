@@ -1,5 +1,13 @@
 # Resume state — where the next session picks up
 
+**Narrative cap and blank witnesses, 2026-10-22 (admin R15):** on `fix/textarea-limit-and-blank-witnesses`, not
+pushed. `returnReason`, `referralNotes` and `masterDirections` are capped at 2,000 characters with line breaks counted
+once, matching admin's edit form; witness name, address and occupation are trimmed and a blank is refused. Only
+`reference/ts/witnesses/schemas{,.test}.ts` were re-vendored, from admin `7567b60`; the reference README still records
+`8b6b8fc` for the whole tree, and the re-vendored `schemas.ts` comment saying api accepts `""` is now stale and must be
+fixed in admin. Next: open the PR; admin refreshes its `openapi.json`. See
+[the plan](plans/completed/20261022-textarea-limit-and-blank-witnesses.md).
+
 **Judicial application view and revisable directions, 2026-10-19:** on `plan/judicial-application-view`, not
 pushed and not live-verified. By the business's decisions of 2026-10-19, judges see the whole application
 (`JudicialApplicationView`: details, witnesses, readable documents; no case id, no payment or refund data, no

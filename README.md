@@ -47,17 +47,17 @@ documented paths outside the counted surfaces; `documentsNoUnlistedPath` allowli
 | GET | `/caseworker/cases/field-rules` | Show / hide / mandate rules for a `type`, `migrated` and `publishToGazette` |
 | GET | `/caseworker/cases/{id}` | One case **with** its notes, witnesses and documents — one call, not four |
 | GET | `/caseworker/document-types` | Every supporting-document type, with its applicability arrays |
-| POST | `/caseworker/cases` | Create a case, allocating its reference number |
-| PATCH | `/caseworker/cases/{id}` | Apply a patch — PATCH, not PUT, because the forms save one tab at a time |
+| POST | `/caseworker/cases` | Create a case, allocating its reference number; `returnReason`, `referralNotes` and `masterDirections` are capped at 2,000 characters, a CRLF or CR counting as one |
+| PATCH | `/caseworker/cases/{id}` | Apply a patch — PATCH, not PUT, because the forms save one tab at a time; the same 2,000-character cap applies to a narrative field the patch carries |
 | GET | `/caseworker/cases/{id}/notes` | A case's notes |
 | POST | `/caseworker/cases/{id}/notes` | Add a note |
 | GET | `/caseworker/cases/{id}/notes/{noteId}` | One note |
 | PATCH | `/caseworker/cases/{id}/notes/{noteId}` | Amend a note |
 | DELETE | `/caseworker/cases/{id}/notes/{noteId}` | Delete a note — 204, and 404 through the wrong case |
 | GET | `/caseworker/cases/{id}/witnesses` | A case's witnesses and declarants, oldest first |
-| POST | `/caseworker/cases/{id}/witnesses` | Add a witness — all four fields required |
+| POST | `/caseworker/cases/{id}/witnesses` | Add a witness — all four fields required; name, address and occupation are trimmed, and a blank one is a 400 |
 | GET | `/caseworker/cases/{id}/witnesses/{witnessId}` | One witness |
-| PATCH | `/caseworker/cases/{id}/witnesses/{witnessId}` | Amend a witness — an omitted field is left alone |
+| PATCH | `/caseworker/cases/{id}/witnesses/{witnessId}` | Amend a witness — an omitted field is left alone; a present text field is trimmed and must not be blank |
 | DELETE | `/caseworker/cases/{id}/witnesses/{witnessId}` | Delete a witness — **Team leader or Delivery Manager (legacy admin temporarily)**, 204, and 404 through the wrong case |
 | POST | `/caseworker/cases/{id}/documents` | Upload a file (multipart) and record its document row |
 | GET | `/caseworker/cases/{id}/documents/{documentId}/file` | Stream a document's stored file back |

@@ -903,12 +903,12 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
         witnesses.flush();
     }
 
-    /** The request, carrying a valid forwarded access token. */
     /** A body built as a map, so a test can vary one field without hand-escaping JSON. */
     private static String json(Map<String, Object> body) throws JsonProcessingException {
         return new ObjectMapper().writeValueAsString(body);
     }
 
+    /** The request, carrying a valid forwarded access token. */
     private ResultActions authorised(MockHttpServletRequestBuilder request) throws Exception {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(IDAM.accessToken());
