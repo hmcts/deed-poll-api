@@ -78,7 +78,9 @@ tasks.register('highLevelDataSetup', JavaExec) {
   group = 'ccd'
   description = 'Imports build/definitions/CCD_Definition_DEEDPOLL_<env>.xlsx into the environment named by --args'
   mainClass = 'uk.gov.hmcts.reform.deedpoll.ccdimport.HighLevelDataSetupApp'
-  classpath = sourceSets.ccdImport.runtimeClasspath
+  // BEFTA reads each definition with ClassLoader.getResource, never from the filesystem, so the directory
+  // bin/create-xlsx.sh writes to is a classpath root here, and HighLevelDataSetupApp names the file alone.
+  classpath = sourceSets.ccdImport.runtimeClasspath + files(layout.buildDirectory.dir('definitions'))
   jvmArgs = ['--add-opens=java.base/java.lang.reflect=ALL-UNNAMED']
 }
 
