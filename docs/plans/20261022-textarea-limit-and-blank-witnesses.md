@@ -96,6 +96,8 @@ directly, failing on any `[WARN]` or `[ERROR]`. Jenkins runs the real Checkstyle
 script or commit them. Record actual `test` and `integration` counts, failures and skips from
 `build/test-results/`, and distinguish baseline failures from regressions.
 
+**Known intermittent test, already on master:** `CcdCreationAttemptRepositoryTest` "an attempt that ran out of tries on refusals may be retried from scratch, which clears the proof" failed once in a full build on 2026-10-22 (line 550, `claim` returned empty) and passed three times out of three alone. If it fails, re-run it alone with `--tests '*CcdCreationAttemptRepositoryTest' --rerun`; if it passes, record that and carry on. Do not change it or anything under `ccd/` in this plan.
+
 Run every build and test command in the foreground and wait for it to finish. A backgrounded build ends the
 session and the next one builds over it, wiping the results.
 
