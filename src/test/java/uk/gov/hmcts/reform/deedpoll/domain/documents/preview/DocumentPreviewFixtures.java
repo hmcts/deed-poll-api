@@ -32,8 +32,13 @@ import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.util.Arrays;
 import java.util.List;
+import java.util.zip.CRC32;
+import java.util.zip.Deflater;
+import java.util.zip.DeflaterOutputStream;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageTypeSpecifier;
@@ -85,6 +90,14 @@ final class DocumentPreviewFixtures {
     static final Fixture PHOTO_ON_ITS_SIDE = new Fixture("photo-exif-6.jpeg",
         List.of(new Frame(640, 480, GREEN, null, 6)));
     static final Fixture SCAN = new Fixture("scan.png", List.of(new Frame(480, 640, RED, null, 1)));
+    /**
+     * {@link #SCAN}'s image with a compressed {@code zTXt} and a compressed {@code iTXt} chunk after its IHDR.
+     */
+    static final Fixture TEXT_CHUNKS = new Fixture("text-chunks.png", SCAN.frames());
+    /**
+     * What each of {@link #TEXT_CHUNKS}' text chunks inflates to: zeros, a thousand times their stored size.
+     */
+    static final int TEXT_CHUNK_INFLATED_BYTES = 8 * 1024 * 1024;
     static final String PDF = "three-pages.pdf";
     static final int PDF_PAGES = 3;
 
@@ -213,6 +226,62 @@ final class DocumentPreviewFixtures {
         return out.toByteArray();
     }
 
+    /**
+     * {@code png} with a {@code zTXt} chunk keyed {@code Comment} and an {@code iTXt} chunk keyed {@code Description}
+     * inserted straight after its IHDR, each holding {@code inflatedBytes} of zeros deflated. {@code truncated} cuts
+     * each deflated stream in half, so a reader that inflates either fails, and one that skips them does not notice.
+     */
+    static byte[] withCompressedText(byte[] png, int inflatedBytes, boolean truncated) {
+        byte[] deflated = deflatedZeros(inflatedBytes);
+        if (truncated) {
+            deflated = Arrays.copyOf(deflated, deflated.length / 2);
+        }
+        ByteArrayOutputStream ztxt = new ByteArrayOutputStream();
+        ztxt.writeBytes("Comment".getBytes(StandardCharsets.ISO_8859_1));
+        // The keyword's terminator, then compression method 0 (deflate).
+        ztxt.writeBytes(new byte[] {0, 0});
+        ztxt.writeBytes(deflated);
+        ByteArrayOutputStream itxt = new ByteArrayOutputStream();
+        itxt.writeBytes("Description".getBytes(StandardCharsets.ISO_8859_1));
+        // The keyword's terminator, compressed, method 0, then an empty language tag and translated keyword.
+        itxt.writeBytes(new byte[] {0, 1, 0, 0, 0});
+        itxt.writeBytes(deflated);
+        // The signature is 8 bytes and the IHDR chunk 25: length, type, 13 bytes of data and the CRC.
+        int afterIhdr = 8 + 25;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(png, 0, afterIhdr);
+        pngChunk(out, "zTXt", ztxt.toByteArray());
+        pngChunk(out, "iTXt", itxt.toByteArray());
+        out.write(png, afterIhdr, png.length - afterIhdr);
+        return out.toByteArray();
+    }
+
+    private static byte[] deflatedZeros(int length) {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION);
+        try (DeflaterOutputStream out = new DeflaterOutputStream(bytes, deflater)) {
+            byte[] zeros = new byte[64 * 1024];
+            for (int written = 0; written < length; written += zeros.length) {
+                out.write(zeros, 0, Math.min(zeros.length, length - written));
+            }
+        } catch (IOException unwritable) {
+            throw new UncheckedIOException(unwritable);
+        } finally {
+            deflater.end();
+        }
+        return bytes.toByteArray();
+    }
+
+    private static void pngChunk(ByteArrayOutputStream out, String type, byte[] data) {
+        byte[] name = type.getBytes(StandardCharsets.ISO_8859_1);
+        CRC32 crc = new CRC32();
+        crc.update(name);
+        crc.update(data);
+        ByteBuffer chunk = ByteBuffer.allocate(4 + name.length + data.length + 4);
+        chunk.putInt(data.length).put(name).put(data).putInt((int) crc.getValue());
+        out.writeBytes(chunk.array());
+    }
+
     /** A three-page PDF, portrait, landscape and portrait, each page saying its number. */
     static byte[] pdf() {
         return pdf(PDF_PAGES);
@@ -335,6 +404,8 @@ final class DocumentPreviewFixtures {
             case "photo.jpeg" -> encoded("jpeg", PHOTO.frames().getFirst());
             case "photo-exif-6.jpeg" -> encoded("jpeg", PHOTO_ON_ITS_SIDE.frames().getFirst());
             case "scan.png" -> encoded("png", SCAN.frames().getFirst());
+            case "text-chunks.png" -> withCompressedText(encoded("png", TEXT_CHUNKS.frames().getFirst()),
+                                                         TEXT_CHUNK_INFLATED_BYTES, false);
             case "two-frames.tiff" -> tiff(TWO_FRAMES);
             case "three-frames.tiff" -> tiff(THREE_FRAMES);
             case MULTI_PAGE_DOCX -> multiPageDocx();
@@ -344,6 +415,7 @@ final class DocumentPreviewFixtures {
     }
 
     static final List<String> NAMES = List.of(PDF, "photo.jpeg", "photo-exif-6.jpeg", "scan.png",
+                                              "text-chunks.png",
                                               "two-frames.tiff", "three-frames.tiff", MULTI_PAGE_DOCX,
                                               TABLE_AND_IMAGE_DOCX);
 }

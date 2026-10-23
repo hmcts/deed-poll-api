@@ -42,7 +42,7 @@ import javax.imageio.stream.ImageInputStream;
  * limit, and a PNG or TIFF frame's sample layout against the decoded-size limit, before it is decoded; frames are
  * decoded one at a time and dropped once drawn, and the budget is checked between them. A JPEG is decoded only to
  * prove its data is whole and then embedded as it was stored, so a photograph is not recompressed;
- * a PNG or TIFF frame is embedded losslessly.
+ * a PNG or TIFF frame is embedded losslessly. Only a TIFF's metadata is read: a PNG's text chunks are never inflated.
  */
 final class ImageRenderer implements SourceRenderer {
 
@@ -77,7 +77,10 @@ final class ImageRenderer implements SourceRenderer {
             // A JPEG is embedded as stored, so it is read whole once, and its orientation comes from those bytes.
             byte[] jpeg = format == PreviewFormat.JPEG ? Files.readAllBytes(source) : null;
             try {
-                reader.setInput(input, false, format == PreviewFormat.JPEG);
+                // Only a TIFF's orientation is read from its reader's metadata. A PNG's must be ignored: the JDK
+                // inflates every compressed zTXt and iTXt chunk while reading it, with no bound, so a few kilobytes
+                // of text could fill the heap past every limit here. Ignored, the reader skips them unread.
+                reader.setInput(input, false, format != PreviewFormat.TIFF);
                 while (format == PreviewFormat.TIFF || frames == 0) {
                     budget.checkpoint();
                     int width;

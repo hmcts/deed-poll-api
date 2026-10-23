@@ -14,9 +14,14 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.zip.InflaterInputStream;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.metadata.IIOMetadata;
@@ -57,7 +62,8 @@ class DocumentPreviewFixturesTest {
     void images() throws IOException {
         for (DocumentPreviewFixtures.Fixture fixture : java.util.List.of(
             DocumentPreviewFixtures.PHOTO, DocumentPreviewFixtures.PHOTO_ON_ITS_SIDE, DocumentPreviewFixtures.SCAN,
-            DocumentPreviewFixtures.TWO_FRAMES, DocumentPreviewFixtures.THREE_FRAMES)) {
+            DocumentPreviewFixtures.TEXT_CHUNKS, DocumentPreviewFixtures.TWO_FRAMES,
+            DocumentPreviewFixtures.THREE_FRAMES)) {
             byte[] bytes = DocumentPreviewFixtures.read(fixture.name());
             try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
                 Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
@@ -85,6 +91,44 @@ class DocumentPreviewFixturesTest {
     void exif() {
         assertThat(jpegOrientation(DocumentPreviewFixtures.PHOTO_ON_ITS_SIDE.name())).isEqualTo(Orientation.RIGHT_TOP);
         assertThat(jpegOrientation(DocumentPreviewFixtures.PHOTO.name())).isEqualTo(Orientation.TOP_LEFT);
+    }
+
+    @Test
+    @DisplayName("the text-chunk PNG holds a zTXt and a compressed iTXt, each a few KB inflating to 8 MiB")
+    void textChunks() throws IOException {
+        ByteBuffer png = ByteBuffer.wrap(DocumentPreviewFixtures.read(DocumentPreviewFixtures.TEXT_CHUNKS.name()));
+        png.position(8);
+        Map<String, byte[]> chunks = new LinkedHashMap<>();
+        while (png.hasRemaining()) {
+            byte[] data = new byte[png.getInt()];
+            byte[] type = new byte[4];
+            png.get(type).get(data).getInt();
+            chunks.putIfAbsent(new String(type, StandardCharsets.ISO_8859_1), data);
+        }
+        assertThat(chunks.keySet()).startsWith("IHDR", "zTXt", "iTXt");
+        // zTXt: "Comment", its terminator and the method; iTXt: "Description", its terminator, the compression
+        // flag and method, and two empty strings.
+        assertDeflatedZeros(chunks.get("zTXt"), "Comment".length() + 2);
+        assertThat(chunks.get("iTXt")["Description".length() + 1]).isEqualTo((byte) 1);
+        assertDeflatedZeros(chunks.get("iTXt"), "Description".length() + 5);
+    }
+
+    private static void assertDeflatedZeros(byte[] chunk, int textStart) throws IOException {
+        assertThat(chunk.length - textStart).isLessThan(16 * 1024);
+        long inflated = 0;
+        boolean zeros = true;
+        try (InflaterInputStream in = new InflaterInputStream(
+            new ByteArrayInputStream(chunk, textStart, chunk.length - textStart))) {
+            byte[] buffer = new byte[64 * 1024];
+            for (int read = in.read(buffer); read >= 0; read = in.read(buffer)) {
+                for (int index = 0; index < read; index++) {
+                    zeros &= buffer[index] == 0;
+                }
+                inflated += read;
+            }
+        }
+        assertThat(zeros).isTrue();
+        assertThat(inflated).isEqualTo(DocumentPreviewFixtures.TEXT_CHUNK_INFLATED_BYTES);
     }
 
     @Test

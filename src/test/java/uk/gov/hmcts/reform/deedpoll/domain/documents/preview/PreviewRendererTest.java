@@ -48,7 +48,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 import java.util.zip.CRC32;
+import javax.imageio.IIOException;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -179,6 +182,41 @@ class PreviewRendererTest {
                 BufferedImage page = raster(document, 0);
                 assertThat(colourAt(page, 0.5, 0.01)).isEqualTo(Color.WHITE);
                 assertThat(colourAt(page, 0.5, 0.05)).satisfies(colour -> assertNear(colour, RED));
+            }
+        }
+
+        @Test
+        @DisplayName("a PNG whose compressed text chunks inflate to megabytes is previewed like any other")
+        void committedTextChunks() throws IOException {
+            try (RenderedPreview preview = render(PreviewFormat.PNG,
+                                                  DocumentPreviewFixtures.read("text-chunks.png"));
+                 PDDocument document = Loader.loadPDF(bytes(preview))) {
+                assertThat(document.getNumberOfPages()).isEqualTo(1);
+                assertPortrait(document.getPage(0));
+                assertMarker(document, 0, RED, Corner.TOP_LEFT);
+            }
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @ValueSource(strings = {"truecolour", "palette"})
+        @DisplayName("a PNG's text chunks are never inflated: deflate streams cut in half do not stop the preview")
+        void textChunksNeverInflated(String colours) throws IOException {
+            BufferedImage image = "palette".equals(colours)
+                ? new BufferedImage(480, 640, BufferedImage.TYPE_BYTE_INDEXED)
+                : DocumentPreviewFixtures.image(DocumentPreviewFixtures.SCAN.frames().getFirst());
+            byte[] png = DocumentPreviewFixtures.withCompressedText(encodedPng(image),
+                                                                    DocumentPreviewFixtures.TEXT_CHUNK_INFLATED_BYTES,
+                                                                    true);
+            // A reader that reads metadata inflates them, and so refuses this file.
+            ImageReader inflating = ImageIO.getImageReadersByFormatName("png").next();
+            try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(png))) {
+                inflating.setInput(input, false, false);
+                assertThatThrownBy(() -> inflating.read(0)).isInstanceOf(IIOException.class);
+            } finally {
+                inflating.dispose();
+            }
+            try (RenderedPreview preview = render(PreviewFormat.PNG, png)) {
+                assertThat(preview.pages()).isEqualTo(1);
             }
         }
 
