@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <ul>
  *   <li>"Show and mandate Urgency Reason" -- {@code urgencyreason} required when Urgent</li>
- *   <li>"Show Online Application reference and mandate" -- required when Online</li>
+ *   <li>"Show Online Application reference and mandate" -- intentionally retired following AAT feedback</li>
  *   <li>"Show or hide Date Notice Sent to London Gazette" -- hide AND CLEAR the date when Publish to
  *       London Gazette = No, for every type. The reference recorded the general case as "gap #2":
  *       the source applies it to every type while the port at the time only handled it inside the
@@ -93,18 +93,19 @@ class ConditionalGatesConformanceTest {
     }
 
     @Nested
-    @DisplayName("Online Application Reference gate")
+    @DisplayName("Retired Online Application Reference gate")
     class OnlineApplicationReferenceGate {
 
-        @Test
-        @DisplayName("requires onlineApplicationReference when postCounter = Online")
-        void requiresOnlineApplicationReferenceWhenOnline() {
+        @ParameterizedTest
+        @EnumSource(value = DeedPollType.class, names = {"Adult", "Minor"})
+        @DisplayName("does not require the retired online reference for online adult and minor applications")
+        void doesNotRequireOnlineApplicationReferenceWhenOnline(DeedPollType type) {
             List<FieldError> errors = DeedPollValidation.validate(input(
-                "type", DeedPollType.Adult,
+                "type", type,
                 "postCounter", PostCounter.Online,
                 "onlineApplicationReference", ""));
 
-            assertThat(hasError(errors, "onlineApplicationReference")).isTrue();
+            assertThat(hasError(errors, "onlineApplicationReference")).isFalse();
         }
 
         @Test
