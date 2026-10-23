@@ -703,6 +703,34 @@ class PreviewRendererTest {
             }
         }
 
+        @Test
+        @DisplayName("a stuffed FF 00 cannot hide an oversized frame header from the packet or tables check")
+        void stuffedMarkerHidingAFrameHeader() {
+            // The decoder discards FF 00 and scans on, so it finds the hidden header that a length read would skip.
+            byte[] small = greyJpeg(64, 64, 64, 64);
+            byte[] hidden = tablesOf(greyJpeg(64, 64, 40_000, 40_000), true);
+            byte[] hiding = hidden(hidden);
+            byte[] packet = ByteBuffer.allocate(small.length + hiding.length).put(small, 0, 2).put(hiding)
+                .put(small, 2, small.length - 2).array();
+            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet),
+                          PreviewFailure.INVALID_DOCUMENT);
+            byte[] tables = tablesOf(small, false);
+            byte[] hidingTables = ByteBuffer.allocate(tables.length + hiding.length).put(tables, 0, 2).put(hiding)
+                .put(tables, 2, tables.length - 2).array();
+            assertFailure(PreviewFormat.TIFF,
+                          withTables(DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, small), hidingTables),
+                          PreviewFailure.INVALID_DOCUMENT);
+        }
+
+        /**
+         * {@code FF 00} and a length covering {@code segments} without their SOI and EOI.
+         */
+        private static byte[] hidden(byte[] segments) {
+            int body = segments.length - 4;
+            return ByteBuffer.allocate(4 + body).put((byte) 0xFF).put((byte) 0x00).putShort((short) (body + 2))
+                .put(segments, 2, body).array();
+        }
+
         /**
          * {@code tiff} with a JPEGTables entry (UNDEFINED) holding {@code tables}, appended after the packet.
          */

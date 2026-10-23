@@ -163,7 +163,7 @@ final class TiffJpegPackets {
             if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7)) {
                 continue;
             }
-            if (marker == 0xD8 || marker == 0xD9 || marker == 0xDA || isFrameHeader(marker) || at + 2 > end) {
+            if (!isTablesSegment(marker) || at + 2 > end) {
                 throw new IIOException("JPEG tables carry more than tables");
             }
             int segment = (tables[at] & 0xFF) << 8 | tables[at + 1] & 0xFF;
@@ -197,6 +197,9 @@ final class TiffJpegPackets {
             if (marker == 0xD9 || marker == 0xDA || marker == 0xD8) {
                 throw new IIOException("JPEG scan or end before its frame header");
             }
+            if (!isFrameHeader(marker) && !isTablesSegment(marker)) {
+                throw new IIOException("JPEG marker the decoder does not skip by its length");
+            }
             int length = bigEndianShort(tiff);
             if (length < 2) {
                 throw new IIOException("JPEG segment length");
@@ -223,6 +226,17 @@ final class TiffJpegPackets {
     /** A JPEG is big-endian whatever the TIFF around it is, so not the stream's own byte order. */
     private static int bigEndianShort(ImageInputStream tiff) throws IOException {
         return tiff.readUnsignedByte() << 8 | tiff.readUnsignedByte();
+    }
+
+    /**
+     * The segments the JDK's decoder reads by their length ahead of a frame header: DHT, DAC, DQT, DNL, DRI, APP0
+     * to APP15 and COM. Anything else is never skipped by a length there: {@code FF 00} is discarded as a stuffed
+     * byte and the decoder scans on for the next marker, so a length read after it would step over a frame header
+     * the decoder then finds; the reserved markers it refuses, and so are they here.
+     */
+    private static boolean isTablesSegment(int marker) {
+        return marker == 0xC4 || marker == 0xCC || marker >= 0xDB && marker <= 0xDD
+            || marker >= 0xE0 && marker <= 0xEF || marker == 0xFE;
     }
 
     /** SOF0 to SOF15, which are every frame header: not DHT (C4), JPG (C8) or DAC (CC). */

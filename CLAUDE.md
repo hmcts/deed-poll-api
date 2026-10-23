@@ -398,7 +398,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   "just to count pages": that is the heap-exhaustion finding of
   `docs/plans/completed/20261023-document-preview-review-fixes.md`. Likewise a tiled TIFF frame's declared tile is
   held to `max-frame-pixels` before decoding (a strip is clipped to the frame by the JDK, so it is not checked), a
-  JPEG-compressed TIFF's per-packet JPEG header is held to its strip or tile by `TiffJpegPackets`, reading the directory entry by entry as the JDK does (an unknown-type entry is 8 bytes), with JPEGInterchangeFormat as the JDK's fallback and JPEGTables allowed tables only, all its entries together no more bytes than the file (the native decoder
+  JPEG-compressed TIFF's per-packet JPEG header is held to its strip or tile by `TiffJpegPackets`, reading the directory entry by entry as the JDK does (an unknown-type entry is 8 bytes), with JPEGInterchangeFormat as the JDK's fallback, only the markers the decoder skips by length (never `FF 00`, which it discards and scans past), and JPEGTables allowed tables only, all its entries together no more bytes than the file (the native decoder
   sizes off-heap buffers from it; old-style JPEG is refused), and its orientation comes from `TiffOrientation`, never
   `getImageMetadata` (a DOM copy of every strip offset; `PreviewBoundaryTest.noImageMetadataTree`); and the Docmosis
   body is one-shot, so OkHttp cannot resend it on a `503 Retry-After: 0`
