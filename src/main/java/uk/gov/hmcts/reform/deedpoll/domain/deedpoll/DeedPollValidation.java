@@ -3,7 +3,6 @@ package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MaritalStatus;
-import uk.gov.hmcts.reform.deedpoll.entity.enums.PostCounter;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferToMaster;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
@@ -27,7 +26,8 @@ import java.util.Set;
  *   <li>{@code ShowhideandmandatefieldsforMinors} -- the minor fields</li>
  *   <li>{@code ShowhideandmandatefieldsforDeedofRelinquishment} -- old name hidden, and more</li>
  *   <li>{@code ShowandmandateUrgencyReason} -- {@code urgencyreason} gated on urgency = Urgent</li>
- *   <li>{@code ShowOnlineApplicationreferenceandmandate} -- gated on postcounter = Online</li>
+ *   <li>{@code ShowOnlineApplicationreferenceandmandate} -- retired after AAT staff feedback;
+ *       existing references remain optional for correspondence</li>
  *   <li>{@code ShoworhideDateNoticeSenttoLondonGazette} -- gated on publishtolondongazette</li>
  *   <li>{@code DefaultMinorDeedPolltoSingle} -- a create default</li>
  * </ul>
@@ -255,9 +255,9 @@ public final class DeedPollValidation {
      * <p>Returns the list of violations -- empty when valid. The caller decides whether to hard-fail
      * (create / submit) or treat as advisory (an incremental save).
      *
-     * <p>Combines the per-type required matrix ({@link #getFieldRules}) with the two conditional gates
-     * the source enforces field by field: {@code urgencyreason} required when urgency = Urgent (2), and
-     * {@code onlineApplicationReference} required when postcounter = Online (2).
+     * <p>Combines the per-type required matrix ({@link #getFieldRules}) with the urgency-reason gate.
+     * The inherited online-reference requirement is intentionally retired; the vendored source
+     * remains unchanged as historical evidence.
      *
      * <p>The reference returns its own {@code ValidationError {field, message}}; this returns
      * {@link FieldError}, for the reason given on {@link CaseState}.
@@ -281,13 +281,6 @@ public final class DeedPollValidation {
             errors.add(new FieldError(
                 "urgencyreason",
                 "Urgency reason is required when urgency is Urgent"));
-        }
-
-        // Conditional gate: online application reference.
-        if (input.postCounter() == PostCounter.Online && isEmpty(input.get("onlineApplicationReference"))) {
-            errors.add(new FieldError(
-                "onlineApplicationReference",
-                "Online application reference is required for online applications"));
         }
 
         return List.copyOf(errors);

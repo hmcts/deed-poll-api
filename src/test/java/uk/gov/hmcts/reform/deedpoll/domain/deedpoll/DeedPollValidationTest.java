@@ -218,10 +218,10 @@ class DeedPollValidationTest {
         }
 
         @Test
-        @DisplayName("requires onlineApplicationReference when postcounter = Online")
-        void requiresOnlineApplicationReferenceWhenOnline() {
+        @DisplayName("does not require the retired online reference when postcounter = Online")
+        void doesNotRequireOnlineApplicationReferenceWhenOnline() {
             assertThat(fieldsOf(DeedPollValidation.validate(input("postCounter", PostCounter.Online))))
-                .contains("onlineApplicationReference");
+                .doesNotContain("onlineApplicationReference");
         }
 
         @Test

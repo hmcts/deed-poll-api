@@ -74,7 +74,7 @@ public record ValidationInput(Map<String, Object> values) {
     }
 
     /**
-     * The intake channel, gating {@code onlineApplicationReference}.
+     * The intake channel. Online application references are optional.
      */
     public PostCounter postCounter() {
         return read("postCounter", PostCounter.class);
