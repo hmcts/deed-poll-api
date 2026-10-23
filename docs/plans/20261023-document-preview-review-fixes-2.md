@@ -171,6 +171,14 @@ TIFFs, such as an A4 scan at 300 dpi writing `RowsPerStrip` 65,535. The bound no
 review also added `TiffOrientationTest` (both byte orders, last entry wins, wrong type or count, later frames, a
 short chain) and a 64-bit floating-point tile held by the decoded-size limit.
 
+**Review correction (JPEG packets).** The second review found the same allocation by another route: in a
+Compression 7 TIFF every strip or tile is its own JPEG, whose frame header declares its own size, and the JDK hands
+it to the native decoder unchecked. A progressive packet declaring 40,000 × 40,000 inside a 16 × 16 frame took about
+3.2 GB outside the heap. `TiffJpegPackets` now reads each packet's header up to its frame header, before the frame is
+decoded, and refuses a declaration larger than its strip or tile (rounded up to whole 16-pixel MCUs) as
+`LIMIT_EXCEEDED`; old-style JPEG (Compression 6) and a packet that is not a JPEG are `INVALID_DOCUMENT`.
+`TiffDirectories` is the directory walk it shares with `TiffOrientation`.
+
 ## Post-Completion
 
 Publishing, merging and deployment are separate from this plan.

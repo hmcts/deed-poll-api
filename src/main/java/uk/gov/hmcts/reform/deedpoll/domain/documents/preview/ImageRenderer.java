@@ -38,8 +38,9 @@ import javax.imageio.stream.ImageInputStream;
  *
  * <p>The bytes decide, not the stored type: only a reader for the stored format that recognises the bytes is used,
  * so a PNG stored as a JPEG is an invalid document. Each frame's declared dimensions, and a tiled TIFF frame's
- * declared tile, are checked against the pixel limit, and a PNG or TIFF frame's sample layout against the
- * decoded-size limit, before it is decoded; frames are decoded one at a time and dropped once drawn, and the budget is
+ * declared tile, are checked against the pixel limit, a JPEG-compressed TIFF frame's packet headers against
+ * their strip or tile ({@link TiffJpegPackets}), and a PNG or TIFF frame's sample layout against the decoded-size
+ * limit, before it is decoded; frames are decoded one at a time and dropped once drawn, and the budget is
  * checked between them. A JPEG is decoded only to prove its data is whole and then embedded as it was stored, so a
  * photograph is not recompressed; a PNG or TIFF frame is embedded losslessly. A PNG's metadata is never read, so its
  * text chunks are never inflated, and a TIFF's orientation is read by {@link TiffOrientation}, never as ImageIO's
@@ -110,6 +111,10 @@ final class ImageRenderer implements SourceRenderer {
                         int tileHeight = reader.getTileHeight(frames);
                         properties.requireFrame(tileWidth, tileHeight);
                         decodedPixels = Math.max(decodedPixels, (long) tileWidth * tileHeight);
+                        TiffJpegPackets.require(directories, frames, tileWidth, tileHeight, budget);
+                    } else if (format == PreviewFormat.TIFF) {
+                        TiffJpegPackets.require(directories, frames, width,
+                                                Math.min(reader.getTileHeight(frames), height), budget);
                     }
                     Orientation orientation = jpeg != null ? ExifOrientation.of(jpeg)
                         : directories != null ? TiffOrientation.of(directories, frames) : Orientation.TOP_LEFT;

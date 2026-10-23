@@ -76,6 +76,9 @@ import static uk.gov.hmcts.reform.deedpoll.domain.documents.preview.DocumentPrev
  */
 class PreviewRendererTest {
 
+    /** TIFF Compression values: old-style JPEG, and JPEG. */
+    private static final int OLD_JPEG = 6;
+    private static final int JPEG = 7;
     private static final float A4_SHORT = PDRectangle.A4.getWidth();
     private static final float A4_LONG = PDRectangle.A4.getHeight();
 
@@ -575,6 +578,44 @@ class PreviewRendererTest {
         }
 
         @Test
+        @DisplayName("a JPEG-compressed TIFF whose packets declare their own strip or tile renders")
+        void jpegPackets() throws IOException {
+            byte[] packet = greyJpeg(64, 64, 64, 64);
+            for (byte[] tiff : List.of(DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet),
+                                       DocumentPreviewFixtures.tiledGrey(64, 64, 64, 64, JPEG, packet))) {
+                try (RenderedPreview preview = render(PreviewFormat.TIFF, tiff);
+                     PDDocument document = Loader.loadPDF(bytes(preview))) {
+                    assertThat(preview.pages()).hasValue(1);
+                    assertNear(colourAt(raster(document, 0), 0.5, 0.5), Color.BLACK);
+                }
+            }
+        }
+
+        @ParameterizedTest(name = "{0} by {1}")
+        @CsvSource({"40000, 40000", "80, 64", "64, 80"})
+        @DisplayName("a JPEG packet declaring more than its strip or tile is refused before it is decoded")
+        void jpegPacketOverItsRegion(int declaredWidth, int declaredHeight) {
+            // The packet's frame header alone is patched, so the decoder would be sizing its buffers from it.
+            byte[] packet = greyJpeg(64, 64, declaredWidth, declaredHeight);
+            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet),
+                          PreviewFailure.LIMIT_EXCEEDED);
+            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(64, 64, 65_535, JPEG, packet),
+                          PreviewFailure.LIMIT_EXCEEDED);
+            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.tiledGrey(64, 64, 64, 64, JPEG, packet),
+                          PreviewFailure.LIMIT_EXCEEDED);
+        }
+
+        @Test
+        @DisplayName("an old-style JPEG TIFF, or a JPEG one whose packet is not a JPEG, is an invalid document")
+        void oldJpegAndNotJpeg() {
+            assertFailure(PreviewFormat.TIFF,
+                          DocumentPreviewFixtures.strippedGrey(64, 64, 64, OLD_JPEG, greyJpeg(64, 64, 64, 64)),
+                          PreviewFailure.INVALID_DOCUMENT);
+            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, NOT_DEFLATE),
+                          PreviewFailure.INVALID_DOCUMENT);
+        }
+
+        @Test
         @DisplayName("a TIFF cut off half way, or with a broken header, is an invalid document")
         void damaged() {
             byte[] tiff = DocumentPreviewFixtures.read("two-frames.tiff");
@@ -907,6 +948,27 @@ class PreviewRendererTest {
             throw new AssertionError(unwritable);
         }
         return out.toByteArray();
+    }
+
+    /**
+     * A black 8-bit grey JPEG of {@code width} by {@code height}, its frame header then made to declare
+     * {@code declaredWidth} by {@code declaredHeight}.
+     */
+    private static byte[] greyJpeg(int width, int height, int declaredWidth, int declaredHeight) {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try {
+            ImageIO.write(new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY), "jpeg", bytes);
+        } catch (IOException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+        byte[] jpeg = bytes.toByteArray();
+        for (int at = 2; at + 1 < jpeg.length; at++) {
+            if ((jpeg[at] & 0xFF) == 0xFF && (jpeg[at + 1] & 0xFF) == 0xC0) {
+                ByteBuffer.wrap(jpeg, at + 5, 4).putShort((short) declaredHeight).putShort((short) declaredWidth);
+                return jpeg;
+            }
+        }
+        throw new IllegalStateException("no baseline frame header");
     }
 
     private static PreviewBudget budget() {

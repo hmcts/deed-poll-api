@@ -397,7 +397,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   for the rest; a PNG is read with metadata ignored, so its text chunks are never inflated. Do not reintroduce a parse
   "just to count pages": that is the heap-exhaustion finding of
   `docs/plans/completed/20261023-document-preview-review-fixes.md`. Likewise a tiled TIFF frame's declared tile is
-  held to `max-frame-pixels` before decoding (a strip is clipped to the frame by the JDK, so it is not checked), and its orientation comes from `TiffOrientation`, never
+  held to `max-frame-pixels` before decoding (a strip is clipped to the frame by the JDK, so it is not checked), a
+  JPEG-compressed TIFF's per-packet JPEG header is held to its strip or tile by `TiffJpegPackets` (the native decoder
+  sizes off-heap buffers from it; old-style JPEG is refused), and its orientation comes from `TiffOrientation`, never
   `getImageMetadata` (a DOM copy of every strip offset; `PreviewBoundaryTest.noImageMetadataTree`); and the Docmosis
   body is one-shot, so OkHttp cannot resend it on a `503 Retry-After: 0`
   (`docs/plans/completed/20261023-document-preview-review-fixes-2.md`). The request thread does the conversion and
