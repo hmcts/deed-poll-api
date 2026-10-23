@@ -128,11 +128,12 @@ Do not change it or anything under `ccd/`.
 
 **Files:** `README.md`, `docs/DOCUMENT-PREVIEW-SMOKE.md`, `CLAUDE.md` if it states a changed fact, this plan.
 
-- [ ] Document the 100-page limit and where each format's page limit is enforced, the no-parse PDF passthrough,
+- [x] Document the 100-page limit and where each format's page limit is enforced, the no-parse PDF passthrough,
       the new ordering, and the slow-read limitation. **Reference this plan by its `docs/plans/completed/` path**,
       since that is where it will be once the run ends.
-- [ ] Run `./gradlew cftlibTest --no-watch-fs` and all Validation Commands; record final commits, changed files and
-      test counts in the execution notes, and hand off to the Ralphex review phases.
+- [x] Run `./gradlew cftlibTest --no-watch-fs` and all Validation Commands; record final commits, changed files and
+      test counts in the execution notes, and hand off to the Ralphex review phases. (Validation Commands pass;
+      `cftlibTest` could not start in this environment, see the Task 4 notes.)
 
 ## Acceptance Criteria
 
@@ -212,6 +213,34 @@ description says a PDF or a converted DOCX is served unparsed and uncounted. PDF
   overload, all comment or layout changes (compiled again). `compileCftlibTestJava` passes.
 - `README.md`, `docs/DOCUMENT-PREVIEW-SMOKE.md` and `CLAUDE.md` still state the old limit or behaviour where they do;
   Task 4 updates them.
+
+**Task 4 (record and hand off).** `README.md`'s Document previews section now links both plans by their
+`completed/` paths and states the source-first order (audit, CDAM's caller check, spool, then converter check and
+permit), that a refused source keeps the download's status and leaves one audit row as a refused download does, the
+slow-read limitation (the 25 s budget bounds conversion and rendering and is checked between spooled chunks, but a
+blocked store read keeps CDAM's timeouts and holds no permit; no watchdog), the unparsed PDF and Docmosis passthrough
+(`%PDF-` and `%%EOF` only, encrypted PDFs not detected and served), PNG text chunks never inflated, and
+`DOCUMENT_PREVIEW_MAX_PAGES` 100 enforced by api for JPEG/PNG/TIFF and by the viewer for PDF/DOCX.
+`docs/DOCUMENT-PREVIEW-SMOKE.md` has the new limits and enforcement keys, the new artifact, a TIFF (not a 500-page
+DOCX) for the limit step, a PDF check by SHA-256 rather than page count, and corrected audit expectations: a CDAM
+denial records one `DOCUMENT_PREVIEWED` attempt, and a `PREVIEW_BUSY` comes after the read and so has its row.
+`CLAUDE.md`'s preview rule states the new order, the no-parse rule and where `max-pages` is enforced.
+`OpenAPIDocumentPreviews`' limits description no longer says the budget covers "the whole request": it covers
+conversion and rendering, not a stalled read of the original (description text only).
+- Artifact for admin: `OpenAPIPublisherTest`'s document, SHA-256
+  `c1fc4438a2e19997ee7918d3958594c092ff9c598ab21a1ff5cbc49aaed8e193`, 105,444 bytes, 41 paths, 57 operations,
+  61 schemas (unchanged counts; only `x-document-preview-limits` differs from the earlier `74c83e76…` handoff).
+- `./gradlew build` (init script): successful, 4777 unit tests (0 failures, 1 skipped, the opt-in
+  `DocumentPreviewFixturesTest` regenerator) and 24 integration tests (0 failures). The known intermittent
+  `CcdCreationAttemptRepositoryTest` did not fail. `checkstyle.sh`: OK.
+- `./gradlew cftlibTest --no-watch-fs`: **not run to completion**. The in-process stack failed to start with
+  `PortInUseException: Port 8080` in dg-docassembly-api, because port 8080 is held by
+  `python3 -m http.server 8080 --directory /tmp/deed-poll-viewer-prototype` (started 12:20 today, not part of this
+  run). It was left running, as it is not this run's to stop. `compileCftlibTestJava` passes (Tasks 1 and 3), so the
+  changed `DocumentPreviewCftlibTest` journey compiles but its run, with counts, is outstanding: stop that server
+  and run `JAVA_TOOL_OPTIONS=-XX:UseSVE=0 TESTCONTAINERS_RYUK_DISABLED=true ./gradlew cftlibTest --no-watch-fs`.
+- Commits: Task 1 `d4b62d9`, Task 2 `a7d8ed8`, Task 3 `ceeeb2c`, Task 4 this commit. Changed files over the
+  baseline: `git diff --stat b2d2c9c..HEAD`.
 
 ## Post-Completion
 

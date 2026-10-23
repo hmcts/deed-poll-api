@@ -1,6 +1,7 @@
 # Document previews — producer handoff and AAT acceptance
 
-Prepared for [the preview plan](plans/20261023-document-preview-rendering.md). **Not run.** Nothing below has
+Prepared for [the preview plan](plans/completed/20261023-document-preview-rendering.md) and revised by
+[its review fixes](plans/completed/20261023-document-preview-review-fixes.md). **Not run.** Nothing below has
 been provisioned or exercised in a deployed environment: the Docmosis endpoint, its access key and its fonts are
 not configured anywhere this chart deploys, and every automated test uses local files, WireMock or the local-only
 cftlib stack. The routes, headers, errors and limits are in the README's
@@ -14,23 +15,30 @@ names out of the record.
 
 | | |
 |---|---|
-| **Producer source** | `feat/document-preview-rendering`, the first review-fix commit after `e16631b` ("fix: address code review findings"). The contract was first produced at Task 5 (`f795067`); the review added `502` to both previews. |
-| **Artifact** | `OpenAPIPublisherTest`'s document, SHA-256 `74c83e760cb18e8ff803216eff26f4c12f75f90f0043c2c6a1e4d234497d1dd6`, 104,422 bytes. (Tasks 5 to 7 published `86eeee8a…`, 103,978 bytes, without the `502`; do not use that one.) |
-| **How** | `JAVA_TOOL_OPTIONS=-XX:UseSVE=0 TESTCONTAINERS_RYUK_DISABLED=true OPENAPI_OUTPUT_PATH=/tmp/preview-review1/openapi.json ./gradlew integration --tests '*OpenAPIPublisherTest' --no-watch-fs` in this repository at that commit. Admin then follows its own `libs/deed-poll-api-client/SPEC-PROVENANCE.md` recipe (2-space JSON, then Biome). |
+| **Producer source** | `feat/document-preview-rendering`, the review-fixes plan's Task 4 commit ("feat: document the preview review fixes and hand off"). The contract was first produced at the rendering plan's Task 5 (`f795067`); its review added `502` to both previews, and the review fixes changed only `x-document-preview-limits`. |
+| **Artifact** | `OpenAPIPublisherTest`'s document, SHA-256 `c1fc4438a2e19997ee7918d3958594c092ff9c598ab21a1ff5cbc49aaed8e193`, 105,444 bytes. (Earlier handoffs published `74c83e76…`, 104,422 bytes, with `maxPages` 500 and no enforcement keys, and `86eeee8a…`, 103,978 bytes, without the `502`; use neither.) |
+| **How** | `JAVA_TOOL_OPTIONS=-XX:UseSVE=0 TESTCONTAINERS_RYUK_DISABLED=true OPENAPI_OUTPUT_PATH=/tmp/preview-review2/openapi.json ./gradlew integration --tests '*OpenAPIPublisherTest' --no-watch-fs` in this repository at that commit. Admin then follows its own `libs/deed-poll-api-client/SPEC-PROVENANCE.md` recipe (2-space JSON, then Biome). |
 | **Delta** | +2 paths, +2 `GET` operations (`previewCaseDocument`, `previewReferralDocument`), +1 schema (`DocumentPreviewError`). No existing operation changed. Now 41 paths, 57 operations, 61 schemas. |
 | **Per operation** | `200` `application/pdf` binary with `Content-Disposition`, `Content-Length`, `Content-Security-Policy`, `X-Content-Type-Options`, `Cache-Control` and `Accept-Ranges`; `403` (the shared `Forbidden`); `404` and `502` `ApiError` (the `502` is `/file`'s store failure); `422`/`429`/`503` `DocumentPreviewError` (`error`, `code`); `Retry-After` on `429`; `x-document-preview-limits`. |
 
 `x-document-preview-limits`, as published from the running defaults: `requestBudgetSeconds` 25, `maxInputBytes`
-26214400, `maxOutputBytes` 52428800, `maxPages` 500, `maxFramePixels` 25000000,
-`maxConcurrentConversionsPerInstance` 3, `busyRetryAfterSeconds` 5, `rangeRequests` `unsupported`. An environment
+26214400, `maxOutputBytes` 52428800, `maxPages` 100, `maxPagesEnforcedFor` `image/jpeg`, `image/png`, `image/tiff`,
+`maxPagesEnforcedByViewerFor` `application/pdf` and the DOCX type, `maxFramePixels` 25000000,
+`maxConcurrentConversionsPerInstance` 3, `busyRetryAfterSeconds` 5, `rangeRequests` `unsupported`. **The API counts
+pages only for the previews it builds.** A PDF original or a converted DOCX is served unparsed and uncounted (only
+`%PDF-` and a trailing `%%EOF` are checked), so admin's viewer must read `numPages` through PDF.js and refuse one over
+`maxPages` before rendering. An environment
 that overrides one of the `DOCUMENT_PREVIEW_*` variables publishes its own value, so admin should read the
 extension rather than hard-code these numbers. Admin's patience for a preview must cover the 25 s budget and stay
-under the gateways' 30 s.
+under the gateways' 30 s. The budget bounds conversion and rendering, not a stalled read of the original: that read
+keeps CDAM's own timeouts, as a download does, and holds no conversion permit, because the original is read in full
+before the permit is taken.
 
 The plan's API source/artifact evidence, test counts and format/permission matrix are in its Execution notes,
-Tasks 1–6. In short: the five formats render with real parsers on both surfaces, the original's SHA-256 is unchanged
-through `/file`, TIFF keeps every frame in order, DOCX takes its page count from the converted PDF, and through real
-CDAM (cftlib) a preview reads under the caller's own IDAM id and never the system user's.
+Tasks 1–6, and the review fixes' in theirs. In short: the five formats render on both surfaces, the original's
+SHA-256 is unchanged through `/file`, TIFF keeps every frame in order, a PDF and the converter's output are served
+byte for byte without a parse, and through real CDAM (cftlib) a preview reads under the caller's own IDAM id and never
+the system user's.
 
 ## Provisioning needed, none of it done
 
@@ -68,8 +76,8 @@ none of this.
 3. Prepare synthetic documents and keep their SHA-256s: a multi-page PDF; a JPEG taken on its side (EXIF
    orientation 6); a PNG; a TIFF with at least three frames of different content, one portrait among landscapes;
    a DOCX of several pages with a table, an image, headers/footers and page breaks, together with a PDF that Word
-   itself printed from it (the layout reference); and a DOCX of more than 500 pages or a TIFF frame over 25 million
-   pixels for the limit step.
+   itself printed from it (the layout reference); and a TIFF of more than 100 frames or with a frame over 25 million
+   pixels for the limit step. A PDF or DOCX over 100 pages is not refused by the API (the viewer refuses it).
 4. Two synthetic caseworkers, two synthetic judges, and one synthetic staff user without CCD read on the case type
    if CDAM is on (see [CDAM-SMOKE.md](CDAM-SMOKE.md)). Read access to `deedpoll_audit_event`.
 
@@ -81,7 +89,7 @@ none of this.
    `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
    `Content-Security-Policy: default-src 'none'; sandbox`, `Accept-Ranges: none`, and a `Content-Length` equal to
    the bytes received. Then open each PDF and check:
-   - PDF: the same page count as the original.
+   - PDF: byte for byte the original (the same SHA-256 as `/file`).
    - JPEG: one page, upright, not cropped. PNG: one page, not cropped.
    - TIFF: one page per frame, in frame order, the portrait frame upright on its own page.
    - DOCX: compare with the Word-printed reference, page by page: page count, page breaks, the table, the image,
@@ -96,14 +104,18 @@ none of this.
    referral's `404`; A still previews. Close or withdraw it: A gets `404`. A caseworker on the judicial route and a
    judge on the caseworker route get `403`.
 6. **Denials.** No token: `401`. Another case's id with this document id: `404`. With CDAM on, the user without CCD
-   read gets CDAM's `403`/`404` (an entirely unmapped user `502`), never a `PREVIEW_` code. None of these may record
-   `DOCUMENT_PREVIEWED` or produce a converter request; ask the converter owners whether one arrived if in doubt.
+   read gets CDAM's `403`/`404` (an entirely unmapped user `502`), never a `PREVIEW_` code, even with a DOCX while
+   every conversion permit is held or with `DOCMOSIS_URL` empty. The `401` and the wrong-case `404` record nothing;
+   a CDAM denial records exactly one `DOCUMENT_PREVIEWED` attempt, as a CDAM-denied `/file` records one
+   `DOCUMENT_DOWNLOADED`, because the audit is written before the store is asked. None may produce a converter
+   request; ask the converter owners whether one arrived if in doubt.
 7. **Replicas and restart.** Preview the same document through two different pods (or the same pod either side of
    a restart). Both answer the same page count; nothing about a preview survives on a pod, because each request
    renders afresh and deletes its own scratch directory.
 8. **Limits.** The over-limit document answers `422 PREVIEW_LIMIT_EXCEEDED` with no PDF, and its `/file` still
    downloads. Four DOCX/TIFF previews started at once on one pod: the fourth is `429 PREVIEW_BUSY` with
-   `Retry-After: 5` and no audit row, while a PDF preview still succeeds.
+   `Retry-After: 5`, after its original was read (so it has its one `DOCUMENT_PREVIEWED` row), while a PDF preview
+   still succeeds.
 9. **Converter failure.** With the key deliberately wrong (a temporary override in a controlled window), a DOCX
    preview is `503 PREVIEW_UNAVAILABLE` after one converter call, no retry, and the `/file` download still works.
    Remove `DOCMOSIS_URL` and restart: the service starts, DOCX is the same `503`, other formats render. Restore both.

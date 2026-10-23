@@ -582,7 +582,9 @@ metadata and download headers. These local tests do not establish live CDAM onbo
 ### Document previews
 
 Two operations, one per surface, from the preview plan
-([20261023-document-preview-rendering](docs/plans/20261023-document-preview-rendering.md)), and counted apart from
+([20261023-document-preview-rendering](docs/plans/completed/20261023-document-preview-rendering.md)), revised by its
+review fixes ([20261023-document-preview-review-fixes](docs/plans/completed/20261023-document-preview-review-fixes.md)),
+and counted apart from
 both surfaces' totals (`previewCaseDocument`, `previewReferralDocument`). A preview is a read-only PDF rendition for
 the admin viewer. It never replaces, attaches, publishes or edits the original, which
 `/file` keeps serving exactly as above.
@@ -598,11 +600,25 @@ fail-closed before anything is opened, once per request. A wrong case, an unknow
 cannot see is the existing 404; 401 and 403 are unchanged, and a document store that will not return the original
 is `/file`'s 502.
 
+**The source is read before any busy or unavailable refusal.** After the scope check and the format allowlist, the
+original is opened (the audit row, then CDAM's own check of the caller) and spooled to the request's scratch
+directory in full. Only then is the DOCX converter's configuration checked and a conversion permit taken. So a
+caller the store refuses gets the download's own 403/404/502, never `PREVIEW_BUSY` or `PREVIEW_UNAVAILABLE`, and is
+audited exactly as a refused `/file` is (one row); a busy or unconfigured refusal comes only for a document the
+caller may read; and a slow store read holds no permit. **The 25 s budget bounds conversion and rendering, not a
+stalled store read:** it is checked between spooled chunks, but a read that blocks keeps the store client's own
+timeouts (CDAM buffers its response under an inactivity timeout), exactly as a download does, and there is no
+watchdog. Such a read holds no conversion permit, so it cannot starve other previews.
+
 A success is a complete `200` `application/pdf`, `inline` with the fixed filename `document-preview.pdf` and a
 measured `Content-Length`, under the download's `Content-Security-Policy: default-src 'none'; sandbox`,
 `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`. **There is no range support**: the response says
-`Accept-Ranges: none`, a `Range` header is ignored and the whole bounded PDF is returned with `200`, never `206`. PDF passes through after checks; JPEG and PNG become one page; a TIFF becomes one page per frame, in
-order; DOCX is converted by Docmosis Tornado's `/rs/convert`. Nothing is cached or stored.
+`Accept-Ranges: none`, a `Range` header is ignored and the whole bounded PDF is returned with `200`, never `206`. A PDF is served exactly as stored, **without being parsed**: it must start with `%PDF-` and carry
+`%%EOF` within its last 1,024 bytes, and otherwise is `PREVIEW_INVALID_DOCUMENT`. Its pages are not counted, and an
+encrypted PDF is not detected (that needs a parse) and is served as stored; the viewer gives PDF.js no password, so
+the browser never asks for one. JPEG and PNG become one page (a PNG's text chunks are never inflated); a TIFF becomes
+one page per frame, in order; DOCX is converted by Docmosis Tornado's `/rs/convert`. PDFBox builds only the image
+and TIFF previews, which are the service's own output. Nothing is cached or stored.
 
 A preview that is not produced answers `{"error": "<fixed sentence>", "code": "<code>"}` (`DocumentPreviewError`,
 `no-store`), and its sentence never names the file. A refusal before the preview keeps the usual `{"error"}` body.
@@ -622,9 +638,9 @@ acceptance, original downloads or the staging cap.
 
 | Environment variable | Default | Purpose |
 |---|---|---|
-| `DOCUMENT_PREVIEW_REQUEST_BUDGET` | `25s` | The whole request, conversion included; must be under the gateways' 30 s |
+| `DOCUMENT_PREVIEW_REQUEST_BUDGET` | `25s` | Conversion and rendering, checked between spooled chunks of the original but not bounding a stalled store read (above); must be under the gateways' 30 s |
 | `DOCUMENT_PREVIEW_MAX_OUTPUT_BYTES` | `52428800` (50 MiB) | Largest preview PDF served. The input ceiling is the upload's 25 MiB and is not configurable here |
-| `DOCUMENT_PREVIEW_MAX_PAGES` | `500` | Most pages in one preview |
+| `DOCUMENT_PREVIEW_MAX_PAGES` | `100` | Most pages in one preview. Enforced here only for the previews this service builds (JPEG, PNG and TIFF frames, published as `maxPagesEnforcedFor`); a PDF or converted DOCX is served uncounted, and the admin viewer enforces it through PDF.js's `numPages` before rendering (`maxPagesEnforcedByViewerFor`) |
 | `DOCUMENT_PREVIEW_MAX_FRAME_PIXELS` | `25000000` | Most decoded pixels in one image or TIFF frame, checked before decoding; a PNG or TIFF frame's decoded bytes are also held to four a pixel of this (so a 16-bit RGBA frame may have half as many) |
 | `DOCUMENT_PREVIEW_MAX_CONCURRENT_CONVERSIONS` | `3` | Non-PDF previews at once per pod; there is no queue |
 | `DOCUMENT_PREVIEW_BUSY_RETRY_AFTER` | `5s` | `Retry-After` on `PREVIEW_BUSY`, between 1 and 60 s |
@@ -638,8 +654,8 @@ With either Docmosis setting empty the service starts as normal and only a DOCX 
 A DOCX is first held to the upload's content checks, so a malformed, encrypted or macro-enabled package is
 `PREVIEW_INVALID_DOCUMENT` and is never sent. The conversion is one `multipart/form-data` POST to
 `{DOCMOSIS_URL}/rs/convert` (`accessKey`, `outputName=preview.pdf`, `file` named `document.docx`), with no retry
-and no redirect followed. Only a `2xx` `application/pdf` body inside the output ceiling, ending `%%EOF` and
-readable as an unencrypted PDF is served, and its pages are the preview's. A Tornado `413` is
+and no redirect followed. Only a `2xx` `application/pdf` body inside the output ceiling, starting `%PDF-` and ending
+`%%EOF` is served, unparsed and uncounted, as an original PDF is. A Tornado `413` is
 `PREVIEW_LIMIT_EXCEEDED`, the budget running out is `PREVIEW_LIMIT_EXCEEDED`, and every other status, timeout,
 broken transfer or unusable body is `PREVIEW_UNAVAILABLE`. Logs carry the status or an exception class only.
 Automated tests use WireMock: they prove the protocol and bounds, not Word layout or fonts on the real converter.
