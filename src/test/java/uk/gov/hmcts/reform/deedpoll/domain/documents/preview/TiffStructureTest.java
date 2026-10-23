@@ -265,6 +265,17 @@ class TiffStructureTest {
         assertRefused(withImageData(base(), PRIVATE, LONG, 256), "TIFF image data without byte counts");
     }
 
+    @Test
+    @DisplayName("the JDK's JPEGInterchangeFormat fallbacks count as offsets and byte counts, whatever the compression")
+    void jpegInterchangeFormat() {
+        assertPasses(withImageData(base(), 514, LONG, 256));
+        byte[] tiff = base();
+        assertRefused(withImageData(tiff, 514, LONG, tiff.length), "TIFF image data cover more than the file");
+        assertRefused(withImageData(retagged(base(), 273, 513), PRIVATE, LONG, 256),
+                      "TIFF image data without byte counts");
+        assertPasses(retagged(base(), 273, 513));
+    }
+
     @ParameterizedTest(name = "Compression {0}")
     @ValueSource(ints = {OLD_JPEG, JPEG})
     @DisplayName("an old-style JPEG or a JPEG frame is refused, however its Compression entry is written")
@@ -410,6 +421,21 @@ class TiffStructureTest {
             }
         }
         throw new IllegalStateException("no StripByteCounts entry");
+    }
+
+    /**
+     * {@link #base()} with its entry tagged {@code from} retagged {@code to}, its value left alone.
+     */
+    private static byte[] retagged(byte[] tiff, int from, int to) {
+        byte[] copy = tiff.clone();
+        ByteBuffer buffer = ByteBuffer.wrap(copy).order(byteOrder(copy));
+        for (int at = 10; at < nextOffsetAt(copy, 8); at += 12) {
+            if ((buffer.getShort(at) & 0xFFFF) == from) {
+                buffer.putShort(at, (short) to);
+                return copy;
+            }
+        }
+        throw new IllegalStateException("no entry tagged " + from);
     }
 
     private static ByteOrder byteOrder(byte[] tiff) {

@@ -27,8 +27,9 @@ import javax.imageio.IIOException;
  * directories is therefore read once. Image data is aliased the same way: the JDK's decompressors allocate and read
  * each strip's or tile's declared byte count, so a million strips naming one large payload would read it a million
  * times inside one frame's decode, well inside the pixel limits. So every StripByteCounts and TileByteCounts value is
- * added to the same total, and a directory naming strip or tile offsets must give their byte counts rather than leave
- * the JDK to work them out. The work is therefore bounded by the file's size.
+ * added to the same total, as is JPEGInterchangeFormatLength, which the JDK falls back to, and a directory naming
+ * strip, tile or JPEGInterchangeFormat offsets must give byte counts rather than leave the JDK to work them out.
+ * The work is therefore bounded by the file's size.
  *
  * <p>Beyond that it insists on what every real TIFF already is: {@code II} or {@code MM} with the magic number 42
  * (BigTIFF, 43, is refused: the JDK cannot read it), at least one directory, no more directories in the chain than
@@ -70,6 +71,8 @@ final class TiffStructure {
     private static final int STRIP_BYTE_COUNTS = 279;
     private static final int TILE_OFFSETS = 324;
     private static final int TILE_BYTE_COUNTS = 325;
+    private static final int JPEG_INTERCHANGE_FORMAT = 513;
+    private static final int JPEG_INTERCHANGE_FORMAT_LENGTH = 514;
     private static final int OLD_JPEG = 6;
     private static final int JPEG = 7;
     private static final int SUB_IFDS = 330;
@@ -196,8 +199,12 @@ final class TiffStructure {
                 }
                 occupy(value, bytes);
             }
-            offsets |= tag == STRIP_OFFSETS || tag == TILE_OFFSETS;
-            if (tag == STRIP_BYTE_COUNTS || tag == TILE_BYTE_COUNTS) {
+            // The JDK takes the first of TileOffsets, StripOffsets and JPEGInterchangeFormat a directory holds, and
+            // the first of TileByteCounts, StripByteCounts and JPEGInterchangeFormatLength, whichever kind the
+            // offsets were, and estimates counts only when it finds none. So any offsets need any counts, and every
+            // count is added, the JPEG pair's included: it is read whatever the compression.
+            offsets |= tag == STRIP_OFFSETS || tag == TILE_OFFSETS || tag == JPEG_INTERCHANGE_FORMAT;
+            if (tag == STRIP_BYTE_COUNTS || tag == TILE_BYTE_COUNTS || tag == JPEG_INTERCHANGE_FORMAT_LENGTH) {
                 byteCounts = true;
                 imageData(type, count, bytes, table, at + 8, value);
             }
