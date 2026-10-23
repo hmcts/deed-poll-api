@@ -189,14 +189,14 @@ modify `src/main/resources/application.yaml`, `README.md`, `build.gradle` as nee
 **Files:** preview renderer classes/tests under `domain/documents/preview/`;
 synthetic fixtures under `src/test/resources/document-previews/`.
 
-- [ ] Create real synthetic PDF, JPEG, PNG and two-/three-frame TIFF fixtures, with expected page counts,
+- [x] Create real synthetic PDF, JPEG, PNG and two-/three-frame TIFF fixtures, with expected page counts,
       sizes, orientation and distinct frame content. Keep fixture generation/provenance reproducible.
-- [ ] Test and implement valid PDF passthrough and one-page JPEG/PNG wrapping without changing originals.
-- [ ] Enumerate and render every TIFF frame in order; cover portrait/landscape/rotated frames and supported
+- [x] Test and implement valid PDF passthrough and one-page JPEG/PNG wrapping without changing originals.
+- [x] Enumerate and render every TIFF frame in order; cover portrait/landscape/rotated frames and supported
       compression modes. Verify actual output page count and distinguishable content on later pages.
-- [ ] Refuse damaged inputs, unsupported historical MIME, oversized dimensions/output and over-page limits
+- [x] Refuse damaged inputs, unsupported historical MIME, oversized dimensions/output and over-page limits
       with the contract's errors. Probe metadata before allocation; release each decoded frame promptly.
-- [ ] Verify temporary-file/parser/stream cleanup on success, parse failure, disconnect and cancellation;
+- [x] Verify temporary-file/parser/stream cleanup on success, parse failure, disconnect and cancellation;
       do not let a cancelled worker release its permit while still running. Run Validation Commands.
 
 ### Task 3: Implement the DOCX conversion client
@@ -322,6 +322,44 @@ and its file-download smoke are not evidence that document previews exist. Appen
 - **Validation:** focused preview tests 29/29; `./gradlew build` (no-checkstyle init) successful in 4m39s — test
   4611 run, 0 skipped, 0 failed; integration 23 run, 0 skipped, 0 failed; `checkstyle.sh` OK. The known
   intermittent `CcdCreationAttemptRepositoryTest` did not fail.
+
+### Task 2 (2026-10-23)
+
+- **Renderers:** `domain/documents/preview/` — `PreviewRenderer` (the facade: checkpoint, permit, then open and
+  spool the source under the 25 MiB ceiling, render, check pages/size, hand back a `RenderedPreview`; the permit is
+  released only in the worker's own `finally`), `PdfRenderer` (header `%PDF-`, PDFBox open, refuses encryption,
+  counts pages by walking the tree rather than trusting `/Count`, then serves the stored bytes unchanged),
+  `ImageRenderer` (JPEG/PNG one page, TIFF one page per frame in order; A4 portrait/landscape to the frame as seen,
+  fitted, centred, never cropped; the reader must recognise the bytes; dimensions checked before decoding; JPEG is
+  decoded to its raster only to prove the data is whole — a truncated JPEG warns rather than throws — then embedded
+  as stored, DCTDecode, not recompressed; PNG/TIFF frames embedded losslessly), `Orientation` (tag 274, all eight
+  values, drawn by PDF matrix with no rotated copy), `ExifOrientation`, `PreviewWorkspace` (an owner-only
+  `preview-*` directory per request holding the spool, the PDF and PDFBox's bounded on-disk scratch; deleted whole
+  on close/failure/cancellation) and `PreviewSource`. DOCX answers `PREVIEW_UNAVAILABLE` until Task 3.
+- **Beyond the plan:** JPEG EXIF orientation is applied too, because phone photographs taken on their side are
+  common. ImageIO's JPEG metadata throws when an EXIF APP1 comes before the JFIF APP0, so orientation is read by a
+  bounded walk of the raw segments and JPEG pixels are read with metadata ignored; a test covers both orders.
+- **Error mapping:** parser `IOException`/`RuntimeException` → `PREVIEW_INVALID_DOCUMENT` (class name logged at
+  INFO, never the message); a failing write into the bounded scratch or output → `PREVIEW_LIMIT_EXCEEDED`; a source
+  read failing mid-stream or a scratch-directory failure → `PREVIEW_UNAVAILABLE` (the store's message may hold a
+  path, so it is dropped); exceptions from opening the source (e.g. `NotFoundError`) propagate unchanged.
+- **Fixtures:** `src/test/resources/document-previews/` (a 3-page PDF, two JPEGs, a PNG, 2- and 3-frame TIFFs; LZW,
+  Deflate, PackBits, CCITT T.6, uncompressed, orientation 6), written by `DocumentPreviewFixtures` and regenerated
+  with `REGENERATE_DOCUMENT_PREVIEWS=true`; `DocumentPreviewFixturesTest` checks their structure on every build.
+  `PreviewRendererTest` also generates every JDK TIFF compression (None, LZW, Deflate, ZLib, PackBits, JPEG, CCITT
+  RLE/T.4/T.6), all eight orientations, damaged, mismatched, header-only 100,000² PNG, over-page/pixel/output/input
+  and expired-budget cases, and checks rendered page colours and marker corners with PDFBox's rasteriser. A
+  deliberate orientation-6 mutation failed 5 tests, so the orientation assertions do discriminate.
+- **Worst-case heap per conversion (decision 5):** a 25 M-pixel frame decodes to at most about 100 MB (4-byte ARGB;
+  RGB is 75 MB, bilevel about 3 MB), and `LosslessFactory` adds a working copy of comparable size, so about 200 MB.
+  A JPEG adds its stored bytes (≤ 25 MiB) and a raster (≤ 75 MB, freed before embedding). PDFBox scratch and the
+  spool are on disk. Three concurrent conversions: about 600 MB, inside a heap of about 1.3 GB (65 % of 2 GiB), so
+  the default of 3 stands. A PDF passthrough takes no permit and holds only PDFBox's parsed page tree, with
+  stream data in the on-disk scratch.
+- **Validation:** preview package 85 tests (1 skipped: the opt-in regenerate). `./gradlew build` (no-checkstyle
+  init) — test 4667 run, 1 skipped; integration 23 run, 0 failed. The known intermittent
+  `CcdCreationAttemptRepositoryTest` "ran out of tries on refusals…" failed once in the second full build and passed
+  re-run alone with `--rerun`; the first full build of this task passed. `checkstyle.sh` OK.
 
 ## Post-Completion
 
