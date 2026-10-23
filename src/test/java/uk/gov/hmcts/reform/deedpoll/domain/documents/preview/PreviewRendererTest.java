@@ -358,7 +358,7 @@ class PreviewRendererTest {
         }
 
         @Test
-        @DisplayName("DOCX answers unavailable until its converter exists, and opens nothing")
+        @DisplayName("DOCX answers unavailable while its converter is unconfigured, and opens nothing")
         void docx() {
             TrackedSource source = new TrackedSource(new byte[] {'P', 'K', 3, 4});
             assertFailure(renderer(), PreviewFormat.DOCX, source, PreviewFailure.UNAVAILABLE);

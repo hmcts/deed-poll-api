@@ -4,6 +4,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * One preview request's time, from the moment it was admitted, and whether its caller is still there.
@@ -13,12 +16,14 @@ import java.util.Objects;
  * left. Both Application Gateways cut a request off at 30 seconds, so a preview that ran on would end on the
  * gateway's error page rather than this service's answer.
  *
- * <p>Thread-safe for the one case it needs: the request thread may {@link #cancel} while a worker checks.
+ * <p>Thread-safe for the one case it needs: the request thread may {@link #cancel} while a worker checks, and a worker
+ * blocked in a remote call rather than at a checkpoint is woken by what it registered with {@link #onCancel}.
  */
 public final class PreviewBudget {
 
     private final Clock clock;
     private final Instant deadline;
+    private final Set<Runnable> listeners = ConcurrentHashMap.newKeySet();
     private volatile boolean cancelled;
 
     private PreviewBudget(Clock clock, Instant deadline) {
@@ -51,6 +56,26 @@ public final class PreviewBudget {
      */
     public void cancel() {
         cancelled = true;
+        listeners.forEach(Runnable::run);
+    }
+
+    /**
+     * Runs {@code action} once if this budget is cancelled while the returned registration is open -- at once, if it
+     * already has been. For work a checkpoint cannot reach, such as a converter call blocked on its socket. Closing
+     * the registration forgets the action, so a finished call is never cancelled late.
+     */
+    public Registration onCancel(Runnable action) {
+        AtomicBoolean ran = new AtomicBoolean();
+        Runnable once = () -> {
+            if (ran.compareAndSet(false, true)) {
+                action.run();
+            }
+        };
+        listeners.add(once);
+        if (cancelled) {
+            once.run();
+        }
+        return () -> listeners.remove(once);
     }
 
     public boolean isCancelled() {
@@ -82,5 +107,15 @@ public final class PreviewBudget {
         checkpoint();
         Duration left = remaining();
         return configured.compareTo(left) < 0 ? configured : left;
+    }
+
+    /**
+     * An {@link #onCancel} action, forgotten when closed.
+     */
+    @FunctionalInterface
+    public interface Registration extends AutoCloseable {
+
+        @Override
+        void close();
     }
 }

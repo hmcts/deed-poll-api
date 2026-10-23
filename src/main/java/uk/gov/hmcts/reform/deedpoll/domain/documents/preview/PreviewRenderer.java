@@ -20,7 +20,9 @@ import java.util.Objects;
  * stops at its next checkpoint and only then gives the permit back, because until it does it is still holding the
  * memory the permit stands for. A finished {@link RenderedPreview} holds no permit: it is a file being streamed.
  *
- * <p>DOCX has no renderer yet and answers {@link PreviewFailure#UNAVAILABLE}, as an unconfigured converter will.
+ * <p>A DOCX is converted by {@link DocxRenderer}. With its converter unconfigured it answers
+ * {@link PreviewFailure#UNAVAILABLE} at once, before a permit is taken or the source opened, so nothing is read for
+ * a conversion that cannot happen.
  */
 public class PreviewRenderer {
 
@@ -31,15 +33,18 @@ public class PreviewRenderer {
     private final SourceRenderer jpeg;
     private final SourceRenderer png;
     private final SourceRenderer tiff;
+    private final SourceRenderer docx;
 
     public PreviewRenderer(PreviewProperties properties, ConversionCapacity capacity, Path scratchRoot) {
         this.properties = Objects.requireNonNull(properties, "properties");
         this.capacity = Objects.requireNonNull(capacity, "capacity");
         this.scratchRoot = Objects.requireNonNull(scratchRoot, "scratchRoot");
-        this.pdf = new PdfRenderer(properties);
+        PdfRenderer pdfRenderer = new PdfRenderer(properties);
+        this.pdf = pdfRenderer;
         this.jpeg = new ImageRenderer(PreviewFormat.JPEG, properties);
         this.png = new ImageRenderer(PreviewFormat.PNG, properties);
         this.tiff = new ImageRenderer(PreviewFormat.TIFF, properties);
+        this.docx = new DocxRenderer(properties, pdfRenderer);
     }
 
     /**
@@ -78,7 +83,12 @@ public class PreviewRenderer {
             case JPEG -> jpeg;
             case PNG -> png;
             case TIFF -> tiff;
-            case DOCX -> throw new PreviewError(PreviewFailure.UNAVAILABLE);
+            case DOCX -> {
+                if (!properties.converter().configured()) {
+                    throw new PreviewError(PreviewFailure.UNAVAILABLE);
+                }
+                yield docx;
+            }
         };
     }
 

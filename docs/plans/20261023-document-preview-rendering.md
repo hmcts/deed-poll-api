@@ -204,17 +204,17 @@ synthetic fixtures under `src/test/resources/document-previews/`.
 **Files:** DOCX renderer/client and tests under `domain/documents/preview/`;
 WireMock mappings and synthetic DOCX/PDF fixtures in the existing test structure.
 
-- [ ] Pin the verified platform multipart protocol in a WireMock contract test. Use a generic source name
+- [x] Pin the verified platform multipart protocol in a WireMock contract test. Use a generic source name
       and fixed safe output name; source document bytes and the configured access key travel only in the
       approved request body. Use no third-party URL from document content.
-- [ ] Implement bounded byte-in/PDF-out conversion with redirects disabled and configured connect/read/total
+- [x] Implement bounded byte-in/PDF-out conversion with redirects disabled and configured connect/read/total
       deadlines. Accept only a complete valid PDF; no provider body or original name enters diagnostics.
-- [ ] Cover multi-page and table/image DOCX examples using genuine fixture bytes. Test the client protocol
+- [x] Cover multi-page and table/image DOCX examples using genuine fixture bytes. Test the client protocol
       and returned PDF pagination locally; record that mocked PDF output does not prove Word layout fidelity.
-- [ ] Cover blank credentials, rejected credentials, provider 4xx/5xx, non-PDF/empty/truncated responses,
+- [x] Cover blank credentials, rejected credentials, provider 4xx/5xx, non-PDF/empty/truncated responses,
       excess output, timeout, cancellation and malformed active/encrypted DOCX. No automatic retry on an
       ambiguous remote conversion and no fallback to a public or browser-based Word renderer.
-- [ ] Assert fixed safe errors and cleanup/capacity accounting. Keep originals unchanged and ensure no
+- [x] Assert fixed safe errors and cleanup/capacity accounting. Keep originals unchanged and ensure no
       external call occurs before source authorization. Run Validation Commands.
 
 ### Task 4: Coordinate scoped preview reads and audit
@@ -360,6 +360,47 @@ and its file-download smoke are not evidence that document previews exist. Appen
   init) — test 4667 run, 1 skipped; integration 23 run, 0 failed. The known intermittent
   `CcdCreationAttemptRepositoryTest` "ran out of tries on refusals…" failed once in the second full build and passed
   re-run alone with `--rerun`; the first full build of this task passed. `checkstyle.sh` OK.
+
+### Task 3 (2026-10-23)
+
+- **Client:** `domain/documents/preview/DocxRenderer`, reached through `PreviewRenderer` once the converter is
+  configured (unconfigured is still `PREVIEW_UNAVAILABLE` before a permit or a source read). It holds the spooled DOCX
+  to `UploadContentPolicy.verify` first, so a malformed, encrypted (OLE), macro-enabled or non-DOCX package is
+  `PREVIEW_INVALID_DOCUMENT` and nothing is sent. Then one OkHttp 4.12 POST to `{DOCMOSIS_URL}/rs/convert` (the
+  em-stitching-api protocol recorded under Task 1): `multipart/form-data` parts `accessKey`, `outputName=preview.pdf`,
+  `file` as `document.docx` under the DOCX type (em-stitching-api labels it `application/pdf`), `Accept:
+  application/pdf`. `retryOnConnectionFailure(false)`, redirects off, no proxy; connect, read/write and call
+  timeouts are each `PreviewBudget.deadlineFor`/`remaining`, never under 1 ms (OkHttp reads 0 as none). New
+  `PreviewBudget.onCancel` registers `Call.cancel`, so a cancelled caller aborts the call on its socket; the permit is
+  still released only in the worker's `finally`.
+- **Answer acceptance:** 2xx and `application/pdf` (type/subtype), declared length within the output ceiling, body
+  streamed into `PreviewWorkspace.boundedOutput`, `%%EOF` within the last 1 KiB after whitespace, then
+  `PdfRenderer`'s checks (header, PDFBox load, unencrypted, walked page count 1..limit), whose `INVALID_DOCUMENT` is
+  re-mapped to `PREVIEW_UNAVAILABLE` because the bytes are the converter's. **Mapping decided here:** Tornado `413`
+  and an over-ceiling or over-page answer are `PREVIEW_LIMIT_EXCEEDED`; the budget ending mid-call is
+  `PREVIEW_LIMIT_EXCEEDED` (as every other budget expiry); every other status (rejected credentials 401/403
+  included), a read timeout inside the budget, a reset/broken transfer, a redirect and any unusable body are
+  `PREVIEW_UNAVAILABLE`. A provider 4xx is not blamed on the document, because the DOCX already passed the upload's
+  checks and the body that might say why is not read. Logs carry the status or an exception's simple class name.
+- **Fixtures:** `three-pages.docx` (3 pages, hard page breaks) and `table-and-image.docx` (4×3 table, then the
+  `scan.png` picture after a page break), written by POI `XWPFDocument` in `DocumentPreviewFixtures`, structure checked
+  in `DocumentPreviewFixturesTest`, both accepted by `UploadContentPolicy` and their macro (`/word/vbaProject.bin`)
+  and POI standard-encrypted copies refused. The stub's converted PDFs are made by `DocumentPreviewFixtures.pdf(n)`.
+  **This proves the protocol, the bounds and that the preview's page count is the converted PDF's; it does not prove
+  Word layout or font fidelity, which needs the real converter in AAT (Post-Completion).**
+- **Tests:** `DocxRendererTest`, 30 against WireMock: the exact multipart contract (key only in the body, no query),
+  pagination for both fixtures, no retry, no redirect, blank key and unset endpoint (nothing opened or sent), a refused
+  source (its own exception, nothing sent), unsafe packages, busy, nine refusal statuses, 413, wrong/missing
+  content type, seven incomplete/unreadable/encrypted/empty bodies, broken chunked transfer, declared and streamed
+  excess output, over-page, read timeout, budget expiry (stops in < 3 s), unreachable converter, mid-call cancellation
+  (permit held until the call stopped, scratch empty), and diagnostics (no body, key, endpoint, filename or stack
+  trace). Each failure asserts the fixed sentence, no cause, the source closed, all permits back and scratch empty.
+  Mutations: dropping the `%%EOF` check failed 1 test; enabling redirects failed 1 test.
+- **Heap (decision 5):** a DOCX conversion holds the source (≤ 25 MiB) and POI's buffered package during the check
+  (bounded by `DocxContentPolicy` at 50 MiB expanded), then streams the answer to disk; below the image estimate.
+- **Validation:** preview package 115 tests (1 skipped: the opt-in regenerate). `./gradlew build` (no-checkstyle
+  init) — test 4701 run, 1 skipped, 0 failed; integration 23 run, 0 failed. `checkstyle.sh` OK. The known
+  intermittent `CcdCreationAttemptRepositoryTest` did not fail.
 
 ## Post-Completion
 

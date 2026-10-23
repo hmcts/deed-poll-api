@@ -1,6 +1,20 @@
 package uk.gov.hmcts.reform.deedpoll.domain.documents.preview;
 
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.poi.openxml4j.opc.OPCPackage;
+import org.apache.poi.openxml4j.opc.PackagePart;
+import org.apache.poi.openxml4j.opc.PackagingURIHelper;
+import org.apache.poi.poifs.crypt.EncryptionInfo;
+import org.apache.poi.poifs.crypt.EncryptionMode;
+import org.apache.poi.poifs.crypt.Encryptor;
+import org.apache.poi.poifs.filesystem.POIFSFileSystem;
+import org.apache.poi.util.Units;
+import org.apache.poi.xwpf.usermodel.BreakType;
+import org.apache.poi.xwpf.usermodel.Document;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFRun;
+import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
@@ -11,11 +25,14 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.security.GeneralSecurityException;
 import java.util.List;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
@@ -70,6 +87,15 @@ final class DocumentPreviewFixtures {
     static final Fixture SCAN = new Fixture("scan.png", List.of(new Frame(480, 640, RED, null, 1)));
     static final String PDF = "three-pages.pdf";
     static final int PDF_PAGES = 3;
+
+    /** A Word document of three pages, each ending in a hard page break but the last. */
+    static final String MULTI_PAGE_DOCX = "three-pages.docx";
+    static final int MULTI_PAGE_DOCX_PAGES = 3;
+    /** A Word document holding a table and an embedded PNG picture, with a page break between them. */
+    static final String TABLE_AND_IMAGE_DOCX = "table-and-image.docx";
+    static final int TABLE_AND_IMAGE_DOCX_PAGES = 2;
+    static final int TABLE_ROWS = 4;
+    static final int TABLE_COLUMNS = 3;
 
     private DocumentPreviewFixtures() {
     }
@@ -215,6 +241,93 @@ final class DocumentPreviewFixtures {
         }
     }
 
+    /**
+     * {@link #MULTI_PAGE_DOCX}: "Synthetic Word fixture, page N", with a page break after each page but the last.
+     */
+    static byte[] multiPageDocx() {
+        try (XWPFDocument document = new XWPFDocument()) {
+            for (int number = 1; number <= MULTI_PAGE_DOCX_PAGES; number++) {
+                XWPFRun run = document.createParagraph().createRun();
+                run.setText("Synthetic Word fixture, page " + number);
+                if (number < MULTI_PAGE_DOCX_PAGES) {
+                    run.addBreak(BreakType.PAGE);
+                }
+            }
+            return docx(document);
+        } catch (IOException unwritable) {
+            throw new UncheckedIOException(unwritable);
+        }
+    }
+
+    /**
+     * {@link #TABLE_AND_IMAGE_DOCX}: a table on the first page, the {@link #SCAN} picture on the second.
+     */
+    static byte[] tableAndImageDocx() {
+        try (XWPFDocument document = new XWPFDocument()) {
+            document.createParagraph().createRun().setText("Synthetic Word fixture with a table");
+            XWPFTable table = document.createTable(TABLE_ROWS, TABLE_COLUMNS);
+            for (int row = 0; row < TABLE_ROWS; row++) {
+                for (int column = 0; column < TABLE_COLUMNS; column++) {
+                    table.getRow(row).getCell(column).setText("r" + row + "c" + column);
+                }
+            }
+            XWPFParagraph pictured = document.createParagraph();
+            pictured.setPageBreak(true);
+            Frame frame = SCAN.frames().getFirst();
+            try (InputStream picture = new ByteArrayInputStream(encoded("png", frame))) {
+                pictured.createRun().addPicture(picture, Document.PICTURE_TYPE_PNG, "scan.png",
+                                                Units.toEMU(frame.width() / 2.0), Units.toEMU(frame.height() / 2.0));
+            }
+            return docx(document);
+        } catch (IOException | org.apache.poi.openxml4j.exceptions.InvalidFormatException unwritable) {
+            throw new IllegalStateException(unwritable);
+        }
+    }
+
+    /**
+     * {@code docx} with a VBA project part added, the macro-enabled feature an upload refuses.
+     */
+    static byte[] withMacros(byte[] docx) {
+        try (OPCPackage document = OPCPackage.open(new ByteArrayInputStream(docx))) {
+            PackagePart part = document.createPart(PackagingURIHelper.createPartName("/word/vbaProject.bin"),
+                                                   "application/vnd.ms-office.vbaProject");
+            try (OutputStream out = part.getOutputStream()) {
+                out.write(new byte[] {1, 2, 3, 4});
+            }
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            document.save(bytes);
+            return bytes.toByteArray();
+        } catch (IOException | org.apache.poi.openxml4j.exceptions.InvalidFormatException unwritable) {
+            throw new IllegalStateException(unwritable);
+        }
+    }
+
+    /**
+     * {@code docx} password-protected as Word does it: the package encrypted inside an OLE container.
+     */
+    static byte[] encrypted(byte[] docx) {
+        try (POIFSFileSystem container = new POIFSFileSystem()) {
+            Encryptor encryptor = new EncryptionInfo(EncryptionMode.standard).getEncryptor();
+            encryptor.confirmPassword("synthetic");
+            try (OPCPackage document = OPCPackage.open(new ByteArrayInputStream(docx));
+                 OutputStream out = encryptor.getDataStream(container)) {
+                document.save(out);
+            }
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            container.writeFilesystem(bytes);
+            return bytes.toByteArray();
+        } catch (IOException | GeneralSecurityException | org.apache.poi.openxml4j.exceptions.InvalidFormatException
+                     unwritable) {
+            throw new IllegalStateException(unwritable);
+        }
+    }
+
+    private static byte[] docx(XWPFDocument document) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        document.write(bytes);
+        return bytes.toByteArray();
+    }
+
     /** What each committed fixture holds, by name. */
     static byte[] generate(String name) {
         return switch (name) {
@@ -224,10 +337,13 @@ final class DocumentPreviewFixtures {
             case "scan.png" -> encoded("png", SCAN.frames().getFirst());
             case "two-frames.tiff" -> tiff(TWO_FRAMES);
             case "three-frames.tiff" -> tiff(THREE_FRAMES);
+            case MULTI_PAGE_DOCX -> multiPageDocx();
+            case TABLE_AND_IMAGE_DOCX -> tableAndImageDocx();
             default -> throw new IllegalArgumentException(name);
         };
     }
 
     static final List<String> NAMES = List.of(PDF, "photo.jpeg", "photo-exif-6.jpeg", "scan.png",
-                                              "two-frames.tiff", "three-frames.tiff");
+                                              "two-frames.tiff", "three-frames.tiff", MULTI_PAGE_DOCX,
+                                              TABLE_AND_IMAGE_DOCX);
 }

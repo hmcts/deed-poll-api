@@ -627,6 +627,15 @@ acceptance, original downloads or the staging cap.
 With either Docmosis setting empty the service starts as normal and only a DOCX preview answers
 `PREVIEW_UNAVAILABLE`, after its caller is authorised.
 
+A DOCX is first held to the upload's content checks, so a malformed, encrypted or macro-enabled package is
+`PREVIEW_INVALID_DOCUMENT` and is never sent. The conversion is one `multipart/form-data` POST to
+`{DOCMOSIS_URL}/rs/convert` (`accessKey`, `outputName=preview.pdf`, `file` named `document.docx`), with no retry
+and no redirect followed. Only a `2xx` `application/pdf` body inside the output ceiling, ending `%%EOF` and
+readable as an unencrypted PDF is served, and its pages are the preview's. A Tornado `413` is
+`PREVIEW_LIMIT_EXCEEDED`, the budget running out is `PREVIEW_LIMIT_EXCEEDED`, and every other status, timeout,
+broken transfer or unusable body is `PREVIEW_UNAVAILABLE`. Logs carry the status or an exception class only.
+Automated tests use WireMock: they prove the protocol and bounds, not Word layout or fonts on the real converter.
+
 ## Plugins
 
 The project contains the following plugins:
