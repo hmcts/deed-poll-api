@@ -187,12 +187,15 @@ public class OpenAPIDocumentPreviews {
             .filter(format -> !format.countsPages()).map(PreviewFormat::mimeType).toList());
         limits.put("maxFramePixels", properties.maxFramePixels());
         limits.put("maxConcurrentConversionsPerInstance", properties.maxConcurrentConversions());
+        limits.put("maxConcurrentPreviewsPerInstance", properties.maxConcurrentPreviews());
         limits.put("busyRetryAfterSeconds", properties.busyRetryAfter().toSeconds());
         limits.put("rangeRequests", "unsupported");
         limits.put("description", "Preview limits only: none changes upload acceptance or the original download. "
             + "The budget covers conversion and rendering, but not a stalled read of the original, which keeps "
             + "the document store's own timeouts as the download does. Conversions beyond the per-instance "
-            + "limit are refused with PREVIEW_BUSY, not queued; a PDF takes no conversion slot. Reaching any other "
+            + "limit are refused with PREVIEW_BUSY, not queued; a PDF takes no conversion slot. Previews of any "
+            + "format beyond maxConcurrentPreviewsPerInstance, counted from the original's read until the response "
+            + "is written, are PREVIEW_BUSY too. Reaching any other "
             + "limit is PREVIEW_LIMIT_EXCEEDED, never a truncated PDF. maxPages is enforced by the service only for "
             + "the previews it builds (maxPagesEnforcedFor); a PDF or converted DOCX is served unparsed and "
             + "uncounted, so the viewer must count its pages and refuse one over maxPages before rendering.");

@@ -10,6 +10,7 @@ either switchable or not:
 | Emails of one template to one case in 24 hours (default 3) | `CaseEmailService.send` | 409, "This email has already been sent 3 times for this case today" | **always enforced** |
 | One statement of the case list read (default `5s`) | `CaseListStatementTimeout` | the existing failed-read 500 | **always enforced** |
 | Non-PDF document previews converting at once on one pod (default 3) | `PreviewRenderer`, `ConversionCapacity` | 429 `PREVIEW_BUSY`, `Retry-After` `DOCUMENT_PREVIEW_BUSY_RETRY_AFTER` (default 5 s) | **always enforced**, not part of `RATE_LIMIT_MODE` |
+| Document previews of any format holding scratch at once on one pod (default 8), from the store's answer until the response is written | `PreviewRenderer`, `ConversionCapacity` | the same 429 `PREVIEW_BUSY` | **always enforced**, not part of `RATE_LIMIT_MODE` |
 
 The six limited operations and their defaults are in `RateLimitBucket`, and the published OpenAPI document carries
 429 on those six and on the two document previews. A preview's 429 is the conversion permit's `PREVIEW_BUSY`,

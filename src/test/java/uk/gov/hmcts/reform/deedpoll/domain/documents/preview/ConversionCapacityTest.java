@@ -102,9 +102,33 @@ class ConversionCapacityTest {
     }
 
     @Test
-    @DisplayName("a pod with no permits refuses to start")
+    @DisplayName("workspace slots bound every format, a PDF's included, apart from the conversion permits")
+    void workspacesBoundEveryFormat() {
+        ConversionCapacity two = new ConversionCapacity(3, 2, Duration.ofSeconds(5));
+        final ConversionCapacity.Permit first = two.acquireWorkspace();
+        final ConversionCapacity.Permit second = two.acquireWorkspace();
+        assertThat(two.availableWorkspaces()).isZero();
+        assertThat(two.available()).isEqualTo(3);
+
+        assertThatThrownBy(two::acquireWorkspace).isInstanceOfSatisfying(PreviewError.class, error -> {
+            assertThat(error.failure()).isEqualTo(PreviewFailure.BUSY);
+            assertThat(error.retryAfter()).contains(Duration.ofSeconds(5));
+        });
+
+        first.close();
+        first.close();
+        assertThat(two.availableWorkspaces()).isEqualTo(1);
+        second.close();
+        assertThat(two.availableWorkspaces()).isEqualTo(2);
+        assertThat(capacity.availableWorkspaces()).isEqualTo(PreviewProperties.MAX_CONCURRENT_PREVIEWS);
+    }
+
+    @Test
+    @DisplayName("a pod with no permits or no workspaces refuses to start")
     void atLeastOne() {
         assertThatThrownBy(() -> new ConversionCapacity(0, Duration.ofSeconds(5)))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ConversionCapacity(3, 0, Duration.ofSeconds(5)))
             .isInstanceOf(IllegalArgumentException.class);
     }
 }

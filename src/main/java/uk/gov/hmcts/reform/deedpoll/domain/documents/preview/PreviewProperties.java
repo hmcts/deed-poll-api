@@ -28,6 +28,8 @@ import java.util.Set;
  *     PDF or a converted DOCX is served unparsed, so the viewer holds it to this limit, not the service
  * @param maxFramePixels the most decoded pixels in one image or TIFF frame, checked before it is decoded
  * @param maxConcurrentConversions non-PDF previews at once on one pod (decision 5); there is no queue
+ * @param maxConcurrentPreviews previews of any format holding a scratch workspace at once on one pod, from the
+ *     store's answer until the response is written; there is no queue
  * @param busyRetryAfter the {@code Retry-After} on {@link PreviewFailure#BUSY}
  * @param converter the DOCX converter; unconfigured is a DOCX preview answering {@link PreviewFailure#UNAVAILABLE}
  */
@@ -37,6 +39,7 @@ public record PreviewProperties(Duration requestBudget,
                                 Integer maxPages,
                                 Long maxFramePixels,
                                 Integer maxConcurrentConversions,
+                                Integer maxConcurrentPreviews,
                                 Duration busyRetryAfter,
                                 Converter converter) {
 
@@ -45,6 +48,7 @@ public record PreviewProperties(Duration requestBudget,
     public static final int MAX_PAGES = 100;
     public static final long MAX_FRAME_PIXELS = 25_000_000L;
     public static final int MAX_CONCURRENT_CONVERSIONS = 3;
+    public static final int MAX_CONCURRENT_PREVIEWS = 8;
     public static final Duration BUSY_RETRY_AFTER = Duration.ofSeconds(5);
 
     /** Both Application Gateways end a request here, so a budget must finish before it. */
@@ -62,13 +66,15 @@ public record PreviewProperties(Duration requestBudget,
         maxFramePixels = maxFramePixels == null ? MAX_FRAME_PIXELS : maxFramePixels;
         maxConcurrentConversions = maxConcurrentConversions == null
             ? MAX_CONCURRENT_CONVERSIONS : maxConcurrentConversions;
+        maxConcurrentPreviews = maxConcurrentPreviews == null ? MAX_CONCURRENT_PREVIEWS : maxConcurrentPreviews;
         busyRetryAfter = busyRetryAfter == null ? BUSY_RETRY_AFTER : busyRetryAfter;
         converter = converter == null ? new Converter(null, null, null, null) : converter;
 
         if (!positive(requestBudget) || requestBudget.compareTo(GATEWAY_TIMEOUT) >= 0) {
             throw new IllegalArgumentException("the preview request budget must be positive and under 30 seconds");
         }
-        if (maxOutputBytes < 1 || maxPages < 1 || maxFramePixels < 1 || maxConcurrentConversions < 1) {
+        if (maxOutputBytes < 1 || maxPages < 1 || maxFramePixels < 1 || maxConcurrentConversions < 1
+            || maxConcurrentPreviews < 1) {
             throw new IllegalArgumentException("every preview limit must be at least 1");
         }
         if (busyRetryAfter.compareTo(Duration.ofSeconds(1)) < 0 || busyRetryAfter.compareTo(MAX_RETRY_AFTER) > 0) {

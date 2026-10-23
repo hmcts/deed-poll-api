@@ -25,7 +25,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>Created owner-only where the file system has POSIX permissions, named by nothing from the document, and
  * deleted whole by {@link #close} -- after a success once the response is written, and at once after a failure.
  * Every file PDFBox spills to lives here too, so nothing a preview wrote outlives it, and a preview leaves no
- * derivative behind for anybody else to find.
+ * derivative behind for anybody else to find. It holds one of the pod's workspace slots
+ * ({@link ConversionCapacity#acquireWorkspace}) and gives it back only once the directory has been deleted.
  */
 final class PreviewWorkspace implements AutoCloseable {
 
@@ -34,21 +35,24 @@ final class PreviewWorkspace implements AutoCloseable {
     private static final FileAttribute<?>[] PRIVATE = privateDirectory();
 
     private final Path directory;
+    private final ConversionCapacity.Permit slot;
     private final AtomicInteger names = new AtomicInteger();
 
-    private PreviewWorkspace(Path directory) {
+    private PreviewWorkspace(Path directory, ConversionCapacity.Permit slot) {
         this.directory = directory;
+        this.slot = slot;
     }
 
     /**
-     * A fresh private directory under {@code root}.
+     * A fresh private directory under {@code root}, holding {@code slot} until it is closed.
      *
-     * @throws PreviewError {@link PreviewFailure#UNAVAILABLE} if it cannot be created
+     * @throws PreviewError {@link PreviewFailure#UNAVAILABLE} if it cannot be created, with the slot released
      */
-    static PreviewWorkspace create(Path root) {
+    static PreviewWorkspace create(Path root, ConversionCapacity.Permit slot) {
         try {
-            return new PreviewWorkspace(Files.createTempDirectory(root, "preview-", PRIVATE));
-        } catch (IOException noScratch) {
+            return new PreviewWorkspace(Files.createTempDirectory(root, "preview-", PRIVATE), slot);
+        } catch (IOException | RuntimeException noScratch) {
+            slot.close();
             throw new PreviewError(PreviewFailure.UNAVAILABLE);
         }
     }
@@ -131,18 +135,26 @@ final class PreviewWorkspace implements AutoCloseable {
     }
 
     /**
-     * Deletes the directory and everything in it; safe to call more than once.
+     * Deletes the directory and everything in it, then releases the slot; safe to call more than once.
      *
      * <p>Never throws. It runs in a {@code finally}, after a refusal or once the response is already committed, and
      * a failure here must neither replace the refusal the caller is owed nor fail a response that was sent. What
-     * is left behind is logged, in fixed prose, for an operator to remove.
+     * is left behind is logged, in fixed prose, for an operator to remove, and keeps its slot: the slot stands for
+     * scratch on disk, so releasing it would let undeleted directories accumulate past the pod's bound. A later
+     * close that does delete the directory releases it then.
      */
     @Override
     public void close() {
-        if (!Files.exists(directory)) {
-            return;
+        if (delete()) {
+            slot.close();
         }
+    }
+
+    private boolean delete() {
         try {
+            if (!Files.exists(directory)) {
+                return true;
+            }
             Files.walkFileTree(directory, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
@@ -156,9 +168,12 @@ final class PreviewWorkspace implements AutoCloseable {
                     return FileVisitResult.CONTINUE;
                 }
             });
-        } catch (IOException undeleted) {
+            return true;
+        } catch (IOException | RuntimeException undeleted) {
             // The class name only: the message carries the path.
-            LOG.warn("A preview's scratch directory could not be deleted ({})", undeleted.getClass().getSimpleName());
+            LOG.warn("A preview's scratch directory could not be deleted and keeps its workspace slot ({})",
+                undeleted.getClass().getSimpleName());
+            return false;
         }
     }
 

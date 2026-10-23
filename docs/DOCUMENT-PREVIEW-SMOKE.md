@@ -24,7 +24,7 @@ names out of the record.
 `x-document-preview-limits`, as published from the running defaults: `requestBudgetSeconds` 25, `maxInputBytes`
 26214400, `maxOutputBytes` 52428800, `maxPages` 100, `maxPagesEnforcedFor` `image/jpeg`, `image/png`, `image/tiff`,
 `maxPagesEnforcedByViewerFor` `application/pdf` and the DOCX type, `maxFramePixels` 25000000,
-`maxConcurrentConversionsPerInstance` 3, `busyRetryAfterSeconds` 5, `rangeRequests` `unsupported`. **The API counts
+`maxConcurrentConversionsPerInstance` 3, `maxConcurrentPreviewsPerInstance` 8, `busyRetryAfterSeconds` 5, `rangeRequests` `unsupported`. **The API counts
 pages only for the previews it builds.** A PDF original or a converted DOCX is served unparsed and uncounted (only
 `%PDF-` and a trailing `%%EOF` are checked), so admin's viewer must read `numPages` through PDF.js and refuse one over
 `maxPages` before rendering. An environment

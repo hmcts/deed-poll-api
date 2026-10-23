@@ -17,7 +17,8 @@ public class PreviewConfiguration {
 
     @Bean
     public ConversionCapacity conversionCapacity(PreviewProperties properties) {
-        return new ConversionCapacity(properties.maxConcurrentConversions(), properties.busyRetryAfter());
+        return new ConversionCapacity(properties.maxConcurrentConversions(), properties.maxConcurrentPreviews(),
+                                      properties.busyRetryAfter());
     }
 
     @Bean

@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class PreviewPropertiesTest {
 
     private static PreviewProperties defaults() {
-        return new PreviewProperties(null, null, null, null, null, null, null);
+        return new PreviewProperties(null, null, null, null, null, null, null, null);
     }
 
     private static Consumer<PreviewError> failure(PreviewFailure expected) {
@@ -32,6 +32,7 @@ class PreviewPropertiesTest {
         assertThat(properties.maxPages()).isEqualTo(100);
         assertThat(properties.maxFramePixels()).isEqualTo(25_000_000L);
         assertThat(properties.maxConcurrentConversions()).isEqualTo(3);
+        assertThat(properties.maxConcurrentPreviews()).isEqualTo(8);
         assertThat(properties.busyRetryAfter()).isEqualTo(Duration.ofSeconds(5));
         assertThat(properties.maxInputBytes()).isEqualTo(UploadPolicy.MAX_UPLOAD_BYTES).isEqualTo(25L * 1024 * 1024);
         assertThat(properties.converter().configured()).isFalse();
@@ -42,21 +43,24 @@ class PreviewPropertiesTest {
     @Test
     @DisplayName("a budget that would outlast the gateways, or a limit switched off, refuses to start")
     void invalidLimitsRefuseToStart() {
-        assertThatThrownBy(() -> new PreviewProperties(Duration.ofSeconds(30), null, null, null, null, null, null))
+        Duration overGateways = Duration.ofSeconds(30);
+        assertThatThrownBy(() -> new PreviewProperties(overGateways, null, null, null, null, null, null, null))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PreviewProperties(Duration.ZERO, null, null, null, null, null, null))
+        assertThatThrownBy(() -> new PreviewProperties(Duration.ZERO, null, null, null, null, null, null, null))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PreviewProperties(null, 0L, null, null, null, null, null))
+        assertThatThrownBy(() -> new PreviewProperties(null, 0L, null, null, null, null, null, null))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PreviewProperties(null, null, 0, null, null, null, null))
+        assertThatThrownBy(() -> new PreviewProperties(null, null, 0, null, null, null, null, null))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PreviewProperties(null, null, null, -1L, null, null, null))
+        assertThatThrownBy(() -> new PreviewProperties(null, null, null, -1L, null, null, null, null))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PreviewProperties(null, null, null, null, 0, null, null))
+        assertThatThrownBy(() -> new PreviewProperties(null, null, null, null, 0, null, null, null))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PreviewProperties(null, null, null, null, null, Duration.ZERO, null))
+        assertThatThrownBy(() -> new PreviewProperties(null, null, null, null, null, 0, null, null))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PreviewProperties(null, null, null, null, null, Duration.ofMinutes(2), null))
+        assertThatThrownBy(() -> new PreviewProperties(null, null, null, null, null, null, Duration.ZERO, null))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PreviewProperties(null, null, null, null, null, null, Duration.ofMinutes(2), null))
             .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -65,7 +69,7 @@ class PreviewPropertiesTest {
     void converterDeadlinesFitTheBudget() {
         PreviewProperties.Converter slow =
             new PreviewProperties.Converter(null, null, Duration.ofSeconds(5), Duration.ofSeconds(21));
-        assertThatThrownBy(() -> new PreviewProperties(null, null, null, null, null, null, slow))
+        assertThatThrownBy(() -> new PreviewProperties(null, null, null, null, null, null, null, slow))
             .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PreviewProperties.Converter(null, null, Duration.ZERO, null))
             .isInstanceOf(IllegalArgumentException.class);
@@ -144,7 +148,7 @@ class PreviewPropertiesTest {
         @Test
         @DisplayName("the access key is never printed")
         void keyIsRedacted() {
-            PreviewProperties properties = new PreviewProperties(null, null, null, null, null, null,
+            PreviewProperties properties = new PreviewProperties(null, null, null, null, null, null, null,
                 new PreviewProperties.Converter("https://docmosis.aat.platform.hmcts.net", "s3cret-key", null, null));
             assertThat(properties.toString()).doesNotContain("s3cret-key").contains("redacted");
             assertThat(properties.converter().toString()).doesNotContain("s3cret-key");
@@ -174,6 +178,7 @@ class PreviewPropertiesTest {
             runner.withPropertyValues(
                 "deedpoll.documents.preview.request-budget=20s",
                 "deedpoll.documents.preview.max-concurrent-conversions=2",
+                "deedpoll.documents.preview.max-concurrent-previews=5",
                 "deedpoll.documents.preview.converter.url=https://docmosis.aat.platform.hmcts.net",
                 "deedpoll.documents.preview.converter.access-key=s3cret-key",
                 "deedpoll.documents.preview.converter.read-timeout=15s").run(context -> {
@@ -182,6 +187,7 @@ class PreviewPropertiesTest {
                     assertThat(properties.converter().configured()).isTrue();
                     assertThat(properties.converter().accessKey()).isEqualTo("s3cret-key");
                     assertThat(context.getBean(ConversionCapacity.class).available()).isEqualTo(2);
+                    assertThat(context.getBean(ConversionCapacity.class).availableWorkspaces()).isEqualTo(5);
                 });
         }
 

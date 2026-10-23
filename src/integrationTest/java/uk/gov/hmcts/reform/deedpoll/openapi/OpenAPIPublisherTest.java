@@ -403,6 +403,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             assertThat(limits.get("maxFramePixels").asLong()).isEqualTo(PreviewProperties.MAX_FRAME_PIXELS);
             assertThat(limits.get("maxConcurrentConversionsPerInstance").asInt())
                 .isEqualTo(PreviewProperties.MAX_CONCURRENT_CONVERSIONS);
+            assertThat(limits.get("maxConcurrentPreviewsPerInstance").asInt())
+                .isEqualTo(PreviewProperties.MAX_CONCURRENT_PREVIEWS);
             assertThat(limits.get("busyRetryAfterSeconds").asLong())
                 .isEqualTo(PreviewProperties.BUSY_RETRY_AFTER.toSeconds());
             assertThat(limits.get("rangeRequests").asText()).isEqualTo("unsupported");

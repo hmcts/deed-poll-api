@@ -248,6 +248,16 @@ conversion and rendering, not a stalled read of the original (description text o
   503; system correspondence reads unaffected).
 - Commits: Task 1 `d4b62d9`, Task 2 `a7d8ed8`, Task 3 `ceeeb2c`, Task 4 `932d499`; review fixes `a72f13b` (javadoc
   corrections, the `nothingParsesAPdf` ArchUnit rule) and the next review's. Changed files over the baseline: `git diff --stat b2d2c9c..HEAD`.
+- **External review, 2026-10-23:** spooling first left the pod's preview scratch unbounded (any format, PDFs
+  included, and requests later refused `BUSY` each spooled up to 25 MiB). `ConversionCapacity.acquireWorkspace` now
+  takes one of `DOCUMENT_PREVIEW_MAX_CONCURRENT_PREVIEWS` (default 8) slots **after** `source.open()` and before the
+  spool, refused as `PREVIEW_BUSY`, and `PreviewWorkspace.close` releases it once the scratch directory is deleted,
+  after the response is written. A refused source therefore keeps its own status, and the order (audit, store check,
+  slot, spool, converter check, permit) is otherwise unchanged. Published as `maxConcurrentPreviewsPerInstance`.
+  Not bounded by it: the heap a buffered CDAM response holds inside `open()`, which the original download shares.
+  A directory that cannot be deleted keeps its slot (logged, fixed prose), so leftover scratch counts against the
+  bound rather than escaping it; repeated deletion failures degrade the pod to `PREVIEW_BUSY` until an operator
+  clears the directories and restarts it, which is preferred to unbounded disk.
 
 ## Post-Completion
 

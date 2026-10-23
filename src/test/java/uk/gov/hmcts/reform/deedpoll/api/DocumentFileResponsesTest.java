@@ -36,7 +36,8 @@ class DocumentFileResponsesTest {
     @DisplayName("a caller who goes away half way through the preview's response leaves no scratch file behind")
     void disconnectMidResponse() throws IOException {
         byte[] pdf = pdf();
-        RenderedPreview preview = new PreviewRenderer(new PreviewProperties(null, null, null, null, null, null, null),
+        PreviewProperties defaults = new PreviewProperties(null, null, null, null, null, null, null, null);
+        RenderedPreview preview = new PreviewRenderer(defaults,
                                                       new ConversionCapacity(3, Duration.ofSeconds(5)), scratch)
             .render(PreviewFormat.PDF, () -> new ByteArrayInputStream(pdf),
                     PreviewBudget.start(Clock.systemUTC(), PreviewProperties.REQUEST_BUDGET));

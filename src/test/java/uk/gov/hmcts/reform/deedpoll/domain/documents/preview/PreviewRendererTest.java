@@ -561,6 +561,36 @@ class PreviewRendererTest {
             assertThat(capacity.available()).isEqualTo(1);
         }
 
+        @Test
+        @DisplayName("with every workspace held, any format, a PDF included, is busy once the source is opened, "
+            + "spools nothing, and a refused source keeps its own exception")
+        void everyWorkspaceHeld() throws IOException {
+            capacity = new ConversionCapacity(3, 1, Duration.ofSeconds(5));
+            try (RenderedPreview held = render(PreviewFormat.PDF, DocumentPreviewFixtures.pdf())) {
+                assertThat(capacity.availableWorkspaces()).isZero();
+                TrackedSource source = new TrackedSource(DocumentPreviewFixtures.pdf());
+                Throwable thrown = catchThrowable(() -> renderer().render(PreviewFormat.PDF, source, budget()));
+                assertThat(thrown).isInstanceOfSatisfying(PreviewError.class, error -> {
+                    assertThat(error.failure()).isEqualTo(PreviewFailure.BUSY);
+                    assertThat(error.retryAfter()).contains(Duration.ofSeconds(5));
+                });
+                assertThat(source.opened).isTrue();
+                assertThat(source.closed).isTrue();
+                assertThat(Files.list(scratch).count()).isEqualTo(1);
+
+                NotFoundError missing = new NotFoundError("Document not found");
+                assertThat(catchThrowable(() -> renderer().render(PreviewFormat.TIFF, () -> {
+                    throw missing;
+                }, budget()))).isSameAs(missing);
+                assertThat(capacity.available()).isEqualTo(3);
+            }
+            // The slot comes back only once the response is closed and its file deleted.
+            assertThat(capacity.availableWorkspaces()).isEqualTo(1);
+            assertScratchEmpty();
+            render(PreviewFormat.PDF, DocumentPreviewFixtures.pdf()).close();
+            assertThat(capacity.availableWorkspaces()).isEqualTo(1);
+        }
+
         @ParameterizedTest(name = "{0}")
         @ValueSource(strings = {"TIFF", "DOCX"})
         @DisplayName("a refused source keeps its own exception with every permit held or the converter unconfigured")
@@ -641,6 +671,7 @@ class PreviewRendererTest {
             assertFailure(renderer(), format, damaged, PreviewFailure.INVALID_DOCUMENT);
             assertThat(damaged.closed).isTrue();
             assertThat(capacity.available()).isEqualTo(3);
+            assertThat(capacity.availableWorkspaces()).isEqualTo(PreviewProperties.MAX_CONCURRENT_PREVIEWS);
         }
 
         @Test
@@ -755,7 +786,7 @@ class PreviewRendererTest {
     }
 
     private static PreviewProperties limits(int pages, long pixels, long output) {
-        return new PreviewProperties(null, output, pages, pixels, null, null, null);
+        return new PreviewProperties(null, output, pages, pixels, null, null, null, null);
     }
 
     /**
@@ -802,6 +833,7 @@ class PreviewRendererTest {
                                PreviewFailure expected) {
         assertThat(failure(renderer, format, source)).isEqualTo(expected);
         assertThat(capacity.available()).isEqualTo(3);
+        assertThat(capacity.availableWorkspaces()).isEqualTo(PreviewProperties.MAX_CONCURRENT_PREVIEWS);
         assertScratchEmpty();
     }
 

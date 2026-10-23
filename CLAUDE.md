@@ -231,8 +231,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   chart) switches **only** the V37 budgets. **Three limits enforce from day one, whatever the mode:** the per-pod
   in-flight upload `Semaphore` (429, `Retry-After: 5`, released in `finally`), the per-case, per-template daily
   email cap in `CaseEmailService`, and the case list's transaction-local statement timeout. (The preview conversion
-  permit is a fourth always-enforced 429, `PREVIEW_BUSY`, outside `RateLimitBucket` and published by
-  `OpenAPIDocumentPreviews`; previews have no V37 budget.) The email cap answers
+  permit and the preview workspace slot are a fourth always-enforced 429, `PREVIEW_BUSY`, outside `RateLimitBucket`
+  and published by `OpenAPIDocumentPreviews`; previews have no V37 budget.) The email cap answers
   409 rather than 429, and **the replay check comes before the cap**. At the cap, `replayOrRefuse` asks for this
   key's row and the exclusion-group occupant first and answers as `resolveRefusedInsert` would, so a retried
   `Idempotency-Key` is still 200 with `enqueued: false`. Reordering that turns a caseworker's retry into a refusal.
@@ -384,8 +384,10 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   claim/outcome steps. Do not wrap a document read or the drain in a new outer transaction.
 - **A preview is a read, never a derivative, and its order is fixed.** `DocumentPreviewService` refuses an active
   transaction, runs the caseworker or judicial scope check, then the allowlist, then opens the source, recording
-  `DOCUMENT_PREVIEWED` (fail-closed) before `store.open` under the caller's own token, and spools it whole; **only
-  then** does `PreviewRenderer` check the DOCX converter is configured and take the conversion permit. So a refused
+  `DOCUMENT_PREVIEWED` (fail-closed) before `store.open` under the caller's own token, then takes a workspace slot
+  (`DOCUMENT_PREVIEW_MAX_CONCURRENT_PREVIEWS`, any format, held until the response's scratch is deleted, so the pod's
+  scratch is bounded) and spools it whole; **only then** does `PreviewRenderer` check the DOCX converter is
+  configured and take the conversion permit. So a refused
   source keeps its own 404/403/502 (never `PREVIEW_BUSY`/`PREVIEW_UNAVAILABLE`, and one audit row, as a refused
   download leaves), and a slow store read holds no permit; moving either check ahead of the read undoes both. Never
   the system reader, and never as a fallback for a refused read. The 25 s budget does not bound a stalled store read,

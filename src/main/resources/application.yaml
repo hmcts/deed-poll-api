@@ -409,6 +409,9 @@ deedpoll:
       max-frame-pixels: ${DOCUMENT_PREVIEW_MAX_FRAME_PIXELS:25000000}
       # Non-PDF previews at once on one pod; over it is a 429 with Retry-After, never a queue.
       max-concurrent-conversions: ${DOCUMENT_PREVIEW_MAX_CONCURRENT_CONVERSIONS:3}
+      # Previews of any format, a PDF's included, holding scratch on one pod, from the store's answer until the
+      # response is written; this bounds the pod's preview scratch. Over it is the same 429, never a queue.
+      max-concurrent-previews: ${DOCUMENT_PREVIEW_MAX_CONCURRENT_PREVIEWS:8}
       busy-retry-after: ${DOCUMENT_PREVIEW_BUSY_RETRY_AFTER:5s}
       # Docmosis Tornado's /rs/convert, for DOCX only, as em-stitching-api and FPL call it. Both empty by default:
       # the service starts and a DOCX preview answers a fixed 503 until the platform provisions the endpoint

@@ -330,7 +330,7 @@ class DocxRendererTest {
         void excessOutput() {
             byte[] answer = DocumentPreviewFixtures.pdf(3);
             PreviewRenderer small = renderer(new PreviewProperties(null, (long) answer.length - 1, null, null, null,
-                                                                   null, converterAt(converter.baseUrl())));
+                                                                   null, null, converterAt(converter.baseUrl())));
             converter.stubFor(post(urlPathEqualTo(CONVERT)).willReturn(pdf(answer)));
             assertFailure(small, PreviewFailure.LIMIT_EXCEEDED);
             converter.resetAll();
@@ -343,7 +343,7 @@ class DocxRendererTest {
         @DisplayName("a converted PDF over the page limit is served: the viewer counts its pages, not this service")
         void pagesAreTheViewers() {
             converter.stubFor(post(urlPathEqualTo(CONVERT)).willReturn(pdf(DocumentPreviewFixtures.pdf(3))));
-            PreviewRenderer two = renderer(new PreviewProperties(null, null, 2, null, null, null,
+            PreviewRenderer two = renderer(new PreviewProperties(null, null, 2, null, null, null, null,
                                                                  converterAt(converter.baseUrl())));
             try (RenderedPreview preview = unparsed(() -> two.render(PreviewFormat.DOCX, source(), budget()))) {
                 assertThat(preview.pages()).isEmpty();
@@ -472,7 +472,7 @@ class DocxRendererTest {
 
     private static PreviewProperties properties(String url, String key, Duration connect, Duration read,
                                                 Duration budget) {
-        return new PreviewProperties(budget, null, null, null, null, null,
+        return new PreviewProperties(budget, null, null, null, null, null, null,
                                      new PreviewProperties.Converter(url, key, connect, read));
     }
 

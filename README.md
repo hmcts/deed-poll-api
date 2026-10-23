@@ -643,6 +643,7 @@ acceptance, original downloads or the staging cap.
 | `DOCUMENT_PREVIEW_MAX_PAGES` | `100` | Most pages in one preview. Enforced here only for the previews this service builds (JPEG, PNG and TIFF frames, published as `maxPagesEnforcedFor`); a PDF or converted DOCX is served uncounted, and the admin viewer enforces it through PDF.js's `numPages` before rendering (`maxPagesEnforcedByViewerFor`) |
 | `DOCUMENT_PREVIEW_MAX_FRAME_PIXELS` | `25000000` | Most decoded pixels in one image or TIFF frame, checked before decoding; a PNG or TIFF frame's decoded bytes are also held to four a pixel of this (so a 16-bit RGBA frame may have half as many) |
 | `DOCUMENT_PREVIEW_MAX_CONCURRENT_CONVERSIONS` | `3` | Non-PDF previews at once per pod; there is no queue |
+| `DOCUMENT_PREVIEW_MAX_CONCURRENT_PREVIEWS` | `8` | Previews of any format, PDFs included, holding scratch at once per pod, from the store's answer until the response is written; bounds the pod's preview scratch (each holds at most the 25 MiB input and the output ceiling). Over it is `PREVIEW_BUSY`; there is no queue |
 | `DOCUMENT_PREVIEW_BUSY_RETRY_AFTER` | `5s` | `Retry-After` on `PREVIEW_BUSY`, between 1 and 60 s |
 | `DOCMOSIS_URL` | empty | Converter base, e.g. `https://docmosis.<env>.platform.hmcts.net`. Empty is unconfigured; a set value that is not an `https` base refuses startup |
 | `DOCMOSIS_ACCESS_KEY` | empty | Tornado access key, sent only in the request body; never logged |
