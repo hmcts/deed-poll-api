@@ -223,15 +223,15 @@ WireMock mappings and synthetic DOCX/PDF fixtures in the existing test structure
 `domain/referrals/JudicialReferralService.java` only where a shared scoped-read seam is needed;
 update `domain/audit/ReadAudit` tests and relevant service tests.
 
-- [ ] Test both caller contexts: ordinary authorized staff and a judge allowed to see an Open referral or
+- [x] Test both caller contexts: ordinary authorized staff and a judge allowed to see an Open referral or
       their own Claimed/Decided referral. Preserve refusal after closure/withdrawal and for another judge.
-- [ ] Open the source with existing ownership/store/readiness checks and the actual reader's authority.
+- [x] Open the source with existing ownership/store/readiness checks and the actual reader's authority.
       Record one existing document-read audit before bytes are opened; failed audit opens/converts nothing.
-- [ ] Run store reads/conversion outside a database transaction. Share the scoped document read without
+- [x] Run store reads/conversion outside a database transaction. Share the scoped document read without
       duplicating role rules or entering the internal correspondence/system-reader path.
-- [ ] Prove wrong-case/unknown documents, null owners and missing sources cause no converter request or
+- [x] Prove wrong-case/unknown documents, null owners and missing sources cause no converter request or
       new disclosure. Source authorization errors keep their original status and meaning.
-- [ ] Test source/preview cleanup, interrupted transfers and concurrent capacity; verify no derivative
+- [x] Test source/preview cleanup, interrupted transfers and concurrent capacity; verify no derivative
       attachment, notification, metadata mutation or persistent cache is created. Run Validation Commands.
 
 ### Task 5: Publish protected HTTP endpoints and OpenAPI
@@ -401,6 +401,44 @@ and its file-download smoke are not evidence that document previews exist. Appen
 - **Validation:** preview package 115 tests (1 skipped: the opt-in regenerate). `./gradlew build` (no-checkstyle
   init) — test 4701 run, 1 skipped, 0 failed; integration 23 run, 0 failed. `checkstyle.sh` OK. The known
   intermittent `CcdCreationAttemptRepositoryTest` did not fail.
+
+### Task 4 (2026-10-23)
+
+- **Seam:** `domain/documents/DocumentPreviewRead` (the row, plus one opening of its original) from new
+  `DocumentService.previewDocument(caseId, documentId, reader)`: `readableDocument`'s ownership/file/store checks now,
+  and on `open()` `ReadAudit.documentPreviewed` (new `AuditAction.DOCUMENT_PREVIEWED`, a read action, fail-closed)
+  then `store.open(locator)` -- the download's own store call, so CDAM reads under the caller's token. Opening twice is
+  an `IllegalStateException`. `JudicialReferralService.previewDocument` is `document`'s role gate and `visible`
+  check, then that seam. No role rule is repeated, and `CorrespondenceDocumentReader`/`openForService` is never on
+  the path. The domain/documents package still has no dependency on the preview package (`PreviewBoundaryTest`).
+- **Service:** `domain/documents/preview/DocumentPreviewService` -- `caseworkerPreview`, `judicialPreview`, and
+  `budget()` (25 s on the system clock; the caller keeps it so that it can cancel). Order: refuse an active
+  transaction (`IllegalStateException`, as the sweep and outbox do); upstream scope check (its 404/403 unchanged);
+  `PreviewFormat.require(mimeType)` (outside the allowlist is 422 `PREVIEW_INVALID_DOCUMENT`); `PreviewRenderer.render`
+  with `read::open` as the source, so the permit comes before the audit and the store.
+  **Decision recorded:** the audit is committed when the source is opened, not when the scope check passes. A
+  busy (429), unconfigured-DOCX (503), cancelled or invalid-type preview therefore records nothing and reads nothing,
+  and a failed audit opens and converts nothing. A source missing after the audit keeps the store's 404 and leaves its
+  row, exactly as the download's audit-then-open does.
+- **Tests:** `DocumentPreviewServiceTest` (27, Spring context + Postgres + filesystem store + WireMock converter on
+  loopback): all five formats with page counts, one `DOCUMENT_PREVIEWED` and no `DOCUMENT_DOWNLOADED`, the original's
+  SHA-256 and row unchanged, no new document/notification/audit-write/store file; repeat requests record one each;
+  another case's / unknown / file-less document, allowlist-outside type, active transaction, pre-cancelled budget and
+  failed audit (256-character subject) each open nothing, record nothing and send nothing; a missing source and a
+  `ForbiddenError` store refusal keep their own exception and send nothing; converter 503 is one call and
+  `PREVIEW_UNAVAILABLE`; a mid-transfer reset is `PREVIEW_UNAVAILABLE` with the stream closed; cancellation on first
+  read stops the work with the stream closed; three concurrent DOCX conversions held by a 1.5 s converter delay
+  make a PNG `PREVIEW_BUSY` (Retry-After 5 s, no audit, no read) while a PDF still passes. Judicial: any judge on
+  Open, the holder only on Claimed, the directing judge on Decided, nobody once Closed/Withdrawn, nobody on a claim
+  whose `claimedById` is NULL, another case's document is the document's 404, a caseworker is the judicial 403, and
+  a judge's failed audit opens nothing. After every test: all permits free, no new `preview-*` scratch directory,
+  and the correspondence reader never called. `ReadAuditActionsTest` (3) pins the action, its entity and that both
+  document reads fail closed. `JudicialSecurityTest`'s operation inventory gains `previewDocument`, asked the same
+  gate/visibility questions as `document`. Mutations: opening the store before the audit failed 3 tests; removing the
+  transaction guard failed 1.
+- **Validation:** `./gradlew build` (no-checkstyle init) -- test 4731 run, 1 skipped (the opt-in fixture
+  regeneration), 0 failed; integration 23 run, 0 failed. `checkstyle.sh` OK. The known intermittent
+  `CcdCreationAttemptRepositoryTest` did not fail.
 
 ## Post-Completion
 

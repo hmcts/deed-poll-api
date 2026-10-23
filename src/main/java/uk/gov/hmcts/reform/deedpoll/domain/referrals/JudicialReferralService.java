@@ -12,6 +12,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentDownload;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentPreviewRead;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
@@ -523,6 +524,22 @@ public class JudicialReferralService {
 
         Referral referral = visible(referralId, caller);
         return documents.downloadDocument(referral.getDeedPoll().getId(), documentId, caller);
+    }
+
+    /**
+     * {@link #document}'s document, for a preview: the same role gate, the same visibility and the same case scope,
+     * recorded as {@code DOCUMENT_PREVIEWED} only when the preview opens it ({@link DocumentPreviewRead#open}).
+     *
+     * <p>Not {@code @Transactional}, for {@link #document}'s reasons, and it touches no claim.
+     *
+     * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
+     * @throws NotFoundError as {@link #document} does, before anything is recorded or opened
+     */
+    public DocumentPreviewRead previewDocument(String referralId, String documentId, CurrentUser caller) {
+        caller.requireAnyRole(Role.JUDICIAL);
+
+        Referral referral = visible(referralId, caller);
+        return documents.previewDocument(referral.getDeedPoll().getId(), documentId, caller);
     }
 
     /**

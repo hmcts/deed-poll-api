@@ -396,6 +396,27 @@ public class DocumentService {
         return new DocumentDownload(document, store.open(locator(document)));
     }
 
+    /**
+     * The same document {@link #downloadDocument(String, String, CurrentUser)} would serve this reader, for a
+     * preview: the same ownership, file and store checks, now, and the same store opened under the reader's own
+     * authority, later.
+     *
+     * <p>Nothing is recorded or opened here. {@link DocumentPreviewRead#open} commits {@code DOCUMENT_PREVIEWED} and
+     * only then opens the store, so a preview refused before it reads -- busy, unconfigured, cancelled -- records
+     * nothing, and one whose audit cannot be committed opens nothing. It never takes the system reader's path:
+     * a store read this reader is refused stays refused.
+     *
+     * @throws NotFoundError as {@link #downloadDocument(String, String)} does, before anything is recorded
+     */
+    public DocumentPreviewRead previewDocument(String deedPollId, String id, CurrentUser reader) {
+        DeedPollSupportingDocument document = readableDocument(deedPollId, id);
+        String locator = locator(document);
+        return new DocumentPreviewRead(document, () -> {
+            readAudit.documentPreviewed(deedPollId, document.getId(), reader);
+            return store.open(locator);
+        });
+    }
+
     /** Shared ownership and readiness checks; authority is selected only by the calling reader. */
     public DeedPollSupportingDocument readableDocument(String deedPollId, String id) {
         DeedPollSupportingDocument document = readOnly.execute(status ->

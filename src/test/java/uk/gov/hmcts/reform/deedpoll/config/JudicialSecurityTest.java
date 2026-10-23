@@ -224,7 +224,10 @@ class JudicialSecurityTest {
             // A supporting document, reached through the referral and never through the case: the same gate and
             // the same visibility, so it is asked every question the other three referral operations are.
             new Operation("document", true,
-                          (referralId, caller) -> service.document(referralId, DOCUMENT_ID, caller)));
+                          (referralId, caller) -> service.document(referralId, DOCUMENT_ID, caller)),
+            // The same document for a preview: the download's gate and visibility, asked the same questions.
+            new Operation("previewDocument", true,
+                          (referralId, caller) -> service.previewDocument(referralId, DOCUMENT_ID, caller)));
     }
 
     /** The four operations that name a referral, which are the ones visibility has anything to say about. */
@@ -285,6 +288,7 @@ class JudicialSecurityTest {
         verify(transitions, never()).reviseDirection(anyString(), anyString(), any(), any());
         verify(transitions, never()).withdrawDirection(anyString(), anyString(), any());
         verify(documents, never()).downloadDocument(anyString(), anyString(), any());
+        verify(documents, never()).previewDocument(anyString(), anyString(), any());
     }
 
     @Nested
