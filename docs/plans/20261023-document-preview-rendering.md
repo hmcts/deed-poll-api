@@ -269,12 +269,12 @@ preview response helper, preview error DTO/handler, `OpenAPIPublisherTest` and n
 **Files:** `README.md`, a preview operator section in `docs/CDAM-SMOKE.md` or a dedicated procedure,
 `CLAUDE.md` for new invariants only, and this plan's Execution notes.
 
-- [ ] Record source/spec artifact SHAs, actual format/permission evidence, budgets, environment variables,
+- [x] Record source/spec artifact SHAs, actual format/permission evidence, budgets, environment variables,
       approved converter protocol and test results. Provide the generated OpenAPI artifact to the admin plan.
-- [ ] Document synthetic acceptance steps for page/text/layout fidelity, original equality, staff/judicial
+- [x] Document synthetic acceptance steps for page/text/layout fidelity, original equality, staff/judicial
       denial, multiple replicas, a restart and converter failures. Identify required endpoint/key/font
       provisioning without claiming it has happened or embedding credential values.
-- [ ] Review documentation links/commands and relevant configuration/contract tests. Run Validation Commands
+- [x] Review documentation links/commands and relevant configuration/contract tests. Run Validation Commands
       after code/test corrections; keep manual provisioning, review and deployed checks outside tasks.
 
 ## Acceptance Criteria
@@ -531,6 +531,35 @@ and its file-download smoke are not evidence that document previews exist. Appen
   `python3 -m http.server 8080 --directory /tmp/deed-poll-viewer-prototype` held. It was stopped for each cftlib run
   and restarted with the same command afterwards.
 - **Not proven here:** live Docmosis access, fonts and Word layout fidelity, AAT CDAM permissions (Post-Completion).
+
+### Task 7 (2026-10-23)
+
+- **Handoff page:** new `docs/DOCUMENT-PREVIEW-SMOKE.md` (prepared, **not run**): the producer artifact for admin,
+  the provisioning nobody has done yet, AAT preconditions, a nine-step synthetic journey, results and rollback.
+  README's Document previews section links to it and says why the chart has no Docmosis entry yet; `docs/RESUME.md`
+  gains an entry; `CLAUDE.md` gains the `domain/documents/preview` layout line and one invariant (the fixed
+  scope/allowlist/permit/audit/open order, caller authority only, permit released in the worker's `finally`, no
+  stored derivative, written rather than `Resource` responses because of `206`, preset-JSON refusal handlers, no
+  chart secret ahead of the vault).
+- **Artifact for the admin plan:** regenerated at `bde3172` with `OPENAPI_OUTPUT_PATH=/tmp/preview-task7/openapi-bde3172.json
+  ./gradlew integration --tests '*OpenAPIPublisherTest'`. SHA-256 `86eeee8ad19f8787e29f1ce413ee24d8f62aee412d82c466e0eb2f45c2d7508b`,
+  103,978 bytes, **byte-identical to Task 5's**, so Task 6's handler fix changed no contract. 41 paths, 57
+  operations, 61 schemas; both previews publish `200`/`403`/`404`/`422`/`429`/`503`, six `200` headers,
+  `Retry-After` on `429` and `x-document-preview-limits` (25 s, 26214400, 52428800, 500, 25000000, 3, 5 s,
+  `rangeRequests: unsupported`), checked by parsing the file. Admin regenerates from that commit through its own
+  `SPEC-PROVENANCE.md` recipe; this repository did not touch admin.
+- **Environment variables / secrets recorded:** `DOCUMENT_PREVIEW_*` (six, defaults above), `DOCMOSIS_URL` (base;
+  `/rs/convert` appended), `DOCMOSIS_ACCESS_KEY` (proposed vault secret `docmosis-access-key` in `deed-poll-{env}`,
+  as em-stitching-api names its own), `DOCMOSIS_CONNECT_TIMEOUT`/`DOCMOSIS_READ_TIMEOUT` (3 s / 20 s). The chart is
+  deliberately unchanged: a `keyVaults` entry for an absent secret fails the deploy. Endpoint access, key issue,
+  fonts, 25 MiB acceptance and data retention on Tornado are listed as provisioning for their owners, not done.
+- **Review of links/commands:** every relative link in the new page, README and RESUME resolves; the regeneration
+  command was the one run; the README environment table matches `application.yaml`'s `deedpoll.documents.preview`
+  keys and defaults; the CLAUDE.md invariant was checked against `DomainErrorHandler` (404/401/403/502/preview preset
+  JSON; preview ids are text, so a malformed one is the ordinary 404, not a negotiated 400) and `PreviewRenderer`.
+- **Validation:** no code or test changed. `./gradlew build` (no-checkstyle init) successful: `integration` re-ran,
+  24 run, 0 failed; `test` was up to date against unchanged inputs, its results Task 6's 4763 run, 1 skipped, 0
+  failed. `checkstyle.sh` OK.
 
 ## Post-Completion
 

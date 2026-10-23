@@ -40,6 +40,8 @@ domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
 domain/referrals                  referrals to the judiciary and the applicant's confirmation — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
+domain/documents/preview          transient PDF renditions for the admin viewer, DOCX via Docmosis — NOT a port;
+                                  domain/documents must not depend on it (PreviewBoundaryTest)
 domain/auth                       CurrentUser, IdamClaims, Role — transport-independent
 domain/audit                      the append-only audit trail (V36): AuditTrail, its AuditAction vocabulary, ReadAudit
                                   — NOT a port
@@ -378,6 +380,17 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `DocumentService.downloadDocument` uses a short read template and throws refusals after it, keeping remote
   reads outside database transactions. The drain now rejects an outer transaction and commits only the local
   claim/outcome steps. Do not wrap a document read or the drain in a new outer transaction.
+- **A preview is a read, never a derivative, and its order is fixed.** `DocumentPreviewService` refuses an active
+  transaction, runs the caseworker or judicial scope check, then the allowlist, then takes the conversion permit,
+  and only on opening the source records `DOCUMENT_PREVIEWED` (fail-closed) before `store.open` under the caller's
+  own token. Never the system reader, and never as a fallback for a refused read: a refused source keeps its own
+  404/403/502. The permit is released only in the worker's own `finally`, so a cancelled request cannot free a slot
+  that is still converting. Nothing is cached or stored; each request's `preview-*` scratch directory is deleted on
+  close. `DocumentFileResponses.writePreview` writes the servlet response itself, because a `Resource` body lets
+  Spring answer `Range` with a partial `206`. A preview client sends `Accept: application/pdf`, so **every handler
+  that can answer a preview presets `application/json`** (the preview, 404, 401, 403 and upstream-failure handlers);
+  a new one that negotiates loses its body and becomes a 500. The chart mounts no Docmosis secret until
+  `docmosis-access-key` exists in every vault it deploys to; see `docs/DOCUMENT-PREVIEW-SMOKE.md`.
 
 ## Conventions worth knowing before writing code
 

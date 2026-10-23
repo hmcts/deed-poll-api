@@ -1,5 +1,14 @@
 # Resume state — where the next session picks up
 
+**Document previews, 2026-10-23:** on `feat/document-preview-rendering`, not pushed and not live-verified.
+`GET /caseworker/cases/{id}/documents/{documentId}/preview` and `GET /judicial/referrals/{referralId}/documents/{documentId}/preview`
+serve a transient, complete PDF rendition of PDF, JPEG, PNG, every TIFF frame and DOCX (Docmosis Tornado
+`/rs/convert`), audited as `DOCUMENT_PREVIEWED`. DOCX answers `503 PREVIEW_UNAVAILABLE` until the converter endpoint,
+`docmosis-access-key` and fonts are provisioned, none of which is done. The chart has no Docmosis entry yet. Next:
+Ralphex review; open the PR; admin regenerates `openapi.json` from the artifact recorded in
+[DOCUMENT-PREVIEW-SMOKE.md](DOCUMENT-PREVIEW-SMOKE.md), which also holds the AAT acceptance steps (prepared, not run).
+See [the plan](plans/20261023-document-preview-rendering.md).
+
 **Narrative cap and blank witnesses, 2026-10-22 (admin R15):** on `fix/textarea-limit-and-blank-witnesses`, not
 pushed. `returnReason`, `referralNotes` and `masterDirections` are capped at 2,000 characters with line breaks counted
 once, matching admin's edit form; witness name, address and occupation are trimmed and a blank is refused. Only

@@ -643,6 +643,11 @@ readable as an unencrypted PDF is served, and its pages are the preview's. A Tor
 broken transfer or unusable body is `PREVIEW_UNAVAILABLE`. Logs carry the status or an exception class only.
 Automated tests use WireMock: they prove the protocol and bounds, not Word layout or fonts on the real converter.
 
+The chart sets neither Docmosis variable yet: a `keyVaults` entry for a secret the vault does not hold fails the
+deploy, so the endpoint, the `docmosis-access-key` secret and the converter's fonts are provisioned first. That
+provisioning, the producer artifact handed to admin and the AAT acceptance steps are in
+[docs/DOCUMENT-PREVIEW-SMOKE.md](docs/DOCUMENT-PREVIEW-SMOKE.md), prepared and not run.
+
 ## Plugins
 
 The project contains the following plugins:
