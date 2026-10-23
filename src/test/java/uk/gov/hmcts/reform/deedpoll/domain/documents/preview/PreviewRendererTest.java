@@ -57,6 +57,7 @@ import java.util.zip.CRC32;
 import javax.imageio.IIOException;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
+import javax.imageio.stream.FileImageInputStream;
 import javax.imageio.stream.ImageInputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -652,6 +653,40 @@ class PreviewRendererTest {
             }
             assertFailure(PreviewFormat.TIFF, withTables(tiff, tablesOf(greyJpeg(64, 64, 40_000, 40_000), true)),
                           PreviewFailure.INVALID_DOCUMENT);
+        }
+
+        @Test
+        @DisplayName("JPEGTables entries that together cover more than the file are refused before they are read")
+        void repeatedJpegTables(@TempDir Path scratch) throws IOException {
+            byte[] packet = greyJpeg(64, 64, 64, 64);
+            byte[] tiff = DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet);
+            byte[] onlyTables = tablesOf(packet, false);
+            // An APP0 segment pads the tables to most of the file, so two entries naming them exceed it.
+            int padding = 60_000;
+            byte[] padded = ByteBuffer.allocate(onlyTables.length + 4 + padding).put(onlyTables, 0, 2)
+                .put((byte) 0xFF).put((byte) 0xE0).putShort((short) (padding + 2)).put(new byte[padding])
+                .put(onlyTables, 2, onlyTables.length - 2).array();
+            byte[] once = withTables(tiff, padded);
+            try (RenderedPreview preview = render(PreviewFormat.TIFF, once)) {
+                assertThat(preview.pages()).hasValue(1);
+            }
+            // A second entry shifts the payload by its own twelve bytes, so both entries are pointed at it afresh.
+            byte[] again = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 347)
+                .putShort((short) 7).putInt(padded.length).putInt(0).array();
+            byte[] twice = DocumentPreviewFixtures.withLeadingEntry(once, again, new byte[0]);
+            ByteBuffer entries = ByteBuffer.wrap(twice).order(ByteOrder.LITTLE_ENDIAN);
+            for (int at = 10; at < 10 + (entries.getShort(8) & 0xFFFF) * 12; at += 12) {
+                if ((entries.getShort(at) & 0xFFFF) == 347) {
+                    entries.putInt(at + 8, twice.length - padded.length);
+                }
+            }
+            // The JDK refuses this file too, in the same words, so the packet check is asked directly.
+            PreviewBudget budget = PreviewBudget.start(Clock.systemUTC(), Duration.ofSeconds(25));
+            Path file = Files.write(scratch.resolve("twice.tiff"), twice);
+            try (ImageInputStream stream = new FileImageInputStream(file.toFile())) {
+                assertThatThrownBy(() -> TiffJpegPackets.require(stream, 0, 64, 64, budget))
+                    .isInstanceOf(IIOException.class).hasMessage("JPEG tables cover more than the file");
+            }
         }
 
         /**

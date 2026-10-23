@@ -85,7 +85,15 @@ final class TiffJpegPackets {
             // The JDK falls back to JPEGInterchangeFormat for a frame with neither offsets field.
             offsetFields.addAll(interchange);
         }
+        // Each field is copied and scanned whole, and many entries may name one payload, so together they may
+        // cover no more bytes than the file holds: one pass over the file, not one per entry.
+        long tablesBytes = 0;
         for (long[] field : tables) {
+            budget.checkpoint();
+            tablesBytes += field[1];
+            if (tablesBytes > tiff.length()) {
+                throw new IIOException("JPEG tables cover more than the file");
+            }
             requireTables(tiff, field[0], field[1], field[2]);
         }
         long maxWidth = roundUp(regionWidth);
