@@ -165,6 +165,21 @@ class PreviewRendererTest {
                 });
             }
         }
+
+        @Test
+        @DisplayName("%%EOF ending on the window's last byte passes, and one byte further out is invalid")
+        void eofWindowEdge() throws IOException {
+            byte[] minimal = "%PDF-1.7\n%%EOF".getBytes(StandardCharsets.US_ASCII);
+            byte[] atTheEdge = concat(minimal, new byte[PdfRenderer.EOF_WINDOW - 5]);
+            try (RenderedPreview preview = unparsed(() -> render(PreviewFormat.PDF, atTheEdge))) {
+                assertThat(bytes(preview)).isEqualTo(atTheEdge);
+            }
+            byte[] outside = concat(minimal, new byte[PdfRenderer.EOF_WINDOW - 4]);
+            unparsed(() -> {
+                assertFailure(PreviewFormat.PDF, outside, PreviewFailure.INVALID_DOCUMENT);
+                return null;
+            });
+        }
     }
 
     @Nested

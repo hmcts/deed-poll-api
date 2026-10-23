@@ -64,8 +64,8 @@ These belong to other repositories and teams. This repository records them and c
    `DOCMOSIS_READ_TIMEOUT`), and that it keeps neither the document nor the PDF after answering. Applicant
    documents are personal data.
 
-Until 1–3 are done, a DOCX preview answers `503 PREVIEW_UNAVAILABLE` after its caller is authorised and the DOCX
-download keeps working. That is the accepted phased release (decision 3): PDF, JPEG, PNG and TIFF previews need
+Until 1–3 are done, a DOCX preview answers `503 PREVIEW_UNAVAILABLE` only after its original has been read under the
+caller's own token (one `DOCUMENT_PREVIEWED` row), and the DOCX download keeps working. That is the accepted phased release (decision 3): PDF, JPEG, PNG and TIFF previews need
 none of this.
 
 ## Preconditions
@@ -77,7 +77,8 @@ none of this.
    orientation 6); a PNG; a TIFF with at least three frames of different content, one portrait among landscapes;
    a DOCX of several pages with a table, an image, headers/footers and page breaks, together with a PDF that Word
    itself printed from it (the layout reference); and a TIFF of more than 100 frames or with a frame over 25 million
-   pixels for the limit step. A PDF or DOCX over 100 pages is not refused by the API (the viewer refuses it).
+   pixels for the limit step; and a PDF of 101 pages. A PDF or DOCX over 100 pages is not refused by the API (the
+   viewer refuses it).
 4. Two synthetic caseworkers, two synthetic judges, and one synthetic staff user without CCD read on the case type
    if CDAM is on (see [CDAM-SMOKE.md](CDAM-SMOKE.md)). Read access to `deedpoll_audit_event`.
 
@@ -115,7 +116,8 @@ none of this.
 8. **Limits.** The over-limit document answers `422 PREVIEW_LIMIT_EXCEEDED` with no PDF, and its `/file` still
    downloads. Four DOCX/TIFF previews started at once on one pod: the fourth is `429 PREVIEW_BUSY` with
    `Retry-After: 5`, after its original was read (so it has its one `DOCUMENT_PREVIEWED` row), while a PDF preview
-   still succeeds.
+   still succeeds. The 101-page PDF previews `200`, byte for byte, from the API; admin's viewer refuses it before
+   rendering (PDF.js `numPages` over `maxPages`). A viewer that renders it stops the rollout.
 9. **Converter failure.** With the key deliberately wrong (a temporary override in a controlled window), a DOCX
    preview is `503 PREVIEW_UNAVAILABLE` after one converter call, no retry, and the `/file` download still works.
    Remove `DOCMOSIS_URL` and restart: the service starts, DOCX is the same `503`, other formats render. Restore both.

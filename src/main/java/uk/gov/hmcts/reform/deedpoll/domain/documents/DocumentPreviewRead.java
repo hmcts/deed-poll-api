@@ -11,10 +11,11 @@ import java.util.function.Supplier;
  * A document a preview may read: the row, already found in its case and checked readable, and the one opening of
  * its original that the preview is allowed.
  *
- * <p>Unlike a {@link DocumentDownload}, nothing is open yet. A preview may be refused before it reads a byte (the
- * pod's conversions are all taken, the converter is not configured, the caller went away), and such a refusal should
- * neither record a read nor hold a stream. So {@link #open} is where the {@code DOCUMENT_PREVIEWED} row is committed,
- * fail-closed, and only then is the store opened under the reader's own authority -- on the thread that calls it.
+ * <p>Unlike a {@link DocumentDownload}, nothing is open yet. A preview whose budget is already spent is refused
+ * before it reads a byte, and that refusal should neither record a read nor hold a stream. So {@link #open} is where
+ * the {@code DOCUMENT_PREVIEWED} row is committed, fail-closed, and only then is the store opened under the reader's
+ * own authority -- on the thread that calls it. A busy pod or an unconfigured converter is decided after it returns,
+ * so the store's own refusal of a caller always outranks either.
  *
  * <p>It opens once. A second call is a programming error rather than a second audited read.
  */

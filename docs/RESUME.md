@@ -7,7 +7,12 @@ serve a transient, complete PDF rendition of PDF, JPEG, PNG, every TIFF frame an
 `docmosis-access-key` and fonts are provisioned, none of which is done. The chart has no Docmosis entry yet. Next:
 Ralphex review; open the PR; admin regenerates `openapi.json` from the artifact recorded in
 [DOCUMENT-PREVIEW-SMOKE.md](DOCUMENT-PREVIEW-SMOKE.md), which also holds the AAT acceptance steps (prepared, not run).
-See [the plan](plans/20261023-document-preview-rendering.md).
+See [the plan](plans/completed/20261023-document-preview-rendering.md). Revised by
+[the review fixes](plans/completed/20261023-document-preview-review-fixes.md): the original is read before any busy
+or unavailable refusal; a PDF or Docmosis output is served unparsed; PNG text chunks are never inflated; and
+`DOCUMENT_PREVIEW_MAX_PAGES` is 100, enforced by the API for JPEG, PNG and TIFF only, so admin's viewer must refuse
+a PDF or DOCX over `maxPages`. The handoff artifact is now `c1fc4438…`. Outstanding: `./gradlew cftlibTest`, which
+could not start because port 8080 was taken.
 
 **Narrative cap and blank witnesses, 2026-10-22 (admin R15):** on `fix/textarea-limit-and-blank-witnesses`, not
 pushed. `returnReason`, `referralNotes` and `masterDirections` are capped at 2,000 characters with line breaks counted

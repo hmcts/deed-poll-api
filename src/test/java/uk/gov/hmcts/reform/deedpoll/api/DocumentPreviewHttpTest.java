@@ -440,6 +440,8 @@ class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {
                 authorised(get(caseworkerUrl(caseId, png)).accept(MediaType.APPLICATION_PDF))
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.error").value("Stored file not found"));
+                assertThat(reads("DOCUMENT_PREVIEWED")).as("each refused read is recorded once, as a download's is")
+                    .hasSize(2);
                 assertThat(CONVERTER.findAll(anyRequestedFor(anyUrl()))).isEmpty();
             } finally {
                 held.forEach(ConversionCapacity.Permit::close);

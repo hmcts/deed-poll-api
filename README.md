@@ -649,7 +649,8 @@ acceptance, original downloads or the staging cap.
 | `DOCMOSIS_CONNECT_TIMEOUT` / `DOCMOSIS_READ_TIMEOUT` | `3s` / `20s` | Together within the request budget, and never longer than what is left of it |
 
 With either Docmosis setting empty the service starts as normal and only a DOCX preview answers
-`PREVIEW_UNAVAILABLE`, after its caller is authorised.
+`PREVIEW_UNAVAILABLE`, and only after its original has been read under the caller's own token and recorded as
+`DOCUMENT_PREVIEWED`, so a caller the store refuses gets the download's 403, 404 or 502 instead.
 
 A DOCX is first held to the upload's content checks, so a malformed, encrypted or macro-enabled package is
 `PREVIEW_INVALID_DOCUMENT` and is never sent. The conversion is one `multipart/form-data` POST to

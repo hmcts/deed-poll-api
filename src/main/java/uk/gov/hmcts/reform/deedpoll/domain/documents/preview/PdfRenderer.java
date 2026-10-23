@@ -52,7 +52,6 @@ final class PdfRenderer implements SourceRenderer {
         } catch (IOException scratch) {
             throw new PreviewError(PreviewFailure.UNAVAILABLE);
         }
-        budget.checkpoint();
         return new Rendition(source, OptionalInt.empty());
     }
 

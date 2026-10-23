@@ -37,6 +37,19 @@ class PreviewBoundaryTest {
     }
 
     @Test
+    @DisplayName("nothing in the preview parses a PDF: originals and converter output are served unparsed")
+    void nothingParsesAPdf() {
+        JavaClasses classes = new ClassFileImporter()
+            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+            .importPackages("uk.gov.hmcts.reform.deedpoll.domain.documents.preview");
+
+        noClasses().should().dependOnClassesThat().haveFullyQualifiedName("org.apache.pdfbox.Loader")
+            .orShould().dependOnClassesThat().resideInAPackage("org.apache.pdfbox.pdfparser..")
+            .because("a parse inflates object streams before any limit of ours can look at them")
+            .check(classes);
+    }
+
+    @Test
     @DisplayName("the upload allowlist and ceiling are as they were before previews")
     void uploadPolicyIsUnchanged() {
         assertThat(UploadPolicy.MAX_UPLOAD_BYTES).isEqualTo(25L * 1024 * 1024);

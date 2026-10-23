@@ -402,9 +402,9 @@ public class DocumentService {
      * authority, later.
      *
      * <p>Nothing is recorded or opened here. {@link DocumentPreviewRead#open} commits {@code DOCUMENT_PREVIEWED} and
-     * only then opens the store, so a preview refused before it reads -- busy, unconfigured, out of time -- records
-     * nothing, and one whose audit cannot be committed opens nothing. It never takes the system reader's path:
-     * a store read this reader is refused stays refused.
+     * only then opens the store, so a preview whose budget is spent before it reads records nothing, and one whose
+     * audit cannot be committed opens nothing. Busy and unconfigured are decided only after that audited read. It
+     * never takes the system reader's path: a store read this reader is refused stays refused.
      *
      * @throws NotFoundError as {@link #downloadDocument(String, String)} does, before anything is recorded
      */

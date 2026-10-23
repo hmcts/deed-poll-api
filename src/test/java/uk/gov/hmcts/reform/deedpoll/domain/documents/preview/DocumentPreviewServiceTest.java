@@ -360,6 +360,8 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
 
             assertThat(catchThrowable(() -> previewAsCaseworker(caseId, documentId))).isSameAs(refusal);
 
+            assertThat(reads("DOCUMENT_PREVIEWED")).as("a refused read is recorded once, as a refused download is")
+                .hasSize(1);
             assertThat(CONVERTER.findAll(anyRequestedFor(anyUrl()))).isEmpty();
             // The tearDown verifies the correspondence reader was never asked instead.
         }
