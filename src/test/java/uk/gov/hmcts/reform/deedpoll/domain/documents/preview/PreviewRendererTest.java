@@ -34,6 +34,7 @@ import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -613,6 +614,77 @@ class PreviewRendererTest {
                           PreviewFailure.INVALID_DOCUMENT);
             assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, NOT_DEFLATE),
                           PreviewFailure.INVALID_DOCUMENT);
+        }
+
+        @Test
+        @DisplayName("an entry of a type the JDK does not know cannot hide a JPEG frame's oversized packet")
+        void jpegBehindAnUnknownType() {
+            // The JDK reads an unknown-type entry as eight bytes, so the real entries that follow are aligned for it.
+            byte[] entry = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 0x9999)
+                .putShort((short) 0).putInt(0x0007_0103).array();
+            byte[] packet = greyJpeg(64, 64, 40_000, 40_000);
+            assertFailure(PreviewFormat.TIFF,
+                          DocumentPreviewFixtures.withLeadingEntry(
+                              DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet), entry, new byte[0]),
+                          PreviewFailure.LIMIT_EXCEEDED);
+        }
+
+        @Test
+        @DisplayName("a JPEG frame whose only packet offset is JPEGInterchangeFormat is held to its frame")
+        void jpegInterchangeFormat() {
+            byte[] packet = greyJpeg(64, 64, 40_000, 40_000);
+            assertFailure(PreviewFormat.TIFF,
+                          DocumentPreviewFixtures.withStripOffsetsAs(
+                              DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet), 513),
+                          PreviewFailure.LIMIT_EXCEEDED);
+        }
+
+        @Test
+        @DisplayName("JPEGTables carrying tables alone render; carrying a frame header or a scan they are refused")
+        void jpegTables() throws IOException {
+            byte[] packet = greyJpeg(64, 64, 64, 64);
+            byte[] tiff = DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet);
+            byte[] onlyTables = tablesOf(packet, false);
+            try (RenderedPreview preview = render(PreviewFormat.TIFF, withTables(tiff, onlyTables));
+                 PDDocument document = Loader.loadPDF(bytes(preview))) {
+                assertThat(preview.pages()).hasValue(1);
+                assertNear(colourAt(raster(document, 0), 0.5, 0.5), Color.BLACK);
+            }
+            assertFailure(PreviewFormat.TIFF, withTables(tiff, tablesOf(greyJpeg(64, 64, 40_000, 40_000), true)),
+                          PreviewFailure.INVALID_DOCUMENT);
+        }
+
+        /**
+         * {@code tiff} with a JPEGTables entry (UNDEFINED) holding {@code tables}, appended after the packet.
+         */
+        private static byte[] withTables(byte[] tiff, byte[] tables) {
+            byte[] entry = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 347)
+                .putShort((short) 7).putInt(tables.length).putInt(tiff.length + 12).array();
+            return DocumentPreviewFixtures.withLeadingEntry(tiff, entry, tables);
+        }
+
+        /**
+         * SOI, {@code jpeg}'s DQT and DHT segments (and its SOF0 if {@code withFrame}, and then its SOS), and EOI.
+         */
+        private static byte[] tablesOf(byte[] jpeg, boolean withFrame) {
+            ByteArrayOutputStream tables = new ByteArrayOutputStream();
+            tables.write(0xFF);
+            tables.write(0xD8);
+            int at = 2;
+            while (at + 4 <= jpeg.length) {
+                int marker = jpeg[at + 1] & 0xFF;
+                int length = (jpeg[at + 2] & 0xFF) << 8 | jpeg[at + 3] & 0xFF;
+                if (marker == 0xDB || marker == 0xC4 || withFrame && (marker == 0xC0 || marker == 0xDA)) {
+                    tables.write(jpeg, at, length + 2);
+                }
+                if (marker == 0xDA) {
+                    break;
+                }
+                at += length + 2;
+            }
+            tables.write(0xFF);
+            tables.write(0xD9);
+            return tables.toByteArray();
         }
 
         @Test

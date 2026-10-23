@@ -319,6 +319,40 @@ final class DocumentPreviewFixtures {
     }
 
     /**
+     * A one-packet {@link #greyTiff} with {@code entry}'s raw bytes put first in its directory and {@code appended}
+     * after its packet, so an entry may point at data the fixture does not otherwise hold. Everything after the
+     * directory's entry count moves on by the entry's length, so the packet's inline offset moves with it.
+     */
+    static byte[] withLeadingEntry(byte[] tiff, byte[] entry, byte[] appended) {
+        ByteBuffer source = ByteBuffer.wrap(tiff).order(ByteOrder.LITTLE_ENDIAN);
+        int entries = source.getShort(8) & 0xFFFF;
+        ByteBuffer out = ByteBuffer.allocate(tiff.length + entry.length + appended.length)
+            .order(ByteOrder.LITTLE_ENDIAN);
+        out.put(tiff, 0, 8).putShort((short) (entries + 1)).put(entry).put(tiff, 10, tiff.length - 10).put(appended);
+        for (int at = 10 + entry.length; at < 10 + entry.length + entries * 12; at += 12) {
+            int tag = out.getShort(at) & 0xFFFF;
+            if (tag == 273 || tag == 324) {
+                out.putInt(at + 8, out.getInt(at + 8) + entry.length);
+            }
+        }
+        return out.array();
+    }
+
+    /**
+     * A one-packet {@link #greyTiff} whose StripOffsets entry is retagged {@code tag}.
+     */
+    static byte[] withStripOffsetsAs(byte[] tiff, int tag) {
+        ByteBuffer buffer = ByteBuffer.wrap(tiff.clone()).order(ByteOrder.LITTLE_ENDIAN);
+        int entries = buffer.getShort(8) & 0xFFFF;
+        for (int at = 10; at < 10 + entries * 12; at += 12) {
+            if ((buffer.getShort(at) & 0xFFFF) == 273) {
+                buffer.putShort(at, (short) tag);
+            }
+        }
+        return buffer.array();
+    }
+
+    /**
      * A one-frame image in {@code format} ({@code jpeg} or {@code png}), with an EXIF orientation if not 1.
      */
     static byte[] encoded(String format, Frame frame) {

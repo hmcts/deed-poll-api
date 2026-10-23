@@ -19,7 +19,9 @@ import javax.imageio.stream.ImageInputStream;
  * <p>Old-style JPEG (Compression 6, withdrawn in 1995) is refused outright: the JDK may decode it from a stream the
  * directory points at rather than the packets, so there is no one header to check. Every Compression entry is
  * looked at, whatever its type, so that two contradictory entries cannot hide a JPEG frame; a frame that is not JPEG
- * is left alone.
+ * is left alone. The directory is read entry by entry as the JDK reads it ({@link TiffDirectories#forEachEntry}), the
+ * packets are found where the JDK finds them (TileOffsets, StripOffsets, or failing both JPEGInterchangeFormat), and
+ * JPEGTables, which the JDK puts ahead of every packet, may carry tables but never a frame header or a scan.
  */
 final class TiffJpegPackets {
 
@@ -28,6 +30,10 @@ final class TiffJpegPackets {
     private static final int JPEG = 7;
     private static final int STRIP_OFFSETS = 273;
     private static final int TILE_OFFSETS = 324;
+    private static final int JPEG_TABLES = 347;
+    private static final int JPEG_INTERCHANGE_FORMAT = 513;
+    private static final int BYTE = 1;
+    private static final int UNDEFINED = 7;
     private static final int SHORT = 3;
     private static final int LONG = 4;
     private static final int MCU = 16;
@@ -53,28 +59,34 @@ final class TiffJpegPackets {
             // The reader found this frame, so a walk that does not is a file read two ways: not drawn at all.
             throw new IIOException("directory chain disagrees with the reader");
         }
-        tiff.seek(directory);
-        int entries = tiff.readUnsignedShort();
-        boolean jpeg = false;
+        boolean[] jpeg = {false};
         List<long[]> offsetFields = new ArrayList<>();
-        for (int entry = 0; entry < entries; entry++) {
-            int tag = tiff.readUnsignedShort();
-            int type = tiff.readUnsignedShort();
-            long count = tiff.readUnsignedInt();
-            long valueField = tiff.getStreamPosition();
+        List<long[]> interchange = new ArrayList<>();
+        List<long[]> tables = new ArrayList<>();
+        TiffDirectories.forEachEntry(tiff, directory, (tag, type, count, valueField) -> {
             if (tag == COMPRESSION) {
                 int compression = type == LONG ? (int) tiff.readUnsignedInt() : tiff.readUnsignedShort();
                 if (compression == OLD_JPEG) {
                     throw new IIOException("old-style JPEG compression");
                 }
-                jpeg |= compression == JPEG;
+                jpeg[0] |= compression == JPEG;
             } else if (tag == STRIP_OFFSETS || tag == TILE_OFFSETS) {
                 offsetFields.add(new long[] {type, count, valueField});
+            } else if (tag == JPEG_INTERCHANGE_FORMAT) {
+                interchange.add(new long[] {type, count, valueField});
+            } else if (tag == JPEG_TABLES) {
+                tables.add(new long[] {type, count, valueField});
             }
-            tiff.seek(valueField + 4);
-        }
-        if (!jpeg) {
+        });
+        if (!jpeg[0]) {
             return;
+        }
+        if (offsetFields.isEmpty()) {
+            // The JDK falls back to JPEGInterchangeFormat for a frame with neither offsets field.
+            offsetFields.addAll(interchange);
+        }
+        for (long[] field : tables) {
+            requireTables(tiff, field[0], field[1], field[2]);
         }
         long maxWidth = roundUp(regionWidth);
         long maxHeight = roundUp(regionHeight);
@@ -93,6 +105,63 @@ final class TiffJpegPackets {
                 long offset = type == SHORT ? tiff.readUnsignedShort() : tiff.readUnsignedInt();
                 requireHeader(tiff, offset, maxWidth, maxHeight);
             }
+        }
+    }
+
+    /**
+     * Holds a JPEGTables field to tables alone. The JDK copies its bytes, up to the last EOI, ahead of each packet
+     * with the packet's SOI removed, so a frame header there would be the one the decoder sizes its buffers from and
+     * the packet's own would never be read. The segments must end exactly where the copy does, so that the packet
+     * is read from its first marker, as {@link #requireHeader} reads it.
+     */
+    private static void requireTables(ImageInputStream tiff, long type, long count, long valueField)
+        throws IOException {
+        if (type != BYTE && type != UNDEFINED) {
+            throw new IIOException("JPEG tables of an unexpected type");
+        }
+        tiff.seek(valueField);
+        long start = count <= 4 ? valueField : tiff.readUnsignedInt();
+        long length = tiff.length();
+        if (length < 0 || start + count > length) {
+            throw new IIOException("JPEG tables outside the file");
+        }
+        byte[] tables = new byte[(int) count];
+        tiff.seek(start);
+        tiff.readFully(tables);
+        int end = tables.length;
+        // The JDK's own search, from the end back to the second byte.
+        for (int at = tables.length - 2; at > 0; at--) {
+            if ((tables[at] & 0xFF) == 0xFF && (tables[at + 1] & 0xFF) == 0xD9) {
+                end = at;
+                break;
+            }
+        }
+        if (end < 2 || (tables[0] & 0xFF) != 0xFF || (tables[1] & 0xFF) != 0xD8) {
+            throw new IIOException("JPEG tables are not a JPEG stream");
+        }
+        int at = 2;
+        while (at < end) {
+            if ((tables[at++] & 0xFF) != 0xFF) {
+                throw new IIOException("JPEG marker expected");
+            }
+            while (at < end && (tables[at] & 0xFF) == 0xFF) {
+                at++;
+            }
+            if (at >= end) {
+                throw new IIOException("JPEG tables end inside a marker");
+            }
+            int marker = tables[at++] & 0xFF;
+            if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7)) {
+                continue;
+            }
+            if (marker == 0xD8 || marker == 0xD9 || marker == 0xDA || isFrameHeader(marker) || at + 2 > end) {
+                throw new IIOException("JPEG tables carry more than tables");
+            }
+            int segment = (tables[at] & 0xFF) << 8 | tables[at + 1] & 0xFF;
+            if (segment < 2 || at + segment > end) {
+                throw new IIOException("JPEG tables segment length");
+            }
+            at += segment;
         }
     }
 
