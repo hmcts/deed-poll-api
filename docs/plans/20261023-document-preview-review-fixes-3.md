@@ -111,9 +111,9 @@ Do not change it or anything under `ccd/`.
 
 **Files:** `README.md`, `docs/DOCUMENT-PREVIEW-SMOKE.md`, `CLAUDE.md`, this plan.
 
-- [ ] Document both decisions. **Reference this plan by its `docs/plans/completed/` path**, since that is where it
+- [x] Document both decisions. **Reference this plan by its `docs/plans/completed/` path**, since that is where it
       will be once the run ends.
-- [ ] Run `./gradlew cftlibTest --no-watch-fs` and all Validation Commands; record final commits and counts, and hand
+- [x] Run `./gradlew cftlibTest --no-watch-fs` and all Validation Commands; record final commits and counts, and hand
       off to the Ralphex review phases.
 
 ## Acceptance Criteria
@@ -176,6 +176,18 @@ Red: `TiffStructureTest` + `PreviewRendererTest` — 102 tests, 6 failed (the ne
 224 (1 skipped). Validation: `./gradlew build` (init script) passed — test 4,845 (1 skipped, the opt-in fixture
 regeneration), integration 24, 0 failures; `checkstyle.sh` OK after one line wrap (re-run of `PreviewRendererTest`
 green). Docs still name `TiffJpegPackets` (`CLAUDE.md`, `README.md`); Task 3 rewrites them.
+
+**Task 3.** Documented both decisions in `README.md`'s Document previews section (a new paragraph on the structure
+check and the JPEG-compressed TIFF refusal; the `MAX_FRAME_PIXELS` row loses its TIFF-JPEG packet sentence),
+`CLAUDE.md`'s preview bullet (the `TiffJpegPackets` sentence replaced by `TiffStructure` and Decision 2), and
+`docs/DOCUMENT-PREVIEW-SMOKE.md` (revision links, and a journey check that a Compression 7 TIFF is `422
+PREVIEW_INVALID_DOCUMENT` with `/file` still downloading), each citing
+`docs/plans/completed/20261023-document-preview-review-fixes-3.md`. No OpenAPI change, so the smoke page's artifact
+is unchanged. Validation: `./gradlew build` (init script) passed — test 4,845 (1 skipped, the opt-in fixture
+regeneration), integration 24, 0 failures; `checkstyle.sh` OK; `./gradlew cftlibTest --no-watch-fs` passed, 21
+tests, 0 failures, 0 skipped. Commits after the baseline: `fa9981b` (Task 1), `12a1992` (Task 2), and this Task 3
+commit ("feat: document the TIFF structure check and hand off"). Ready for the Ralphex review phases, from baseline
+`c43cc0ad971272e6f2c29266c21d7e778e1651d2`.
 
 ## Post-Completion
 

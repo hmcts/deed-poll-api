@@ -397,9 +397,14 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   for the rest; a PNG is read with metadata ignored, so its text chunks are never inflated. Do not reintroduce a parse
   "just to count pages": that is the heap-exhaustion finding of
   `docs/plans/completed/20261023-document-preview-review-fixes.md`. Likewise a tiled TIFF frame's declared tile is
-  held to `max-frame-pixels` before decoding (a strip is clipped to the frame by the JDK, so it is not checked), a
-  JPEG-compressed TIFF's per-packet JPEG header is held to its strip or tile by `TiffJpegPackets`, reading the directory entry by entry as the JDK does (an unknown-type entry is 8 bytes), with JPEGInterchangeFormat as the JDK's fallback, only the markers the decoder skips by length (never `FF 00`, which it discards and scans past), and JPEGTables allowed tables only, all its entries together no more bytes than the file (the native decoder
-  sizes off-heap buffers from it; old-style JPEG is refused), and its orientation comes from `TiffOrientation`, never
+  held to `max-frame-pixels` before decoding (a strip is clipped to the frame by the JDK, so it is not checked),
+  **no `ImageIO` call touches a TIFF until `TiffStructure` has passed it** (plain bounded reads: magic 42 only, at
+  most `max-pages` directories, none named twice, 1–64 entries of the 13 TIFF 6.0 types each, every payload inside
+  the file and header, tables and payloads all disjoint, so aliased entries cannot multiply the JDK's directory reads;
+  SubIFDs refused, EXIF/GPS/Interop bounded identically; `PreviewRendererTest.structureRefusedBeforeImageIo` proves
+  it with a static mock), **JPEG-compressed TIFFs (Compression 6 and 7) are deliberately not previewed** and answer
+  `PREVIEW_INVALID_DOCUMENT` (download the original instead; enabling them is a reviewed change, not a fix —
+  `docs/plans/completed/20261023-document-preview-review-fixes-3.md`), a TIFF's orientation comes from `TiffOrientation`, never
   `getImageMetadata` (a DOM copy of every strip offset; `PreviewBoundaryTest.noImageMetadataTree`); and the Docmosis
   body is one-shot, so OkHttp cannot resend it on a `503 Retry-After: 0`
   (`docs/plans/completed/20261023-document-preview-review-fixes-2.md`). The request thread does the conversion and
