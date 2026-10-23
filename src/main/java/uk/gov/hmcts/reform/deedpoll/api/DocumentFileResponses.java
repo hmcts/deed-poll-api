@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api;
 
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
@@ -10,13 +11,18 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentDownload;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.RenderedPreview;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * The one way a supporting document's bytes become an HTTP response, shared by the caseworker and judicial downloads.
+ * The one way a supporting document's bytes become an HTTP response, shared by the caseworker and judicial downloads
+ * and by their previews.
  *
  * <p>Here rather than in either namespace, as {@code DomainErrorHandler} is, because the headers below are what make
  * serving user-uploaded bytes safe, and a second copy would be a second place to forget one. It takes the domain's
@@ -101,6 +107,12 @@ public final class DocumentFileResponses {
 
     private static final String CONTENT_SECURITY_POLICY = "Content-Security-Policy";
 
+    /**
+     * Every preview's filename. Fixed rather than derived from the original's, so the rendition's name says what it
+     * is and carries nothing a member of the public typed; the original keeps its own name on {@code /file}.
+     */
+    public static final String PREVIEW_FILENAME = "document-preview.pdf";
+
     private DocumentFileResponses() {
     }
 
@@ -120,6 +132,41 @@ public final class DocumentFileResponses {
             // The message converter closes the stream once it is written, which is what DocumentDownload's
             // "the caller closes it" means here.
             .body(new InputStreamResource(download.stream()));
+    }
+
+    /**
+     * Writes a finished preview as the whole response, and closes it whatever happens.
+     *
+     * <p>The download's three protective headers, {@code inline} under {@link #PREVIEW_FILENAME}, and two the
+     * download does not send:
+     *
+     * <ul>
+     *   <li>{@code Content-Length}, because unlike a stored row's {@code sizeBytes} the preview's length was measured
+     *       from the file about to be sent.</li>
+     *   <li>{@code Accept-Ranges: none}. <strong>A preview has no range support</strong>, and the response is written
+     *       here rather than returned as a {@link Resource} for exactly that reason: Spring answers a {@code Range}
+     *       header on a resource body with a {@code 206} of the bytes asked for, and a partial PDF is the one outcome
+     *       the preview contract rules out. A {@code Range} header is ignored and the bounded whole is sent.</li>
+     * </ul>
+     *
+     * <p>Closing the preview deletes its scratch directory, so a caller that goes away half way through leaves
+     * nothing behind: the write fails, and the {@code finally} of the try below still runs.
+     */
+    public static void writePreview(RenderedPreview preview, HttpServletResponse response) throws IOException {
+        try (preview; InputStream pdf = preview.open()) {
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.setContentType(MediaType.APPLICATION_PDF_VALUE);
+            response.setContentLengthLong(preview.size());
+            response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+                ContentDisposition.inline().filename(PREVIEW_FILENAME).build().toString());
+            response.setHeader(X_CONTENT_TYPE_OPTIONS, "nosniff");
+            response.setHeader(CONTENT_SECURITY_POLICY, INERT_CONTENT_POLICY);
+            response.setHeader(HttpHeaders.CACHE_CONTROL, CacheControl.noStore().getHeaderValue());
+            response.setHeader(HttpHeaders.ACCEPT_RANGES, "none");
+            OutputStream body = response.getOutputStream();
+            pdf.transferTo(body);
+            body.flush();
+        }
     }
 
     /**

@@ -32,8 +32,9 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 ## The API surface
 
 Thirty-four caseworker operations across twenty-one paths, plus eight judicial ones on a namespace of their
-own (below), three privileged CCD-attempt ones (see [Repairing attempts](#repairing-attempts)), and eight
-Delivery Manager-only Gazette operations (see [Gazette publication foundation](#gazette-publication-foundation)).
+own (below), three privileged CCD-attempt ones (see [Repairing attempts](#repairing-attempts)), eight
+Delivery Manager-only Gazette operations (see [Gazette publication foundation](#gazette-publication-foundation)),
+and two document previews, one per surface (see [Document previews](#document-previews)), counted apart.
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
 `capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
 `/swagger-ui.html` is the authority; this table is the map — and `OpenAPIPublisherTest` asserts each count,
@@ -61,6 +62,7 @@ documented paths outside the counted surfaces; `documentsNoUnlistedPath` allowli
 | DELETE | `/caseworker/cases/{id}/witnesses/{witnessId}` | Delete a witness — **Team leader or Delivery Manager (legacy admin temporarily)**, 204, and 404 through the wrong case |
 | POST | `/caseworker/cases/{id}/documents` | Upload a file (multipart) and record its document row |
 | GET | `/caseworker/cases/{id}/documents/{documentId}/file` | Stream a document's stored file back |
+| GET | `/caseworker/cases/{id}/documents/{documentId}/preview` | A read-only PDF rendition of it for the admin viewer — counted apart; see [Document previews](#document-previews) |
 | GET | `/caseworker/saved-queries` | The shared library plus the caller's own, each flagged `selected` and `editable` |
 | POST | `/caseworker/saved-queries` | Save a query — `name` required, unshared unless `shared` says otherwise, and **only a Team leader, Delivery Manager or temporary legacy admin may set `shared`** (403 otherwise) |
 | GET | `/caseworker/saved-queries/{id}` | One saved query, if it is shared or theirs |
@@ -247,6 +249,7 @@ cannot be reused for the judiciary by accident. An ArchUnit rule asserts the sep
 | GET | `/judicial/referrals/mine` | This judge's own work — their `Claimed` referrals before their `Decided` ones, urgent first then longest-waiting, paged the same ten at a time |
 | GET | `/judicial/referrals/{referralId}` | One referral, the wide `JudicialApplicationView` of its application (details, witnesses, readable documents; no case id, payment or refund data, or office processing record), and the case's notes. Opening it records `CASE_VIEWED` |
 | GET | `/judicial/referrals/{referralId}/documents/{documentId}/file` | Download one of the application's readable documents — any judge who can see an `Open` referral may. Records `DOCUMENT_DOWNLOADED` and is served with the caseworker download's headers |
+| GET | `/judicial/referrals/{referralId}/documents/{documentId}/preview` | A read-only PDF rendition of it, to whoever may download it — counted apart; see [Document previews](#document-previews) |
 | POST | `/judicial/referrals/{referralId}/claim` | Claim a pool referral — it becomes theirs and drops off every other judge's |
 | POST | `/judicial/referrals/{referralId}/direction` | Record a direction — `decision`, optional `directionsText`, and `publishToGazette` |
 | PUT | `/judicial/referrals/{referralId}/direction` | Revise the judge's own direction (the `POST`'s body) while the referral is `Decided` and not yet closed |
@@ -576,12 +579,12 @@ the declared type is recorded. Regression tests exercise the five accepted types
 metadata against the real local store and the CDAM WireMock journey, including conflicting upstream upload
 metadata and download headers. These local tests do not establish live CDAM onboarding or malware scanning.
 
-### Document previews (planned contract)
+### Document previews
 
-**Not yet published.** The routes below are the contract the preview plan
-([20261023-document-preview-rendering](docs/plans/20261023-document-preview-rendering.md)) builds towards; the
-configuration and limits exist, the handlers arrive in its Task 5, and until then neither path answers. A preview is
-a read-only PDF rendition for the admin viewer. It never replaces, attaches, publishes or edits the original, which
+Two operations, one per surface, from the preview plan
+([20261023-document-preview-rendering](docs/plans/20261023-document-preview-rendering.md)), and counted apart from
+both surfaces' totals (`previewCaseDocument`, `previewReferralDocument`). A preview is a read-only PDF rendition for
+the admin viewer. It never replaces, attaches, publishes or edits the original, which
 `/file` keeps serving exactly as above.
 
 ```http
@@ -594,13 +597,15 @@ authorise and open the original through the same caller-scoped read as `/file`, 
 fail-closed before anything is opened, once per request. A wrong case, an unknown document or a referral the judge
 cannot see is the existing 404; 401 and 403 are unchanged.
 
-A success is a complete `200` `application/pdf`, `inline` with a safe `.pdf` filename, under the download's
-`Content-Security-Policy: default-src 'none'; sandbox`, `X-Content-Type-Options: nosniff` and
-`Cache-Control: no-store`. **There is no range support**: a `Range` header is ignored and the whole bounded PDF is
-returned. PDF passes through after checks; JPEG and PNG become one page; a TIFF becomes one page per frame, in
+A success is a complete `200` `application/pdf`, `inline` with the fixed filename `document-preview.pdf` and a
+measured `Content-Length`, under the download's `Content-Security-Policy: default-src 'none'; sandbox`,
+`X-Content-Type-Options: nosniff` and `Cache-Control: no-store`. **There is no range support**: the response says
+`Accept-Ranges: none`, a `Range` header is ignored and the whole bounded PDF is returned with `200`, never `206`. PDF passes through after checks; JPEG and PNG become one page; a TIFF becomes one page per frame, in
 order; DOCX is converted by Docmosis Tornado's `/rs/convert`. Nothing is cached or stored.
 
-A preview that is not produced answers a fixed body with one of four codes, and its sentence never names the file:
+A preview that is not produced answers `{"error": "<fixed sentence>", "code": "<code>"}` (`DocumentPreviewError`,
+`no-store`), and its sentence never names the file. A refusal before the preview keeps the usual `{"error"}` body.
+Every refusal is JSON even to a client that sent `Accept: application/pdf`:
 
 | Status | Code | Meaning |
 |---|---|---|
@@ -609,7 +614,9 @@ A preview that is not produced answers a fixed body with one of four codes, and 
 | 503 | `PREVIEW_UNAVAILABLE` | The DOCX converter is unconfigured, unreachable, or did not return a complete PDF |
 | 429 | `PREVIEW_BUSY` | Every conversion permit on this pod is in use; `Retry-After` says when to try again |
 
-Every failure leaves the original download working. The limits are preview limits only: none of them changes upload
+Every failure leaves the original download working. Both operations publish the limits below as
+`x-document-preview-limits` in the OpenAPI document, read from the running configuration. The limits are preview
+limits only: none of them changes upload
 acceptance, original downloads or the staging cap.
 
 | Environment variable | Default | Purpose |

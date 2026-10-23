@@ -30,7 +30,9 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations 
                                   and /caseworker/gazette-notices (1 history GET, counted apart)
                                   and /caseworker/gazette-settings (Delivery Manager-only GET/PUT)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
-api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case
+                                  plus GET …/documents/{documentId}/preview (counted apart as PREVIEW_PATHS)
+api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case,
+                                  plus its own document preview (counted apart with the caseworker one)
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web, behind the S2S-only citizenFilterChain
 api/caller/{controller,dto}       GET /me, the caller's own areas and capabilities — outside both staff areas,
                                   because a caller with no deed-poll role must be told so rather than refused

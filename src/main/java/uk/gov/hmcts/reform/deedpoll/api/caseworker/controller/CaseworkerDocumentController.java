@@ -1,5 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -23,6 +25,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentStore;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadFormInput;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.DocumentPreviewService;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -31,21 +34,21 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Supporting documents: the upload and the download.
+ * Supporting documents: the upload, the download and the preview.
  *
- * <p>Two of the caseworker operations, and the only two this service exposes on documents. There is deliberately
+ * <p>Three of the caseworker operations, and the only three this service exposes on documents. There is deliberately
  * no metadata create, no patch, no delete and no document list -- {@code GET /caseworker/cases/&#123;id&#125;}
  * already carries a case's documents, which is where the detail page reads them, and the remaining domain methods
  * have no consumer. They are implemented and tested in {@code DocumentService}, so exposing one later is a route
  * rather than a design.
  *
- * <p><strong>These are the only two routes in the service that are not JSON in and JSON out</strong>, so they are
- * the only two that touch transport detail: multipart on the way in, and a stream with its own headers on the way
- * out. Everything that is a decision about the service rather than about HTTP is in
- * {@link UploadPolicy} -- the size limit, the accepted-type list and the wording of both refusals -- so that the
- * SSR form in the sibling web app enforces the same rules from the same constants.
+ * <p><strong>These are the only caseworker routes that are not JSON in and JSON out</strong>, so they are the only
+ * ones that touch transport detail: multipart on the way in, and a stream with its own headers on the way out.
+ * Everything that is a decision about the service rather than about HTTP is in {@link UploadPolicy} -- the size
+ * limit, the accepted-type list and the wording of both refusals -- so that the SSR form in the sibling web app
+ * enforces the same rules from the same constants.
  *
- * <p>Neither route is annotated as requiring authentication, and both do: {@code SecurityConfiguration}
+ * <p>No route here is annotated as requiring authentication, and all three do: {@code SecurityConfiguration}
  * authenticates {@code anyRequest()} that is not on a short infrastructure allowlist.
  */
 @RestController
@@ -53,9 +56,11 @@ import java.util.Map;
 public class CaseworkerDocumentController {
 
     private final DocumentService documents;
+    private final DocumentPreviewService previews;
 
-    public CaseworkerDocumentController(DocumentService documents) {
+    public CaseworkerDocumentController(DocumentService documents, DocumentPreviewService previews) {
         this.documents = documents;
+        this.previews = previews;
     }
 
     /**
@@ -113,6 +118,32 @@ public class CaseworkerDocumentController {
                                          @PathVariable("documentId") String documentId) {
 
         return DocumentFileResponses.of(documents.downloadDocument(id, documentId, CurrentUsers.required()));
+    }
+
+    /**
+     * A read-only PDF rendition of a document, for the admin viewer; {@code /file} keeps serving the original.
+     *
+     * <p>Scoped exactly as {@link #file} is, and recorded as {@code DOCUMENT_PREVIEWED} -- not as a download -- once,
+     * fail-closed, before the original is opened. Rendered on this request and never stored: the response is the
+     * whole PDF or one of the four fixed refusals, and {@link DocumentFileResponses#writePreview} deletes the
+     * rendition once it is written or the caller has gone.
+     */
+    @Operation(operationId = "previewCaseDocument",
+        summary = "Preview a supporting document as a PDF",
+        description = "A read-only rendition of the document as one complete PDF, for viewing in place; the "
+            + "original stays on /file, unchanged. PDF passes through after checks, JPEG and PNG become one page, "
+            + "a TIFF one page per frame in order, and DOCX is converted. Scoped to the case as /file is: 404 for "
+            + "another case's document, an unknown one, or one with no readable file. Recorded as "
+            + "DOCUMENT_PREVIEWED, not DOCUMENT_DOWNLOADED, once per request before the original is opened, and "
+            + "refused if that cannot be recorded. No range support: a Range header is ignored and the whole PDF is "
+            + "sent. A preview that is not produced is one of four fixed codes, and leaves /file working.")
+    @GetMapping("/{documentId}/preview")
+    public void preview(@PathVariable("id") String id,
+                        @PathVariable("documentId") String documentId,
+                        HttpServletResponse response) throws IOException {
+
+        DocumentFileResponses.writePreview(
+            previews.caseworkerPreview(id, documentId, CurrentUsers.required(), previews.budget()), response);
     }
 
     /**

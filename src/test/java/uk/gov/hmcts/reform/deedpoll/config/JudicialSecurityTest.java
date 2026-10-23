@@ -144,11 +144,12 @@ class JudicialSecurityTest {
      * published -- safe for the reason the transitions were before the judicial controller existed, because a gate on
      * a surface nobody can reach refuses everybody -- and publishing its route moved this line. The document download
      * (2026-10-19) moved it again, and so did revising a direction (a {@code PUT} beside the {@code POST}) and
-     * withdrawing one. Written
+     * withdrawing one, and the document preview (2026-10-23), whose handler reaches {@code previewDocument} through
+     * {@code DocumentPreviewService}. Written
      * as a number rather than derived, so a handler arriving without a gated service method behind it fails here
      * instead of following whatever the controller happens to declare.
      */
-    private static final int ROUTED_OPERATIONS = 8;
+    private static final int ROUTED_OPERATIONS = 9;
 
     /** Every judicial path, as a caller would type it: what the allowlist must not match. */
     private static final List<String> JUDICIAL_PATHS = List.of(
@@ -159,7 +160,8 @@ class JudicialSecurityTest {
         "/judicial/referrals/" + REFERRAL_ID + "/claim",
         "/judicial/referrals/" + REFERRAL_ID + "/direction",
         "/judicial/referrals/" + REFERRAL_ID + "/direction/withdraw",
-        "/judicial/referrals/" + REFERRAL_ID + "/documents/" + DOCUMENT_ID + "/file");
+        "/judicial/referrals/" + REFERRAL_ID + "/documents/" + DOCUMENT_ID + "/file",
+        "/judicial/referrals/" + REFERRAL_ID + "/documents/" + DOCUMENT_ID + "/preview");
 
     private ReferralRepository referrals;
     private ReferralService transitions;

@@ -1,8 +1,10 @@
 package uk.gov.hmcts.reform.deedpoll.api;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MissingRequestHeaderException;
@@ -21,8 +23,10 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewError;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteRefusal;
 
+import java.time.Duration;
 import java.util.List;
 
 /**
@@ -63,10 +67,18 @@ public class DomainErrorHandler {
         return ResponseEntity.badRequest().body(ApiError.of(error.getMessage(), error.errors()));
     }
 
-    /** No such record, or none visible in the scope it was asked for. */
+    /**
+     * No such record, or none visible in the scope it was asked for.
+     *
+     * <p>This and the 401 and 403 below preset their JSON type rather than negotiating it, because they are what a
+     * binary route refuses with before it has produced anything: a document preview client asks for
+     * {@code application/pdf}, no converter writes an {@link ApiError} as that, and a negotiated refusal would be
+     * lost and answered 500 instead of 404.
+     */
     @ExceptionHandler(NotFoundError.class)
     public ResponseEntity<ApiError> notFound(NotFoundError error) {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiError.of(error.getMessage()));
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).contentType(MediaType.APPLICATION_JSON)
+            .body(ApiError.of(error.getMessage()));
     }
 
     /**
@@ -80,6 +92,7 @@ public class DomainErrorHandler {
     public ResponseEntity<ApiError> unauthorized(UnauthorizedError error) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
             .header(HttpHeaders.WWW_AUTHENTICATE, "Bearer")
+            .contentType(MediaType.APPLICATION_JSON)
             .body(ApiError.of(error.getMessage()));
     }
 
@@ -95,7 +108,8 @@ public class DomainErrorHandler {
     @ExceptionHandler(ForbiddenError.class)
     public ResponseEntity<ApiError> forbidden(ForbiddenError error, HttpServletRequest request) {
         SecurityEvents.denied(request.getRequestURI(), SecurityEvents.DOMAIN_RULE);
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ApiError.of(error.getMessage()));
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).contentType(MediaType.APPLICATION_JSON)
+            .body(ApiError.of(error.getMessage()));
     }
 
     /**
@@ -109,6 +123,34 @@ public class DomainErrorHandler {
         return ResponseEntity.status(error.code()
             == GazetteRefusal.Code.GAZETTE_UNAVAILABLE
                 ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.CONFLICT).body(GazetteError.from(error));
+    }
+
+    /**
+     * A document preview that was not produced, under its failure's own status and fixed body.
+     *
+     * <p>422 for a document that cannot be rendered or reached a limit, 503 for a converter that is not there, 429
+     * with {@code Retry-After} for a pod with no conversion permit free. Nothing of the failure's cause reaches the
+     * body, because {@link PreviewError} carries none.
+     *
+     * <p><strong>The JSON type is set, not negotiated.</strong> A preview client asks for {@code application/pdf},
+     * and a negotiated body would find no converter for that and lose the refusal; a preset type is written as is.
+     * {@code no-store} because the answer is about one document at one moment.
+     */
+    @ExceptionHandler(PreviewError.class)
+    public ResponseEntity<DocumentPreviewError> preview(PreviewError error) {
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(error.failure().status())
+            .contentType(MediaType.APPLICATION_JSON)
+            .cacheControl(CacheControl.noStore());
+        error.retryAfter().ifPresent(wait -> response.header(HttpHeaders.RETRY_AFTER, wholeSeconds(wait)));
+        return response.body(DocumentPreviewError.from(error));
+    }
+
+    /**
+     * {@code Retry-After}'s delay-seconds: a whole number, rounded up so a client never retries early.
+     */
+    private static String wholeSeconds(Duration wait) {
+        long seconds = wait.getSeconds() + (wait.getNano() > 0 ? 1 : 0);
+        return Long.toString(Math.max(1, seconds));
     }
 
     @ExceptionHandler(ConflictError.class)

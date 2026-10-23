@@ -98,6 +98,30 @@ class StaffAccessRulesTest {
                 || List.of(SecurityConfiguration.ANY_AUTHENTICATED_PATHS).contains(pattern));
     }
 
+    /**
+     * The two document previews, each a single GET inside the area of the download beside it. Pinned by name as
+     * well as covered by the rule above, because a preview mapped under the wrong prefix would still be inside
+     * <em>a</em> staff area -- and a caseworker reading a judicial rendition, or the reverse, is the disclosure.
+     */
+    @Test
+    @DisplayName("the document previews are one GET each, inside the caseworker and judicial areas respectively")
+    void theDocumentPreviewsSitInTheirOwnAreas() {
+        Map<String, StaffArea> previews = Map.of(
+            "/caseworker/cases/{id}/documents/{documentId}/preview", StaffArea.CASEWORKER,
+            "/judicial/referrals/{referralId}/documents/{documentId}/preview", StaffArea.JUDICIAL);
+        assertThat(OpenAPIDocumentPreviews.PATHS).containsExactlyInAnyOrderElementsOf(previews.keySet());
+
+        previews.forEach((path, area) -> {
+            List<RequestMappingInfo> mapped = applicationMappings().stream()
+                .filter(mapping -> mapping.getPatternValues().contains(path))
+                .toList();
+            assertThat(mapped).as(path).hasSize(1);
+            assertThat(mapped.get(0).getMethodsCondition().getMethods()).as(path)
+                .containsExactly(RequestMethod.GET);
+            assertThat(StaffArea.of(path)).as(path).contains(area);
+        });
+    }
+
     @Test
     @DisplayName("the routes any authenticated caller may reach are exactly /me, so another is a reviewed change")
     void anyAuthenticatedPathsAreExactlyMe() {

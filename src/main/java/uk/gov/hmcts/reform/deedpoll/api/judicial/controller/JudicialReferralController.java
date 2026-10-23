@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.api.judicial.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,15 +23,18 @@ import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.ReadAudit;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.DocumentPreviewService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralView;
 
+import java.io.IOException;
+
 /**
- * What a judge does, all eight of it: read the shared pool, read their own outstanding work, open a referral they
- * may see, download one of its supporting documents, claim one, direct one they hold, and revise or withdraw a
- * direction they gave.
+ * What a judge does, all nine of it: read the shared pool, read their own outstanding work, open a referral they
+ * may see, download or preview one of its supporting documents, claim one, direct one they hold, and revise or
+ * withdraw a direction they gave.
  *
- * <p><strong>Four reads and four writes.</strong> The fifth operation is the personal list, and it completes the
+ * <p><strong>Five reads and four writes.</strong> The fifth operation is the personal list, and it completes the
  * judicial boundary rather than widening it: visibility always admitted a judge's own {@code Claimed} and
  * {@code Decided} referrals, and until there was a list of them a successful claim removed the referral from the
  * only page that linked to it. Its membership is the same predicate as that visibility, so the list cannot offer a
@@ -53,7 +57,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralView;
  * {@code CaseDetailResponse} carries every field a caseworker sees and reuse would be a disclosure dressed as
  * deduplication.
  *
- * <p>No route here is annotated as requiring authentication, and all eight do: {@code SecurityConfiguration}
+ * <p>No route here is annotated as requiring authentication, and all nine do: {@code SecurityConfiguration}
  * authenticates {@code anyRequest()} that is not on a short infrastructure allowlist, so {@code /judicial/**} was
  * protected the moment it existed. An unauthenticated caller is a 401 before routing; a caseworker token is a 403
  * from the domain's role gate; a referral this judge may not see is a 404.
@@ -64,10 +68,13 @@ public class JudicialReferralController {
 
     private final JudicialReferralService judicial;
     private final ReadAudit readAudit;
+    private final DocumentPreviewService previews;
 
-    public JudicialReferralController(JudicialReferralService judicial, ReadAudit readAudit) {
+    public JudicialReferralController(JudicialReferralService judicial, ReadAudit readAudit,
+                                      DocumentPreviewService previews) {
         this.judicial = judicial;
         this.readAudit = readAudit;
+        this.previews = previews;
     }
 
     /**
@@ -190,6 +197,34 @@ public class JudicialReferralController {
                                              @PathVariable("documentId") String documentId) {
 
         return DocumentFileResponses.of(judicial.document(referralId, documentId, CurrentUsers.required()));
+    }
+
+    /**
+     * A read-only PDF rendition of one of the application's supporting documents, reached as {@link #document} is.
+     *
+     * <p>The same role gate and visibility as the download, through {@code JudicialReferralService.previewDocument},
+     * so every refusal is the download's: the referral's 404, the document's 404 and the judicial 403. Recorded as
+     * {@code DOCUMENT_PREVIEWED}, fail-closed, before the original is opened; the rendition is never stored.
+     */
+    @Operation(operationId = "previewReferralDocument",
+        summary = "Preview one of the application's supporting documents as a PDF",
+        description = "Requires the judicial role. The documentId is one of the referral's application.documents, "
+            + "and who may preview it is exactly who may download it from /file: any judge for an Open referral, "
+            + "the holder for a Claimed one and the directing judge for a Decided one. A read-only rendition as "
+            + "one complete PDF; the original stays on /file, unchanged. PDF passes through after checks, JPEG and "
+            + "PNG become one page, a TIFF one page per frame in order, and DOCX is converted. Recorded as "
+            + "DOCUMENT_PREVIEWED, not DOCUMENT_DOWNLOADED, once per request before the original is opened, and "
+            + "refused if that cannot be recorded. 404 for a referral this judge may not see, and for a document "
+            + "that is not this referral's case's or has no readable file. No range support: a Range header is "
+            + "ignored and the whole PDF is sent. A preview that is not produced is one of four fixed codes, and "
+            + "leaves /file working.")
+    @GetMapping("/{referralId}/documents/{documentId}/preview")
+    public void preview(@PathVariable("referralId") String referralId,
+                        @PathVariable("documentId") String documentId,
+                        HttpServletResponse response) throws IOException {
+
+        DocumentFileResponses.writePreview(
+            previews.judicialPreview(referralId, documentId, CurrentUsers.required(), previews.budget()), response);
     }
 
     /**

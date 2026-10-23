@@ -239,15 +239,15 @@ update `domain/audit/ReadAudit` tests and relevant service tests.
 **Files:** caseworker/judicial document controllers, `api/DocumentFileResponses.java` or a dedicated
 preview response helper, preview error DTO/handler, `OpenAPIPublisherTest` and namespace/security tests.
 
-- [ ] Write full-context HTTP tests before adding the two handlers. Preserve the repo's namespace separation
+- [x] Write full-context HTTP tests before adding the two handlers. Preserve the repo's namespace separation
       and add the routes to the staff-area coverage inventory; do not rely on a `@WebMvcTest` slice.
-- [ ] Serve complete PDF previews with safe filenames, `no-store`, `nosniff` and inert sandbox policy.
+- [x] Serve complete PDF previews with safe filenames, `no-store`, `nosniff` and inert sandbox policy.
       Keep the original MIME/disposition policy intact and ensure closing the response releases resources.
-- [ ] Publish exact statuses, fixed error schema, binary media type, headers and the resource-limit extension.
+- [x] Publish exact statuses, fixed error schema, binary media type, headers and the resource-limit extension.
       Describe the preview as a read-only rendition; do not expose CDAM IDs/hash tokens, paths or converter URLs.
-- [ ] Verify anonymous/wrong-area/wrong-parent/hidden-referral refusals and all five format successes over HTTP;
+- [x] Verify anonymous/wrong-area/wrong-parent/hidden-referral refusals and all five format successes over HTTP;
       cover unsupported Range requests as a full bounded 200 response, not partial/truncated content.
-- [ ] Extend the OpenAPI path/operation assertions and generate the producer artifact with the existing
+- [x] Extend the OpenAPI path/operation assertions and generate the producer artifact with the existing
       publisher test. Record its source SHA/checksum and structural delta. Run Validation Commands.
 
 ### Task 6: Verify the complete preview boundary
@@ -439,6 +439,55 @@ and its file-download smoke are not evidence that document previews exist. Appen
 - **Validation:** `./gradlew build` (no-checkstyle init) -- test 4731 run, 1 skipped (the opt-in fixture
   regeneration), 0 failed; integration 23 run, 0 failed. `checkstyle.sh` OK. The known intermittent
   `CcdCreationAttemptRepositoryTest` did not fail.
+
+### Task 5 (2026-10-23)
+
+- **Routes:** `CaseworkerDocumentController.preview` (`GET /caseworker/cases/{id}/documents/{documentId}/preview`,
+  operationId `previewCaseDocument`) and `JudicialReferralController.preview`
+  (`GET /judicial/referrals/{referralId}/documents/{documentId}/preview`, `previewReferralDocument`), each one call to
+  `DocumentPreviewService` with a fresh `budget()`, then `DocumentFileResponses.writePreview`.
+- **Response written, not returned:** a `Resource` body would let Spring answer `Range` with a `206` of the bytes
+  asked for (`AbstractMessageConverterMethodProcessor`), so `writePreview` writes the servlet response itself:
+  `200`, `application/pdf`, measured `Content-Length`, `inline; filename="document-preview.pdf"` (fixed, so nothing
+  the uploader typed reaches the header), the download's `nosniff`, `default-src 'none'; sandbox` and `no-store`,
+  plus `Accept-Ranges: none`. It closes the `RenderedPreview` (deleting its scratch directory) in a
+  try-with-resources whatever happens. The original's `DocumentFileResponses.of` is unchanged.
+- **Errors:** `DomainErrorHandler.preview` maps `PreviewError` to its failure's status with
+  `DocumentPreviewError {error, code}`, `no-store`, and `Retry-After` (whole seconds, rounded up) on `PREVIEW_BUSY`.
+  **Found while testing:** a client sending `Accept: application/pdf` had its 404 lost to content negotiation and
+  rethrown (a 500 in a container), because no converter writes `ApiError` as PDF. The preview handler and the shared
+  404/401/403 handlers now preset `application/json`; JSON clients see no difference.
+- **OpenAPI:** `config/OpenAPIDocumentPreviews` (springdoc sees a `void` handler) publishes, on both operations:
+  `200` `application/pdf` binary with its six headers; `404` `ApiError`; `422`/`429`/`503` `DocumentPreviewError`,
+  grouped from `PreviewFailure`'s own statuses with each code's fixed sentence in the description and the `code` enum
+  from the enum itself; `Retry-After` on 429; and `x-document-preview-limits` read from the running
+  `PreviewProperties` (25 s, 26214400 input, 52428800 output, 500 pages, 25,000,000 pixels, 3 per instance, 5 s,
+  `rangeRequests: unsupported`). The 403 is still `OpenAPIForbiddenResponses`'. No converter, CDAM id, hash token or
+  storage key is named.
+- **Counted apart:** `OpenAPIPublisherTest.PREVIEW_PATHS`, like the CCD attempts, so the caseworker 34 and judicial
+  8 stand; `documentsNoUnlistedPath` knows them. `JudicialSecurityTest.ROUTED_OPERATIONS` is 9 (the controller's
+  ninth handler reaches the already-gated `previewDocument`). `StaffAccessRulesTest` pins each preview as one GET in
+  its own area. `RateLimitRoutesTest` now expects 429 on the six limited routes plus the two previews, and only the
+  previews' 429 is `PREVIEW_BUSY`.
+- **Tests:** `api/DocumentPreviewHttpTest`, 30, full context with the staff gate enforcing, real Postgres, filesystem
+  store and renderers, WireMock converter: all five formats on both surfaces (page counts read back with PDFBox,
+  every header, one `DOCUMENT_PREVIEWED` and no `DOCUMENT_DOWNLOADED`, the converter called only for DOCX, the
+  original still served byte-identical); `Range: bytes=0-99` is a full `200` with no `Content-Range`; anonymous 401,
+  judge on the caseworker route and every staff role on the judicial route 403, another case's URL / unknown
+  document / another case's document 404, another judge on a claim and closed/withdrawn referrals the referral's
+  404 -- each with nothing opened, nothing sent and nothing recorded; legacy `.doc` and PDF bytes behind a PNG row 422
+  `PREVIEW_INVALID_DOCUMENT` in a body of exactly two fields; converter 503/500 is `PREVIEW_UNAVAILABLE` with
+  nothing of the provider body, host, filename or key; three held permits make a PNG 429 `Retry-After: 5` with no
+  audit while a PDF passes; refusals are JSON under `Accept: application/pdf`; a failed audit opens nothing. After
+  every test all permits are free and no `preview-*` directory remains. Mutation: not closing the preview in
+  `writePreview` failed 14 tests.
+- **Producer artifact:** `OpenAPIPublisherTest` (21 tests) wrote `/tmp/openapi-specs.json`, SHA-256
+  `86eeee8ad19f8787e29f1ce413ee24d8f62aee412d82c466e0eb2f45c2d7508b`, from the Task 5 commit's source (parent
+  `48feecb`). Structural delta: +2 paths, +2 GET operations, +1 schema (`DocumentPreviewError`); now 41 paths, 57
+  operations, 61 schemas. No existing operation's contract changed.
+- **Validation:** `./gradlew build` (no-checkstyle init) successful -- test 4762 run, 1 skipped (the opt-in fixture
+  regeneration), 0 failed; integration 24 run, 0 failed. `checkstyle.sh` OK after line-length/Javadoc fixes (re-ran
+  the HTTP test after them: 30/30). The known intermittent `CcdCreationAttemptRepositoryTest` did not fail.
 
 ## Post-Completion
 
