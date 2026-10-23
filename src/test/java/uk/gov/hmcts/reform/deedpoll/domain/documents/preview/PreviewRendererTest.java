@@ -403,8 +403,7 @@ class PreviewRendererTest {
         }
 
         @ParameterizedTest(name = "{0}")
-        @ValueSource(strings = {"None", "LZW", "Deflate", "ZLib", "PackBits", "JPEG", "CCITT RLE", "CCITT T.4",
-                                "CCITT T.6"})
+        @ValueSource(strings = {"None", "LZW", "Deflate", "ZLib", "PackBits", "CCITT RLE", "CCITT T.4", "CCITT T.6"})
         @DisplayName("every frame of every supported compression is a page")
         void compressions(String compression) throws IOException {
             String type = "None".equals(compression) ? null : compression;
@@ -581,189 +580,19 @@ class PreviewRendererTest {
         }
 
         @Test
-        @DisplayName("a JPEG-compressed TIFF whose packets declare their own strip or tile renders")
-        void jpegPackets() throws IOException {
-            byte[] packet = greyJpeg(64, 64, 64, 64);
-            for (byte[] tiff : List.of(DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet),
-                                       DocumentPreviewFixtures.tiledGrey(64, 64, 64, 64, JPEG, packet))) {
-                try (RenderedPreview preview = render(PreviewFormat.TIFF, tiff);
-                     PDDocument document = Loader.loadPDF(bytes(preview))) {
-                    assertThat(preview.pages()).hasValue(1);
-                    assertNear(colourAt(raster(document, 0), 0.5, 0.5), Color.BLACK);
-                }
-            }
-        }
-
-        @ParameterizedTest(name = "{0} by {1}")
-        @CsvSource({"40000, 40000", "80, 64", "64, 80"})
-        @DisplayName("a JPEG packet declaring more than its strip or tile is refused before it is decoded")
-        void jpegPacketOverItsRegion(int declaredWidth, int declaredHeight) {
-            // The packet's frame header alone is patched, so the decoder would be sizing its buffers from it.
-            byte[] packet = greyJpeg(64, 64, declaredWidth, declaredHeight);
-            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet),
-                          PreviewFailure.LIMIT_EXCEEDED);
-            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(64, 64, 65_535, JPEG, packet),
-                          PreviewFailure.LIMIT_EXCEEDED);
-            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.tiledGrey(64, 64, 64, 64, JPEG, packet),
-                          PreviewFailure.LIMIT_EXCEEDED);
-        }
-
-        @Test
-        @DisplayName("an old-style JPEG TIFF, or a JPEG one whose packet is not a JPEG, is an invalid document")
-        void oldJpegAndNotJpeg() {
+        @DisplayName("a JPEG-compressed TIFF, old-style or not, is an invalid document, not drawn")
+        void jpegCompressed() {
+            // Deliberately not previewed (plan 20261023-document-preview-review-fixes-3, decision 2): the viewer
+            // offers the original's download instead.
+            assertFailure(PreviewFormat.TIFF,
+                          DocumentPreviewFixtures.tiff(List.of(new Frame(200, 300, RED, "JPEG", 1))),
+                          PreviewFailure.INVALID_DOCUMENT);
             assertFailure(PreviewFormat.TIFF,
                           DocumentPreviewFixtures.strippedGrey(64, 64, 64, OLD_JPEG, greyJpeg(64, 64, 64, 64)),
                           PreviewFailure.INVALID_DOCUMENT);
-            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, NOT_DEFLATE),
-                          PreviewFailure.INVALID_DOCUMENT);
-        }
-
-        @Test
-        @DisplayName("an entry of a type the JDK does not know cannot hide a JPEG frame's oversized packet")
-        void jpegBehindAnUnknownType() {
-            // The JDK reads an unknown-type entry as eight bytes, so the real entries that follow are aligned for it;
-            // the structure check refuses any unknown type before either reading is attempted.
-            byte[] entry = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 0x9999)
-                .putShort((short) 0).putInt(0x0007_0103).array();
-            byte[] packet = greyJpeg(64, 64, 40_000, 40_000);
             assertFailure(PreviewFormat.TIFF,
-                          DocumentPreviewFixtures.withLeadingEntry(
-                              DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet), entry, new byte[0]),
+                          DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, greyJpeg(64, 64, 40_000, 40_000)),
                           PreviewFailure.INVALID_DOCUMENT);
-        }
-
-        @Test
-        @DisplayName("a JPEG frame whose only packet offset is JPEGInterchangeFormat is held to its frame")
-        void jpegInterchangeFormat() {
-            byte[] packet = greyJpeg(64, 64, 40_000, 40_000);
-            assertFailure(PreviewFormat.TIFF,
-                          DocumentPreviewFixtures.withStripOffsetsAs(
-                              DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet), 513),
-                          PreviewFailure.LIMIT_EXCEEDED);
-        }
-
-        @Test
-        @DisplayName("a SHORT TileOffsets entry the JDK drops cannot hide an oversized JPEGInterchangeFormat packet")
-        void jpegInterchangeBehindDroppedTileOffsets() {
-            // The JDK keeps TileOffsets only as LONG, so it ignores this one and decodes from JPEGInterchangeFormat.
-            byte[] small = greyJpeg(64, 64, 64, 64);
-            byte[] tiff = DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, greyJpeg(64, 64, 40_000, 40_000));
-            byte[] entry = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 324)
-                .putShort((short) 3).putInt(1).putShort((short) (tiff.length + 12)).putShort((short) 0).array();
-            assertFailure(PreviewFormat.TIFF,
-                          DocumentPreviewFixtures.withStripOffsetsAs(
-                              DocumentPreviewFixtures.withLeadingEntry(tiff, entry, small), 513),
-                          PreviewFailure.LIMIT_EXCEEDED);
-        }
-
-        @Test
-        @DisplayName("JPEGTables carrying tables alone render; carrying a frame header or a scan they are refused")
-        void jpegTables() throws IOException {
-            byte[] packet = greyJpeg(64, 64, 64, 64);
-            byte[] tiff = DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet);
-            byte[] onlyTables = tablesOf(packet, false);
-            try (RenderedPreview preview = render(PreviewFormat.TIFF, withTables(tiff, onlyTables));
-                 PDDocument document = Loader.loadPDF(bytes(preview))) {
-                assertThat(preview.pages()).hasValue(1);
-                assertNear(colourAt(raster(document, 0), 0.5, 0.5), Color.BLACK);
-            }
-            assertFailure(PreviewFormat.TIFF, withTables(tiff, tablesOf(greyJpeg(64, 64, 40_000, 40_000), true)),
-                          PreviewFailure.INVALID_DOCUMENT);
-        }
-
-        @Test
-        @DisplayName("JPEGTables entries that together cover more than the file are refused before they are read")
-        void repeatedJpegTables(@TempDir Path scratch) throws IOException {
-            byte[] packet = greyJpeg(64, 64, 64, 64);
-            byte[] tiff = DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet);
-            byte[] onlyTables = tablesOf(packet, false);
-            // An APP0 segment pads the tables to most of the file, so two entries naming them exceed it.
-            int padding = 60_000;
-            byte[] padded = ByteBuffer.allocate(onlyTables.length + 4 + padding).put(onlyTables, 0, 2)
-                .put((byte) 0xFF).put((byte) 0xE0).putShort((short) (padding + 2)).put(new byte[padding])
-                .put(onlyTables, 2, onlyTables.length - 2).array();
-            byte[] once = withTables(tiff, padded);
-            try (RenderedPreview preview = render(PreviewFormat.TIFF, once)) {
-                assertThat(preview.pages()).hasValue(1);
-            }
-            // A second entry shifts the payload by its own twelve bytes, so both entries are pointed at it afresh.
-            byte[] again = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 347)
-                .putShort((short) 7).putInt(padded.length).putInt(0).array();
-            byte[] twice = DocumentPreviewFixtures.withLeadingEntry(once, again, new byte[0]);
-            ByteBuffer entries = ByteBuffer.wrap(twice).order(ByteOrder.LITTLE_ENDIAN);
-            for (int at = 10; at < 10 + (entries.getShort(8) & 0xFFFF) * 12; at += 12) {
-                if ((entries.getShort(at) & 0xFFFF) == 347) {
-                    entries.putInt(at + 8, twice.length - padded.length);
-                }
-            }
-            // The JDK refuses this file too, in the same words, so the packet check is asked directly.
-            PreviewBudget budget = PreviewBudget.start(Clock.systemUTC(), Duration.ofSeconds(25));
-            Path file = Files.write(scratch.resolve("twice.tiff"), twice);
-            try (ImageInputStream stream = new FileImageInputStream(file.toFile())) {
-                assertThatThrownBy(() -> TiffJpegPackets.require(stream, 0, 64, 64, budget))
-                    .isInstanceOf(IIOException.class).hasMessage("JPEG tables cover more than the file");
-            }
-        }
-
-        @Test
-        @DisplayName("a stuffed FF 00 cannot hide an oversized frame header from the packet or tables check")
-        void stuffedMarkerHidingAFrameHeader() {
-            // The decoder discards FF 00 and scans on, so it finds the hidden header that a length read would skip.
-            byte[] small = greyJpeg(64, 64, 64, 64);
-            byte[] hidden = tablesOf(greyJpeg(64, 64, 40_000, 40_000), true);
-            byte[] hiding = hidden(hidden);
-            byte[] packet = ByteBuffer.allocate(small.length + hiding.length).put(small, 0, 2).put(hiding)
-                .put(small, 2, small.length - 2).array();
-            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet),
-                          PreviewFailure.INVALID_DOCUMENT);
-            byte[] tables = tablesOf(small, false);
-            byte[] hidingTables = ByteBuffer.allocate(tables.length + hiding.length).put(tables, 0, 2).put(hiding)
-                .put(tables, 2, tables.length - 2).array();
-            assertFailure(PreviewFormat.TIFF,
-                          withTables(DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, small), hidingTables),
-                          PreviewFailure.INVALID_DOCUMENT);
-        }
-
-        /**
-         * {@code FF 00} and a length covering {@code segments} without their SOI and EOI.
-         */
-        private static byte[] hidden(byte[] segments) {
-            int body = segments.length - 4;
-            return ByteBuffer.allocate(4 + body).put((byte) 0xFF).put((byte) 0x00).putShort((short) (body + 2))
-                .put(segments, 2, body).array();
-        }
-
-        /**
-         * {@code tiff} with a JPEGTables entry (UNDEFINED) holding {@code tables}, appended after the packet.
-         */
-        private static byte[] withTables(byte[] tiff, byte[] tables) {
-            byte[] entry = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 347)
-                .putShort((short) 7).putInt(tables.length).putInt(tiff.length + 12).array();
-            return DocumentPreviewFixtures.withLeadingEntry(tiff, entry, tables);
-        }
-
-        /**
-         * SOI, {@code jpeg}'s DQT and DHT segments (and its SOF0 if {@code withFrame}, and then its SOS), and EOI.
-         */
-        private static byte[] tablesOf(byte[] jpeg, boolean withFrame) {
-            ByteArrayOutputStream tables = new ByteArrayOutputStream();
-            tables.write(0xFF);
-            tables.write(0xD8);
-            int at = 2;
-            while (at + 4 <= jpeg.length) {
-                int marker = jpeg[at + 1] & 0xFF;
-                int length = (jpeg[at + 2] & 0xFF) << 8 | jpeg[at + 3] & 0xFF;
-                if (marker == 0xDB || marker == 0xC4 || withFrame && (marker == 0xC0 || marker == 0xDA)) {
-                    tables.write(jpeg, at, length + 2);
-                }
-                if (marker == 0xDA) {
-                    break;
-                }
-                at += length + 2;
-            }
-            tables.write(0xFF);
-            tables.write(0xD9);
-            return tables.toByteArray();
         }
 
         @Test
@@ -783,7 +612,9 @@ class PreviewRendererTest {
                                                                                              8), new byte[0]),
                 DocumentPreviewFixtures.withLeadingEntry(tiff, DocumentPreviewFixtures.entry(65_000, 16, 1, 0),
                                                          new byte[0]),
-                selfLoop);
+                selfLoop,
+                DocumentPreviewFixtures.strippedGrey(64, 64, 64, OLD_JPEG, greyJpeg(64, 64, 64, 64)),
+                DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, greyJpeg(64, 64, 64, 64)));
             byte[] tooManyFrames = DocumentPreviewFixtures.tiff(Collections.nCopies(
                 PreviewProperties.MAX_PAGES + 1, new Frame(16, 16, GREEN, null, 1)));
             try (MockedStatic<ImageIO> imageIo = Mockito.mockStatic(ImageIO.class);

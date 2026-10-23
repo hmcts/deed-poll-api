@@ -35,6 +35,11 @@ import javax.imageio.IIOException;
  * is in force: each is followed once, at most {@link #MAX_POINTER_DEPTH} deep, and its directory and values are held
  * to the same rules. Nothing is allocated from a declared count: the largest read is one directory table, after its
  * entry count has been checked.
+ *
+ * <p>JPEG-compressed TIFFs, old-style (Compression 6) and JPEG (7), are refused here too, deliberately: the JDK's
+ * JPEG-in-TIFF path, with its per-packet headers, JPEGTables and JPEGInterchangeFormat fallback, is its most complex
+ * and least trusted, and is not previewed rather than defended. The original still downloads. Allowing it again is a
+ * self-contained change, made with its own checks, once a business case for it exists.
  */
 final class TiffStructure {
 
@@ -53,8 +58,12 @@ final class TiffStructure {
     private static final int LITTLE_ENDIAN = 0x4949;
     private static final int BIG_ENDIAN = 0x4D4D;
     private static final int MAGIC = 42;
+    private static final int SHORT = 3;
     private static final int LONG = 4;
     private static final int IFD = 13;
+    private static final int COMPRESSION = 259;
+    private static final int OLD_JPEG = 6;
+    private static final int JPEG = 7;
     private static final int SUB_IFDS = 330;
     private static final int EXIF_IFD = 34_665;
     private static final int GPS_IFD = 34_853;
@@ -155,6 +164,9 @@ final class TiffStructure {
             if (tag == SUB_IFDS) {
                 throw new IIOException("TIFF SubIFDs");
             }
+            if (tag == COMPRESSION) {
+                requireNotJpeg(type, count, table, at + 8);
+            }
             if (tag == EXIF_IFD || tag == GPS_IFD || tag == INTEROPERABILITY_IFD) {
                 if (type != LONG && type != IFD || count != 1) {
                     throw new IIOException("TIFF directory pointer of an unexpected type or count");
@@ -176,6 +188,21 @@ final class TiffStructure {
             directory(pointer, depth + 1);
         }
         return Integer.toUnsignedLong(table.getInt(entries * ENTRY));
+    }
+
+    /**
+     * Refuses a Compression entry that is not one SHORT or LONG, and old-style JPEG and JPEG. Every Compression entry
+     * in every directory is looked at, so a second or mistyped entry cannot leave one the JDK reads unchecked.
+     */
+    private static void requireNotJpeg(int type, long count, ByteBuffer table, int valueAt) throws IIOException {
+        if (type != SHORT && type != LONG || count != 1) {
+            throw new IIOException("TIFF Compression of an unexpected type or count");
+        }
+        long compression = type == SHORT ? table.getShort(valueAt) & 0xFFFF
+            : Integer.toUnsignedLong(table.getInt(valueAt));
+        if (compression == OLD_JPEG || compression == JPEG) {
+            throw new IIOException("TIFF JPEG compression");
+        }
     }
 
     /**

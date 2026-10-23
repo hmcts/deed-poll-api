@@ -103,7 +103,7 @@ Do not change it or anything under `ccd/`.
 
 **Files:** the structure check, `ImageRenderer.java`, the previous run's TIFF-JPEG check, their tests and fixtures.
 
-- [ ] Add failing tests for Compression 6 and 7, then refuse them in the structure check, and remove or reduce the
+- [x] Add failing tests for Compression 6 and 7, then refuse them in the structure check, and remove or reduce the
       previous TIFF-JPEG check as the Development Approach says. Run focused tests and all Validation Commands, and
       record the results.
 
@@ -156,6 +156,26 @@ Red: `TiffStructureTest` + `PreviewRendererTest` + `DocumentPreviewFixturesTest`
 failed (`structureRefusedBeforeImageIo`, `jpegBehindAnUnknownType`). Green after wiring: all pass
 (`TiffStructureTest` 20, `PreviewRendererTest$Tiff` 52). Validation: `./gradlew build` (init script) passed — test
 4,852 (1 skipped, the opt-in fixture regeneration), integration 24, 0 failures; `checkstyle.sh` OK.
+
+**Task 2.** `TiffStructure` refuses every Compression entry, in every directory it walks, that is not one SHORT or
+LONG ("TIFF Compression of an unexpected type or count"), and one whose value is 6 or 7 ("TIFF JPEG compression"),
+so a second or mistyped entry cannot leave one the JDK reads unchecked. Both are `PREVIEW_INVALID_DOCUMENT` through
+`ImageRenderer`'s existing `IIOException` path. **`TiffJpegPackets` is deleted whole:** every check in it (old-style
+refusal, per-packet SOF bounds, JPEGInterchangeFormat fallback, JPEGTables content and total) ran only for a frame
+whose Compression was 6 or 7, and no such frame now reaches ImageIO, so no part guards a reachable path. Its calls
+in `ImageRenderer` (tiled and stripped) went with it. `TiffDirectories` stays: `TiffOrientation` still uses it. Its
+eight-byte step for an unknown type is now unreachable too (`TiffStructure` refuses unknown types), but it is the
+JDK's reading, kept so the orientation read stays faithful if that rule is ever relaxed. Tests removed with it: the
+nine JPEG-in-TIFF renderer tests and their helpers, `DocumentPreviewFixtures.withStripOffsetsAs`, and `JPEG` from
+the supported-compressions list. Added: `TiffStructureTest.jpegCompression` (6 and 7; SHORT, LONG, an extra entry,
+and the second frame of a JDK-written big-endian TIFF), `jdkJpeg`, `mistypedCompression` (UNDEFINED, count 2, and a
+LONG 1 that passes); `PreviewRendererTest.jpegCompressed`; and Compression 6 and 7 in
+`structureRefusedBeforeImageIo`, so they are proven refused with no ImageIO interaction and no stream opened.
+
+Red: `TiffStructureTest` + `PreviewRendererTest` — 102 tests, 6 failed (the new ones). Green: the preview tests,
+224 (1 skipped). Validation: `./gradlew build` (init script) passed — test 4,845 (1 skipped, the opt-in fixture
+regeneration), integration 24, 0 failures; `checkstyle.sh` OK after one line wrap (re-run of `PreviewRendererTest`
+green). Docs still name `TiffJpegPackets` (`CLAUDE.md`, `README.md`); Task 3 rewrites them.
 
 ## Post-Completion
 

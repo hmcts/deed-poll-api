@@ -380,20 +380,6 @@ final class DocumentPreviewFixtures {
     }
 
     /**
-     * A one-packet {@link #greyTiff} whose StripOffsets entry is retagged {@code tag}.
-     */
-    static byte[] withStripOffsetsAs(byte[] tiff, int tag) {
-        ByteBuffer buffer = ByteBuffer.wrap(tiff.clone()).order(ByteOrder.LITTLE_ENDIAN);
-        int entries = buffer.getShort(8) & 0xFFFF;
-        for (int at = 10; at < 10 + entries * 12; at += 12) {
-            if ((buffer.getShort(at) & 0xFFFF) == 273) {
-                buffer.putShort(at, (short) tag);
-            }
-        }
-        return buffer.array();
-    }
-
-    /**
      * A one-frame image in {@code format} ({@code jpeg} or {@code png}), with an EXIF orientation if not 1.
      */
     static byte[] encoded(String format, Frame frame) {

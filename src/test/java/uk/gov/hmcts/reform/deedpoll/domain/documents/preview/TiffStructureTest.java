@@ -37,6 +37,10 @@ class TiffStructureTest {
     private static final int LONG = 4;
     private static final int UNDEFINED = 7;
     private static final int DOUBLE = 12;
+    private static final int COMPRESSION = 259;
+    /** TIFF Compression values: old-style JPEG, and JPEG. */
+    private static final int OLD_JPEG = 6;
+    private static final int JPEG = 7;
     /** Private tags, which no reader gives a meaning to. */
     private static final int PRIVATE = 65_000;
     private static final int EXIF_IFD = 34_665;
@@ -230,6 +234,42 @@ class TiffStructureTest {
                       "TIFF directory pointers too deep or repeated");
     }
 
+    @ParameterizedTest(name = "Compression {0}")
+    @ValueSource(ints = {OLD_JPEG, JPEG})
+    @DisplayName("an old-style JPEG or a JPEG frame is refused, however its Compression entry is written")
+    void jpegCompression(int compression) {
+        assertRefused(DocumentPreviewFixtures.strippedGrey(16, 16, 16, compression, new byte[64]),
+                      "TIFF JPEG compression");
+        // As a LONG, and as an extra Compression entry beside the ordinary one, so no reading of either can miss it.
+        assertRefused(withCompression(base(), 8, LONG, compression), "TIFF JPEG compression");
+        byte[] tiff = base();
+        assertRefused(withLeadingEntry(tiff, entry(COMPRESSION, SHORT, 1, compression), new byte[0]),
+                      "TIFF JPEG compression");
+        // In the second frame of a JDK-written, big-endian TIFF whose first frame is ordinary.
+        byte[] two = DocumentPreviewFixtures.tiff(List.of(new Frame(16, 16, RED, "LZW", 1),
+                                                          new Frame(16, 16, BLUE, "LZW", 1)));
+        ByteBuffer buffer = ByteBuffer.wrap(two).order(byteOrder(two));
+        long second = Integer.toUnsignedLong(buffer.getInt(nextOffsetAt(two, buffer.getInt(4))));
+        assertRefused(withCompression(two, second, SHORT, compression), "TIFF JPEG compression");
+    }
+
+    @Test
+    @DisplayName("a JDK-written JPEG TIFF is refused")
+    void jdkJpeg() {
+        assertRefused(DocumentPreviewFixtures.tiff(List.of(new Frame(64, 48, RED, "JPEG", 1))),
+                      "TIFF JPEG compression");
+    }
+
+    @Test
+    @DisplayName("a Compression entry of another type, or more than one value, is refused")
+    void mistypedCompression() {
+        assertRefused(withCompression(base(), 8, UNDEFINED, 1), "TIFF Compression of an unexpected type or count");
+        byte[] tiff = base();
+        assertRefused(withLeadingEntry(tiff, entry(COMPRESSION, SHORT, 2, 0x0007_0001), new byte[0]),
+                      "TIFF Compression of an unexpected type or count");
+        assertPasses(withCompression(base(), 8, LONG, 1));
+    }
+
     @Test
     @DisplayName("every committed TIFF, and JDK-written TIFFs of every compression, single and multi-frame, pass")
     void ordinaryTiffs() throws IOException {
@@ -297,6 +337,27 @@ class TiffStructureTest {
             out.writeBytes(part);
         }
         return out.toByteArray();
+    }
+
+    /**
+     * {@code tiff} with the Compression entry of the directory at {@code directory} rewritten as one {@code type}
+     * value, {@code compression}, held inline.
+     */
+    private static byte[] withCompression(byte[] tiff, long directory, int type, int compression) {
+        byte[] copy = tiff.clone();
+        ByteBuffer buffer = ByteBuffer.wrap(copy).order(byteOrder(copy));
+        for (int at = (int) directory + 2; at < nextOffsetAt(copy, directory); at += 12) {
+            if ((buffer.getShort(at) & 0xFFFF) == COMPRESSION) {
+                buffer.putShort(at + 2, (short) type).putInt(at + 4, 1).putInt(at + 8, 0);
+                if (type == LONG) {
+                    buffer.putInt(at + 8, compression);
+                } else {
+                    buffer.putShort(at + 8, (short) compression);
+                }
+                return copy;
+            }
+        }
+        throw new IllegalStateException("no Compression entry");
     }
 
     private static ByteOrder byteOrder(byte[] tiff) {
