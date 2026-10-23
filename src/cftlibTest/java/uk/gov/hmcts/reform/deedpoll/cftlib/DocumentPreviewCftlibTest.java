@@ -156,9 +156,9 @@ class DocumentPreviewCftlibTest extends CftlibTest {
                 assertThat(preview.statusCode()).isEqualTo(503);
                 assertThat(new String(preview.body(), StandardCharsets.UTF_8)).contains("PREVIEW_UNAVAILABLE")
                     .doesNotContain(ACCESS_KEY, "letter.docx", "localhost");
-                // Unconfigured is refused before the source is read or the read is recorded.
-                DM.server().verify(0, getRequestedFor(urlPathEqualTo(binaryPath(original))));
-                assertThat(previewsRecorded(original)).isZero();
+                // Unconfigured is decided after CDAM has served the caller, so only a reader hears it.
+                assertReadAsCaller(original, CftlibConfig.DOCUMENT_READER);
+                assertThat(previewsRecorded(original)).isEqualTo(1);
             } else {
                 assertPreview(preview, original.pages());
                 assertReadAsCaller(original, CftlibConfig.DOCUMENT_READER);
@@ -187,7 +187,7 @@ class DocumentPreviewCftlibTest extends CftlibTest {
             .withRequestBodyPart(part("file", docx.bytes())));
         assertThat(CONVERTER.getAllServeEvents().getFirst().getRequest().getBodyAsString())
             .doesNotContain("letter.docx");
-        assertThat(previewsRecorded(docx)).isEqualTo(1);
+        assertThat(previewsRecorded(docx)).as("the unconfigured attempt's read, then this one").isEqualTo(2);
         assertOriginalUnchanged(docx);
 
         CONVERTER.resetRequests();
@@ -292,11 +292,14 @@ class DocumentPreviewCftlibTest extends CftlibTest {
             CONVERTER.resetRequests();
             for (Original document : List.of(originals.get("scan.png"), originals.get("letter.docx"))) {
                 DM.server().resetRequests();
+                int recorded = previewsRecorded(document);
                 HttpResponse<byte[]> denied = preview(caseworkerPreview(recordId, document),
                     CftlibConfig.DOCUMENT_READER);
                 assertThat(denied.statusCode()).isIn(403, 404);
                 assertThat(new String(denied.body(), StandardCharsets.UTF_8)).doesNotContain("PREVIEW_");
                 DM.server().verify(0, getRequestedFor(urlPathEqualTo(binaryPath(document))));
+                // As a download records DOCUMENT_DOWNLOADED before CDAM refuses it: the attempt is the audited read.
+                assertThat(previewsRecorded(document)).isEqualTo(recorded + 1);
             }
             assertThat(CONVERTER.getAllServeEvents()).isEmpty();
         } finally {

@@ -433,8 +433,8 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
     class Capacity {
 
         @Test
-        @DisplayName("over the pod's conversions is busy with nothing recorded or read; a PDF still passes, and "
-            + "every permit comes back")
+        @DisplayName("over the pod's conversions is busy only after the audited source read; a PDF still passes, "
+            + "and every permit comes back")
         void busyWhileConversionsRun() throws Exception {
             String docx = uploadedFixture("three-pages.docx", DOCX);
             String png = uploadedFixture("scan.png", "image/png");
@@ -468,7 +468,7 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
                 pool.shutdownNow();
             }
 
-            assertThat(readsOf(png)).isEmpty();
+            assertThat(readsOf(png)).hasSize(1);
             assertThat(readsOf(docx)).hasSize(PreviewProperties.MAX_CONCURRENT_CONVERSIONS);
             assertThat(readsOf(pdf)).hasSize(1);
             assertThat(CONVERTER.findAll(anyRequestedFor(anyUrl())))

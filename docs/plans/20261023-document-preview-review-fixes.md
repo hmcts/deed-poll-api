@@ -102,11 +102,11 @@ Do not change it or anything under `ccd/`.
 
 **Files:** `PreviewRenderer.java` and its tests; `DocumentPreviewHttpTest`, `DocumentPreviewCftlibTest` as needed.
 
-- [ ] Record the execution baseline in the execution notes.
-- [ ] Add failing tests: a CDAM-refused source answers the download's status, not 429/503, with every permit held
+- [x] Record the execution baseline in the execution notes.
+- [x] Add failing tests: a CDAM-refused source answers the download's status, not 429/503, with every permit held
       and with the converter unconfigured; a slow source read holds no permit (another preview can acquire it
       meanwhile); busy and unconfigured refusals still happen, after the source is read, with nothing partial.
-- [ ] Reorder, run focused tests and all Validation Commands, and record the results.
+- [x] Reorder, run focused tests and all Validation Commands, and record the results.
 
 ### Task 2: PNG previews never inflate text metadata (finding 1)
 
@@ -146,6 +146,26 @@ Do not change it or anything under `ccd/`.
 ## Execution notes
 
 (Record baseline, red/green evidence and final results here.)
+
+**Baseline:** `b2d2c9c089e172542bb5476b9fbefc4d898ff2a8` (branch HEAD before Task 1).
+
+**Task 1 (findings 3 and 4).** `PreviewRenderer.render` now creates the workspace and spools the source first (the
+`DOCUMENT_PREVIEWED` audit and CDAM's caller check), then picks the renderer (DOCX unconfigured is `UNAVAILABLE`),
+then takes the permit for the conversion only. The download path is unchanged; it also records
+`DOCUMENT_DOWNLOADED` before `store.open`, so a CDAM-denied preview now leaves one audit row exactly as a denied
+download does. `DocumentPreviewCftlibTest` was made consistent: the unconfigured DOCX in test 1 is read as the caller
+and recorded once, test 2 expects two recorded previews of the DOCX, and test 5 asserts one recorded attempt per
+CDAM denial (test 3 already expected `recorded + 1`).
+- Red: the new and changed tests run against the old `PreviewRenderer` gave 12 failures in
+  `PreviewRendererTest`, `DocxRendererTest`, `DocumentPreviewServiceTest` and `DocumentPreviewHttpTest` (busy and
+  unconfigured decided before the read; a refused source under held permits answered `BUSY`/`UNAVAILABLE`; a slow
+  read held the only permit).
+- Green: the four focused classes pass; `./gradlew build` (init script) passes with 4769 unit tests (1 skipped, the
+  opt-in `DocumentPreviewFixturesTest` regenerator) and 24 integration tests, no failures; `checkstyle.sh` OK.
+- `cftlibTest` takes no `--tests` filter, so the changed journey is compiled (`compileCftlibTestJava`) and runs in
+  full in Task 4.
+- The old "keeps its permit until it has stopped" proof read through the stalled source; that read no longer holds a
+  permit, so `DocxRendererTest.permitHeldWhileConverting` now proves it against a stalled converter.
 
 ## Post-Completion
 

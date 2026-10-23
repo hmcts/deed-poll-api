@@ -30,6 +30,8 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
+import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.PatchField;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
@@ -120,6 +122,7 @@ class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {
 
     private static final String CASEWORKER_NAME = "Ada Caseworker";
     private static final String STORE_FAILED = "The document store did not return this document's file. Try again.";
+    private static final String STORE_FORBIDDEN = "You do not have permission to open this document's file";
     private static final String CASEWORKER_SUBJECT = "caseworker-preview-http";
     private static final String JUDGE_NAME = "District Judge Bell";
     private static final String JUDGE_SUBJECT = "idam-judge-bell";
@@ -410,11 +413,37 @@ class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {
                     .andExpect(status().isTooManyRequests())
                     .andExpect(header().string(HttpHeaders.RETRY_AFTER, "5"))
                     .andExpect(jsonPath("$.code").value("PREVIEW_BUSY"));
-                assertThat(reads("DOCUMENT_PREVIEWED")).as("a busy pod records nothing").isEmpty();
+                assertThat(reads("DOCUMENT_PREVIEWED")).as("busy is decided after the audited source read")
+                    .hasSize(1);
 
                 authorised(get(caseworkerUrl(caseId, pdf))).andExpect(status().isOk());
             } finally {
                 held.forEach(ConversionCapacity.Permit::close);
+            }
+        }
+
+        @Test
+        @DisplayName("keeps the store's own 403 and 404 with every permit held, never 429")
+        void storeRefusalOutranksBusy() throws Exception {
+            String png = uploaded(caseId, "scan.png", "image/png", fixture("scan.png"));
+            List<ConversionCapacity.Permit> held = new ArrayList<>();
+            try {
+                for (int i = 0; i < PreviewProperties.MAX_CONCURRENT_CONVERSIONS; i++) {
+                    held.add(capacity.acquire(PreviewFormat.PNG));
+                }
+                doThrow(new ForbiddenError(STORE_FORBIDDEN)).when(store).open(any());
+                authorised(get(caseworkerUrl(caseId, png)).accept(MediaType.APPLICATION_PDF))
+                    .andExpect(status().isForbidden())
+                    .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                    .andExpect(jsonPath("$.error").value(STORE_FORBIDDEN));
+                doThrow(new NotFoundError("Stored file not found")).when(store).open(any());
+                authorised(get(caseworkerUrl(caseId, png)).accept(MediaType.APPLICATION_PDF))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error").value("Stored file not found"));
+                assertThat(CONVERTER.findAll(anyRequestedFor(anyUrl()))).isEmpty();
+            } finally {
+                held.forEach(ConversionCapacity.Permit::close);
+                reset(store);
             }
         }
 

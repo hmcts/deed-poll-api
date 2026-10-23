@@ -35,6 +35,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aMultipart;
@@ -164,12 +166,12 @@ class DocxRendererTest {
 
         @ParameterizedTest(name = "with the key \"{0}\"")
         @ValueSource(strings = {"", "   "})
-        @DisplayName("while the access key is blank, and nothing is read or held")
+        @DisplayName("while the access key is blank, once the source is read, and nothing is held")
         void blankCredentials(String key) {
             TrackedSource source = source();
             assertFailure(renderer(properties(converter.baseUrl(), key, null, null, null)), source,
                           budget(), PreviewFailure.UNAVAILABLE);
-            assertThat(source.opened).isFalse();
+            assertThat(source.opened).isTrue();
             assertNothingSent();
         }
 
@@ -179,7 +181,7 @@ class DocxRendererTest {
             TrackedSource source = source();
             assertFailure(renderer(properties(null, ACCESS_KEY, null, null, null)), source, budget(),
                           PreviewFailure.UNAVAILABLE);
-            assertThat(source.opened).isFalse();
+            assertThat(source.opened).isTrue();
         }
 
         @Test
@@ -210,7 +212,7 @@ class DocxRendererTest {
         }
 
         @Test
-        @DisplayName("when the pod is busy, before the source is opened")
+        @DisplayName("when the pod is busy, once the source is read and closed")
         void busy() {
             capacity = new ConversionCapacity(1, Duration.ofSeconds(5));
             try (ConversionCapacity.Permit held = capacity.acquire(PreviewFormat.TIFF)) {
@@ -219,7 +221,9 @@ class DocxRendererTest {
                 Throwable thrown = catchThrowable(() -> renderer().render(PreviewFormat.DOCX, source, budget()));
                 assertThat(thrown).isInstanceOfSatisfying(PreviewError.class,
                     error -> assertThat(error.failure()).isEqualTo(PreviewFailure.BUSY));
-                assertThat(source.opened).isFalse();
+                assertThat(source.opened).isTrue();
+                assertThat(source.closed).isTrue();
+                assertScratchEmpty();
             }
             assertNothingSent();
         }
@@ -335,6 +339,33 @@ class DocxRendererTest {
             assertFailure(renderer(), source(), PreviewBudget.start(Clock.systemUTC(), Duration.ofMillis(700)),
                           PreviewFailure.LIMIT_EXCEEDED);
             assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
+        }
+
+        @Test
+        @DisplayName("a conversion holds its permit while the converter works, and gives it back once it stops")
+        void permitHeldWhileConverting() throws Exception {
+            converter.stubFor(post(urlPathEqualTo(CONVERT))
+                .willReturn(pdf(DocumentPreviewFixtures.pdf()).withFixedDelay(5_000)));
+            PreviewRenderer renderer = renderer();
+            TrackedSource source = source();
+            PreviewBudget budget = PreviewBudget.start(Clock.systemUTC(), Duration.ofMillis(1_500));
+            CompletableFuture<RenderedPreview> worker =
+                CompletableFuture.supplyAsync(() -> renderer.render(PreviewFormat.DOCX, source, budget));
+
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (capacity.available() == 3 && !worker.isDone() && System.nanoTime() < until) {
+                Thread.sleep(10);
+            }
+            // The source is read by now; what holds the permit is the conversion, still waiting on the converter.
+            assertThat(capacity.available()).isEqualTo(2);
+            assertThat(source.closed).isTrue();
+
+            Throwable thrown = catchThrowable(() -> worker.get(5, TimeUnit.SECONDS));
+            assertThat(thrown).cause().isInstanceOfSatisfying(PreviewError.class,
+                error -> assertThat(error.failure()).isEqualTo(PreviewFailure.LIMIT_EXCEEDED));
+            assertThat(capacity.available()).isEqualTo(3);
+            assertThat(source.closed).isTrue();
+            assertScratchEmpty();
         }
 
         @Test

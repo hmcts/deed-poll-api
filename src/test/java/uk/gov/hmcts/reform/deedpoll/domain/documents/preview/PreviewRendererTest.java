@@ -16,6 +16,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 
@@ -402,12 +403,13 @@ class PreviewRendererTest {
         }
 
         @Test
-        @DisplayName("DOCX answers unavailable while its converter is unconfigured, and opens nothing")
+        @DisplayName("DOCX answers unavailable while its converter is unconfigured, only once its source is read")
         void docx() {
             TrackedSource source = new TrackedSource(new byte[] {'P', 'K', 3, 4});
             assertFailure(renderer(), PreviewFormat.DOCX, source, PreviewFailure.UNAVAILABLE);
-            assertThat(source.opened).isFalse();
-            assertThat(capacity.available()).isEqualTo(3);
+            // The read is the store's check of the caller, so only a caller it would serve hears "unavailable".
+            assertThat(source.opened).isTrue();
+            assertThat(source.closed).isTrue();
         }
 
         @Test
@@ -436,7 +438,7 @@ class PreviewRendererTest {
         }
 
         @Test
-        @DisplayName("a busy pod refuses before the source is opened, and a PDF still passes")
+        @DisplayName("a busy pod refuses once the source is read, keeping nothing, and a PDF still passes")
         void busy() throws IOException {
             capacity = new ConversionCapacity(1, Duration.ofSeconds(5));
             try (ConversionCapacity.Permit held = capacity.acquire(PreviewFormat.TIFF)) {
@@ -446,9 +448,29 @@ class PreviewRendererTest {
                     assertThat(error.failure()).isEqualTo(PreviewFailure.BUSY);
                     assertThat(error.retryAfter()).contains(Duration.ofSeconds(5));
                 });
-                assertThat(source.opened).isFalse();
+                assertThat(source.opened).isTrue();
+                assertThat(source.closed).isTrue();
+                assertScratchEmpty();
+                assertThat(capacity.available()).isZero();
                 render(PreviewFormat.PDF, DocumentPreviewFixtures.pdf()).close();
             }
+            assertThat(capacity.available()).isEqualTo(1);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @ValueSource(strings = {"TIFF", "DOCX"})
+        @DisplayName("a refused source keeps its own exception with every permit held or the converter unconfigured")
+        void sourceRefusalOutranksBusyAndUnavailable(PreviewFormat format) {
+            capacity = new ConversionCapacity(1, Duration.ofSeconds(5));
+            ForbiddenError refused = new ForbiddenError("You do not have permission to open this document's file");
+            try (ConversionCapacity.Permit held = capacity.acquire(PreviewFormat.TIFF)) {
+                Throwable thrown = catchThrowable(() -> renderer().render(format, () -> {
+                    throw refused;
+                }, budget()));
+                assertThat(thrown).isSameAs(refused);
+                assertScratchEmpty();
+            }
+            assertThat(capacity.available()).isEqualTo(1);
         }
 
         @Test
@@ -521,8 +543,10 @@ class PreviewRendererTest {
         }
 
         @Test
-        @DisplayName("a worker whose budget runs out keeps its permit until it has actually stopped, then cleans up")
-        void expiryMidRead() throws Exception {
+        @DisplayName("a slow source read holds no permit: another preview converts meanwhile, and the slow one "
+            + "still runs out of budget cleanly")
+        void slowReadHoldsNoPermit() throws Exception {
+            capacity = new ConversionCapacity(1, Duration.ofSeconds(5));
             CountDownLatch reading = new CountDownLatch(1);
             CountDownLatch resume = new CountDownLatch(1);
             byte[] tiff = DocumentPreviewFixtures.read("two-frames.tiff");
@@ -555,17 +579,23 @@ class PreviewRendererTest {
             PreviewRenderer renderer = renderer();
             final CompletableFuture<RenderedPreview> worker =
                 CompletableFuture.supplyAsync(() -> renderer.render(PreviewFormat.TIFF, stalled, budget));
-            assertThat(reading.await(5, TimeUnit.SECONDS)).isTrue();
+            try {
+                assertThat(reading.await(5, TimeUnit.SECONDS)).isTrue();
 
-            clock.advance(Duration.ofSeconds(26));
-            // The time is up, but the worker is still inside the source read: its permit is still its own.
-            assertThat(capacity.available()).isEqualTo(2);
-            resume.countDown();
+                // The one permit is free while the slow read trickles in, so another conversion takes it and finishes.
+                assertThat(capacity.available()).isEqualTo(1);
+                try (RenderedPreview other = render(PreviewFormat.TIFF, tiff)) {
+                    assertThat(other.pages()).isEqualTo(2);
+                }
+                clock.advance(Duration.ofSeconds(26));
+            } finally {
+                resume.countDown();
+            }
 
             Throwable thrown = catchThrowable(() -> worker.get(5, TimeUnit.SECONDS));
             assertThat(thrown).cause().isInstanceOfSatisfying(PreviewError.class,
                 error -> assertThat(error.failure()).isEqualTo(PreviewFailure.LIMIT_EXCEEDED));
-            assertThat(capacity.available()).isEqualTo(3);
+            assertThat(capacity.available()).isEqualTo(1);
             assertThat(closed).isTrue();
             assertScratchEmpty();
         }

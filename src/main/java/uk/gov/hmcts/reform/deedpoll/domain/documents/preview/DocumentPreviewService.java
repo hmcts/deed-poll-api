@@ -23,10 +23,12 @@ import java.util.Objects;
  * the caller unchanged, before any format is chosen, any permit taken or any converter called.
  *
  * <p><strong>Then, in order:</strong> the stored MIME type picks the format (outside the upload allowlist is
- * {@link PreviewFailure#INVALID_DOCUMENT}, nothing read); {@link PreviewRenderer} takes a permit if the format
- * needs one; and only then does it open the source, which commits {@code DOCUMENT_PREVIEWED} and opens the store
- * under the reader's authority. A busy pod, an unconfigured converter or a spent budget records and opens
- * nothing; an audit that cannot be committed opens and converts nothing.
+ * {@link PreviewFailure#INVALID_DOCUMENT}, nothing read); {@link PreviewRenderer} opens the source, which commits
+ * {@code DOCUMENT_PREVIEWED} and opens the store under the reader's authority, as the download does; and only then
+ * checks the converter is configured and takes a permit if the format needs one. So a store's refusal keeps the
+ * download's status, a busy pod or an unconfigured converter is told only to a caller the store has served, and a
+ * slow store read holds no permit. A spent budget records and opens nothing; an audit that cannot be committed
+ * opens and converts nothing.
  *
  * <p><strong>Never inside a transaction.</strong> The store may be CDAM and the converter is remote, and neither may
  * hold a database transaction open, so a caller that brings one is refused before anything happens rather than left

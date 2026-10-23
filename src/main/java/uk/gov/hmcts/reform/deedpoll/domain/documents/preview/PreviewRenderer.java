@@ -7,13 +7,15 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 /**
- * Makes one document's preview: a permit if its format needs one, then the source, then a complete PDF.
+ * Makes one document's preview: the source, then a permit if its format needs one, then a complete PDF.
  *
- * <p>The order is the point. The permit is taken before the source is opened, so a busy pod refuses without reading
- * a byte; the source is spooled into the request's private workspace under the input ceiling and the budget; the
- * format's renderer writes the PDF there; and its pages and size are checked against the limits before it is
- * handed back. Whatever happens, the source stream is closed and a failed preview's workspace is deleted
- * before this returns.
+ * <p>The order is the point. The source is opened and spooled first, into the request's private workspace under the
+ * input ceiling and the budget. Opening it is where {@code DOCUMENT_PREVIEWED} is committed and where the store (CDAM)
+ * checks the caller, so a caller the store refuses gets the download's own refusal, never {@link PreviewFailure#BUSY}
+ * or {@link PreviewFailure#UNAVAILABLE}, and a slow store read holds no permit while it trickles in. Only then is the
+ * converter's configuration checked and the permit taken, the format's renderer writes the PDF there, and its pages
+ * and size are checked against the limits before it is handed back. Whatever happens, the source stream is closed
+ * and a failed preview's workspace is deleted before this returns.
  *
  * <p><strong>The permit is released here, on the thread doing the work, and only when that work has
  * stopped.</strong> The request thread is the worker, so a caller that disconnects mid-conversion is noticed only
@@ -22,8 +24,8 @@ import java.util.Objects;
  * file being streamed.
  *
  * <p>A DOCX is converted by {@link DocxRenderer}. With its converter unconfigured it answers
- * {@link PreviewFailure#UNAVAILABLE} at once, before a permit is taken or the source opened, so nothing is read for
- * a conversion that cannot happen.
+ * {@link PreviewFailure#UNAVAILABLE} once the source has been read, before a permit is taken, so that refusal too
+ * reaches only a caller the store would have served.
  */
 public class PreviewRenderer {
 
@@ -55,12 +57,12 @@ public class PreviewRenderer {
      */
     public RenderedPreview render(PreviewFormat format, PreviewSource source, PreviewBudget budget) {
         budget.checkpoint();
-        SourceRenderer renderer = rendererFor(format);
-        try (ConversionCapacity.Permit permit = capacity.acquire(format)) {
-            PreviewWorkspace workspace = PreviewWorkspace.create(scratchRoot);
-            boolean handedBack = false;
-            try {
-                Path spooled = spool(source, workspace, budget);
+        PreviewWorkspace workspace = PreviewWorkspace.create(scratchRoot);
+        boolean handedBack = false;
+        try {
+            Path spooled = spool(source, workspace, budget);
+            SourceRenderer renderer = rendererFor(format);
+            try (ConversionCapacity.Permit permit = capacity.acquire(format)) {
                 SourceRenderer.Rendition rendition = renderer.render(spooled, workspace, budget);
                 properties.requirePages(rendition.pages());
                 long size = size(rendition.file());
@@ -69,10 +71,10 @@ public class PreviewRenderer {
                 RenderedPreview preview = new RenderedPreview(workspace, rendition.file(), rendition.pages(), size);
                 handedBack = true;
                 return preview;
-            } finally {
-                if (!handedBack) {
-                    workspace.close();
-                }
+            }
+        } finally {
+            if (!handedBack) {
+                workspace.close();
             }
         }
     }
