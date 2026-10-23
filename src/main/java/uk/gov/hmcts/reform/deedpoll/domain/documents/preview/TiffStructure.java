@@ -24,7 +24,11 @@ import javax.imageio.IIOException;
  * checkpoint between them. So this walks the structure with plain bounded reads first, and every byte a directory
  * table or an out-of-line field value occupies must be its own: no two of them may overlap, none may run past the end
  * of the file, and together they may cover no more bytes than the file holds. Whatever the JDK then reads from the
- * directories is therefore read once, and the work is bounded by the file's size.
+ * directories is therefore read once. Image data is aliased the same way: the JDK's decompressors allocate and read
+ * each strip's or tile's declared byte count, so a million strips naming one large payload would read it a million
+ * times inside one frame's decode, well inside the pixel limits. So every StripByteCounts and TileByteCounts value is
+ * added to the same total, and a directory naming strip or tile offsets must give their byte counts rather than leave
+ * the JDK to work them out. The work is therefore bounded by the file's size.
  *
  * <p>Beyond that it insists on what every real TIFF already is: {@code II} or {@code MM} with the magic number 42
  * (BigTIFF, 43, is refused: the JDK cannot read it), at least one directory, no more directories in the chain than
@@ -62,6 +66,10 @@ final class TiffStructure {
     private static final int LONG = 4;
     private static final int IFD = 13;
     private static final int COMPRESSION = 259;
+    private static final int STRIP_OFFSETS = 273;
+    private static final int STRIP_BYTE_COUNTS = 279;
+    private static final int TILE_OFFSETS = 324;
+    private static final int TILE_BYTE_COUNTS = 325;
     private static final int OLD_JPEG = 6;
     private static final int JPEG = 7;
     private static final int SUB_IFDS = 330;
@@ -70,13 +78,18 @@ final class TiffStructure {
     private static final int INTEROPERABILITY_IFD = 40_965;
     /** A value of at most four bytes sits in the entry itself, and occupies nothing outside the table. */
     private static final int INLINE = 4;
+    /** How much of an out-of-line byte-count array is read at once. */
+    private static final int CHUNK = 64 * 1024;
 
     private final FileChannel file;
     private final long length;
     private final PreviewBudget budget;
     private final List<long[]> occupied = new ArrayList<>();
     private final Set<Long> directories = new HashSet<>();
-    private ByteOrder order;
+    /**
+     * Big-endian until the header says otherwise: {@code II} and {@code MM} read the same either way.
+     */
+    private ByteOrder order = ByteOrder.BIG_ENDIAN;
     private long covered;
 
     private TiffStructure(FileChannel file, PreviewBudget budget) throws IOException {
@@ -102,7 +115,7 @@ final class TiffStructure {
             throw new IIOException("TIFF header outside the file");
         }
         ByteBuffer header = read(0, HEADER);
-        int byteOrder = header.order(ByteOrder.BIG_ENDIAN).getShort(0) & 0xFFFF;
+        int byteOrder = header.getShort(0) & 0xFFFF;
         if (byteOrder != LITTLE_ENDIAN && byteOrder != BIG_ENDIAN) {
             throw new IIOException("TIFF byte order");
         }
@@ -154,6 +167,8 @@ final class TiffStructure {
         ByteBuffer table = read(offset + 2, (int) size - 2);
         List<Long> pointers = new ArrayList<>();
         Set<Integer> pointerTags = new HashSet<>();
+        boolean offsets = false;
+        boolean byteCounts = false;
         for (int entry = 0; entry < entries; entry++) {
             int at = entry * ENTRY;
             int tag = table.getShort(at) & 0xFFFF;
@@ -181,6 +196,14 @@ final class TiffStructure {
                 }
                 occupy(value, bytes);
             }
+            offsets |= tag == STRIP_OFFSETS || tag == TILE_OFFSETS;
+            if (tag == STRIP_BYTE_COUNTS || tag == TILE_BYTE_COUNTS) {
+                byteCounts = true;
+                imageData(type, count, bytes, table, at + 8, value);
+            }
+        }
+        if (offsets && !byteCounts) {
+            throw new IIOException("TIFF image data without byte counts");
         }
         for (long pointer : pointers) {
             budget.checkpoint();
@@ -202,6 +225,39 @@ final class TiffStructure {
             : Integer.toUnsignedLong(table.getInt(valueAt));
         if (compression == OLD_JPEG || compression == JPEG) {
             throw new IIOException("TIFF JPEG compression");
+        }
+    }
+
+    /**
+     * Adds every strip's or tile's byte count to the bytes taken, so that however the offsets alias each other, the
+     * decompressors together read no more than the file holds. An out-of-line array is already known to lie inside
+     * the file and within its size, and is read a chunk at a time.
+     */
+    private void imageData(int type, long count, long bytes, ByteBuffer table, int valueAt, long value)
+        throws IOException {
+        if (type != SHORT && type != LONG) {
+            throw new IIOException("TIFF byte counts of an unexpected type");
+        }
+        int size = (int) sizeOf(type);
+        if (bytes <= INLINE) {
+            for (int index = 0; index < count; index++) {
+                addImageData(table, valueAt + index * size, type);
+            }
+            return;
+        }
+        for (long done = 0; done < bytes; done += CHUNK) {
+            budget.checkpoint();
+            ByteBuffer chunk = read(value + done, (int) Math.min(CHUNK, bytes - done));
+            for (int at = 0; at < chunk.limit(); at += size) {
+                addImageData(chunk, at, type);
+            }
+        }
+    }
+
+    private void addImageData(ByteBuffer values, int at, int type) throws IIOException {
+        covered += type == SHORT ? values.getShort(at) & 0xFFFF : Integer.toUnsignedLong(values.getInt(at));
+        if (covered > length) {
+            throw new IIOException("TIFF image data cover more than the file");
         }
     }
 
@@ -248,6 +304,6 @@ final class TiffStructure {
                 throw new EOFException();
             }
         }
-        return buffer.flip().order(order == null ? ByteOrder.BIG_ENDIAN : order);
+        return buffer.flip().order(order);
     }
 }

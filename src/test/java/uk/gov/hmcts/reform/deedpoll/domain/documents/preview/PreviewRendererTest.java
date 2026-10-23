@@ -603,6 +603,7 @@ class PreviewRendererTest {
             ByteBuffer.wrap(selfLoop).order(ByteOrder.LITTLE_ENDIAN).putInt(8 + 2 + 8 * 12, 8);
             List<byte[]> refused = List.of(
                 DocumentPreviewFixtures.read(DocumentPreviewFixtures.ALIASED_PAYLOADS),
+                DocumentPreviewFixtures.aliasedStrips(4096, 1024),
                 DocumentPreviewFixtures.withLeadingEntries(tiff, List.of(
                     DocumentPreviewFixtures.entry(65_000, 7, 100, tiff.length + 24L),
                     DocumentPreviewFixtures.entry(65_001, 7, 100, tiff.length + 74L)), new byte[150]),

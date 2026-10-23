@@ -400,7 +400,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   held to `max-frame-pixels` before decoding (a strip is clipped to the frame by the JDK, so it is not checked),
   **no `ImageIO` call touches a TIFF until `TiffStructure` has passed it** (plain bounded reads: magic 42 only, at
   most `max-pages` directories, none named twice, 1–64 entries of the 13 TIFF 6.0 types each, every payload inside
-  the file and header, tables and payloads all disjoint, so aliased entries cannot multiply the JDK's directory reads;
+  the file and header, tables and payloads all disjoint, so aliased entries cannot multiply the JDK's directory reads, and every
+  strip/tile byte count added to the same file-sized total, because the decompressors read what each count declares;
   SubIFDs refused, EXIF/GPS/Interop bounded identically; `PreviewRendererTest.structureRefusedBeforeImageIo` proves
   it with a static mock), **JPEG-compressed TIFFs (Compression 6 and 7) are deliberately not previewed** and answer
   `PREVIEW_INVALID_DOCUMENT` (download the original instead; enabling them is a reviewed change, not a fix —

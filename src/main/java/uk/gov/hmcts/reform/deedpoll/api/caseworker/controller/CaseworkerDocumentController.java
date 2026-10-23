@@ -132,8 +132,9 @@ public class CaseworkerDocumentController {
         summary = "Preview a supporting document as a PDF",
         description = "A read-only rendition of the document as one complete PDF, for viewing in place; the "
             + "original stays on /file, unchanged. PDF passes through after checks, JPEG and PNG become one page, "
-            + "a TIFF one page per frame in order, and DOCX is converted. Scoped to the case as /file is: 404 for "
-            + "another case's document, an unknown one, or one with no readable file. Recorded as "
+            + "a TIFF one page per frame in order (a JPEG-compressed TIFF, Compression 6 or 7, is deliberately not "
+            + "previewed and answers PREVIEW_INVALID_DOCUMENT), and DOCX is converted. Scoped to the case as /file "
+            + "is: 404 for another case's document, an unknown one, or one with no readable file. Recorded as "
             + "DOCUMENT_PREVIEWED, not DOCUMENT_DOWNLOADED, once per request before the original is opened, and "
             + "refused if that cannot be recorded. No range support: a Range header is ignored and the whole PDF is "
             + "sent. A preview that is not produced is one of four fixed codes, and leaves /file working.")

@@ -44,6 +44,7 @@ class TiffStructureTest {
     /** Private tags, which no reader gives a meaning to. */
     private static final int PRIVATE = 65_000;
     private static final int EXIF_IFD = 34_665;
+    private static final int GPS_IFD = 34_853;
     private static final int INTEROPERABILITY_IFD = 40_965;
 
     @TempDir
@@ -68,8 +69,8 @@ class TiffStructureTest {
         long appendedAt = tiff.length + 24L;
         byte[] overlapping = withLeadingEntries(tiff, List.of(entry(PRIVATE, UNDEFINED, 100, appendedAt),
                                                               entry(PRIVATE + 1, UNDEFINED, 100, appendedAt + 50)),
-                                                new byte[150]);
-        assertThat(overlapping.length).isGreaterThan(400);
+                                                new byte[250]);
+        assertThat(overlapping.length).isGreaterThan(500);
         assertRefused(overlapping, "TIFF fields overlap");
         byte[] apart = withLeadingEntries(tiff, List.of(entry(PRIVATE, UNDEFINED, 100, appendedAt),
                                                         entry(PRIVATE + 1, UNDEFINED, 100, appendedAt + 100)),
@@ -80,8 +81,9 @@ class TiffStructureTest {
     @Test
     @DisplayName("a payload sharing bytes with the header or a directory table is refused")
     void payloadOverTheStructure() {
-        assertRefused(withLeadingEntry(base(), entry(PRIVATE, UNDEFINED, 20, 8), new byte[0]), "TIFF fields overlap");
-        assertRefused(withLeadingEntry(base(), entry(PRIVATE, UNDEFINED, 8, 0), new byte[0]), "TIFF fields overlap");
+        // Padded so the bytes claimed still fit the file, leaving only the overlap to refuse.
+        assertRefused(withLeadingEntry(base(), entry(PRIVATE, UNDEFINED, 20, 8), new byte[20]), "TIFF fields overlap");
+        assertRefused(withLeadingEntry(base(), entry(PRIVATE, UNDEFINED, 8, 0), new byte[8]), "TIFF fields overlap");
     }
 
     @Test
@@ -205,6 +207,12 @@ class TiffStructureTest {
         byte[] nested = concat(directory(List.of(entry(INTEROPERABILITY_IFD, LONG, 1, exifAt + 18))),
                                directory(inlineEntries(1)));
         assertPasses(withLeadingEntry(tiff, entry(EXIF_IFD, 13, 1, exifAt), nested));
+        assertPasses(withLeadingEntry(tiff, entry(GPS_IFD, LONG, 1, exifAt), directory(inlineEntries(2))));
+        // A GPS directory is claimed like any other: one aliasing a private payload is refused.
+        assertRefused(withLeadingEntries(tiff, List.of(entry(PRIVATE, UNDEFINED, 30, exifAt + 12),
+                                                       entry(GPS_IFD, LONG, 1, exifAt + 12)),
+                                         concat(directory(inlineEntries(2)), new byte[30])),
+                      "TIFF fields overlap");
     }
 
     @Test
@@ -216,11 +224,13 @@ class TiffStructureTest {
         // A private payload and the EXIF directory both claiming the same 42 bytes.
         assertRefused(withLeadingEntries(tiff, List.of(entry(PRIVATE, UNDEFINED, 42, exifAt + 12),
                                                        entry(EXIF_IFD, LONG, 1, exifAt + 12)),
-                                         directory(inlineEntries(3))),
+                                         concat(directory(inlineEntries(3)), new byte[42])),
                       "TIFF fields overlap");
         assertRefused(withLeadingEntry(tiff, entry(EXIF_IFD, LONG, 1, exifAt + 100), new byte[0]),
                       "TIFF directory outside the file");
         assertRefused(withLeadingEntry(tiff, entry(EXIF_IFD, SHORT, 1, exifAt), directory(inlineEntries(1))),
+                      "TIFF directory pointer of an unexpected type or count");
+        assertRefused(withLeadingEntry(tiff, entry(EXIF_IFD, LONG, 2, exifAt), directory(inlineEntries(1))),
                       "TIFF directory pointer of an unexpected type or count");
         assertRefused(withLeadingEntries(tiff, List.of(entry(EXIF_IFD, LONG, 1, exifAt + 12),
                                                        entry(EXIF_IFD, LONG, 1, exifAt + 12)),
@@ -232,6 +242,27 @@ class TiffStructureTest {
                              directory(inlineEntries(1)));
         assertRefused(withLeadingEntry(tiff, entry(EXIF_IFD, LONG, 1, exifAt), deep),
                       "TIFF directory pointers too deep or repeated");
+    }
+
+    @Test
+    @DisplayName("strips naming one payload are refused once their byte counts together exceed the file")
+    void aliasedStrips() {
+        // 4,096 strips over one byte of data: 16 KiB of offsets and 16 KiB of counts.
+        byte[] fits = DocumentPreviewFixtures.aliasedStrips(4096, 1);
+        assertPasses(fits);
+        assertRefused(DocumentPreviewFixtures.aliasedStrips(4096, fits.length / 4096 + 1),
+                      "TIFF image data cover more than the file");
+        // One inline byte count larger than the file on its own.
+        byte[] tiff = base();
+        assertRefused(withImageData(tiff, 279, LONG, tiff.length), "TIFF image data cover more than the file");
+    }
+
+    @Test
+    @DisplayName("byte counts as SHORTs pass; of another type, or missing beside the offsets, they are refused")
+    void byteCountTypes() {
+        assertPasses(withImageData(base(), 279, SHORT, 256));
+        assertRefused(withImageData(base(), 279, UNDEFINED, 256), "TIFF byte counts of an unexpected type");
+        assertRefused(withImageData(base(), PRIVATE, LONG, 256), "TIFF image data without byte counts");
     }
 
     @ParameterizedTest(name = "Compression {0}")
@@ -358,6 +389,27 @@ class TiffStructureTest {
             }
         }
         throw new IllegalStateException("no Compression entry");
+    }
+
+    /**
+     * {@link #base()}'s one-value StripByteCounts entry rewritten as {@code tag}, one {@code type} value
+     * {@code count}, held inline.
+     */
+    private static byte[] withImageData(byte[] tiff, int tag, int type, long count) {
+        byte[] copy = tiff.clone();
+        ByteBuffer buffer = ByteBuffer.wrap(copy).order(byteOrder(copy));
+        for (int at = 10; at < nextOffsetAt(copy, 8); at += 12) {
+            if ((buffer.getShort(at) & 0xFFFF) == 279) {
+                buffer.putShort(at, (short) tag).putShort(at + 2, (short) type).putInt(at + 4, 1).putInt(at + 8, 0);
+                if (type == SHORT) {
+                    buffer.putShort(at + 8, (short) count);
+                } else {
+                    buffer.putInt(at + 8, (int) count);
+                }
+                return copy;
+            }
+        }
+        throw new IllegalStateException("no StripByteCounts entry");
     }
 
     private static ByteOrder byteOrder(byte[] tiff) {

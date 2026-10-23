@@ -380,6 +380,35 @@ final class DocumentPreviewFixtures {
     }
 
     /**
+     * A 1 pixel wide grey TIFF of {@code strips} one-row strips whose offsets all name the first strip and whose byte
+     * counts are all {@code byteCount}: aliased image data, which the JDK's decompressors would read once per strip.
+     */
+    static byte[] aliasedStrips(int strips, long byteCount) {
+        byte[] tiff = strippedGrey(1, strips, 1L, 0);
+        ByteBuffer buffer = ByteBuffer.wrap(tiff).order(ByteOrder.LITTLE_ENDIAN);
+        int entries = buffer.getShort(8) & 0xFFFF;
+        long firstStrip = -1;
+        for (int at = 10; at < 10 + entries * 12; at += 12) {
+            int tag = buffer.getShort(at) & 0xFFFF;
+            int array = buffer.getInt(at + 8);
+            if (tag == 273) {
+                firstStrip = Integer.toUnsignedLong(buffer.getInt(array));
+                for (int index = 0; index < strips; index++) {
+                    buffer.putInt(array + index * 4, (int) firstStrip);
+                }
+            } else if (tag == 279) {
+                for (int index = 0; index < strips; index++) {
+                    buffer.putInt(array + index * 4, (int) byteCount);
+                }
+            }
+        }
+        if (firstStrip < 0) {
+            throw new IllegalStateException("no StripOffsets entry");
+        }
+        return tiff;
+    }
+
+    /**
      * A one-frame image in {@code format} ({@code jpeg} or {@code png}), with an EXIF orientation if not 1.
      */
     static byte[] encoded(String format, Frame frame) {

@@ -141,8 +141,14 @@ pointers bounded identically**, because JDK 21's `TIFFIFD.initialize` follows th
 default `TIFFImageReadParam` (Baseline, Fax, ExifParent, GeoTIFF tag sets), and a scanner or phone may write an EXIF
 directory: LONG/IFD count 1, each tag once a directory, at most two deep, the pointed-to table and its payloads
 claimed like any other. Every refusal is an `IIOException` with a fixed sentence, logged by class name and answered
-`PREVIEW_INVALID_DOCUMENT` by `ImageRenderer`. Strip and tile *data* are not claimed (only directory fields), so
-decode work stays bounded by the existing pixel, tile and decoded-size checks.
+`PREVIEW_INVALID_DOCUMENT` by `ImageRenderer`. Strip and tile *data* were at first not claimed, on the reasoning that
+decode work stays bounded by the pixel, tile and decoded-size checks. Review found that wrong: JDK 21's
+decompressors (`TIFFDeflateDecompressor.decodeRaw` and the rest) allocate and read each strip's declared byte count,
+so a million one-row strips aliasing one large payload pass the pixel checks and read terabytes inside one frame.
+So every StripByteCounts/TileByteCounts value now counts towards the same file-sized total (no disjointness, which
+would mean a region per strip), and offsets without byte counts are refused, since the JDK would otherwise compute
+them (`TiffStructureTest.aliasedStrips`, `byteCountTypes`; the aliased-strips fixture joins
+`structureRefusedBeforeImageIo`).
 
 Fixtures: committed `aliased-payloads.tiff` (66,327 bytes; 56 JPEGTables entries, 64 in the directory, naming one
 64 KiB payload), written field by field by `DocumentPreviewFixtures.aliasedPayloads`; `DocumentPreviewFixturesTest`

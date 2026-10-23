@@ -2,7 +2,7 @@
 
 **Document previews, 2026-10-23:** on `feat/document-preview-rendering`, not pushed and not live-verified.
 `GET /caseworker/cases/{id}/documents/{documentId}/preview` and `GET /judicial/referrals/{referralId}/documents/{documentId}/preview`
-serve a transient, complete PDF rendition of PDF, JPEG, PNG, every TIFF frame and DOCX (Docmosis Tornado
+serve a transient, complete PDF rendition of PDF, JPEG, PNG, every frame of a TIFF that is not JPEG-compressed, and DOCX (Docmosis Tornado
 `/rs/convert`), audited as `DOCUMENT_PREVIEWED`. DOCX answers `503 PREVIEW_UNAVAILABLE` until the converter endpoint,
 `docmosis-access-key` and fonts are provisioned, none of which is done. The chart has no Docmosis entry yet. Next:
 Ralphex review; open the PR; admin regenerates `openapi.json` from the artifact recorded in
@@ -11,10 +11,13 @@ See [the plan](plans/completed/20261023-document-preview-rendering.md). Revised 
 [the review fixes](plans/completed/20261023-document-preview-review-fixes.md): the original is read before any busy
 or unavailable refusal; a PDF or Docmosis output is served unparsed; PNG text chunks are never inflated; and
 `DOCUMENT_PREVIEW_MAX_PAGES` is 100, enforced by the API for JPEG, PNG and TIFF only, so admin's viewer must refuse
-a PDF or DOCX over `maxPages`. The handoff artifact is now `c1fc4438…`. `./gradlew cftlibTest` passed on 2026-10-23 (21 tests,
+a PDF or DOCX over `maxPages`. The handoff artifact was then `c1fc4438…`; it is now `351b6047…` (see the third review below). `./gradlew cftlibTest` passed on 2026-10-23 (21 tests,
 including all seven `DocumentPreviewCftlibTest` journeys). [The second review's fixes](plans/completed/20261023-document-preview-review-fixes-2.md) hold a tiled TIFF
 frame's declared tile to `max-frame-pixels` before decoding and make the Docmosis request one-shot, so a
-`503 Retry-After: 0` is never resent.
+`503 Retry-After: 0` is never resent. [The third review's fixes](plans/completed/20261023-document-preview-review-fixes-3.md)
+check a TIFF's whole structure with bounded reads before any ImageIO call (`TiffStructure`: directory tables, field
+values and strip/tile byte counts together no larger than the file), and deliberately do not preview JPEG-compressed
+TIFFs (Compression 6/7, `422 PREVIEW_INVALID_DOCUMENT`; `/file` still downloads them).
 
 **Narrative cap and blank witnesses, 2026-10-22 (admin R15):** on `fix/textarea-limit-and-blank-witnesses`, not
 pushed. `returnReason`, `referralNotes` and `masterDirections` are capped at 2,000 characters with line breaks counted

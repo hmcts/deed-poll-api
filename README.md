@@ -627,7 +627,10 @@ directory entries may all name the same payload bytes. The header must be `II`/`
 refused); there are at most `DOCUMENT_PREVIEW_MAX_PAGES` frame directories (over it is `PREVIEW_LIMIT_EXCEEDED`), no
 directory is named twice, each has 1–64 entries of the thirteen TIFF 6.0 types, and every out-of-line payload
 (type size × count, overflow-safe) lies inside the file. The header, every directory table and every payload must be
-disjoint, so no bytes are shared and their total cannot exceed the file. SubIFDs are refused; EXIF, GPS and
+disjoint, so no bytes are shared and their total cannot exceed the file. Every StripByteCounts/TileByteCounts value
+counts towards that same total, because the JDK's decompressors read each strip's declared byte count wherever its
+offset points, so strips aliasing one payload cannot multiply the reads either; strip or tile offsets without byte
+counts are refused. SubIFDs are refused; EXIF, GPS and
 Interoperability pointers are followed and bounded identically. **JPEG-compressed TIFFs (Compression 6 and 7) are
 deliberately not previewed**: they answer `PREVIEW_INVALID_DOCUMENT`, the viewer shows its preview-unavailable state,
 and the original still downloads; uploads are unaffected. Every other refusal here is also `PREVIEW_INVALID_DOCUMENT`. PDFBox builds only the image
@@ -639,7 +642,7 @@ Every refusal is JSON even to a client that sent `Accept: application/pdf`:
 
 | Status | Code | Meaning |
 |---|---|---|
-| 422 | `PREVIEW_INVALID_DOCUMENT` | Damaged bytes, bytes that are not the stored type, or a stored type with no preview (e.g. legacy `.doc`) |
+| 422 | `PREVIEW_INVALID_DOCUMENT` | Damaged bytes, bytes that are not the stored type, a stored type with no preview (e.g. legacy `.doc`), a TIFF whose structure fails the pre-decode check, or a JPEG-compressed TIFF (Compression 6/7, deliberately not previewed) |
 | 422 | `PREVIEW_LIMIT_EXCEEDED` | A page, pixel, output or time limit below was reached; nothing partial is returned |
 | 503 | `PREVIEW_UNAVAILABLE` | The DOCX converter is unconfigured, unreachable, or did not return a complete PDF |
 | 429 | `PREVIEW_BUSY` | Every conversion permit on this pod is in use; `Retry-After` says when to try again |
