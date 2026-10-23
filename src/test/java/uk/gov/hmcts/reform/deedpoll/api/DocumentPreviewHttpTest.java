@@ -31,6 +31,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.PatchField;
+import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
@@ -81,7 +82,9 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -116,6 +119,7 @@ class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {
     private static final String UNRECORDABLE = "h".repeat(256);
 
     private static final String CASEWORKER_NAME = "Ada Caseworker";
+    private static final String STORE_FAILED = "The document store did not return this document's file. Try again.";
     private static final String CASEWORKER_SUBJECT = "caseworker-preview-http";
     private static final String JUDGE_NAME = "District Judge Bell";
     private static final String JUDGE_SUBJECT = "idam-judge-bell";
@@ -435,6 +439,22 @@ class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {
             authorised(get(judicialUrl(referralId, documentId)).accept(MediaType.APPLICATION_PDF))
                 .andExpect(status().isForbidden())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON));
+        }
+
+        @Test
+        @DisplayName("keeps a store that would not return the original as the download's 502, in JSON, never sent")
+        void storeFailureIsTheDownloadsBadGateway() throws Exception {
+            String documentId = uploaded(caseId, "three-pages.docx", DOCX, fixture("three-pages.docx"));
+            doThrow(new UpstreamFailureError(STORE_FAILED)).when(store).open(any());
+            try {
+                authorised(get(caseworkerUrl(caseId, documentId)).accept(MediaType.APPLICATION_PDF))
+                    .andExpect(status().isBadGateway())
+                    .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                    .andExpect(jsonPath("$.error").value(STORE_FAILED));
+                assertThat(CONVERTER.findAll(anyRequestedFor(anyUrl()))).isEmpty();
+            } finally {
+                reset(store);
+            }
         }
 
         @Test

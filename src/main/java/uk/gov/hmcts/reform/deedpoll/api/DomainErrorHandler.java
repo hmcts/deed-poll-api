@@ -70,10 +70,10 @@ public class DomainErrorHandler {
     /**
      * No such record, or none visible in the scope it was asked for.
      *
-     * <p>This and the 401 and 403 below preset their JSON type rather than negotiating it, because they are what a
-     * binary route refuses with before it has produced anything: a document preview client asks for
-     * {@code application/pdf}, no converter writes an {@link ApiError} as that, and a negotiated refusal would be
-     * lost and answered 500 instead of 404.
+     * <p>This, the 401 and 403 below and the 502 for a failed store read preset their JSON type rather than
+     * negotiating it, because they are what a binary route refuses with before it has produced anything: a document
+     * preview client asks for {@code application/pdf}, no converter writes an {@link ApiError} as that, and a
+     * negotiated refusal would be lost and answered 500 instead.
      */
     @ExceptionHandler(NotFoundError.class)
     public ResponseEntity<ApiError> notFound(NotFoundError error) {
@@ -179,10 +179,14 @@ public class DomainErrorHandler {
      * did not. The message is the domain's own composed text, because an outbound client's exception message
      * contains its dependency's response -- the point {@link #unreadableBody()} makes about the framework's
      * messages, with more at stake.
+     *
+     * <p>JSON is preset, as the 404 explains: a document store that will not return a preview's original is this,
+     * and the cftlib preview journey found it answered 500 once negotiated against {@code application/pdf}.
      */
     @ExceptionHandler(UpstreamFailureError.class)
     public ResponseEntity<ApiError> upstreamFailure(UpstreamFailureError error) {
-        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(ApiError.of(error.getMessage()));
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).contentType(MediaType.APPLICATION_JSON)
+            .body(ApiError.of(error.getMessage()));
     }
 
     /**

@@ -254,13 +254,13 @@ preview response helper, preview error DTO/handler, `OpenAPIPublisherTest` and n
 
 **Files:** service/HTTP/cftlib preview tests and fixtures; production code only to address findings.
 
-- [ ] Run the all-format matrix with actual parsers and original byte/checksum assertions, including TIFF
+- [x] Run the all-format matrix with actual parsers and original byte/checksum assertions, including TIFF
       later frames, converted DOCX PDF pages, one-page images and original-download regression checks.
-- [ ] Extend local cftlib document journeys to demonstrate caller-authorized CDAM reads feeding previews,
+- [x] Extend local cftlib document journeys to demonstrate caller-authorized CDAM reads feeding previews,
       refused readers/wrong cases, judicial ownership and preserved system correspondence behaviour.
-- [ ] Exercise converter outage, missing configuration, capacity, parser/output bounds, cancellation and
+- [x] Exercise converter outage, missing configuration, capacity, parser/output bounds, cancellation and
       fail-closed audit; prove unauthenticated/denied requests do not reach the conversion client.
-- [ ] Run full build, Validation Commands and relevant cftlib journeys. Record counts/skips, limits and
+- [x] Run full build, Validation Commands and relevant cftlib journeys. Record counts/skips, limits and
       the review-base/handoff notes for Ralphex's subsequent review phases. Do not start those phases in
       this task; append their findings and revalidation later. Live converter validation remains external.
 
@@ -488,6 +488,49 @@ and its file-download smoke are not evidence that document previews exist. Appen
 - **Validation:** `./gradlew build` (no-checkstyle init) successful -- test 4762 run, 1 skipped (the opt-in fixture
   regeneration), 0 failed; integration 24 run, 0 failed. `checkstyle.sh` OK after line-length/Javadoc fixes (re-ran
   the HTTP test after them: 30/30). The known intermittent `CcdCreationAttemptRepositoryTest` did not fail.
+
+### Task 6 (2026-10-23)
+
+- **Review base for Ralphex's later phases:** `f795067` (the Task 5 commit); this task's commit sits on it.
+- **All-format matrix, real parsers:** already in place from Tasks 2-5 and re-run in this build --
+  `PreviewRendererTest`/`DocxRendererTest` (every JDK TIFF compression and orientation, later-frame colours read back
+  with PDFBox's rasteriser, converted DOCX page counts), `DocumentPreviewServiceTest` (original SHA-256 and row
+  unchanged for all five formats) and `DocumentPreviewHttpTest` (both surfaces, original download byte-identical).
+  New here: the same matrix through **real CDAM and CCD** in `cftlibTest`.
+- **New cftlib journey `DocumentPreviewCftlibTest` (7 tests, only dm-store and the converter stubbed):** five
+  uploads over HTTP (2-page PDF, JPEG, PNG, 3-frame TIFF with a portrait middle frame, 3-page DOCX), each preview read
+  through CDAM with dm-store's `user-id` equal to **the caller's IDAM id, never the system user's**, every
+  protective header, page count from PDFBox, TIFF pages 1-3 rendered in frame colour order, one
+  `DOCUMENT_PREVIEWED` per request and the original's SHA-256 unchanged through `/file`. Test 1 runs with the converter
+  **unconfigured**: DOCX is the fixed 503 with no source read and no audit, the rest render, the original downloads.
+  The context is then replaced with the converter configured (a `DynamicPropertySource` supplier read at context
+  start): DOCX converts, the converter receives exactly the original bytes and the key in the body and not the
+  filename; `Range` is a full 200 without `Content-Range` for all five. Four caseworker roles preview under their own
+  token; anonymous 401 and another case's URL 404 reach neither dm-store nor the converter; the unmapped user keeps the
+  download's CDAM 502. Judicial: both judges preview while Open, a caseworker on the judicial route is 403, after one
+  judge claims the other gets the referral's 404 with nothing read or sent while the holder previews the converted DOCX,
+  and after withdrawal the holder gets 404. Revoking CCD read for `DEED_POLL_READER` makes PNG and DOCX previews CDAM's
+  403/404 (never a `PREVIEW_` body), no binary read, no conversion; restoring it restores the preview. A converter
+  503 is the fixed `PREVIEW_UNAVAILABLE` after exactly one call, with the original still downloadable. System
+  correspondence still reads the same bytes as the system user afterwards. `CftlibConfig` gains a second judge
+  (`deed-poll-other-judge@localhost`).
+- **Finding, fixed:** the unmapped user's preview answered **500**, not the download's 502. `DomainErrorHandler.
+  upstreamFailure` negotiated its body, and a preview asks for `application/pdf` -- the class of bug Task 5 fixed for
+  404/401/403. It now presets JSON. `DocumentPreviewHttpTest` gains a store `UpstreamFailureError` under `Accept:
+  application/pdf` (502 JSON, nothing sent), which fails without the fix. `CdamDocumentStore.open` throws only
+  `NotFoundError`, `ForbiddenError` and `UpstreamFailureError`, all three now preset.
+- **Bounds, outage, capacity, cancellation, fail-closed audit, missing configuration:** covered by the existing
+  renderer/service/HTTP tests (Task 2-5 notes), plus the unconfigured, outage and denial journeys above through CDAM.
+  Limits unchanged: 25 s, 25 MiB in, 50 MiB out, 500 pages, 25 M pixels, 3 conversions per pod, Retry-After 5 s.
+- **Validation:** `./gradlew build` (no-checkstyle init) successful in 5m 6s -- test 4763 run, 1 skipped (the opt-in
+  fixture regeneration), 0 failed; integration 24 run, 0 failed. The known intermittent `CcdCreationAttemptRepositoryTest`
+  did not fail. `checkstyle.sh` OK (after one Javadoc line-length fix, comment only). `./gradlew cftlibTest
+  --no-watch-fs`: **21 tests, 0 failed/skipped**, 1m 22s (log `/tmp/preview-task6-cftlib.log`). Gradle's own
+  `checkstyleCftlibTest` hits the documented SIGILL; `checkstyle.sh` covers that source set.
+- **Environment note:** cftlib's bundled dg-docassembly binds port 8080, which an existing
+  `python3 -m http.server 8080 --directory /tmp/deed-poll-viewer-prototype` held. It was stopped for each cftlib run
+  and restarted with the same command afterwards.
+- **Not proven here:** live Docmosis access, fonts and Word layout fidelity, AAT CDAM permissions (Post-Completion).
 
 ## Post-Completion
 
