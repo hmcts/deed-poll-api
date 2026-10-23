@@ -75,9 +75,6 @@ class PreviewPropertiesTest {
     @DisplayName("the limits refuse at their edges with the contract's failures")
     void limitChecks() {
         PreviewProperties properties = defaults();
-        properties.requireInputBytes(UploadPolicy.MAX_UPLOAD_BYTES);
-        assertThatThrownBy(() -> properties.requireInputBytes(UploadPolicy.MAX_UPLOAD_BYTES + 1))
-            .isInstanceOfSatisfying(PreviewError.class, failure(PreviewFailure.LIMIT_EXCEEDED));
         properties.requireOutputBytes(50L * 1024 * 1024);
         assertThatThrownBy(() -> properties.requireOutputBytes(50L * 1024 * 1024 + 1))
             .isInstanceOfSatisfying(PreviewError.class, failure(PreviewFailure.LIMIT_EXCEEDED));

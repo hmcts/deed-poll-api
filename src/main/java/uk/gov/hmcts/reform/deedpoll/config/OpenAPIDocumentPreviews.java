@@ -94,6 +94,10 @@ public class OpenAPIDocumentPreviews {
         responses.put("404", new ApiResponse()
             .description("No such document in this scope, as /file answers: the usual error object.")
             .content(json(API_ERROR_REF)));
+        responses.put("502", new ApiResponse()
+            .description("The document store would not return the original, as /file answers: the usual error "
+                + "object. Nothing was converted.")
+            .content(json(API_ERROR_REF)));
         failuresByStatus().forEach((status, failures) -> responses.put(status, refusal(failures, properties)));
         operation.setResponses(responses);
         operation.addExtension(LIMITS_EXTENSION, limits(properties));

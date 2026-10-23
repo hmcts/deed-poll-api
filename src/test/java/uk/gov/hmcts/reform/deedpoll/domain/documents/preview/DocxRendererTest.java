@@ -35,8 +35,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aMultipart;
@@ -347,31 +345,6 @@ class DocxRendererTest {
             assertFailure(renderer(properties(address, ACCESS_KEY, null, null, null)), source(), budget(),
                           PreviewFailure.UNAVAILABLE);
         }
-    }
-
-    @Test
-    @DisplayName("a caller who goes away mid-conversion cancels the call; the permit is held until it has stopped")
-    void cancellation() throws Exception {
-        converter.stubFor(post(urlPathEqualTo(CONVERT))
-            .willReturn(pdf(DocumentPreviewFixtures.pdf()).withFixedDelay(10_000)));
-        PreviewBudget budget = budget();
-        PreviewRenderer renderer = renderer();
-        final CompletableFuture<RenderedPreview> worker =
-            CompletableFuture.supplyAsync(() -> renderer.render(PreviewFormat.DOCX, source(), budget));
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (converter.findAll(anyRequestedFor(anyUrl())).isEmpty() && System.nanoTime() < deadline) {
-            Thread.sleep(20);
-        }
-        assertThat(converter.findAll(anyRequestedFor(anyUrl()))).hasSize(1);
-        assertThat(capacity.available()).isEqualTo(2);
-
-        long cancelled = System.nanoTime();
-        budget.cancel();
-        Throwable thrown = catchThrowable(() -> worker.get(5, TimeUnit.SECONDS));
-        assertThat(thrown).hasCauseInstanceOf(PreviewCancelledException.class);
-        assertThat(Duration.ofNanos(System.nanoTime() - cancelled)).isLessThan(Duration.ofSeconds(3));
-        assertThat(capacity.available()).isEqualTo(3);
-        assertScratchEmpty();
     }
 
     @Test

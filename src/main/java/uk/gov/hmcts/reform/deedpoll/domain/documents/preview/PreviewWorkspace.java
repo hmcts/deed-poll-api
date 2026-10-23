@@ -2,12 +2,13 @@ package uk.gov.hmcts.reform.deedpoll.domain.documents.preview;
 
 import org.apache.pdfbox.io.MemoryUsageSetting;
 import org.apache.pdfbox.io.RandomAccessStreamCache;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.UncheckedIOException;
 import java.nio.file.FileSystems;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -22,12 +23,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  * One preview's private scratch directory: the spooled source, the rendered PDF and PDFBox's own scratch files.
  *
  * <p>Created owner-only where the file system has POSIX permissions, named by nothing from the document, and
- * deleted whole by {@link #close} -- after a success once the response is written, and at once after a failure or a
- * cancellation. Every file PDFBox spills to lives here too, so nothing a preview wrote outlives it, and a preview
- * leaves no derivative behind for anybody else to find.
+ * deleted whole by {@link #close} -- after a success once the response is written, and at once after a failure.
+ * Every file PDFBox spills to lives here too, so nothing a preview wrote outlives it, and a preview leaves no
+ * derivative behind for anybody else to find.
  */
 final class PreviewWorkspace implements AutoCloseable {
 
+    private static final Logger LOG = LoggerFactory.getLogger(PreviewWorkspace.class);
     private static final int CHUNK = 64 * 1024;
     private static final FileAttribute<?>[] PRIVATE = privateDirectory();
 
@@ -61,7 +63,6 @@ final class PreviewWorkspace implements AutoCloseable {
      *
      * @throws PreviewError {@link PreviewFailure#LIMIT_EXCEEDED} over the limit or the budget,
      *     {@link PreviewFailure#UNAVAILABLE} if the source could not be read to its end
-     * @throws PreviewCancelledException if the caller went away
      */
     Path spool(InputStream source, long limit, PreviewBudget budget) {
         Path file = newFile(".source");
@@ -129,7 +130,13 @@ final class PreviewWorkspace implements AutoCloseable {
         return MemoryUsageSetting.setupTempFileOnly(maxBytes).setTempDir(directory.toFile()).streamCache;
     }
 
-    /** Deletes the directory and everything in it; safe to call more than once. */
+    /**
+     * Deletes the directory and everything in it; safe to call more than once.
+     *
+     * <p>Never throws. It runs in a {@code finally}, after a refusal or once the response is already committed, and
+     * a failure here must neither replace the refusal the caller is owed nor fail a response that was sent. What
+     * is left behind is logged, in fixed prose, for an operator to remove.
+     */
     @Override
     public void close() {
         if (!Files.exists(directory)) {
@@ -150,7 +157,8 @@ final class PreviewWorkspace implements AutoCloseable {
                 }
             });
         } catch (IOException undeleted) {
-            throw new UncheckedIOException("a preview's scratch directory could not be deleted", undeleted);
+            // The class name only: the message carries the path.
+            LOG.warn("A preview's scratch directory could not be deleted ({})", undeleted.getClass().getSimpleName());
         }
     }
 

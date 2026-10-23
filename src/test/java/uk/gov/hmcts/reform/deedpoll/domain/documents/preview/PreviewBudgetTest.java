@@ -29,24 +29,6 @@ class PreviewBudgetTest {
     }
 
     @Test
-    @DisplayName("a cancel runs each open registration once, at once if already cancelled, and never a closed one")
-    void onCancel() {
-        PreviewBudget budget = PreviewBudget.start(clock, Duration.ofSeconds(25));
-        int[] open = new int[1];
-        int[] closed = new int[1];
-        budget.onCancel(() -> open[0]++);
-        budget.onCancel(() -> closed[0]++).close();
-        budget.cancel();
-        budget.cancel();
-        assertThat(open[0]).isEqualTo(1);
-        assertThat(closed[0]).isZero();
-
-        int[] late = new int[1];
-        budget.onCancel(() -> late[0]++);
-        assertThat(late[0]).isEqualTo(1);
-    }
-
-    @Test
     @DisplayName("a spent budget stops the work as a limit, never as a partial preview")
     void spentIsLimitExceeded() {
         PreviewBudget budget = PreviewBudget.start(clock, Duration.ofSeconds(25));
@@ -54,18 +36,6 @@ class PreviewBudgetTest {
         assertThatThrownBy(budget::checkpoint).isInstanceOfSatisfying(PreviewError.class,
             error -> assertThat(error.failure()).isEqualTo(PreviewFailure.LIMIT_EXCEEDED));
         assertThatThrownBy(() -> budget.deadlineFor(Duration.ofSeconds(3))).isInstanceOf(PreviewError.class);
-    }
-
-    @Test
-    @DisplayName("a cancelled request stops at its next checkpoint, ahead of any expiry")
-    void cancellationStops() {
-        PreviewBudget budget = PreviewBudget.start(clock, Duration.ofSeconds(25));
-        budget.cancel();
-        clock.advance(Duration.ofSeconds(30));
-        assertThat(budget.isCancelled()).isTrue();
-        assertThatThrownBy(budget::checkpoint).isInstanceOf(PreviewCancelledException.class);
-        assertThatThrownBy(() -> budget.deadlineFor(Duration.ofSeconds(3)))
-            .isInstanceOf(PreviewCancelledException.class);
     }
 
     @Test

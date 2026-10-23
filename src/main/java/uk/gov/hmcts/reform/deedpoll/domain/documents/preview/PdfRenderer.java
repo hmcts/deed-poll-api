@@ -49,13 +49,15 @@ final class PdfRenderer implements SourceRenderer {
                     throw new PreviewError(PreviewFailure.LIMIT_EXCEEDED);
                 }
             }
-        } catch (PreviewError | PreviewCancelledException own) {
+        } catch (PreviewError own) {
             throw own;
         } catch (IOException | RuntimeException unreadable) {
             // The class name only: PDFBox's messages quote object numbers, names and strings from the file.
             LOG.info("A PDF preview was refused as unreadable ({})", unreadable.getClass().getSimpleName());
             throw new PreviewError(PreviewFailure.INVALID_DOCUMENT);
         }
+        // Repeated by PreviewRenderer for every format, but needed here: a converted DOCX with no pages must reach
+        // DocxRenderer as this invalid document, which it reports as the converter's failure.
         properties.requirePages(pages);
         return new Rendition(source, pages);
     }

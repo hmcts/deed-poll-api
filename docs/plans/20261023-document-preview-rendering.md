@@ -289,9 +289,9 @@ preview response helper, preview error DTO/handler, `OpenAPIPublisherTest` and n
 
 ## Execution notes
 
-Planning only, 23 October 2026. No preview endpoint, converter integration, configuration change, new test
-run or Ralphex execution has been performed by authoring this plan. The earlier AAT document-store repair
-and its file-download smoke are not evidence that document previews exist. Append execution evidence here.
+Implemented on `feat/document-preview-rendering` (Tasks 1–7 up to `e16631b`, then review fixes); not pushed,
+not live-verified. Post-Completion items are open. The earlier AAT document-store repair and its file-download
+smoke are not evidence that document previews exist.
 
 ### Task 1 (2026-10-23)
 
@@ -560,6 +560,27 @@ and its file-download smoke are not evidence that document previews exist. Appen
 - **Validation:** no code or test changed. `./gradlew build` (no-checkstyle init) successful: `integration` re-ran,
   24 run, 0 failed; `test` was up to date against unchanged inputs, its results Task 6's 4763 run, 1 skipped, 0
   failed. `checkstyle.sh` OK.
+
+### Review iteration 1 (2026-10-23)
+
+- **Cancellation removed, not wired.** No production code ever called `PreviewBudget.cancel()`: the request thread
+  is the worker, so a servlet cannot notice a disconnect mid-conversion until it writes. `cancel`/`onCancel` and
+  `PreviewCancelledException` are gone. A disconnect during the write still deletes the scratch directory
+  (`DocumentFileResponsesTest`), and abandoned work runs on to completion or to the 25 s budget, holding its permit
+  throughout. This revises Development Approach 4/7's "client disconnect" for the conversion phase. A real
+  mid-conversion cancel needs async request handling and would be a separate plan.
+- **Decoded bytes bounded.** The pixel limit alone allowed 16-bit RGBA (8 B/px) or float TIFF (16+ B/px) frames
+  to decode past the heap estimate below. A PNG/TIFF frame's raw sample layout is now held to four bytes a pixel of
+  `maxFramePixels` before decoding (`LIMIT_EXCEEDED`). JPEG is unaffected, since the JDK decodes it at ≤ 4 B/px. The
+  estimate below therefore holds as written.
+- **OpenAPI publishes `502`** (`ApiError`, the store failure `/file` also returns) on both previews. New artifact
+  SHA-256 `74c83e760cb18e8ff803216eff26f4c12f75f90f0043c2c6a1e4d234497d1dd6`, 104,422 bytes, 41 paths / 57
+  operations / 61 schemas. It supersedes `86eeee8a…`.
+- **Smaller fixes:** scratch-deletion failure now logs a fixed WARN and no longer masks a refusal or fails a sent
+  response; the unused `requireInputBytes` and `ImageRenderer`'s redundant format guard and page re-check are gone;
+  `ExifOrientationTest.hostile`'s offsets are corrected (the old ones mutated the wrong bytes) and asserted exactly;
+  added tests for big-endian/multi-entry EXIF, exactly-at-limit pages (PDF and TIFF), `Retry-After` rounding and
+  the decoded-size limit. The rate-limit and audit docs now name the preview permit and `DOCUMENT_PREVIEWED`.
 
 ## Post-Completion
 

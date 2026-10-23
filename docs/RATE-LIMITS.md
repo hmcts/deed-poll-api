@@ -1,6 +1,6 @@
 # Abuse limits: reading them and switching them
 
-The api half of OWASP plan 06 (M6, L13), built by `docs/plans/completed/20261016-abuse-limits.md`. Four limits, and each one is
+The api half of OWASP plan 06 (M6, L13), built by `docs/plans/completed/20261016-abuse-limits.md`. Five limits (the last added with document previews), and each one is
 either switchable or not:
 
 | Limit | Where | Answer | Mode |
@@ -9,9 +9,11 @@ either switchable or not:
 | Uploads in flight on one pod (default 4) | the same filter, a `Semaphore` | 429, `Retry-After: 5` | **always enforced** |
 | Emails of one template to one case in 24 hours (default 3) | `CaseEmailService.send` | 409, "This email has already been sent 3 times for this case today" | **always enforced** |
 | One statement of the case list read (default `5s`) | `CaseListStatementTimeout` | the existing failed-read 500 | **always enforced** |
+| Non-PDF document previews converting at once on one pod (default 3) | `PreviewRenderer`, `ConversionCapacity` | 429 `PREVIEW_BUSY`, `Retry-After` `DOCUMENT_PREVIEW_BUSY_RETRY_AFTER` (default 5 s) | **always enforced**, not part of `RATE_LIMIT_MODE` |
 
 The six limited operations and their defaults are in `RateLimitBucket`, and the published OpenAPI document carries
-429 on exactly those six. An unfiltered `GET /caseworker/cases` is never counted: only one carrying `q` or `where` is
+429 on those six and on the two document previews. A preview's 429 is the conversion permit's `PREVIEW_BUSY`,
+published by `OpenAPIDocumentPreviews`, not a budget: previews have no V37 per-person budget. An unfiltered `GET /caseworker/cases` is never counted: only one carrying `q` or `where` is
 a `search`.
 
 ## The modes
@@ -105,7 +107,7 @@ statement timeout appears as a failed `GET /caseworker/cases` request with a `Qu
 ## Admin's next spec refresh
 
 Admin vendors this api's `openapi.json`, and `libs/deed-poll-api-client/src/api/contract.test.ts` holds its client to
-that copy, so the refresh has to land all at once. The six 429 responses (and their `Retry-After` header) go into
+that copy, so the refresh has to land all at once. The six budget 429 responses (and their `Retry-After` header) go into
 one refresh with every other api change since the last one. Do not try to spread them over several. The plan
 expected that refresh to break pinned `operation.responses` assertions. As of 2026-10-16, admin's test pins one
 `operation.responses`, on `GET /caseworker/gazette-notices`. That operation is not limited, so it is unaffected. Admin's

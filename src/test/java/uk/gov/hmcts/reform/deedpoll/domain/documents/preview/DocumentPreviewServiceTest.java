@@ -62,6 +62,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
@@ -412,29 +414,15 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("a caller who goes away mid-transfer stops the work, and the stream and its permit are released")
-        void cancelledMidTransfer() {
-            String documentId = uploadedFixture("three-frames.tiff", "image/tiff");
-            PreviewBudget budget = previews.budget();
-            AtomicBoolean closed = new AtomicBoolean();
-            doAnswer(call -> new CancelsOnRead(call.callRealMethod(), budget, closed)).when(store).open(any());
-
-            assertThatThrownBy(() -> previews.caseworkerPreview(caseId, documentId, CASEWORKER, budget))
-                .isInstanceOf(PreviewCancelledException.class);
-
-            assertThat(closed).isTrue();
-            assertThat(reads("DOCUMENT_PREVIEWED")).hasSize(1);
-        }
-
-        @Test
-        @DisplayName("a caller already gone is refused before anything is recorded or read")
-        void cancelledBeforeStarting() {
+        @DisplayName("a spent budget is a limit, refused before anything is recorded or read")
+        void spentBeforeStarting() {
             String documentId = uploadedFixture("scan.png", "image/png");
-            PreviewBudget budget = previews.budget();
-            budget.cancel();
+            PreviewBudget budget = PreviewBudget.start(Clock.systemUTC(), Duration.ZERO);
 
-            assertThatThrownBy(() -> previews.caseworkerPreview(caseId, documentId, CASEWORKER, budget))
-                .isInstanceOf(PreviewCancelledException.class);
+            PreviewError refused = catchThrowableOfType(
+                () -> previews.caseworkerPreview(caseId, documentId, CASEWORKER, budget));
+
+            assertThat(refused.failure()).isEqualTo(PreviewFailure.LIMIT_EXCEEDED);
 
             assertNothingRead();
         }
@@ -766,31 +754,6 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
             int count = super.read(buffer, offset, (int) Math.min(length, limit - read));
             read += Math.max(count, 0);
             return count;
-        }
-
-        @Override
-        public void close() throws IOException {
-            closed.set(true);
-            super.close();
-        }
-    }
-
-    /** The store's stream, whose first read is when the caller goes away. */
-    private static final class CancelsOnRead extends FilterInputStream {
-
-        private final PreviewBudget budget;
-        private final AtomicBoolean closed;
-
-        CancelsOnRead(Object stream, PreviewBudget budget, AtomicBoolean closed) {
-            super((InputStream) stream);
-            this.budget = budget;
-            this.closed = closed;
-        }
-
-        @Override
-        public int read(byte[] buffer, int offset, int length) throws IOException {
-            budget.cancel();
-            return super.read(buffer, offset, length);
         }
 
         @Override

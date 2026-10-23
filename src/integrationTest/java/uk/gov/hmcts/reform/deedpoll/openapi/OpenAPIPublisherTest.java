@@ -349,7 +349,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
             JsonNode responses = operation.get("responses");
             assertThat(responses.fieldNames()).toIterable().as(path)
-                .containsExactlyInAnyOrder("200", "403", "404", "422", "429", "503");
+                .containsExactlyInAnyOrder("200", "403", "404", "422", "429", "502", "503");
 
             JsonNode ok = responses.get("200");
             assertThat(ok.get("content").fieldNames()).toIterable().containsExactly("application/pdf");
@@ -362,6 +362,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
             JsonNode notFound = resolve(spec, responses.at("/404/content/application~1json/schema"));
             assertThat(notFound.path("properties").fieldNames()).toIterable()
+                .containsExactlyInAnyOrder("error", "errors");
+            JsonNode badGateway = resolve(spec, responses.at("/502/content/application~1json/schema"));
+            assertThat(badGateway.path("properties").fieldNames()).toIterable()
                 .containsExactlyInAnyOrder("error", "errors");
 
             List<String> published = new ArrayList<>();

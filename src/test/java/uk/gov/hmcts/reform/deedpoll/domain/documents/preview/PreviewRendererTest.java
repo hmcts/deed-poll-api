@@ -20,7 +20,11 @@ import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 
 import java.awt.Color;
+import java.awt.Transparency;
+import java.awt.color.ColorSpace;
 import java.awt.image.BufferedImage;
+import java.awt.image.ComponentColorModel;
+import java.awt.image.DataBuffer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.FilterInputStream;
@@ -43,6 +47,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 import java.util.zip.CRC32;
+import javax.imageio.ImageIO;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -93,6 +98,17 @@ class PreviewRendererTest {
         void overPages() {
             assertFailure(renderer(limits(2, PreviewProperties.MAX_FRAME_PIXELS, PreviewProperties.MAX_OUTPUT_BYTES)),
                           PreviewFormat.PDF, DocumentPreviewFixtures.pdf(3), PreviewFailure.LIMIT_EXCEEDED);
+        }
+
+        @Test
+        @DisplayName("exactly the page limit is served")
+        void atPageLimit() {
+            PreviewRenderer exact = renderer(limits(3, PreviewProperties.MAX_FRAME_PIXELS,
+                                                    PreviewProperties.MAX_OUTPUT_BYTES));
+            try (RenderedPreview preview = exact.render(PreviewFormat.PDF, new TrackedSource(
+                DocumentPreviewFixtures.pdf(3)), budget())) {
+                assertThat(preview.pages()).isEqualTo(3);
+            }
         }
 
         @Test
@@ -220,6 +236,23 @@ class PreviewRendererTest {
         }
 
         @Test
+        @DisplayName("a frame whose samples decode past an ARGB frame's bytes is refused, within the pixel limit")
+        void deepSamples() {
+            PreviewRenderer small = renderer(limits(PreviewProperties.MAX_PAGES, 100,
+                                                    PreviewProperties.MAX_OUTPUT_BYTES));
+            // Ten by ten is the whole pixel limit: four bytes a pixel fits, a 16-bit RGBA PNG's eight does not.
+            try (RenderedPreview preview = small.render(PreviewFormat.PNG, new TrackedSource(
+                encodedPng(new BufferedImage(10, 10, BufferedImage.TYPE_INT_ARGB))), budget())) {
+                assertThat(preview.pages()).isEqualTo(1);
+            }
+            ComponentColorModel deep = new ComponentColorModel(ColorSpace.getInstance(ColorSpace.CS_sRGB), true,
+                                                               false, Transparency.TRANSLUCENT, DataBuffer.TYPE_USHORT);
+            BufferedImage sixteenBit =
+                new BufferedImage(deep, deep.createCompatibleWritableRaster(10, 10), false, null);
+            assertFailure(small, PreviewFormat.PNG, encodedPng(sixteenBit), PreviewFailure.LIMIT_EXCEEDED);
+        }
+
+        @Test
         @DisplayName("a preview over the output limit is refused rather than truncated")
         void overOutput() {
             PreviewRenderer small = renderer(limits(PreviewProperties.MAX_PAGES, PreviewProperties.MAX_FRAME_PIXELS,
@@ -321,6 +354,17 @@ class PreviewRendererTest {
             assertFailure(renderer(limits(2, PreviewProperties.MAX_FRAME_PIXELS, PreviewProperties.MAX_OUTPUT_BYTES)),
                           PreviewFormat.TIFF, DocumentPreviewFixtures.read("three-frames.tiff"),
                           PreviewFailure.LIMIT_EXCEEDED);
+        }
+
+        @Test
+        @DisplayName("exactly the page limit in frames is served")
+        void atPageLimit() {
+            PreviewRenderer exact = renderer(limits(3, PreviewProperties.MAX_FRAME_PIXELS,
+                                                    PreviewProperties.MAX_OUTPUT_BYTES));
+            try (RenderedPreview preview = exact.render(PreviewFormat.TIFF, new TrackedSource(
+                DocumentPreviewFixtures.read("three-frames.tiff")), budget())) {
+                assertThat(preview.pages()).isEqualTo(3);
+            }
         }
 
         @Test
@@ -465,7 +509,7 @@ class PreviewRendererTest {
         }
 
         @Test
-        @DisplayName("a caller who goes away half way through the response leaves nothing behind")
+        @DisplayName("a preview closed half way through reading its PDF leaves nothing behind")
         void disconnect() throws IOException {
             RenderedPreview preview = render(PreviewFormat.TIFF, DocumentPreviewFixtures.read("two-frames.tiff"));
             try (InputStream body = preview.open()) {
@@ -477,8 +521,8 @@ class PreviewRendererTest {
         }
 
         @Test
-        @DisplayName("a cancelled worker keeps its permit until it has actually stopped, then cleans up")
-        void cancellation() throws Exception {
+        @DisplayName("a worker whose budget runs out keeps its permit until it has actually stopped, then cleans up")
+        void expiryMidRead() throws Exception {
             CountDownLatch reading = new CountDownLatch(1);
             CountDownLatch resume = new CountDownLatch(1);
             byte[] tiff = DocumentPreviewFixtures.read("two-frames.tiff");
@@ -506,19 +550,21 @@ class PreviewRendererTest {
                     super.close();
                 }
             };
-            PreviewBudget budget = budget();
+            MutableClock clock = new MutableClock();
+            PreviewBudget budget = PreviewBudget.start(clock, Duration.ofSeconds(25));
             PreviewRenderer renderer = renderer();
             final CompletableFuture<RenderedPreview> worker =
                 CompletableFuture.supplyAsync(() -> renderer.render(PreviewFormat.TIFF, stalled, budget));
             assertThat(reading.await(5, TimeUnit.SECONDS)).isTrue();
 
-            budget.cancel();
-            // The caller has gone, but the worker is still inside the source read: its permit is still its own.
+            clock.advance(Duration.ofSeconds(26));
+            // The time is up, but the worker is still inside the source read: its permit is still its own.
             assertThat(capacity.available()).isEqualTo(2);
             resume.countDown();
 
             Throwable thrown = catchThrowable(() -> worker.get(5, TimeUnit.SECONDS));
-            assertThat(thrown).hasCauseInstanceOf(PreviewCancelledException.class);
+            assertThat(thrown).cause().isInstanceOfSatisfying(PreviewError.class,
+                error -> assertThat(error.failure()).isEqualTo(PreviewFailure.LIMIT_EXCEEDED));
             assertThat(capacity.available()).isEqualTo(3);
             assertThat(closed).isTrue();
             assertScratchEmpty();
@@ -567,6 +613,16 @@ class PreviewRendererTest {
 
     private static PreviewProperties limits(int pages, long pixels, long output) {
         return new PreviewProperties(null, output, pages, pixels, null, null, null);
+    }
+
+    private static byte[] encodedPng(BufferedImage image) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try {
+            assertThat(ImageIO.write(image, "png", out)).isTrue();
+        } catch (IOException unwritable) {
+            throw new AssertionError(unwritable);
+        }
+        return out.toByteArray();
     }
 
     private static PreviewBudget budget() {
@@ -768,7 +824,7 @@ class PreviewRendererTest {
     }
 
     private static final class MutableClock extends Clock {
-        private Instant now = Instant.parse("2026-10-23T09:00:00Z");
+        private volatile Instant now = Instant.parse("2026-10-23T09:00:00Z");
 
         void advance(Duration by) {
             now = now.plus(by);

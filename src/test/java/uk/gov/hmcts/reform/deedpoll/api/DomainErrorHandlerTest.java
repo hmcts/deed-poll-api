@@ -14,7 +14,10 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewError;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFailure;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -176,5 +179,16 @@ class DomainErrorHandlerTest {
         assertThat(handler.unreadableMultipart().getBody()).isNotNull();
         assertThat(handler.uploadTooLarge().getBody().error())
             .isNotEqualTo(handler.unreadableMultipart().getBody().error());
+    }
+
+    @Test
+    @DisplayName("a busy preview's Retry-After is whole seconds, rounded up so a client never retries early")
+    void previewRetryAfterRoundsUp() {
+        assertThat(handler.preview(PreviewError.busy(Duration.ofMillis(1500))).getHeaders()
+                       .getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("2");
+        assertThat(handler.preview(PreviewError.busy(Duration.ofSeconds(1))).getHeaders()
+                       .getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
+        assertThat(handler.preview(new PreviewError(PreviewFailure.LIMIT_EXCEEDED)).getHeaders()
+                       .containsKey(HttpHeaders.RETRY_AFTER)).isFalse();
     }
 }

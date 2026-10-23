@@ -5,9 +5,8 @@ import java.nio.file.Path;
 /**
  * Makes one format's preview from a source already spooled into the request's workspace.
  *
- * <p>An implementation returns a complete PDF or throws: {@link PreviewError} for a refusal, and
- * {@link PreviewCancelledException} when the budget's caller has gone. It never lets a parser's or a client's own
- * exception out, because its message may quote the document.
+ * <p>An implementation returns a complete PDF or throws {@link PreviewError} for a refusal. It never
+ * lets a parser's or a client's own exception out, because its message may quote the document.
  */
 interface SourceRenderer {
 

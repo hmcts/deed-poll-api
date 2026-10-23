@@ -11,6 +11,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBuffer;
+import java.awt.image.SampleModel;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -20,6 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import javax.imageio.IIOException;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
+import javax.imageio.ImageTypeSpecifier;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.plugins.tiff.TIFFDirectory;
 import javax.imageio.plugins.tiff.TIFFField;
@@ -36,22 +39,31 @@ import javax.imageio.stream.ImageInputStream;
  *
  * <p>The bytes decide, not the stored type: only a reader for the stored format that recognises the bytes is used,
  * so a PNG stored as a JPEG is an invalid document. Each frame's declared dimensions are checked against the pixel
- * limit before it is decoded, frames are decoded one at a time and dropped once drawn, and the budget is checked
- * between them. A JPEG is decoded only to prove its data is whole and then embedded as it was stored, so a
- * photograph is not recompressed; a PNG or TIFF frame is embedded losslessly.
+ * limit, and a PNG or TIFF frame's sample layout against the decoded-size limit, before it is decoded; frames are
+ * decoded one at a time and dropped once drawn, and the budget is checked between them. A JPEG is decoded only to
+ * prove its data is whole and then embedded as it was stored, so a photograph is not recompressed;
+ * a PNG or TIFF frame is embedded losslessly.
  */
 final class ImageRenderer implements SourceRenderer {
 
     private static final Logger LOG = LoggerFactory.getLogger(ImageRenderer.class);
 
+    /**
+     * The decoded bytes a full-size frame may take, per pixel of {@link PreviewProperties#maxFramePixels}: ARGB at
+     * eight bits a sample, the figure decision 5's heap estimate rests on.
+     */
+    private static final long MAX_DECODED_BYTES_PER_FRAME_PIXEL = 4;
+
     private final PreviewFormat format;
+    private final String formatName;
     private final PreviewProperties properties;
 
-    ImageRenderer(PreviewFormat format, PreviewProperties properties) {
-        if (format != PreviewFormat.JPEG && format != PreviewFormat.PNG && format != PreviewFormat.TIFF) {
-            throw new IllegalArgumentException("not an image format: " + format);
-        }
+    /**
+     * A renderer for {@code format}, read by ImageIO's readers for {@code formatName}.
+     */
+    ImageRenderer(PreviewFormat format, String formatName, PreviewProperties properties) {
         this.format = format;
+        this.formatName = formatName;
         this.properties = properties;
     }
 
@@ -81,7 +93,7 @@ final class ImageRenderer implements SourceRenderer {
                     }
                     properties.requireFrame(width, height);
                     Orientation orientation = jpeg != null ? ExifOrientation.of(jpeg) : orientation(reader, frames);
-                    PDImageXObject image = frame(reader, frames, jpeg, document);
+                    PDImageXObject image = frame(reader, frames, jpeg, document, width, height);
                     budget.checkpoint();
                     place(document, image, width, height, orientation);
                     frames++;
@@ -89,7 +101,6 @@ final class ImageRenderer implements SourceRenderer {
             } finally {
                 reader.dispose();
             }
-            properties.requirePages(frames);
             budget.checkpoint();
             building(() -> {
                 try (OutputStream out = workspace.boundedOutput(output, properties.maxOutputBytes())) {
@@ -97,7 +108,7 @@ final class ImageRenderer implements SourceRenderer {
                 }
                 return null;
             });
-        } catch (PreviewError | PreviewCancelledException own) {
+        } catch (PreviewError own) {
             throw own;
         } catch (Building scratch) {
             // Writing, not reading: the frame was decoded and it is the bounded scratch that is full.
@@ -111,7 +122,7 @@ final class ImageRenderer implements SourceRenderer {
     }
 
     private ImageReader readerFor(ImageInputStream input) throws IOException {
-        Iterator<ImageReader> readers = ImageIO.getImageReadersByFormatName(formatName());
+        Iterator<ImageReader> readers = ImageIO.getImageReadersByFormatName(formatName);
         while (readers.hasNext()) {
             ImageReader reader = readers.next();
             if (reader.getOriginatingProvider().canDecodeInput(input)) {
@@ -120,15 +131,6 @@ final class ImageRenderer implements SourceRenderer {
             reader.dispose();
         }
         throw new PreviewError(PreviewFailure.INVALID_DOCUMENT);
-    }
-
-    private String formatName() {
-        return switch (format) {
-            case JPEG -> "jpeg";
-            case PNG -> "png";
-            case TIFF -> "tiff";
-            case PDF, DOCX -> throw new IllegalStateException("not an image format");
-        };
     }
 
     private Orientation orientation(ImageReader reader, int index) throws IOException {
@@ -141,8 +143,8 @@ final class ImageRenderer implements SourceRenderer {
         return field == null ? Orientation.TOP_LEFT : Orientation.of(field.getAsInt(0));
     }
 
-    private static PDImageXObject frame(ImageReader reader, int index, byte[] jpeg, PDDocument document)
-        throws IOException {
+    private PDImageXObject frame(ImageReader reader, int index, byte[] jpeg, PDDocument document, int width,
+                                 int height) throws IOException {
         if (jpeg != null) {
             AtomicBoolean damaged = new AtomicBoolean();
             reader.addIIOReadWarningListener((ignored, warning) -> damaged.set(true));
@@ -154,8 +156,31 @@ final class ImageRenderer implements SourceRenderer {
             }
             return building(() -> JPEGFactory.createFromByteArray(document, jpeg));
         }
+        requireDecodedSize(reader, index, width, height);
         BufferedImage image = reader.read(index);
         return building(() -> LosslessFactory.createFromImage(document, image));
+    }
+
+    /**
+     * The pixel limit alone does not bound the heap: a 16-bit RGBA frame is eight bytes a pixel and a floating-point
+     * TIFF sixteen or more, so the frame's own sample layout is held to what a full-size ARGB frame would take. A
+     * JPEG needs no such check, because the JDK decodes it only at eight bits a sample and at most four samples.
+     */
+    private void requireDecodedSize(ImageReader reader, int index, int width, int height) throws IOException {
+        ImageTypeSpecifier type = reader.getRawImageType(index);
+        if (type == null) {
+            Iterator<ImageTypeSpecifier> types = reader.getImageTypes(index);
+            if (!types.hasNext()) {
+                throw new IIOException("no decodable image type");
+            }
+            type = types.next();
+        }
+        SampleModel samples = type.getSampleModel();
+        long bitsPerPixel = (long) DataBuffer.getDataTypeSize(samples.getDataType()) * samples.getNumDataElements();
+        long bytesPerPixel = Math.max(1, (bitsPerPixel + 7) / 8);
+        if ((long) width * height * bytesPerPixel > properties.maxFramePixels() * MAX_DECODED_BYTES_PER_FRAME_PIXEL) {
+            throw new PreviewError(PreviewFailure.LIMIT_EXCEEDED);
+        }
     }
 
     private static void place(PDDocument document, PDImageXObject image, int width, int height,

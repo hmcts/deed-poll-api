@@ -83,17 +83,6 @@ public record PreviewProperties(Duration requestBudget,
     }
 
     /**
-     * Refuses a source over the input ceiling.
-     *
-     * @throws PreviewError {@link PreviewFailure#LIMIT_EXCEEDED} over {@link #maxInputBytes}
-     */
-    public void requireInputBytes(long bytes) {
-        if (bytes > maxInputBytes()) {
-            throw new PreviewError(PreviewFailure.LIMIT_EXCEEDED);
-        }
-    }
-
-    /**
      * Refuses a preview over the output ceiling.
      *
      * @throws PreviewError {@link PreviewFailure#LIMIT_EXCEEDED} over {@link #maxOutputBytes}

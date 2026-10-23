@@ -12,13 +12,14 @@ import java.util.Objects;
  * <p>The order is the point. The permit is taken before the source is opened, so a busy pod refuses without reading
  * a byte; the source is spooled into the request's private workspace under the input ceiling and the budget; the
  * format's renderer writes the PDF there; and its pages and size are checked against the limits before it is
- * handed back. Whatever happens, the source stream is closed and a failed or cancelled preview's workspace is
- * deleted before this returns.
+ * handed back. Whatever happens, the source stream is closed and a failed preview's workspace is deleted
+ * before this returns.
  *
  * <p><strong>The permit is released here, on the thread doing the work, and only when that work has
- * stopped.</strong> A caller that disconnects cancels the {@link PreviewBudget} from wherever it notices; the worker
- * stops at its next checkpoint and only then gives the permit back, because until it does it is still holding the
- * memory the permit stands for. A finished {@link RenderedPreview} holds no permit: it is a file being streamed.
+ * stopped.</strong> The request thread is the worker, so a caller that disconnects mid-conversion is noticed only
+ * when the PDF is written; the work runs on to its end or to the {@link PreviewBudget}, holding the memory the permit
+ * stands for, and only then gives the permit back. A finished {@link RenderedPreview} holds no permit: it is a
+ * file being streamed.
  *
  * <p>A DOCX is converted by {@link DocxRenderer}. With its converter unconfigured it answers
  * {@link PreviewFailure#UNAVAILABLE} at once, before a permit is taken or the source opened, so nothing is read for
@@ -41,9 +42,9 @@ public class PreviewRenderer {
         this.scratchRoot = Objects.requireNonNull(scratchRoot, "scratchRoot");
         PdfRenderer pdfRenderer = new PdfRenderer(properties);
         this.pdf = pdfRenderer;
-        this.jpeg = new ImageRenderer(PreviewFormat.JPEG, properties);
-        this.png = new ImageRenderer(PreviewFormat.PNG, properties);
-        this.tiff = new ImageRenderer(PreviewFormat.TIFF, properties);
+        this.jpeg = new ImageRenderer(PreviewFormat.JPEG, "jpeg", properties);
+        this.png = new ImageRenderer(PreviewFormat.PNG, "png", properties);
+        this.tiff = new ImageRenderer(PreviewFormat.TIFF, "tiff", properties);
         this.docx = new DocxRenderer(properties, pdfRenderer);
     }
 
@@ -51,7 +52,6 @@ public class PreviewRenderer {
      * The preview of {@code source}, stored as {@code format}.
      *
      * @throws PreviewError for any of {@link PreviewFailure}'s reasons; nothing partial is ever returned
-     * @throws PreviewCancelledException if the budget was cancelled
      */
     public RenderedPreview render(PreviewFormat format, PreviewSource source, PreviewBudget budget) {
         budget.checkpoint();

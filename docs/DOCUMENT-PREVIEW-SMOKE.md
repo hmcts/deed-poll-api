@@ -14,11 +14,11 @@ names out of the record.
 
 | | |
 |---|---|
-| **Producer source** | `feat/document-preview-rendering`, commit `bde3172` (Task 6), on review base `f795067` (Task 5). The contract was first produced at Task 5 and Task 6 changed no published byte. |
-| **Artifact** | `OpenAPIPublisherTest`'s document, SHA-256 `86eeee8ad19f8787e29f1ce413ee24d8f62aee412d82c466e0eb2f45c2d7508b`, 103,978 bytes. Identical when regenerated at `f795067` and at `bde3172`. |
-| **How** | `JAVA_TOOL_OPTIONS=-XX:UseSVE=0 TESTCONTAINERS_RYUK_DISABLED=true OPENAPI_OUTPUT_PATH=/tmp/preview-task7/openapi-bde3172.json ./gradlew integration --tests '*OpenAPIPublisherTest' --no-watch-fs` in this repository at that commit. Admin then follows its own `libs/deed-poll-api-client/SPEC-PROVENANCE.md` recipe (2-space JSON, then Biome). |
+| **Producer source** | `feat/document-preview-rendering`, the first review-fix commit after `e16631b` ("fix: address code review findings"). The contract was first produced at Task 5 (`f795067`); the review added `502` to both previews. |
+| **Artifact** | `OpenAPIPublisherTest`'s document, SHA-256 `74c83e760cb18e8ff803216eff26f4c12f75f90f0043c2c6a1e4d234497d1dd6`, 104,422 bytes. (Tasks 5 to 7 published `86eeee8a…`, 103,978 bytes, without the `502`; do not use that one.) |
+| **How** | `JAVA_TOOL_OPTIONS=-XX:UseSVE=0 TESTCONTAINERS_RYUK_DISABLED=true OPENAPI_OUTPUT_PATH=/tmp/preview-review1/openapi.json ./gradlew integration --tests '*OpenAPIPublisherTest' --no-watch-fs` in this repository at that commit. Admin then follows its own `libs/deed-poll-api-client/SPEC-PROVENANCE.md` recipe (2-space JSON, then Biome). |
 | **Delta** | +2 paths, +2 `GET` operations (`previewCaseDocument`, `previewReferralDocument`), +1 schema (`DocumentPreviewError`). No existing operation changed. Now 41 paths, 57 operations, 61 schemas. |
-| **Per operation** | `200` `application/pdf` binary with `Content-Disposition`, `Content-Length`, `Content-Security-Policy`, `X-Content-Type-Options`, `Cache-Control` and `Accept-Ranges`; `403` (the shared `Forbidden`); `404` `ApiError`; `422`/`429`/`503` `DocumentPreviewError` (`error`, `code`); `Retry-After` on `429`; `x-document-preview-limits`. |
+| **Per operation** | `200` `application/pdf` binary with `Content-Disposition`, `Content-Length`, `Content-Security-Policy`, `X-Content-Type-Options`, `Cache-Control` and `Accept-Ranges`; `403` (the shared `Forbidden`); `404` and `502` `ApiError` (the `502` is `/file`'s store failure); `422`/`429`/`503` `DocumentPreviewError` (`error`, `code`); `Retry-After` on `429`; `x-document-preview-limits`. |
 
 `x-document-preview-limits`, as published from the running defaults: `requestBudgetSeconds` 25, `maxInputBytes`
 26214400, `maxOutputBytes` 52428800, `maxPages` 500, `maxFramePixels` 25000000,

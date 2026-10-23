@@ -33,7 +33,7 @@ import java.time.Duration;
  * {@code preview.pdf}, so no original filename leaves the service. It is posted only to the configured endpoint,
  * once: no retry, because a conversion whose answer was lost is ambiguous, and no redirect, because a
  * {@code Location} is not an endpoint anybody configured. Connect, read and the whole call are each bounded by what is
- * left of the budget, and a cancelled budget cancels the call on its socket.
+ * left of the budget.
  *
  * <p>Before anything is sent, the DOCX is held to {@link UploadContentPolicy} as an upload is, so a malformed,
  * encrypted or active package -- which can only be an old row -- is refused here as an invalid document and never
@@ -127,15 +127,14 @@ final class DocxRenderer implements SourceRenderer {
             .build()
             .newCall(request);
         Path converted = workspace.newFile(".pdf");
-        try (PreviewBudget.Registration ignored = budget.onCancel(call::cancel);
-             Response response = call.execute()) {
+        try (Response response = call.execute()) {
             requireAccepted(response);
             ResponseBody body = response.body();
             if (body.contentLength() > properties.maxOutputBytes()) {
                 throw new PreviewError(PreviewFailure.LIMIT_EXCEEDED);
             }
             copy(body.byteStream(), workspace.boundedOutput(converted, properties.maxOutputBytes()), budget);
-        } catch (PreviewError | PreviewCancelledException own) {
+        } catch (PreviewError own) {
             throw own;
         } catch (IOException | RuntimeException failed) {
             budget.checkpoint();

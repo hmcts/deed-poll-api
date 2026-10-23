@@ -199,8 +199,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   an entity with no case (saved queries, Gazette settings and batches record names only). `record` is
   `MANDATORY`: it joins the change's transaction, so a change whose audit insert fails rolls back, and it refuses a
   user write with no subject — only an explicitly system write uses `AuditActor.system()`. Reads (`CASE_VIEWED`,
-  `DOCUMENT_DOWNLOADED`; never lists or searches) go through `ReadAudit` in their own transaction: a case view fails
-  open, a download fails closed. `AuditAction` is the vocabulary and has no DB check constraint; renaming one leaves
+  `DOCUMENT_DOWNLOADED`, `DOCUMENT_PREVIEWED`; never lists or searches) go through `ReadAudit` in their own
+  transaction: a case view fails open, a download or a preview fails closed. `AuditAction` is the vocabulary and has no DB check constraint; renaming one leaves
   seven years of rows under the old name. Every `POST`/`PUT`/`PATCH`/`DELETE` handler under `api.caseworker` and
   `api.judicial` carries `@AuditedAs(action)` or sits in `WriteEndpointAuditCoverageTest`'s four-entry exemption
   list (email preview, Gazette preview, saved-query selection PUT/DELETE); the annotation records nothing, so the
@@ -230,7 +230,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   (not `/`, `/me`, `security: []` overrides or an operation's own 403); admin's copied spec needs a refresh after it changes. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, default `observe` in yaml and the
   chart) switches **only** the V37 budgets. **Three limits enforce from day one, whatever the mode:** the per-pod
   in-flight upload `Semaphore` (429, `Retry-After: 5`, released in `finally`), the per-case, per-template daily
-  email cap in `CaseEmailService`, and the case list's transaction-local statement timeout. The email cap answers
+  email cap in `CaseEmailService`, and the case list's transaction-local statement timeout. (The preview conversion
+  permit is a fourth always-enforced 429, `PREVIEW_BUSY`, outside `RateLimitBucket` and published by
+  `OpenAPIDocumentPreviews`; previews have no V37 budget.) The email cap answers
   409 rather than 429, and **the replay check comes before the cap**. At the cap, `replayOrRefuse` asks for this
   key's row and the exclusion-group occupant first and answers as `resolveRefusedInsert` would, so a retried
   `Idempotency-Key` is still 200 with `enqueued: false`. Reordering that turns a caseworker's retry into a refusal.
@@ -384,8 +386,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   transaction, runs the caseworker or judicial scope check, then the allowlist, then takes the conversion permit,
   and only on opening the source records `DOCUMENT_PREVIEWED` (fail-closed) before `store.open` under the caller's
   own token. Never the system reader, and never as a fallback for a refused read: a refused source keeps its own
-  404/403/502. The permit is released only in the worker's own `finally`, so a cancelled request cannot free a slot
-  that is still converting. Nothing is cached or stored; each request's `preview-*` scratch directory is deleted on
+  404/403/502. The request thread does the conversion and releases the permit in its own `finally`, so a slot
+  is never free while it is still converting; a caller who disconnects mid-conversion is noticed only when the PDF is
+  written, so the 25 s budget is the only bound on abandoned work. Nothing is cached or stored; each request's `preview-*` scratch directory is deleted on
   close. `DocumentFileResponses.writePreview` writes the servlet response itself, because a `Resource` body lets
   Spring answer `Range` with a partial `206`. A preview client sends `Accept: application/pdf`, so **every handler
   that can answer a preview presets `application/json`** (the preview, 404, 401, 403 and upstream-failure handlers);

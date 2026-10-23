@@ -25,8 +25,8 @@ import java.util.Objects;
  * <p><strong>Then, in order:</strong> the stored MIME type picks the format (outside the upload allowlist is
  * {@link PreviewFailure#INVALID_DOCUMENT}, nothing read); {@link PreviewRenderer} takes a permit if the format
  * needs one; and only then does it open the source, which commits {@code DOCUMENT_PREVIEWED} and opens the store
- * under the reader's authority. A busy pod, an unconfigured converter or a caller who has already gone records and
- * opens nothing; an audit that cannot be committed opens and converts nothing.
+ * under the reader's authority. A busy pod, an unconfigured converter or a spent budget records and opens
+ * nothing; an audit that cannot be committed opens and converts nothing.
  *
  * <p><strong>Never inside a transaction.</strong> The store may be CDAM and the converter is remote, and neither may
  * hold a database transaction open, so a caller that brings one is refused before anything happens rather than left
@@ -65,7 +65,7 @@ public class DocumentPreviewService {
     }
 
     /**
-     * A fresh request budget (decision 2), started now. The caller keeps it so that it can cancel it.
+     * A fresh request budget (decision 2), started now.
      */
     public PreviewBudget budget() {
         return PreviewBudget.start(clock, properties.requestBudget());
@@ -77,7 +77,6 @@ public class DocumentPreviewService {
      * @return the complete PDF, which the caller streams and then closes
      * @throws NotFoundError as the original download would, before anything is recorded or opened
      * @throws PreviewError for any of {@link PreviewFailure}'s reasons
-     * @throws PreviewCancelledException if the budget was cancelled
      * @throws IllegalStateException if called inside a transaction
      */
     public RenderedPreview caseworkerPreview(String caseId, String documentId, CurrentUser reader,
@@ -93,7 +92,6 @@ public class DocumentPreviewService {
      * @throws ForbiddenError if the caller does not hold the judicial role
      * @throws NotFoundError as the judicial download would, before anything is recorded or opened
      * @throws PreviewError for any of {@link PreviewFailure}'s reasons
-     * @throws PreviewCancelledException if the budget was cancelled
      * @throws IllegalStateException if called inside a transaction
      */
     public RenderedPreview judicialPreview(String referralId, String documentId, CurrentUser caller,
