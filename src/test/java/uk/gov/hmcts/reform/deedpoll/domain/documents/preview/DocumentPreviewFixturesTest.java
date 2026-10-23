@@ -5,6 +5,7 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.io.TempDir;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
@@ -28,6 +29,7 @@ import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.plugins.tiff.BaselineTIFFTagSet;
 import javax.imageio.plugins.tiff.TIFFDirectory;
 import javax.imageio.plugins.tiff.TIFFField;
+import javax.imageio.stream.FileImageInputStream;
 import javax.imageio.stream.ImageInputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -115,6 +117,35 @@ class DocumentPreviewFixturesTest {
                 reader.dispose();
             }
         }
+    }
+
+    @Test
+    @DisplayName("the aliasing probe is what it is generated as, and the JDK alone reads its one payload per entry")
+    void aliasedPayloads(@TempDir Path scratch) throws IOException {
+        byte[] bytes = DocumentPreviewFixtures.read(DocumentPreviewFixtures.ALIASED_PAYLOADS);
+        // Written field by field, with no ImageIO, so it is the same on every JDK.
+        assertThat(bytes).isEqualTo(DocumentPreviewFixtures.aliasedPayloads());
+        assertThat(bytes).hasSizeLessThan(DocumentPreviewFixtures.ALIASED_PAYLOAD_BYTES + 1024);
+        long[] read = {0};
+        Path file = Files.write(scratch.resolve("aliased.tiff"), bytes);
+        try (ImageInputStream input = new FileImageInputStream(file.toFile()) {
+            @Override
+            public int read(byte[] buffer, int offset, int length) throws IOException {
+                int got = super.read(buffer, offset, length);
+                read[0] += Math.max(got, 0);
+                return got;
+            }
+        }) {
+            ImageReader reader = ImageIO.getImageReadersByFormatName("tiff").next();
+            try {
+                reader.setInput(input);
+                assertThat(reader.getWidth(0)).isEqualTo(1);
+            } finally {
+                reader.dispose();
+            }
+        }
+        assertThat(read[0]).isGreaterThanOrEqualTo(
+            (long) DocumentPreviewFixtures.ALIASED_ENTRIES * DocumentPreviewFixtures.ALIASED_PAYLOAD_BYTES);
     }
 
     @Test

@@ -37,8 +37,9 @@ import javax.imageio.stream.ImageInputStream;
  * and never cropped.
  *
  * <p>The bytes decide, not the stored type: only a reader for the stored format that recognises the bytes is used,
- * so a PNG stored as a JPEG is an invalid document. Each frame's declared dimensions, and a tiled TIFF frame's
- * declared tile, are checked against the pixel limit, a JPEG-compressed TIFF frame's packet headers against
+ * so a PNG stored as a JPEG is an invalid document. A TIFF's directory structure is held to the file's own bytes by
+ * {@link TiffStructure} before ImageIO is given the file at all. Each frame's declared dimensions, and a tiled TIFF
+ * frame's declared tile, are checked against the pixel limit, a JPEG-compressed TIFF frame's packet headers against
  * their strip or tile ({@link TiffJpegPackets}), and a PNG or TIFF frame's sample layout against the decoded-size
  * limit, before it is decoded; frames are decoded one at a time and dropped once drawn, and the budget is
  * checked between them. A JPEG is decoded only to prove its data is whole and then embedded as it was stored, so a
@@ -73,7 +74,7 @@ final class ImageRenderer implements SourceRenderer {
     public Rendition render(Path source, PreviewWorkspace workspace, PreviewBudget budget) {
         Path output = workspace.newFile(".pdf");
         int frames = 0;
-        try (ImageInputStream input = new FileImageInputStream(source.toFile());
+        try (ImageInputStream input = checkedInput(source, budget);
              // A second stream for the TIFF directories, so the reader's own position and byte order are untouched.
              ImageInputStream directories = format == PreviewFormat.TIFF
                  ? new FileImageInputStream(source.toFile()) : null;
@@ -144,6 +145,17 @@ final class ImageRenderer implements SourceRenderer {
             throw new PreviewError(PreviewFailure.INVALID_DOCUMENT);
         }
         return new Rendition(output, OptionalInt.of(frames));
+    }
+
+    /**
+     * The source as ImageIO reads it. A TIFF's structure is checked first ({@link TiffStructure}), so no ImageIO
+     * code, this stream included, ever sees a TIFF whose directories could make the JDK read one payload many times.
+     */
+    private ImageInputStream checkedInput(Path source, PreviewBudget budget) throws IOException {
+        if (format == PreviewFormat.TIFF) {
+            TiffStructure.require(source, properties.maxPages(), budget);
+        }
+        return new FileImageInputStream(source.toFile());
     }
 
     private ImageReader readerFor(ImageInputStream input) throws IOException {

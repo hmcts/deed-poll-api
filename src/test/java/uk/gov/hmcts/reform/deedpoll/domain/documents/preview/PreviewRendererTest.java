@@ -16,6 +16,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
@@ -620,14 +621,15 @@ class PreviewRendererTest {
         @Test
         @DisplayName("an entry of a type the JDK does not know cannot hide a JPEG frame's oversized packet")
         void jpegBehindAnUnknownType() {
-            // The JDK reads an unknown-type entry as eight bytes, so the real entries that follow are aligned for it.
+            // The JDK reads an unknown-type entry as eight bytes, so the real entries that follow are aligned for it;
+            // the structure check refuses any unknown type before either reading is attempted.
             byte[] entry = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 0x9999)
                 .putShort((short) 0).putInt(0x0007_0103).array();
             byte[] packet = greyJpeg(64, 64, 40_000, 40_000);
             assertFailure(PreviewFormat.TIFF,
                           DocumentPreviewFixtures.withLeadingEntry(
                               DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, packet), entry, new byte[0]),
-                          PreviewFailure.LIMIT_EXCEEDED);
+                          PreviewFailure.INVALID_DOCUMENT);
         }
 
         @Test
@@ -762,6 +764,62 @@ class PreviewRendererTest {
             tables.write(0xFF);
             tables.write(0xD9);
             return tables.toByteArray();
+        }
+
+        @Test
+        @DisplayName("a TIFF whose structure is refused never reaches ImageIO: no reader is looked up or stream opened")
+        void structureRefusedBeforeImageIo() {
+            byte[] tiff = DocumentPreviewFixtures.strippedGrey(16, 16, null, 0x80);
+            byte[] selfLoop = tiff.clone();
+            ByteBuffer.wrap(selfLoop).order(ByteOrder.LITTLE_ENDIAN).putInt(8 + 2 + 8 * 12, 8);
+            List<byte[]> refused = List.of(
+                DocumentPreviewFixtures.read(DocumentPreviewFixtures.ALIASED_PAYLOADS),
+                DocumentPreviewFixtures.withLeadingEntries(tiff, List.of(
+                    DocumentPreviewFixtures.entry(65_000, 7, 100, tiff.length + 24L),
+                    DocumentPreviewFixtures.entry(65_001, 7, 100, tiff.length + 74L)), new byte[150]),
+                DocumentPreviewFixtures.withLeadingEntry(tiff, DocumentPreviewFixtures.entry(65_000, 7, 100,
+                                                                                             tiff.length), new byte[0]),
+                DocumentPreviewFixtures.withLeadingEntry(tiff, DocumentPreviewFixtures.entry(65_000, 4, 0x8000_0000L,
+                                                                                             8), new byte[0]),
+                DocumentPreviewFixtures.withLeadingEntry(tiff, DocumentPreviewFixtures.entry(65_000, 16, 1, 0),
+                                                         new byte[0]),
+                selfLoop);
+            byte[] tooManyFrames = DocumentPreviewFixtures.tiff(Collections.nCopies(
+                PreviewProperties.MAX_PAGES + 1, new Frame(16, 16, GREEN, null, 1)));
+            try (MockedStatic<ImageIO> imageIo = Mockito.mockStatic(ImageIO.class);
+                 MockedConstruction<FileImageInputStream> streams = Mockito.mockConstruction(
+                     FileImageInputStream.class)) {
+                for (byte[] structure : refused) {
+                    assertFailure(PreviewFormat.TIFF, structure, PreviewFailure.INVALID_DOCUMENT);
+                }
+                assertFailure(PreviewFormat.TIFF, tooManyFrames, PreviewFailure.LIMIT_EXCEEDED);
+                imageIo.verifyNoInteractions();
+                assertThat(streams.constructed()).isEmpty();
+
+                // The seam is live: a TIFF the check passes goes on to ImageIO, which (mocked) has no reader for it.
+                assertFailure(PreviewFormat.TIFF, tiff, PreviewFailure.INVALID_DOCUMENT);
+                imageIo.verify(() -> ImageIO.getImageReadersByFormatName("tiff"));
+                assertThat(streams.constructed()).isNotEmpty();
+            }
+        }
+
+        @Test
+        @DisplayName("a directory at the entry cap, and a frame with an EXIF directory, still render")
+        void entryCapAndExif() {
+            byte[] tiff = DocumentPreviewFixtures.strippedGrey(16, 16, null, 0x80);
+            List<byte[]> atTheCap = java.util.stream.IntStream.range(0, TiffStructure.MAX_ENTRIES - 8)
+                .mapToObj(index -> DocumentPreviewFixtures.entry(65_000 + index, 3, 1, index)).toList();
+            // One EXIF directory of one inline entry, after the frame's own entries, with no next directory.
+            byte[] exif = ByteBuffer.allocate(18).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 1)
+                .put(DocumentPreviewFixtures.entry(0x9000, 7, 4, 0x3033_3230)).putInt(0).array();
+            for (byte[] served : List.of(DocumentPreviewFixtures.withLeadingEntries(tiff, atTheCap, new byte[0]),
+                                         DocumentPreviewFixtures.withLeadingEntry(
+                                             tiff, DocumentPreviewFixtures.entry(34_665, 4, 1, tiff.length + 12L),
+                                             exif))) {
+                try (RenderedPreview preview = render(PreviewFormat.TIFF, served)) {
+                    assertThat(preview.pages()).hasValue(1);
+                }
+            }
         }
 
         @Test

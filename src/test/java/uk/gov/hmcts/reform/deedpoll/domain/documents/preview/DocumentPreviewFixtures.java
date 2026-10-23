@@ -112,6 +112,14 @@ final class DocumentPreviewFixtures {
     static final byte[] NOT_DEFLATE = "not a deflate stream".getBytes(StandardCharsets.US_ASCII);
     /** TIFF Compression values: none, and Adobe Deflate. */
     static final int UNCOMPRESSED = 1;
+    /**
+     * The aliasing probe of the third review: one small payload named by many directory entries, so the JDK would
+     * read it once per entry. Within {@link TiffStructure#MAX_ENTRIES}, so only the structure check's own byte
+     * accounting can refuse it.
+     */
+    static final String ALIASED_PAYLOADS = "aliased-payloads.tiff";
+    static final int ALIASED_ENTRIES = TiffStructure.MAX_ENTRIES - 8;
+    static final int ALIASED_PAYLOAD_BYTES = 64 * 1024;
     static final int DEFLATE = 8;
     static final String PDF = "three-pages.pdf";
     static final int PDF_PAGES = 3;
@@ -324,11 +332,26 @@ final class DocumentPreviewFixtures {
      * directory's entry count moves on by the entry's length, so the packet's inline offset moves with it.
      */
     static byte[] withLeadingEntry(byte[] tiff, byte[] entry, byte[] appended) {
+        return withLeading(tiff, entry, 1, appended);
+    }
+
+    /**
+     * {@link #withLeadingEntry} with several whole entries, in order. {@code appended} starts at
+     * {@code tiff.length + 12 * entries.size()}, which is where an entry pointing into it must point.
+     */
+    static byte[] withLeadingEntries(byte[] tiff, List<byte[]> entries, byte[] appended) {
+        ByteArrayOutputStream joined = new ByteArrayOutputStream();
+        entries.forEach(joined::writeBytes);
+        return withLeading(tiff, joined.toByteArray(), entries.size(), appended);
+    }
+
+    private static byte[] withLeading(byte[] tiff, byte[] entry, int count, byte[] appended) {
         ByteBuffer source = ByteBuffer.wrap(tiff).order(ByteOrder.LITTLE_ENDIAN);
         int entries = source.getShort(8) & 0xFFFF;
         ByteBuffer out = ByteBuffer.allocate(tiff.length + entry.length + appended.length)
             .order(ByteOrder.LITTLE_ENDIAN);
-        out.put(tiff, 0, 8).putShort((short) (entries + 1)).put(entry).put(tiff, 10, tiff.length - 10).put(appended);
+        out.put(tiff, 0, 8).putShort((short) (entries + count)).put(entry).put(tiff, 10, tiff.length - 10)
+            .put(appended);
         for (int at = 10 + entry.length; at < 10 + entry.length + entries * 12; at += 12) {
             int tag = out.getShort(at) & 0xFFFF;
             if (tag == 273 || tag == 324) {
@@ -336,6 +359,24 @@ final class DocumentPreviewFixtures {
             }
         }
         return out.array();
+    }
+
+    /** One little-endian twelve-byte directory entry. */
+    static byte[] entry(int tag, int type, long count, long value) {
+        return ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putShort((short) tag).putShort((short) type)
+            .putInt((int) count).putInt((int) value).array();
+    }
+
+    /**
+     * {@link #ALIASED_PAYLOADS}: a 1 by 1 grey strip of {@link #strippedGrey} and {@link #ALIASED_ENTRIES} JPEGTables
+     * entries (UNDEFINED), every one naming the same {@link #ALIASED_PAYLOAD_BYTES} of zeros appended after the strip.
+     */
+    static byte[] aliasedPayloads() {
+        byte[] tiff = strippedGrey(1, 1, null, 0);
+        long payloadAt = tiff.length + 12L * ALIASED_ENTRIES;
+        return withLeadingEntries(tiff, Collections.nCopies(ALIASED_ENTRIES,
+                                                            entry(347, 7, ALIASED_PAYLOAD_BYTES, payloadAt)),
+                                  new byte[ALIASED_PAYLOAD_BYTES]);
     }
 
     /**
@@ -636,6 +677,7 @@ final class DocumentPreviewFixtures {
             case "two-frames.tiff" -> tiff(TWO_FRAMES);
             case "three-frames.tiff" -> tiff(THREE_FRAMES);
             case OVERSIZED_TILE -> tiledGrey(16, 16, OVERSIZED_TILE_SIDE, OVERSIZED_TILE_SIDE, DEFLATE, NOT_DEFLATE);
+            case ALIASED_PAYLOADS -> aliasedPayloads();
             case MULTI_PAGE_DOCX -> multiPageDocx();
             case TABLE_AND_IMAGE_DOCX -> tableAndImageDocx();
             default -> throw new IllegalArgumentException(name);
@@ -645,6 +687,7 @@ final class DocumentPreviewFixtures {
     static final List<String> NAMES = List.of(PDF, "photo.jpeg", "photo-exif-6.jpeg", "scan.png",
                                               "text-chunks.png",
                                               "two-frames.tiff", "three-frames.tiff", OVERSIZED_TILE,
+                                              ALIASED_PAYLOADS,
                                               MULTI_PAGE_DOCX,
                                               TABLE_AND_IMAGE_DOCX);
 }

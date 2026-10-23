@@ -95,8 +95,8 @@ Do not change it or anything under `ccd/`.
 **Files:** a new structure-check class and its test beside `ImageRenderer`; `ImageRenderer.java`; fixtures and
 `DocumentPreviewFixtures`.
 
-- [ ] Record the execution baseline in the execution notes.
-- [ ] Add the failing tests from the Development Approach (all but the compression ones), then implement and wire it
+- [x] Record the execution baseline in the execution notes.
+- [x] Add the failing tests from the Development Approach (all but the compression ones), then implement and wire it
       ahead of every `ImageIO` call on a TIFF. Run focused tests and all Validation Commands, and record the results.
 
 ### Task 2: No JPEG-compressed TIFF previews (Decision 2)
@@ -126,7 +126,36 @@ Do not change it or anything under `ccd/`.
 
 ## Execution notes
 
-(Record baseline, red/green evidence and final results here.)
+**Baseline:** `c43cc0ad971272e6f2c29266c21d7e778e1651d2` (branch HEAD before Task 1).
+
+**Task 1.** New `TiffStructure` beside `ImageRenderer`, called from `ImageRenderer.checkedInput` before the
+`FileImageInputStream` is opened, so no ImageIO code sees a TIFF before it passes. Plain `FileChannel` reads; the
+largest allocation is one directory table, after its entry count is checked. Rules: `II`/`MM` and magic 42 (BigTIFF
+43 refused; the JDK cannot read it), at least one directory, more than `max-pages` frame directories is
+`PREVIEW_LIMIT_EXCEEDED`, a directory offset named twice (chain loop, or a pointer back to a directory) refused,
+1–64 entries a directory, the thirteen TIFF 6.0 types only, out-of-line payloads (type size × count in `long`
+arithmetic) inside the file, header + every directory table + every payload disjoint and in total no larger than the
+file. **64 entries:** TIFF 6.0 defines 74 tags, many mutually exclusive; the JDK writer puts about 15 in a frame and
+scanners/fax/Photoshop 20–40. **SubIFDs (330) refused; EXIF (34665), GPS (34853) and Interoperability (40965)
+pointers bounded identically**, because JDK 21's `TIFFIFD.initialize` follows them once `read()` has installed the
+default `TIFFImageReadParam` (Baseline, Fax, ExifParent, GeoTIFF tag sets), and a scanner or phone may write an EXIF
+directory: LONG/IFD count 1, each tag once a directory, at most two deep, the pointed-to table and its payloads
+claimed like any other. Every refusal is an `IIOException` with a fixed sentence, logged by class name and answered
+`PREVIEW_INVALID_DOCUMENT` by `ImageRenderer`. Strip and tile *data* are not claimed (only directory fields), so
+decode work stays bounded by the existing pixel, tile and decoded-size checks.
+
+Fixtures: committed `aliased-payloads.tiff` (66,327 bytes; 56 JPEGTables entries, 64 in the directory, naming one
+64 KiB payload), written field by field by `DocumentPreviewFixtures.aliasedPayloads`; `DocumentPreviewFixturesTest`
+proves the JDK alone reads ≥ 56 × 64 KiB from it. Other malformed structures are built in the tests with
+`DocumentPreviewFixtures.entry`/`withLeadingEntries`. `PreviewRendererTest.structureRefusedBeforeImageIo` proves
+"before any ImageIO call" with `mockStatic(ImageIO)` + `mockConstruction(FileImageInputStream)` (no interactions, no
+stream constructed) and a positive control that a passing TIFF does reach ImageIO. `jpegBehindAnUnknownType` now
+expects `PREVIEW_INVALID_DOCUMENT`: the structure check refuses the unknown type first.
+
+Red: `TiffStructureTest` + `PreviewRendererTest` + `DocumentPreviewFixturesTest` before wiring — 120 tests, 2
+failed (`structureRefusedBeforeImageIo`, `jpegBehindAnUnknownType`). Green after wiring: all pass
+(`TiffStructureTest` 20, `PreviewRendererTest$Tiff` 52). Validation: `./gradlew build` (init script) passed — test
+4,852 (1 skipped, the opt-in fixture regeneration), integration 24, 0 failures; `checkstyle.sh` OK.
 
 ## Post-Completion
 
