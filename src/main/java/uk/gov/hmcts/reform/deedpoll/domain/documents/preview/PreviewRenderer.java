@@ -13,9 +13,10 @@ import java.util.Objects;
  * input ceiling and the budget. Opening it is where {@code DOCUMENT_PREVIEWED} is committed and where the store (CDAM)
  * checks the caller, so a caller the store refuses gets the download's own refusal, never {@link PreviewFailure#BUSY}
  * or {@link PreviewFailure#UNAVAILABLE}, and a slow store read holds no permit while it trickles in. Only then is the
- * converter's configuration checked and the permit taken, the format's renderer writes the PDF there, and its pages
- * and size are checked against the limits before it is handed back. Whatever happens, the source stream is closed
- * and a failed preview's workspace is deleted before this returns.
+ * converter's configuration checked and the permit taken, the format's renderer writes the PDF there, and its size
+ * (and, for a preview this service built, its pages) is checked against the limits before it is handed back. A PDF
+ * and a converted DOCX are never parsed, so their pages are not counted here; see {@link PdfRenderer}. Whatever
+ * happens, the source stream is closed and a failed preview's workspace is deleted before this returns.
  *
  * <p><strong>The permit is released here, on the thread doing the work, and only when that work has
  * stopped.</strong> The request thread is the worker, so a caller that disconnects mid-conversion is noticed only
@@ -42,7 +43,7 @@ public class PreviewRenderer {
         this.properties = Objects.requireNonNull(properties, "properties");
         this.capacity = Objects.requireNonNull(capacity, "capacity");
         this.scratchRoot = Objects.requireNonNull(scratchRoot, "scratchRoot");
-        PdfRenderer pdfRenderer = new PdfRenderer(properties);
+        PdfRenderer pdfRenderer = new PdfRenderer();
         this.pdf = pdfRenderer;
         this.jpeg = new ImageRenderer(PreviewFormat.JPEG, "jpeg", properties);
         this.png = new ImageRenderer(PreviewFormat.PNG, "png", properties);
@@ -64,7 +65,7 @@ public class PreviewRenderer {
             SourceRenderer renderer = rendererFor(format);
             try (ConversionCapacity.Permit permit = capacity.acquire(format)) {
                 SourceRenderer.Rendition rendition = renderer.render(spooled, workspace, budget);
-                properties.requirePages(rendition.pages());
+                rendition.pages().ifPresent(properties::requirePages);
                 long size = size(rendition.file());
                 properties.requireOutputBytes(size);
                 budget.checkpoint();

@@ -29,6 +29,13 @@ class PreviewFormatTest {
     }
 
     @Test
+    @DisplayName("only the previews this service builds count their pages: never a PDF or a converted DOCX")
+    void onlyBuiltPreviewsCountPages() {
+        assertThat(Arrays.stream(PreviewFormat.values()).filter(PreviewFormat::countsPages))
+            .containsExactly(PreviewFormat.JPEG, PreviewFormat.PNG, PreviewFormat.TIFF);
+    }
+
+    @Test
     @DisplayName("a historical, parameterised, differently cased or missing type has no preview")
     void unsupportedTypesAreInvalidDocuments() {
         for (String type : new String[] {"application/msword", "application/pdf; charset=binary", "IMAGE/PNG",

@@ -50,6 +50,16 @@ class DocumentPreviewFixturesTest {
     }
 
     @Test
+    @DisplayName("the object-stream bomb is a one-page PDF, small on disk, whose page tree sits behind its padding")
+    void objectStreamBomb() throws IOException {
+        byte[] small = DocumentPreviewFixtures.objectStreamBomb(1024);
+        try (PDDocument document = Loader.loadPDF(small)) {
+            assertThat(document.getNumberOfPages()).isEqualTo(1);
+        }
+        assertThat(DocumentPreviewFixtures.objectStreamBomb(64 * 1024 * 1024)).hasSizeLessThan(128 * 1024);
+    }
+
+    @Test
     @DisplayName("the PDF has three pages")
     void pdf() throws IOException {
         try (PDDocument document = Loader.loadPDF(DocumentPreviewFixtures.read(DocumentPreviewFixtures.PDF))) {

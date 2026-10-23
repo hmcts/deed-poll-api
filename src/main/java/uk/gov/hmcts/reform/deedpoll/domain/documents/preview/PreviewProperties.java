@@ -23,7 +23,8 @@ import java.util.Set;
  *
  * @param requestBudget the whole preview request, conversion included (decision 2); under the gateways' 30 s
  * @param maxOutputBytes the largest preview PDF served
- * @param maxPages the most pages a preview may have
+ * @param maxPages the most pages a preview this service builds may have: a TIFF's frames, an image's one page. A
+ *     PDF or a converted DOCX is served unparsed, so the viewer holds it to this limit, not the service
  * @param maxFramePixels the most decoded pixels in one image or TIFF frame, checked before it is decoded
  * @param maxConcurrentConversions non-PDF previews at once on one pod (decision 5); there is no queue
  * @param busyRetryAfter the {@code Retry-After} on {@link PreviewFailure#BUSY}
@@ -40,7 +41,7 @@ public record PreviewProperties(Duration requestBudget,
 
     public static final Duration REQUEST_BUDGET = Duration.ofSeconds(25);
     public static final long MAX_OUTPUT_BYTES = 50L * 1024 * 1024;
-    public static final int MAX_PAGES = 500;
+    public static final int MAX_PAGES = 100;
     public static final long MAX_FRAME_PIXELS = 25_000_000L;
     public static final int MAX_CONCURRENT_CONVERSIONS = 3;
     public static final Duration BUSY_RETRY_AFTER = Duration.ofSeconds(5);

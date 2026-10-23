@@ -29,7 +29,7 @@ class PreviewPropertiesTest {
         PreviewProperties properties = defaults();
         assertThat(properties.requestBudget()).isEqualTo(Duration.ofSeconds(25));
         assertThat(properties.maxOutputBytes()).isEqualTo(50L * 1024 * 1024);
-        assertThat(properties.maxPages()).isEqualTo(500);
+        assertThat(properties.maxPages()).isEqualTo(100);
         assertThat(properties.maxFramePixels()).isEqualTo(25_000_000L);
         assertThat(properties.maxConcurrentConversions()).isEqualTo(3);
         assertThat(properties.busyRetryAfter()).isEqualTo(Duration.ofSeconds(5));
@@ -78,8 +78,8 @@ class PreviewPropertiesTest {
         properties.requireOutputBytes(50L * 1024 * 1024);
         assertThatThrownBy(() -> properties.requireOutputBytes(50L * 1024 * 1024 + 1))
             .isInstanceOfSatisfying(PreviewError.class, failure(PreviewFailure.LIMIT_EXCEEDED));
-        properties.requirePages(500);
-        assertThatThrownBy(() -> properties.requirePages(501))
+        properties.requirePages(100);
+        assertThatThrownBy(() -> properties.requirePages(101))
             .isInstanceOfSatisfying(PreviewError.class, failure(PreviewFailure.LIMIT_EXCEEDED));
         assertThatThrownBy(() -> properties.requirePages(0))
             .isInstanceOfSatisfying(PreviewError.class, failure(PreviewFailure.INVALID_DOCUMENT));

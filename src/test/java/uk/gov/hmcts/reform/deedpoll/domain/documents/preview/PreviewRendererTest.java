@@ -16,6 +16,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
@@ -32,6 +34,7 @@ import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -41,11 +44,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 import java.util.zip.CRC32;
 import javax.imageio.IIOException;
@@ -82,13 +87,13 @@ class PreviewRendererTest {
     class Pdf {
 
         @Test
-        @DisplayName("passes through byte for byte, keeping its pages, and takes no permit")
+        @DisplayName("passes through byte for byte, unparsed and uncounted, and takes no permit")
         void passthrough() throws IOException {
             byte[] original = DocumentPreviewFixtures.read(DocumentPreviewFixtures.PDF);
             byte[] copy = original.clone();
-            try (RenderedPreview preview = render(PreviewFormat.PDF, original)) {
+            try (RenderedPreview preview = unparsed(() -> render(PreviewFormat.PDF, original))) {
                 assertThat(capacity.available()).isEqualTo(3);
-                assertThat(preview.pages()).isEqualTo(3);
+                assertThat(preview.pages()).isEmpty();
                 byte[] served = bytes(preview);
                 assertThat(sha256(served)).isEqualTo(sha256(copy));
                 assertThat(preview.size()).isEqualTo(original.length);
@@ -98,26 +103,31 @@ class PreviewRendererTest {
         }
 
         @Test
-        @DisplayName("over the page limit is refused, whatever its /Count says")
-        void overPages() {
-            assertFailure(renderer(limits(2, PreviewProperties.MAX_FRAME_PIXELS, PreviewProperties.MAX_OUTPUT_BYTES)),
-                          PreviewFormat.PDF, DocumentPreviewFixtures.pdf(3), PreviewFailure.LIMIT_EXCEEDED);
-        }
-
-        @Test
-        @DisplayName("exactly the page limit is served")
-        void atPageLimit() {
-            PreviewRenderer exact = renderer(limits(3, PreviewProperties.MAX_FRAME_PIXELS,
-                                                    PreviewProperties.MAX_OUTPUT_BYTES));
-            try (RenderedPreview preview = exact.render(PreviewFormat.PDF, new TrackedSource(
-                DocumentPreviewFixtures.pdf(3)), budget())) {
-                assertThat(preview.pages()).isEqualTo(3);
+        @DisplayName("over the page limit is still served: the viewer counts a PDF's pages, not this service")
+        void pagesAreTheViewers() throws IOException {
+            PreviewRenderer two = renderer(limits(2, PreviewProperties.MAX_FRAME_PIXELS,
+                                                  PreviewProperties.MAX_OUTPUT_BYTES));
+            byte[] three = DocumentPreviewFixtures.pdf(3);
+            try (RenderedPreview preview = unparsed(() -> two.render(PreviewFormat.PDF, new TrackedSource(three),
+                                                                     budget()))) {
+                assertThat(preview.pages()).isEmpty();
+                assertThat(bytes(preview)).isEqualTo(three);
             }
         }
 
         @Test
-        @DisplayName("an encrypted PDF is an invalid document, as an upload would have been")
-        void encrypted() throws IOException {
+        @DisplayName("a compressed object-stream bomb is served as stored, never inflated")
+        void objectStreamBomb() throws IOException {
+            byte[] bomb = DocumentPreviewFixtures.objectStreamBomb(64 * 1024 * 1024);
+            try (RenderedPreview preview = unparsed(() -> render(PreviewFormat.PDF, bomb))) {
+                assertThat(bytes(preview)).isEqualTo(bomb);
+            }
+            assertScratchEmpty();
+        }
+
+        @Test
+        @DisplayName("an encrypted PDF or one with no pages is served as stored; PDF.js is given no password")
+        void unparsedContent() throws IOException {
             byte[] encrypted;
             try (PDDocument document = Loader.loadPDF(DocumentPreviewFixtures.pdf())) {
                 document.protect(new StandardProtectionPolicy("owner", "", new AccessPermission()));
@@ -125,22 +135,34 @@ class PreviewRendererTest {
                 document.save(out);
                 encrypted = out.toByteArray();
             }
-            assertFailure(PreviewFormat.PDF, encrypted, PreviewFailure.INVALID_DOCUMENT);
+            byte[] empty;
+            try (PDDocument none = new PDDocument()) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                none.save(out);
+                empty = out.toByteArray();
+            }
+            byte[] trailing = concat(DocumentPreviewFixtures.pdf(), new byte[PdfRenderer.EOF_WINDOW - 6]);
+            for (byte[] original : List.of(encrypted, empty, trailing)) {
+                try (RenderedPreview preview = unparsed(() -> render(PreviewFormat.PDF, original))) {
+                    assertThat(bytes(preview)).isEqualTo(original);
+                }
+            }
         }
 
         @Test
-        @DisplayName("a truncated PDF, a PDF with no pages and bytes that are not a PDF are invalid documents")
-        void damaged() throws IOException {
+        @DisplayName("a truncated body, bytes that are not a PDF, and %%EOF too far from the end are invalid")
+        void damaged() {
             byte[] whole = DocumentPreviewFixtures.pdf();
-            assertFailure(PreviewFormat.PDF, Arrays.copyOf(whole, 40), PreviewFailure.INVALID_DOCUMENT);
-            assertFailure(PreviewFormat.PDF, DocumentPreviewFixtures.read("scan.png"),
-                          PreviewFailure.INVALID_DOCUMENT);
-            assertFailure(PreviewFormat.PDF, "%PDF-1.7 and then nothing".getBytes(),
-                          PreviewFailure.INVALID_DOCUMENT);
-            try (PDDocument empty = new PDDocument()) {
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                empty.save(out);
-                assertFailure(PreviewFormat.PDF, out.toByteArray(), PreviewFailure.INVALID_DOCUMENT);
+            for (byte[] refused : List.of(Arrays.copyOf(whole, 40), Arrays.copyOf(whole, whole.length - 10),
+                                          DocumentPreviewFixtures.read("scan.png"),
+                                          "%PDF-1.7 and then nothing".getBytes(StandardCharsets.US_ASCII),
+                                          concat(" ".getBytes(StandardCharsets.US_ASCII), whole),
+                                          concat(whole, new byte[PdfRenderer.EOF_WINDOW]),
+                                          new byte[0])) {
+                unparsed(() -> {
+                    assertFailure(PreviewFormat.PDF, refused, PreviewFailure.INVALID_DOCUMENT);
+                    return null;
+                });
             }
         }
     }
@@ -156,7 +178,7 @@ class PreviewRendererTest {
             byte[] copy = original.clone();
             try (RenderedPreview preview = render(PreviewFormat.JPEG, original);
                  PDDocument document = Loader.loadPDF(bytes(preview))) {
-                assertThat(preview.pages()).isEqualTo(1);
+                assertThat(preview.pages()).hasValue(1);
                 assertThat(document.getNumberOfPages()).isEqualTo(1);
                 assertLandscape(document.getPage(0));
                 PDImageXObject image = onlyImage(document.getPage(0));
@@ -216,7 +238,7 @@ class PreviewRendererTest {
                 inflating.dispose();
             }
             try (RenderedPreview preview = render(PreviewFormat.PNG, png)) {
-                assertThat(preview.pages()).isEqualTo(1);
+                assertThat(preview.pages()).hasValue(1);
             }
         }
 
@@ -282,7 +304,7 @@ class PreviewRendererTest {
             // Ten by ten is the whole pixel limit: four bytes a pixel fits, a 16-bit RGBA PNG's eight does not.
             try (RenderedPreview preview = small.render(PreviewFormat.PNG, new TrackedSource(
                 encodedPng(new BufferedImage(10, 10, BufferedImage.TYPE_INT_ARGB))), budget())) {
-                assertThat(preview.pages()).isEqualTo(1);
+                assertThat(preview.pages()).hasValue(1);
             }
             ComponentColorModel deep = new ComponentColorModel(ColorSpace.getInstance(ColorSpace.CS_sRGB), true,
                                                                false, Transparency.TRANSLUCENT, DataBuffer.TYPE_USHORT);
@@ -313,7 +335,7 @@ class PreviewRendererTest {
             byte[] copy = original.clone();
             try (RenderedPreview preview = render(PreviewFormat.TIFF, original);
                  PDDocument document = Loader.loadPDF(bytes(preview))) {
-                assertThat(preview.pages()).isEqualTo(2);
+                assertThat(preview.pages()).hasValue(2);
                 assertThat(document.getNumberOfPages()).isEqualTo(2);
                 assertPortrait(document.getPage(0));
                 assertMarker(document, 0, RED, Corner.TOP_LEFT);
@@ -402,8 +424,21 @@ class PreviewRendererTest {
                                                     PreviewProperties.MAX_OUTPUT_BYTES));
             try (RenderedPreview preview = exact.render(PreviewFormat.TIFF, new TrackedSource(
                 DocumentPreviewFixtures.read("three-frames.tiff")), budget())) {
-                assertThat(preview.pages()).isEqualTo(3);
+                assertThat(preview.pages()).hasValue(3);
             }
+        }
+
+        @Test
+        @DisplayName("the default page limit is 100: a hundred frames are served and a hundred and one refused")
+        void defaultPageLimit() {
+            assertThat(PreviewProperties.MAX_PAGES).isEqualTo(100);
+            Frame small = new Frame(16, 16, GREEN, null, 1);
+            byte[] hundred = DocumentPreviewFixtures.tiff(Collections.nCopies(100, small));
+            try (RenderedPreview preview = render(PreviewFormat.TIFF, hundred)) {
+                assertThat(preview.pages()).hasValue(100);
+            }
+            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.tiff(Collections.nCopies(101, small)),
+                          PreviewFailure.LIMIT_EXCEEDED);
         }
 
         @Test
@@ -623,7 +658,7 @@ class PreviewRendererTest {
                 // The one permit is free while the slow read trickles in, so another conversion takes it and finishes.
                 assertThat(capacity.available()).isEqualTo(1);
                 try (RenderedPreview other = render(PreviewFormat.TIFF, tiff)) {
-                    assertThat(other.pages()).isEqualTo(2);
+                    assertThat(other.pages()).hasValue(2);
                 }
                 clock.advance(Duration.ofSeconds(26));
             } finally {
@@ -683,6 +718,23 @@ class PreviewRendererTest {
         return new PreviewProperties(null, output, pages, pixels, null, null, null);
     }
 
+    /**
+     * Runs {@code work} with PDFBox's loader replaced, and fails if anything asked it to parse.
+     */
+    private static <T> T unparsed(Supplier<T> work) {
+        try (MockedStatic<Loader> loader = Mockito.mockStatic(Loader.class)) {
+            T result = work.get();
+            loader.verifyNoInteractions();
+            return result;
+        }
+    }
+
+    private static byte[] concat(byte[] first, byte[] second) {
+        byte[] both = Arrays.copyOf(first, first.length + second.length);
+        System.arraycopy(second, 0, both, first.length, second.length);
+        return both;
+    }
+
     private static byte[] encodedPng(BufferedImage image) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try {
@@ -715,7 +767,7 @@ class PreviewRendererTest {
 
     private PreviewFailure failure(PreviewRenderer renderer, PreviewFormat format, PreviewSource source) {
         try (RenderedPreview unexpected = renderer.render(format, source, budget())) {
-            return fail("expected a refusal, got a preview of %d pages", unexpected.pages());
+            return fail("expected a refusal, got a preview of %s pages", unexpected.pages());
         } catch (PreviewError refused) {
             // The fixed sentence, never the parser's.
             assertThat(refused.getMessage()).isEqualTo(refused.failure().message());

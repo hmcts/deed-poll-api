@@ -405,7 +405,7 @@ deedpoll:
     preview:
       request-budget: ${DOCUMENT_PREVIEW_REQUEST_BUDGET:25s}
       max-output-bytes: ${DOCUMENT_PREVIEW_MAX_OUTPUT_BYTES:52428800}
-      max-pages: ${DOCUMENT_PREVIEW_MAX_PAGES:500}
+      max-pages: ${DOCUMENT_PREVIEW_MAX_PAGES:100}
       max-frame-pixels: ${DOCUMENT_PREVIEW_MAX_FRAME_PIXELS:25000000}
       # Non-PDF previews at once on one pod; over it is a 429 with Retry-After, never a queue.
       max-concurrent-conversions: ${DOCUMENT_PREVIEW_MAX_CONCURRENT_CONVERSIONS:3}

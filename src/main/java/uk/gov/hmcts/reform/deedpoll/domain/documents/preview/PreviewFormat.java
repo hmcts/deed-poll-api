@@ -16,20 +16,26 @@ import java.util.Optional;
  *
  * <p>A PDF is passed through after checks, so it takes no conversion permit. Every other format is rendered or
  * converted, and is what {@link ConversionCapacity} counts (decision 5).
+ *
+ * <p>Only a preview this service builds itself has its pages counted against
+ * {@link PreviewProperties#maxPages}: an image is one page and a TIFF one per frame. A PDF and a converted DOCX are
+ * served unparsed, because parsing a hostile PDF is itself the risk, so their page limit is the viewer's.
  */
 public enum PreviewFormat {
-    PDF("application/pdf", false),
-    JPEG("image/jpeg", true),
-    PNG("image/png", true),
-    TIFF("image/tiff", true),
-    DOCX("application/vnd.openxmlformats-officedocument.wordprocessingml.document", true);
+    PDF("application/pdf", false, false),
+    JPEG("image/jpeg", true, true),
+    PNG("image/png", true, true),
+    TIFF("image/tiff", true, true),
+    DOCX("application/vnd.openxmlformats-officedocument.wordprocessingml.document", true, false);
 
     private final String mimeType;
     private final boolean conversion;
+    private final boolean countsPages;
 
-    PreviewFormat(String mimeType, boolean conversion) {
+    PreviewFormat(String mimeType, boolean conversion, boolean countsPages) {
         this.mimeType = mimeType;
         this.conversion = conversion;
+        this.countsPages = countsPages;
     }
 
     public String mimeType() {
@@ -39,6 +45,13 @@ public enum PreviewFormat {
     /** Whether making the preview is a conversion, and so needs one of the pod's few permits. */
     public boolean isConversion() {
         return conversion;
+    }
+
+    /**
+     * Whether this service counts the preview's pages, and so holds it to {@link PreviewProperties#maxPages}.
+     */
+    public boolean countsPages() {
+        return countsPages;
     }
 
     /**

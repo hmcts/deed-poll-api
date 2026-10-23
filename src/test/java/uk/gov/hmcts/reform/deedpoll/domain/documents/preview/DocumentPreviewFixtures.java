@@ -397,6 +397,64 @@ final class DocumentPreviewFixtures {
         return bytes.toByteArray();
     }
 
+    /**
+     * A one-page PDF whose catalog, page tree and page sit in a compressed object stream behind {@code padding} zero
+     * bytes: a few hundred KB on disk that a parser must inflate to {@code padding} bytes in memory to reach the
+     * page tree. Built on demand rather than committed; the bytes are the same every time.
+     */
+    static byte[] objectStreamBomb(int padding) {
+        String[] objects = {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>",
+        };
+        StringBuilder index = new StringBuilder();
+        StringBuilder body = new StringBuilder();
+        for (int number = 0; number < objects.length; number++) {
+            index.append(number + 1).append(' ').append(padding + body.length()).append(' ');
+            body.append(objects[number]).append('\n');
+        }
+        byte[] header = index.toString().getBytes(StandardCharsets.US_ASCII);
+        ByteArrayOutputStream deflated = new ByteArrayOutputStream();
+        Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION);
+        try (DeflaterOutputStream out = new DeflaterOutputStream(deflated, deflater)) {
+            out.write(header);
+            byte[] zeros = new byte[64 * 1024];
+            for (int written = 0; written < padding; written += zeros.length) {
+                out.write(zeros, 0, Math.min(zeros.length, padding - written));
+            }
+            out.write(body.toString().getBytes(StandardCharsets.US_ASCII));
+        } catch (IOException unwritable) {
+            throw new UncheckedIOException(unwritable);
+        } finally {
+            deflater.end();
+        }
+        byte[] stream = deflated.toByteArray();
+
+        ByteArrayOutputStream pdf = new ByteArrayOutputStream();
+        pdf.writeBytes("%PDF-1.7\n".getBytes(StandardCharsets.US_ASCII));
+        final int objectStreamAt = pdf.size();
+        pdf.writeBytes(("4 0 obj\n<< /Type /ObjStm /N " + objects.length + " /First " + header.length
+            + " /Filter /FlateDecode /Length " + stream.length + " >>\nstream\n")
+                           .getBytes(StandardCharsets.US_ASCII));
+        pdf.writeBytes(stream);
+        pdf.writeBytes("\nendstream\nendobj\n".getBytes(StandardCharsets.US_ASCII));
+        final int xrefAt = pdf.size();
+        // Six entries of /W [1 4 2]: the free head, three objects in stream 4, then 4 and 5 themselves.
+        ByteBuffer xref = ByteBuffer.allocate(6 * 7);
+        xref.put((byte) 0).putInt(0).putShort((short) 0xFFFF);
+        for (int number = 0; number < objects.length; number++) {
+            xref.put((byte) 2).putInt(4).putShort((short) number);
+        }
+        xref.put((byte) 1).putInt(objectStreamAt).putShort((short) 0);
+        xref.put((byte) 1).putInt(xrefAt).putShort((short) 0);
+        pdf.writeBytes(("5 0 obj\n<< /Type /XRef /Size 6 /Root 1 0 R /W [1 4 2] /Length " + xref.capacity()
+            + " >>\nstream\n").getBytes(StandardCharsets.US_ASCII));
+        pdf.writeBytes(xref.array());
+        pdf.writeBytes(("\nendstream\nendobj\nstartxref\n" + xrefAt + "\n%%EOF\n").getBytes(StandardCharsets.US_ASCII));
+        return pdf.toByteArray();
+    }
+
     /** What each committed fixture holds, by name. */
     static byte[] generate(String name) {
         return switch (name) {

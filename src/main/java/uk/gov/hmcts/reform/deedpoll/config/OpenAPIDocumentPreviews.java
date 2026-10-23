@@ -24,6 +24,7 @@ import uk.gov.hmcts.reform.deedpoll.api.ApiError;
 import uk.gov.hmcts.reform.deedpoll.api.DocumentFileResponses;
 import uk.gov.hmcts.reform.deedpoll.api.DocumentPreviewError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFailure;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFormat;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewProperties;
 
 import java.util.Arrays;
@@ -180,6 +181,10 @@ public class OpenAPIDocumentPreviews {
         limits.put("maxInputBytes", properties.maxInputBytes());
         limits.put("maxOutputBytes", properties.maxOutputBytes());
         limits.put("maxPages", properties.maxPages());
+        limits.put("maxPagesEnforcedFor", Arrays.stream(PreviewFormat.values()).filter(PreviewFormat::countsPages)
+            .map(PreviewFormat::mimeType).toList());
+        limits.put("maxPagesEnforcedByViewerFor", Arrays.stream(PreviewFormat.values())
+            .filter(format -> !format.countsPages()).map(PreviewFormat::mimeType).toList());
         limits.put("maxFramePixels", properties.maxFramePixels());
         limits.put("maxConcurrentConversionsPerInstance", properties.maxConcurrentConversions());
         limits.put("busyRetryAfterSeconds", properties.busyRetryAfter().toSeconds());
@@ -187,7 +192,9 @@ public class OpenAPIDocumentPreviews {
         limits.put("description", "Preview limits only: none changes upload acceptance or the original download. "
             + "The budget covers the whole request, conversion included. Conversions beyond the per-instance "
             + "limit are refused with PREVIEW_BUSY, not queued; a PDF takes no conversion slot. Reaching any other "
-            + "limit is PREVIEW_LIMIT_EXCEEDED, never a truncated PDF.");
+            + "limit is PREVIEW_LIMIT_EXCEEDED, never a truncated PDF. maxPages is enforced by the service only for "
+            + "the previews it builds (maxPagesEnforcedFor); a PDF or converted DOCX is served unparsed and "
+            + "uncounted, so the viewer must count its pages and refuse one over maxPages before rendering.");
         return limits;
     }
 

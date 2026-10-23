@@ -18,6 +18,7 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Iterator;
+import java.util.OptionalInt;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.imageio.IIOException;
 import javax.imageio.ImageIO;
@@ -121,7 +122,7 @@ final class ImageRenderer implements SourceRenderer {
             LOG.info("A {} preview was refused as unreadable ({})", format, unreadable.getClass().getSimpleName());
             throw new PreviewError(PreviewFailure.INVALID_DOCUMENT);
         }
-        return new Rendition(output, frames);
+        return new Rendition(output, OptionalInt.of(frames));
     }
 
     private ImageReader readerFor(ImageInputStream input) throws IOException {

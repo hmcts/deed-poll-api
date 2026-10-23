@@ -70,6 +70,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -259,7 +260,8 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
             final Snapshot before = snapshot(documentId);
 
             try (RenderedPreview preview = previewAsCaseworker(caseId, documentId)) {
-                assertThat(preview.pages()).isEqualTo(pages);
+                assertThat(preview.pages()).isEqualTo(PreviewFormat.require(mimeType).countsPages()
+                    ? OptionalInt.of(pages) : OptionalInt.empty());
                 try (InputStream in = preview.open(); PDDocument pdf = Loader.loadPDF(in.readAllBytes())) {
                     assertThat(pdf.getNumberOfPages()).isEqualTo(pages);
                 }
@@ -447,7 +449,7 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
                 for (int i = 0; i < PreviewProperties.MAX_CONCURRENT_CONVERSIONS; i++) {
                     running.add(pool.submit(() -> {
                         try (RenderedPreview preview = previewAsCaseworker(caseId, docx)) {
-                            return preview.pages();
+                            return pageCount(preview);
                         }
                     }));
                 }
@@ -458,7 +460,7 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
                 assertThat(busy.retryAfter()).contains(PreviewProperties.BUSY_RETRY_AFTER);
 
                 try (RenderedPreview passthrough = previewAsCaseworker(caseId, pdf)) {
-                    assertThat(passthrough.pages()).isEqualTo(DocumentPreviewFixtures.PDF_PAGES);
+                    assertThat(pageCount(passthrough)).isEqualTo(DocumentPreviewFixtures.PDF_PAGES);
                 }
 
                 for (Future<Integer> conversion : running) {
@@ -601,8 +603,17 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
         private int previewAsJudge(CurrentUser caller) {
             PreviewBudget budget = previews.budget();
             try (RenderedPreview preview = previews.judicialPreview(referralId, documentId, caller, budget)) {
-                return preview.pages();
+                return pageCount(preview);
             }
+        }
+    }
+
+    /** The preview's pages, read back by a real parser: the service no longer counts a PDF's or a DOCX's. */
+    private static int pageCount(RenderedPreview preview) {
+        try (InputStream in = preview.open(); PDDocument pdf = Loader.loadPDF(in.readAllBytes())) {
+            return pdf.getNumberOfPages();
+        } catch (IOException unreadable) {
+            throw new AssertionError(unreadable);
         }
     }
 

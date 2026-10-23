@@ -25,6 +25,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFailure;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFormat;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
@@ -394,6 +395,11 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             assertThat(limits.get("maxInputBytes").asLong()).isEqualTo(UploadPolicy.MAX_UPLOAD_BYTES);
             assertThat(limits.get("maxOutputBytes").asLong()).isEqualTo(PreviewProperties.MAX_OUTPUT_BYTES);
             assertThat(limits.get("maxPages").asInt()).isEqualTo(PreviewProperties.MAX_PAGES);
+            assertThat(limits.get("maxPagesEnforcedFor")).map(JsonNode::asText)
+                .containsExactly("image/jpeg", "image/png", "image/tiff");
+            assertThat(limits.get("maxPagesEnforcedByViewerFor")).map(JsonNode::asText)
+                .containsExactly("application/pdf", PreviewFormat.DOCX.mimeType());
+            assertThat(limits.get("description").asText()).contains("unparsed", "viewer");
             assertThat(limits.get("maxFramePixels").asLong()).isEqualTo(PreviewProperties.MAX_FRAME_PIXELS);
             assertThat(limits.get("maxConcurrentConversionsPerInstance").asInt())
                 .isEqualTo(PreviewProperties.MAX_CONCURRENT_CONVERSIONS);

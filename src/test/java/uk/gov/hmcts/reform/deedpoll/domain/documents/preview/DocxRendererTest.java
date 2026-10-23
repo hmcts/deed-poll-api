@@ -20,6 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadContentPolicy;
@@ -37,6 +39,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aMultipart;
@@ -110,8 +113,8 @@ class DocxRendererTest {
                     .withBody(binaryEqualTo(original)))
                 .willReturn(pdf(DocumentPreviewFixtures.pdf(DocumentPreviewFixtures.MULTI_PAGE_DOCX_PAGES))));
 
-            try (RenderedPreview preview = render(original)) {
-                assertThat(preview.pages()).isEqualTo(DocumentPreviewFixtures.MULTI_PAGE_DOCX_PAGES);
+            try (RenderedPreview preview = unparsed(() -> render(original))) {
+                assertThat(preview.pages()).isEmpty();
                 try (PDDocument document = Loader.loadPDF(bytes(preview))) {
                     assertThat(document.getNumberOfPages()).isEqualTo(DocumentPreviewFixtures.MULTI_PAGE_DOCX_PAGES);
                 }
@@ -129,14 +132,16 @@ class DocxRendererTest {
         }
 
         @Test
-        @DisplayName("a table-and-image DOCX's pages are the converted PDF's, however many it has")
-        void tableAndImage() {
+        @DisplayName("a table-and-image DOCX's preview is the converted PDF as answered, however many pages it has")
+        void tableAndImage() throws IOException {
             byte[] original = DocumentPreviewFixtures.read(DocumentPreviewFixtures.TABLE_AND_IMAGE_DOCX);
+            byte[] answer = DocumentPreviewFixtures.pdf(DocumentPreviewFixtures.TABLE_AND_IMAGE_DOCX_PAGES);
             converter.stubFor(post(urlPathEqualTo(CONVERT))
                 .withMultipartRequestBody(aMultipart("file").withBody(binaryEqualTo(original)))
-                .willReturn(pdf(DocumentPreviewFixtures.pdf(DocumentPreviewFixtures.TABLE_AND_IMAGE_DOCX_PAGES))));
-            try (RenderedPreview preview = render(original)) {
-                assertThat(preview.pages()).isEqualTo(DocumentPreviewFixtures.TABLE_AND_IMAGE_DOCX_PAGES);
+                .willReturn(pdf(answer)));
+            try (RenderedPreview preview = unparsed(() -> render(original))) {
+                assertThat(preview.pages()).isEmpty();
+                assertThat(bytes(preview)).isEqualTo(answer);
             }
         }
 
@@ -264,8 +269,25 @@ class DocxRendererTest {
         }
 
         @Test
-        @DisplayName("an application/pdf answer that is empty, not a PDF, cut short or unreadable is unavailable")
-        void notACompletePdf() throws IOException {
+        @DisplayName("an application/pdf answer that is empty, not a PDF or cut short is unavailable")
+        void notACompletePdf() {
+            byte[] whole = DocumentPreviewFixtures.pdf();
+            for (byte[] answer : List.of(new byte[0], PROVIDER_BODY.getBytes(StandardCharsets.UTF_8),
+                                         Arrays.copyOf(whole, whole.length - 200), Arrays.copyOf(whole, 40),
+                                         ("%PDF-1.7 nothing\n%%EOF\n" + " ".repeat(2048))
+                                             .getBytes(StandardCharsets.US_ASCII))) {
+                converter.resetAll();
+                converter.stubFor(post(urlPathEqualTo(CONVERT)).willReturn(pdf(answer)));
+                unparsed(() -> {
+                    assertFailure(PreviewFailure.UNAVAILABLE);
+                    return null;
+                });
+            }
+        }
+
+        @Test
+        @DisplayName("a whole-looking answer is served unparsed, whatever is inside it: the viewer reads it")
+        void servedUnparsed() throws IOException {
             byte[] whole = DocumentPreviewFixtures.pdf();
             byte[] encrypted;
             try (PDDocument document = Loader.loadPDF(whole)) {
@@ -280,14 +302,18 @@ class DocxRendererTest {
                 none.save(out);
                 empty = out.toByteArray();
             }
-            for (byte[] answer : List.of(new byte[0], PROVIDER_BODY.getBytes(StandardCharsets.UTF_8),
-                                         Arrays.copyOf(whole, whole.length - 200), Arrays.copyOf(whole, 40),
-                                         "%PDF-1.7 nothing\n%%EOF\n".getBytes(StandardCharsets.US_ASCII),
-                                         encrypted, empty)) {
+            byte[] bomb = DocumentPreviewFixtures.objectStreamBomb(64 * 1024 * 1024);
+            for (byte[] answer : List.of("%PDF-1.7 nothing\n%%EOF\n".getBytes(StandardCharsets.US_ASCII),
+                                         encrypted, empty, bomb)) {
                 converter.resetAll();
                 converter.stubFor(post(urlPathEqualTo(CONVERT)).willReturn(pdf(answer)));
-                assertFailure(PreviewFailure.UNAVAILABLE);
+                try (RenderedPreview preview = unparsed(() -> render())) {
+                    assertThat(preview.pages()).isEmpty();
+                    assertThat(bytes(preview)).isEqualTo(answer);
+                }
+                assertThat(capacity.available()).isEqualTo(3);
             }
+            assertScratchEmpty();
         }
 
         @Test
@@ -313,12 +339,14 @@ class DocxRendererTest {
         }
 
         @Test
-        @DisplayName("a converted PDF over the page limit is a limit")
-        void overPages() {
+        @DisplayName("a converted PDF over the page limit is served: the viewer counts its pages, not this service")
+        void pagesAreTheViewers() {
             converter.stubFor(post(urlPathEqualTo(CONVERT)).willReturn(pdf(DocumentPreviewFixtures.pdf(3))));
-            assertFailure(renderer(new PreviewProperties(null, null, 2, null, null, null,
-                                                         converterAt(converter.baseUrl()))),
-                          PreviewFailure.LIMIT_EXCEEDED);
+            PreviewRenderer two = renderer(new PreviewProperties(null, null, 2, null, null, null,
+                                                                 converterAt(converter.baseUrl())));
+            try (RenderedPreview preview = unparsed(() -> two.render(PreviewFormat.DOCX, source(), budget()))) {
+                assertThat(preview.pages()).isEmpty();
+            }
         }
 
         @Test
@@ -410,6 +438,21 @@ class DocxRendererTest {
         return new TrackedSource(DocumentPreviewFixtures.read(DocumentPreviewFixtures.MULTI_PAGE_DOCX));
     }
 
+    /**
+     * Runs {@code work} with PDFBox's loader replaced, and fails if anything asked it to parse.
+     */
+    private static <T> T unparsed(Supplier<T> work) {
+        try (MockedStatic<Loader> loader = Mockito.mockStatic(Loader.class)) {
+            T result = work.get();
+            loader.verifyNoInteractions();
+            return result;
+        }
+    }
+
+    private RenderedPreview render() {
+        return render(DocumentPreviewFixtures.read(DocumentPreviewFixtures.MULTI_PAGE_DOCX));
+    }
+
     private RenderedPreview render(byte[] docx) {
         return renderer().render(PreviewFormat.DOCX, () -> new ByteArrayInputStream(docx), budget());
     }
@@ -451,7 +494,7 @@ class DocxRendererTest {
     private void assertFailure(PreviewRenderer renderer, TrackedSource source, PreviewBudget budget,
                                PreviewFailure expected) {
         try (RenderedPreview unexpected = renderer.render(PreviewFormat.DOCX, source, budget)) {
-            fail("expected %s, got a preview of %d pages", expected, unexpected.pages());
+            fail("expected %s, got a preview of %s pages", expected, unexpected.pages());
         } catch (PreviewError refused) {
             assertThat(refused.failure()).isEqualTo(expected);
             assertThat(refused.getMessage()).isEqualTo(expected.message());

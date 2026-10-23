@@ -40,10 +40,10 @@ import java.time.Duration;
  * reaches the converter.
  *
  * <p>The answer is accepted only as a complete PDF: a 2xx, {@code application/pdf}, written into the workspace no
- * further than the output ceiling, ending in {@code %%EOF}, and then held to {@link PdfRenderer}'s checks, whose page
- * count is the preview's. Anything else is {@link PreviewFailure#UNAVAILABLE}, the converter's fault rather than the
- * document's. Diagnostics carry the status or an exception's class name, never the provider's body, the key, the
- * endpoint or a name from the document.
+ * further than the output ceiling, ending in {@code %%EOF}, and then held to {@link PdfRenderer}'s structural checks.
+ * It is never parsed, so its pages are counted by the viewer, not here. Anything else is
+ * {@link PreviewFailure#UNAVAILABLE}, the converter's fault rather than the document's. Diagnostics carry the
+ * status or an exception's class name, never the provider's body, the key, the endpoint or a name from the document.
  */
 final class DocxRenderer implements SourceRenderer {
 
@@ -85,7 +85,7 @@ final class DocxRenderer implements SourceRenderer {
         } catch (PreviewError refused) {
             if (refused.failure() == PreviewFailure.INVALID_DOCUMENT) {
                 // The DOCX passed; a PDF that does not is the converter's answer, not the applicant's document.
-                LOG.warn("A DOCX preview conversion answered with an unreadable PDF");
+                LOG.warn("A DOCX preview conversion answered with something that does not look like a PDF");
                 throw new PreviewError(PreviewFailure.UNAVAILABLE);
             }
             throw refused;
