@@ -239,6 +239,13 @@ conversion and rendering, not a stalled read of the original (description text o
   run). It was left running, as it is not this run's to stop. `compileCftlibTestJava` passes (Tasks 1 and 3), so the
   changed `DocumentPreviewCftlibTest` journey compiles but its run, with counts, is outstanding: stop that server
   and run `JAVA_TOOL_OPTIONS=-XX:UseSVE=0 TESTCONTAINERS_RYUK_DISABLED=true ./gradlew cftlibTest --no-watch-fs`.
+- **Closed 2026-10-23 (Arbor, after the run):** the server holding 8080 was an orphaned
+  `python3 -m http.server 8080 --directory /tmp/deed-poll-viewer-prototype` left from the prototype's browser check;
+  Steve approved stopping it (PID 2532). `JAVA_TOOL_OPTIONS=-XX:UseSVE=0 TESTCONTAINERS_RYUK_DISABLED=true ./gradlew
+  cftlibTest --no-watch-fs` then passed: **21 tests, 0 failed, 0 skipped**, 1m 21s, all seven
+  `DocumentPreviewCftlibTest` journeys included (refused CDAM source reaches neither store nor converter; every staff
+  role previews under its own token; judicial visibility; converter outage and unconfigured converter are the fixed
+  503; system correspondence reads unaffected).
 - Commits: Task 1 `d4b62d9`, Task 2 `a7d8ed8`, Task 3 `ceeeb2c`, Task 4 this commit. Changed files over the
   baseline: `git diff --stat b2d2c9c..HEAD`.
 
