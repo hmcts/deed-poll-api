@@ -1,0 +1,153 @@
+# Plan: fix the four review findings on document preview rendering
+
+## Overview
+
+A direct Copilot review of the completed preview work
+(`docs/plans/completed/20261023-document-preview-rendering.md`) found four defects, confirmed against the code
+(workspace `local-notes/deed-poll-api/api-preview-direct-review.jsonl`):
+
+1. **HIGH:** `ImageRenderer` reads PNGs with `ignoreMetadata=false`. The JDK's `PNGImageReader` inflates compressed
+   `zTXt`/`iTXt` text chunks with no bound, so a small PNG of permitted dimensions can exhaust the heap. None of the
+   input, pixel or scratch limits sees the inflated text.
+2. **HIGH:** `PdfRenderer` parses every PDF original and every Docmosis output with PDFBox, only to count pages.
+   PDFBox 3.0.8 decodes compressed object streams into heap buffers regardless of the temp-file stream cache, and
+   its page iterator collects the page tree recursively before the loop's checks run. A compressed-object bomb or a
+   deep or oversized page tree can exhaust heap or stack. PDFs take no conversion permit, so concurrent requests
+   amplify it.
+3. **MEDIUM:** `PreviewRenderer.render` acquires the conversion permit before `source.open()`, and the source read
+   has no deadline (CDAM buffers the response under an inactivity timeout). A slowly trickling read keeps a permit
+   and can outlast the 25 s budget and the 30 s gateways.
+4. **MEDIUM:** the capacity refusal (429 `PREVIEW_BUSY`) and the unconfigured-converter refusal (503
+   `PREVIEW_UNAVAILABLE`) are decided before `source.open()`, which is where CDAM checks the caller. So a caller CDAM
+   would refuse can receive 429/503 instead of the download's own 403/404.
+
+**Decisions (Steve, 2026-10-23):**
+- Fix all four through this plan.
+- **The page limit becomes 100**, down from 500. No uploaded document is expected to come near 50.
+- api stops parsing PDF originals and Docmosis output (finding 2). So the 100-page limit is enforced by api only for
+  the previews api builds itself (JPEG, PNG and TIFF frames). For PDF and DOCX previews it is enforced by the admin
+  viewer, which reads `numPages` through PDF.js before rendering (the admin plan's concern, not this repository's).
+  The published `x-document-preview-limits` extension must say which limit api enforces for which formats.
+
+## Context
+
+Branch `feat/document-preview-rendering`, which carries the completed preview plan. Read `CLAUDE.md`, the completed
+plan, `README.md`'s preview section and `docs/DOCUMENT-PREVIEW-SMOKE.md` first. Main sources are under
+`src/main/java/uk/gov/hmcts/reform/deedpoll/domain/documents/preview/`: `PreviewRenderer` (ordering, spool, permit),
+`ImageRenderer` (finding 1), `PdfRenderer` (finding 2, also used for the DOCX output's validation through
+`DocxRenderer`), `ConversionCapacity`, `PreviewProperties` (`max-pages`) and `config/OpenAPIDocumentPreviews`.
+
+Record the execution baseline (this branch's HEAD) for Ralphex review.
+
+## Development Approach
+
+1. **Finding 1:** read PNG with metadata ignored. Only JPEG needs its metadata (EXIF orientation via
+   `ExifOrientation`); keep that path and confirm it reads a bounded amount. Add a real PNG fixture with a large
+   compressed `zTXt`/`iTXt` chunk (a few KB on disk inflating to well over the heap a test allows, or a
+   reader-level assertion that the text is never inflated) and prove it previews or is refused without inflating it.
+   The fixture must be generated reproducibly, like the existing ones.
+2. **Finding 2:** no PDFBox parse of a PDF original or of Docmosis output. Validate by: size within the input/output
+   ceilings, a `%PDF-` header at the start, and a `%%EOF` marker within the last 1,024 bytes. Answer
+   `PREVIEW_INVALID_DOCUMENT` (or the DOCX converter's failure, as today) otherwise. Stream the spooled file
+   through as the preview, with no page count. Keep encrypted-PDF refusal only if it can be detected without a
+   parse; otherwise drop it and note that the browser asks for no password because PDF.js is given none. Keep
+   PDFBox for **building** image and TIFF previews, which is api's own content. Remove the page loop. Test with a real
+   compressed-object-stream bomb fixture (small on disk) that it is served or refused without parsing, by an
+   assertion that PDFBox's loader is never called for PDF/DOCX output, or a bounded-heap test if that is reliable.
+3. **Page limit 100:** default `max-pages` (`DOCUMENT_PREVIEW_MAX_PAGES`) becomes 100. It applies to the previews api
+   builds (TIFF frames; JPEG/PNG are one page). Update the published limits extension, `README.md`,
+   `docs/DOCUMENT-PREVIEW-SMOKE.md` and `CLAUDE.md` if they state 500 or that the limit covers PDF/DOCX.
+4. **Findings 3 and 4:** in `PreviewRenderer.render`, open and spool the source **first**, which is CDAM's caller
+   check and the `DOCUMENT_PREVIEWED` audit, then check the converter is configured (DOCX) and acquire the
+   conversion permit (non-PDF), then render. A source refusal therefore keeps its own status (403/404 as the download
+   gives), a busy or unconfigured refusal comes only for a document the caller may read, and a slow read holds no
+   permit. Keep: nothing partial returned; workspace closed on every failure; permit released only after work stops.
+   The cftlib journey that expects an extra audit row on a CDAM denial must be re-examined against the download
+   path's behaviour and made consistent with it. Do not change the download path.
+5. **The slow-read deadline is a documented limitation, not a watchdog.** The source read keeps CDAM's existing
+   timeouts, as downloads do. Document in `README.md`'s preview section and `docs/DOCUMENT-PREVIEW-SMOKE.md` that the
+   25 s budget bounds conversion and rendering, not a stalled store read, and that after the reordering a stalled
+   read holds no conversion permit.
+6. Work test first: each fix gets a test that fails without it. Local task commits; publishing is separate.
+7. **Out of scope:** the download path, upload acceptance, CDAM client timeouts, `src/test/resources/reference/`,
+   Flyway migrations, the admin repository. No new dependency.
+
+## Validation Commands
+
+Run from the repository root before implementation and after each task:
+
+```bash
+export JAVA_TOOL_OPTIONS=-XX:UseSVE=0 TESTCONTAINERS_RYUK_DISABLED=true
+./gradlew build -I /home/hmcts/.claude/jobs/c45dad71/tmp/no-checkstyle.gradle --console=plain
+/home/hmcts/.claude/jobs/c45dad71/tmp/checkstyle.sh .
+```
+
+`build` runs compile, `test` and `integration`. This devcontainer's JVM needs `-XX:UseSVE=0`, and Gradle's
+Checkstyle worker ignores it and crashes with SIGILL, so the init script disables the Checkstyle tasks and
+`checkstyle.sh` runs the same jar and config over every source set, failing on any `[WARN]` or `[ERROR]`. Jenkins
+runs the real Checkstyle tasks. Do not edit, move or commit either helper. At the end also run
+`./gradlew cftlibTest --no-watch-fs` (with the same `JAVA_TOOL_OPTIONS`) and record its counts.
+
+Run every build and test command in the foreground and wait for it: a backgrounded build ends the session and the
+next one builds over it.
+
+**Known intermittent test, already on master:** `CcdCreationAttemptRepositoryTest` "an attempt that ran out of tries
+on refusals may be retried from scratch, which clears the proof" fails occasionally in a full build. If it fails,
+re-run it alone with `--tests '*CcdCreationAttemptRepositoryTest' --rerun`; if it passes, record that and carry on.
+Do not change it or anything under `ccd/`.
+
+## Implementation Steps
+
+### Task 1: Order the preview so the source is read before any refusal (findings 3 and 4)
+
+**Files:** `PreviewRenderer.java` and its tests; `DocumentPreviewHttpTest`, `DocumentPreviewCftlibTest` as needed.
+
+- [ ] Record the execution baseline in the execution notes.
+- [ ] Add failing tests: a CDAM-refused source answers the download's status, not 429/503, with every permit held
+      and with the converter unconfigured; a slow source read holds no permit (another preview can acquire it
+      meanwhile); busy and unconfigured refusals still happen, after the source is read, with nothing partial.
+- [ ] Reorder, run focused tests and all Validation Commands, and record the results.
+
+### Task 2: PNG previews never inflate text metadata (finding 1)
+
+**Files:** `ImageRenderer.java` and its tests; a generated fixture under `src/test/resources/document-previews/`.
+
+- [ ] Add the failing fixture test, then fix; confirm JPEG orientation still works. Run all Validation Commands.
+
+### Task 3: PDF originals and Docmosis output are not parsed, and the page limit is 100 (finding 2)
+
+**Files:** `PdfRenderer.java`, `DocxRenderer.java` where it validates output, `PreviewProperties.java`,
+`application.yaml`, `config/OpenAPIDocumentPreviews.java`, `OpenAPIPublisherTest`, and their tests; fixtures.
+
+- [ ] Add failing tests: no PDFBox load for a PDF original or DOCX output; header and `%%EOF` checks refuse a
+      truncated or non-PDF body; a small object-stream bomb is not parsed; the default page limit is 100 and still
+      bounds a TIFF with more frames; the published limits say which formats api counts.
+- [ ] Implement, run focused tests and all Validation Commands, and record the results.
+
+### Task 4: Record and hand off
+
+**Files:** `README.md`, `docs/DOCUMENT-PREVIEW-SMOKE.md`, `CLAUDE.md` if it states a changed fact, this plan.
+
+- [ ] Document the 100-page limit and where each format's page limit is enforced, the no-parse PDF passthrough,
+      the new ordering, and the slow-read limitation. **Reference this plan by its `docs/plans/completed/` path**,
+      since that is where it will be once the run ends.
+- [ ] Run `./gradlew cftlibTest --no-watch-fs` and all Validation Commands; record final commits, changed files and
+      test counts in the execution notes, and hand off to the Ralphex review phases.
+
+## Acceptance Criteria
+
+- A PNG's text chunks are never inflated; JPEG orientation still applies.
+- No PDF original or Docmosis output is parsed with PDFBox; truncated or non-PDF bodies are refused.
+- The default page limit is 100 and bounds TIFF previews; the published limits are accurate.
+- A source refusal keeps its own status; busy and unconfigured refusals follow a successful source read; a slow read
+  holds no permit.
+- All Validation Commands and `cftlibTest` pass with no new failures or skips.
+
+## Execution notes
+
+(Record baseline, red/green evidence and final results here.)
+
+## Post-Completion
+
+Publishing, merging and deployment are separate from this plan. The admin viewer plan enforces the 100-page limit for
+PDF and DOCX previews through PDF.js.
