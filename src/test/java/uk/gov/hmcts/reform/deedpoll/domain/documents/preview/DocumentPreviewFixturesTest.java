@@ -97,6 +97,27 @@ class DocumentPreviewFixturesTest {
     }
 
     @Test
+    @DisplayName("the oversized-tile TIFF is a few hundred bytes, 16 by 16, declaring one 8192 by 8192 tile")
+    void oversizedTile() throws IOException {
+        byte[] bytes = DocumentPreviewFixtures.read(DocumentPreviewFixtures.OVERSIZED_TILE);
+        assertThat(bytes).hasSizeLessThan(512);
+        try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
+            ImageReader reader = ImageIO.getImageReadersByFormatName("tiff").next();
+            try {
+                reader.setInput(input);
+                assertThat(reader.getNumImages(true)).isEqualTo(1);
+                assertThat(reader.getWidth(0)).isEqualTo(16);
+                assertThat(reader.getHeight(0)).isEqualTo(16);
+                assertThat(reader.isImageTiled(0)).isTrue();
+                assertThat(reader.getTileWidth(0)).isEqualTo(DocumentPreviewFixtures.OVERSIZED_TILE_SIDE);
+                assertThat(reader.getTileHeight(0)).isEqualTo(DocumentPreviewFixtures.OVERSIZED_TILE_SIDE);
+            } finally {
+                reader.dispose();
+            }
+        }
+    }
+
+    @Test
     @DisplayName("the sideways photo carries EXIF orientation 6 and the upright one carries none")
     void exif() {
         assertThat(jpegOrientation(DocumentPreviewFixtures.PHOTO_ON_ITS_SIDE.name())).isEqualTo(Orientation.RIGHT_TOP);

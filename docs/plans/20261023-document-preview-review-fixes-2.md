@@ -71,8 +71,8 @@ Do not change it or anything under `ccd/`.
 
 **Files:** `ImageRenderer.java`, its tests, a generated fixture and `DocumentPreviewFixtures`.
 
-- [ ] Record the execution baseline in the execution notes.
-- [ ] Add the failing fixture test (oversized tile; oversized strip; ordinary tiled and stripped TIFFs still render),
+- [x] Record the execution baseline in the execution notes.
+- [x] Add the failing fixture test (oversized tile; oversized strip; ordinary tiled and stripped TIFFs still render),
       then fix. Run focused tests and all Validation Commands, and record the results.
 
 ### Task 2: Docmosis is sent at most once (finding 2)
@@ -101,7 +101,41 @@ Do not change it or anything under `ccd/`.
 
 ## Execution notes
 
-(Record baseline, red/green evidence and final results here.)
+**Baseline:** `cb236577268f6c0322c992fdd9f656210a9ee19d` (`docs(plan): add the second preview review-fixes plan`),
+branch `feat/document-preview-rendering`, clean.
+
+**Task 1 (TIFF tiles and strips).**
+- *Where the reader allocates from.* JDK 21's `TIFFImageReader.getTileOrStripWidth/Height` give `TileWidth`, else
+  `ImageWidth`; `TileLength`, else `RowsPerStrip` (`-1`, i.e. a LONG `0xFFFFFFFF`, means the height), else the height.
+  It builds each tile rectangle from these **unclamped** values, so a `RowsPerStrip` past the height is allocated as
+  declared. `ImageReader.getTileWidth(index)`/`getTileHeight(index)` return exactly these two methods, from the
+  directory already parsed for `getWidth`, so the check uses the reader's own interpretation rather than a second
+  one. Both go through `requireFrame` (below 1 is `PREVIEW_INVALID_DOCUMENT`, a LONG over `Integer.MAX_VALUE` reads
+  negative and is invalid too), and the larger of frame and tile/strip feeds the existing decoded-size check.
+- *Reading the directory.* `TIFFIFD.initialize` reads a field's value only if `offset + size` lies inside the
+  stream, skips counts beyond `int`, clamps ASCII to 64 KB and has no compressed fields, so the parsed directory is
+  linear in the file. **But `getImageMetadata(index)`, which the existing orientation read used, is not:** it copies
+  the directory through `TIFFFieldNode`, a DOM node with a string attribute per array value, and `setFromTree`
+  materialises every node. Measured: an 8 MB, 16×1,000,000 TIFF of a million strips (inside the pixel limit) ran out
+  of a 256 MB heap inside `getImageMetadata(0)` (`Long.toString`), and needed between 256 MB and 1 GB. So orientation
+  now comes from `TiffOrientation`, which walks the IFD chain as the JDK reader does and reads each entry's 12 bytes
+  from a second stream, keeping one value. The same file's `getTileWidth/Height` plus `TiffOrientation` run in a
+  64 MB heap. `PreviewBoundaryTest.noImageMetadataTree` fails the build if preview code calls `getImageMetadata`.
+  PNG keeps `ignoreMetadata=true`.
+- *Fixture.* `oversized-tile.tiff` (162 bytes, committed, made by `DocumentPreviewFixtures.tiledGrey`): 16×16 grey,
+  one declared 8192×8192 tile, whose only packet is labelled Deflate and is not a zlib stream. Decoding it is
+  `INVALID_DOCUMENT`, so `LIMIT_EXCEEDED` proves the refusal came from the directory before `read(index)`; the same
+  packet under a 16×16 tile is `INVALID_DOCUMENT`, proving the packet really is undecodable.
+- *Red (before the fix):* 9 of the new `PreviewRendererTest` cases and the ArchUnit rule failed: oversized tile and
+  oversized strip answered `INVALID_DOCUMENT` (the decoder ran), and the tile at 64×80 and the strip of 257 rows
+  against a 4,096-pixel limit were served. (Two more were test errors: commas in CSV names, and a grey sample drawn
+  through the grey colour space's tone curve, so the ordinary cases assert black.)
+- *Green:* every `documents.preview` test passes (180); ordinary tiled (64×64 tiles), 16-row strips, no
+  `RowsPerStrip`, `RowsPerStrip` 2^32−1 and `RowsPerStrip` 65,535 (past the height, within the limit) all render;
+  zero-row tiles and strips are invalid.
+- *Validation:* `./gradlew build` (init script) passed: `test` 4,801 tests, 0 failed, 1 skipped (the env-gated fixture
+  regeneration); `integration` 24, 0 failed. `checkstyle.sh` flagged two single-line Javadocs in the fixtures, fixed;
+  then OK, and the fixtures test re-run green.
 
 ## Post-Completion
 

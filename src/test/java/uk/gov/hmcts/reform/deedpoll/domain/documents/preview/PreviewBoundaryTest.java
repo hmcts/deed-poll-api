@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 
 import java.util.Set;
+import javax.imageio.ImageReader;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +47,20 @@ class PreviewBoundaryTest {
         noClasses().should().dependOnClassesThat().haveFullyQualifiedName("org.apache.pdfbox.Loader")
             .orShould().dependOnClassesThat().resideInAPackage("org.apache.pdfbox.pdfparser..")
             .because("a parse inflates object streams before any limit of ours can look at them")
+            .check(classes);
+    }
+
+    @Test
+    @DisplayName("nothing in the preview asks ImageIO for a frame's metadata tree")
+    void noImageMetadataTree() {
+        JavaClasses classes = new ClassFileImporter()
+            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+            .importPackages("uk.gov.hmcts.reform.deedpoll.domain.documents.preview");
+
+        noClasses().should().callMethod(ImageReader.class, "getImageMetadata", int.class)
+            .orShould().callMethod(ImageReader.class, "getImageMetadata", int.class, String.class, Set.class)
+            .because("the TIFF reader rebuilds every value of every field as a DOM node, hundreds of bytes each,"
+                         + " so a few megabytes of strip offsets fill the heap before any limit of ours runs")
             .check(classes);
     }
 

@@ -25,9 +25,6 @@ import javax.imageio.IIOException;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.ImageTypeSpecifier;
-import javax.imageio.metadata.IIOMetadata;
-import javax.imageio.plugins.tiff.TIFFDirectory;
-import javax.imageio.plugins.tiff.TIFFField;
 import javax.imageio.stream.FileImageInputStream;
 import javax.imageio.stream.ImageInputStream;
 
@@ -40,11 +37,13 @@ import javax.imageio.stream.ImageInputStream;
  * and never cropped.
  *
  * <p>The bytes decide, not the stored type: only a reader for the stored format that recognises the bytes is used,
- * so a PNG stored as a JPEG is an invalid document. Each frame's declared dimensions are checked against the pixel
- * limit, and a PNG or TIFF frame's sample layout against the decoded-size limit, before it is decoded; frames are
- * decoded one at a time and dropped once drawn, and the budget is checked between them. A JPEG is decoded only to
- * prove its data is whole and then embedded as it was stored, so a photograph is not recompressed;
- * a PNG or TIFF frame is embedded losslessly. Only a TIFF's metadata is read: a PNG's text chunks are never inflated.
+ * so a PNG stored as a JPEG is an invalid document. Each frame's declared dimensions, and a TIFF frame's declared
+ * tile or strip, are checked against the pixel limit, and a PNG or TIFF frame's sample layout against the
+ * decoded-size limit, before it is decoded; frames are decoded one at a time and dropped once drawn, and the budget is
+ * checked between them. A JPEG is decoded only to prove its data is whole and then embedded as it was stored, so a
+ * photograph is not recompressed; a PNG or TIFF frame is embedded losslessly. A PNG's metadata is never read, so its
+ * text chunks are never inflated, and a TIFF's orientation is read by {@link TiffOrientation}, never as ImageIO's
+ * metadata tree.
  */
 final class ImageRenderer implements SourceRenderer {
 
@@ -74,14 +73,18 @@ final class ImageRenderer implements SourceRenderer {
         Path output = workspace.newFile(".pdf");
         int frames = 0;
         try (ImageInputStream input = new FileImageInputStream(source.toFile());
+             // A second stream for the TIFF directories, so the reader's own position and byte order are untouched.
+             ImageInputStream directories = format == PreviewFormat.TIFF
+                 ? new FileImageInputStream(source.toFile()) : null;
              PDDocument document = new PDDocument(workspace.streamCache(properties.maxOutputBytes()))) {
             ImageReader reader = readerFor(input);
             // A JPEG is embedded as stored, so it is read whole once, and its orientation comes from those bytes.
             byte[] jpeg = format == PreviewFormat.JPEG ? Files.readAllBytes(source) : null;
             try {
-                // Only a TIFF's orientation is read from its reader's metadata. A PNG's must be ignored: the JDK
-                // inflates every compressed zTXt and iTXt chunk while reading it, with no bound, so a few kilobytes
-                // of text could fill the heap past every limit here. Ignored, the reader skips them unread.
+                // A PNG's metadata must be ignored: the JDK inflates every compressed zTXt and iTXt chunk while
+                // reading it, with no bound, so a few kilobytes of text could fill the heap past every limit here.
+                // Ignored, the reader skips them unread. A TIFF reader keeps its fields, each read only if it lies
+                // inside the file, and never inflates one; they are read through its tile accessors, never as a tree.
                 reader.setInput(input, false, format != PreviewFormat.TIFF);
                 while (format == PreviewFormat.TIFF || frames == 0) {
                     budget.checkpoint();
@@ -97,8 +100,19 @@ final class ImageRenderer implements SourceRenderer {
                         throw new PreviewError(PreviewFailure.LIMIT_EXCEEDED);
                     }
                     properties.requireFrame(width, height);
-                    Orientation orientation = jpeg != null ? ExifOrientation.of(jpeg) : orientation(reader, frames);
-                    PDImageXObject image = frame(reader, frames, jpeg, document, width, height);
+                    long decodedPixels = (long) width * height;
+                    if (format == PreviewFormat.TIFF) {
+                        // The JDK's TIFF decoder sizes its rasters from the declared tile (TileWidth by TileLength)
+                        // or strip (ImageWidth by RowsPerStrip), which may be far larger than the frame. These are
+                        // the reader's own values for both, read from the directory it has already parsed.
+                        int tileWidth = reader.getTileWidth(frames);
+                        int tileHeight = reader.getTileHeight(frames);
+                        properties.requireFrame(tileWidth, tileHeight);
+                        decodedPixels = Math.max(decodedPixels, (long) tileWidth * tileHeight);
+                    }
+                    Orientation orientation = jpeg != null ? ExifOrientation.of(jpeg)
+                        : directories != null ? TiffOrientation.of(directories, frames) : Orientation.TOP_LEFT;
+                    PDImageXObject image = frame(reader, frames, jpeg, document, decodedPixels);
                     budget.checkpoint();
                     place(document, image, width, height, orientation);
                     frames++;
@@ -138,18 +152,8 @@ final class ImageRenderer implements SourceRenderer {
         throw new PreviewError(PreviewFailure.INVALID_DOCUMENT);
     }
 
-    private Orientation orientation(ImageReader reader, int index) throws IOException {
-        if (format != PreviewFormat.TIFF) {
-            return Orientation.TOP_LEFT;
-        }
-        IIOMetadata metadata = reader.getImageMetadata(index);
-        TIFFField field = metadata == null ? null
-            : TIFFDirectory.createFromMetadata(metadata).getTIFFField(Orientation.TAG);
-        return field == null ? Orientation.TOP_LEFT : Orientation.of(field.getAsInt(0));
-    }
-
-    private PDImageXObject frame(ImageReader reader, int index, byte[] jpeg, PDDocument document, int width,
-                                 int height) throws IOException {
+    private PDImageXObject frame(ImageReader reader, int index, byte[] jpeg, PDDocument document,
+                                 long decodedPixels) throws IOException {
         if (jpeg != null) {
             AtomicBoolean damaged = new AtomicBoolean();
             reader.addIIOReadWarningListener((ignored, warning) -> damaged.set(true));
@@ -161,17 +165,18 @@ final class ImageRenderer implements SourceRenderer {
             }
             return building(() -> JPEGFactory.createFromByteArray(document, jpeg));
         }
-        requireDecodedSize(reader, index, width, height);
+        requireDecodedSize(reader, index, decodedPixels);
         BufferedImage image = reader.read(index);
         return building(() -> LosslessFactory.createFromImage(document, image));
     }
 
     /**
      * The pixel limit alone does not bound the heap: a 16-bit RGBA frame is eight bytes a pixel and a floating-point
-     * TIFF sixteen or more, so the frame's own sample layout is held to what a full-size ARGB frame would take. A
-     * JPEG needs no such check, because the JDK decodes it only at eight bits a sample and at most four samples.
+     * TIFF sixteen or more, so the frame's own sample layout is held to what a full-size ARGB frame would take, over
+     * the frame or its larger declared tile or strip. A JPEG needs no such check, because the JDK decodes it only at
+     * eight bits a sample and at most four samples.
      */
-    private void requireDecodedSize(ImageReader reader, int index, int width, int height) throws IOException {
+    private void requireDecodedSize(ImageReader reader, int index, long pixels) throws IOException {
         ImageTypeSpecifier type = reader.getRawImageType(index);
         if (type == null) {
             Iterator<ImageTypeSpecifier> types = reader.getImageTypes(index);
@@ -183,7 +188,7 @@ final class ImageRenderer implements SourceRenderer {
         SampleModel samples = type.getSampleModel();
         long bitsPerPixel = (long) DataBuffer.getDataTypeSize(samples.getDataType()) * samples.getNumDataElements();
         long bytesPerPixel = Math.max(1, (bitsPerPixel + 7) / 8);
-        if ((long) width * height * bytesPerPixel > properties.maxFramePixels() * MAX_DECODED_BYTES_PER_FRAME_PIXEL) {
+        if (pixels * bytesPerPixel > properties.maxFramePixels() * MAX_DECODED_BYTES_PER_FRAME_PIXEL) {
             throw new PreviewError(PreviewFailure.LIMIT_EXCEEDED);
         }
     }

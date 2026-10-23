@@ -34,8 +34,12 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.zip.CRC32;
 import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
@@ -98,6 +102,17 @@ final class DocumentPreviewFixtures {
      * What each of {@link #TEXT_CHUNKS}' text chunks inflates to: zeros, a thousand times their stored size.
      */
     static final int TEXT_CHUNK_INFLATED_BYTES = 8 * 1024 * 1024;
+    /**
+     * A 16 by 16 grey TIFF declaring one 8192 by 8192 tile, about 67 million pixels, whose only packet is
+     * {@link #NOT_DEFLATE}: a decoder would size its tile raster from the declaration before failing on the data.
+     */
+    static final String OVERSIZED_TILE = "oversized-tile.tiff";
+    static final int OVERSIZED_TILE_SIDE = 8192;
+    /** A packet labelled Deflate that is not a zlib stream, so decoding it fails rather than drawing anything. */
+    static final byte[] NOT_DEFLATE = "not a deflate stream".getBytes(StandardCharsets.US_ASCII);
+    /** TIFF Compression values: none, and Adobe Deflate. */
+    static final int UNCOMPRESSED = 1;
+    static final int DEFLATE = 8;
     static final String PDF = "three-pages.pdf";
     static final int PDF_PAGES = 3;
 
@@ -181,6 +196,113 @@ final class DocumentPreviewFixtures {
             writer.dispose();
         }
         return bytes.toByteArray();
+    }
+
+    /**
+     * A one-frame, 8-bit grey TIFF, every packet {@code shade}, split into {@code tileWidth} by {@code tileLength}
+     * tiles. Written field by field rather than by ImageIO, so a declaration can say what no writer would.
+     */
+    static byte[] tiledGrey(int width, int height, long tileWidth, long tileLength, int shade) {
+        long across = (width + tileWidth - 1) / tileWidth;
+        long down = (height + tileLength - 1) / tileLength;
+        byte[] tile = new byte[Math.toIntExact(tileWidth * tileLength)];
+        Arrays.fill(tile, (byte) shade);
+        return greyTiff(width, height, UNCOMPRESSED, List.of(new long[] {322, tileWidth}, new long[] {323, tileLength}),
+                        true, Collections.nCopies(Math.toIntExact(across * down), tile));
+    }
+
+    /**
+     * One {@code tileWidth} by {@code tileLength} tile declaration over a single {@code compression} packet.
+     */
+    static byte[] tiledGrey(int width, int height, long tileWidth, long tileLength, int compression, byte[] packet) {
+        return greyTiff(width, height, compression,
+                        List.of(new long[] {322, tileWidth}, new long[] {323, tileLength}), true, List.of(packet));
+    }
+
+    /**
+     * A one-frame, 8-bit grey TIFF, every pixel {@code shade}, in strips of {@code rowsPerStrip} rows ({@code null}
+     * for no RowsPerStrip field at all, which means the whole height).
+     */
+    static byte[] strippedGrey(int width, int height, Long rowsPerStrip, int shade) {
+        long rows = rowsPerStrip == null || rowsPerStrip >= height ? height : rowsPerStrip;
+        List<byte[]> strips = new ArrayList<>();
+        for (long top = 0; top < height; top += rows) {
+            byte[] strip = new byte[Math.toIntExact(width * Math.min(rows, height - top))];
+            Arrays.fill(strip, (byte) shade);
+            strips.add(strip);
+        }
+        return greyTiff(width, height, UNCOMPRESSED, rowsPerStrip(rowsPerStrip), false, strips);
+    }
+
+    /**
+     * A RowsPerStrip declaration over a single {@code compression} packet.
+     */
+    static byte[] strippedGrey(int width, int height, long rowsPerStrip, int compression, byte[] packet) {
+        return greyTiff(width, height, compression, rowsPerStrip(rowsPerStrip), false, List.of(packet));
+    }
+
+    private static List<long[]> rowsPerStrip(Long rows) {
+        return rows == null ? List.of() : List.<long[]>of(new long[] {278, rows});
+    }
+
+    /**
+     * A little-endian, one-directory TIFF: BlackIsZero, one 8-bit sample, {@code layout}'s LONG fields, and the
+     * packets after the directory with their offsets and byte counts as strips or tiles.
+     */
+    private static byte[] greyTiff(int width, int height, int compression, List<long[]> layout, boolean tiled,
+                                   List<byte[]> packets) {
+        Map<Integer, long[]> fields = new TreeMap<>();
+        // Each field: TIFF type (3 SHORT, 4 LONG), then its values.
+        fields.put(256, new long[] {4, width});
+        fields.put(257, new long[] {4, height});
+        fields.put(258, new long[] {3, 8});
+        fields.put(259, new long[] {3, compression});
+        fields.put(262, new long[] {3, 1});
+        fields.put(277, new long[] {3, 1});
+        for (long[] field : layout) {
+            fields.put((int) field[0], new long[] {4, field[1]});
+        }
+        int entries = fields.size() + 2;
+        int directoryEnd = 8 + 2 + entries * 12 + 4;
+        int countsAt = directoryEnd + packets.size() * 4;
+        int dataAt = countsAt + packets.size() * 4;
+        long[] offsets = new long[packets.size()];
+        long[] counts = new long[packets.size()];
+        long next = dataAt;
+        for (int index = 0; index < packets.size(); index++) {
+            offsets[index] = next;
+            counts[index] = packets.get(index).length;
+            next += counts[index];
+        }
+        fields.put(tiled ? 324 : 273, offsets);
+        fields.put(tiled ? 325 : 279, counts);
+        ByteBuffer tiff = ByteBuffer.allocate(Math.toIntExact(next)).order(ByteOrder.LITTLE_ENDIAN);
+        tiff.put(new byte[] {'I', 'I'}).putShort((short) 42).putInt(8).putShort((short) entries);
+        for (Map.Entry<Integer, long[]> field : fields.entrySet()) {
+            long[] value = field.getValue();
+            boolean packetList = value == offsets || value == counts;
+            tiff.putShort(field.getKey().shortValue());
+            if (packetList) {
+                tiff.putShort((short) 4).putInt(value.length);
+                tiff.putInt(value.length == 1 ? (int) value[0] : value == offsets ? directoryEnd : countsAt);
+            } else if (value[0] == 3) {
+                tiff.putShort((short) 3).putInt(1).putShort((short) value[1]).putShort((short) 0);
+            } else {
+                tiff.putShort((short) 4).putInt(1).putInt((int) value[1]);
+            }
+        }
+        tiff.putInt(0);
+        if (packets.size() > 1) {
+            for (long offset : offsets) {
+                tiff.putInt((int) offset);
+            }
+            for (long count : counts) {
+                tiff.putInt((int) count);
+            }
+        }
+        tiff.position(dataAt);
+        packets.forEach(tiff::put);
+        return tiff.array();
     }
 
     /**
@@ -466,6 +588,7 @@ final class DocumentPreviewFixtures {
                                                          TEXT_CHUNK_INFLATED_BYTES, false);
             case "two-frames.tiff" -> tiff(TWO_FRAMES);
             case "three-frames.tiff" -> tiff(THREE_FRAMES);
+            case OVERSIZED_TILE -> tiledGrey(16, 16, OVERSIZED_TILE_SIDE, OVERSIZED_TILE_SIDE, DEFLATE, NOT_DEFLATE);
             case MULTI_PAGE_DOCX -> multiPageDocx();
             case TABLE_AND_IMAGE_DOCX -> tableAndImageDocx();
             default -> throw new IllegalArgumentException(name);
@@ -474,6 +597,7 @@ final class DocumentPreviewFixtures {
 
     static final List<String> NAMES = List.of(PDF, "photo.jpeg", "photo-exif-6.jpeg", "scan.png",
                                               "text-chunks.png",
-                                              "two-frames.tiff", "three-frames.tiff", MULTI_PAGE_DOCX,
+                                              "two-frames.tiff", "three-frames.tiff", OVERSIZED_TILE,
+                                              MULTI_PAGE_DOCX,
                                               TABLE_AND_IMAGE_DOCX);
 }

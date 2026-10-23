@@ -64,8 +64,10 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.Assertions.fail;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static uk.gov.hmcts.reform.deedpoll.domain.documents.preview.DocumentPreviewFixtures.BLUE;
+import static uk.gov.hmcts.reform.deedpoll.domain.documents.preview.DocumentPreviewFixtures.DEFLATE;
 import static uk.gov.hmcts.reform.deedpoll.domain.documents.preview.DocumentPreviewFixtures.Frame;
 import static uk.gov.hmcts.reform.deedpoll.domain.documents.preview.DocumentPreviewFixtures.GREEN;
+import static uk.gov.hmcts.reform.deedpoll.domain.documents.preview.DocumentPreviewFixtures.NOT_DEFLATE;
 import static uk.gov.hmcts.reform.deedpoll.domain.documents.preview.DocumentPreviewFixtures.RED;
 import static uk.gov.hmcts.reform.deedpoll.domain.documents.preview.DocumentPreviewFixtures.YELLOW;
 
@@ -479,6 +481,81 @@ class PreviewRendererTest {
                                                                new Frame(200, 200, BLUE, "LZW", 1)));
             assertFailure(renderer(limits(PreviewProperties.MAX_PAGES, 1_000, PreviewProperties.MAX_OUTPUT_BYTES)),
                           PreviewFormat.TIFF, tiff, PreviewFailure.LIMIT_EXCEEDED);
+        }
+
+        @Test
+        @DisplayName("a small TIFF declaring a tile over the pixel limit is refused before the tile is decoded")
+        void oversizedTile() {
+            // The only packet is not a deflate stream, so decoding it is an invalid document: a limit can only be
+            // the directory check answering first.
+            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.read(DocumentPreviewFixtures.OVERSIZED_TILE),
+                          PreviewFailure.LIMIT_EXCEEDED);
+            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.tiledGrey(16, 16, 16, 16, DEFLATE, NOT_DEFLATE),
+                          PreviewFailure.INVALID_DOCUMENT);
+        }
+
+        @Test
+        @DisplayName("a small TIFF declaring a strip over the pixel limit is refused before the strip is decoded")
+        void oversizedStrip() {
+            // Sixteen columns by two million rows a strip is 32 million pixels, for a frame of 256.
+            assertFailure(PreviewFormat.TIFF,
+                          DocumentPreviewFixtures.strippedGrey(16, 16, 2_000_000L, DEFLATE, NOT_DEFLATE),
+                          PreviewFailure.LIMIT_EXCEEDED);
+            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(16, 16, 16L, DEFLATE, NOT_DEFLATE),
+                          PreviewFailure.INVALID_DOCUMENT);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @CsvSource({
+            "tile at the limit, 64, 64, 0, true",
+            "tile over the limit, 64, 80, 0, false",
+            "strip at the limit, 0, 0, 256, true",
+            "strip over the limit, 0, 0, 257, false",
+        })
+        @DisplayName("a tile or strip is held to the pixel limit itself, not only the frame it belongs to")
+        void tileAndStripAtTheLimit(String name, int tileWidth, int tileLength, long rowsPerStrip, boolean served)
+            throws IOException {
+            PreviewRenderer limited = renderer(limits(PreviewProperties.MAX_PAGES, 64 * 64,
+                                                      PreviewProperties.MAX_OUTPUT_BYTES));
+            byte[] tiff = rowsPerStrip > 0 ? DocumentPreviewFixtures.strippedGrey(16, 16, rowsPerStrip, 0x80)
+                : DocumentPreviewFixtures.tiledGrey(16, 16, tileWidth, tileLength, 0x80);
+            if (served) {
+                try (RenderedPreview preview = limited.render(PreviewFormat.TIFF, new TrackedSource(tiff), budget())) {
+                    assertThat(preview.pages()).hasValue(1);
+                }
+            } else {
+                assertFailure(limited, PreviewFormat.TIFF, tiff, PreviewFailure.LIMIT_EXCEEDED);
+            }
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @CsvSource({
+            "tiled in 64 by 64 tiles, 64, 0",
+            "16 rows a strip, 0, 16",
+            "one strip with no RowsPerStrip, 0, -1",
+            "RowsPerStrip 2^32 - 1 (the whole height), 0, 4294967295",
+            "RowsPerStrip past the height but in the limit, 0, 65535",
+        })
+        @DisplayName("ordinary tiled and stripped TIFFs still render")
+        void ordinaryTilesAndStrips(String name, int tile, long rowsPerStrip) throws IOException {
+            // Black, because a grey sample is drawn through the grey colour space's own tone curve.
+            byte[] tiff = tile > 0 ? DocumentPreviewFixtures.tiledGrey(300, 200, tile, tile, 0)
+                : DocumentPreviewFixtures.strippedGrey(300, 200, rowsPerStrip < 0 ? null : rowsPerStrip, 0);
+            try (RenderedPreview preview = render(PreviewFormat.TIFF, tiff);
+                 PDDocument document = Loader.loadPDF(bytes(preview))) {
+                assertThat(preview.pages()).hasValue(1);
+                assertLandscape(document.getPage(0));
+                assertNear(colourAt(raster(document, 0), 0.5, 0.5), Color.BLACK);
+            }
+        }
+
+        @Test
+        @DisplayName("a TIFF declaring a tile or strip of no rows is an invalid document")
+        void emptyTileOrStrip() {
+            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.tiledGrey(16, 16, 16, 0, DEFLATE, NOT_DEFLATE),
+                          PreviewFailure.INVALID_DOCUMENT);
+            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(16, 16, 0L, DEFLATE, NOT_DEFLATE),
+                          PreviewFailure.INVALID_DOCUMENT);
         }
 
         @Test
