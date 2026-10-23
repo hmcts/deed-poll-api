@@ -86,10 +86,10 @@ Do not change it or anything under `ccd/`.
 
 **Files:** `README.md` and `CLAUDE.md` only if they state a changed fact, this plan.
 
-- [ ] Note the tile/strip bound beside the pixel limit and the one-shot converter request in the existing preview
+- [x] Note the tile/strip bound beside the pixel limit and the one-shot converter request in the existing preview
       docs. **Reference this plan by its `docs/plans/completed/` path**, since that is where it will be once the run
       ends.
-- [ ] Run `./gradlew cftlibTest --no-watch-fs` and all Validation Commands; record final commits and counts, and
+- [x] Run `./gradlew cftlibTest --no-watch-fs` and all Validation Commands; record final commits and counts, and
       hand off to the Ralphex review phases.
 
 ## Acceptance Criteria
@@ -151,6 +151,17 @@ branch `feat/document-preview-rendering`, clean.
   already single sends and now pin it. *Green:* every `documents.preview` test passes.
 - *Validation:* `./gradlew build` (init script) passed: `test` 4,812 tests, 0 failed, 1 skipped (the env-gated fixture
   regeneration); `integration` 24, 0 failed. `checkstyle.sh` OK.
+
+**Task 3 (record and hand off).**
+- *Docs.* README's preview section cites this plan by its `docs/plans/completed/` path, states the tile/strip bound
+  in the `DOCUMENT_PREVIEW_MAX_FRAME_PIXELS` row, and the one-shot body beside "no retry and no redirect followed".
+  CLAUDE.md's preview bullet gains the same two facts plus the `getImageMetadata` ban, and `docs/RESUME.md` a line.
+  No OpenAPI change, so the admin handoff artifact is unchanged.
+- *Validation:* `./gradlew build` (init script) passed: `test` 4,812 tests, 0 failed, 1 skipped (the env-gated fixture
+  regeneration); `integration` 24, 0 failed. `checkstyle.sh` OK. `./gradlew cftlibTest --no-watch-fs` passed: 21
+  tests, 0 failed, 0 skipped, including all seven `DocumentPreviewCftlibTest` journeys.
+- *Commits:* `476cc15` (Task 1), `96516eb` (Task 2), and this task's docs commit on top. Ready for the Ralphex review
+  phases from the baseline `cb23657`.
 
 ## Post-Completion
 

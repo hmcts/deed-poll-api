@@ -583,7 +583,8 @@ metadata and download headers. These local tests do not establish live CDAM onbo
 
 Two operations, one per surface, from the preview plan
 ([20261023-document-preview-rendering](docs/plans/completed/20261023-document-preview-rendering.md)), revised by its
-review fixes ([20261023-document-preview-review-fixes](docs/plans/completed/20261023-document-preview-review-fixes.md)),
+review fixes ([20261023-document-preview-review-fixes](docs/plans/completed/20261023-document-preview-review-fixes.md))
+and the second review's ([20261023-document-preview-review-fixes-2](docs/plans/completed/20261023-document-preview-review-fixes-2.md)),
 and counted apart from
 both surfaces' totals (`previewCaseDocument`, `previewReferralDocument`). A preview is a read-only PDF rendition for
 the admin viewer. It never replaces, attaches, publishes or edits the original, which
@@ -641,7 +642,7 @@ acceptance, original downloads or the staging cap.
 | `DOCUMENT_PREVIEW_REQUEST_BUDGET` | `25s` | Conversion and rendering, checked between spooled chunks of the original but not bounding a stalled store read (above); must be under the gateways' 30 s |
 | `DOCUMENT_PREVIEW_MAX_OUTPUT_BYTES` | `52428800` (50 MiB) | Largest preview PDF served. The input ceiling is the upload's 25 MiB and is not configurable here |
 | `DOCUMENT_PREVIEW_MAX_PAGES` | `100` | Most pages in one preview. Enforced here only for the previews this service builds (JPEG, PNG and TIFF frames, published as `maxPagesEnforcedFor`); a PDF or converted DOCX is served uncounted, and the admin viewer enforces it through PDF.js's `numPages` before rendering (`maxPagesEnforcedByViewerFor`) |
-| `DOCUMENT_PREVIEW_MAX_FRAME_PIXELS` | `25000000` | Most decoded pixels in one image or TIFF frame, checked before decoding; a PNG or TIFF frame's decoded bytes are also held to four a pixel of this (so a 16-bit RGBA frame may have half as many) |
+| `DOCUMENT_PREVIEW_MAX_FRAME_PIXELS` | `25000000` | Most decoded pixels in one image or TIFF frame, checked before decoding; a PNG or TIFF frame's decoded bytes are also held to four a pixel of this (so a 16-bit RGBA frame may have half as many). A TIFF frame's declared tile (`TileWidth × TileLength`) or strip (`ImageWidth × RowsPerStrip`, absent meaning the whole height) is held to the same limit before decoding, because the reader allocates from it unclamped; its directory is walked entry by entry, never through `getImageMetadata` |
 | `DOCUMENT_PREVIEW_MAX_CONCURRENT_CONVERSIONS` | `3` | Non-PDF previews at once per pod; there is no queue |
 | `DOCUMENT_PREVIEW_MAX_CONCURRENT_PREVIEWS` | `8` | Previews of any format, PDFs included, holding scratch at once per pod, from the store's answer until the response is written; bounds the pod's preview scratch (each holds at most the 25 MiB input and the output ceiling). Over it is `PREVIEW_BUSY`; there is no queue |
 | `DOCUMENT_PREVIEW_BUSY_RETRY_AFTER` | `5s` | `Retry-After` on `PREVIEW_BUSY`, between 1 and 60 s |
@@ -656,7 +657,8 @@ With either Docmosis setting empty the service starts as normal and only a DOCX 
 A DOCX is first held to the upload's content checks, so a malformed, encrypted or macro-enabled package is
 `PREVIEW_INVALID_DOCUMENT` and is never sent. The conversion is one `multipart/form-data` POST to
 `{DOCMOSIS_URL}/rs/convert` (`accessKey`, `outputName=preview.pdf`, `file` named `document.docx`), with no retry
-and no redirect followed. Only a `2xx` `application/pdf` body inside the output ceiling, starting `%PDF-` and ending
+and no redirect followed. The body is one-shot, so OkHttp never resends it, not even for a `503` with
+`Retry-After: 0`: a conversion reaches Tornado at most once. Only a `2xx` `application/pdf` body inside the output ceiling, starting `%PDF-` and ending
 `%%EOF` is served, unparsed and uncounted, as an original PDF is. A Tornado `413` is
 `PREVIEW_LIMIT_EXCEEDED`, the budget running out is `PREVIEW_LIMIT_EXCEEDED`, and every other status, timeout,
 broken transfer or unusable body is `PREVIEW_UNAVAILABLE`. Logs carry the status or an exception class only.

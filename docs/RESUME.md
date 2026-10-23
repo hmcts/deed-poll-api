@@ -12,7 +12,9 @@ See [the plan](plans/completed/20261023-document-preview-rendering.md). Revised 
 or unavailable refusal; a PDF or Docmosis output is served unparsed; PNG text chunks are never inflated; and
 `DOCUMENT_PREVIEW_MAX_PAGES` is 100, enforced by the API for JPEG, PNG and TIFF only, so admin's viewer must refuse
 a PDF or DOCX over `maxPages`. The handoff artifact is now `c1fc4438…`. `./gradlew cftlibTest` passed on 2026-10-23 (21 tests,
-including all seven `DocumentPreviewCftlibTest` journeys).
+including all seven `DocumentPreviewCftlibTest` journeys). [The second review's fixes](plans/completed/20261023-document-preview-review-fixes-2.md) hold a TIFF
+frame's declared tile or strip to `max-frame-pixels` before decoding and make the Docmosis request one-shot, so a
+`503 Retry-After: 0` is never resent.
 
 **Narrative cap and blank witnesses, 2026-10-22 (admin R15):** on `fix/textarea-limit-and-blank-witnesses`, not
 pushed. `returnReason`, `referralNotes` and `masterDirections` are capped at 2,000 characters with line breaks counted
