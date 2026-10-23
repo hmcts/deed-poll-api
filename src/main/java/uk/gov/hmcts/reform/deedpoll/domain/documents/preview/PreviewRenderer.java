@@ -45,9 +45,9 @@ public class PreviewRenderer {
         this.scratchRoot = Objects.requireNonNull(scratchRoot, "scratchRoot");
         PdfRenderer pdfRenderer = new PdfRenderer();
         this.pdf = pdfRenderer;
-        this.jpeg = new ImageRenderer(PreviewFormat.JPEG, "jpeg", properties);
-        this.png = new ImageRenderer(PreviewFormat.PNG, "png", properties);
-        this.tiff = new ImageRenderer(PreviewFormat.TIFF, "tiff", properties);
+        this.jpeg = new ImageRenderer(PreviewFormat.JPEG, properties);
+        this.png = new ImageRenderer(PreviewFormat.PNG, properties);
+        this.tiff = new ImageRenderer(PreviewFormat.TIFF, properties);
         this.docx = new DocxRenderer(properties, pdfRenderer);
     }
 

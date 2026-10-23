@@ -26,7 +26,7 @@ import java.util.OptionalInt;
 final class PdfRenderer implements SourceRenderer {
 
     private static final byte[] HEADER = "%PDF-".getBytes(StandardCharsets.US_ASCII);
-    private static final byte[] EOF_MARKER = "%%EOF".getBytes(StandardCharsets.US_ASCII);
+    static final byte[] EOF_MARKER = "%%EOF".getBytes(StandardCharsets.US_ASCII);
 
     /**
      * How far from the end the whole {@code %%EOF} marker may sit; trailing whitespace or junk, generously.

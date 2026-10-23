@@ -21,7 +21,8 @@ import java.util.Set;
  * (zero, negative) refuses to start. Reaching one at run time is {@link PreviewFailure#LIMIT_EXCEEDED}, never a
  * truncated PDF.
  *
- * @param requestBudget the whole preview request, conversion included (decision 2); under the gateways' 30 s
+ * @param requestBudget conversion and rendering, checked between spooled chunks (decision 2); under the gateways'
+ *     30 s. A stalled store read is bounded by the store client's own timeouts, as a download is
  * @param maxOutputBytes the largest preview PDF served
  * @param maxPages the most pages a preview this service builds may have: a TIFF's frames, an image's one page. A
  *     PDF or a converted DOCX is served unparsed, so the viewer holds it to this limit, not the service

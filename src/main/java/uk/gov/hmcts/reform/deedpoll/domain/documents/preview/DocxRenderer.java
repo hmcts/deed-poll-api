@@ -19,7 +19,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.net.Proxy;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -54,11 +53,6 @@ final class DocxRenderer implements SourceRenderer {
 
     private static final MediaType DOCX = MediaType.get(PreviewFormat.DOCX.mimeType());
     private static final String PDF = "application/pdf";
-    private static final byte[] EOF_MARKER = "%%EOF".getBytes(StandardCharsets.US_ASCII);
-    /**
-     * How far from the end {@code %%EOF} may sit: trailing whitespace only, generously.
-     */
-    private static final int EOF_WINDOW = 1024;
     private static final int CHUNK = 64 * 1024;
     private static final Duration SHORTEST = Duration.ofMillis(1);
 
@@ -178,7 +172,7 @@ final class DocxRenderer implements SourceRenderer {
     private static void requireComplete(Path converted) {
         try (RandomAccessFile file = new RandomAccessFile(converted.toFile(), "r")) {
             long length = file.length();
-            int window = (int) Math.min(length, EOF_WINDOW);
+            int window = (int) Math.min(length, PdfRenderer.EOF_WINDOW);
             byte[] tail = new byte[window];
             file.seek(length - window);
             file.readFully(tail);
@@ -186,11 +180,11 @@ final class DocxRenderer implements SourceRenderer {
             while (end > 0 && isWhitespace(tail[end - 1])) {
                 end--;
             }
-            if (end < EOF_MARKER.length) {
+            if (end < PdfRenderer.EOF_MARKER.length) {
                 throw incomplete();
             }
-            for (int index = 0; index < EOF_MARKER.length; index++) {
-                if (tail[end - EOF_MARKER.length + index] != EOF_MARKER[index]) {
+            for (int index = 0; index < PdfRenderer.EOF_MARKER.length; index++) {
+                if (tail[end - PdfRenderer.EOF_MARKER.length + index] != PdfRenderer.EOF_MARKER[index]) {
                     throw incomplete();
                 }
             }

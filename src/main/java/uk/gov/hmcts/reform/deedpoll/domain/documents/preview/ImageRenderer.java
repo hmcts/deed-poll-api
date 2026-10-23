@@ -18,6 +18,7 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Iterator;
+import java.util.Locale;
 import java.util.OptionalInt;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.imageio.IIOException;
@@ -60,11 +61,11 @@ final class ImageRenderer implements SourceRenderer {
     private final PreviewProperties properties;
 
     /**
-     * A renderer for {@code format}, read by ImageIO's readers for {@code formatName}.
+     * A renderer for {@code format}, read by ImageIO's readers for the format's lower-case name.
      */
-    ImageRenderer(PreviewFormat format, String formatName, PreviewProperties properties) {
+    ImageRenderer(PreviewFormat format, PreviewProperties properties) {
         this.format = format;
-        this.formatName = formatName;
+        this.formatName = format.name().toLowerCase(Locale.ROOT);
         this.properties = properties;
     }
 

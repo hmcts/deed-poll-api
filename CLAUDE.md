@@ -390,7 +390,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   download leaves), and a slow store read holds no permit; moving either check ahead of the read undoes both. Never
   the system reader, and never as a fallback for a refused read. The 25 s budget does not bound a stalled store read,
   which keeps the store client's timeouts as a download does. **PDF originals and Docmosis output are never parsed**
-  (no PDFBox `Loader`): `PdfRenderer` checks `%PDF-` and a trailing `%%EOF` only and serves the file as it is, so
+  (no PDFBox `Loader`, and `PreviewBoundaryTest.nothingParsesAPdf` fails the build if preview code reaches it): `PdfRenderer` checks `%PDF-` and a trailing `%%EOF` only and serves the file as it is, so
   `max-pages` (100) is enforced here only for JPEG/PNG/TIFF (`PreviewFormat.countsPages`) and by the admin viewer
   for the rest; a PNG is read with metadata ignored, so its text chunks are never inflated. Do not reintroduce a parse
   "just to count pages": that is the heap-exhaustion finding of

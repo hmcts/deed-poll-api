@@ -344,6 +344,22 @@ class PreviewRendererTest {
     class Tiff {
 
         @Test
+        @DisplayName("a budget spent while frames are rendered is a limit, with the permit back and nothing left")
+        void budgetSpentWhileRendering() {
+            MutableClock clock = new MutableClock();
+            PreviewBudget budget = PreviewBudget.start(clock, Duration.ofSeconds(25));
+            TrackedSource source = new TrackedSource(DocumentPreviewFixtures.read("three-frames.tiff"));
+            source.onClose = () -> clock.advance(Duration.ofSeconds(26));
+
+            Throwable thrown = catchThrowable(() -> renderer().render(PreviewFormat.TIFF, source, budget));
+
+            assertThat(thrown).isInstanceOfSatisfying(PreviewError.class,
+                error -> assertThat(error.failure()).isEqualTo(PreviewFailure.LIMIT_EXCEEDED));
+            assertThat(capacity.available()).isEqualTo(3);
+            assertScratchEmpty();
+        }
+
+        @Test
         @DisplayName("two frames become two pages, in order, each its own way round")
         void twoFrames() throws IOException {
             byte[] original = DocumentPreviewFixtures.read("two-frames.tiff");
@@ -577,6 +593,15 @@ class PreviewRendererTest {
         @DisplayName("a source that fails half way is unavailable, not the document's fault, and is closed")
         void sourceFailsMidway() {
             TrackedSource source = new TrackedSource(DocumentPreviewFixtures.read("two-frames.tiff"), 1_000);
+            assertFailure(renderer(), PreviewFormat.TIFF, source, PreviewFailure.UNAVAILABLE);
+            assertThat(source.closed).isTrue();
+        }
+
+        @Test
+        @DisplayName("a source whose stream cannot be closed is unavailable, holds no permit and leaves nothing")
+        void sourceCannotClose() {
+            TrackedSource source = new TrackedSource(DocumentPreviewFixtures.read("two-frames.tiff"));
+            source.closeFails = true;
             assertFailure(renderer(), PreviewFormat.TIFF, source, PreviewFailure.UNAVAILABLE);
             assertThat(source.closed).isTrue();
         }
@@ -923,6 +948,8 @@ class PreviewRendererTest {
         private final long failAfter;
         private volatile boolean opened;
         private volatile boolean closed;
+        private volatile Runnable onClose = () -> { };
+        private volatile boolean closeFails;
 
         TrackedSource(byte[] bytes) {
             this(bytes, Long.MAX_VALUE);
@@ -953,6 +980,10 @@ class PreviewRendererTest {
                 public void close() throws IOException {
                     closed = true;
                     super.close();
+                    onClose.run();
+                    if (closeFails) {
+                        throw new IOException("/var/lib/documents/secret-name.tiff could not be closed");
+                    }
                 }
             };
         }

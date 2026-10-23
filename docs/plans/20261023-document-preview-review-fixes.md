@@ -246,8 +246,8 @@ conversion and rendering, not a stalled read of the original (description text o
   `DocumentPreviewCftlibTest` journeys included (refused CDAM source reaches neither store nor converter; every staff
   role previews under its own token; judicial visibility; converter outage and unconfigured converter are the fixed
   503; system correspondence reads unaffected).
-- Commits: Task 1 `d4b62d9`, Task 2 `a7d8ed8`, Task 3 `ceeeb2c`, Task 4 this commit. Changed files over the
-  baseline: `git diff --stat b2d2c9c..HEAD`.
+- Commits: Task 1 `d4b62d9`, Task 2 `a7d8ed8`, Task 3 `ceeeb2c`, Task 4 `932d499`; review fixes `a72f13b` (javadoc
+  corrections, the `nothingParsesAPdf` ArchUnit rule) and the next review's. Changed files over the baseline: `git diff --stat b2d2c9c..HEAD`.
 
 ## Post-Completion
 

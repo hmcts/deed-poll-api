@@ -509,6 +509,17 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
         }
 
         @Test
+        @DisplayName("refuses to run inside a caller's transaction, before anything is recorded or read")
+        void refusesATransaction() {
+            assertThatThrownBy(() -> new TransactionTemplate(transactions).executeWithoutResult(status ->
+                previews.judicialPreview(referralId, documentId, JUDGE, previews.budget()).close()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("outside a transaction");
+
+            assertNothingRead();
+        }
+
+        @Test
         @DisplayName("any judge previews a document of an Open referral, recorded as that judge")
         void anyJudgeOnAnOpenReferral() {
             assertThat(previewAsJudge(JUDGE)).isEqualTo(3);

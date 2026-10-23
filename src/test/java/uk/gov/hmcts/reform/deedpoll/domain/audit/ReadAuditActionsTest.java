@@ -13,6 +13,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -44,8 +45,13 @@ class ReadAuditActionsTest {
     @Test
     @DisplayName("a preview and a download are told apart in the trail")
     void previewIsNotADownload() {
-        assertThat(AuditAction.DOCUMENT_PREVIEWED).isNotEqualTo(AuditAction.DOCUMENT_DOWNLOADED);
-        assertThat(AuditAction.DOCUMENT_PREVIEWED.name()).hasSizeLessThanOrEqualTo(64);
+        audit.documentDownloaded("case-1", "document-1", READER);
+        audit.documentPreviewed("case-1", "document-1", READER);
+
+        ArgumentCaptor<AuditEntry> recorded = ArgumentCaptor.forClass(AuditEntry.class);
+        verify(trail, times(2)).recordRead(recorded.capture());
+        assertThat(recorded.getAllValues()).extracting(AuditEntry::action)
+            .containsExactly(AuditAction.DOCUMENT_DOWNLOADED, AuditAction.DOCUMENT_PREVIEWED);
     }
 
     @Test

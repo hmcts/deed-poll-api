@@ -275,7 +275,8 @@ class DocxRendererTest {
             for (byte[] answer : List.of(new byte[0], PROVIDER_BODY.getBytes(StandardCharsets.UTF_8),
                                          Arrays.copyOf(whole, whole.length - 200), Arrays.copyOf(whole, 40),
                                          ("%PDF-1.7 nothing\n%%EOF\n" + " ".repeat(2048))
-                                             .getBytes(StandardCharsets.US_ASCII))) {
+                                             .getBytes(StandardCharsets.US_ASCII),
+                                         "not a pdf\n%%EOF\n".getBytes(StandardCharsets.US_ASCII))) {
                 converter.resetAll();
                 converter.stubFor(post(urlPathEqualTo(CONVERT)).willReturn(pdf(answer)));
                 unparsed(() -> {
