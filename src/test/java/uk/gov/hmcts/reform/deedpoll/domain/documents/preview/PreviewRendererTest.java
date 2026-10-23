@@ -641,6 +641,20 @@ class PreviewRendererTest {
         }
 
         @Test
+        @DisplayName("a SHORT TileOffsets entry the JDK drops cannot hide an oversized JPEGInterchangeFormat packet")
+        void jpegInterchangeBehindDroppedTileOffsets() {
+            // The JDK keeps TileOffsets only as LONG, so it ignores this one and decodes from JPEGInterchangeFormat.
+            byte[] small = greyJpeg(64, 64, 64, 64);
+            byte[] tiff = DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, greyJpeg(64, 64, 40_000, 40_000));
+            byte[] entry = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 324)
+                .putShort((short) 3).putInt(1).putShort((short) (tiff.length + 12)).putShort((short) 0).array();
+            assertFailure(PreviewFormat.TIFF,
+                          DocumentPreviewFixtures.withStripOffsetsAs(
+                              DocumentPreviewFixtures.withLeadingEntry(tiff, entry, small), 513),
+                          PreviewFailure.LIMIT_EXCEEDED);
+        }
+
+        @Test
         @DisplayName("JPEGTables carrying tables alone render; carrying a frame header or a scan they are refused")
         void jpegTables() throws IOException {
             byte[] packet = greyJpeg(64, 64, 64, 64);

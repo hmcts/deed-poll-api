@@ -20,8 +20,9 @@ import javax.imageio.stream.ImageInputStream;
  * directory points at rather than the packets, so there is no one header to check. Every Compression entry is
  * looked at, whatever its type, so that two contradictory entries cannot hide a JPEG frame; a frame that is not JPEG
  * is left alone. The directory is read entry by entry as the JDK reads it ({@link TiffDirectories#forEachEntry}), the
- * packets are found where the JDK finds them (TileOffsets, StripOffsets, or failing both JPEGInterchangeFormat), and
- * JPEGTables, which the JDK puts ahead of every packet, may carry tables but never a frame header or a scan.
+ * packets are looked for wherever the JDK may find them (TileOffsets, StripOffsets and JPEGInterchangeFormat, all
+ * of them, because the JDK drops an entry whose type its tag does not allow and then falls back), and JPEGTables,
+ * which the JDK puts ahead of every packet, may carry tables but never a frame header or a scan.
  */
 final class TiffJpegPackets {
 
@@ -81,10 +82,10 @@ final class TiffJpegPackets {
         if (!jpeg[0]) {
             return;
         }
-        if (offsetFields.isEmpty()) {
-            // The JDK falls back to JPEGInterchangeFormat for a frame with neither offsets field.
-            offsetFields.addAll(interchange);
-        }
+        // The JDK falls back to JPEGInterchangeFormat whenever it keeps neither offsets field, and it silently drops
+        // an offsets entry of a type its tag does not allow (a SHORT TileOffsets), so the fallback is not decided by
+        // which entries are present. Every packet any of them names is held to the region instead.
+        offsetFields.addAll(interchange);
         // Each field is copied and scanned whole, and many entries may name one payload, so together they may
         // cover no more bytes than the file holds: one pass over the file, not one per entry.
         long tablesBytes = 0;
