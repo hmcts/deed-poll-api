@@ -37,8 +37,8 @@ import javax.imageio.stream.ImageInputStream;
  * and never cropped.
  *
  * <p>The bytes decide, not the stored type: only a reader for the stored format that recognises the bytes is used,
- * so a PNG stored as a JPEG is an invalid document. Each frame's declared dimensions, and a TIFF frame's declared
- * tile or strip, are checked against the pixel limit, and a PNG or TIFF frame's sample layout against the
+ * so a PNG stored as a JPEG is an invalid document. Each frame's declared dimensions, and a tiled TIFF frame's
+ * declared tile, are checked against the pixel limit, and a PNG or TIFF frame's sample layout against the
  * decoded-size limit, before it is decoded; frames are decoded one at a time and dropped once drawn, and the budget is
  * checked between them. A JPEG is decoded only to prove its data is whole and then embedded as it was stored, so a
  * photograph is not recompressed; a PNG or TIFF frame is embedded losslessly. A PNG's metadata is never read, so its
@@ -101,10 +101,11 @@ final class ImageRenderer implements SourceRenderer {
                     }
                     properties.requireFrame(width, height);
                     long decodedPixels = (long) width * height;
-                    if (format == PreviewFormat.TIFF) {
-                        // The JDK's TIFF decoder sizes its rasters from the declared tile (TileWidth by TileLength)
-                        // or strip (ImageWidth by RowsPerStrip), which may be far larger than the frame. These are
-                        // the reader's own values for both, read from the directory it has already parsed.
+                    if (format == PreviewFormat.TIFF && reader.isImageTiled(frames)) {
+                        // The JDK's TIFF decoder sizes its rasters from the declared tile (TileWidth by TileLength),
+                        // which may legally be far larger than the frame. A strip is clipped to the frame before it
+                        // is decoded, so a RowsPerStrip past the height is already bounded by the frame check. These
+                        // are the reader's own values, read from the directory it has already parsed.
                         int tileWidth = reader.getTileWidth(frames);
                         int tileHeight = reader.getTileHeight(frames);
                         properties.requireFrame(tileWidth, tileHeight);
@@ -173,7 +174,7 @@ final class ImageRenderer implements SourceRenderer {
     /**
      * The pixel limit alone does not bound the heap: a 16-bit RGBA frame is eight bytes a pixel and a floating-point
      * TIFF sixteen or more, so the frame's own sample layout is held to what a full-size ARGB frame would take, over
-     * the frame or its larger declared tile or strip. A JPEG needs no such check, because the JDK decodes it only at
+     * the frame or its larger declared tile. A JPEG needs no such check, because the JDK decodes it only at
      * eight bits a sample and at most four samples.
      */
     private void requireDecodedSize(ImageReader reader, int index, long pixels) throws IOException {

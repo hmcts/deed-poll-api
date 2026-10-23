@@ -396,8 +396,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `max-pages` (100) is enforced here only for JPEG/PNG/TIFF (`PreviewFormat.countsPages`) and by the admin viewer
   for the rest; a PNG is read with metadata ignored, so its text chunks are never inflated. Do not reintroduce a parse
   "just to count pages": that is the heap-exhaustion finding of
-  `docs/plans/completed/20261023-document-preview-review-fixes.md`. Likewise a TIFF frame's declared tile or strip is
-  held to `max-frame-pixels` before decoding, and its orientation comes from `TiffOrientation`, never
+  `docs/plans/completed/20261023-document-preview-review-fixes.md`. Likewise a tiled TIFF frame's declared tile is
+  held to `max-frame-pixels` before decoding (a strip is clipped to the frame by the JDK, so it is not checked), and its orientation comes from `TiffOrientation`, never
   `getImageMetadata` (a DOM copy of every strip offset; `PreviewBoundaryTest.noImageMetadataTree`); and the Docmosis
   body is one-shot, so OkHttp cannot resend it on a `503 Retry-After: 0`
   (`docs/plans/completed/20261023-document-preview-review-fixes-2.md`). The request thread does the conversion and

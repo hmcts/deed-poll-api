@@ -163,6 +163,14 @@ branch `feat/document-preview-rendering`, clean.
 - *Commits:* `476cc15` (Task 1), `96516eb` (Task 2), and this task's docs commit on top. Ready for the Ralphex review
   phases from the baseline `cb23657`.
 
+**Review correction (strips).** The first review found Task 1's strip half wrong: `TIFFImageReader.decodeTile`
+intersects a strip's rectangle with the image bounds (`if (!isImageTiled(currIndex))`) before any decompressor sizes
+a buffer, so only a tile is allocated as declared. Holding `ImageWidth × RowsPerStrip` to the limit refused legal
+TIFFs, such as an A4 scan at 300 dpi writing `RowsPerStrip` 65,535. The bound now applies only when
+`reader.isImageTiled`; strips past the height render under a limited renderer and are held by the frame alone. The
+review also added `TiffOrientationTest` (both byte orders, last entry wins, wrong type or count, later frames, a
+short chain) and a 64-bit floating-point tile held by the decoded-size limit.
+
 ## Post-Completion
 
 Publishing, merging and deployment are separate from this plan.

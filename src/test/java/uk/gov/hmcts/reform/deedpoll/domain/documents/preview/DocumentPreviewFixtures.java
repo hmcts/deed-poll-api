@@ -208,7 +208,7 @@ final class DocumentPreviewFixtures {
         byte[] tile = new byte[Math.toIntExact(tileWidth * tileLength)];
         Arrays.fill(tile, (byte) shade);
         return greyTiff(width, height, UNCOMPRESSED, List.of(new long[] {322, tileWidth}, new long[] {323, tileLength}),
-                        true, Collections.nCopies(Math.toIntExact(across * down), tile));
+                        8, true, Collections.nCopies(Math.toIntExact(across * down), tile));
     }
 
     /**
@@ -216,7 +216,16 @@ final class DocumentPreviewFixtures {
      */
     static byte[] tiledGrey(int width, int height, long tileWidth, long tileLength, int compression, byte[] packet) {
         return greyTiff(width, height, compression,
-                        List.of(new long[] {322, tileWidth}, new long[] {323, tileLength}), true, List.of(packet));
+                        List.of(new long[] {322, tileWidth}, new long[] {323, tileLength}), 8, true, List.of(packet));
+    }
+
+    /**
+     * {@link #tiledGrey(int, int, long, long, int, byte[])} with 64-bit floating-point samples, eight bytes a pixel.
+     */
+    static byte[] tiledDoubleGrey(int width, int height, long tileWidth, long tileLength, int compression,
+                                  byte[] packet) {
+        return greyTiff(width, height, compression,
+                        List.of(new long[] {322, tileWidth}, new long[] {323, tileLength}), 64, true, List.of(packet));
     }
 
     /**
@@ -231,14 +240,14 @@ final class DocumentPreviewFixtures {
             Arrays.fill(strip, (byte) shade);
             strips.add(strip);
         }
-        return greyTiff(width, height, UNCOMPRESSED, rowsPerStrip(rowsPerStrip), false, strips);
+        return greyTiff(width, height, UNCOMPRESSED, rowsPerStrip(rowsPerStrip), 8, false, strips);
     }
 
     /**
      * A RowsPerStrip declaration over a single {@code compression} packet.
      */
     static byte[] strippedGrey(int width, int height, long rowsPerStrip, int compression, byte[] packet) {
-        return greyTiff(width, height, compression, rowsPerStrip(rowsPerStrip), false, List.of(packet));
+        return greyTiff(width, height, compression, rowsPerStrip(rowsPerStrip), 8, false, List.of(packet));
     }
 
     private static List<long[]> rowsPerStrip(Long rows) {
@@ -246,16 +255,20 @@ final class DocumentPreviewFixtures {
     }
 
     /**
-     * A little-endian, one-directory TIFF: BlackIsZero, one 8-bit sample, {@code layout}'s LONG fields, and the
-     * packets after the directory with their offsets and byte counts as strips or tiles.
+     * A little-endian, one-directory TIFF: BlackIsZero, one sample of {@code bitsPerSample} (an unsigned integer
+     * at 8, floating point otherwise), {@code layout}'s LONG fields, and the packets after the directory with their
+     * offsets and byte counts as strips or tiles.
      */
-    private static byte[] greyTiff(int width, int height, int compression, List<long[]> layout, boolean tiled,
-                                   List<byte[]> packets) {
+    private static byte[] greyTiff(int width, int height, int compression, List<long[]> layout, int bitsPerSample,
+                                   boolean tiled, List<byte[]> packets) {
         Map<Integer, long[]> fields = new TreeMap<>();
         // Each field: TIFF type (3 SHORT, 4 LONG), then its values.
         fields.put(256, new long[] {4, width});
         fields.put(257, new long[] {4, height});
-        fields.put(258, new long[] {3, 8});
+        fields.put(258, new long[] {3, bitsPerSample});
+        if (bitsPerSample != 8) {
+            fields.put(339, new long[] {3, 3});
+        }
         fields.put(259, new long[] {3, compression});
         fields.put(262, new long[] {3, 1});
         fields.put(277, new long[] {3, 1});

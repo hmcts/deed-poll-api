@@ -494,31 +494,16 @@ class PreviewRendererTest {
                           PreviewFailure.INVALID_DOCUMENT);
         }
 
-        @Test
-        @DisplayName("a small TIFF declaring a strip over the pixel limit is refused before the strip is decoded")
-        void oversizedStrip() {
-            // Sixteen columns by two million rows a strip is 32 million pixels, for a frame of 256.
-            assertFailure(PreviewFormat.TIFF,
-                          DocumentPreviewFixtures.strippedGrey(16, 16, 2_000_000L, DEFLATE, NOT_DEFLATE),
-                          PreviewFailure.LIMIT_EXCEEDED);
-            assertFailure(PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(16, 16, 16L, DEFLATE, NOT_DEFLATE),
-                          PreviewFailure.INVALID_DOCUMENT);
-        }
-
         @ParameterizedTest(name = "{0}")
         @CsvSource({
-            "tile at the limit, 64, 64, 0, true",
-            "tile over the limit, 64, 80, 0, false",
-            "strip at the limit, 0, 0, 256, true",
-            "strip over the limit, 0, 0, 257, false",
+            "tile at the limit, 64, 64, true",
+            "tile over the limit, 64, 80, false",
         })
-        @DisplayName("a tile or strip is held to the pixel limit itself, not only the frame it belongs to")
-        void tileAndStripAtTheLimit(String name, int tileWidth, int tileLength, long rowsPerStrip, boolean served)
-            throws IOException {
+        @DisplayName("a tile is held to the pixel limit itself, not only the frame it belongs to")
+        void tileAtTheLimit(String name, int tileWidth, int tileLength, boolean served) throws IOException {
             PreviewRenderer limited = renderer(limits(PreviewProperties.MAX_PAGES, 64 * 64,
                                                       PreviewProperties.MAX_OUTPUT_BYTES));
-            byte[] tiff = rowsPerStrip > 0 ? DocumentPreviewFixtures.strippedGrey(16, 16, rowsPerStrip, 0x80)
-                : DocumentPreviewFixtures.tiledGrey(16, 16, tileWidth, tileLength, 0x80);
+            byte[] tiff = DocumentPreviewFixtures.tiledGrey(16, 16, tileWidth, tileLength, 0x80);
             if (served) {
                 try (RenderedPreview preview = limited.render(PreviewFormat.TIFF, new TrackedSource(tiff), budget())) {
                     assertThat(preview.pages()).hasValue(1);
@@ -526,6 +511,37 @@ class PreviewRendererTest {
             } else {
                 assertFailure(limited, PreviewFormat.TIFF, tiff, PreviewFailure.LIMIT_EXCEEDED);
             }
+        }
+
+        @Test
+        @DisplayName("a tile within the pixel limit is still held to the decoded-size limit by its sample layout")
+        void tileOverTheDecodedSize() {
+            // Eight bytes a pixel over a 64 by 64 tile is twice what a full-size ARGB frame of 4,096 pixels takes,
+            // for a frame of 256; the packet is not deflate, so only the declaration can answer with a limit.
+            PreviewRenderer limited = renderer(limits(PreviewProperties.MAX_PAGES, 64 * 64,
+                                                      PreviewProperties.MAX_OUTPUT_BYTES));
+            assertFailure(limited, PreviewFormat.TIFF,
+                          DocumentPreviewFixtures.tiledDoubleGrey(16, 16, 64, 64, DEFLATE, NOT_DEFLATE),
+                          PreviewFailure.LIMIT_EXCEEDED);
+            assertFailure(limited, PreviewFormat.TIFF,
+                          DocumentPreviewFixtures.tiledDoubleGrey(16, 16, 32, 32, DEFLATE, NOT_DEFLATE),
+                          PreviewFailure.INVALID_DOCUMENT);
+        }
+
+        @ParameterizedTest(name = "RowsPerStrip {0}")
+        @ValueSource(longs = {256, 4096, 65_535, 2_000_000})
+        @DisplayName("a strip declared past the frame's height is clipped to the frame, so only the frame is held")
+        void stripPastTheHeight(long rowsPerStrip) throws IOException {
+            // The JDK clips a strip, unlike a tile, to the frame before decoding it: 64 by 2,000,000 would be 128
+            // million pixels, for a frame (and a limit) of 4,096. A writer putting 65,535 for "all rows" is legal.
+            PreviewRenderer limited = renderer(limits(PreviewProperties.MAX_PAGES, 64 * 64,
+                                                      PreviewProperties.MAX_OUTPUT_BYTES));
+            byte[] tiff = DocumentPreviewFixtures.strippedGrey(64, 64, rowsPerStrip, 0x80);
+            try (RenderedPreview preview = limited.render(PreviewFormat.TIFF, new TrackedSource(tiff), budget())) {
+                assertThat(preview.pages()).hasValue(1);
+            }
+            assertFailure(limited, PreviewFormat.TIFF, DocumentPreviewFixtures.strippedGrey(64, 65, rowsPerStrip, 0x80),
+                          PreviewFailure.LIMIT_EXCEEDED);
         }
 
         @ParameterizedTest(name = "{0}")

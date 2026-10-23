@@ -174,6 +174,9 @@ class DocxRendererTest {
             assertThat(converter.findAll(anyRequestedFor(anyUrl()))).hasSize(1);
         }
 
+        // Only the 503 above depends on the one-shot body. These rows guard the client's other settings: a 408 is
+        // retried only with retryOnConnectionFailure, a 401/407 only through an authenticator, a 3xx only with
+        // redirects followed, and a 421 only on a coalesced HTTP/2 connection, which WireMock never offers.
         @ParameterizedTest(name = "{0} {1}: {2}")
         @CsvSource(delimiter = '|', value = {
             "408 | Retry-After        | 0",
