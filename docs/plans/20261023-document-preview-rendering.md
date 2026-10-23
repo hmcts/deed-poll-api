@@ -173,15 +173,15 @@ No test may quietly become a live platform or conversion-service request.
 **Files:** create `domain/documents/preview/` policy/error/configuration classes and colocated tests;
 modify `src/main/resources/application.yaml`, `README.md`, `build.gradle` as needed.
 
-- [ ] Reconcile the source-read, audit, namespace and upload-format inventory on the execution baseline;
+- [x] Reconcile the source-read, audit, namespace and upload-format inventory on the execution baseline;
       record the reviewed converter protocol reference and the Ralphex review base.
-- [ ] Write failing tests for allowlist coverage, preview limits, capacity refusal, cancellation/budget
+- [x] Write failing tests for allowlist coverage, preview limits, capacity refusal, cancellation/budget
       accounting, error/status vocabulary and unset/invalid converter configuration.
-- [ ] Implement the small configuration/policy contract and pin required parsing/image dependencies.
+- [x] Implement the small configuration/policy contract and pin required parsing/image dependencies.
       Define fixed operator endpoint/secret settings with non-working credential defaults and no secret logs.
-- [ ] Document the exact two routes, binary response/headers, errors, budgets and lack of range support;
+- [x] Document the exact two routes, binary response/headers, errors, budgets and lack of range support;
       keep this a planned contract until producer/controller publication in Task 5.
-- [ ] Prove the policy does not modify upload acceptance, original downloads or generated-deed staging.
+- [x] Prove the policy does not modify upload acceptance, original downloads or generated-deed staging.
       Run focused tests and all Validation Commands.
 
 ### Task 2: Implement PDF and image preview rendering
@@ -292,6 +292,36 @@ preview response helper, preview error DTO/handler, `OpenAPIPublisherTest` and n
 Planning only, 23 October 2026. No preview endpoint, converter integration, configuration change, new test
 run or Ralphex execution has been performed by authoring this plan. The earlier AAT document-store repair
 and its file-download smoke are not evidence that document previews exist. Append execution evidence here.
+
+### Task 1 (2026-10-23)
+
+- **Execution baseline / Ralphex review base:** `c3287d515bfafc9e1fa091a7fa96cd00d1fc605a` on
+  `feat/document-preview-rendering` (the reviewed `3891c2a` plus the two plan commits), in the isolated
+  `.worktrees/deed-poll-api-document-preview` worktree.
+- **Inventory reconciled on that baseline, unchanged from Context:** `CaseworkerDocumentController` serves
+  `GET /{documentId}/file`; `JudicialReferralController` serves `/{referralId}/documents/{documentId}/file`;
+  `DocumentService.readableDocument` is the shared ownership/readiness/store check and
+  `downloadDocument(…, CurrentUser)` records `ReadAudit.documentDownloaded` before `store.open`;
+  `CdamDocumentStore.open` reads under the caller's token with no system fallback (the system reader is separate);
+  `AuditAction` has `DOCUMENT_DOWNLOADED` and no `DOCUMENT_PREVIEWED` yet (Task 4 adds it);
+  `UploadPolicy.ALLOWED_UPLOAD_MIME_TYPES` is exactly PDF/JPEG/PNG/TIFF/DOCX at 25 MiB.
+- **Converter protocol reference:** `apps/em/em-stitching-api` at `94f456e7827b4717f69701cc10811aaa1f59ae64`,
+  `DocmosisConverter`: `POST {DOCMOSIS_ENDPOINT}` (`https://docmosis.aat.platform.hmcts.net/rs/convert`),
+  `multipart/form-data` with parts `accessKey`, `outputName` and `file`, `Accept: application/pdf`, PDF body back.
+  Here the setting is the base (`DOCMOSIS_URL`) and `/rs/convert` is appended.
+- **Dependencies:** nothing brought PDFBox before; `org.apache.pdfbox:pdfbox:3.0.8` (latest on Central) is pinned.
+  No image codec added: JDK 21 ImageIO reads JPEG, PNG and multi-image TIFF (orientation is read from the TIFF tag
+  by the Task 2 renderer, since ImageIO does not apply it).
+- **Contract:** `domain/documents/preview/` — `PreviewFormat` (one per allowlist type; only PDF takes no permit),
+  `PreviewFailure`/`PreviewError` (four codes, fixed sentences, no cause), `PreviewProperties`
+  (`deedpoll.documents.preview`, defaults 25 s / 50 MiB / 500 pages / 25 M pixels / 3 permits / 5 s Retry-After;
+  converter url+key unset by default, a set non-https base refuses startup, key redacted from `toString`;
+  connect+read must fit the budget), `PreviewBudget` (deadline, cancellation, `deadlineFor`),
+  `ConversionCapacity` (non-queuing semaphore, idempotent permit), `PreviewConfiguration`.
+  `PreviewBoundaryTest` asserts nothing in documents/staging/deeds/storage depends on the preview package.
+- **Validation:** focused preview tests 29/29; `./gradlew build` (no-checkstyle init) successful in 4m39s — test
+  4611 run, 0 skipped, 0 failed; integration 23 run, 0 skipped, 0 failed; `checkstyle.sh` OK. The known
+  intermittent `CcdCreationAttemptRepositoryTest` did not fail.
 
 ## Post-Completion
 

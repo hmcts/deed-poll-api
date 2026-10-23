@@ -399,6 +399,25 @@ deedpoll:
     # document URL outside its ccd.document.url.pattern, whose default host is dm-store:8080, and CDAM reads only the
     # last 36 characters as the document id (docs/CDAM-SEQUENCE.md section 1). Read only by the cdam store.
     document-url-base: ${DOCUMENT_URL_BASE:http://dm-store:8080}
+    # Read-only PDF previews of a supporting document (PreviewProperties). Preview limits only: the input ceiling is
+    # the upload's 25 MiB, and nothing here changes upload acceptance, original downloads or staging. A limit reached
+    # is a fixed 422, never a truncated PDF. The budget includes conversion and must end inside the gateways' 30 s.
+    preview:
+      request-budget: ${DOCUMENT_PREVIEW_REQUEST_BUDGET:25s}
+      max-output-bytes: ${DOCUMENT_PREVIEW_MAX_OUTPUT_BYTES:52428800}
+      max-pages: ${DOCUMENT_PREVIEW_MAX_PAGES:500}
+      max-frame-pixels: ${DOCUMENT_PREVIEW_MAX_FRAME_PIXELS:25000000}
+      # Non-PDF previews at once on one pod; over it is a 429 with Retry-After, never a queue.
+      max-concurrent-conversions: ${DOCUMENT_PREVIEW_MAX_CONCURRENT_CONVERSIONS:3}
+      busy-retry-after: ${DOCUMENT_PREVIEW_BUSY_RETRY_AFTER:5s}
+      # Docmosis Tornado's /rs/convert, for DOCX only, as em-stitching-api and FPL call it. Both empty by default:
+      # the service starts and a DOCX preview answers a fixed 503 until the platform provisions the endpoint
+      # (https://docmosis.<env>.platform.hmcts.net) and its access key. A url that is set must be an https base.
+      converter:
+        url: ${DOCMOSIS_URL:}
+        access-key: ${DOCMOSIS_ACCESS_KEY:}
+        connect-timeout: ${DOCMOSIS_CONNECT_TIMEOUT:3s}
+        read-timeout: ${DOCMOSIS_READ_TIMEOUT:20s}
 
 azure:
   application-insights:

@@ -576,6 +576,57 @@ the declared type is recorded. Regression tests exercise the five accepted types
 metadata against the real local store and the CDAM WireMock journey, including conflicting upstream upload
 metadata and download headers. These local tests do not establish live CDAM onboarding or malware scanning.
 
+### Document previews (planned contract)
+
+**Not yet published.** The routes below are the contract the preview plan
+([20261023-document-preview-rendering](docs/plans/20261023-document-preview-rendering.md)) builds towards; the
+configuration and limits exist, the handlers arrive in its Task 5, and until then neither path answers. A preview is
+a read-only PDF rendition for the admin viewer. It never replaces, attaches, publishes or edits the original, which
+`/file` keeps serving exactly as above.
+
+```http
+GET /caseworker/cases/{id}/documents/{documentId}/preview
+GET /judicial/referrals/{referralId}/documents/{documentId}/preview
+```
+
+The judicial route carries no case id: the case comes from the referral's visibility, as for its `/file`. Both
+authorise and open the original through the same caller-scoped read as `/file`, and record `DOCUMENT_PREVIEWED`
+fail-closed before anything is opened, once per request. A wrong case, an unknown document or a referral the judge
+cannot see is the existing 404; 401 and 403 are unchanged.
+
+A success is a complete `200` `application/pdf`, `inline` with a safe `.pdf` filename, under the download's
+`Content-Security-Policy: default-src 'none'; sandbox`, `X-Content-Type-Options: nosniff` and
+`Cache-Control: no-store`. **There is no range support**: a `Range` header is ignored and the whole bounded PDF is
+returned. PDF passes through after checks; JPEG and PNG become one page; a TIFF becomes one page per frame, in
+order; DOCX is converted by Docmosis Tornado's `/rs/convert`. Nothing is cached or stored.
+
+A preview that is not produced answers a fixed body with one of four codes, and its sentence never names the file:
+
+| Status | Code | Meaning |
+|---|---|---|
+| 422 | `PREVIEW_INVALID_DOCUMENT` | Damaged bytes, bytes that are not the stored type, or a stored type with no preview (e.g. legacy `.doc`) |
+| 422 | `PREVIEW_LIMIT_EXCEEDED` | A page, pixel, output or time limit below was reached; nothing partial is returned |
+| 503 | `PREVIEW_UNAVAILABLE` | The DOCX converter is unconfigured, unreachable, or did not return a complete PDF |
+| 429 | `PREVIEW_BUSY` | Every conversion permit on this pod is in use; `Retry-After` says when to try again |
+
+Every failure leaves the original download working. The limits are preview limits only: none of them changes upload
+acceptance, original downloads or the staging cap.
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `DOCUMENT_PREVIEW_REQUEST_BUDGET` | `25s` | The whole request, conversion included; must be under the gateways' 30 s |
+| `DOCUMENT_PREVIEW_MAX_OUTPUT_BYTES` | `52428800` (50 MiB) | Largest preview PDF served. The input ceiling is the upload's 25 MiB and is not configurable here |
+| `DOCUMENT_PREVIEW_MAX_PAGES` | `500` | Most pages in one preview |
+| `DOCUMENT_PREVIEW_MAX_FRAME_PIXELS` | `25000000` | Most decoded pixels in one image or TIFF frame, checked before decoding |
+| `DOCUMENT_PREVIEW_MAX_CONCURRENT_CONVERSIONS` | `3` | Non-PDF previews at once per pod; there is no queue |
+| `DOCUMENT_PREVIEW_BUSY_RETRY_AFTER` | `5s` | `Retry-After` on `PREVIEW_BUSY`, between 1 and 60 s |
+| `DOCMOSIS_URL` | empty | Converter base, e.g. `https://docmosis.<env>.platform.hmcts.net`. Empty is unconfigured; a set value that is not an `https` base refuses startup |
+| `DOCMOSIS_ACCESS_KEY` | empty | Tornado access key, sent only in the request body; never logged |
+| `DOCMOSIS_CONNECT_TIMEOUT` / `DOCMOSIS_READ_TIMEOUT` | `3s` / `20s` | Together within the request budget, and never longer than what is left of it |
+
+With either Docmosis setting empty the service starts as normal and only a DOCX preview answers
+`PREVIEW_UNAVAILABLE`, after its caller is authorised.
+
 ## Plugins
 
 The project contains the following plugins:
