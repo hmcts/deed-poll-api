@@ -79,7 +79,7 @@ Do not change it or anything under `ccd/`.
 
 **Files:** `DocxRenderer.java` and its tests.
 
-- [ ] Add the failing `Retry-After: 0` test and any other follow-up cases found, then fix. Run focused tests and all
+- [x] Add the failing `Retry-After: 0` test and any other follow-up cases found, then fix. Run focused tests and all
       Validation Commands, and record the results.
 
 ### Task 3: Record and hand off
@@ -136,6 +136,21 @@ branch `feat/document-preview-rendering`, clean.
 - *Validation:* `./gradlew build` (init script) passed: `test` 4,801 tests, 0 failed, 1 skipped (the env-gated fixture
   regeneration); `integration` 24, 0 failed. `checkstyle.sh` flagged two single-line Javadocs in the fixtures, fixed;
   then OK, and the fixtures test re-run green.
+
+**Task 2 (Docmosis is sent at most once).**
+- *Fix.* `DocxRenderer` wraps the multipart body in `OneShot`, a delegating `RequestBody` whose `isOneShot()` is
+  true. OkHttp 4.12's `RetryAndFollowUpInterceptor` returns the response rather than sending a follow-up whose body
+  is one-shot, and its connection-failure recovery refuses one-shot bodies too. `retryOnConnectionFailure(false)`,
+  refused redirects and `Proxy.NO_PROXY` are kept.
+- *Other follow-ups checked.* `408` is already refused by `retryOnConnectionFailure(false)` (and by one-shot); `421`
+  is retried only on a coalesced HTTP/2 connection and never for a one-shot body; `401`/`407` use the default
+  `Authenticator.NONE` (and `407` without a proxy is a `ProtocolException`); `3xx` is refused by
+  `followRedirects(false)`. Each is a parameterised case (`noFollowUp`: 408, 421, 401, 407, 300, 301, 302, 303, 307,
+  308) asserting one request and `PREVIEW_UNAVAILABLE`.
+- *Red:* only `noReplayOfAnImmediateRetry` (503, `Retry-After: 0`) failed before the fix; the follow-up cases were
+  already single sends and now pin it. *Green:* every `documents.preview` test passes.
+- *Validation:* `./gradlew build` (init script) passed: `test` 4,812 tests, 0 failed, 1 skipped (the env-gated fixture
+  regeneration); `integration` 24, 0 failed. `checkstyle.sh` OK.
 
 ## Post-Completion
 

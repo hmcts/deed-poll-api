@@ -8,6 +8,7 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
+import okio.BufferedSink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
@@ -30,9 +31,9 @@ import java.time.Duration;
  * {@code accessKey}, {@code outputName} and {@code file}, {@code Accept: application/pdf} -- with what that class
  * does not do. The file goes as {@code document.docx} under the DOCX type and the output is always
  * {@code preview.pdf}, so no original filename leaves the service. It is posted only to the configured endpoint,
- * once: no retry, because a conversion whose answer was lost is ambiguous, and no redirect, because a
- * {@code Location} is not an endpoint anybody configured. Connect, read and the whole call are each bounded by what is
- * left of the budget.
+ * once: no retry, because a conversion whose answer was lost is ambiguous (so the body is one-shot, and no answer
+ * invites OkHttp to resend it), and no redirect, because a {@code Location} is not an endpoint anybody configured.
+ * Connect, read and the whole call are each bounded by what is left of the budget.
  *
  * <p>Before anything is sent, the DOCX is held to {@link UploadContentPolicy} as an upload is, so a malformed,
  * encrypted or active package -- which can only be an old row -- is refused here as an invalid document and never
@@ -106,11 +107,11 @@ final class DocxRenderer implements SourceRenderer {
         Request request = new Request.Builder()
             .url(converter.convertUri().toString())
             .header("Accept", PDF)
-            .post(new MultipartBody.Builder().setType(MultipartBody.FORM)
+            .post(new OneShot(new MultipartBody.Builder().setType(MultipartBody.FORM)
                       .addFormDataPart("accessKey", converter.accessKey())
                       .addFormDataPart("outputName", OUTPUT_NAME)
                       .addFormDataPart("file", SOURCE_NAME, RequestBody.create(source.toFile(), DOCX))
-                      .build())
+                      .build()))
             .build();
         Duration read = atLeastOne(budget.deadlineFor(converter.readTimeout()));
         Call call = transport.newBuilder()
@@ -200,6 +201,40 @@ final class DocxRenderer implements SourceRenderer {
 
     private static boolean isWhitespace(byte value) {
         return value == 0 || value == 9 || value == 10 || value == 12 || value == 13 || value == 32;
+    }
+
+    /**
+     * The multipart body, marked as one that cannot be sent twice. {@code retryOnConnectionFailure(false)} stops
+     * OkHttp replaying after a dropped connection, but not after a {@code 503} with {@code Retry-After: 0}, which its
+     * follow-up interceptor resends for any replayable body. A one-shot body is never resent, whatever the answer.
+     */
+    private static final class OneShot extends RequestBody {
+
+        private final RequestBody body;
+
+        OneShot(RequestBody body) {
+            this.body = body;
+        }
+
+        @Override
+        public MediaType contentType() {
+            return body.contentType();
+        }
+
+        @Override
+        public long contentLength() throws IOException {
+            return body.contentLength();
+        }
+
+        @Override
+        public void writeTo(BufferedSink sink) throws IOException {
+            body.writeTo(sink);
+        }
+
+        @Override
+        public boolean isOneShot() {
+            return true;
+        }
     }
 
     /** OkHttp reads a zero timeout as none at all, so what is left of the budget is never rounded down to it. */

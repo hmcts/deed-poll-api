@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
@@ -162,6 +163,36 @@ class DocxRendererTest {
             converter.stubFor(post(urlPathEqualTo("/elsewhere")).willReturn(pdf(DocumentPreviewFixtures.pdf())));
             assertFailure(PreviewFailure.UNAVAILABLE);
             assertThat(converter.findAll(postRequestedFor(urlPathEqualTo("/elsewhere")))).isEmpty();
+        }
+
+        @Test
+        @DisplayName("goes once when the converter answers 503 with Retry-After: 0, which OkHttp would replay")
+        void noReplayOfAnImmediateRetry() {
+            converter.stubFor(post(urlPathEqualTo(CONVERT))
+                .willReturn(aResponse().withStatus(503).withHeader("Retry-After", "0")));
+            assertFailure(PreviewFailure.UNAVAILABLE);
+            assertThat(converter.findAll(anyRequestedFor(anyUrl()))).hasSize(1);
+        }
+
+        @ParameterizedTest(name = "{0} {1}: {2}")
+        @CsvSource(delimiter = '|', value = {
+            "408 | Retry-After        | 0",
+            "421 | Content-Type       | text/plain",
+            "401 | WWW-Authenticate   | Basic realm=\"tornado\"",
+            "407 | Proxy-Authenticate | Basic realm=\"proxy\"",
+            "300 | Location           | /rs/convert",
+            "301 | Location           | /rs/convert",
+            "302 | Location           | /rs/convert",
+            "303 | Location           | /rs/convert",
+            "307 | Location           | /rs/convert",
+            "308 | Location           | /rs/convert",
+        })
+        @DisplayName("goes once whatever follow-up the answer invites: a timeout, a misdirect, a challenge, a redirect")
+        void noFollowUp(int status, String header, String value) {
+            converter.stubFor(post(urlPathEqualTo(CONVERT))
+                .willReturn(aResponse().withStatus(status).withHeader(header, value)));
+            assertFailure(PreviewFailure.UNAVAILABLE);
+            assertThat(converter.findAll(anyRequestedFor(anyUrl()))).hasSize(1);
         }
     }
 
