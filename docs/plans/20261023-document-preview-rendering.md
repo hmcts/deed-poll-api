@@ -12,6 +12,30 @@ This is the producer companion to the admin
 Implement/review this repository independently and publish its OpenAPI artifact before the admin adapter
 task. The approved visual reference lives in the admin repository; its sample pages are not conversion code.
 
+## Decisions (Steve, 2026-10-23)
+
+These supersede anything below that says otherwise.
+
+1. **DOCX converts through Docmosis Tornado's `/rs/convert`**, bytes in and PDF out, with `DOCMOSIS_ACCESS_KEY`
+   and a `https://docmosis.<env>.platform.hmcts.net` endpoint as configuration. It is an established HMCTS pattern:
+   `em-stitching-api` (`docmosis.convert.endpoint`, `DocmosisConverter`) and FPL (`DocumentConversionService`) both
+   call it directly. `dg-docassembly-api`'s `POST /api/convert/{documentId}` was considered and not chosen, because
+   it fetches from dm-store and so needs CDAM, which is still off by default here.
+2. **The request budget is 25 seconds, not 45**, conversion included. Both Application Gateways cut a request off at
+   30 s (admin review finding R03), so a longer budget ends on the gateway's error page instead of this service's
+   fixed `PREVIEW_UNAVAILABLE`. Set connect/read deadlines inside 25 s.
+3. **Phased release is acceptable.** PDF, JPEG, PNG and TIFF previews are rendered in this service and may be
+   released first. DOCX ships in the same code, and answers the fixed 503 `PREVIEW_UNAVAILABLE` until the converter
+   is provisioned; the original download keeps working. Releasing does not wait for converter provisioning.
+4. **A preview is audited as its own action.** Add `AuditAction.DOCUMENT_PREVIEWED`, recorded through `ReadAudit`
+   exactly as `DOCUMENT_DOWNLOADED` is (fail-closed, once per preview request, before bytes are opened), so the
+   trail distinguishes a preview from a download. `AuditAction` is a vocabulary with no database check constraint,
+   so this needs no migration; never rename an existing member.
+5. **A few conversions per pod, not one.** Default `3` concurrent non-PDF conversions per API pod, configurable. The
+   chart sets no resources, so pods get the HMCTS Java chart defaults (about 2 GiB, heap about 65 % of it); within the
+   pixel and output limits below, three concurrent conversions fit. Record the worst-case heap estimate in the
+   execution notes, and reduce the default if a test shows otherwise.
+
 ## Context
 
 Reviewed API baseline: `3891c2ad77557b1f156ff88c4c4235e275e8b663`; admin baseline:
@@ -80,8 +104,8 @@ cftlib conventions. No accepted document, original binary, CCD attachment or not
    A successful response is `application/pdf`, with a safe `.pdf` preview filename,
    `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and inert PDF sandbox policy. The judicial
    route carries no case ID; it resolves the case through the existing visibility check.
-3. Authorize and open the original through the existing caller-scoped path. Preserve the download read audit
-   before opening bytes, once per preview request, and the existing fail-closed behaviour. Thumbnails/page
+3. Authorize and open the original through the existing caller-scoped path. Record a `DOCUMENT_PREVIEWED` read audit (Decision 4)
+   before opening bytes, once per preview request, with the existing fail-closed behaviour. Thumbnails/page
    changes are browser rendering of that PDF and must not create extra server reads/audit events per page.
    Never use system credentials because a judge/caseworker download was refused.
 4. Generate a transient representation on demand. GET changes no business state and writes no derivative to
@@ -96,9 +120,9 @@ cftlib conventions. No accepted document, original binary, CCD attachment or not
    before adding PDFBox and an image codec. Do not edit court Word templates or vendored reference source.
    Preserve image aspect ratio and avoid needless JPEG recompression; no cropping or silent first-frame TIFF.
 7. Publish/test bounded engineering defaults: existing 25 MiB input ceiling, 50 MiB preview output ceiling,
-   500 pages, 25 million decoded pixels per image frame and one active non-PDF conversion per API pod without
-   an in-memory queue. Check metadata before allocating raster memory and process TIFF frames sequentially.
-   A 45-second request budget includes conversion; configure connect/read deadlines within it and stop
+   500 pages, 25 million decoded pixels per image frame and three active non-PDF conversions per API pod (configurable,
+   Decision 5) without an in-memory queue. Check metadata before allocating raster memory and process TIFF frames sequentially.
+   A 25-second request budget (Decision 2) includes conversion; configure connect/read deadlines within it and stop
    further work after cancellation. Keep the concurrency permit until resources/work are actually finished.
    These are preview-resource limits, not changes to upload acceptance or the generated-deed staging cap.
 8. Expose resource limits and timeout semantics in OpenAPI (a single `x-document-preview-limits` extension
@@ -120,11 +144,21 @@ cftlib conventions. No accepted document, original binary, CCD attachment or not
 Run from this API repository root before implementation and after each implementation task:
 
 ```bash
-export TESTCONTAINERS_RYUK_DISABLED=true
-./gradlew test
-./gradlew integration
-./gradlew checkstyleMain checkstyleTest
+export JAVA_TOOL_OPTIONS=-XX:UseSVE=0 TESTCONTAINERS_RYUK_DISABLED=true
+./gradlew build -I /home/hmcts/.claude/jobs/c45dad71/tmp/no-checkstyle.gradle --console=plain
+/home/hmcts/.claude/jobs/c45dad71/tmp/checkstyle.sh .
 ```
+
+`build` runs compile, `test` and `integration`. This devcontainer's JVM needs `-XX:UseSVE=0`, and Gradle's
+Checkstyle worker ignores it and crashes with SIGILL, so the init script disables the Checkstyle tasks and
+`checkstyle.sh` runs the same jar and config over every source set, failing on any `[WARN]` or `[ERROR]`. Jenkins
+runs the real Checkstyle tasks. Do not edit, move or commit either helper. Run every build and test command in the
+foreground and wait for it: a backgrounded build ends the session and the next one builds over it.
+
+**Known intermittent test, already on master:** `CcdCreationAttemptRepositoryTest` "an attempt that ran out of tries
+on refusals may be retried from scratch, which clears the proof" fails occasionally in a full build. If it fails,
+re-run it alone with `--tests '*CcdCreationAttemptRepositoryTest' --rerun`; if it passes, record that and carry on.
+Do not change it or anything under `ccd/`.
 
 Use Java 21 and the repository wrapper. Preserve the machine-specific `JAVA_TOOL_OPTIONS=-XX:UseSVE=0`
 workaround only where required. Reuse the repo's documented Docker bridge/Testcontainers setup. Run focused
@@ -266,6 +300,6 @@ vault/Flux infrastructure, confirming data-handling and maximum valid upload-siz
 with synthetic PDF/JPEG/PNG, a true multi-frame TIFF and representative generated DOCX; compare converted
 layout/fonts/page count to the original's expected print layout. Exercise original downloads, access
 denials, separate replicas, a restart and converter outage/limits. Keep the original download available on
-preview failure and resolve any format gap before releasing the admin viewer. Publish/review/merge/deploy
+preview failure. Per Decision 3, a DOCX gap does not block releasing PDF/image/TIFF previews. Publish/review/merge/deploy
 separately from local execution; deploy the producer and converter before the consumer. Move this plan to
 `docs/plans/completed/` after implementation and review.
