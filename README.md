@@ -585,7 +585,8 @@ Two operations, one per surface, from the preview plan
 ([20261023-document-preview-rendering](docs/plans/completed/20261023-document-preview-rendering.md)), revised by its
 review fixes ([20261023-document-preview-review-fixes](docs/plans/completed/20261023-document-preview-review-fixes.md))
 the second review's ([20261023-document-preview-review-fixes-2](docs/plans/completed/20261023-document-preview-review-fixes-2.md))
-and the third's ([20261023-document-preview-review-fixes-3](docs/plans/completed/20261023-document-preview-review-fixes-3.md)),
+the third's ([20261023-document-preview-review-fixes-3](docs/plans/completed/20261023-document-preview-review-fixes-3.md))
+and the fourth's ([20261024-document-preview-review-fixes-4](docs/plans/completed/20261024-document-preview-review-fixes-4.md)),
 and counted apart from
 both surfaces' totals (`previewCaseDocument`, `previewReferralDocument`). A preview is a read-only PDF rendition for
 the admin viewer. It never replaces, attaches, publishes or edits the original, which
@@ -632,8 +633,13 @@ counts towards that same total, because the JDK's decompressors read each strip'
 offset points, so strips aliasing one payload cannot multiply the reads either; strip or tile offsets without byte
 counts are refused. SubIFDs are refused; EXIF, GPS and
 Interoperability pointers are followed and bounded identically. **JPEG-compressed TIFFs (Compression 6 and 7) are
-deliberately not previewed**: they answer `PREVIEW_INVALID_DOCUMENT`, the viewer shows its preview-unavailable state,
-and the original still downloads; uploads are unaffected. Every other refusal here is also `PREVIEW_INVALID_DOCUMENT`. PDFBox builds only the image
+deliberately not previewed**, and neither is any TIFF carrying JPEG data under another declared compression: a
+directory holding `JPEGTables` (347) or any old-style JPEG tag (512–521, e.g. `JPEGInterchangeFormat`) is refused
+whatever its `Compression`, because the JDK reader would otherwise parse the JPEG stream outside this accounting to
+recover missing dimensions. For the same reason every frame must carry `ImageWidth`, `ImageLength` and
+`SamplesPerPixel`; every other tag the reader can miss gets a fixed default and reads nothing
+([20261024-document-preview-review-fixes-4](docs/plans/completed/20261024-document-preview-review-fixes-4.md)). These answer `PREVIEW_INVALID_DOCUMENT`, the viewer
+shows its preview-unavailable state, and the original still downloads; uploads are unaffected. Every other refusal here is also `PREVIEW_INVALID_DOCUMENT`. PDFBox builds only the image
 and TIFF previews, which are the service's own output. Nothing is cached or stored.
 
 A preview that is not produced answers `{"error": "<fixed sentence>", "code": "<code>"}` (`DocumentPreviewError`,
@@ -642,7 +648,7 @@ Every refusal is JSON even to a client that sent `Accept: application/pdf`:
 
 | Status | Code | Meaning |
 |---|---|---|
-| 422 | `PREVIEW_INVALID_DOCUMENT` | Damaged bytes, bytes that are not the stored type, a stored type with no preview (e.g. legacy `.doc`), a TIFF whose structure fails the pre-decode check, or a JPEG-compressed TIFF (Compression 6/7, deliberately not previewed) |
+| 422 | `PREVIEW_INVALID_DOCUMENT` | Damaged bytes, bytes that are not the stored type, a stored type with no preview (e.g. legacy `.doc`), a TIFF whose structure fails the pre-decode check, a JPEG-compressed TIFF (Compression 6/7) or a TIFF carrying a JPEG tag (deliberately not previewed), or a TIFF frame without its dimension tags |
 | 422 | `PREVIEW_LIMIT_EXCEEDED` | A page, pixel, output or time limit below was reached; nothing partial is returned |
 | 503 | `PREVIEW_UNAVAILABLE` | The DOCX converter is unconfigured, unreachable, or did not return a complete PDF |
 | 429 | `PREVIEW_BUSY` | Every conversion permit on this pod is in use; `Retry-After` says when to try again |

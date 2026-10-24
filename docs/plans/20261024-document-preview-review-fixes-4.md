@@ -82,9 +82,9 @@ Do not change it or anything under `ccd/`.
 
 **Files:** `README.md`, `docs/DOCUMENT-PREVIEW-SMOKE.md`, `CLAUDE.md`, this plan.
 
-- [ ] Update the docs. **Reference this plan by its `docs/plans/completed/` path**, since that is where it will be
+- [x] Update the docs. **Reference this plan by its `docs/plans/completed/` path**, since that is where it will be
       once the run ends.
-- [ ] Run `./gradlew cftlibTest --no-watch-fs` and all Validation Commands; record final commits and counts, and hand
+- [x] Run `./gradlew cftlibTest --no-watch-fs` and all Validation Commands; record final commits and counts, and hand
       off to the Ralphex review phases.
 
 ## Acceptance Criteria
@@ -122,6 +122,17 @@ Do not change it or anything under `ccd/`.
 - Red: the new tests against the baseline `TiffStructure`: 120 tests, 17 failed (all the new or rewritten ones).
 - Green: focused `*.preview.*` 242 tests, 1 skipped (the opt-in fixture regeneration), 0 failed. Full `build`
   BUILD SUCCESSFUL: `test` 4863 (1 skipped, the same), `integration` 24, 0 failures. `checkstyle.sh`: OK.
+
+**Task 2.**
+- Docs: `README.md`'s Document previews section (the plan list, the TIFF structure paragraph and the 422 row),
+  `docs/DOCUMENT-PREVIEW-SMOKE.md` (the plan list and the JPEG-compressed TIFF check) and `CLAUDE.md`'s preview bullet
+  now describe the JPEG-tag refusal and the dimension-tag requirement, citing
+  `docs/plans/completed/20261024-document-preview-review-fixes-4.md`. No OpenAPI change, so the published contract and
+  the smoke page's producer-source hash are unchanged.
+- Final validation: `build` BUILD SUCCESSFUL, `test` 4863 (1 skipped, the opt-in fixture regeneration), `integration`
+  24, 0 failures; `checkstyle.sh`: OK; `cftlibTest --no-watch-fs` BUILD SUCCESSFUL, 21 tests, 0 skipped, 0 failed.
+  The known intermittent `CcdCreationAttemptRepositoryTest` did not fail.
+- Commits: Task 1 `7c8b6f9`; Task 2 is the commit that records this note. Handed off to the Ralphex review phases.
 
 ## Post-Completion
 

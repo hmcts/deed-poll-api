@@ -2,8 +2,9 @@
 
 Prepared for [the preview plan](plans/completed/20261023-document-preview-rendering.md) and revised by
 [its review fixes](plans/completed/20261023-document-preview-review-fixes.md), the
-[second](plans/completed/20261023-document-preview-review-fixes-2.md) and the
-[third](plans/completed/20261023-document-preview-review-fixes-3.md). **Not run.** Nothing below has
+[second](plans/completed/20261023-document-preview-review-fixes-2.md), the
+[third](plans/completed/20261023-document-preview-review-fixes-3.md) and the
+[fourth](plans/completed/20261024-document-preview-review-fixes-4.md). **Not run.** Nothing below has
 been provisioned or exercised in a deployed environment: the Docmosis endpoint, its access key and its fonts are
 not configured anywhere this chart deploys, and every automated test uses local files, WireMock or the local-only
 cftlib stack. The routes, headers, errors and limits are in the README's
@@ -97,7 +98,9 @@ none of this.
    - TIFF: one page per frame, in frame order, the portrait frame upright on its own page.
    - A JPEG-compressed TIFF (Compression 7, as many scanners write; prepare one): `422 PREVIEW_INVALID_DOCUMENT`,
      and its `/file` still downloads. This is deliberate, not a fault: a TIFF's structure is checked before any
-     decode, and JPEG-compressed TIFFs are not previewed. Uploads accept it as before.
+     decode, and JPEG-compressed TIFFs are not previewed. Uploads accept it as before. The same answer holds for a
+     TIFF carrying any JPEG tag (347, 512–521) under another compression, and for a frame missing `ImageWidth`,
+     `ImageLength` or `SamplesPerPixel` ([fourth review](plans/completed/20261024-document-preview-review-fixes-4.md)).
    - DOCX: compare with the Word-printed reference, page by page: page count, page breaks, the table, the image,
      headers/footers, and the fonts. **This is the only check of layout fidelity anywhere**; record differences.
    - Download `/file` for each and compare its SHA-256 with the uploaded one.

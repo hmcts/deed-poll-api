@@ -405,7 +405,10 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   SubIFDs refused, EXIF/GPS/Interop bounded identically; `PreviewRendererTest.structureRefusedBeforeImageIo` proves
   it with a static mock), **JPEG-compressed TIFFs (Compression 6 and 7) are deliberately not previewed** and answer
   `PREVIEW_INVALID_DOCUMENT` (download the original instead; enabling them is a reviewed change, not a fix —
-  `docs/plans/completed/20261023-document-preview-review-fixes-3.md`), a TIFF's orientation comes from `TiffOrientation`, never
+  `docs/plans/completed/20261023-document-preview-review-fixes-3.md`), and nor is JPEG data under any other
+  compression: `TiffStructure` refuses `JPEGTables` (347) and tags 512–521 in every directory, and a frame without
+  `ImageWidth`/`ImageLength`/`SamplesPerPixel`, because the JDK reader recovers those by parsing the JPEG stream
+  outside the byte accounting (`docs/plans/completed/20261024-document-preview-review-fixes-4.md`), a TIFF's orientation comes from `TiffOrientation`, never
   `getImageMetadata` (a DOM copy of every strip offset; `PreviewBoundaryTest.noImageMetadataTree`); and the Docmosis
   body is one-shot, so OkHttp cannot resend it on a `503 Retry-After: 0`
   (`docs/plans/completed/20261023-document-preview-review-fixes-2.md`). The request thread does the conversion and
