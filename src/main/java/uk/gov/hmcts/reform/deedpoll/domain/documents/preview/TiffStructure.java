@@ -43,8 +43,11 @@ import javax.imageio.IIOException;
  *
  * <p>JPEG-compressed TIFFs, old-style (Compression 6) and JPEG (7), are refused here too, deliberately: the JDK's
  * JPEG-in-TIFF path, with its per-packet headers, JPEGTables and JPEGInterchangeFormat fallback, is its most complex
- * and least trusted, and is not previewed rather than defended. The original still downloads. Allowing it again is a
- * self-contained change, made with its own checks, once a business case for it exists.
+ * and least trusted, and is not previewed rather than defended. So is any directory carrying JPEGTables or an
+ * old-style JPEG tag (512 to 521), whatever its Compression says, and any frame missing ImageWidth, ImageLength or
+ * SamplesPerPixel: an uncompressed frame missing one makes the JDK run its JPEG reader over JPEGInterchangeFormat to
+ * recover it, ignoring the declared length, outside everything counted above. The original still downloads. Allowing
+ * any of it again is a self-contained change, made with its own checks, once a business case for it exists.
  */
 final class TiffStructure {
 
@@ -73,6 +76,12 @@ final class TiffStructure {
     private static final int TILE_BYTE_COUNTS = 325;
     private static final int JPEG_INTERCHANGE_FORMAT = 513;
     private static final int JPEG_INTERCHANGE_FORMAT_LENGTH = 514;
+    /** JPEGTables, and the old-style JPEG tags from JPEGProc to JPEGACTables. */
+    private static final int JPEG_TABLES = 347;
+    private static final int FIRST_OLD_JPEG_TAG = 512;
+    private static final int LAST_OLD_JPEG_TAG = 521;
+    /** ImageWidth, ImageLength and SamplesPerPixel: the dimensions the JDK would otherwise recover from a JPEG. */
+    private static final Set<Integer> DIMENSIONS = Set.of(256, 257, 277);
     private static final int OLD_JPEG = 6;
     private static final int JPEG = 7;
     private static final int SUB_IFDS = 330;
@@ -172,6 +181,8 @@ final class TiffStructure {
         Set<Integer> pointerTags = new HashSet<>();
         boolean offsets = false;
         boolean byteCounts = false;
+        boolean jpegTag = false;
+        Set<Integer> dimensions = new HashSet<>();
         for (int entry = 0; entry < entries; entry++) {
             int at = entry * ENTRY;
             int tag = table.getShort(at) & 0xFFFF;
@@ -208,6 +219,20 @@ final class TiffStructure {
                 byteCounts = true;
                 imageData(type, count, bytes, table, at + 8, value);
             }
+            jpegTag |= tag == JPEG_TABLES || tag >= FIRST_OLD_JPEG_TAG && tag <= LAST_OLD_JPEG_TAG;
+            if (DIMENSIONS.contains(tag)) {
+                dimensions.add(tag);
+            }
+        }
+        // Refused once every entry's bounds are checked, so a JPEG tag gets no exemption from the rules above.
+        if (jpegTag) {
+            throw new IIOException("TIFF JPEG tag");
+        }
+        // Missing one of these, a frame with a JPEGInterchangeFormat sends the JDK to its JPEG reader to recover it.
+        // That tag is refused already; requiring the three as well leaves the reader no reason to look. Every other
+        // tag the JDK finds missing it replaces with a constant, reading nothing (TIFFImageReader, JDK 21).
+        if (depth == 0 && dimensions.size() != DIMENSIONS.size()) {
+            throw new IIOException("TIFF frame without its dimensions");
         }
         if (offsets && !byteCounts) {
             throw new IIOException("TIFF image data without byte counts");

@@ -266,14 +266,49 @@ class TiffStructureTest {
     }
 
     @Test
-    @DisplayName("the JDK's JPEGInterchangeFormat fallbacks count as offsets and byte counts, whatever the compression")
+    @DisplayName("JPEGInterchangeFormat and its length are refused whatever the compression, once their bounds pass")
     void jpegInterchangeFormat() {
-        assertPasses(withImageData(base(), 514, LONG, 256));
+        assertRefused(withImageData(base(), 514, LONG, 256), "TIFF JPEG tag");
+        assertRefused(retagged(base(), 273, 513), "TIFF JPEG tag");
+        assertRefused(withImageData(retagged(base(), 273, 513), PRIVATE, LONG, 256), "TIFF JPEG tag");
+        // The length still counts as image data, and is held to the file before the tag is refused.
         byte[] tiff = base();
         assertRefused(withImageData(tiff, 514, LONG, tiff.length), "TIFF image data cover more than the file");
-        assertRefused(withImageData(retagged(base(), 273, 513), PRIVATE, LONG, 256),
-                      "TIFF image data without byte counts");
-        assertPasses(retagged(base(), 273, 513));
+    }
+
+    @Test
+    @DisplayName("the fourth review's layout is refused: Compression 1, no SamplesPerPixel, a JPEGInterchangeFormat")
+    void uncompressedWithJpegInterchange() {
+        assertRefused(DocumentPreviewFixtures.uncompressedWithJpegInterchange(new byte[64]), "TIFF JPEG tag");
+    }
+
+    @ParameterizedTest(name = "tag {0}")
+    @ValueSource(ints = {347, 512, 513, 514, 515, 516, 517, 518, 519, 520, 521})
+    @DisplayName("JPEGTables or an old-style JPEG tag is refused alone, in an uncompressed frame or its EXIF directory")
+    void jpegTags(int tag) {
+        assertRefused(withLeadingEntry(base(), entry(tag, SHORT, 1, 0), new byte[0]), "TIFF JPEG tag");
+        byte[] tiff = base();
+        assertRefused(withLeadingEntry(tiff, entry(EXIF_IFD, LONG, 1, tiff.length + 12L),
+                                       directory(List.of(entry(tag, SHORT, 1, 0)))),
+                      "TIFF JPEG tag");
+        // In the second frame of a JDK-written TIFF whose first frame is ordinary.
+        byte[] two = DocumentPreviewFixtures.tiff(List.of(new Frame(16, 16, RED, "LZW", 1),
+                                                          new Frame(16, 16, BLUE, "LZW", 1)));
+        ByteBuffer buffer = ByteBuffer.wrap(two).order(byteOrder(two));
+        long second = Integer.toUnsignedLong(buffer.getInt(nextOffsetAt(two, buffer.getInt(4))));
+        assertRefused(retaggedAt(two, second, 262, tag), "TIFF JPEG tag");
+    }
+
+    @ParameterizedTest(name = "tag {0}")
+    @ValueSource(ints = {256, 257, 277})
+    @DisplayName("a frame missing ImageWidth, ImageLength or SamplesPerPixel is refused, in any frame")
+    void dimensions(int tag) {
+        assertRefused(DocumentPreviewFixtures.without(base(), tag), "TIFF frame without its dimensions");
+        byte[] two = DocumentPreviewFixtures.tiff(List.of(new Frame(16, 16, RED, "LZW", 1),
+                                                          new Frame(16, 16, BLUE, "LZW", 1)));
+        ByteBuffer buffer = ByteBuffer.wrap(two).order(byteOrder(two));
+        long second = Integer.toUnsignedLong(buffer.getInt(nextOffsetAt(two, buffer.getInt(4))));
+        assertRefused(retaggedAt(two, second, tag, PRIVATE), "TIFF frame without its dimensions");
     }
 
     @ParameterizedTest(name = "Compression {0}")
@@ -430,6 +465,21 @@ class TiffStructureTest {
         byte[] copy = tiff.clone();
         ByteBuffer buffer = ByteBuffer.wrap(copy).order(byteOrder(copy));
         for (int at = 10; at < nextOffsetAt(copy, 8); at += 12) {
+            if ((buffer.getShort(at) & 0xFFFF) == from) {
+                buffer.putShort(at, (short) to);
+                return copy;
+            }
+        }
+        throw new IllegalStateException("no entry tagged " + from);
+    }
+
+    /**
+     * {@code tiff} with the entry tagged {@code from} in the directory at {@code directory} retagged {@code to}.
+     */
+    private static byte[] retaggedAt(byte[] tiff, long directory, int from, int to) {
+        byte[] copy = tiff.clone();
+        ByteBuffer buffer = ByteBuffer.wrap(copy).order(byteOrder(copy));
+        for (int at = (int) directory + 2; at < nextOffsetAt(copy, directory); at += 12) {
             if ((buffer.getShort(at) & 0xFFFF) == from) {
                 buffer.putShort(at, (short) to);
                 return copy;

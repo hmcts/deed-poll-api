@@ -361,6 +361,33 @@ final class DocumentPreviewFixtures {
         return out.array();
     }
 
+    /**
+     * {@code tiff}, a one-directory little-endian TIFF, with its entry tagged {@code tag} retagged as a private tag,
+     * so the directory no longer holds {@code tag} and nothing else moves.
+     */
+    static byte[] without(byte[] tiff, int tag) {
+        byte[] copy = tiff.clone();
+        ByteBuffer buffer = ByteBuffer.wrap(copy).order(ByteOrder.LITTLE_ENDIAN);
+        int entries = buffer.getShort(8) & 0xFFFF;
+        for (int at = 10; at < 10 + entries * 12; at += 12) {
+            if ((buffer.getShort(at) & 0xFFFF) == tag) {
+                buffer.putShort(at, (short) 65_100);
+                return copy;
+            }
+        }
+        throw new IllegalStateException("no entry tagged " + tag);
+    }
+
+    /**
+     * The fourth review's layout: a 16 by 16 grey uncompressed strip (Compression 1) with no SamplesPerPixel, and a
+     * JPEGInterchangeFormat naming {@code jpeg}, appended after the strip, with a JPEGInterchangeFormatLength of one
+     * byte. The JDK would run its JPEG reader over {@code jpeg} to recover the missing dimension, whatever the length.
+     */
+    static byte[] uncompressedWithJpegInterchange(byte[] jpeg) {
+        byte[] tiff = without(strippedGrey(16, 16, null, 0x80), 277);
+        return withLeadingEntries(tiff, List.of(entry(513, 4, 1, tiff.length + 24L), entry(514, 4, 1, 1)), jpeg);
+    }
+
     /** One little-endian twelve-byte directory entry. */
     static byte[] entry(int tag, int type, long count, long value) {
         return ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN).putShort((short) tag).putShort((short) type)

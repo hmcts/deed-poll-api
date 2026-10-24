@@ -615,7 +615,13 @@ class PreviewRendererTest {
                                                          new byte[0]),
                 selfLoop,
                 DocumentPreviewFixtures.strippedGrey(64, 64, 64, OLD_JPEG, greyJpeg(64, 64, 64, 64)),
-                DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, greyJpeg(64, 64, 64, 64)));
+                DocumentPreviewFixtures.strippedGrey(64, 64, 64, JPEG, greyJpeg(64, 64, 64, 64)),
+                DocumentPreviewFixtures.uncompressedWithJpegInterchange(greyJpeg(64, 64, 64, 64)),
+                DocumentPreviewFixtures.withLeadingEntry(tiff, DocumentPreviewFixtures.entry(347, 7, 4, 0),
+                                                         new byte[0]),
+                DocumentPreviewFixtures.without(tiff, 256),
+                DocumentPreviewFixtures.without(tiff, 257),
+                DocumentPreviewFixtures.without(tiff, 277));
             byte[] tooManyFrames = DocumentPreviewFixtures.tiff(Collections.nCopies(
                 PreviewProperties.MAX_PAGES + 1, new Frame(16, 16, GREEN, null, 1)));
             try (MockedStatic<ImageIO> imageIo = Mockito.mockStatic(ImageIO.class);

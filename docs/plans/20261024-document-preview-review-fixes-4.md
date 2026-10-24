@@ -74,8 +74,8 @@ Do not change it or anything under `ccd/`.
 
 **Files:** `TiffStructure.java`, its tests, fixtures and `DocumentPreviewFixtures`.
 
-- [ ] Record the execution baseline in the execution notes.
-- [ ] Add the failing tests from the Development Approach, then implement. Run focused tests and all Validation
+- [x] Record the execution baseline in the execution notes.
+- [x] Add the failing tests from the Development Approach, then implement. Run focused tests and all Validation
       Commands, and record the results.
 
 ### Task 2: Record and hand off
@@ -95,7 +95,33 @@ Do not change it or anything under `ccd/`.
 
 ## Execution notes
 
-(Record baseline, red/green evidence and final results here.)
+**Execution baseline:** `c66b72c744ec3f33f1f87bd254ede363a39e0753` (this branch's HEAD when the run started).
+
+**Task 1.**
+- JDK source read (JDK 21's `src.zip`, read-only): `TIFFImageReader.initializeFromMetadata` falls back to the stream
+  only once: when ImageWidth, ImageLength or SamplesPerPixel is missing and JPEGInterchangeFormat is present, it runs
+  the JPEG reader at that offset, also taking the default BitsPerSample from it. Every other missing tag gets a
+  constant: Compression (none), PhotometricInterpretation (derived from compression, ColorMap or sample count),
+  SampleFormat, BitsPerSample, ExtraSamples, RowsPerStrip (whole height), TileWidth/TileLength, PlanarConfiguration
+  (chunky). Missing strip/tile offsets throw (`getTileOrStripOffset`). Missing byte counts are estimated
+  (`getTileOrStripByteCount`, `TIFFIFD.calculateByteCounts`), but `TiffStructure` already refuses offsets without
+  counts. So the only new requirements are the three dimension tags, in every frame directory (depth 0; EXIF, GPS and
+  Interoperability directories carry none).
+- `TiffStructure` refuses JPEGTables (347) and tags 512 to 521 in any directory as "TIFF JPEG tag", once each
+  entry's bounds and byte counts are checked, so the committed aliasing probe (JPEGTables entries) is still refused
+  for covering more than the file. A frame without 256, 257 or 277 is "TIFF frame without its dimensions". Both
+  reach the renderer as `PREVIEW_INVALID_DOCUMENT`.
+- Tests: `TiffStructureTest.jpegTags` (each of the 11 tags alone, in a frame, in an EXIF directory and in the second
+  frame of a JDK-written TIFF), `dimensions` (each of the three missing, first and second frame),
+  `uncompressedWithJpegInterchange` (the reviewer's layout, new fixture
+  `DocumentPreviewFixtures.uncompressedWithJpegInterchange`), and `jpegInterchangeFormat` rewritten from "passes" to
+  refused. `PreviewRendererTest.structureRefusedBeforeImageIo` gains the reviewer's layout over a real JPEG, a
+  JPEGTables entry and each missing dimension, with `ImageIO` statically mocked and `FileImageInputStream`
+  construction-mocked, as before. Ordinary TIFFs: `TiffStructureTest.ordinaryTiffs` and the renderer's TIFF tests,
+  unchanged and passing.
+- Red: the new tests against the baseline `TiffStructure`: 120 tests, 17 failed (all the new or rewritten ones).
+- Green: focused `*.preview.*` 242 tests, 1 skipped (the opt-in fixture regeneration), 0 failed. Full `build`
+  BUILD SUCCESSFUL: `test` 4863 (1 skipped, the same), `integration` 24, 0 failures. `checkstyle.sh`: OK.
 
 ## Post-Completion
 
