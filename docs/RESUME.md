@@ -2,7 +2,7 @@
 
 **Document previews, 2026-10-23:** on `feat/document-preview-rendering`, not pushed and not live-verified.
 `GET /caseworker/cases/{id}/documents/{documentId}/preview` and `GET /judicial/referrals/{referralId}/documents/{documentId}/preview`
-serve a transient, complete PDF rendition of PDF, JPEG, PNG, every frame of a TIFF that is not JPEG-compressed, and DOCX (Docmosis Tornado
+serve a transient, complete PDF rendition of PDF, JPEG, PNG, every frame of a TIFF that carries no JPEG data, and DOCX (Docmosis Tornado
 `/rs/convert`), audited as `DOCUMENT_PREVIEWED`. DOCX answers `503 PREVIEW_UNAVAILABLE` until the converter endpoint,
 `docmosis-access-key` and fonts are provisioned, none of which is done. The chart has no Docmosis entry yet. Next:
 Ralphex review; open the PR; admin regenerates `openapi.json` from the artifact recorded in
@@ -17,7 +17,10 @@ frame's declared tile to `max-frame-pixels` before decoding and make the Docmosi
 `503 Retry-After: 0` is never resent. [The third review's fixes](plans/completed/20261023-document-preview-review-fixes-3.md)
 check a TIFF's whole structure with bounded reads before any ImageIO call (`TiffStructure`: directory tables, field
 values and strip/tile byte counts together no larger than the file), and deliberately do not preview JPEG-compressed
-TIFFs (Compression 6/7, `422 PREVIEW_INVALID_DOCUMENT`; `/file` still downloads them).
+TIFFs (Compression 6/7, `422 PREVIEW_INVALID_DOCUMENT`; `/file` still downloads them). [The fourth review's
+fixes](plans/completed/20261024-document-preview-review-fixes-4.md) also refuse any TIFF directory carrying
+`JPEGTables` (347) or an old-style JPEG tag (512–521), whatever its Compression, and any frame without `ImageWidth`,
+`ImageLength` or `SamplesPerPixel` (same 422). No OpenAPI change, so the handoff artifact is unchanged.
 
 **Narrative cap and blank witnesses, 2026-10-22 (admin R15):** on `fix/textarea-limit-and-blank-witnesses`, not
 pushed. `returnReason`, `referralNotes` and `masterDirections` are capped at 2,000 characters with line breaks counted

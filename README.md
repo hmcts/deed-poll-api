@@ -637,7 +637,9 @@ deliberately not previewed**, and neither is any TIFF carrying JPEG data under a
 directory holding `JPEGTables` (347) or any old-style JPEG tag (512–521, e.g. `JPEGInterchangeFormat`) is refused
 whatever its `Compression`, because the JDK reader would otherwise parse the JPEG stream outside this accounting to
 recover missing dimensions. For the same reason every frame must carry `ImageWidth`, `ImageLength` and
-`SamplesPerPixel`; every other tag the reader can miss gets a fixed default and reads nothing
+`SamplesPerPixel`; every other tag the reader can miss gets a fixed default and reads nothing. That costs some
+valid files deliberately: TIFF 6.0 defaults `SamplesPerPixel` to 1, so a bilevel or greyscale scan that omits it is
+not previewed
 ([20261024-document-preview-review-fixes-4](docs/plans/completed/20261024-document-preview-review-fixes-4.md)). These answer `PREVIEW_INVALID_DOCUMENT`, the viewer
 shows its preview-unavailable state, and the original still downloads; uploads are unaffected. Every other refusal here is also `PREVIEW_INVALID_DOCUMENT`. PDFBox builds only the image
 and TIFF previews, which are the service's own output. Nothing is cached or stored.

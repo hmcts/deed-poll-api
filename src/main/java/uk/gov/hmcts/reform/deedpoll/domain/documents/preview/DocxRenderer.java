@@ -237,8 +237,13 @@ final class DocxRenderer implements SourceRenderer {
         }
     }
 
-    /** OkHttp reads a zero timeout as none at all, so what is left of the budget is never rounded down to it. */
+    /**
+     * OkHttp reads a zero timeout as none at all, so what is left of the budget is never rounded down to it. It also
+     * truncates every timeout to whole milliseconds, so the rest is rounded up: a call cut off by the budget must
+     * find the budget expired, or it would answer unavailable rather than a limit.
+     */
     private static Duration atLeastOne(Duration deadline) {
-        return deadline.compareTo(SHORTEST) < 0 ? SHORTEST : deadline;
+        Duration whole = Duration.ofMillis(deadline.plusNanos(999_999).toMillis());
+        return whole.compareTo(SHORTEST) < 0 ? SHORTEST : whole;
     }
 }

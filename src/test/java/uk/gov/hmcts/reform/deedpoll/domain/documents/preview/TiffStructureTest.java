@@ -271,9 +271,6 @@ class TiffStructureTest {
         assertRefused(withImageData(base(), 514, LONG, 256), "TIFF JPEG tag");
         assertRefused(retagged(base(), 273, 513), "TIFF JPEG tag");
         assertRefused(withImageData(retagged(base(), 273, 513), PRIVATE, LONG, 256), "TIFF JPEG tag");
-        // The length still counts as image data, and is held to the file before the tag is refused.
-        byte[] tiff = base();
-        assertRefused(withImageData(tiff, 514, LONG, tiff.length), "TIFF image data cover more than the file");
     }
 
     @Test

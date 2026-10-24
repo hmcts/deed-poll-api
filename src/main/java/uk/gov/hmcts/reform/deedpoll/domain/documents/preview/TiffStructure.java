@@ -27,8 +27,8 @@ import javax.imageio.IIOException;
  * directories is therefore read once. Image data is aliased the same way: the JDK's decompressors allocate and read
  * each strip's or tile's declared byte count, so a million strips naming one large payload would read it a million
  * times inside one frame's decode, well inside the pixel limits. So every StripByteCounts and TileByteCounts value is
- * added to the same total, as is JPEGInterchangeFormatLength, which the JDK falls back to, and a directory naming
- * strip, tile or JPEGInterchangeFormat offsets must give byte counts rather than leave the JDK to work them out.
+ * added to the same total, and a directory naming strip or tile offsets must give byte counts rather than leave the
+ * JDK to work them out.
  * The work is therefore bounded by the file's size.
  *
  * <p>Beyond that it insists on what every real TIFF already is: {@code II} or {@code MM} with the magic number 42
@@ -74,8 +74,6 @@ final class TiffStructure {
     private static final int STRIP_BYTE_COUNTS = 279;
     private static final int TILE_OFFSETS = 324;
     private static final int TILE_BYTE_COUNTS = 325;
-    private static final int JPEG_INTERCHANGE_FORMAT = 513;
-    private static final int JPEG_INTERCHANGE_FORMAT_LENGTH = 514;
     /** JPEGTables, and the old-style JPEG tags from JPEGProc to JPEGACTables. */
     private static final int JPEG_TABLES = 347;
     private static final int FIRST_OLD_JPEG_TAG = 512;
@@ -210,12 +208,10 @@ final class TiffStructure {
                 }
                 occupy(value, bytes);
             }
-            // The JDK takes the first of TileOffsets, StripOffsets and JPEGInterchangeFormat a directory holds, and
-            // the first of TileByteCounts, StripByteCounts and JPEGInterchangeFormatLength, whichever kind the
-            // offsets were, and estimates counts only when it finds none. So any offsets need any counts, and every
-            // count is added, the JPEG pair's included: it is read whatever the compression.
-            offsets |= tag == STRIP_OFFSETS || tag == TILE_OFFSETS || tag == JPEG_INTERCHANGE_FORMAT;
-            if (tag == STRIP_BYTE_COUNTS || tag == TILE_BYTE_COUNTS || tag == JPEG_INTERCHANGE_FORMAT_LENGTH) {
+            // The JDK estimates byte counts only when it finds none, so any offsets need any counts, and every count
+            // is added. The JPEGInterchangeFormat pair is not counted: it is refused below with every JPEG tag.
+            offsets |= tag == STRIP_OFFSETS || tag == TILE_OFFSETS;
+            if (tag == STRIP_BYTE_COUNTS || tag == TILE_BYTE_COUNTS) {
                 byteCounts = true;
                 imageData(type, count, bytes, table, at + 8, value);
             }
@@ -230,7 +226,9 @@ final class TiffStructure {
         }
         // Missing one of these, a frame with a JPEGInterchangeFormat sends the JDK to its JPEG reader to recover it.
         // That tag is refused already; requiring the three as well leaves the reader no reason to look. Every other
-        // tag the JDK finds missing it replaces with a constant, reading nothing (TIFFImageReader, JDK 21).
+        // tag the JDK finds missing it replaces with a constant, reading nothing (TIFFImageReader, JDK 21). The cost
+        // is deliberate: TIFF 6.0 defaults SamplesPerPixel to 1, so a bilevel or greyscale file that omits it is
+        // valid, and is not previewed; its original still downloads.
         if (depth == 0 && dimensions.size() != DIMENSIONS.size()) {
             throw new IIOException("TIFF frame without its dimensions");
         }
