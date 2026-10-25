@@ -62,6 +62,7 @@ import javax.imageio.stream.FileImageInputStream;
 import javax.imageio.stream.ImageInputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.Assertions.fail;
@@ -252,16 +253,22 @@ class PreviewRendererTest {
             byte[] png = DocumentPreviewFixtures.withCompressedText(encodedPng(image),
                                                                     DocumentPreviewFixtures.TEXT_CHUNK_INFLATED_BYTES,
                                                                     true);
-            // A reader that reads metadata inflates them, and so refuses this file.
+            // The preview must succeed whatever the JDK does with the text chunks: the renderer reads PNGs with
+            // metadata ignored, so it never inflates them.
+            try (RenderedPreview preview = render(PreviewFormat.PNG, png)) {
+                assertThat(preview.pages()).hasValue(1);
+            }
+            // The control, that a reader which does read metadata refuses this file, holds only on JDKs whose PNG
+            // reader fails on a truncated compressed text chunk: 21.0.0 does, later 21 updates (Jenkins) do not. So
+            // it is an assumption, not an assertion, and the check above stands on its own either way.
             ImageReader inflating = ImageIO.getImageReadersByFormatName("png").next();
             try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(png))) {
                 inflating.setInput(input, false, false);
-                assertThatThrownBy(() -> inflating.read(0)).isInstanceOf(IIOException.class);
+                Throwable refused = catchThrowable(() -> inflating.read(0));
+                assumeTrue(refused instanceof IIOException,
+                           "this JDK's PNG reader accepts the truncated text chunk, so the control does not apply");
             } finally {
                 inflating.dispose();
-            }
-            try (RenderedPreview preview = render(PreviewFormat.PNG, png)) {
-                assertThat(preview.pages()).hasValue(1);
             }
         }
 
