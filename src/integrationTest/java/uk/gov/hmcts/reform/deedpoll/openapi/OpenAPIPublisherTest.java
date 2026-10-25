@@ -23,6 +23,10 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFailure;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFormat;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
@@ -135,6 +139,16 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/ccd-attempts",
         "/caseworker/ccd-attempts/{attemptId}/reconciliation",
         "/caseworker/ccd-attempts/{attemptId}/retry"
+    );
+
+    /**
+     * The two document previews (2026-10-23), one per surface, counted apart from both surfaces' lists for the reason
+     * the CCD attempt operations are: the caseworker and judicial counts are numbers the README and the resume notes
+     * state, and these are a read-only rendition beside a download each surface already had.
+     */
+    private static final List<String> PREVIEW_PATHS = List.of(
+        "/caseworker/cases/{id}/documents/{documentId}/preview",
+        "/judicial/referrals/{referralId}/documents/{documentId}/preview"
     );
 
     /** Delivery Manager-only publication history, whose single GET is asserted separately. */
@@ -299,6 +313,106 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(paths).isNotNull();
         assertThat(paths.fieldNames()).toIterable().containsAll(CASEWORKER_PATHS);
         assertThat(paths.fieldNames()).toIterable().containsAll(JUDICIAL_PATHS);
+        assertThat(paths.fieldNames()).toIterable().containsAll(PREVIEW_PATHS);
+    }
+
+    /**
+     * The two document previews' whole contract, which {@code deed-poll-admin}'s viewer adapter is generated from.
+     *
+     * <p>The handlers write their own response, so springdoc on its own would publish a bodiless 200; everything
+     * below is {@code OpenAPIDocumentPreviews}'s, and asserted here so that a refusal the service sends cannot be
+     * missing from the document, nor a code listed that it never sends. The limits are the defaults, which is what
+     * the producer artifact is generated under.
+     */
+    @DisplayName("Documents both document previews: the PDF, its headers, the four fixed refusals and the limits")
+    @Test
+    void documentsTheDocumentPreviews() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                          .andExpect(status().isOk())
+                                          .andReturn()
+                                          .getResponse()
+                                          .getContentAsByteArray());
+        JsonNode paths = spec.get("paths");
+
+        assertThat(CASEWORKER_PATHS).doesNotContainAnyElementsOf(PREVIEW_PATHS);
+        assertThat(JUDICIAL_PATHS).doesNotContainAnyElementsOf(PREVIEW_PATHS);
+        Map<String, String> operationIds = Map.of(
+            PREVIEW_PATHS.get(0), "previewCaseDocument",
+            PREVIEW_PATHS.get(1), "previewReferralDocument");
+
+        List<String> codes = Arrays.stream(PreviewFailure.values()).map(PreviewFailure::code).toList();
+        for (String path : PREVIEW_PATHS) {
+            assertThat(paths.get(path).fieldNames()).toIterable().as(path).containsExactly("get");
+            JsonNode operation = paths.get(path).get("get");
+            assertThat(operation.get("operationId").asText()).isEqualTo(operationIds.get(path));
+            assertThat(operation.get("description").asText()).as(path)
+                .contains("read-only rendition", "/file", "DOCUMENT_PREVIEWED", "404", "Range", "TIFF", "DOCX");
+
+            JsonNode responses = operation.get("responses");
+            assertThat(responses.fieldNames()).toIterable().as(path)
+                .containsExactlyInAnyOrder("200", "403", "404", "422", "429", "502", "503");
+
+            JsonNode ok = responses.get("200");
+            assertThat(ok.get("content").fieldNames()).toIterable().containsExactly("application/pdf");
+            assertThat(ok.at("/content/application~1pdf/schema/format").asText()).isEqualTo("binary");
+            assertThat(ok.get("headers").fieldNames()).toIterable().containsExactlyInAnyOrder(
+                "Content-Disposition", "Content-Length", "Cache-Control", "X-Content-Type-Options",
+                "Content-Security-Policy", "Accept-Ranges");
+            assertThat(ok.at("/headers/Content-Disposition/description").asText()).contains("document-preview.pdf");
+            assertThat(ok.at("/headers/Accept-Ranges/description").asText()).contains("none");
+
+            JsonNode notFound = resolve(spec, responses.at("/404/content/application~1json/schema"));
+            assertThat(notFound.path("properties").fieldNames()).toIterable()
+                .containsExactlyInAnyOrder("error", "errors");
+            JsonNode badGateway = resolve(spec, responses.at("/502/content/application~1json/schema"));
+            assertThat(badGateway.path("properties").fieldNames()).toIterable()
+                .containsExactlyInAnyOrder("error", "errors");
+
+            List<String> published = new ArrayList<>();
+            for (String status : List.of("422", "429", "503")) {
+                JsonNode refusal = responses.get(status);
+                assertThat(refusal.at("/headers/Cache-Control").isMissingNode()).as(status).isFalse();
+                JsonNode error = resolve(spec, refusal.at("/content/application~1json/schema"));
+                assertThat(error.path("properties").fieldNames()).toIterable().as(status)
+                    .containsExactlyInAnyOrder("error", "code");
+                assertThat(error.at("/properties/code/enum")).map(JsonNode::asText)
+                    .containsExactlyElementsOf(codes);
+                Arrays.stream(PreviewFailure.values())
+                    .filter(failure -> Integer.toString(failure.status()).equals(status))
+                    .forEach(failure -> {
+                        assertThat(refusal.get("description").asText()).as(status)
+                            .contains(failure.code(), failure.message());
+                        published.add(failure.code());
+                    });
+            }
+            assertThat(published).as("every code under its own status").containsExactlyInAnyOrderElementsOf(codes);
+            assertThat(responses.at("/429/headers/Retry-After/schema/type").asText()).isEqualTo("integer");
+            assertThat(responses.at("/422/headers/Retry-After").isMissingNode()).isTrue();
+
+            JsonNode limits = operation.get("x-document-preview-limits");
+            assertThat(limits.get("requestBudgetSeconds").asLong())
+                .isEqualTo(PreviewProperties.REQUEST_BUDGET.toSeconds());
+            assertThat(limits.get("maxInputBytes").asLong()).isEqualTo(UploadPolicy.MAX_UPLOAD_BYTES);
+            assertThat(limits.get("maxOutputBytes").asLong()).isEqualTo(PreviewProperties.MAX_OUTPUT_BYTES);
+            assertThat(limits.get("maxPages").asInt()).isEqualTo(PreviewProperties.MAX_PAGES);
+            assertThat(limits.get("maxPagesEnforcedFor")).map(JsonNode::asText)
+                .containsExactly("image/jpeg", "image/png", "image/tiff");
+            assertThat(limits.get("maxPagesEnforcedByViewerFor")).map(JsonNode::asText)
+                .containsExactly("application/pdf", PreviewFormat.DOCX.mimeType());
+            assertThat(limits.get("description").asText()).contains("unparsed", "viewer");
+            assertThat(limits.get("maxFramePixels").asLong()).isEqualTo(PreviewProperties.MAX_FRAME_PIXELS);
+            assertThat(limits.get("maxConcurrentConversionsPerInstance").asInt())
+                .isEqualTo(PreviewProperties.MAX_CONCURRENT_CONVERSIONS);
+            assertThat(limits.get("maxConcurrentPreviewsPerInstance").asInt())
+                .isEqualTo(PreviewProperties.MAX_CONCURRENT_PREVIEWS);
+            assertThat(limits.get("busyRetryAfterSeconds").asLong())
+                .isEqualTo(PreviewProperties.BUSY_RETRY_AFTER.toSeconds());
+            assertThat(limits.get("rangeRequests").asText()).isEqualTo("unsupported");
+
+            // Nothing names the converter or a stored identifier: the admin's client is generated from this text.
+            assertThat(operation.toString().toLowerCase(Locale.ROOT))
+                .doesNotContain("docmosis", "tornado", "rs/convert", "cdam", "hashtoken", "storagekey");
+        }
     }
 
     /**
@@ -476,6 +590,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         List<String> known = new ArrayList<>(CASEWORKER_PATHS);
         known.addAll(JUDICIAL_PATHS);
         known.addAll(CCD_ATTEMPT_PATHS);
+        known.addAll(PREVIEW_PATHS);
         known.add(GAZETTE_HISTORY_PATH);
         known.add("/caseworker/gazette-settings");
         known.add("/caseworker/gazette-notice-previews");

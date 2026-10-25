@@ -32,8 +32,9 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 ## The API surface
 
 Thirty-four caseworker operations across twenty-one paths, plus eight judicial ones on a namespace of their
-own (below), three privileged CCD-attempt ones (see [Repairing attempts](#repairing-attempts)), and eight
-Delivery Manager-only Gazette operations (see [Gazette publication foundation](#gazette-publication-foundation)).
+own (below), three privileged CCD-attempt ones (see [Repairing attempts](#repairing-attempts)), eight
+Delivery Manager-only Gazette operations (see [Gazette publication foundation](#gazette-publication-foundation)),
+and two document previews, one per surface (see [Document previews](#document-previews)), counted apart.
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
 `capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
 `/swagger-ui.html` is the authority; this table is the map — and `OpenAPIPublisherTest` asserts each count,
@@ -61,6 +62,7 @@ documented paths outside the counted surfaces; `documentsNoUnlistedPath` allowli
 | DELETE | `/caseworker/cases/{id}/witnesses/{witnessId}` | Delete a witness — **Team leader or Delivery Manager (legacy admin temporarily)**, 204, and 404 through the wrong case |
 | POST | `/caseworker/cases/{id}/documents` | Upload a file (multipart) and record its document row |
 | GET | `/caseworker/cases/{id}/documents/{documentId}/file` | Stream a document's stored file back |
+| GET | `/caseworker/cases/{id}/documents/{documentId}/preview` | A read-only PDF rendition of it for the admin viewer — counted apart; see [Document previews](#document-previews) |
 | GET | `/caseworker/saved-queries` | The shared library plus the caller's own, each flagged `selected` and `editable` |
 | POST | `/caseworker/saved-queries` | Save a query — `name` required, unshared unless `shared` says otherwise, and **only a Team leader, Delivery Manager or temporary legacy admin may set `shared`** (403 otherwise) |
 | GET | `/caseworker/saved-queries/{id}` | One saved query, if it is shared or theirs |
@@ -247,6 +249,7 @@ cannot be reused for the judiciary by accident. An ArchUnit rule asserts the sep
 | GET | `/judicial/referrals/mine` | This judge's own work — their `Claimed` referrals before their `Decided` ones, urgent first then longest-waiting, paged the same ten at a time |
 | GET | `/judicial/referrals/{referralId}` | One referral, the wide `JudicialApplicationView` of its application (details, witnesses, readable documents; no case id, payment or refund data, or office processing record), and the case's notes. Opening it records `CASE_VIEWED` |
 | GET | `/judicial/referrals/{referralId}/documents/{documentId}/file` | Download one of the application's readable documents — any judge who can see an `Open` referral may. Records `DOCUMENT_DOWNLOADED` and is served with the caseworker download's headers |
+| GET | `/judicial/referrals/{referralId}/documents/{documentId}/preview` | A read-only PDF rendition of it, to whoever may download it — counted apart; see [Document previews](#document-previews) |
 | POST | `/judicial/referrals/{referralId}/claim` | Claim a pool referral — it becomes theirs and drops off every other judge's |
 | POST | `/judicial/referrals/{referralId}/direction` | Record a direction — `decision`, optional `directionsText`, and `publishToGazette` |
 | PUT | `/judicial/referrals/{referralId}/direction` | Revise the judge's own direction (the `POST`'s body) while the referral is `Decided` and not yet closed |
@@ -576,6 +579,119 @@ the declared type is recorded. Regression tests exercise the five accepted types
 metadata against the real local store and the CDAM WireMock journey, including conflicting upstream upload
 metadata and download headers. These local tests do not establish live CDAM onboarding or malware scanning.
 
+### Document previews
+
+Two operations, one per surface, from the preview plan
+([20261023-document-preview-rendering](docs/plans/completed/20261023-document-preview-rendering.md)), revised by its
+review fixes ([20261023-document-preview-review-fixes](docs/plans/completed/20261023-document-preview-review-fixes.md))
+the second review's ([20261023-document-preview-review-fixes-2](docs/plans/completed/20261023-document-preview-review-fixes-2.md))
+the third's ([20261023-document-preview-review-fixes-3](docs/plans/completed/20261023-document-preview-review-fixes-3.md))
+and the fourth's ([20261024-document-preview-review-fixes-4](docs/plans/completed/20261024-document-preview-review-fixes-4.md)),
+and counted apart from
+both surfaces' totals (`previewCaseDocument`, `previewReferralDocument`). A preview is a read-only PDF rendition for
+the admin viewer. It never replaces, attaches, publishes or edits the original, which
+`/file` keeps serving exactly as above.
+
+```http
+GET /caseworker/cases/{id}/documents/{documentId}/preview
+GET /judicial/referrals/{referralId}/documents/{documentId}/preview
+```
+
+The judicial route carries no case id: the case comes from the referral's visibility, as for its `/file`. Both
+authorise and open the original through the same caller-scoped read as `/file`, and record `DOCUMENT_PREVIEWED`
+fail-closed before anything is opened, once per request. A wrong case, an unknown document or a referral the judge
+cannot see is the existing 404; 401 and 403 are unchanged, and a document store that will not return the original
+is `/file`'s 502.
+
+**The source is read before any busy or unavailable refusal.** After the scope check and the format allowlist, the
+original is opened (the audit row, then CDAM's own check of the caller) and spooled to the request's scratch
+directory in full. Only then is the DOCX converter's configuration checked and a conversion permit taken. So a
+caller the store refuses gets the download's own 403/404/502, never `PREVIEW_BUSY` or `PREVIEW_UNAVAILABLE`, and is
+audited exactly as a refused `/file` is (one row); a busy or unconfigured refusal comes only for a document the
+caller may read; and a slow store read holds no permit. **The 25 s budget bounds conversion and rendering, not a
+stalled store read:** it is checked between spooled chunks, but a read that blocks keeps the store client's own
+timeouts (CDAM buffers its response under an inactivity timeout), exactly as a download does, and there is no
+watchdog. Such a read holds no conversion permit, so it cannot starve other previews.
+
+A success is a complete `200` `application/pdf`, `inline` with the fixed filename `document-preview.pdf` and a
+measured `Content-Length`, under the download's `Content-Security-Policy: default-src 'none'; sandbox`,
+`X-Content-Type-Options: nosniff` and `Cache-Control: no-store`. **There is no range support**: the response says
+`Accept-Ranges: none`, a `Range` header is ignored and the whole bounded PDF is returned with `200`, never `206`. A PDF is served exactly as stored, **without being parsed**: it must start with `%PDF-` and carry
+`%%EOF` within its last 1,024 bytes, and otherwise is `PREVIEW_INVALID_DOCUMENT`. Its pages are not counted, and an
+encrypted PDF is not detected (that needs a parse) and is served as stored; the viewer gives PDF.js no password, so
+the browser never asks for one. JPEG and PNG become one page (a PNG's text chunks are never inflated); a TIFF becomes
+one page per frame, in order; DOCX is converted by Docmosis Tornado's `/rs/convert`.
+
+**A TIFF's structure is checked before any image code reads it** (`TiffStructure`, with plain bounded reads and no
+`ImageIO`), because the JDK reader materialises a frame's whole directory before any of our limits apply, and
+directory entries may all name the same payload bytes. The header must be `II`/`MM` with magic 42 (BigTIFF is
+refused); there are at most `DOCUMENT_PREVIEW_MAX_PAGES` frame directories (over it is `PREVIEW_LIMIT_EXCEEDED`), no
+directory is named twice, each has 1–64 entries of the thirteen TIFF 6.0 types, and every out-of-line payload
+(type size × count, overflow-safe) lies inside the file. The header, every directory table and every payload must be
+disjoint, so no bytes are shared and their total cannot exceed the file. Every StripByteCounts/TileByteCounts value
+counts towards that same total, because the JDK's decompressors read each strip's declared byte count wherever its
+offset points, so strips aliasing one payload cannot multiply the reads either; strip or tile offsets without byte
+counts are refused. SubIFDs are refused; EXIF, GPS and
+Interoperability pointers are followed and bounded identically. **JPEG-compressed TIFFs (Compression 6 and 7) are
+deliberately not previewed**, and neither is any TIFF carrying JPEG data under another declared compression: a
+directory holding `JPEGTables` (347) or any old-style JPEG tag (512–521, e.g. `JPEGInterchangeFormat`) is refused
+whatever its `Compression`, because the JDK reader would otherwise parse the JPEG stream outside this accounting to
+recover missing dimensions. For the same reason every frame must carry `ImageWidth`, `ImageLength` and
+`SamplesPerPixel`; every other tag the reader can miss gets a fixed default and reads nothing. That costs some
+valid files deliberately: TIFF 6.0 defaults `SamplesPerPixel` to 1, so a bilevel or greyscale scan that omits it is
+not previewed
+([20261024-document-preview-review-fixes-4](docs/plans/completed/20261024-document-preview-review-fixes-4.md)). These answer `PREVIEW_INVALID_DOCUMENT`, the viewer
+shows its preview-unavailable state, and the original still downloads; uploads are unaffected. Every other refusal here is also `PREVIEW_INVALID_DOCUMENT`. PDFBox builds only the image
+and TIFF previews, which are the service's own output. Nothing is cached or stored.
+
+A preview that is not produced answers `{"error": "<fixed sentence>", "code": "<code>"}` (`DocumentPreviewError`,
+`no-store`), and its sentence never names the file. A refusal before the preview keeps the usual `{"error"}` body.
+Every refusal is JSON even to a client that sent `Accept: application/pdf`:
+
+| Status | Code | Meaning |
+|---|---|---|
+| 422 | `PREVIEW_INVALID_DOCUMENT` | Damaged bytes, bytes that are not the stored type, a stored type with no preview (e.g. legacy `.doc`), a TIFF whose structure fails the pre-decode check, a JPEG-compressed TIFF (Compression 6/7) or a TIFF carrying a JPEG tag (deliberately not previewed), or a TIFF frame without its dimension tags |
+| 422 | `PREVIEW_LIMIT_EXCEEDED` | A page, pixel, output or time limit below was reached; nothing partial is returned |
+| 503 | `PREVIEW_UNAVAILABLE` | The DOCX converter is unconfigured, unreachable, or did not return a complete PDF |
+| 429 | `PREVIEW_BUSY` | Every conversion permit on this pod is in use; `Retry-After` says when to try again |
+
+Every failure leaves the original download working. Both operations publish the limits below as
+`x-document-preview-limits` in the OpenAPI document, read from the running configuration. The limits are preview
+limits only: none of them changes upload
+acceptance, original downloads or the staging cap.
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `DOCUMENT_PREVIEW_REQUEST_BUDGET` | `25s` | Conversion and rendering, checked between spooled chunks of the original but not bounding a stalled store read (above); must be under the gateways' 30 s |
+| `DOCUMENT_PREVIEW_MAX_OUTPUT_BYTES` | `52428800` (50 MiB) | Largest preview PDF served. The input ceiling is the upload's 25 MiB and is not configurable here |
+| `DOCUMENT_PREVIEW_MAX_PAGES` | `100` | Most pages in one preview. Enforced here only for the previews this service builds (JPEG, PNG and TIFF frames, published as `maxPagesEnforcedFor`); a PDF or converted DOCX is served uncounted, and the admin viewer enforces it through PDF.js's `numPages` before rendering (`maxPagesEnforcedByViewerFor`) |
+| `DOCUMENT_PREVIEW_MAX_FRAME_PIXELS` | `25000000` | Most decoded pixels in one image or TIFF frame, checked before decoding; a PNG or TIFF frame's decoded bytes are also held to four a pixel of this (so a 16-bit RGBA frame may have half as many). A tiled TIFF frame's declared tile (`TileWidth × TileLength`) is held to the same limit before decoding, because the reader allocates a tile unclamped (a strip is clipped to the frame, so `RowsPerStrip` past the height is legal and needs no check). A TIFF's orientation is read from its directory entry by entry, never through `getImageMetadata` |
+| `DOCUMENT_PREVIEW_MAX_CONCURRENT_CONVERSIONS` | `3` | Non-PDF previews at once per pod; there is no queue |
+| `DOCUMENT_PREVIEW_MAX_CONCURRENT_PREVIEWS` | `8` | Previews of any format, PDFs included, holding scratch at once per pod, from the store's answer until the response is written; bounds the pod's preview scratch (each holds at most the 25 MiB input and the output ceiling). Over it is `PREVIEW_BUSY`; there is no queue |
+| `DOCUMENT_PREVIEW_BUSY_RETRY_AFTER` | `5s` | `Retry-After` on `PREVIEW_BUSY`, between 1 and 60 s |
+| `DOCMOSIS_URL` | empty | Converter base, e.g. `https://docmosis.<env>.platform.hmcts.net`. Empty is unconfigured; a set value that is not an `https` base refuses startup |
+| `DOCMOSIS_ACCESS_KEY` | empty | Tornado access key, sent only in the request body; never logged |
+| `DOCMOSIS_CONNECT_TIMEOUT` / `DOCMOSIS_READ_TIMEOUT` | `3s` / `20s` | Together within the request budget, and never longer than what is left of it |
+
+With either Docmosis setting empty the service starts as normal and only a DOCX preview answers
+`PREVIEW_UNAVAILABLE`, and only after its original has been read under the caller's own token and recorded as
+`DOCUMENT_PREVIEWED`, so a caller the store refuses gets the download's 403, 404 or 502 instead.
+
+A DOCX is first held to the upload's content checks, so a malformed, encrypted or macro-enabled package is
+`PREVIEW_INVALID_DOCUMENT` and is never sent. The conversion is one `multipart/form-data` POST to
+`{DOCMOSIS_URL}/rs/convert` (`accessKey`, `outputName=preview.pdf`, `file` named `document.docx`), with no retry
+and no redirect followed. The body is one-shot, so OkHttp never resends it, not even for a `503` with
+`Retry-After: 0`: a conversion reaches Tornado at most once. Only a `2xx` `application/pdf` body inside the output ceiling, starting `%PDF-` and ending
+`%%EOF` is served, unparsed and uncounted, as an original PDF is. A Tornado `413` is
+`PREVIEW_LIMIT_EXCEEDED`, the budget running out is `PREVIEW_LIMIT_EXCEEDED`, and every other status, timeout,
+broken transfer or unusable body is `PREVIEW_UNAVAILABLE`. Logs carry the status or an exception class only.
+Automated tests use WireMock: they prove the protocol and bounds, not Word layout or fonts on the real converter.
+
+The chart sets neither Docmosis variable yet: a `keyVaults` entry for a secret the vault does not hold fails the
+deploy, so the endpoint, the `docmosis-access-key` secret and the converter's fonts are provisioned first. That
+provisioning, the producer artifact handed to admin and the AAT acceptance steps are in
+[docs/DOCUMENT-PREVIEW-SMOKE.md](docs/DOCUMENT-PREVIEW-SMOKE.md), prepared and not run.
+
 ## Plugins
 
 The project contains the following plugins:
@@ -710,9 +826,9 @@ code, both when the build itself runs inside a container that shares the host's 
 
 V37 adds `deedpoll_request_budget`, the per-subject counters behind `429` on search, email preview, email send,
 upload and the Gazette routes. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, default `observe`) switches only
-those budgets. Three limits enforce whatever the mode: the per-pod in-flight upload cap
-(`RATE_LIMIT_UPLOAD_IN_FLIGHT`), the daily per-case, per-template email cap (`EMAIL_MAX_PER_CASE_PER_TEMPLATE_PER_DAY`,
-default 3; a fourth distinct-key send is a `409`, a replayed key is still `200`) and the case list statement
+those budgets. Three limits enforce whatever the mode (as does the conversion permit under Document previews,
+above): the per-pod in-flight upload cap (`RATE_LIMIT_UPLOAD_IN_FLIGHT`), the daily per-case, per-template
+email cap (`EMAIL_MAX_PER_CASE_PER_TEMPLATE_PER_DAY`, default 3; a fourth distinct-key send is a `409`, a replayed key is still `200`) and the case list statement
 timeout (`LIST_STATEMENT_TIMEOUT`). See [docs/RATE-LIMITS.md](docs/RATE-LIMITS.md).
 
 ### The audit trail
@@ -721,7 +837,8 @@ V36 adds `deedpoll_audit_event` (who, when, action, entity, case and field names
 `deedpoll_audit_event_value` (before/after values, disposed with the case). Row triggers make both append-only;
 only the two `SECURITY DEFINER` disposal functions can delete, and nothing schedules them yet. Every
 caseworker and judicial write records an event in its own transaction, so a failed audit insert rolls the change
-back. A case view is audited and fails open; a document download is audited and fails closed. Authentication and
+back. A case view is audited and fails open; a document download or preview is audited, each under its own action,
+and fails closed. Authentication and
 authorisation failures are logged by `SecurityEvents` with identifiers only. No endpoint reads the trail yet.
 
 ### Running the application

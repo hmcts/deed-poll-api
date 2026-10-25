@@ -1,0 +1,267 @@
+package uk.gov.hmcts.reform.deedpoll.domain.documents.preview;
+
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.io.TempDir;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFTable;
+import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadContentPolicy;
+import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadedFile;
+
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.zip.InflaterInputStream;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.metadata.IIOMetadata;
+import javax.imageio.plugins.tiff.BaselineTIFFTagSet;
+import javax.imageio.plugins.tiff.TIFFDirectory;
+import javax.imageio.plugins.tiff.TIFFField;
+import javax.imageio.stream.FileImageInputStream;
+import javax.imageio.stream.ImageInputStream;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * The committed fixtures are what {@link DocumentPreviewFixtures} says they are, and can be made again from it.
+ */
+class DocumentPreviewFixturesTest {
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "REGENERATE_DOCUMENT_PREVIEWS", matches = "true")
+    @DisplayName("regenerates every committed fixture (REGENERATE_DOCUMENT_PREVIEWS=true only)")
+    void regenerate() throws IOException {
+        Path directory = Path.of("src/test/resources/document-previews");
+        for (String name : DocumentPreviewFixtures.NAMES) {
+            Files.write(directory.resolve(name), DocumentPreviewFixtures.generate(name));
+        }
+    }
+
+    @Test
+    @DisplayName("the object-stream bomb is a one-page PDF, small on disk, whose page tree sits behind its padding")
+    void objectStreamBomb() throws IOException {
+        byte[] small = DocumentPreviewFixtures.objectStreamBomb(1024);
+        try (PDDocument document = Loader.loadPDF(small)) {
+            assertThat(document.getNumberOfPages()).isEqualTo(1);
+        }
+        assertThat(DocumentPreviewFixtures.objectStreamBomb(64 * 1024 * 1024)).hasSizeLessThan(128 * 1024);
+    }
+
+    @Test
+    @DisplayName("the PDF has three pages")
+    void pdf() throws IOException {
+        try (PDDocument document = Loader.loadPDF(DocumentPreviewFixtures.read(DocumentPreviewFixtures.PDF))) {
+            assertThat(document.getNumberOfPages()).isEqualTo(DocumentPreviewFixtures.PDF_PAGES);
+        }
+    }
+
+    @Test
+    @DisplayName("each image fixture has its frames' dimensions, compression and orientation, in order")
+    void images() throws IOException {
+        for (DocumentPreviewFixtures.Fixture fixture : java.util.List.of(
+            DocumentPreviewFixtures.PHOTO, DocumentPreviewFixtures.PHOTO_ON_ITS_SIDE, DocumentPreviewFixtures.SCAN,
+            DocumentPreviewFixtures.TEXT_CHUNKS, DocumentPreviewFixtures.TWO_FRAMES,
+            DocumentPreviewFixtures.THREE_FRAMES)) {
+            byte[] bytes = DocumentPreviewFixtures.read(fixture.name());
+            try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
+                Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+                ImageReader reader = readers.next();
+                try {
+                    reader.setInput(input);
+                    assertThat(reader.getNumImages(true)).as(fixture.name()).isEqualTo(fixture.frames().size());
+                    for (int index = 0; index < fixture.frames().size(); index++) {
+                        DocumentPreviewFixtures.Frame frame = fixture.frames().get(index);
+                        assertThat(reader.getWidth(index)).as(fixture.name()).isEqualTo(frame.width());
+                        assertThat(reader.getHeight(index)).as(fixture.name()).isEqualTo(frame.height());
+                        if (fixture.name().endsWith(".tiff")) {
+                            assertTiffFrame(reader.getImageMetadata(index), frame, fixture.name());
+                        }
+                    }
+                } finally {
+                    reader.dispose();
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("the oversized-tile TIFF is a few hundred bytes, 16 by 16, declaring one 8192 by 8192 tile")
+    void oversizedTile() throws IOException {
+        byte[] bytes = DocumentPreviewFixtures.read(DocumentPreviewFixtures.OVERSIZED_TILE);
+        assertThat(bytes).hasSizeLessThan(512);
+        try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
+            ImageReader reader = ImageIO.getImageReadersByFormatName("tiff").next();
+            try {
+                reader.setInput(input);
+                assertThat(reader.getNumImages(true)).isEqualTo(1);
+                assertThat(reader.getWidth(0)).isEqualTo(16);
+                assertThat(reader.getHeight(0)).isEqualTo(16);
+                assertThat(reader.isImageTiled(0)).isTrue();
+                assertThat(reader.getTileWidth(0)).isEqualTo(DocumentPreviewFixtures.OVERSIZED_TILE_SIDE);
+                assertThat(reader.getTileHeight(0)).isEqualTo(DocumentPreviewFixtures.OVERSIZED_TILE_SIDE);
+            } finally {
+                reader.dispose();
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("the aliasing probe is what it is generated as, and the JDK alone reads its one payload per entry")
+    void aliasedPayloads(@TempDir Path scratch) throws IOException {
+        byte[] bytes = DocumentPreviewFixtures.read(DocumentPreviewFixtures.ALIASED_PAYLOADS);
+        // Written field by field, with no ImageIO, so it is the same on every JDK.
+        assertThat(bytes).isEqualTo(DocumentPreviewFixtures.aliasedPayloads());
+        assertThat(bytes).hasSizeLessThan(DocumentPreviewFixtures.ALIASED_PAYLOAD_BYTES + 1024);
+        long[] read = {0};
+        Path file = Files.write(scratch.resolve("aliased.tiff"), bytes);
+        try (ImageInputStream input = new FileImageInputStream(file.toFile()) {
+            @Override
+            public int read(byte[] buffer, int offset, int length) throws IOException {
+                int got = super.read(buffer, offset, length);
+                read[0] += Math.max(got, 0);
+                return got;
+            }
+        }) {
+            ImageReader reader = ImageIO.getImageReadersByFormatName("tiff").next();
+            try {
+                reader.setInput(input);
+                assertThat(reader.getWidth(0)).isEqualTo(1);
+            } finally {
+                reader.dispose();
+            }
+        }
+        assertThat(read[0]).isGreaterThanOrEqualTo(
+            (long) DocumentPreviewFixtures.ALIASED_ENTRIES * DocumentPreviewFixtures.ALIASED_PAYLOAD_BYTES);
+    }
+
+    @Test
+    @DisplayName("the sideways photo carries EXIF orientation 6 and the upright one carries none")
+    void exif() {
+        assertThat(jpegOrientation(DocumentPreviewFixtures.PHOTO_ON_ITS_SIDE.name())).isEqualTo(Orientation.RIGHT_TOP);
+        assertThat(jpegOrientation(DocumentPreviewFixtures.PHOTO.name())).isEqualTo(Orientation.TOP_LEFT);
+    }
+
+    @Test
+    @DisplayName("the text-chunk PNG holds a zTXt and a compressed iTXt, each a few KB inflating to 8 MiB")
+    void textChunks() throws IOException {
+        ByteBuffer png = ByteBuffer.wrap(DocumentPreviewFixtures.read(DocumentPreviewFixtures.TEXT_CHUNKS.name()));
+        png.position(8);
+        Map<String, byte[]> chunks = new LinkedHashMap<>();
+        while (png.hasRemaining()) {
+            byte[] data = new byte[png.getInt()];
+            byte[] type = new byte[4];
+            png.get(type).get(data).getInt();
+            chunks.putIfAbsent(new String(type, StandardCharsets.ISO_8859_1), data);
+        }
+        assertThat(chunks.keySet()).startsWith("IHDR", "zTXt", "iTXt");
+        // zTXt: "Comment", its terminator and the method; iTXt: "Description", its terminator, the compression
+        // flag and method, and two empty strings.
+        assertDeflatedZeros(chunks.get("zTXt"), "Comment".length() + 2);
+        assertThat(chunks.get("iTXt")["Description".length() + 1]).isEqualTo((byte) 1);
+        assertDeflatedZeros(chunks.get("iTXt"), "Description".length() + 5);
+    }
+
+    private static void assertDeflatedZeros(byte[] chunk, int textStart) throws IOException {
+        assertThat(chunk.length - textStart).isLessThan(16 * 1024);
+        long inflated = 0;
+        boolean zeros = true;
+        try (InflaterInputStream in = new InflaterInputStream(
+            new ByteArrayInputStream(chunk, textStart, chunk.length - textStart))) {
+            byte[] buffer = new byte[64 * 1024];
+            for (int read = in.read(buffer); read >= 0; read = in.read(buffer)) {
+                for (int index = 0; index < read; index++) {
+                    zeros &= buffer[index] == 0;
+                }
+                inflated += read;
+            }
+        }
+        assertThat(zeros).isTrue();
+        assertThat(inflated).isEqualTo(DocumentPreviewFixtures.TEXT_CHUNK_INFLATED_BYTES);
+    }
+
+    @Test
+    @DisplayName("the multi-page DOCX has a page break after each of its first two pages")
+    void multiPageDocx() throws IOException {
+        try (XWPFDocument document = docx(DocumentPreviewFixtures.MULTI_PAGE_DOCX)) {
+            assertThat(document.getParagraphs()).hasSize(DocumentPreviewFixtures.MULTI_PAGE_DOCX_PAGES);
+            long breaks = document.getParagraphs().stream()
+                .filter(paragraph -> paragraph.getCTP().xmlText().contains("w:type=\"page\""))
+                .count();
+            assertThat(breaks).isEqualTo(DocumentPreviewFixtures.MULTI_PAGE_DOCX_PAGES - 1);
+            assertThat(document.getParagraphs().getLast().getText()).isEqualTo("Synthetic Word fixture, page 3");
+        }
+    }
+
+    @Test
+    @DisplayName("the table-and-image DOCX has its table, then its picture on a new page")
+    void tableAndImageDocx() throws IOException {
+        try (XWPFDocument document = docx(DocumentPreviewFixtures.TABLE_AND_IMAGE_DOCX)) {
+            XWPFTable table = document.getTables().getFirst();
+            assertThat(document.getTables()).hasSize(1);
+            assertThat(table.getNumberOfRows()).isEqualTo(DocumentPreviewFixtures.TABLE_ROWS);
+            assertThat(table.getRow(0).getTableCells()).hasSize(DocumentPreviewFixtures.TABLE_COLUMNS);
+            assertThat(table.getRow(3).getCell(2).getText()).isEqualTo("r3c2");
+            assertThat(document.getAllPictures()).hasSize(1);
+            XWPFParagraph pictured = document.getParagraphs().getLast();
+            assertThat(pictured.isPageBreak()).isTrue();
+            assertThat(pictured.getRuns().getFirst().getEmbeddedPictures()).hasSize(1);
+        }
+    }
+
+    @Test
+    @DisplayName("both DOCX fixtures are uploads the service accepts; their macro and encrypted copies are not")
+    void docxAcceptance() {
+        for (String name : java.util.List.of(DocumentPreviewFixtures.MULTI_PAGE_DOCX,
+                                             DocumentPreviewFixtures.TABLE_AND_IMAGE_DOCX)) {
+            byte[] bytes = DocumentPreviewFixtures.read(name);
+            assertThatCode(() -> UploadContentPolicy.verify(docxUpload(bytes))).as(name).doesNotThrowAnyException();
+            assertThatThrownBy(() -> UploadContentPolicy.verify(docxUpload(DocumentPreviewFixtures.withMacros(bytes))))
+                .as(name).isInstanceOf(InvalidInputError.class);
+            assertThatThrownBy(() -> UploadContentPolicy.verify(docxUpload(DocumentPreviewFixtures.encrypted(bytes))))
+                .as(name).isInstanceOf(InvalidInputError.class);
+        }
+    }
+
+    private static XWPFDocument docx(String name) throws IOException {
+        return new XWPFDocument(new ByteArrayInputStream(DocumentPreviewFixtures.read(name)));
+    }
+
+    private static UploadedFile docxUpload(byte[] bytes) {
+        return UploadedFile.of(bytes, "fixture.docx", PreviewFormat.DOCX.mimeType());
+    }
+
+    private static Orientation jpegOrientation(String name) {
+        return ExifOrientation.of(DocumentPreviewFixtures.read(name));
+    }
+
+    private static void assertTiffFrame(IIOMetadata metadata, DocumentPreviewFixtures.Frame frame, String name)
+        throws IOException {
+        TIFFDirectory directory = TIFFDirectory.createFromMetadata(metadata);
+        TIFFField compression = directory.getTIFFField(BaselineTIFFTagSet.TAG_COMPRESSION);
+        int expected = switch (frame.compression() == null ? "None" : frame.compression()) {
+            case "None" -> BaselineTIFFTagSet.COMPRESSION_NONE;
+            case "LZW" -> BaselineTIFFTagSet.COMPRESSION_LZW;
+            case "Deflate" -> BaselineTIFFTagSet.COMPRESSION_DEFLATE;
+            case "PackBits" -> BaselineTIFFTagSet.COMPRESSION_PACKBITS;
+            case "CCITT T.6" -> BaselineTIFFTagSet.COMPRESSION_CCITT_T_6;
+            default -> throw new IllegalArgumentException(frame.compression());
+        };
+        assertThat(compression.getAsInt(0)).as(name).isEqualTo(expected);
+        TIFFField orientation = directory.getTIFFField(BaselineTIFFTagSet.TAG_ORIENTATION);
+        assertThat(orientation == null ? 1 : orientation.getAsInt(0)).as(name).isEqualTo(frame.orientation());
+    }
+}

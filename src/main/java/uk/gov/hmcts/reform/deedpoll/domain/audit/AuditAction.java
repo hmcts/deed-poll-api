@@ -41,7 +41,8 @@ public enum AuditAction {
     CCD_ATTEMPT_RECONCILED,
     CCD_ATTEMPT_RETRIED,
     CASE_VIEWED(true),
-    DOCUMENT_DOWNLOADED(true);
+    DOCUMENT_DOWNLOADED(true),
+    DOCUMENT_PREVIEWED(true);
 
     private final boolean read;
 

@@ -30,7 +30,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * {@link RateLimitBucket}'s routes against the controllers and the published document, from the whole context.
  *
  * <p>A bucket naming a route no controller maps would leave the renamed route unlimited, and nothing else would fail.
- * The same routes decide where the document publishes 429, so this also holds the document to exactly those six.
+ * The same routes decide where the document publishes 429, so this also holds the document to exactly those six --
+ * and the two document previews, whose 429 is their own {@code PREVIEW_BUSY} for a pod with no conversion permit
+ * free, and not a rate limit.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -64,7 +66,7 @@ class RateLimitRoutesTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("the document publishes 429 on the six limited operations, and on no other")
+    @DisplayName("the document publishes 429 on the six limited operations and the two previews, and on no other")
     void theDocumentPublishes429OnTheSixOnly() throws Exception {
         JsonNode document = json.readTree(mvc.perform(get("/v3/api-docs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
@@ -80,11 +82,16 @@ class RateLimitRoutesTest extends AbstractPostgresContainerTest {
                     assertThat(response.path("description").asText().contains("whatever the mode"))
                         .as("only the upload's 429 says it is refused in every mode: %s", path.getKey())
                         .isEqualTo(upload);
+                    assertThat(response.path("description").asText().contains("PREVIEW_BUSY"))
+                        .as("only a preview's 429 is PREVIEW_BUSY: %s", path.getKey())
+                        .isEqualTo(OpenAPIDocumentPreviews.PATHS.contains(path.getKey()));
                 }
             }
         }
 
-        assertThat(with429).containsExactlyInAnyOrderElementsOf(routes());
+        List<String> expected = new ArrayList<>(routes());
+        OpenAPIDocumentPreviews.PATHS.forEach(path -> expected.add("GET " + path));
+        assertThat(with429).containsExactlyInAnyOrderElementsOf(expected);
     }
 
     @Test

@@ -39,6 +39,8 @@ public class CftlibConfig implements CFTLibConfigurer {
     public static final String DELIVERY_MANAGER_USER = "deed-poll-delivery-manager@localhost";
 
     public static final String JUDICIAL_USER = "deed-poll-judge@localhost";
+    /** A second judge, so that a claim held by one is seen to hide its documents from the other. */
+    public static final String OTHER_JUDICIAL_USER = "deed-poll-other-judge@localhost";
     public static final String UNMAPPED_USER = "deed-poll-unmapped@localhost";
 
     private static final File DEFINITIONS = new File("build/cftlib/definitions");
@@ -71,9 +73,10 @@ public class CftlibConfig implements CFTLibConfigurer {
         lib.createIdamUser(DELIVERY_MANAGER_USER, Role.DELIVERY_MANAGER.claimValue());
         lib.createIdamUser(DOCUMENT_READER, Role.CASEWORKER.claimValue());
         lib.createIdamUser(JUDICIAL_USER, Role.JUDICIAL.claimValue());
+        lib.createIdamUser(OTHER_JUDICIAL_USER, Role.JUDICIAL.claimValue());
         lib.createIdamUser(UNMAPPED_USER, "caseworker");
-        for (String staff : java.util.List.of(DOCUMENT_READER, LEGACY_ADMIN_USER, JUDICIAL_USER, UNMAPPED_USER,
-            TEAM_LEADER_USER, DELIVERY_MANAGER_USER)) {
+        for (String staff : java.util.List.of(DOCUMENT_READER, LEGACY_ADMIN_USER, JUDICIAL_USER, OTHER_JUDICIAL_USER,
+            UNMAPPED_USER, TEAM_LEADER_USER, DELIVERY_MANAGER_USER)) {
             lib.createProfile(staff, identifiers.jurisdictionId(), identifiers.caseTypeId(),
                 DeedPollCaseState.Registered.name());
         }

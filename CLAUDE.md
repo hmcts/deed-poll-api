@@ -30,7 +30,9 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations 
                                   and /caseworker/gazette-notices (1 history GET, counted apart)
                                   and /caseworker/gazette-settings (Delivery Manager-only GET/PUT)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
-api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case
+                                  plus GET …/documents/{documentId}/preview (counted apart as PREVIEW_PATHS)
+api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case,
+                                  plus its own document preview (counted apart with the caseworker one)
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web, behind the S2S-only citizenFilterChain
 api/caller/{controller,dto}       GET /me, the caller's own areas and capabilities — outside both staff areas,
                                   because a caller with no deed-poll role must be told so rather than refused
@@ -38,6 +40,8 @@ domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
 domain/referrals                  referrals to the judiciary and the applicant's confirmation — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
+domain/documents/preview          transient PDF renditions for the admin viewer, DOCX via Docmosis — NOT a port;
+                                  domain/documents must not depend on it (PreviewBoundaryTest)
 domain/auth                       CurrentUser, IdamClaims, Role — transport-independent
 domain/audit                      the append-only audit trail (V36): AuditTrail, its AuditAction vocabulary, ReadAudit
                                   — NOT a port
@@ -195,8 +199,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   an entity with no case (saved queries, Gazette settings and batches record names only). `record` is
   `MANDATORY`: it joins the change's transaction, so a change whose audit insert fails rolls back, and it refuses a
   user write with no subject — only an explicitly system write uses `AuditActor.system()`. Reads (`CASE_VIEWED`,
-  `DOCUMENT_DOWNLOADED`; never lists or searches) go through `ReadAudit` in their own transaction: a case view fails
-  open, a download fails closed. `AuditAction` is the vocabulary and has no DB check constraint; renaming one leaves
+  `DOCUMENT_DOWNLOADED`, `DOCUMENT_PREVIEWED`; never lists or searches) go through `ReadAudit` in their own
+  transaction: a case view fails open, a download or a preview fails closed. `AuditAction` is the vocabulary and has no DB check constraint; renaming one leaves
   seven years of rows under the old name. Every `POST`/`PUT`/`PATCH`/`DELETE` handler under `api.caseworker` and
   `api.judicial` carries `@AuditedAs(action)` or sits in `WriteEndpointAuditCoverageTest`'s four-entry exemption
   list (email preview, Gazette preview, saved-query selection PUT/DELETE); the annotation records nothing, so the
@@ -226,7 +230,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   (not `/`, `/me`, `security: []` overrides or an operation's own 403); admin's copied spec needs a refresh after it changes. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, default `observe` in yaml and the
   chart) switches **only** the V37 budgets. **Three limits enforce from day one, whatever the mode:** the per-pod
   in-flight upload `Semaphore` (429, `Retry-After: 5`, released in `finally`), the per-case, per-template daily
-  email cap in `CaseEmailService`, and the case list's transaction-local statement timeout. The email cap answers
+  email cap in `CaseEmailService`, and the case list's transaction-local statement timeout. (The preview conversion
+  permit and the preview workspace slot are a fourth always-enforced 429, `PREVIEW_BUSY`, outside `RateLimitBucket`
+  and published by `OpenAPIDocumentPreviews`; previews have no V37 budget.) The email cap answers
   409 rather than 429, and **the replay check comes before the cap**. At the cap, `replayOrRefuse` asks for this
   key's row and the exclusion-group occupant first and answers as `resolveRefusedInsert` would, so a retried
   `Idempotency-Key` is still 200 with `enqueued: false`. Reordering that turns a caseworker's retry into a refusal.
@@ -376,6 +382,44 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `DocumentService.downloadDocument` uses a short read template and throws refusals after it, keeping remote
   reads outside database transactions. The drain now rejects an outer transaction and commits only the local
   claim/outcome steps. Do not wrap a document read or the drain in a new outer transaction.
+- **A preview is a read, never a derivative, and its order is fixed.** `DocumentPreviewService` refuses an active
+  transaction, runs the caseworker or judicial scope check, then the allowlist, then opens the source, recording
+  `DOCUMENT_PREVIEWED` (fail-closed) before `store.open` under the caller's own token, then takes a workspace slot
+  (`DOCUMENT_PREVIEW_MAX_CONCURRENT_PREVIEWS`, any format, held until the response's scratch is deleted, so the pod's
+  scratch is bounded) and spools it whole; **only then** does `PreviewRenderer` check the DOCX converter is
+  configured and take the conversion permit. So a refused
+  source keeps its own 404/403/502 (never `PREVIEW_BUSY`/`PREVIEW_UNAVAILABLE`, and one audit row, as a refused
+  download leaves), and a slow store read holds no permit; moving either check ahead of the read undoes both. Never
+  the system reader, and never as a fallback for a refused read. The 25 s budget does not bound a stalled store read,
+  which keeps the store client's timeouts as a download does. **PDF originals and Docmosis output are never parsed**
+  (no PDFBox `Loader`, and `PreviewBoundaryTest.nothingParsesAPdf` fails the build if preview code reaches it): `PdfRenderer` checks `%PDF-` and a trailing `%%EOF` only and serves the file as it is, so
+  `max-pages` (100) is enforced here only for JPEG/PNG/TIFF (`PreviewFormat.countsPages`) and by the admin viewer
+  for the rest; a PNG is read with metadata ignored, so its text chunks are never inflated. Do not reintroduce a parse
+  "just to count pages": that is the heap-exhaustion finding of
+  `docs/plans/completed/20261023-document-preview-review-fixes.md`. Likewise a tiled TIFF frame's declared tile is
+  held to `max-frame-pixels` before decoding (a strip is clipped to the frame by the JDK, so it is not checked),
+  **no `ImageIO` call touches a TIFF until `TiffStructure` has passed it** (plain bounded reads: magic 42 only, at
+  most `max-pages` directories, none named twice, 1–64 entries of the 13 TIFF 6.0 types each, every payload inside
+  the file and header, tables and payloads all disjoint, so aliased entries cannot multiply the JDK's directory reads, and every
+  strip/tile byte count added to the same file-sized total, because the decompressors read what each count declares;
+  SubIFDs refused, EXIF/GPS/Interop bounded identically; `PreviewRendererTest.structureRefusedBeforeImageIo` proves
+  it with a static mock), **JPEG-compressed TIFFs (Compression 6 and 7) are deliberately not previewed** and answer
+  `PREVIEW_INVALID_DOCUMENT` (download the original instead; enabling them is a reviewed change, not a fix —
+  `docs/plans/completed/20261023-document-preview-review-fixes-3.md`), and nor is JPEG data under any other
+  compression: `TiffStructure` refuses `JPEGTables` (347) and tags 512–521 in every directory, and a frame without
+  `ImageWidth`/`ImageLength`/`SamplesPerPixel`, because the JDK reader recovers those by parsing the JPEG stream
+  outside the byte accounting (`docs/plans/completed/20261024-document-preview-review-fixes-4.md`), a TIFF's orientation comes from `TiffOrientation`, never
+  `getImageMetadata` (a DOM copy of every strip offset; `PreviewBoundaryTest.noImageMetadataTree`); and the Docmosis
+  body is one-shot, so OkHttp cannot resend it on a `503 Retry-After: 0`
+  (`docs/plans/completed/20261023-document-preview-review-fixes-2.md`). The request thread does the conversion and
+  releases the permit in its own `finally`, so a slot
+  is never free while it is still converting; a caller who disconnects mid-conversion is noticed only when the PDF is
+  written, so the 25 s budget is the only bound on abandoned work. Nothing is cached or stored; each request's `preview-*` scratch directory is deleted on
+  close. `DocumentFileResponses.writePreview` writes the servlet response itself, because a `Resource` body lets
+  Spring answer `Range` with a partial `206`. A preview client sends `Accept: application/pdf`, so **every handler
+  that can answer a preview presets `application/json`** (the preview, 404, 401, 403 and upstream-failure handlers);
+  a new one that negotiates loses its body and becomes a 500. The chart mounts no Docmosis secret until
+  `docmosis-access-key` exists in every vault it deploys to; see `docs/DOCUMENT-PREVIEW-SMOKE.md`.
 
 ## Conventions worth knowing before writing code
 
