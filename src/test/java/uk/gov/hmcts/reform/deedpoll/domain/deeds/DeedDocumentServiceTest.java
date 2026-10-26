@@ -172,8 +172,8 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
         // DocumentService's default, so it has to be said explicitly and therefore asserted.
         assertThat(saved.getDirection()).isEqualTo(DocumentDirection.Outgoing);
         assertThat(saved.getDeedPoll().getId()).isEqualTo(caseId);
-        assertThat(saved.getDocumentType().getName()).isEqualTo("LOC020 Change of name deed");
-        assertThat(saved.getName()).isEqualTo("LOC020 Change of name deed");
+        assertThat(saved.getDocumentType().getName()).isEqualTo("Change of Name Deed (LOC020)");
+        assertThat(saved.getName()).isEqualTo("Change of Name Deed (LOC020)");
         // A name the applicant will recognise among their downloads, not the UUID the store keys blobs by.
         assertThat(saved.getOriginalName())
             .isEqualTo("LOC020-change-of-name-deed-" + REFERENCE + ".docx");
@@ -223,13 +223,13 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
         // V20's index deliberately frees the slot for one of those. So it refuses.
         assertThatThrownBy(() -> deedDocuments.storeDeed(caseId, DeedTemplate.MINOR))
             .isInstanceOf(ConflictError.class)
-            .hasMessageContaining("LOC020 Change of name deed")
+            .hasMessageContaining("Change of Name Deed (LOC020)")
             .hasMessageContaining("LOC022");
 
         // And it neither replaced nor added to the stored deed: the bytes an applicant may already have signed.
         assertThat(documents.count()).isOne();
         assertThat(stored(caseId, first.getId()).getDocumentType().getName())
-            .isEqualTo("LOC020 Change of name deed");
+            .isEqualTo("Change of Name Deed (LOC020)");
         assertThat(storedBlobs()).hasSize(1);
         verify(generator, times(1)).generate(any(), any());
     }
@@ -252,7 +252,7 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
         DeedPollSupportingDocument deed = deedDocuments.storeDeed(caseId, DeedTemplate.ADULT);
 
         assertThat(deed.getId()).isNotEqualTo(otherId);
-        assertThat(deed.getDocumentType().getName()).isEqualTo("LOC020 Change of name deed");
+        assertThat(deed.getDocumentType().getName()).isEqualTo("Change of Name Deed (LOC020)");
         assertThat(documents.count()).isEqualTo(2);
         verify(generator, times(1)).generate(any(), any());
     }
@@ -263,12 +263,12 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
         String caseId = storedCase();
         // Reachable from the first deed generated anywhere in an environment onward: the type row is real, so
         // GET /caseworker/document-types publishes it and the upload endpoint takes it as any other
-        // documentTypeId. The obvious thing to file under "LOC020 Change of name deed" is the signed deed coming
+        // documentTypeId. The obvious thing to file under "Change of Name Deed (LOC020)" is the signed deed coming
         // back from the applicant -- and the lookup keys on the type's NAME, which cannot tell that row from a
         // generated one. Answered with, it would email the applicant their own returned paperwork as the deed to
         // print, sign before witnesses and swear, with no deed ever generated and nothing else failing.
         DeedPollSupportingDocumentType deedType = new DeedPollSupportingDocumentType();
-        deedType.setName("LOC020 Change of name deed");
+        deedType.setName("Change of Name Deed (LOC020)");
         String misfiledId = documentService.uploadDocument(
             caseId, types.save(deedType).getId(),
             UploadedFile.of("%PDF-1.4 a signed deed coming back".getBytes(StandardCharsets.UTF_8),
@@ -277,7 +277,7 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
 
         assertThatThrownBy(() -> deedDocuments.storeDeed(caseId, DeedTemplate.ADULT))
             .isInstanceOf(ConflictError.class)
-            .hasMessageContaining("LOC020 Change of name deed")
+            .hasMessageContaining("Change of Name Deed (LOC020)")
             .hasMessageContaining("did not send out");
 
         // Refused rather than ignored: an Incoming row under a deed's type is either this, or a generated deed
@@ -286,6 +286,39 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
         assertThat(documents.count()).isOne();
         assertThat(storedBlobs()).hasSize(1);
         verify(generator, times(0)).generate(any(), any());
+    }
+
+    @Test
+    @DisplayName("a deed under its type's pre-V39 name is still the case's deed, and still refused for the other")
+    void recognisesADeedFiledUnderTheLegacyTypeName() {
+        String caseId = storedCase();
+        DeedPollSupportingDocument deed = deedDocuments.storeDeed(caseId, DeedTemplate.ADULT);
+        // What a pod still on the old code writes during a rolling deploy: the same row, under its old name. If the
+        // lookup missed it, the next send would generate a second legal instrument for this applicant.
+        DeedPollSupportingDocumentType type = deed.getDocumentType();
+        type.setName(DeedDocumentTypes.legacyName(DeedTemplate.ADULT));
+        types.save(type);
+
+        assertThat(deedDocuments.storeDeed(caseId, DeedTemplate.ADULT).getId()).isEqualTo(deed.getId());
+        assertThatThrownBy(() -> deedDocuments.storeDeed(caseId, DeedTemplate.MINOR))
+            .isInstanceOf(ConflictError.class)
+            .hasMessageContaining("LOC020 Change of name deed");
+
+        assertThat(documents.count()).isOne();
+        verify(generator, times(1)).generate(any(), any());
+    }
+
+    @Test
+    @DisplayName("files a new deed under the legacy-named type rather than creating a second one")
+    void reusesALegacyNamedType() {
+        DeedPollSupportingDocumentType legacy = new DeedPollSupportingDocumentType();
+        legacy.setName(DeedDocumentTypes.legacyName(DeedTemplate.MINOR));
+        String legacyId = types.save(legacy).getId();
+
+        DeedPollSupportingDocument deed = deedDocuments.storeDeed(storedCase(), DeedTemplate.MINOR);
+
+        assertThat(deed.getDocumentType().getId()).isEqualTo(legacyId);
+        assertThat(types.count()).isOne();
     }
 
     @Test
@@ -318,7 +351,7 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
 
         DeedPollSupportingDocument saved = stored(caseId, document.getId());
         DeedPollSupportingDocumentType type = saved.getDocumentType();
-        assertThat(type.getName()).isEqualTo("LOC022 Change of name deed for a child");
+        assertThat(type.getName()).isEqualTo("Change of Name Deed for a minor (LOC022)");
         assertThat(type.getApplicableTypes()).containsExactly(3, 4);
         assertThat(saved.getOriginalName())
             .isEqualTo("LOC022-change-of-name-deed-for-a-child-" + REFERENCE + ".docx");
@@ -327,8 +360,8 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("creates the document type the first time it is needed, and reuses it afterwards")
     void createsTheDocumentTypeOnceAndReusesIt() {
-        // Nothing seeds deedpoll_supportingdocumenttype, and there is no endpoint to create a row with -- so a
-        // fresh environment's first deed has to make its own type, and its second must not make another.
+        // V39 seeds deedpoll_supportingdocumenttype, but a row can still be missing (this test clears the table),
+        // and there is no endpoint to create one -- so a first deed makes its own type, and a second must not.
         assertThat(types.count()).isZero();
 
         deedDocuments.storeDeed(storedCase(), DeedTemplate.ADULT);
@@ -347,7 +380,7 @@ class DeedDocumentServiceTest extends AbstractPostgresContainerTest {
         // The "has this case a deed already" lookup asks by name, so it does not have to make a row for the
         // other deed to find out that there is none.
         assertThat(types.findAll()).extracting(DeedPollSupportingDocumentType::getName)
-            .containsExactly("LOC020 Change of name deed");
+            .containsExactly("Change of Name Deed (LOC020)");
     }
 
     @Test

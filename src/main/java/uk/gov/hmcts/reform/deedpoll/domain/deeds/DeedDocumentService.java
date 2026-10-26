@@ -189,7 +189,7 @@ public class DeedDocumentService {
                     + "is not a deed this service generated. Re-file that document under the type it belongs "
                     + "to, or withdraw it, before this email can be sent");
         }
-        if (!DeedDocumentTypes.name(template).equals(held)) {
+        if (!DeedDocumentTypes.names(template).contains(held)) {
             // Refused rather than answered with the deed the case holds: the caller is about to send that
             // deed out under the other deed's covering words. Neither replaced nor returned -- see the
             // class comment for how this is reached and why it is a caseworker's decision.
@@ -205,13 +205,13 @@ public class DeedDocumentService {
 
     private static Set<String> deedTypeNames() {
         return Arrays.stream(DeedTemplate.values())
-            .map(DeedDocumentTypes::name)
+            .flatMap(template -> DeedDocumentTypes.names(template).stream())
             .collect(Collectors.toSet());
     }
 
     /**
      * The document type a deed of this template is filed under, created if this environment has not needed one
-     * yet -- see {@link DeedDocumentTypes} for why nothing seeds it.
+     * yet -- see {@link DeedDocumentTypes} for why V39 seeding it does not remove this.
      *
      * <p>{@code findFirst} rather than a unique lookup: the column has no unique index, so two rows of the same
      * name are possible (two first deeds racing, or a caseworker-created namesake if the type write operations
@@ -220,7 +220,9 @@ public class DeedDocumentService {
      */
     DeedPollSupportingDocumentType typeFor(DeedTemplate template) {
         String name = DeedDocumentTypes.name(template);
-        return types.findFirstByNameOrderByIdAsc(name).orElseGet(() -> created(template, name));
+        return types.findFirstByNameOrderByIdAsc(name)
+            .or(() -> types.findFirstByNameOrderByIdAsc(DeedDocumentTypes.legacyName(template)))
+            .orElseGet(() -> created(template, name));
     }
 
     private DeedPollSupportingDocumentType created(DeedTemplate template, String name) {

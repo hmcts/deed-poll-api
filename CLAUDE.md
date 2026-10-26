@@ -369,10 +369,12 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   is offered the other one with nothing in the outbox in the way. Where the outbox *can* see the contradiction it
   gets first say, so `CaseEmailService.deedDocumentId` reads the group slot before generating anything and the
   caseworker is shown the same sentence the Email tab greyed the option out with. The deed's
-  `DeedPollSupportingDocumentType` row is **created on first use and found by name** — no migration seeds it, and
-  because the row is real, `GET /caseworker/document-types` publishes it and the upload endpoint takes it as any
-  other `documentTypeId`. So **the name cannot tell a generated deed from a caseworker's upload filed under it** —
-  and the obvious thing to file under "LOC020 Change of name deed" is the signed deed coming back. The direction
+  `DeedPollSupportingDocumentType` row is **seeded by V39 under the business's name ("Change of Name Deed (LOC020)",
+  "… for a minor (LOC022)"), created on first use if missing, and found by name**, and `DeedDocumentTypes.legacyName`
+  (the pre-V39 "LOC020 Change of name deed") is still matched for one release, so a row an old pod wrote mid-deploy
+  is not missed. Because the row is real, `GET /caseworker/document-types` publishes it and the upload endpoint takes
+  it as any other `documentTypeId`. So **the name cannot tell a generated deed from a caseworker's upload filed under
+  it** — and the obvious thing to file under "Change of Name Deed (LOC020)" is the signed deed coming back. The direction
   decides: the court's deed went `Outgoing`, and `storeDeed` refuses anything else under a deed's type in the same
   words, because answering with it would email the applicant their own returned paperwork as the deed to swear.
   `existingDeed` still reads **both** directions on purpose — narrowing the query would hide a generated deed whose

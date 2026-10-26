@@ -208,7 +208,7 @@ class DocumentUploadsTest {
         assertThat(refused.failure()).isEqualTo(NotificationFailure.TECHNICAL);
         assertThat(refused.reason())
             .contains("deed_document")
-            .contains("LOC020 Change of name deed")
+            .contains("Change of Name Deed (LOC020)")
             .contains(String.valueOf(DocumentUploads.MAX_UPLOAD_BYTES));
     }
 
@@ -287,7 +287,7 @@ class DocumentUploadsTest {
         // one than none.
         assertThat(((JSONObject) ready(uploads.resolve(row(), EmailTemplate.FORMS_FOR_COMPLETION_ADULT))
             .get("deed_document")).getString("filename"))
-            .isEqualTo("LOC020 Change of name deed");
+            .isEqualTo("Change of Name Deed (LOC020)");
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -349,7 +349,7 @@ class DocumentUploadsTest {
     private static DeedPollSupportingDocument deedRow() {
         DeedPollSupportingDocument deed = new DeedPollSupportingDocument();
         deed.setId(DEED_ID);
-        deed.setName("LOC020 Change of name deed");
+        deed.setName("Change of Name Deed (LOC020)");
         deed.setOriginalName(FILENAME);
         deed.setMimeType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
         return deed;

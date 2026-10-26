@@ -2729,7 +2729,7 @@ class CaseEmailServiceTest {
     private static DeedPollSupportingDocument storedDeed() {
         DeedPollSupportingDocument deed = new DeedPollSupportingDocument();
         deed.setId(DEED_DOCUMENT_ID);
-        deed.setName("LOC020 Change of name deed");
+        deed.setName("Change of Name Deed (LOC020)");
         return deed;
     }
 

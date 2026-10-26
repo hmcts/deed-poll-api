@@ -4,6 +4,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.enums.DynamicsValues;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * What a generated deed is filed as: the {@code deedpoll_supportingdocumenttype} row each template's output
@@ -14,13 +15,17 @@ import java.util.List;
  * produced -- so each has its own type rather than both being filed as "deed". That is also what makes
  * {@code applicableTypes} meaningful: a row that applied to every case type would say nothing.
  *
- * <p><strong>The rows are created on first use rather than seeded by a migration.</strong> Nothing seeds this
- * table -- {@code V3__children.sql} creates it empty and no migration has ever put a row in it -- so a deed
- * generated in a fresh environment has no type to reference, and a caseworker cannot create one because the
- * type write operations deliberately have no HTTP surface ({@code DocumentTypeService}). A migration insert
- * would not remove the runtime check either: the row could still be missing, and a service that then threw
- * would refuse to send an applicant their deed over reference data. So {@code DeedDocumentService} finds the
- * row and creates it when it is absent, which is idempotent and self-healing.
+ * <p><strong>The rows are seeded, and still created on first use.</strong> {@code V39} seeds the business's
+ * supporting-document types, these two included, under the names below. The runtime check stays because the row
+ * could still be missing, and a service that threw would refuse to send an applicant their deed over reference
+ * data. So {@code DeedDocumentService} finds the row and creates it when it is absent, which is idempotent and
+ * self-healing.
+ *
+ * <p><strong>The names are the business's, and {@link #legacyName} is the one each used to have.</strong> Before
+ * V39 the api named these rows "LOC020 Change of name deed" and "LOC022 Change of name deed for a child". V39
+ * renames any such row in place, keeping its id and the documents filed under it. Every lookup also accepts the
+ * legacy name for one release. Without that, a pod still on the old code during a rolling deploy could create a
+ * second, legacy-named row, and "has this case already got a deed" would stop seeing the deed filed under it.
  *
  * <p><strong>{@link #name} is the key that lookup uses, and that is safe only while nothing can rename a
  * type.</strong> There is no rename endpoint, and the row's id is what a stored document actually references,
@@ -49,11 +54,31 @@ final class DeedDocumentTypes {
     /**
      * The type row's name, which is what a caseworker sees in the documents grid.
      *
-     * <p>Derived from the template rather than written out, so the form code and the wording cannot drift from
-     * {@link DeedTemplate}'s. Well inside the column's 100 characters: the longer of the two is 38.
+     * <p>The business's own names, as V39 seeds them, so a caseworker sees one LOC020 and one LOC022 type in the
+     * list rather than the api's and the business's side by side. Well inside the column's 100 characters.
      */
     static String name(DeedTemplate template) {
+        return switch (template) {
+            case ADULT -> "Change of Name Deed (LOC020)";
+            case MINOR -> "Change of Name Deed for a minor (LOC022)";
+        };
+    }
+
+    /**
+     * The name the row had before V39, which a row created by a pod still on the old code would still carry.
+     *
+     * <p>Kept so that every lookup sees such a row for one release. Remove it, with {@link #names}, once every
+     * environment has run V39 and no old pod can still be serving.
+     */
+    static String legacyName(DeedTemplate template) {
         return template.formCode() + " " + template.displayName();
+    }
+
+    /**
+     * {@link #name} and {@link #legacyName}: every name a row of this deed's type can carry.
+     */
+    static Set<String> names(DeedTemplate template) {
+        return Set.of(name(template), legacyName(template));
     }
 
     /**
