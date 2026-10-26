@@ -166,6 +166,13 @@ class DeploymentChartConformanceTest {
     }
 
     @Test
+    @DisplayName("prod gets the cdam store: DocumentStoreEnvironmentGuard refuses the filesystem one there")
+    void prodUsesTheCdamStore() throws IOException {
+        assertThat(environment()).containsEntry("DOCUMENT_STORE",
+            "{{ if eq .Values.global.environment `prod` }}cdam{{ else }}filesystem{{ end }}");
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void previewNamesItsEnvironmentExplicitly() throws IOException {
         Map<String, Object> values = new Yaml().loadAs(
