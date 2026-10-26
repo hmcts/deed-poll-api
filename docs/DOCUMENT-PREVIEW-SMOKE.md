@@ -43,7 +43,15 @@ SHA-256 is unchanged through `/file`, TIFF keeps every frame in order, a PDF and
 byte for byte without a parse, and through real CDAM (cftlib) a preview reads under the caller's own IDAM id and never
 the system user's.
 
-## Provisioning needed, none of it done
+## Provisioning needed
+
+**Status, 2026-10-26.** Steps 1–3 are in progress; 4 and 5 are still to confirm with the Tornado owners.
+- **Key:** Steve chose to copy em-stitching's per-environment `docmosis-access-key`, as sptribs does. deed-poll-infra's
+  `docmosis.tf` copies it in aat and demo and writes an `ignore_changes` placeholder in prod. ITHC's was copied by hand.
+- **Chart:** 0.0.28 mounts the key and sets `DOCMOSIS_URL` to `https://docmosis.{env}.platform.hmcts.net`, empty in
+  prod, so prod stays on 503 until its real key and URL are set.
+- **Smoke:** a synthetic DOCX sent to `/rs/convert` with the AAT key, and with ITHC's copy, answered 200
+  `application/pdf`.
 
 These belong to other repositories and teams. This repository records them and changes nothing for them.
 
