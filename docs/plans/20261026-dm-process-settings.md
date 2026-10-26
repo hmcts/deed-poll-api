@@ -23,7 +23,8 @@ and the refreshed `openapi.json`, first.
 
 ## Context
 
-Baseline: api `origin/master` `d40b070` (V39, 2026-10-26). Read `AGENTS.md`/`CLAUDE.md` first, especially the audit
+Baseline: api `origin/master` `d40b070` (V39, 2026-10-26). **Rebase the branch onto current `origin/master`
+before starting**, re-record the baseline there, and re-check the next free migration number. Read `AGENTS.md`/`CLAUDE.md` first, especially the audit
 trail and Flyway rules, and record the execution baseline. **Recheck the highest migration at execution time**: V39
 is the latest at writing, so this plan's migration is V40 only if nothing has landed since. Take the next free number.
 
@@ -134,12 +135,34 @@ Files to read before changing anything:
    - PUT 30 and PUT 1440 are accepted. 29, 1441, 0, -5, 90.5, `"120"`, null, a missing field, an unknown key and a
      missing revision are each a 400 that names the field, and nothing is written (row, history and audit unchanged).
    - A stale revision is 409 with nothing written. An unchanged value is 200 at the same revision with no history
-     and no audit.
+     and no audit. **A stale revision beats the no-op**: a PUT carrying an old revision and the value the row now
+     holds is still 409, so an out-of-date form is never told it saved.
    - A change bumps the revision, sets attribution, writes exactly one history row with the old and new minutes, and
-     records exactly one audit event with field names and no values.
-   - The sweep: with the stored value at 30 minutes, a claim untouched for 31 minutes is released and one untouched
-     for 29 is kept. After a PUT to 60, the same 31-minute claim is kept on the next sweep in the same test. That
-     proves D6 with no restart.
+     records exactly one audit event with field names and no values. **No `deedpoll_audit_event_value` row** is
+     written for it (the entity has no case).
+   - **Atomicity and concurrency, against real Postgres, in independent transactions** (the Gazette pattern is design
+     evidence, not proof of this write path). Use `NotificationOutboxConcurrencyTest` for the repo's way of running two
+     transactions at once, and `@MockitoSpyBean` as the notify tests do for a forced failure:
+     - two updates from the same revision, released together, give exactly one success and one `ConflictError`
+       (409), with one revision increment, one history row and one audit event;
+     - `AuditTrail.record` forced to throw: the settings row and the history are both unchanged afterwards;
+     - the history insert forced to fail (for example, a history row already present at the next revision, so its
+       primary key refuses): the settings row is unchanged and no audit event committed.
+   - **The live window, through the real entry points and real Postgres.** Build on `JudicialReferralControllerTest`,
+     which already has `claimedBy(...)` and `lapse(...)` fixtures. A released claim becomes `Open` and nothing makes
+     it `Claimed` again, so every step uses a claim that is still `Claimed`:
+     - Fixture A, `Claimed` and last touched 31 minutes ago. With the stored window at 60, a judicial pool load keeps
+       it. PUT 30: **the PUT itself releases nothing**; A is still `Claimed` with no lapse note. The next pool load
+       releases A, writes exactly one lapse note and refreshes the case's `currentReferralState`. PUT 60 and load
+       again: A stays `Open` (raising the window never restores a released claim).
+     - Fixture B, a fresh `Claimed` claim last touched 31 minutes ago, with the window at 60: a pool load keeps it.
+       That proves a raised window retains a claim not yet swept.
+     - Repeat the release check through `GET /judicial/referrals/mine` and through `claim`, the other two sweep entry
+       points (`JudicialReferralService` and `ReferralService.claim`), each with its own still-`Claimed` fixture.
+     - **The singleton row deleted** (inside the test only): the pool load fails, and no claim is released, no note is
+       written and no read-model changes. The read happens before any release, so there is never a partial sweep.
+   - `ReferralServiceTest`'s existing lapse tests stay unit tests with a stubbed settings read. They prove the cutoff
+     arithmetic, not D6.
    - `/me` for a Delivery Manager lists `MANAGE_PROCESS_CONFIG`, and for a Team leader does not.
    - The OpenAPI document carries both operations, the bounds and the 403.
 7. **Out of scope:** the six later values; admin (separate plan); any scheduler (the sweep stays a mutating read);
@@ -150,6 +173,11 @@ Files to read before changing anything:
    window is now a stored value seeded at 2 hours. It must also name the **rolling-deploy window**: until every pod
    is replaced, old pods still read `PT2H` from yaml while new pods read the seeded 120 minutes. The two agree, so
    nothing changes, but a Delivery Manager who saves a new window mid-deploy is ignored by old pods until they go.
+   So the PR and `docs/` state, as an activation rule: **nobody edits process settings until every old api pod is
+   replaced**, and raising the window cannot restore claims already released. A sweep already running when a change
+   commits finishes with the value it read; "no cache" means the next sweep uses the new value, not that a running
+   one is cancelled. Sweeps run on the judicial pool, My referrals and claim, not only the pool. Admin must not
+   deploy its page until this api is serving on every replica in that environment.
    **Do not open or publish the PR until Scout confirms the ITHC freeze is in**, because any api master merge rolls
    ITHC before the freeze pin lands.
 
@@ -198,7 +226,7 @@ if it needs the new value spelled out, `/me` controller tests, `CLAUDE.md` (Staf
 `ProcessSettingsService.java`, `repository/ProcessSettingsRepository.java`, `domain/audit/AuditAction.java`,
 `AuditEntities.java`, `health/DeedPollSchema.java`, and their tests, plus the migration, audit and schema-health tests that enumerate tables or actions.
 
-- [ ] Add failing tests for the seed, the bounds, the closed key set, stale revisions, the no-op, the history row and the audit event.
+- [ ] Add failing tests for the seed, the bounds, the closed key set, stale revisions (including stale-beats-no-op), the no-op, the history row, the audit event with no value row, the two concurrent updates and the two forced-failure rollbacks.
 - [ ] Implement, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 3: The HTTP operations
@@ -215,7 +243,7 @@ if it needs the new value spelled out, `/me` controller tests, `CLAUDE.md` (Staf
 `ReferralConfiguration.java`, `ReferralPropertiesTest.java` (delete), `ReferralServiceTest`, `ConfirmationSecurityTest`,
 `ReferralSecurityTest`, `application.yaml`, `notify/NotifyProperties.java` (comment).
 
-- [ ] Add failing tests: the sweep honours the stored window, and a changed window applies on the next sweep with no restart.
+- [ ] Add the failing real-Postgres live-window tests listed in the Development Approach: fixtures A and B, the three entry points, the PUT releasing nothing, and the missing singleton releasing nothing.
 - [ ] Implement, delete the property and its key, run `grep -rn "claim-expiry\|CLAIM_EXPIRY\|ReferralProperties" src docs` and clear every hit or justify it, then run all Validation Commands and record the results.
 
 ### Task 5: Documentation and final verification
@@ -223,4 +251,4 @@ if it needs the new value spelled out, `/me` controller tests, `CLAUDE.md` (Staf
 **Files:** `CLAUDE.md`, `docs/RESUME.md` if it describes referrals or settings, and any `docs/` page naming `DEEDPOLL_REFERRAL_CLAIM_EXPIRY`.
 
 - [ ] Update the docs that describe the claim window or the caseworker surface.
-- [ ] Run all Validation Commands one final time. Record the counts against the baseline, and confirm `git status` is clean apart from the task commits.
+- [ ] Run the final validation **forced**, so nothing is reported from an earlier run: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record which tasks executed and which were up to date, and the counts against the baseline. Say that Checkstyle ran through `checkstyle.sh` locally, not through Gradle (Jenkins runs the Gradle tasks). Confirm `git status` is clean apart from the task commits.
