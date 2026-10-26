@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -147,6 +148,21 @@ class DeploymentChartConformanceTest {
     void storageGuardReceivesTheDeploymentEnvironment() throws IOException {
         assertThat(environment()).containsEntry("ENVIRONMENT_NAME", "{{ .Values.global.environment }}");
         assertThat(read(APPLICATION_YAML)).contains("environment-name: ${ENVIRONMENT_NAME:}");
+    }
+
+    @Test
+    @DisplayName("prod inherits no non-prod Notify identifier: each renders a placeholder or nothing there")
+    void prodInheritsNoNonProdNotifyIdentifier() throws IOException {
+        Map<String, Object> notify = new TreeMap<>(environment());
+        notify.keySet().removeIf(name -> !name.startsWith("NOTIFY_"));
+
+        assertThat(notify).isNotEmpty().allSatisfy((name, value) -> assertThat(String.valueOf(value))
+            .as("%s is a non-prod value; prod must render it as DEED_POLL_PLACEHOLDER or empty", name)
+            .satisfiesAnyOf(
+                v -> assertThat(v).startsWith("{{ if eq .Values.global.environment `prod` }}DEED_POLL_PLACEHOLDER"
+                    + "{{ else }}"),
+                v -> assertThat(v).startsWith("{{ if ne .Values.global.environment `prod` }}")
+                    .doesNotContain("{{ else }}")));
     }
 
     @Test
