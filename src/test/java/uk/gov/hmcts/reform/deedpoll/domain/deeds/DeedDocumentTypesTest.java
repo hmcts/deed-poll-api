@@ -23,11 +23,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DeedDocumentTypesTest {
 
     @Test
-    @DisplayName("files each deed under its own type, named as the court and the caseworker both name it")
-    void namesEachType() {
-        assertThat(DeedDocumentTypes.name(DeedTemplate.ADULT)).isEqualTo("LOC020 Change of name deed");
-        assertThat(DeedDocumentTypes.name(DeedTemplate.MINOR))
+    @DisplayName("recognises each type's pre-V39 name for one release, and keeps it apart from the current one")
+    void keepsTheLegacyNames() {
+        assertThat(DeedDocumentTypes.legacyName(DeedTemplate.ADULT)).isEqualTo("LOC020 Change of name deed");
+        assertThat(DeedDocumentTypes.legacyName(DeedTemplate.MINOR))
             .isEqualTo("LOC022 Change of name deed for a child");
+        assertThat(DeedDocumentTypes.names(DeedTemplate.ADULT))
+            .containsExactlyInAnyOrder("Change of Name Deed (LOC020)", "LOC020 Change of name deed");
+    }
+
+    @Test
+    @DisplayName("files each deed under its own type, named as the business names it")
+    void namesEachType() {
+        assertThat(DeedDocumentTypes.name(DeedTemplate.ADULT)).isEqualTo("Change of Name Deed (LOC020)");
+        assertThat(DeedDocumentTypes.name(DeedTemplate.MINOR))
+            .isEqualTo("Change of Name Deed for a minor (LOC022)");
     }
 
     @ParameterizedTest

@@ -1523,7 +1523,7 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
                 // The recorded name, which is the document type's -- not the applicant-facing filename, which is
                 // the originalName the upload token carries.
                 .andExpect(jsonPath("$.history[0].documents[0].name")
-                               .value("LOC020 Change of name deed"));
+                               .value("Change of Name Deed (LOC020)"));
         }
 
         @Test
