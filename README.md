@@ -34,6 +34,7 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 Thirty-four caseworker operations across twenty-one paths, plus eight judicial ones on a namespace of their
 own (below), three privileged CCD-attempt ones (see [Repairing attempts](#repairing-attempts)), eight
 Delivery Manager-only Gazette operations (see [Gazette publication foundation](#gazette-publication-foundation)),
+two Delivery Manager-only process-settings operations (see [Process settings](#process-settings)),
 and two document previews, one per surface (see [Document previews](#document-previews)), counted apart.
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
 `capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
@@ -233,8 +234,9 @@ can put a case into the waiting list or take it out without an answer.
 **Claiming a referral and recording a direction are the judge's half of the loop, and they have no route on this
 surface.** Both are transitions on `ReferralService` — role-gated to `Role.JUDICIAL` — exposed on the judicial
 namespace below rather than bolted onto the caseworker one. A claim lapses after
-`deedpoll.referrals.claim-expiry` (two hours by default) of the holding judge's inactivity, taken back as a side
-effect of loading either judicial list — the shared pool or the judge's own — rather than by a scheduler.
+the claim window (two hours as V40 seeds it; see [Process settings](#process-settings)) of the holding judge's
+inactivity, taken back as a side effect of loading either judicial list — the shared pool or the judge's own — or of
+a claim, rather than by a scheduler.
 
 ### The judicial surface
 
@@ -1031,6 +1033,27 @@ See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md),
 [ledger evidence](docs/plans/completed/gazette-1c-request-ledger-and-guards.md) and
 [preview/status implementation](docs/plans/completed/gazette-1d-preview-admission-and-status.md), and
 [delivery/recovery evidence](docs/plans/completed/gazette-1e-delivery-and-recovery.md).
+
+### Process settings
+
+Values a Delivery Manager adjusts while the service runs, with no release. The first, and so far the only, is the
+referral claim window: how long a judge's untouched claim survives before the next pool load, personal-list load or
+claim returns it to the pool.
+
+| Method | Path | Access and response |
+|---|---|---|
+| GET | `/caseworker/process-settings` (`getProcessSettings`) | `MANAGE_PROCESS_CONFIG` (Delivery Manager only): `referralClaimExpiryMinutes`, `revision` and the last change's attribution |
+| PUT | `/caseworker/process-settings` (`updateProcessSettings`) | The same capability; takes exactly `referralClaimExpiryMinutes` and `revision` |
+
+V40 seeds one row at revision 0 with 120 minutes. The window is whole minutes from 30 to 1,440; anything else,
+an unknown key or a missing revision is a 400 naming its field. A stale revision is a 409 and changes nothing, even
+when the value is unchanged; an unchanged value at the current revision is a no-op. Each change writes one
+`deedpoll_process_settings_change` row with the old and new values and the caller's subject and display name, and one
+`PROCESS_SETTINGS_CHANGED` audit event naming the field only, because the audit trail holds no values for an entity
+with no case. The subject is never published. There is no cache: the sweep reads the stored value each time it runs,
+so a change applies to every claim at once. Lowering the window releases nothing by itself; the next sweep does. A
+missing row fails the sweep rather than falling back to a default. `deedpoll.referrals.claim-expiry` and
+`DEEDPOLL_REFERRAL_CLAIM_EXPIRY` no longer exist.
 
 ### The OpenAPI document
 

@@ -250,8 +250,8 @@ if it needs the new value spelled out, `/me` controller tests, `CLAUDE.md` (Staf
 
 **Files:** `CLAUDE.md`, `docs/RESUME.md` if it describes referrals or settings, and any `docs/` page naming `DEEDPOLL_REFERRAL_CLAIM_EXPIRY`.
 
-- [ ] Update the docs that describe the claim window or the caseworker surface.
-- [ ] Run the final validation **forced**, so nothing is reported from an earlier run: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record which tasks executed and which were up to date, and the counts against the baseline. Say that Checkstyle ran through `checkstyle.sh` locally, not through Gradle (Jenkins runs the Gradle tasks). Confirm `git status` is clean apart from the task commits.
+- [x] Update the docs that describe the claim window or the caseworker surface.
+- [x] Run the final validation **forced**, so nothing is reported from an earlier run: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record which tasks executed and which were up to date, and the counts against the baseline. Say that Checkstyle ran through `checkstyle.sh` locally, not through Gradle (Jenkins runs the Gradle tasks). Confirm `git status` is clean apart from the task commits.
 
 ## Execution notes
 
@@ -326,3 +326,15 @@ said "past any configured window", no longer true with a 24-hour maximum, so the
 Focused run: 390 tests, 0 failures. `build`: SUCCESSFUL (4m 55s); `test` 4,939 tests (+1: +5 new, -4
 `ReferralPropertiesTest`), 0 failures, 0 errors, 1 skipped; `integration` 25, 0 failures. `checkstyle.sh`: OK (after
 re-wrapping one javadoc line and making one local `final`).
+
+**Task 5.** Docs: `README.md`'s judicial paragraph named the deleted `deedpoll.referrals.claim-expiry`; it now names
+the stored window, and a new "Process settings" section (both operations, bounds, seed, 400/409/no-op, history and
+audit, no cache, the missing row) joins the surface map. `docs/RESUME.md` has a resume entry; `CLAUDE.md` has a rule
+that the window is read on every sweep and never cached or defaulted. No other `docs/` page named
+`DEEDPOLL_REFERRAL_CLAIM_EXPIRY` (`docs/plans/completed/` is history). Final validation, forced:
+`./gradlew cleanTest cleanIntegration build -I no-checkstyle.gradle`: SUCCESSFUL (3m 45s). Executed: `cleanTest`,
+`cleanIntegration`, `writeCheckstyleConfig`, `integration`, `test`, `verifyNoJackson3`, `check`, `build`; every
+compile, resource, jar and distribution task was UP-TO-DATE from Task 4's build (only docs changed since), and the
+five Checkstyle tasks SKIPPED by the init script. `test` 4,939 tests, 0 failures, 0 errors, 1 skipped (baseline 4,871:
++68 across the plan); `integration` 25, 0 failures (baseline 24: +1). Checkstyle ran through `checkstyle.sh` locally,
+not through Gradle (Jenkins runs the Gradle tasks): OK. `git status` was clean apart from this task's three doc files.

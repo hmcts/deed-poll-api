@@ -489,6 +489,11 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   values, and recompute both read-models. No email, and no Gazette code changes. **A withdrawn direction is a live
   claim again:** if the judge does not direct it, the inactivity sweep returns it to the pool like any other claim.
   That is deliberate and published in withdraw's OpenAPI description; do not special-case the sweep.
+- **The referral claim window is a stored process setting, read on every sweep.** `ReferralService` asks
+  `ProcessSettingsService.referralClaimExpiry()` once per `reclaimStaleClaims`, so a Delivery Manager's `PUT` applies
+  at once; never cache it or reintroduce a property default, and a missing V40 row fails the sweep rather than
+  guessing. Values go in `deedpoll_process_settings_change`, never in the audit trail (no case owns them). A new
+  setting arrives with the behaviour that reads it, not as a placeholder column.
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
   only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback

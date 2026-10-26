@@ -1,5 +1,13 @@
 # Resume state — where the next session picks up
 
+**Delivery Manager process settings, 2026-10-26:** on `feat/dm-process-config`, not pushed. V40 adds a revisioned,
+attributed singleton (`deedpoll_process_settings`) and its change history; `GET`/`PUT /caseworker/process-settings`
+read and change it under the new `MANAGE_PROCESS_CONFIG`, granted to Delivery Managers only. Its one value is the
+referral claim window (30–1,440 minutes, seeded 120), which `ReferralService.reclaimStaleClaims` now reads on every
+sweep with no cache; `deedpoll.referrals.claim-expiry` / `DEEDPOLL_REFERRAL_CLAIM_EXPIRY` are removed. Next: open the
+PR; after merge and deploy, admin's `docs/plans/20261026-dm-settings-page.md` refreshes `openapi.json` and builds the
+page. See [the plan](plans/20261026-dm-process-settings.md).
+
 **Document previews, 2026-10-23:** on `feat/document-preview-rendering`, not pushed and not live-verified.
 `GET /caseworker/cases/{id}/documents/{documentId}/preview` and `GET /judicial/referrals/{referralId}/documents/{documentId}/preview`
 serve a transient, complete PDF rendition of PDF, JPEG, PNG, every frame of a TIFF that carries no JPEG data, and DOCX (Docmosis Tornado
