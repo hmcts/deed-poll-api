@@ -39,6 +39,8 @@ api/caller/{controller,dto}       GET /me, the caller's own areas and capabiliti
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
 domain/referrals                  referrals to the judiciary and the applicant's confirmation — NOT a port
+domain/settings                   the Delivery Manager's process settings (V40), starting with the referral claim
+                                  window — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
 domain/documents/preview          transient PDF renditions for the admin viewer, DOCX via Docmosis — NOT a port;
                                   domain/documents must not depend on it (PreviewBoundaryTest)

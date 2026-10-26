@@ -226,8 +226,8 @@ if it needs the new value spelled out, `/me` controller tests, `CLAUDE.md` (Staf
 `ProcessSettingsService.java`, `repository/ProcessSettingsRepository.java`, `domain/audit/AuditAction.java`,
 `AuditEntities.java`, `health/DeedPollSchema.java`, and their tests, plus the migration, audit and schema-health tests that enumerate tables or actions.
 
-- [ ] Add failing tests for the seed, the bounds, the closed key set, stale revisions (including stale-beats-no-op), the no-op, the history row, the audit event with no value row, the two concurrent updates and the two forced-failure rollbacks.
-- [ ] Implement, run the focused tests and all Validation Commands, and record the results.
+- [x] Add failing tests for the seed, the bounds, the closed key set, stale revisions (including stale-beats-no-op), the no-op, the history row, the audit event with no value row, the two concurrent updates and the two forced-failure rollbacks.
+- [x] Implement, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 3: The HTTP operations
 
@@ -269,3 +269,22 @@ They failed to compile before the member existed. `CallerAccessOpenApiTest` alre
 only; `CLAUDE.md` and `docs/STAFF-ROLE-RELEASE.md` name it. Focused run: 84 tests, 0 failures. `build`: SUCCESSFUL
 (4m 52s); `test` 4,871 tests, 0 failures, 0 errors, 1 skipped; `integration` 24, 0 failures. `checkstyle.sh`: OK
 (after shortening one display name it flagged).
+
+**Task 2.** V40 is still the next free number. Tests first: `ProcessSettingsServiceTest` (unit, mocked repository:
+every non-Delivery-Manager role refused both operations before any read; no subject is 401; the 15 refused bodies,
+29/1441/0/-5/90.5/90.0/a `Long`/`"120"`/null/missing minutes, missing/null/-1/`"0"` revision and an unknown key, each
+naming its field with nothing read; 30 and 1440 accepted; stale revision, stale-beats-no-op, the no-op; a change's
+history call and audit entry; the sweep read and the missing row), `ProcessSettingsPersistenceTest` (real Postgres,
+committed transactions: the seed, V40's checks, a change's row/history/audit with zero value rows, nothing written
+for a no-op/stale/refused body, stale-beats-no-op, two overlapping updates proven to wait on the singleton lock via
+`pg_stat_activity` giving one success and one 409, `AuditTrail.record` forced to throw and a pre-existing history
+row at the next revision each rolling everything back, and the missing singleton), a `RemainingWriteAuditTest` case,
+and `DeedPollSchemaHealthTest`/`SdkMigrationOrderTest` taught V40's tables and version. Implemented
+`V40__process_settings.sql`, `domain/settings/ProcessSettings`, `ProcessSettingsService`,
+`repository/ProcessSettingsRepository` (returns `Optional`; the service turns an empty read into
+`IllegalStateException`, because `@Repository` translation would otherwise wrap one thrown there),
+`AuditAction.PROCESS_SETTINGS_CHANGED`, `AuditEntities.PROCESS_SETTINGS` and the two `DeedPollSchema` tables; the
+`CLAUDE.md` layout names `domain/settings`. Note for later tasks: stubbing the `AuditTrail` spy must run inside a
+transaction, because the stubbing call passes through `record`'s `MANDATORY` interceptor. Focused run: 82 tests, 0
+failures. `build`: SUCCESSFUL (4m 28s); `test` 4,913 tests (+42), 0 failures, 0 errors, 1 skipped; `integration` 24,
+0 failures. `checkstyle.sh`: OK (after making one javadoc multi-line and splitting one line).

@@ -19,6 +19,7 @@ public final class AuditEntities {
     public static final String GAZETTE_SETTINGS = "GazetteSettings";
     public static final String GAZETTE_REQUEST = "GazetteRequest";
     public static final String CCD_ATTEMPT = "CcdCreationAttempt";
+    public static final String PROCESS_SETTINGS = "ProcessSettings";
 
     private AuditEntities() {
     }
