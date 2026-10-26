@@ -66,8 +66,8 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
 
 `caseworker-deedpoll-team-leader` grants OVERRIDE_PRIVACY, DELETE_NOTE, DELETE_WITNESS,
 MANAGE_SHARED_QUERIES and REPAIR_CCD. `caseworker-deedpoll-delivery-manager` inherits all five
-and alone grants ACCESS_GAZETTE. The deprecated `caseworker-deedpoll-admin` temporarily grants
-only the first five. Resolve capabilities from verified roles; the retained privacy boolean is derived.
+and alone grants ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG (the process settings). The deprecated
+`caseworker-deedpoll-admin` temporarily grants only the first five. Resolve capabilities from verified roles; the retained privacy boolean is derived.
 Every Gazette operation and the named `readyForPublication` worklist/count (including saved-query
 links) requires ACCESS_GAZETTE, with 403 before reads or side effects. Ordinary field conditions
 and case visibility remain unchanged. Neither new role grants judicial or system authority.

@@ -28,7 +28,8 @@
         "DELETE_WITNESS",
         "MANAGE_SHARED_QUERIES",
         "REPAIR_CCD",
-        "ACCESS_GAZETTE"
+        "ACCESS_GAZETTE",
+        "MANAGE_PROCESS_CONFIG"
       ],
       "judicial": false,
       "ccdReader": true,
@@ -117,7 +118,8 @@
         "DELETE_WITNESS",
         "MANAGE_SHARED_QUERIES",
         "REPAIR_CCD",
-        "ACCESS_GAZETTE"
+        "ACCESS_GAZETTE",
+        "MANAGE_PROCESS_CONFIG"
       ],
       "judicial": true,
       "ccdReader": true,
@@ -170,7 +172,8 @@
         "DELETE_WITNESS",
         "MANAGE_SHARED_QUERIES",
         "REPAIR_CCD",
-        "ACCESS_GAZETTE"
+        "ACCESS_GAZETTE",
+        "MANAGE_PROCESS_CONFIG"
       ],
       "judicial": false,
       "ccdReader": true,

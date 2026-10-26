@@ -216,9 +216,9 @@ and the next one builds over it, wiping the results.
 **Files:** `domain/auth/Capability.java`, `RoleCapabilities.java`, `RoleCapabilitiesTest`, `CallerAccessOpenApiTest`
 if it needs the new value spelled out, `/me` controller tests, `CLAUDE.md` (Staff permissions).
 
-- [ ] Record the execution baseline (commit, highest migration, test counts) in the execution notes.
-- [ ] Add failing tests: Delivery Manager holds `MANAGE_PROCESS_CONFIG`; Team leader and legacy admin do not; `/me` publishes it.
-- [ ] Implement, run the focused tests and all Validation Commands, and record the results.
+- [x] Record the execution baseline (commit, highest migration, test counts) in the execution notes.
+- [x] Add failing tests: Delivery Manager holds `MANAGE_PROCESS_CONFIG`; Team leader and legacy admin do not; `/me` publishes it.
+- [x] Implement, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 2: Migration, repository and service
 
@@ -252,3 +252,20 @@ if it needs the new value spelled out, `/me` controller tests, `CLAUDE.md` (Staf
 
 - [ ] Update the docs that describe the claim window or the caseworker surface.
 - [ ] Run the final validation **forced**, so nothing is reported from an earlier run: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record which tasks executed and which were up to date, and the counts against the baseline. Say that Checkstyle ran through `checkstyle.sh` locally, not through Gradle (Jenkins runs the Gradle tasks). Confirm `git status` is clean apart from the task commits.
+
+## Execution notes
+
+**Baseline (2026-10-26, Task 1).** The branch already contains current `origin/master` `64e0f86` (#134, chart
+previews), one commit past the plan's `d40b070`; no rebase was needed. Highest migration is still V39, so this plan's
+migration is V40. `64e0f86` adds one test to `DeploymentChartConformanceTest`, so the baseline `test` count is 4,871
+(the plan's 4,870 plus that one); `integration` 24.
+
+**Task 1.** Tests first: the staff permission contract (`staff-permission-contract.json`, the delivery-manager,
+delivery-manager-judicial and mixed-privileged cases), `RoleCapabilitiesTest` (Delivery Manager adds exactly
+`ACCESS_GAZETTE` and `MANAGE_PROCESS_CONFIG`; Team leader and legacy admin lack it), `CallerAccessResponseTest`,
+`CallerAccessSecurityTest` (`/me` for every role, STRICT, including the AM-sourced Delivery Manager) and `AmRolesTest`.
+They failed to compile before the member existed. `CallerAccessOpenApiTest` already holds the published enum to
+`Capability.values()` and needed no change. Implemented by appending the member and granting it in `deliveryManager()`
+only; `CLAUDE.md` and `docs/STAFF-ROLE-RELEASE.md` name it. Focused run: 84 tests, 0 failures. `build`: SUCCESSFUL
+(4m 52s); `test` 4,871 tests, 0 failures, 0 errors, 1 skipped; `integration` 24, 0 failures. `checkstyle.sh`: OK
+(after shortening one display name it flagged).

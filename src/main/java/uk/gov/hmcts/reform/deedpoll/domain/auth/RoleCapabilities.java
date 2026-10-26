@@ -23,6 +23,7 @@ public final class RoleCapabilities {
     private static Set<Capability> deliveryManager() {
         EnumSet<Capability> inherited = EnumSet.copyOf(TEAM_LEADER);
         inherited.add(Capability.ACCESS_GAZETTE);
+        inherited.add(Capability.MANAGE_PROCESS_CONFIG);
         return Set.copyOf(inherited);
     }
 

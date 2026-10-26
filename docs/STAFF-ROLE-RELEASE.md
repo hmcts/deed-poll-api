@@ -15,6 +15,7 @@ and artifact identities. The admin and infrastructure companion plans own their 
 | MANAGE_SHARED_QUERIES | SavedQueryPermissions editing and publishing | Yes | Yes |
 | REPAIR_CCD | CcdAttemptRepairs overview, reconciliation and retry | Yes | Yes |
 | ACCESS_GAZETTE | All Gazette human entry points and named ready worklist/count | No | Yes |
+| MANAGE_PROCESS_CONFIG | Process settings read and update (`/caseworker/process-settings`) | No | Yes |
 
 The exact new claims are `caseworker-deedpoll-team-leader` and
 `caseworker-deedpoll-delivery-manager`. The deprecated `caseworker-deedpoll-admin` has only

@@ -65,7 +65,7 @@ class CallerAccessSecurityTest extends AbstractPostgresContainerTest {
         "[\"OVERRIDE_PRIVACY\",\"DELETE_NOTE\",\"DELETE_WITNESS\",\"MANAGE_SHARED_QUERIES\",\"REPAIR_CCD\"]";
     private static final String DELIVERY_MANAGER_SET =
         "[\"OVERRIDE_PRIVACY\",\"DELETE_NOTE\",\"DELETE_WITNESS\",\"MANAGE_SHARED_QUERIES\",\"REPAIR_CCD\","
-            + "\"ACCESS_GAZETTE\"]";
+            + "\"ACCESS_GAZETTE\",\"MANAGE_PROCESS_CONFIG\"]";
 
     private static final StubIdam IDAM = new StubIdam();
     private static final WireMockServer RAS = new WireMockServer(WireMockConfiguration.options().dynamicPort());
@@ -171,7 +171,7 @@ class CallerAccessSecurityTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("includes AM's word: a ctsc-team-leader with the Gazette skill gets ACCESS_GAZETTE")
+    @DisplayName("includes AM's word: a ctsc-team-leader with the Gazette skill gets the Delivery Manager set")
     void includesAmRoles() throws Exception {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Team Leader", List.of(Role.CASEWORKER.claimValue()));
         RAS.stubFor(WireMock.get(urlPathEqualTo(ACTOR_PATH)).willReturn(okJson("""
