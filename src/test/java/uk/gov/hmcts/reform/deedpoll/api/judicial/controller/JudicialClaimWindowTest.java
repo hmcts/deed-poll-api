@@ -214,7 +214,8 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
 
         asJudge();
         assertThatThrownBy(() -> authorised(get(POOL)))
-            .rootCause().isInstanceOf(IllegalStateException.class);
+            .rootCause().isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("process settings row is missing");
 
         assertStillClaimed(a);
         assertThat(notesOn(a)).isEqualTo(notesBefore);

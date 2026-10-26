@@ -199,7 +199,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   and the field *names*, plus `detail` restricted to `AuditEntry`'s allowlisted keys; it holds no applicant data and
   is kept for 7 years. `deedpoll_audit_event_value` holds the before/after values (decision 5's text encoding, a
   row only for a changed field), which are applicant data disposed with the case, so `AuditTrail` refuses values on
-  an entity with no case (saved queries, Gazette settings and batches record names only). `record` is
+  an entity with no case (saved queries, Gazette settings, process settings and batches record names only; process settings keep
+  their values in V40's `deedpoll_process_settings_change`). `record` is
   `MANDATORY`: it joins the change's transaction, so a change whose audit insert fails rolls back, and it refuses a
   user write with no subject — only an explicitly system write uses `AuditActor.system()`. Reads (`CASE_VIEWED`,
   `DOCUMENT_DOWNLOADED`, `DOCUMENT_PREVIEWED`; never lists or searches) go through `ReadAudit` in their own

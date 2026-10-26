@@ -366,8 +366,8 @@ verified roles to explicit capabilities:
 | Role claim | Privileges |
 |---|---|
 | `caseworker-deedpoll-team-leader` | Privacy override, note/witness deletion, shared-query management, CCD repairs |
-| `caseworker-deedpoll-delivery-manager` | All Team leader privileges plus the entire Gazette facility |
-| `caseworker-deedpoll-admin` (deprecated) | Temporary Team leader compatibility; no Gazette access |
+| `caseworker-deedpoll-delivery-manager` | All Team leader privileges plus the entire Gazette facility and the process settings (`MANAGE_PROCESS_CONFIG`) |
+| `caseworker-deedpoll-admin` (deprecated) | Temporary Team leader compatibility; no Gazette access or process settings |
 
 Each new role works alone. Neither grants judicial or system access. Private saved queries remain
 owner-only; shared-query management does not bypass that rule. The privacy adapter derives its flag
@@ -1051,9 +1051,15 @@ when the value is unchanged; an unchanged value at the current revision is a no-
 `deedpoll_process_settings_change` row with the old and new values and the caller's subject and display name, and one
 `PROCESS_SETTINGS_CHANGED` audit event naming the field only, because the audit trail holds no values for an entity
 with no case. The subject is never published. There is no cache: the sweep reads the stored value each time it runs,
-so a change applies to every claim at once. Lowering the window releases nothing by itself; the next sweep does. A
+so once every replica runs this version a change applies to every claim at once; a sweep already running finishes
+with the value it read. Lowering the window releases nothing by itself; the next sweep does. A
 missing row fails the sweep rather than falling back to a default. `deedpoll.referrals.claim-expiry` and
 `DEEDPOLL_REFERRAL_CLAIM_EXPIRY` no longer exist.
+
+**Activation rule.** During the rolling deployment that brings V40, pods still on the previous version read the old
+yaml window (`PT2H` unless the environment overrode it) and ignore the stored one. So nobody edits the process settings until every old api pod is
+replaced, and admin does not deploy its settings page until this api serves on every replica in that environment.
+Raising the window afterwards cannot restore a claim the sweep has already released.
 
 ### The OpenAPI document
 

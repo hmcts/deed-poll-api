@@ -106,11 +106,12 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
     @ParameterizedTest
     @ValueSource(strings = {"caseworker-deedpoll", "caseworker-deedpoll-team-leader", "caseworker-deedpoll-admin",
         "caseworker-deedpoll-judicial", "caseworker-civil"})
-    @DisplayName("everyone but a Delivery Manager is refused both operations, with nothing written")
+    @DisplayName("everyone but a Delivery Manager is refused both operations, before any body check")
     void refusesEveryoneButADeliveryManager(String role) throws Exception {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Not a Delivery Manager", List.of(role));
         authorised(get(PATH)).andExpect(status().isForbidden());
         save("{\"" + MINUTES + "\":60,\"revision\":0}").andExpect(status().isForbidden());
+        save("{\"" + MINUTES + "\":29,\"forged\":true}").andExpect(status().isForbidden());
         assertUnchanged();
     }
 
@@ -134,8 +135,12 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
             .andExpect(jsonPath("$.updatedAt").isNotEmpty())
             .andReturn().getResponse().getContentAsString();
         assertThat(body).doesNotContain(StubIdam.SUBJECT, "updatedById");
-        authorised(get(PATH)).andExpect(jsonPath("$." + MINUTES).value(minutes))
-            .andExpect(jsonPath("$.revision").value(1));
+        String reread = authorised(get(PATH)).andExpect(jsonPath("$." + MINUTES).value(minutes))
+            .andExpect(jsonPath("$.revision").value(1))
+            .andExpect(jsonPath("$.updatedBy").value("Delivery Manager"))
+            .andExpect(jsonPath("$.updatedAt").isNotEmpty())
+            .andReturn().getResponse().getContentAsString();
+        assertThat(reread).doesNotContain(StubIdam.SUBJECT, "updatedById");
 
         assertThat(jdbc.queryForList("SELECT * FROM deedpoll_process_settings_change")).singleElement()
             .satisfies(row -> assertThat(row)
@@ -156,6 +161,9 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
         "{\"referralClaimExpiryMinutes\":0,\"revision\":0}|referralClaimExpiryMinutes",
         "{\"referralClaimExpiryMinutes\":-5,\"revision\":0}|referralClaimExpiryMinutes",
         "{\"referralClaimExpiryMinutes\":90.5,\"revision\":0}|referralClaimExpiryMinutes",
+        "{\"referralClaimExpiryMinutes\":90.0,\"revision\":0}|referralClaimExpiryMinutes",
+        "{\"referralClaimExpiryMinutes\":1.2e2,\"revision\":0}|referralClaimExpiryMinutes",
+        "{\"referralClaimExpiryMinutes\":2147483648,\"revision\":0}|referralClaimExpiryMinutes",
         "{\"referralClaimExpiryMinutes\":\"120\",\"revision\":0}|referralClaimExpiryMinutes",
         "{\"referralClaimExpiryMinutes\":null,\"revision\":0}|referralClaimExpiryMinutes",
         "{\"revision\":0}|referralClaimExpiryMinutes",
