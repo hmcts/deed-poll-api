@@ -6,7 +6,7 @@ read and change it under the new `MANAGE_PROCESS_CONFIG`, granted to Delivery Ma
 referral claim window (30–1,440 minutes, seeded 120), which `ReferralService.reclaimStaleClaims` now reads on every
 sweep with no cache; `deedpoll.referrals.claim-expiry` / `DEEDPOLL_REFERRAL_CLAIM_EXPIRY` are removed. Next: open the
 PR; after merge and deploy, admin's `docs/plans/20261026-dm-settings-page.md` refreshes `openapi.json` and builds the
-page. See [the plan](plans/20261026-dm-process-settings.md).
+page. See [the plan](plans/completed/20261026-dm-process-settings.md).
 
 **Document previews, 2026-10-23:** on `feat/document-preview-rendering`, not pushed and not live-verified.
 `GET /caseworker/cases/{id}/documents/{documentId}/preview` and `GET /judicial/referrals/{referralId}/documents/{documentId}/preview`
