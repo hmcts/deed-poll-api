@@ -1094,7 +1094,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         /**
-         * Backdates a claim past any configured expiry window, so the next sweep takes it back.
+         * Backdates a claim nine hours, past the seeded two-hour window, so the next sweep takes it back.
          *
          * <p>Off the row's own {@code claimedAt} rather than off {@code LocalDateTime.now()}, so the arithmetic
          * cannot depend on which clock the test and the service each read.

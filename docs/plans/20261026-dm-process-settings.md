@@ -243,8 +243,8 @@ if it needs the new value spelled out, `/me` controller tests, `CLAUDE.md` (Staf
 `ReferralConfiguration.java`, `ReferralPropertiesTest.java` (delete), `ReferralServiceTest`, `ConfirmationSecurityTest`,
 `ReferralSecurityTest`, `application.yaml`, `notify/NotifyProperties.java` (comment).
 
-- [ ] Add the failing real-Postgres live-window tests listed in the Development Approach: fixtures A and B, the three entry points, the PUT releasing nothing, and the missing singleton releasing nothing.
-- [ ] Implement, delete the property and its key, run `grep -rn "claim-expiry\|CLAIM_EXPIRY\|ReferralProperties" src docs` and clear every hit or justify it, then run all Validation Commands and record the results.
+- [x] Add the failing real-Postgres live-window tests listed in the Development Approach: fixtures A and B, the three entry points, the PUT releasing nothing, and the missing singleton releasing nothing.
+- [x] Implement, delete the property and its key, run `grep -rn "claim-expiry\|CLAIM_EXPIRY\|ReferralProperties" src docs` and clear every hit or justify it, then run all Validation Commands and record the results.
 
 ### Task 5: Documentation and final verification
 
@@ -306,3 +306,23 @@ test). Implemented `CaseworkerProcessSettingsController`, `ProcessSettingsRespon
 and `OpenAPIWriteBodies.describeProcessSettingsBody` (bounds from the service's constants); the `CLAUDE.md` layout
 names the path. Focused run: 50 unit and 22 integration tests, 0 failures. `build`: SUCCESSFUL (4m 49s); `test` 4,938
 tests (+25), 0 failures, 0 errors, 1 skipped; `integration` 25 (+1), 0 failures. `checkstyle.sh`: OK.
+
+**Task 4.** Tests first: `JudicialClaimWindowTest` (full context, real Postgres, stub IDAM; every window change is a
+real `PUT /caseworker/process-settings` as a Delivery Manager; each fixture `Claimed` and last touched 31 minutes
+ago). Fixture A on the pool: kept at 60, still `Claimed` with no lapse note after `PUT 30`, released by the next load
+with exactly one lapse note and `currentReferralState` refreshed to `Open`, still `Open` after `PUT 60` and another
+load. Fixture B, claimed at 30 and raised to 60 before any sweep: the pool keeps it. My referrals and claim each
+release their own still-`Claimed` fixture only after `PUT 30` (claim is a 404 inside the window, a 200 for this judge
+with one lapse note after). The singleton row deleted: the pool load fails with `IllegalStateException`, and the
+claim, its notes and the read-model are unchanged. Four of the five failed against `ReferralProperties` (the raised
+window passes either way). Implemented: `ReferralService` takes `ProcessSettingsService` and reads
+`referralClaimExpiry()` once per sweep, before anything is released; `ReferralProperties`, `ReferralConfiguration`,
+`ReferralPropertiesTest` and `deedpoll.referrals.claim-expiry` deleted; javadoc now names the Delivery Manager
+setting; `NotifyProperties`' comment fixed; `ReferralServiceTest`, `ConfirmationSecurityTest` and
+`ReferralSecurityTest` stub the settings read. The grep's remaining hits are justified: `ReferralServiceTest`'s
+`CLAIM_EXPIRY` is its stubbed window, `REFERRAL_CLAIM_EXPIRY_MINUTES` is the new setting's key, and
+`docs/plans/completed/referrals-api-2-claim-direction-close.md` is history. The two `lapse(...)` fixtures' javadoc
+said "past any configured window", no longer true with a 24-hour maximum, so they now say past the seeded two hours.
+Focused run: 390 tests, 0 failures. `build`: SUCCESSFUL (4m 55s); `test` 4,939 tests (+1: +5 new, -4
+`ReferralPropertiesTest`), 0 failures, 0 errors, 1 skipped; `integration` 25, 0 failures. `checkstyle.sh`: OK (after
+re-wrapping one javadoc line and making one local `final`).
