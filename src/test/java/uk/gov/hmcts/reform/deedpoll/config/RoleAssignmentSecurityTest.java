@@ -47,6 +47,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class RoleAssignmentSecurityTest extends AbstractPostgresContainerTest {
 
     private static final String GAZETTE = "/caseworker/gazette-settings";
+    private static final String PROCESS_SETTINGS = "/caseworker/process-settings";
     private static final String STAFF_ONLY = "/caseworker/document-types";
     private static final String SKILL = "SKILL:DEEDPOLL:GAZETTE";
     private static final String ACTOR_PATH = "/am/role-assignments/actors/" + StubIdam.SUBJECT;
@@ -114,6 +115,18 @@ class RoleAssignmentSecurityTest extends AbstractPostgresContainerTest {
         authorised(GAZETTE).andExpect(status().isOk());
         RAS.verify(1, getRequestedFor(urlPathEqualTo(ACTOR_PATH))
             .withHeader("ServiceAuthorization", equalTo("Bearer s2s-token")));
+    }
+
+    @Test
+    @DisplayName("the same AM-sourced Delivery Manager reaches the process settings, and loses them when RAS fails")
+    void amDeliveryManagerReachesTheProcessSettings() throws Exception {
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Team Leader", List.of("caseworker-deedpoll"));
+        teamLeaderWithSkill();
+        authorised(PROCESS_SETTINGS).andExpect(status().isOk());
+
+        RAS.resetAll();
+        rasFails();
+        authorised(PROCESS_SETTINGS).andExpect(status().isForbidden());
     }
 
     @Test

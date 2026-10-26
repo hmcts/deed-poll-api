@@ -27,6 +27,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQuerySchemas;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
@@ -142,6 +144,7 @@ public class OpenAPIWriteBodies {
             describeUploadBody(openApi);
             describeGazetteSettingsBody(openApi);
             describeGazetteBodies(openApi);
+            describeProcessSettingsBody(openApi);
         };
     }
 
@@ -181,6 +184,25 @@ public class OpenAPIWriteBodies {
         settings.addProperty("revision", new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
             .description("The revision returned by the settings read; stale values return 409."));
         settings.setRequired(java.util.List.of("recipientEmail", "revision"));
+        settings.setAdditionalProperties(false);
+    }
+
+    private void describeProcessSettingsBody(OpenAPI openApi) {
+        Schema<?> settings = schema(openApi, "UpdateProcessSettingsRequest");
+        if (settings == null) {
+            return;
+        }
+        settings.setType("object");
+        settings.setProperties(null);
+        settings.addProperty(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, new IntegerSchema()
+            .format("int32")
+            .minimum(java.math.BigDecimal.valueOf(ProcessSettingsService.MIN_REFERRAL_CLAIM_EXPIRY_MINUTES))
+            .maximum(java.math.BigDecimal.valueOf(ProcessSettingsService.MAX_REFERRAL_CLAIM_EXPIRY_MINUTES))
+            .description("How long a judge's untouched claim survives before it returns to the pool, in whole"
+                + " minutes, from 30 to 1440 (24 hours). Null, a fraction and a string are refused."));
+        settings.addProperty("revision", new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
+            .description("The revision returned by the settings read; stale values return 409."));
+        settings.setRequired(java.util.List.of(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, "revision"));
         settings.setAdditionalProperties(false);
     }
 

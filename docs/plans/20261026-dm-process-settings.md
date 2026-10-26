@@ -234,8 +234,8 @@ if it needs the new value spelled out, `/me` controller tests, `CLAUDE.md` (Staf
 **Files:** `api/caseworker/controller/CaseworkerProcessSettingsController.java`, `api/caseworker/dto/ProcessSettingsResponse.java`,
 `UpdateProcessSettingsRequest.java`, the path-enumerating tests listed in Context, `OpenAPIPublisherTest`, `CLAUDE.md` (layout).
 
-- [ ] Add failing tests: full-context MockMvc for every role, the 400/409 cases over HTTP, and the published operations, bounds and 403.
-- [ ] Implement, run the focused tests and all Validation Commands, and record the results.
+- [x] Add failing tests: full-context MockMvc for every role, the 400/409 cases over HTTP, and the published operations, bounds and 403.
+- [x] Implement, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 4: The sweep reads the stored window
 
@@ -288,3 +288,21 @@ and `DeedPollSchemaHealthTest`/`SdkMigrationOrderTest` taught V40's tables and v
 transaction, because the stubbing call passes through `record`'s `MANDATORY` interceptor. Focused run: 82 tests, 0
 failures. `build`: SUCCESSFUL (4m 28s); `test` 4,913 tests (+42), 0 failures, 0 errors, 1 skipped; `integration` 24,
 0 failures. `checkstyle.sh`: OK (after making one javadoc multi-line and splitting one line).
+
+**Task 3.** Tests first: `CaseworkerProcessSettingsControllerTest` (full context, real Postgres, stub IDAM: no token
+is 401; a fresh database answers 120/revision 0/null attribution; caseworker, Team leader, legacy admin, judge and a
+non-deed-poll role are 403 on GET and PUT with nothing written; a Team leader who is also a Delivery Manager is
+admitted; PUT 30 and 1440 accepted with attribution, no subject in the body, one history row and one audit event
+with no value row; 29/1441/0/-5/90.5/`"120"`/null/missing minutes, an unknown key, and missing/`"0"`/-1 revision each
+a 400 naming its field with row, history and audit unchanged; the bounds in the message; a stale revision 409 with
+nothing written, including stale-beats-no-op; the unchanged value a 200 no-op), a `RoleAssignmentSecurityTest` case
+(an AM-sourced Delivery Manager reaches `/caseworker/process-settings`, and loses it when RAS fails), and in
+`OpenAPIPublisherTest` the path in `known` plus `documentsProcessSettingsTheirBoundsAndTheirRefusal` (both operation
+ids, descriptions, the 403 on both, the response properties, `minimum: 30`, `maximum: 1440`, `format: int32`,
+`additionalProperties: false`). `WriteEndpointAuditCoverageTest`'s count moved from 29/25 to 30/26.
+`StaffAccessRulesTest` and `OpenAPIForbiddenResponsesTest` needed no change: the path is inside the caseworker
+`StaffArea`, so the rule covers it and the 403 is published by `OpenAPIForbiddenResponses` (asserted in the publisher
+test). Implemented `CaseworkerProcessSettingsController`, `ProcessSettingsResponse`, `UpdateProcessSettingsRequest`
+and `OpenAPIWriteBodies.describeProcessSettingsBody` (bounds from the service's constants); the `CLAUDE.md` layout
+names the path. Focused run: 50 unit and 22 integration tests, 0 failures. `build`: SUCCESSFUL (4m 49s); `test` 4,938
+tests (+25), 0 failures, 0 errors, 1 skipped; `integration` 25 (+1), 0 failures. `checkstyle.sh`: OK.
