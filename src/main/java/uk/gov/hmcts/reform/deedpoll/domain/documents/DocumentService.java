@@ -79,6 +79,9 @@ public class DocumentService {
     private final TransactionTemplate inTransaction;
     private final TransactionTemplate readOnly;
 
+    // Sonar's S9352 reads `store` as ambiguous between CdamDocumentStore and LocalFilesystemDocumentStore, but each is
+    // @ConditionalOnProperty on deedpoll.documents.store with a different value, so exactly one bean ever exists.
+    @SuppressWarnings("java:S9352")
     public DocumentService(DeedPollRepository deedPolls,
                            DeedPollSupportingDocumentRepository documents,
                            DeedPollSupportingDocumentTypeRepository types,
