@@ -154,8 +154,13 @@ final class ImageRenderer implements SourceRenderer {
     }
 
     private static Orientation orientation(byte[] jpeg, ImageInputStream directories, int index) throws IOException {
-        return jpeg != null ? ExifOrientation.of(jpeg)
-            : directories != null ? TiffOrientation.of(directories, index) : Orientation.TOP_LEFT;
+        if (jpeg != null) {
+            return ExifOrientation.of(jpeg);
+        }
+        if (directories != null) {
+            return TiffOrientation.of(directories, index);
+        }
+        return Orientation.TOP_LEFT;
     }
 
     private ImageReader readerFor(ImageInputStream input) throws IOException {
