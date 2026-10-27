@@ -120,6 +120,8 @@ public class OpenAPIWriteBodies {
 
     private static final String NOTE_FIELD = "note";
 
+    private static final String REVISION_PROPERTY = "revision";
+
     /** What the bounds on a witness text field measure, said once for the three of them. */
     private static final String WITNESS_TRIMMED =
         "Trimmed first: the bounds hold for the trimmed value, which is what is stored, so a blank is refused.";
@@ -181,9 +183,9 @@ public class OpenAPIWriteBodies {
             .pattern(GazetteSettingsService.EMAIL_PATTERN)
             .description("One email address; outer whitespace is trimmed."
                 + " Local part is at most 64 characters. Null and blank are refused."));
-        settings.addProperty("revision", new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
+        settings.addProperty(REVISION_PROPERTY, new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
             .description("The revision returned by the settings read; stale values return 409."));
-        settings.setRequired(java.util.List.of("recipientEmail", "revision"));
+        settings.setRequired(java.util.List.of("recipientEmail", REVISION_PROPERTY));
         settings.setAdditionalProperties(false);
     }
 
@@ -200,9 +202,9 @@ public class OpenAPIWriteBodies {
             .maximum(java.math.BigDecimal.valueOf(ProcessSettingsService.MAX_REFERRAL_CLAIM_EXPIRY_MINUTES))
             .description("How long a judge's untouched claim survives before it returns to the pool, in whole"
                 + " minutes, from 30 to 1440 (24 hours). Null, a fraction and a string are refused."));
-        settings.addProperty("revision", new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
+        settings.addProperty(REVISION_PROPERTY, new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
             .description("The revision returned by the settings read; stale values return 409."));
-        settings.setRequired(java.util.List.of(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, "revision"));
+        settings.setRequired(java.util.List.of(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, REVISION_PROPERTY));
         settings.setAdditionalProperties(false);
     }
 
