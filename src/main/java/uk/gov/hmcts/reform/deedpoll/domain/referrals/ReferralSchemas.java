@@ -309,7 +309,7 @@ public final class ReferralSchemas {
             || LEGACY_PUBLISH_TO_GAZETTE.equals(e.field()))) {
             return Optional.empty();
         }
-        if (changes.isPresent() && publish.isPresent() && changes.get() == publish.get()) {
+        if (changes.isPresent() && publish.isPresent() && changes.get().equals(publish.get())) {
             errors.add(new FieldError(CHANGES_TO_STANDARD_PUBLICATION, CHANGES_TO_STANDARD_PUBLICATION
                 + " and " + LEGACY_PUBLISH_TO_GAZETTE + " disagree: send " + CHANGES_TO_STANDARD_PUBLICATION
                 + " alone"));
