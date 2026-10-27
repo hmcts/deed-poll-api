@@ -113,8 +113,7 @@ final class ImageRenderer implements SourceRenderer {
                         properties.requireFrame(tileWidth, tileHeight);
                         decodedPixels = Math.max(decodedPixels, (long) tileWidth * tileHeight);
                     }
-                    Orientation orientation = jpeg != null ? ExifOrientation.of(jpeg)
-                        : directories != null ? TiffOrientation.of(directories, frames) : Orientation.TOP_LEFT;
+                    Orientation orientation = orientation(jpeg, directories, frames);
                     PDImageXObject image = frame(reader, frames, jpeg, document, decodedPixels);
                     budget.checkpoint();
                     place(document, image, width, height, orientation);
@@ -152,6 +151,16 @@ final class ImageRenderer implements SourceRenderer {
             TiffStructure.require(source, properties.maxPages(), budget);
         }
         return new FileImageInputStream(source.toFile());
+    }
+
+    private static Orientation orientation(byte[] jpeg, ImageInputStream directories, int index) throws IOException {
+        if (jpeg != null) {
+            return ExifOrientation.of(jpeg);
+        }
+        if (directories != null) {
+            return TiffOrientation.of(directories, index);
+        }
+        return Orientation.TOP_LEFT;
     }
 
     private ImageReader readerFor(ImageInputStream input) throws IOException {
