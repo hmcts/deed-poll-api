@@ -58,12 +58,12 @@ final class DocxRenderer implements SourceRenderer {
     private static final Duration SHORTEST = Duration.ofMillis(1);
 
     private final PreviewProperties properties;
-    private final PdfRenderer pdf;
+    private final PdfRenderer pdfRenderer;
     private final OkHttpClient transport;
 
-    DocxRenderer(PreviewProperties properties, PdfRenderer pdf) {
+    DocxRenderer(PreviewProperties properties, PdfRenderer pdfRenderer) {
         this.properties = properties;
-        this.pdf = pdf;
+        this.pdfRenderer = pdfRenderer;
         this.transport = new OkHttpClient.Builder().retryOnConnectionFailure(false)
             .followRedirects(false).followSslRedirects(false).proxy(Proxy.NO_PROXY).build();
     }
@@ -76,7 +76,7 @@ final class DocxRenderer implements SourceRenderer {
         requireComplete(converted);
         SourceRenderer.Rendition rendition;
         try {
-            rendition = pdf.render(converted, workspace, budget);
+            rendition = pdfRenderer.render(converted, workspace, budget);
         } catch (PreviewError refused) {
             if (refused.failure() == PreviewFailure.INVALID_DOCUMENT) {
                 // The DOCX passed; a PDF that does not is the converter's answer, not the applicant's document.
