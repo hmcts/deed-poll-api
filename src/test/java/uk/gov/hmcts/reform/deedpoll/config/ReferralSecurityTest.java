@@ -28,9 +28,9 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.CreateReferralInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
-import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
@@ -201,7 +201,7 @@ class ReferralSecurityTest {
         referrals = mock(ReferralRepository.class);
         notes = mock(NoteService.class);
         service = new ReferralService(deedPolls, referrals, notes,
-                                      new ReferralProperties(Duration.ofHours(2)),
+                                      claimWindow(Duration.ofHours(2)),
                                       mock(EntityManager.class),
                                       mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
 
@@ -1036,5 +1036,12 @@ class ReferralSecurityTest {
         return Arrays.stream(JudicialReferralController.class.getDeclaredMethods())
             .filter(method -> !method.isSynthetic())
             .toList();
+    }
+
+    /** The stored claim window, as the sweep reads it. */
+    private static ProcessSettingsService claimWindow(Duration window) {
+        ProcessSettingsService settings = mock(ProcessSettingsService.class);
+        when(settings.referralClaimExpiry()).thenReturn(window);
+        return settings;
     }
 }

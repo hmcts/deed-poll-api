@@ -20,6 +20,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
@@ -202,7 +203,9 @@ class ReferralServiceTest {
      * transactions to show, so it is proved in {@code ConfirmationConcurrencyTest} against a real database.
      */
     private ReferralService serviceWithClaimExpiry(Duration window) {
-        return new ReferralService(deedPolls, referrals, notes, new ReferralProperties(window),
+        ProcessSettingsService settings = mock(ProcessSettingsService.class);
+        when(settings.referralClaimExpiry()).thenReturn(window);
+        return new ReferralService(deedPolls, referrals, notes, settings,
                                    mock(EntityManager.class), mock(AuditTrail.class));
     }
 
@@ -2180,14 +2183,14 @@ class ReferralServiceTest {
         }
 
         @Test
-        @DisplayName("reads the window from configuration rather than assuming two hours")
-        void readsTheWindowFromConfiguration() {
+        @DisplayName("reads the window from the process settings rather than assuming two hours")
+        void readsTheWindowFromTheProcessSettings() {
             Referral held = storedClaim(JUDGE, Duration.ofMinutes(45));
             rowsInTheDatabase(held);
 
-            // Untouched for 45 minutes: inside the default two hours and well outside a configured half hour.
-            // The same row, swept by two differently configured services, is the claim that the window is not
-            // hard-coded -- and it is why correcting the guess is a deployment value rather than a release.
+            // Untouched for 45 minutes: inside the seeded two hours and well outside a stored half hour. The
+            // same row, swept against two different stored windows, is the claim that the window is not
+            // hard-coded -- and it is why a Delivery Manager can correct the guess without a release.
             assertThat(service.reclaimStaleClaims()).isZero();
             assertThat(held.getState()).isEqualTo(ReferralState.Claimed);
 

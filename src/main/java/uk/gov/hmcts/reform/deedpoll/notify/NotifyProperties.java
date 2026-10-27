@@ -11,8 +11,8 @@ import java.util.Optional;
  * What this service needs to know about GOV.UK Notify: where it is, how to authenticate, and which template
  * is which.
  *
- * <p>Wired the way {@code IdamProperties} and {@code ReferralProperties} are -- a record with constructor
- * binding, registered by {@link NotifyConfiguration} rather than component-scanned.
+ * <p>Wired the way {@code IdamProperties} is -- a record with constructor binding, registered by
+ * {@link NotifyConfiguration} rather than component-scanned.
  *
  * <p><strong>No Notify service exists for deed poll yet.</strong> There is no API key and there are no
  * templates, so {@link #apiKey()} has a non-working default and every template ID defaults to

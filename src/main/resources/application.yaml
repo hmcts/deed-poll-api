@@ -356,16 +356,6 @@ deedpoll:
         # How long one sweep may run before it starts nothing more. The counts bound the calls; this bounds a CCD or
         # IDAM that answers each one slowly but inside the Feign timeouts, which fails nothing and so stops nothing.
         max-duration: ${CCD_LINKING_SWEEP_MAX_DURATION:PT15S}
-  referrals:
-    # How long a judge's claim on a referral survives their inactivity before it goes back into the
-    # shared pool. Measured from their last interaction with the referral, not from the claim, so a
-    # judge still reading the papers keeps it.
-    #
-    # Two hours is a guess about how judges will actually work -- long enough not to lose a referral
-    # while reading a case, short enough that a closed laptop does not hold one overnight. Tunable
-    # here, as an ISO-8601 duration, once there is real judicial behaviour to observe: PT30M, PT4H.
-    # A zero or negative value refuses to start rather than releasing every claim as it is made.
-    claim-expiry: ${DEEDPOLL_REFERRAL_CLAIM_EXPIRY:PT2H}
   email:
     # How many rows of one template one case may hold from the last 24 hours, not counting permanent refusals
     # (CaseEmailService, abuse-limits plan). Over it is a 409; a replay of an earlier Idempotency-Key is still a 200.

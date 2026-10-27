@@ -257,6 +257,32 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    void documentsProcessSettingsTheirBoundsAndTheirRefusal() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+        JsonNode path = spec.get("paths").get("/caseworker/process-settings");
+        assertThat(path.fieldNames()).toIterable().containsExactlyInAnyOrder("get", "put");
+        assertThat(path.at("/get/operationId").asText()).isEqualTo("getProcessSettings");
+        assertThat(path.at("/put/operationId").asText()).isEqualTo("updateProcessSettings");
+        for (String method : List.of("get", "put")) {
+            assertThat(path.at("/" + method + "/description").asText())
+                .contains("caseworker-deedpoll-delivery-manager", "MANAGE_PROCESS_CONFIG");
+            assertThat(path.at("/" + method + "/responses/403").isMissingNode()).as(method).isFalse();
+        }
+        assertThat(path.at("/put/description").asText()).contains("409", "next judicial pool");
+        assertThat(spec.at("/components/schemas/ProcessSettingsResponse/properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "revision", "updatedAt", "updatedBy");
+        JsonNode body = spec.at("/components/schemas/UpdateProcessSettingsRequest");
+        assertThat(body.get("required").toString()).contains("referralClaimExpiryMinutes", "revision");
+        assertThat(body.get("additionalProperties").asBoolean()).isFalse();
+        JsonNode minutes = body.at("/properties/referralClaimExpiryMinutes");
+        assertThat(minutes.get("minimum").asInt()).isEqualTo(30);
+        assertThat(minutes.get("maximum").asInt()).isEqualTo(1440);
+        assertThat(minutes.get("format").asText()).isEqualTo("int32");
+        assertThat(body.at("/properties/revision/minimum").asInt()).isZero();
+    }
+
+    @Test
     void documentsEveryGazetteGateAndNamedWorklistRefusal() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
@@ -593,6 +619,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.addAll(PREVIEW_PATHS);
         known.add(GAZETTE_HISTORY_PATH);
         known.add("/caseworker/gazette-settings");
+        known.add("/caseworker/process-settings");
         known.add("/caseworker/gazette-notice-previews");
         known.add("/caseworker/gazette-notice-requests");
         known.add("/caseworker/gazette-notices/{batchId}");

@@ -29,6 +29,7 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations 
                                   /caseworker/ccd-attempts (3 operations, counted apart as CCD_ATTEMPT_PATHS)
                                   and /caseworker/gazette-notices (1 history GET, counted apart)
                                   and /caseworker/gazette-settings (Delivery Manager-only GET/PUT)
+                                  and /caseworker/process-settings (MANAGE_PROCESS_CONFIG GET/PUT, counted apart)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
                                   plus GET …/documents/{documentId}/preview (counted apart as PREVIEW_PATHS)
 api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case,
@@ -39,6 +40,8 @@ api/caller/{controller,dto}       GET /me, the caller's own areas and capabiliti
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
 domain/referrals                  referrals to the judiciary and the applicant's confirmation — NOT a port
+domain/settings                   the Delivery Manager's process settings (V40), starting with the referral claim
+                                  window — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
 domain/documents/preview          transient PDF renditions for the admin viewer, DOCX via Docmosis — NOT a port;
                                   domain/documents must not depend on it (PreviewBoundaryTest)
@@ -66,8 +69,8 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
 
 `caseworker-deedpoll-team-leader` grants OVERRIDE_PRIVACY, DELETE_NOTE, DELETE_WITNESS,
 MANAGE_SHARED_QUERIES and REPAIR_CCD. `caseworker-deedpoll-delivery-manager` inherits all five
-and alone grants ACCESS_GAZETTE. The deprecated `caseworker-deedpoll-admin` temporarily grants
-only the first five. Resolve capabilities from verified roles; the retained privacy boolean is derived.
+and alone grants ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG (the process settings). The deprecated
+`caseworker-deedpoll-admin` temporarily grants only the first five. Resolve capabilities from verified roles; the retained privacy boolean is derived.
 Every Gazette operation and the named `readyForPublication` worklist/count (including saved-query
 links) requires ACCESS_GAZETTE, with 403 before reads or side effects. Ordinary field conditions
 and case visibility remain unchanged. Neither new role grants judicial or system authority.
@@ -196,7 +199,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   and the field *names*, plus `detail` restricted to `AuditEntry`'s allowlisted keys; it holds no applicant data and
   is kept for 7 years. `deedpoll_audit_event_value` holds the before/after values (decision 5's text encoding, a
   row only for a changed field), which are applicant data disposed with the case, so `AuditTrail` refuses values on
-  an entity with no case (saved queries, Gazette settings and batches record names only). `record` is
+  an entity with no case (saved queries, Gazette settings, process settings and batches record names only; process settings keep
+  their values in V40's `deedpoll_process_settings_change`). `record` is
   `MANDATORY`: it joins the change's transaction, so a change whose audit insert fails rolls back, and it refuses a
   user write with no subject — only an explicitly system write uses `AuditActor.system()`. Reads (`CASE_VIEWED`,
   `DOCUMENT_DOWNLOADED`, `DOCUMENT_PREVIEWED`; never lists or searches) go through `ReadAudit` in their own
@@ -486,6 +490,11 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   values, and recompute both read-models. No email, and no Gazette code changes. **A withdrawn direction is a live
   claim again:** if the judge does not direct it, the inactivity sweep returns it to the pool like any other claim.
   That is deliberate and published in withdraw's OpenAPI description; do not special-case the sweep.
+- **The referral claim window is a stored process setting, read on every sweep.** `ReferralService` asks
+  `ProcessSettingsService.referralClaimExpiry()` once per `reclaimStaleClaims`, so a Delivery Manager's `PUT` applies
+  at once; never cache it or reintroduce a property default, and a missing V40 row fails the sweep rather than
+  guessing. Values go in `deedpoll_process_settings_change`, never in the audit trail (no case owns them). A new
+  setting arrives with the behaviour that reads it, not as a placeholder column.
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
   only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback

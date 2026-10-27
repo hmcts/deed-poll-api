@@ -31,6 +31,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.CreateSavedQueryInput;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQueryDefinition;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQueryService;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.UpdateSavedQueryInput;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
@@ -49,8 +50,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The referral, judicial, saved-query, Gazette settings, CCD repair and document metadata writes, and a case
- * delete, each record one audit event in their own transaction.
+ * The referral, judicial, saved-query, Gazette settings, process settings, CCD repair and document metadata writes,
+ * and a case delete, each record one audit event in their own transaction.
  *
  * <p>Rolled back, as {@code CaseWriteAuditTest} is, because V36 refuses the {@code DELETE} any other cleanup would
  * need. The email send and the Gazette settlement commit their own transactions, so {@code SendIdempotencyTest} and
@@ -80,6 +81,9 @@ class RemainingWriteAuditTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private GazetteSettingsService gazetteSettings;
+
+    @Autowired
+    private ProcessSettingsService processSettings;
 
     @Autowired
     private CcdCreationAttempts attempts;
@@ -310,6 +314,28 @@ class RemainingWriteAuditTest extends AbstractPostgresContainerTest {
                 .containsEntry("case_id", null)
                 .containsEntry("fields", "recipientEmail");
             assertThat(event.row().values()).noneMatch(value -> String.valueOf(value).contains("@"));
+            assertThat(event.values()).isEmpty();
+        });
+    }
+
+    @Test
+    @DisplayName("a process settings change names the claim window field and never its minutes")
+    void processSettings() {
+        int revision = jdbc.queryForObject("SELECT revision FROM deedpoll_process_settings WHERE id = 1",
+                                           Integer.class);
+        int minutes = jdbc.queryForObject(
+            "SELECT referral_claim_expiry_minutes FROM deedpoll_process_settings WHERE id = 1", Integer.class);
+
+        processSettings.update(DELIVERY_MANAGER,
+                               Map.of("referralClaimExpiryMinutes", minutes == 45 ? 46 : 45, "revision", revision));
+
+        List<Event> events = events("entity_type = 'ProcessSettings' AND actor_id = ?", "delivery-manager-subject");
+        assertThat(events).singleElement().satisfies(event -> {
+            assertThat(event.row())
+                .containsEntry("action", "PROCESS_SETTINGS_CHANGED")
+                .containsEntry("entity_id", "1")
+                .containsEntry("case_id", null)
+                .containsEntry("fields", "referralClaimExpiryMinutes");
             assertThat(event.values()).isEmpty();
         });
     }

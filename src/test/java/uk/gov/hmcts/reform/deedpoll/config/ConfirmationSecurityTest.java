@@ -36,9 +36,9 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ConfirmationInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralView;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralNotes;
-import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
@@ -153,7 +153,7 @@ class ConfirmationSecurityTest {
         referrals = mock(ReferralRepository.class);
         notes = mock(NoteService.class);
         service = new ReferralService(deedPolls, referrals, notes,
-                                      new ReferralProperties(Duration.ofHours(2)),
+                                      claimWindow(Duration.ofHours(2)),
                                       mock(EntityManager.class),
                                       mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
 
@@ -595,5 +595,12 @@ class ConfirmationSecurityTest {
 
     private static boolean mentionsConfirmation(String name) {
         return name.toLowerCase(Locale.ROOT).contains("confirmation");
+    }
+
+    /** The stored claim window, as the sweep reads it. */
+    private static ProcessSettingsService claimWindow(Duration window) {
+        ProcessSettingsService settings = mock(ProcessSettingsService.class);
+        when(settings.referralClaimExpiry()).thenReturn(window);
+        return settings;
     }
 }

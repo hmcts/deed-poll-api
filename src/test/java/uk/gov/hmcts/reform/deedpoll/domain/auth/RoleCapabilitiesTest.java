@@ -59,12 +59,13 @@ class RoleCapabilitiesTest {
     }
 
     @Test
-    void deliveryManagerInheritsExactlyTeamLeaderPlusGazette() {
+    void deliveryManagerInheritsExactlyTeamLeaderPlusGazetteAndProcessConfig() {
         Set<Capability> leader = RoleCapabilities.forRoles(List.of(Role.TEAM_LEADER));
         Set<Capability> manager = RoleCapabilities.forRoles(List.of(Role.DELIVERY_MANAGER));
         assertThat(manager).containsAll(leader);
         assertThat(manager.stream().filter(capability -> !leader.contains(capability)))
-            .containsExactly(Capability.ACCESS_GAZETTE);
+            .containsExactlyInAnyOrder(Capability.ACCESS_GAZETTE, Capability.MANAGE_PROCESS_CONFIG);
+        assertThat(leader).doesNotContain(Capability.MANAGE_PROCESS_CONFIG);
         assertThat(RoleCapabilities.forRoles(List.of(Role.DEEDPOLL_ADMIN))).isEqualTo(leader);
         assertThat(Role.fromClaimValue("caseworker-deedpoll-admin")).contains(Role.DEEDPOLL_ADMIN);
     }

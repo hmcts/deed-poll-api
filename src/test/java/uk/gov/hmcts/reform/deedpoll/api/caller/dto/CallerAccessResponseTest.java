@@ -24,7 +24,8 @@ class CallerAccessResponseTest {
 
     private static final List<Capability> DELIVERY_MANAGER = List.of(
         Capability.OVERRIDE_PRIVACY, Capability.DELETE_NOTE, Capability.DELETE_WITNESS,
-        Capability.MANAGE_SHARED_QUERIES, Capability.REPAIR_CCD, Capability.ACCESS_GAZETTE);
+        Capability.MANAGE_SHARED_QUERIES, Capability.REPAIR_CCD, Capability.ACCESS_GAZETTE,
+        Capability.MANAGE_PROCESS_CONFIG);
 
     @Test
     @DisplayName("a caseworker is staff with no capabilities")
@@ -39,14 +40,14 @@ class CallerAccessResponseTest {
     }
 
     @Test
-    @DisplayName("a Delivery Manager is staff with the Team leader set plus ACCESS_GAZETTE")
+    @DisplayName("a Delivery Manager is staff with the Team leader set plus ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG")
     void deliveryManager() {
         assertThat(accessFor(Role.DELIVERY_MANAGER))
             .isEqualTo(new CallerAccessResponse(true, false, DELIVERY_MANAGER));
     }
 
     @Test
-    @DisplayName("the legacy admin is staff with the Team leader set, never ACCESS_GAZETTE")
+    @DisplayName("the legacy admin is staff with the Team leader set, never ACCESS_GAZETTE or MANAGE_PROCESS_CONFIG")
     void legacyAdmin() {
         assertThat(accessFor(Role.DEEDPOLL_ADMIN)).isEqualTo(new CallerAccessResponse(true, false, TEAM_LEADER));
     }

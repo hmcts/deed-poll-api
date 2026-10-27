@@ -201,6 +201,7 @@ class AmRolesTest {
 
         EnumSet<Capability> expected = EnumSet.copyOf(leader);
         expected.add(Capability.ACCESS_GAZETTE);
+        expected.add(Capability.MANAGE_PROCESS_CONFIG);
         assertThat(granted).containsExactlyInAnyOrderElementsOf(expected);
 
         CurrentUser user = CurrentUser.currentUser(List.copyOf(roles), "Team leader", "subject");
@@ -209,6 +210,6 @@ class AmRolesTest {
             assertThat(user.can(capability)).as(capability.name()).isTrue();
         }
         assertThat(RoleCapabilities.forRoles(roles(assignment("ctsc-team-leader"))))
-            .doesNotContain(Capability.ACCESS_GAZETTE);
+            .doesNotContain(Capability.ACCESS_GAZETTE, Capability.MANAGE_PROCESS_CONFIG);
     }
 }
