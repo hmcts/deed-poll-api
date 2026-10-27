@@ -52,9 +52,6 @@ import java.util.List;
  *     the Gazette?": true for do not publish, or publish only as {@code directionsText} says; false for publish as
  *     standard. A boxed {@link Boolean} because absent and false are different answers: a referral with no
  *     direction has not been asked. Never derived from a {@code NonPublication} referral reason
- * @param publishToGazette the same answer under its pre-2026-10-27 name and inverted, for one release, so the admin
- *     deployed beside this api reads it as it always has. Deprecated in the document; removed once that admin is
- *     gone
  * @param decisionDate when the direction was recorded, or null
  * @param decidedBy who recorded it, which is this caller or null
  * @param directionChangedAt when this judge last revised or withdrew their direction, or null if it stands as
@@ -78,9 +75,6 @@ public record JudicialReferralDetail(
         + "publications in the Gazette?\": true for do not publish, or publish only as directionsText says; false for "
         + "publish as standard; null until a direction exists.")
     Boolean changesToStandardPublication,
-    @Schema(nullable = true, deprecated = true, description = "changesToStandardPublication inverted, under the "
-        + "name it had before 2026-10-27. Kept for one release; read changesToStandardPublication.")
-    Boolean publishToGazette,
     LocalDateTime decisionDate,
     String decidedBy,
     @Schema(nullable = true, description = "When the judge last revised or withdrew their direction, or null if "
@@ -107,18 +101,9 @@ public record JudicialReferralDetail(
             referral.getDecision(),
             referral.getDirectionsText(),
             referral.getChangesToStandardPublication(),
-            legacyPublishToGazette(referral),
             referral.getDecisionDate(),
             referral.getDecidedBy(),
             referral.getDirectionChangedAt(),
             JudicialApplicationView.from(view.application(), view.documents()));
-    }
-
-    /**
-     * {@code changesToStandardPublication} inverted, null staying null: the answer as the old name meant it.
-     */
-    private static Boolean legacyPublishToGazette(Referral referral) {
-        Boolean changes = referral.getChangesToStandardPublication();
-        return changes == null ? null : !changes;
     }
 }
