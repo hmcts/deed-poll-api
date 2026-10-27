@@ -492,6 +492,14 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   values, and recompute both read-models. No email, and no Gazette code changes. **A withdrawn direction is a live
   claim again:** if the judge does not direct it, the inactivity sweep returns it to the pool like any other claim.
   That is deliberate and published in withdraw's OpenAPI description; do not special-case the sweep.
+- **A minor's referral says what kind it is, as `Minor*` reasons beside `Minor`.** Master Sullivan's feedback (Steve,
+  2026-10-27) added eight `ReferralReason` members marked `isMinorDetail()`: `MinorTransgender`,
+  `MinorParentalConsent`/`MinorNoParentalConsent`, `MinorStepparentConsent`/`MinorNoStepparentConsent`,
+  `MinorCourtOrder` and `MinorAged16Or17Consented`/`MinorAged16Or17NotConsented`. They are reasons, not a new field,
+  so they need no migration. `ReferralSchemas.parseCreateReferral` accepts one only beside `Minor` and refuses both
+  halves of a pair (`CONTRADICTORY_MINOR_DETAILS`). **`Minor` alone is still accepted, deliberately, for one
+  release:** the admin deployed beside this api can send it, so "at least one detail" arrives with the contract step
+  after admin requires it. Never rename a member; the names are the stored form.
 - **The referral claim window is a stored process setting, read on every sweep.** `ReferralService` asks
   `ProcessSettingsService.referralClaimExpiry()` once per `reclaimStaleClaims`, so a Delivery Manager's `PUT` applies
   at once; never cache it or reintroduce a property default, and a missing V40 row fails the sweep rather than

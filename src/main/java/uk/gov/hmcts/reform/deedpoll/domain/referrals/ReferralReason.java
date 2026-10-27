@@ -16,6 +16,12 @@ package uk.gov.hmcts.reform.deedpoll.domain.referrals;
  * <p>{@link #Other} is the one member with a rule attached: it requires the referral's {@code notes},
  * which is the single free-text field rather than an explanation column of its own.
  *
+ * <p><strong>The {@code Minor*} details refine {@link #Minor}</strong> (Master Sullivan's feedback, Steve,
+ * 2026-10-27): the Masters asked for the kind of minor's application to be said when it is referred, as options
+ * beneath "Applicant is a minor". They are members of this enum rather than a field of their own, so they are
+ * stored, published and listed as reasons are, with no migration. {@link #isMinorDetail()} marks them, and
+ * {@code ReferralSchemas} accepts one only beside {@link #Minor} and refuses the three contradictory pairs.
+ *
  * <p>{@link #Minor} is a manually selectable reason like any other. Every minor application is
  * referred as a matter of policy, but auto-raising that referral needs a dependable "relates to a
  * minor" signal and a firing point in the case lifecycle, which is a follow-up.
@@ -38,5 +44,51 @@ public enum ReferralReason {
     SeparatedOrEstranged,
 
     /** Anything else -- requires the referral's notes to say what. */
-    Other
+    Other,
+
+    /** A minor's detail: the applicant is transgender. */
+    MinorTransgender(true),
+
+    /**
+     * A minor's detail: there is parental consent. Contradicts {@link #MinorNoParentalConsent}.
+     */
+    MinorParentalConsent(true),
+
+    /** A minor's detail: there is no parental consent. */
+    MinorNoParentalConsent(true),
+
+    /**
+     * A minor's detail: a stepparent has consented. Contradicts {@link #MinorNoStepparentConsent}.
+     */
+    MinorStepparentConsent(true),
+
+    /** A minor's detail: there is no stepparent consent. */
+    MinorNoStepparentConsent(true),
+
+    /** A minor's detail: there is a court order. */
+    MinorCourtOrder(true),
+
+    /** A minor's detail: the applicant is 16 or 17 and has consented. Contradicts the next. */
+    MinorAged16Or17Consented(true),
+
+    /** A minor's detail: the applicant is 16 or 17 and has not consented. */
+    MinorAged16Or17NotConsented(true);
+
+    private final boolean minorDetail;
+
+    ReferralReason() {
+        this(false);
+    }
+
+    ReferralReason(boolean minorDetail) {
+        this.minorDetail = minorDetail;
+    }
+
+    /**
+     * Whether this is one of the details a caseworker gives beneath {@link #Minor} (Master Sullivan's feedback,
+     * Steve, 2026-10-27), and so is accepted only beside it.
+     */
+    public boolean isMinorDetail() {
+        return minorDetail;
+    }
 }

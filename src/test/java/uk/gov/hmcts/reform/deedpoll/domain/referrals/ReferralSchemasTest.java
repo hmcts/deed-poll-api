@@ -3,6 +3,8 @@ package uk.gov.hmcts.reform.deedpoll.domain.referrals;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
@@ -122,13 +124,28 @@ class ReferralSchemasTest {
         @Test
         @DisplayName("accepts every member of the enum, so none is unreachable")
         void acceptsEveryMember() {
-            List<String> everyName = Arrays.stream(ReferralReason.values()).map(Enum::name).toList();
+            // Two passes, because one referral may not carry both halves of a contradictory pair: the first
+            // half of each pair in one, the second in the other, and every other member in both.
+            List<ReferralReason> secondHalves = List.of(
+                ReferralReason.MinorNoParentalConsent,
+                ReferralReason.MinorNoStepparentConsent,
+                ReferralReason.MinorAged16Or17NotConsented);
+            List<ReferralReason> firstHalves = List.of(
+                ReferralReason.MinorParentalConsent,
+                ReferralReason.MinorStepparentConsent,
+                ReferralReason.MinorAged16Or17Consented);
 
-            CreateReferralInput created = parse(payload(
-                "reasons", everyName,
-                "notes", "Other is in there"));
+            for (List<ReferralReason> left : List.of(secondHalves, firstHalves)) {
+                List<ReferralReason> sent = Arrays.stream(ReferralReason.values())
+                    .filter(reason -> !left.contains(reason))
+                    .toList();
 
-            assertThat(created.reasons()).containsExactlyElementsOf(Arrays.asList(ReferralReason.values()));
+                CreateReferralInput created = parse(payload(
+                    "reasons", sent.stream().map(Enum::name).toList(),
+                    "notes", "Other is in there"));
+
+                assertThat(created.reasons()).containsExactlyElementsOf(sent);
+            }
         }
 
         @Test
@@ -157,6 +174,66 @@ class ReferralSchemasTest {
         void refusesANonTextElement() {
             assertThat(errorsFrom(() -> parse(payload("reasons", List.of("Minor", 7)))))
                 .containsExactly(new FieldError("reasons", "reasons must be a list of text"));
+        }
+    }
+
+    @Nested
+    @DisplayName("a minor's details, which refine Minor")
+    class MinorDetails {
+
+        @Test
+        @DisplayName("accepts the details beside Minor, in the order they were ticked")
+        void acceptsDetailsBesideMinor() {
+            CreateReferralInput created = parse(payload("reasons", List.of(
+                "Minor", "MinorTransgender", "MinorParentalConsent", "MinorAged16Or17Consented")));
+
+            assertThat(created.reasons()).containsExactly(
+                ReferralReason.Minor,
+                ReferralReason.MinorTransgender,
+                ReferralReason.MinorParentalConsent,
+                ReferralReason.MinorAged16Or17Consented);
+        }
+
+        @Test
+        @DisplayName("refuses a detail without Minor, because it describes a minor's application")
+        void refusesADetailWithoutMinor() {
+            assertThat(errorsFrom(() -> parse(payload("reasons", List.of("DomesticAbuse", "MinorCourtOrder")))))
+                .containsExactly(new FieldError("reasons",
+                    "reasons names a minor's detail (MinorCourtOrder) without Minor"));
+        }
+
+        @ParameterizedTest(name = "{0} and {1}")
+        @CsvSource({
+            "MinorParentalConsent, MinorNoParentalConsent",
+            "MinorStepparentConsent, MinorNoStepparentConsent",
+            "MinorAged16Or17Consented, MinorAged16Or17NotConsented"
+        })
+        @DisplayName("refuses both halves of a contradictory pair")
+        void refusesAContradictoryPair(String first, String second) {
+            assertThat(errorsFrom(() -> parse(payload("reasons", List.of("Minor", second, first)))))
+                .containsExactly(new FieldError("reasons", "reasons cannot name both " + first + " and " + second));
+        }
+
+        @Test
+        @DisplayName("still accepts Minor alone for now, because the admin beside this api can send it")
+        void stillAcceptsMinorAlone() {
+            // The "at least one detail" rule arrives with the contract step, once admin requires a detail itself.
+            assertThat(parse(payload("reasons", List.of("Minor"))).reasons()).containsExactly(ReferralReason.Minor);
+        }
+
+        @Test
+        @DisplayName("marks exactly the eight Minor details, so a new reason is not one by accident")
+        void marksTheEightDetails() {
+            assertThat(Arrays.stream(ReferralReason.values()).filter(ReferralReason::isMinorDetail).map(Enum::name))
+                .containsExactly(
+                    "MinorTransgender",
+                    "MinorParentalConsent",
+                    "MinorNoParentalConsent",
+                    "MinorStepparentConsent",
+                    "MinorNoStepparentConsent",
+                    "MinorCourtOrder",
+                    "MinorAged16Or17Consented",
+                    "MinorAged16Or17NotConsented");
         }
     }
 
