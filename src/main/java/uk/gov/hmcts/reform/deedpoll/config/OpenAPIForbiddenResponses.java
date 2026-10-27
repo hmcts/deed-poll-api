@@ -50,27 +50,35 @@ public class OpenAPIForbiddenResponses {
             }
             boolean referenced = false;
             for (Map.Entry<String, PathItem> path : openApi.getPaths().entrySet()) {
-                if (StaffArea.of(path.getKey()).isEmpty()) {
-                    continue;
-                }
-                for (Operation operation : path.getValue().readOperations()) {
-                    if (isPublic(operation)) {
-                        continue;
-                    }
-                    if (operation.getResponses() == null) {
-                        operation.setResponses(new ApiResponses());
-                    }
-                    if (!operation.getResponses().containsKey(FORBIDDEN)) {
-                        operation.getResponses().addApiResponse(FORBIDDEN,
-                            new ApiResponse().$ref("#/components/responses/" + RESPONSE_NAME));
-                        referenced = true;
-                    }
+                if (referenceForbiddenResponses(path)) {
+                    referenced = true;
                 }
             }
             if (referenced) {
                 register(openApi);
             }
         };
+    }
+
+    private static boolean referenceForbiddenResponses(Map.Entry<String, PathItem> path) {
+        if (StaffArea.of(path.getKey()).isEmpty()) {
+            return false;
+        }
+        boolean referenced = false;
+        for (Operation operation : path.getValue().readOperations()) {
+            if (isPublic(operation)) {
+                continue;
+            }
+            if (operation.getResponses() == null) {
+                operation.setResponses(new ApiResponses());
+            }
+            if (!operation.getResponses().containsKey(FORBIDDEN)) {
+                operation.getResponses().addApiResponse(FORBIDDEN,
+                    new ApiResponse().$ref("#/components/responses/" + RESPONSE_NAME));
+                referenced = true;
+            }
+        }
+        return referenced;
     }
 
     /** An explicit empty requirement opts an operation out of the global bearer requirement. */
