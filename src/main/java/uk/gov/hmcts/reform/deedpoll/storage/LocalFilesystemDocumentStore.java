@@ -32,7 +32,7 @@ import java.util.UUID;
  * it is {@code cdam}. {@link DocumentStoreProperties} refuses any other value at startup.
  */
 @Component
-@ConditionalOnProperty(name = DocumentStoreProperties.STORE, havingValue = DocumentStoreProperties.FILESYSTEM,
+@ConditionalOnProperty(name = DocumentStoreProperties.STORE_PROPERTY, havingValue = DocumentStoreProperties.FILESYSTEM,
     matchIfMissing = true)
 public class LocalFilesystemDocumentStore implements DocumentStore {
 
