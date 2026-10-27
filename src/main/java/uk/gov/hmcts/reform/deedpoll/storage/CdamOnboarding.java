@@ -12,7 +12,7 @@ import java.util.List;
 
 /** Refuses an enabled CDAM store with local defaults or unconfirmed identifiers outside the local test stacks. */
 @Component
-@ConditionalOnProperty(name = DocumentStoreProperties.STORE, havingValue = DocumentStoreProperties.CDAM)
+@ConditionalOnProperty(name = DocumentStoreProperties.STORE_PROPERTY, havingValue = DocumentStoreProperties.CDAM)
 public class CdamOnboarding {
 
     public CdamOnboarding(@Value("${case_document_am.url:}") String url,

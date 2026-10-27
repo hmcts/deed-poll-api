@@ -20,7 +20,7 @@ import java.net.URI;
 public record DocumentStoreProperties(String store, String documentUrlBase) {
 
     /** The property that selects the store, for the implementations' conditions. */
-    public static final String STORE = "deedpoll.documents.store";
+    public static final String STORE_PROPERTY = "deedpoll.documents.store";
 
     public static final String FILESYSTEM = "filesystem";
 
@@ -32,7 +32,7 @@ public record DocumentStoreProperties(String store, String documentUrlBase) {
         }
         if (!FILESYSTEM.equals(store) && !CDAM.equals(store)) {
             throw new IllegalArgumentException(
-                STORE + " must be " + FILESYSTEM + " or " + CDAM + ", not '" + store + "'");
+                STORE_PROPERTY + " must be " + FILESYSTEM + " or " + CDAM + ", not '" + store + "'");
         }
         if (documentUrlBase == null || documentUrlBase.isBlank()) {
             documentUrlBase = "http://dm-store:8080";

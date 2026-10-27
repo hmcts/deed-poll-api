@@ -45,7 +45,7 @@ import java.util.UUID;
  * the far side (decision 8).
  */
 @Component
-@ConditionalOnProperty(name = DocumentStoreProperties.STORE, havingValue = DocumentStoreProperties.CDAM)
+@ConditionalOnProperty(name = DocumentStoreProperties.STORE_PROPERTY, havingValue = DocumentStoreProperties.CDAM)
 public class CdamDocumentUploads implements RemoteDocumentUploads {
 
     /** How many times one request submits the attach: the first, and one retry after a lost answer. */
