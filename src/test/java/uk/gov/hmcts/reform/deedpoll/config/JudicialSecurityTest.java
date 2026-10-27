@@ -16,12 +16,10 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.IdamClaims;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
-import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
-import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
@@ -95,7 +93,7 @@ class JudicialSecurityTest {
      *
      * <p>The caller the ownership migration exists for, and the one this class is the right place to state: while
      * visibility compared display names, a namesake was admitted to another judge's referral -- and on this
-     * surface that is the application and its whole notes timeline, because {@code visibleTo} is the only boundary
+     * surface that is the application and its documents, because {@code visibleTo} is the only boundary
      * in front of a finder by referral id.
      */
     private static final CurrentUser NAMESAKE_JUDGE =
@@ -165,8 +163,6 @@ class JudicialSecurityTest {
 
     private ReferralRepository referrals;
     private ReferralService transitions;
-    private NoteService notes;
-    private WitnessService witnesses;
     private DocumentService documents;
     private JudicialReferralService service;
 
@@ -174,14 +170,12 @@ class JudicialSecurityTest {
     void createService() {
         referrals = mock(ReferralRepository.class);
         transitions = mock(ReferralService.class);
-        notes = mock(NoteService.class);
-        witnesses = mock(WitnessService.class);
         documents = mock(DocumentService.class);
-        service = new JudicialReferralService(referrals, transitions, notes, witnesses, documents);
+        service = new JudicialReferralService(referrals, transitions, documents);
 
-        // An empty timeline rather than the mock's null: the read wraps the notes in a view, so a judge admitted
-        // by the gate has to be able to get all the way to an answer for the refusals to mean anything.
-        when(notes.findNotes(anyString())).thenReturn(List.of());
+        // No documents rather than the mock's null: the read wraps them in a view, so a judge admitted by the gate
+        // has to be able to get all the way to an answer for the refusals to mean anything.
+        when(documents.readableDocuments(anyString())).thenReturn(List.of());
     }
 
     /**
@@ -279,7 +273,7 @@ class JudicialSecurityTest {
     private void verifyNothingHappened() {
         verifyNoInteractions(referrals);
         verifyNoInteractions(transitions);
-        verifyNoInteractions(notes, witnesses, documents);
+        verifyNoInteractions(documents);
     }
 
     /** No transition ran, whatever else the request did on the way to being refused. */

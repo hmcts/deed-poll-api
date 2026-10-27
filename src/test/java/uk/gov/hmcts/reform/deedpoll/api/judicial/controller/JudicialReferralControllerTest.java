@@ -767,7 +767,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     class ReadReferral {
 
         @Test
-        @DisplayName("returns the referral, the application view and the case's notes")
+        @DisplayName("returns the referral and the application view, with no case notes")
         void returnsTheReferralAndItsApplication() throws Exception {
             String caseId = named(newCase(), "Robin");
             String referralId = raise(caseId, Urgency.Urgent);
@@ -790,16 +790,14 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.application.newForename").value("Robin"))
                 .andExpect(jsonPath("$.application.newMiddleName").value("Peter"))
                 .andExpect(jsonPath("$.application.newSurname").value("Smyth"))
-                // The timeline, read-only -- the referral's own "raised" note is on it, by the caseworker who
-                // raised it.
-                .andExpect(jsonPath("$.caseNotes.length()").value(1))
-                .andExpect(jsonPath("$.caseNotes[0].note").value(containsString("Referred to a Master")))
-                .andExpect(jsonPath("$.caseNotes[0].createdBy").value("Ada Caseworker"))
-                .andExpect(jsonPath("$.caseNotes[0].createdOn").exists());
+                // No timeline since 2026-10-27 (Master Sullivan's feedback), although raising the referral wrote
+                // a note.
+                .andExpect(jsonPath("$.caseNotes").doesNotExist());
         }
 
         @Test
-        @DisplayName("returns a private case's details, witnesses and attached documents, as the business decided")
+        @DisplayName("returns a private case's readable documents, and none of its contact details, privacy or "
+            + "witnesses")
         void returnsThePrivateCaseInFull() throws Exception {
             String caseId = named(newCase(), "Robin");
             administrative(caseId);
@@ -810,16 +808,12 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
             authorised(get(POOL + "/" + referralId))
                 .andExpect(status().isOk())
-                // Business decisions 1 and 2 of 2026-10-19: contact details and privacy, shown read-only.
-                .andExpect(jsonPath("$.application.privacy").value(Privacy.Private.name()))
-                .andExpect(jsonPath("$.application.applicantEmail").value("applicant@example.com"))
-                .andExpect(jsonPath("$.application.applicantTelephone").value("020 7946 0000"))
-                .andExpect(jsonPath("$.application.dateReceived").exists())
-                // The witness, with no id.
-                .andExpect(jsonPath("$.application.witnesses.length()").value(1))
-                .andExpect(jsonPath("$.application.witnesses[0].witnessName").value("A Witness"))
-                .andExpect(jsonPath("$.application.witnesses[0].declarant").value(true))
-                .andExpect(jsonPath("$.application.witnesses[0].id").doesNotExist())
+                // Narrowed on 2026-10-27 (Master Sullivan's feedback): the case has all of these, and none is sent.
+                .andExpect(jsonPath("$.application.privacy").doesNotExist())
+                .andExpect(jsonPath("$.application.applicantEmail").doesNotExist())
+                .andExpect(jsonPath("$.application.applicantTelephone").doesNotExist())
+                .andExpect(jsonPath("$.application.dateReceived").doesNotExist())
+                .andExpect(jsonPath("$.application.witnesses").doesNotExist())
                 // Only the document with a file: the row with none would be a link whose download 404s.
                 .andExpect(jsonPath("$.application.documents.length()").value(1))
                 .andExpect(jsonPath("$.application.documents[0].id").value(attached))
@@ -1046,11 +1040,8 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 // The same document the read gives, because the screen after a claim is the papers -- so a client
                 // renders them without a second call.
                 .andExpect(jsonPath("$.application.newSurname").value("Smyth"))
-                // Two notes: the caseworker's "referred to the judiciary" and this claim's own, written by the
-                // transition in the same request and therefore already on the timeline it answers with.
-                .andExpect(jsonPath("$.caseNotes.length()").value(2))
-                .andExpect(jsonPath("$.caseNotes[*].note",
-                                    hasItem(containsString("claimed by a Master"))));
+                // The claim still writes its case note, but the Master's answer carries no timeline.
+                .andExpect(jsonPath("$.caseNotes").doesNotExist());
 
             Referral claimed = stored(referralId);
             assertThat(claimed.getState()).isEqualTo(ReferralState.Claimed);

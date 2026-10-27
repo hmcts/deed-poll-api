@@ -21,12 +21,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
-import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
-import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
-import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
-import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
@@ -82,7 +78,7 @@ class JudicialReferralServiceTest {
      *
      * <p>The shape the ownership migration exists for. While visibility compared display names these two were one
      * person to it, so either could read the other's claimed referral -- and on this surface that means the
-     * application and its notes, because {@code visibleTo} is the only boundary in front of a finder by referral
+     * application and its documents, because {@code visibleTo} is the only boundary in front of a finder by referral
      * id.
      */
     private static final CurrentUser NAMESAKE_JUDGE =
@@ -121,8 +117,6 @@ class JudicialReferralServiceTest {
 
     private ReferralRepositoryStub referrals;
     private ReferralService referralService;
-    private NoteService notes;
-    private WitnessService witnesses;
     private DocumentService documents;
     private JudicialReferralService service;
 
@@ -130,10 +124,8 @@ class JudicialReferralServiceTest {
     void createService() {
         referrals = new ReferralRepositoryStub();
         referralService = mock(ReferralService.class);
-        notes = mock(NoteService.class);
-        witnesses = mock(WitnessService.class);
         documents = mock(DocumentService.class);
-        service = new JudicialReferralService(referrals.repository(), referralService, notes, witnesses, documents);
+        service = new JudicialReferralService(referrals.repository(), referralService, documents);
     }
 
     /**
@@ -225,7 +217,7 @@ class JudicialReferralServiceTest {
         @DisplayName("a different judge sharing the holder's display name sees nothing of theirs")
         void refusesANamesakeOfTheHolder() {
             // The disclosure V14 removes, stated at the boundary that admits it: while this compared names,
-            // a namesake was handed the referral, the application behind it and its whole notes timeline.
+            // a namesake was handed the referral, the application behind it and its documents.
             for (ReferralState state : List.of(ReferralState.Claimed, ReferralState.Decided)) {
                 assertThat(JudicialReferralService.visibleTo(referral(state, JUDGE), NAMESAKE_JUDGE))
                     .as("a %s referral of a judge who shares this caller's display name", state)
@@ -642,17 +634,16 @@ class JudicialReferralServiceTest {
             // The gate is the first statement, so a caseworker learns nothing about whether the referral exists,
             // and their refused read cannot stamp a claim's inactivity clock.
             referrals.verifyNothingRead();
-            verifyNoInteractions(referralService, notes);
+            verifyNoInteractions(referralService, documents);
         }
 
         @ParameterizedTest
         @EnumSource(value = ReferralState.class, names = {"Open", "Claimed", "Decided"})
-        @DisplayName("returns the referral, its application and its notes for one this judge may see")
+        @DisplayName("returns the referral, its application and its readable documents for one this judge may see")
         void returnsAVisibleReferral(ReferralState state) {
             Referral referral = stored(state, JUDGE);
-            DeedPollNote note = new DeedPollNote();
-            note.setNote("Fee taken, papers scanned");
-            when(notes.findNotes(CASE_ID)).thenReturn(List.of(note));
+            DeedPollSupportingDocument document = new DeedPollSupportingDocument();
+            when(documents.readableDocuments(CASE_ID)).thenReturn(List.of(document));
 
             JudicialReferralView view = service.referral(REFERRAL_ID.toString(), JUDGE);
 
@@ -660,25 +651,21 @@ class JudicialReferralServiceTest {
             // Resolved from the referral rather than named by the caller, which is the whole of decision 2: a
             // judicial URL carries no case id, so this is the only way the application is reached.
             assertThat(view.application().getId()).isEqualTo(CASE_ID);
-            assertThat(view.caseNotes()).containsExactly(note);
-            verify(notes).findNotes(CASE_ID);
+            assertThat(view.documents()).containsExactly(document);
         }
 
         @Test
-        @DisplayName("returns a private case's witnesses and readable documents in full, as for any other case")
+        @DisplayName("returns a private case's readable documents, as for any other case")
         void returnsThePrivateCaseInFull() {
             Referral referral = stored(ReferralState.Open, JUDGE);
             referral.getDeedPoll().setPrivacy(Privacy.Private);
-            DeedPollWitness witness = new DeedPollWitness();
             DeedPollSupportingDocument document = new DeedPollSupportingDocument();
-            when(witnesses.findWitnesses(CASE_ID)).thenReturn(List.of(witness));
             when(documents.readableDocuments(CASE_ID)).thenReturn(List.of(document));
 
             JudicialReferralView view = service.referral(REFERRAL_ID.toString(), JUDGE);
 
-            // Business decision 2: privacy restricts no read here, so a private case is the same whole view.
+            // Privacy restricts no read here, so a private case is the same view as any other.
             assertThat(view.application().getPrivacy()).isEqualTo(Privacy.Private);
-            assertThat(view.witnesses()).containsExactly(witness);
             // The readable documents and not every row: which rows those are is DocumentService's rule, the
             // same one its download applies, so a judge is never listed a document their download would 404.
             assertThat(view.documents()).containsExactly(document);
@@ -687,7 +674,7 @@ class JudicialReferralServiceTest {
 
         @ParameterizedTest
         @EnumSource(value = ReferralState.class, names = {"Closed", "Withdrawn"})
-        @DisplayName("404s a terminal referral even for the judge who directed it, and reads no notes")
+        @DisplayName("404s a terminal referral even for the judge who directed it, and reads no documents")
         void notFoundForATerminalReferral(ReferralState terminal) {
             stored(terminal, JUDGE);
 
@@ -696,8 +683,8 @@ class JudicialReferralServiceTest {
                 .hasMessage(NOT_FOUND);
 
             // The refusal comes before the case is reached at all, so an invisible referral does not even cause
-            // its application's timeline, witnesses or documents to be loaded.
-            verifyNoInteractions(notes, witnesses, documents);
+            // its application's documents to be loaded.
+            verifyNoInteractions(documents);
             verifyNoInteractions(referralService);
         }
 
@@ -779,7 +766,7 @@ class JudicialReferralServiceTest {
                 .isInstanceOf(NotFoundError.class);
 
             assertThat(unheld.getClaimedBy()).isNull();
-            verifyNoInteractions(referralService, notes);
+            verifyNoInteractions(referralService, documents);
         }
     }
 
@@ -809,7 +796,7 @@ class JudicialReferralServiceTest {
             // The gate is the first statement, so a refused caller cannot trigger the mutating sweep -- which
             // writes notes and moves other judges' claims -- by being refused often enough.
             referrals.verifyNothingRead();
-            verifyNoInteractions(referralService, notes);
+            verifyNoInteractions(referralService, documents);
         }
 
         @Test
@@ -825,7 +812,7 @@ class JudicialReferralServiceTest {
 
             verify(referralService, never()).reclaimStaleClaims();
             verify(referralService, never()).claim(any(), any(), any());
-            verifyNoInteractions(notes);
+            verifyNoInteractions(documents);
         }
 
         @Test
@@ -850,8 +837,8 @@ class JudicialReferralServiceTest {
             Referral pooled = stored(ReferralState.Open, null);
             Referral claimed = referral(ReferralState.Claimed, JUDGE);
             when(referralService.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE)).thenReturn(claimed);
-            DeedPollNote note = new DeedPollNote();
-            when(notes.findNotes(CASE_ID)).thenReturn(List.of(note));
+            DeedPollSupportingDocument document = new DeedPollSupportingDocument();
+            when(documents.readableDocuments(CASE_ID)).thenReturn(List.of(document));
 
             JudicialReferralView view = service.claim(REFERRAL_ID.toString(), JUDGE);
 
@@ -861,8 +848,8 @@ class JudicialReferralServiceTest {
             // post-transition one, and returning the pre-claim referral would show them Open.
             assertThat(view.referral()).isSameAs(claimed).isNotSameAs(pooled);
             assertThat(view.application().getId()).isEqualTo(CASE_ID);
-            // The same three things a read answers with, because the screen after a claim is the papers.
-            assertThat(view.caseNotes()).containsExactly(note);
+            // The same things a read answers with, because the screen after a claim is the papers.
+            assertThat(view.documents()).containsExactly(document);
         }
 
         @ParameterizedTest
@@ -941,7 +928,7 @@ class JudicialReferralServiceTest {
             }
 
             referrals.verifyNothingRead();
-            verifyNoInteractions(referralService, notes);
+            verifyNoInteractions(referralService, documents);
         }
 
         @Test
@@ -1034,7 +1021,7 @@ class JudicialReferralServiceTest {
             }
 
             referrals.verifyNothingRead();
-            verifyNoInteractions(referralService, notes);
+            verifyNoInteractions(referralService, documents);
         }
 
         @Test
@@ -1105,7 +1092,7 @@ class JudicialReferralServiceTest {
             }
 
             referrals.verifyNothingRead();
-            verifyNoInteractions(referralService, notes);
+            verifyNoInteractions(referralService, documents);
         }
 
         @Test

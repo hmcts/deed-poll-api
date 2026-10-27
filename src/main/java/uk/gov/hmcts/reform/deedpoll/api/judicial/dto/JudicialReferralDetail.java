@@ -11,18 +11,17 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * One referral as the judge who may see it reads it: the referral, the application with its witnesses and
- * documents, and the application's timeline.
+ * One referral as the Master who may see it reads it: the referral and the application with its readable
+ * documents. Since 2026-10-27 (Master Sullivan's feedback) it carries no case notes: the Masters asked for the
+ * referral, the application's names and its documents, and nothing of the office's timeline.
  *
  * <p>One response for what is one screen. A judge opening a referral is deciding what to direct, and the reasons
  * it was raised, the names it is about and what the office has recorded are all inputs to that -- so they arrive
- * together rather than as three calls each having to repeat the visibility check.
+ * together rather than as separate calls each having to repeat the visibility check.
  *
- * <p><strong>{@code notes} is the referral's free text and {@code caseNotes} is the application's timeline.</strong>
- * Two different things with confusable names, and the names are the ones each already has: {@code notes} is the
- * referral column a caseworker fills in for the judiciary -- the same field {@code ReferralResponse} publishes
- * under that name -- and {@code caseNotes} is the notes grid. Renaming either to disambiguate would make one of
- * them disagree with the resource it belongs to.
+ * <p><strong>{@code notes} is the referral's free text</strong>, the column a caseworker fills in for the Master -- the
+ * same field {@code ReferralResponse} publishes under that name. It is not the application's case notes, which this
+ * response does not carry.
  *
  * <p><strong>The claim and the decision columns are published, and they cannot name another judge.</strong>
  * {@code claimedBy} and {@code decidedBy} are only ever this caller or null by the time a response gets here:
@@ -55,9 +54,8 @@ import java.util.List;
  * @param decidedBy who recorded it, which is this caller or null
  * @param directionChangedAt when this judge last revised or withdrew their direction, or null if it stands as
  *     first given. Never cleared, so a withdrawn direction keeps it while the referral is claimed again
- * @param application the judicial view of the case, with its witnesses and readable documents, resolved from
- *     the referral rather than named by the caller
- * @param caseNotes the application's notes, newest first, read-only
+ * @param application the judicial view of the case, with its readable documents, resolved from the referral
+ *     rather than named by the caller
  */
 public record JudicialReferralDetail(
     String id,
@@ -78,12 +76,11 @@ public record JudicialReferralDetail(
         + "it stands as first given. Set by both and never cleared: a fact about the referral's history, and the "
         + "earlier direction is on the audit trail.")
     LocalDateTime directionChangedAt,
-    @Schema(description = "The application behind the referral, resolved from it: its details, witnesses and "
-        + "readable documents. Never a case id, and no payment or refund data.")
-    JudicialApplicationView application,
-    List<JudicialCaseNote> caseNotes) {
+    @Schema(description = "The application behind the referral, resolved from it: the names, type, nationality, a "
+        + "minor's parents and its readable documents. Never a case id, contact details or case notes.")
+    JudicialApplicationView application) {
 
-    /** The referral, its application and its timeline, as the domain resolved them for this judge. */
+    /** The referral and its application, as the domain resolved them for this Master. */
     public static JudicialReferralDetail of(JudicialReferralView view) {
         Referral referral = view.referral();
         return new JudicialReferralDetail(
@@ -102,7 +99,6 @@ public record JudicialReferralDetail(
             referral.getDecisionDate(),
             referral.getDecidedBy(),
             referral.getDirectionChangedAt(),
-            JudicialApplicationView.from(view.application(), view.witnesses(), view.documents()),
-            JudicialCaseNote.from(view.caseNotes()));
+            JudicialApplicationView.from(view.application(), view.documents()));
     }
 }

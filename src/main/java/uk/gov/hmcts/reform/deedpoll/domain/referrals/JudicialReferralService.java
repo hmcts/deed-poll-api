@@ -14,8 +14,6 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentDownload;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentPreviewRead;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
-import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
-import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
@@ -32,7 +30,7 @@ import java.util.UUID;
  * {@code touch}, {@code decide}, {@code reviseDirection} -- which keeps one place owning how a referral changes
  * state. What lives here is the half of the judicial surface that service has no notion of: <em>who may see which
  * referral</em>, the two cross-case lists a judge works from -- the shared pool and their own outstanding work --
- * and the resolution of one referral id to the application, the notes and the documents behind it. Every method
+ * and the resolution of one referral id to the application and the documents behind it. Every method
  * here is the judicial persona's, and none is reachable by a caseworker token.
  *
  * <p><strong>{@link #claim} and {@link #direct} are that resolution in front of a transition, and nothing
@@ -133,19 +131,13 @@ public class JudicialReferralService {
 
     private final ReferralRepository referrals;
     private final ReferralService referralService;
-    private final NoteService notes;
-    private final WitnessService witnesses;
     private final DocumentService documents;
 
     public JudicialReferralService(ReferralRepository referrals,
                                    ReferralService referralService,
-                                   NoteService notes,
-                                   WitnessService witnesses,
                                    DocumentService documents) {
         this.referrals = referrals;
         this.referralService = referralService;
-        this.notes = notes;
-        this.witnesses = witnesses;
         this.documents = documents;
     }
 
@@ -313,7 +305,7 @@ public class JudicialReferralService {
     }
 
     /**
-     * One referral, the application behind it and that application's notes -- what a judge opens to direct it.
+     * One referral, the application behind it and its documents -- what a Master opens to direct it.
      *
      * <p><strong>This is the read decision 2 inverts an api-1 rule for, so what guards it matters more than
      * what it returns.</strong> The referral is resolved by id alone, because a judicial URL carries no case id
@@ -341,9 +333,9 @@ public class JudicialReferralService {
      * legitimate. So the condition here is the one {@code touch} itself enforces, asked before it is called
      * rather than caught afterwards.
      *
-     * <p>The notes come from {@link NoteService#findNotes} -- the same read the caseworker timeline uses, with no
-     * judicial variant -- and a judge writes none. There is no judicial note route and no judicial author: what
-     * a judge records is the direction, on the referral.
+     * <p>No case notes (Master Sullivan's feedback, 2026-10-27): the Masters asked not to see the office's timeline,
+     * so it is not read here at all. There is no judicial note route either: what a Master records is the
+     * direction, on the referral.
      *
      * @param referralId the referral, as it appears in the path
      * @param caller the judge asking
@@ -387,7 +379,7 @@ public class JudicialReferralService {
      *
      * @param referralId the referral, as it appears in the path
      * @param caller the judge claiming it
-     * @return the referral as this judge now holds it, with the application and notes the next screen renders
+     * @return the referral as this judge now holds it, with the application the next screen renders
      * @throws ForbiddenError if the caller does not hold {@link Role#JUDICIAL}
      * @throws uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError if the caller carries no stable subject, so
      *     the claim it would make would have no owner
@@ -559,8 +551,9 @@ public class JudicialReferralService {
     }
 
     /**
-     * One referral, its application and that application's timeline, witnesses and readable documents -- what
-     * every method here answers with.
+     * One referral, its application and that application's readable documents -- what every method here answers
+     * with. Since 2026-10-27 neither the notes nor the witnesses are read: the Master's view publishes neither, and
+     * reading what nothing returns would only be load.
      *
      * <p>The same three things after a claim or a direction as after a read, because the judicial surface has one
      * representation of a referral and a transition's answer is that representation: the screen a judge sees next
@@ -574,8 +567,7 @@ public class JudicialReferralService {
      */
     private JudicialReferralView view(Referral referral, DeedPoll application) {
         String caseId = application.getId();
-        return new JudicialReferralView(referral, application,
-            notes.findNotes(caseId), witnesses.findWitnesses(caseId), documents.readableDocuments(caseId));
+        return new JudicialReferralView(referral, application, documents.readableDocuments(caseId));
     }
 
     /**

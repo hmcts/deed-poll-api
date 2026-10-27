@@ -499,7 +499,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      * return to the pool (design decision 6). A judge who withdraws and walks away loses the referral, and the
      * admin has to be able to say so.
      */
-    @DisplayName("Documents the wider judicial application, its documents, and revising or withdrawing a direction")
+    @DisplayName("Documents the Master's application view, its documents, and revising or withdrawing a direction")
     @Test
     void documentsTheJudicialApplicationViewAndRevisedDirections() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
@@ -510,7 +510,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
         String referral = "/paths/~1judicial~1referrals~1{referralId}";
         assertThat(spec.at(referral + "/get/description").asText())
-            .contains("whole application", "CASE_VIEWED", "404");
+            .contains("as a Master sees it", "No case id, contact details, witnesses or case notes", "CASE_VIEWED",
+                      "404");
 
         JsonNode file = spec.at("/paths/~1judicial~1referrals~1{referralId}~1documents~1{documentId}~1file/get");
         assertThat(file.at("/description").asText())
@@ -542,7 +543,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
         assertThat(spec.at("/components/schemas/JudicialReferralDetail/properties/application/description")
                        .asText())
-            .contains("payment");
+            .contains("Never a case id, contact details or case notes");
+        assertThat(spec.at("/components/schemas/JudicialReferralDetail/properties").has("caseNotes"))
+            .as("the Master's referral carries no timeline").isFalse();
     }
 
     /**
@@ -773,14 +776,16 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .as("the pool still answers with its own envelope")
             .isEqualTo("#/components/schemas/JudicialPoolResponse");
 
-        // The application a judge reads (2026-10-19): its witnesses and documents, and none of the case's
-        // identity or payment data. The full list is JudicialApplicationViewTest's; this is that it is published.
+        // The application a Master reads (narrowed 2026-10-27): the names and the documents, and none of the
+        // case's identity, payment data, contact details or witnesses. The full list is
+        // JudicialApplicationViewTest's; this is that it is published.
         JsonNode application = spec.at("/components/schemas/JudicialApplicationView/properties");
         assertThat(application.fieldNames()).toIterable()
-            .contains("privacy", "applicantEmail", "witnesses", "documents")
-            .doesNotContain("id", "referencenumber", "feeReference", "refundAmount", "refundReference");
-        assertThat(spec.at("/components/schemas/JudicialWitness/properties").fieldNames()).toIterable()
-            .doesNotContain("id");
+            .contains("newForename", "oldSurname", "parents", "documents")
+            .doesNotContain("id", "referencenumber", "feeReference", "refundAmount", "refundReference",
+                            "privacy", "applicantEmail", "witnesses");
+        assertThat(spec.at("/components/schemas").has("JudicialWitness"))
+            .as("no witness schema is published to Masters").isFalse();
         assertThat(spec.at("/components/schemas/JudicialDocument/properties").fieldNames()).toIterable()
             .contains("id", "documentType", "uploadedOn")
             .doesNotContain("storageKey", "hasFile");

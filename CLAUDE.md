@@ -465,16 +465,18 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   in the same words an unknown id gets; the only 403 is the `Role.JUDICIAL` gate. Its eight operations must not
   reuse a caseworker DTO, and an ArchUnit rule fails the build if one does. Every new judicial read or write goes
   through `JudicialReferralService.visible`, so a closed or withdrawn referral is that same 404.
-- **The judicial application view is wide by decision of 2026-10-19, and still not a case.**
-  `JudicialApplicationView` replaced the eight-field `JudicialCaseView` (decision 8 of 2026-09-17, superseded):
-  details, contact details, representative, nationality, minor and parent details, privacy (read-only), the
-  previous system's referral fields, witnesses as `JudicialWitness` (no id) and documents as `JudicialDocument`
-  (only rows `DocumentService.readableDocuments` would serve). **Excluded, and pinned by `JudicialApplicationViewTest`
-  over every judicial DTO:** the case `id` and `referencenumber`, payment and refund data (`feeReference`,
-  `refundAmount`, `dateOfRefund`, `refundReference`), and the office's processing record (audit columns,
-  `postCounter`, `onlineApplicationReference`, the day counts, both referral read-models, `returnReason`, the
-  workflow dates). The address lines, declaration multiselects, `publishToLondonGazette`, `migratedRecord` and
-  `retainPermanently` are on neither list and left out until the business answers; never add a field by choosing.
+- **The judicial application view is narrow by decision of 2026-10-27, and still not a case.** Master Sullivan's
+  feedback (Steve, 2026-10-27) took the 2026-10-19 whole-application view back to what a Master asked to see, and Steve
+  chose to narrow the data, not only the page: `JudicialApplicationView` is `displayReference` (admin's caption), the
+  new and old names, `type`, `nationality`, `nationalitySection`, `nationalitySectionOther`, `parents` (**only on a
+  minor's application**, `DeedPollValidation.isMinor`, whatever the row holds) and `documents` as `JudicialDocument`
+  (only rows `DocumentService.readableDocuments` would serve). `JudicialReferralDetail` carries **no `caseNotes`**, and
+  `JudicialReferralService` reads neither notes nor witnesses for it. **Excluded, and pinned by
+  `JudicialApplicationViewTest` over every judicial DTO:** the case `id` and `referencenumber`, payment and refund data,
+  the office's processing record, and everything the narrowing removed (state, privacy, urgency, contact and
+  representative details, the minor's age and date of birth, declaration and workflow dates, the previous system's
+  referral fields, witnesses, case notes). `ConfirmationSecurityTest` pins that the confirmation note no longer reaches
+  the deciding Master. Never add a field by choosing; it is the business's call.
   Opening a referral records `CASE_VIEWED` (fail-open); `GET /judicial/referrals/{referralId}/documents/{documentId}/file`
   records `DOCUMENT_DOWNLOADED` (fail-closed) and answers with `api/DocumentFileResponses`, the caseworker download's
   own headers. Any judge who can see an `Open` referral can open its documents.
