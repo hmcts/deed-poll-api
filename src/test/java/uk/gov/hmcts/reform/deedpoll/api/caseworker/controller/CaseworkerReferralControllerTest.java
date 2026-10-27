@@ -675,7 +675,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             // refuses carries an actual direction to be discarded.
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
-            decide(caseId, referralId, MasterDecision.Approved, "Approved. Publish in the Gazette.", true);
+            decide(caseId, referralId, MasterDecision.Approved, "Approved. Publish in the Gazette.", false);
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/withdrawal"))
                 // 409 and not 403: nothing about the caller is wrong -- any caseworker may withdraw a referral,
@@ -703,7 +703,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         void leavesADecidedReferralCloseable() throws Exception {
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
-            decide(caseId, referralId, MasterDecision.Rejected, "Refused. Write to the applicant.", false);
+            decide(caseId, referralId, MasterDecision.Rejected, "Refused. Write to the applicant.", true);
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/withdrawal"))
                 .andExpect(status().isConflict());
@@ -757,7 +757,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         void closesTheReferral() throws Exception {
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
-            decide(caseId, referralId, MasterDecision.Approved, "Approved. Publish in the Gazette.", true);
+            decide(caseId, referralId, MasterDecision.Approved, "Approved. Publish in the Gazette.", false);
             IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-civil"));
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
@@ -768,6 +768,8 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.state").value(ReferralState.Closed.name()))
                 .andExpect(jsonPath("$.decision").value(MasterDecision.Approved.name()))
                 .andExpect(jsonPath("$.directionsText").value("Approved. Publish in the Gazette."))
+                .andExpect(jsonPath("$.changesToStandardPublication").value(false))
+                // And under its old name, inverted, for the admin deployed beside this api for one release.
                 .andExpect(jsonPath("$.publishToGazette").value(true))
                 .andExpect(jsonPath("$.decisionDate").exists())
                 // The judge directed it and the caseworker closed it, and the response distinguishes them:
@@ -790,7 +792,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         void publishesTheClaimAndTheDirection() throws Exception {
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
-            decide(caseId, referralId, MasterDecision.Rejected, null, false);
+            decide(caseId, referralId, MasterDecision.Rejected, null, true);
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
                 .andExpect(status().isOk())
@@ -801,7 +803,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                 // An approval or refusal needing no comment is a real answer, so the column stays null rather
                 // than becoming an empty string.
                 .andExpect(jsonPath("$.directionsText").doesNotExist())
-                .andExpect(jsonPath("$.publishToGazette").value(false))
+                .andExpect(jsonPath("$.changesToStandardPublication").value(true))
                 // lastTouchedAt is the inactivity sweep's bookkeeping, not a fact about the referral: it moves
                 // every time a judge opens the page, so publishing it would invite it to be read as "when the
                 // judge last worked on this".
@@ -816,7 +818,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         void refusesASecondClosure() throws Exception {
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
-            decide(caseId, referralId, MasterDecision.Approved, "Approved", false);
+            decide(caseId, referralId, MasterDecision.Approved, "Approved", true);
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
                 .andExpect(status().isOk());
@@ -889,7 +891,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         void writesACaseNote() throws Exception {
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
-            decide(caseId, referralId, MasterDecision.Approved, "Approved. Publish in the Gazette.", true);
+            decide(caseId, referralId, MasterDecision.Approved, "Approved. Publish in the Gazette.", false);
             IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-civil"));
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
@@ -1386,13 +1388,13 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                         String referralId,
                         MasterDecision decision,
                         String directionsText,
-                        boolean publishToGazette) {
+                        boolean changesToStandardPublication) {
 
         referralService.claim(caseId, referralId, judge());
         referralService.decide(
             caseId,
             referralId,
-            new DirectionInput(decision, Optional.ofNullable(directionsText), publishToGazette),
+            new DirectionInput(decision, Optional.ofNullable(directionsText), changesToStandardPublication),
             judge());
     }
 
@@ -1409,7 +1411,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
 
     /** A direction that needs no comment, for the tests that are about a transition and not the direction. */
     private static DirectionInput approval() {
-        return new DirectionInput(MasterDecision.Approved, Optional.of("Approved"), false);
+        return new DirectionInput(MasterDecision.Approved, Optional.of("Approved"), true);
     }
 
     /** The case's denormalised column as it stands committed, read in a session of its own. */

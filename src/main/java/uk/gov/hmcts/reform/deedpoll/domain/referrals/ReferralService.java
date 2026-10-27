@@ -530,8 +530,8 @@ public class ReferralService {
     }
 
     /**
-     * The holding judge recording their direction: what they decided, what they directed, and whether the
-     * change is to be published in the London Gazette.
+     * The holding judge recording their direction: what they decided, what they directed, and whether anything
+     * changes about the standard publication in the London Gazette.
      *
      * <p><strong>Permitted only on a referral this caller currently holds</strong> -- state {@code Claimed} and
      * {@code claimedById} is their subject -- and that single check is what two other rules rely on rather than
@@ -581,11 +581,12 @@ public class ReferralService {
         final List<AuditValue> before = List.of(
             AuditValue.of("decision", referral.getDecision(), direction.decision()),
             AuditValue.of("directionsText", referral.getDirectionsText(), direction.directionsText().orElse(null)),
-            AuditValue.of("publishToGazette", referral.getPublishToGazette(), direction.publishToGazette()));
+            AuditValue.of("changesToStandardPublication", referral.getChangesToStandardPublication(),
+                direction.changesToStandardPublication()));
         referral.setState(ReferralState.Decided);
         referral.setDecision(direction.decision());
         referral.setDirectionsText(direction.directionsText().orElse(null));
-        referral.setPublishToGazette(direction.publishToGazette());
+        referral.setChangesToStandardPublication(direction.changesToStandardPublication());
         referral.setDecisionDate(now);
         // The judge's own name from the token, so the record says who directed it rather than who last saved
         // the row -- which the closing caseworker becomes a moment later. And their subject alongside it, which
@@ -626,12 +627,11 @@ public class ReferralService {
      * direction of theirs -- the pool, or their own claim -- is a 409: they are looking at it, and a 404 would be a
      * lie they cannot act on.
      *
-     * <p>It replaces the decision, {@code directionsText} and {@code publishToGazette}, moves {@code decisionDate}
-     * to now and keeps {@code decidedBy}/{@code decidedById}: the direction is still the same judge's, signed as it
-     * was first given. {@code directionChangedAt} is set, and
-     * nothing ever clears it: it is the flag that tells the caseworker the direction they may already be acting on
-     * has changed, and it is a fact about the referral's history rather than its current state. The claim's own
-     * columns stay as they were.
+     * <p>It replaces the decision, {@code directionsText} and {@code changesToStandardPublication}, moves
+     * {@code decisionDate} to now and keeps {@code decidedBy}/{@code decidedById}: the direction is still the same
+     * judge's, signed as it was first given. {@code directionChangedAt} is set, and nothing ever clears it: it is the
+     * flag that tells the caseworker the direction they may already be acting on has changed, and it is a fact about
+     * the referral's history rather than its current state. The claim's own columns stay as they were.
      *
      * <p><strong>The first direction stays on record.</strong> This is a new {@code REFERRAL_DIRECTION_REVISED}
      * event carrying old and new values of the same four fields {@link #decide} records, and the earlier
@@ -640,8 +640,8 @@ public class ReferralService {
      * are recomputed in this transaction (design decision 10): the state stays {@code Decided}, and the confirmation
      * columns are left alone, but each recompute is the rule rather than an assumption about what this write did.
      *
-     * <p>No email and no Gazette change: a revised {@code publishToGazette} changes the referral only, and the
-     * caseworker acts on the flag as on any direction.
+     * <p>No email and no Gazette change: a revised {@code changesToStandardPublication} changes the referral only, and
+     * the caseworker acts on the flag as on any direction.
      *
      * @throws ForbiddenError    if the caller does not hold {@link Role#JUDICIAL}
      * @throws UnauthorizedError if the caller carries no stable subject, so they can have directed nothing
@@ -660,10 +660,11 @@ public class ReferralService {
             AuditValue.of("state", fromState, fromState),
             AuditValue.of("decision", referral.getDecision(), direction.decision()),
             AuditValue.of("directionsText", referral.getDirectionsText(), direction.directionsText().orElse(null)),
-            AuditValue.of("publishToGazette", referral.getPublishToGazette(), direction.publishToGazette()));
+            AuditValue.of("changesToStandardPublication", referral.getChangesToStandardPublication(),
+                direction.changesToStandardPublication()));
         referral.setDecision(direction.decision());
         referral.setDirectionsText(direction.directionsText().orElse(null));
-        referral.setPublishToGazette(direction.publishToGazette());
+        referral.setChangesToStandardPublication(direction.changesToStandardPublication());
         referral.setDecisionDate(now);
         // decidedBy and decidedById are left alone: requireDirectedBy has established the subject is this caller's,
         // and the signature is the one the direction was first given under.
@@ -692,8 +693,8 @@ public class ReferralService {
      *
      * <p>{@code Decided -> Claimed}, held by the same judge: {@code claimedById} and {@code claimedBy} are left as
      * they were, {@code claimedAt} and {@code lastTouchedAt} restart now. The decision, {@code directionsText},
-     * {@code publishToGazette}, {@code decisionDate}, {@code decidedBy} and {@code decidedById} are cleared, because
-     * a claim carries no direction. {@code directionChangedAt} is set and never cleared.
+     * {@code changesToStandardPublication}, {@code decisionDate}, {@code decidedBy} and {@code decidedById} are
+     * cleared, because a claim carries no direction. {@code directionChangedAt} is set and never cleared.
      *
      * <p><strong>The consequence to keep visible:</strong> a withdrawn direction is a live claim again, so
      * {@link #reclaimStaleClaims()} returns it to the shared pool after
@@ -701,9 +702,10 @@ public class ReferralService {
      * is decided, not an oversight; the sweep is unchanged.
      *
      * <p>One {@code REFERRAL_DIRECTION_WITHDRAWN} event with old and new values of the state, decision,
-     * {@code directionsText} and {@code publishToGazette}, as {@link #decide} records, and one case note authored by
-     * the judge, composed from the direction being withdrawn. Both read-models are recomputed in this transaction:
-     * the case leaves the "returned -- action needed" queue, and the confirmation columns are left as they are.
+     * {@code directionsText} and {@code changesToStandardPublication}, as {@link #decide} records, and one case note
+     * authored by the judge, composed from the direction being withdrawn. Both read-models are recomputed in this
+     * transaction: the case leaves the "returned -- action needed" queue, and the confirmation columns are left as they
+     * are.
      *
      * @throws ForbiddenError    if the caller does not hold {@link Role#JUDICIAL}
      * @throws UnauthorizedError if the caller carries no stable subject, so they can have directed nothing
@@ -722,13 +724,13 @@ public class ReferralService {
             AuditValue.of("state", fromState, ReferralState.Claimed),
             AuditValue.of("decision", referral.getDecision(), null),
             AuditValue.of("directionsText", referral.getDirectionsText(), null),
-            AuditValue.of("publishToGazette", referral.getPublishToGazette(), null));
+            AuditValue.of("changesToStandardPublication", referral.getChangesToStandardPublication(), null));
         // Composed before the columns are cleared: the note says which direction is no longer the judge's answer.
         final String note = ReferralNotes.directionWithdrawn(referral);
         referral.setState(ReferralState.Claimed);
         referral.setDecision(null);
         referral.setDirectionsText(null);
-        referral.setPublishToGazette(null);
+        referral.setChangesToStandardPublication(null);
         referral.setDecisionDate(null);
         referral.setDecidedBy(null);
         referral.setDecidedById(null);

@@ -159,16 +159,17 @@ public final class ReferralNotes {
      * <p>The decision and the Gazette answer are quoted rather than summarised away, because those two are
      * what a caseworker scanning the grid needs in order to know whether anything is waiting for them.
      *
-     * <p>The Gazette answer is spelled out as Yes or No and never abbreviated to the presence of a word:
-     * publication puts the applicant's former and new names in a public notice, so "not published" and
-     * "nothing recorded" must not read alike. A referral whose column is somehow null therefore says so,
-     * rather than being read as No -- {@link #decision} takes the same line for the same reason. Neither is
-     * reachable through the direction transition, which always stores both.
+     * <p>The Gazette answer is spelled out as Yes or No and never abbreviated to the presence of a word: publication
+     * puts the applicant's former and new names in a public notice, so "no changes" and "nothing recorded" must not
+     * read alike. A Yes says only that the standard publication changes; what changes is in the direction text, which
+     * the note points at rather than quotes. A referral whose column is somehow null therefore says so, rather than
+     * being read as No -- {@link #decision} takes the same line for the same reason. Neither is reachable through the
+     * direction transition, which always stores both.
      */
     public static String directionRecorded(Referral referral) {
         return "Master’s direction recorded for referral " + identifies(referral) + "."
             + " Decision: " + decision(referral) + "."
-            + " Publish to the London Gazette: " + gazette(referral) + "."
+            + " Changes to standard publication in the Gazette: " + gazette(referral) + "."
             + " See the referral for the full direction.";
     }
 
@@ -185,7 +186,7 @@ public final class ReferralNotes {
     public static String directionRevised(Referral referral) {
         return "Master’s direction revised for referral " + identifies(referral) + "."
             + " Decision: " + decision(referral) + "."
-            + " Publish to the London Gazette: " + gazette(referral) + "."
+            + " Changes to standard publication in the Gazette: " + gazette(referral) + "."
             + " See the referral for the full direction.";
     }
 
@@ -201,7 +202,7 @@ public final class ReferralNotes {
     public static String directionWithdrawn(Referral referral) {
         return "Master’s direction withdrawn for referral " + identifies(referral) + "."
             + " The withdrawn decision was: " + decision(referral) + "."
-            + " Publish to the London Gazette: " + gazette(referral) + "."
+            + " Changes to standard publication in the Gazette: " + gazette(referral) + "."
             + " The referral is back with the Master to direct again.";
     }
 
@@ -325,13 +326,13 @@ public final class ReferralNotes {
         return requested == null ? "a date that was not recorded" : DAY.format(requested);
     }
 
-    /** The Gazette answer as Yes or No, or that it was never recorded. */
+    /** The Master's Gazette answer as Yes or No, or that it was never recorded. */
     private static String gazette(Referral referral) {
-        Boolean publish = referral.getPublishToGazette();
-        if (publish == null) {
+        Boolean changes = referral.getChangesToStandardPublication();
+        if (changes == null) {
             return "not recorded";
         }
-        return publish ? "Yes" : "No";
+        return changes ? "Yes" : "No";
     }
 
     private static String names(CreateReferralInput dto) {

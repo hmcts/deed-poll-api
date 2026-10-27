@@ -104,7 +104,8 @@ public class OpenAPIWriteBodies {
     private static final String DECISION_FIELD = "decision";
 
     /** The Gazette flag, named once because it is the direction's second required field. */
-    private static final String GAZETTE_FIELD = "publishToGazette";
+    private static final String GAZETTE_FIELD = "changesToStandardPublication";
+    private static final String LEGACY_GAZETTE_FIELD = "publishToGazette";
 
     /** The referral's reasons array, named once because it is the create body's only required field. */
     private static final String REASONS_FIELD = "reasons";
@@ -587,11 +588,13 @@ public class OpenAPIWriteBodies {
      * <p>The decision vocabulary is {@link MasterDecision}'s and the cap is
      * {@link ReferralSchemas#MAX_DIRECTIONS_LENGTH}, so both reach the document from what enforces them.
      *
-     * <p><strong>{@code publishToGazette} is declared required and as a boolean, and both halves matter to a
-     * consumer.</strong> Publication puts the applicant's former and new names in a public notice, so the schema
+     * <p><strong>{@code changesToStandardPublication} is declared required and as a boolean, and both halves matter to
+     * a consumer.</strong> Publication puts the applicant's former and new names in a public notice, so the schema
      * refuses the string {@code "false"} rather than reading it truthily -- a document that called this a string
      * would have clients sending the one value that coerces wrongly. Required because a direction that did not
-     * answer it is not a direction.
+     * answer it is not a direction. {@code publishToGazette}, its inverted predecessor, is published deprecated for
+     * the one release api still accepts it; a body that sends it alone satisfies the requirement, which the
+     * document states in prose because only {@code ReferralSchemas} can say it exactly.
      *
      * <p>Nothing here can name the referral, the case, the state, the author or the date: the referral is the
      * path, the case is resolved from it, and the rest come from the clock and the token. Those keys are stripped
@@ -611,12 +614,21 @@ public class OpenAPIWriteBodies {
         direction.addProperty(DECISION_FIELD, decision);
         direction.addProperty("directionsText", new StringSchema()
             .maxLength(ReferralSchemas.MAX_DIRECTIONS_LENGTH)
-            .description("What the judge directed. Optional: an approval that needs no comment is a real "
-                + "answer. Trimmed, and a whitespace-only value counts as none."));
+            .description("What the judge directed. Optional on a standard publication: an approval that needs no "
+                + "comment is a real answer. Required when changesToStandardPublication is true, to say whether "
+                + "to publish nothing or what to publish. Trimmed, and a whitespace-only value counts as none."));
         direction.addProperty(GAZETTE_FIELD, new BooleanSchema()
-            .description("Whether the change is to be published in the London Gazette. The judge's decision, "
-                + "never derived from a caseworker's referral reasons. A JSON boolean -- the string \"false\" "
-                + "is refused rather than coerced, because publication cannot be taken back."));
+            .description("The Master's answer to \"Are there any changes to the standard publications in the "
+                + "Gazette?\": true for do not publish, or publish only as directionsText says; false for publish "
+                + "as standard. The judge's decision, never derived from a caseworker's referral reasons. A JSON "
+                + "boolean -- the string \"false\" is refused rather than coerced, because publication cannot be "
+                + "taken back. publishToGazette alone is accepted in its place for one release."));
+        BooleanSchema legacy = new BooleanSchema();
+        legacy.setDeprecated(true);
+        legacy.setDescription("changesToStandardPublication inverted, under its name before 2026-10-27. Accepted for "
+            + "one release, and exempt from the directionsText requirement; sent beside changesToStandardPublication "
+            + "it must agree with it. Send changesToStandardPublication instead.");
+        direction.addProperty(LEGACY_GAZETTE_FIELD, legacy);
         direction.addRequiredItem(DECISION_FIELD);
         direction.addRequiredItem(GAZETTE_FIELD);
         direction.setAdditionalProperties(true);

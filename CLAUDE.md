@@ -485,13 +485,23 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `POST …/direction/withdraw` (no body) both require `Decided` with `decidedById` = caller, decided by
   `ReferralService.requireDirectedBy` **under the row lock**, which re-asks `visibleTo` so a close that commits
   first makes the judge's write a 404; any other visible referral is 409. Revise replaces the decision,
-  `directionsText` and `publishToGazette`, moves `decisionDate` and keeps `decidedBy`/`decidedById` as first signed.
-  Withdraw returns the referral to `Claimed` by the same judge with the direction columns cleared, and the judge
+  `directionsText` and `changesToStandardPublication`, moves `decisionDate` and keeps `decidedBy`/`decidedById` as
+  first signed. Withdraw returns the referral to `Claimed` by the same judge with the direction columns cleared, and the judge
   directs again with `POST`. Both set V38's `directionChangedAt`, which is **never cleared** and is the caseworker's
   flag (with a case note from `ReferralNotes`), record `REFERRAL_DIRECTION_REVISED`/`_WITHDRAWN` with old and new
   values, and recompute both read-models. No email, and no Gazette code changes. **A withdrawn direction is a live
   claim again:** if the judge does not direct it, the inactivity sweep returns it to the pool like any other claim.
   That is deliberate and published in withdraw's OpenAPI description; do not special-case the sweep.
+- **The Master's Gazette answer is "changes to the standard publication", not "publish".** Master Sullivan's feedback
+  (Steve, 2026-10-27): the direction asks "Are there any changes to the standard publications in the Gazette?", and
+  Yes means do not publish, or publish only as the direction text says (the last name only, for example). V41 renamed
+  the referral's `publishToGazette` to `changesToStandardPublication` and **inverted** every stored answer; the audit
+  trail's earlier rows and the case notes already written keep the old name and wording. `ReferralSchemas` requires
+  `directionsText` when the answer is Yes. **Expand-then-contract, one release:** the direction body still accepts
+  `publishToGazette` (inverted, exempt from the directions rule, refused if it disagrees with the new name) and both
+  referral DTOs still publish it, deprecated, so the admin deployed beside this api keeps working. A later api PR
+  removes both once admin sends the new name everywhere. The case's own `publishToLondonGazette` is a different fact
+  and is untouched.
 - **The referral claim window is a stored process setting, read on every sweep.** `ReferralService` asks
   `ProcessSettingsService.referralClaimExpiry()` once per `reclaimStaleClaims`, so a Delivery Manager's `PUT` applies
   at once; never cache it or reintroduce a property default, and a missing V40 row fails the sweep rather than

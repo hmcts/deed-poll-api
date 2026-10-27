@@ -260,7 +260,7 @@ class JudicialDocumentDownloadTest extends AbstractPostgresContainerTest {
             CurrentUser judge = judge(JUDGE_NAME, JUDGE_SUBJECT);
             referralService.claim(caseId, referralId, judge);
             referralService.decide(caseId, referralId,
-                new DirectionInput(MasterDecision.Approved, Optional.of("Granted"), false), judge);
+                new DirectionInput(MasterDecision.Approved, Optional.of("Granted"), true), judge);
             authorised(get(fileUrl(referralId, documentId))).andExpect(status().isOk());
 
             referralService.close(caseId, referralId, CASEWORKER);

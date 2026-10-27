@@ -253,7 +253,7 @@ cannot be reused for the judiciary by accident. An ArchUnit rule asserts the sep
 | GET | `/judicial/referrals/{referralId}/documents/{documentId}/file` | Download one of the application's readable documents — any judge who can see an `Open` referral may. Records `DOCUMENT_DOWNLOADED` and is served with the caseworker download's headers |
 | GET | `/judicial/referrals/{referralId}/documents/{documentId}/preview` | A read-only PDF rendition of it, to whoever may download it — counted apart; see [Document previews](#document-previews) |
 | POST | `/judicial/referrals/{referralId}/claim` | Claim a pool referral — it becomes theirs and drops off every other judge's |
-| POST | `/judicial/referrals/{referralId}/direction` | Record a direction — `decision`, optional `directionsText`, and `publishToGazette` |
+| POST | `/judicial/referrals/{referralId}/direction` | Record a direction — `decision`, `changesToStandardPublication`, and `directionsText` (required when there are changes) |
 | PUT | `/judicial/referrals/{referralId}/direction` | Revise the judge's own direction (the `POST`'s body) while the referral is `Decided` and not yet closed |
 | POST | `/judicial/referrals/{referralId}/direction/withdraw` | Withdraw the judge's own direction, no body — the referral returns to `Claimed` by the same judge, who may direct again |
 

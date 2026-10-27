@@ -164,12 +164,14 @@ public class Referral {
     private String directionsText;
 
     /**
-     * The judge's decision on London Gazette publication. A {@link Boolean} rather than a primitive
-     * because absent and false are different answers: a referral with no direction has not been asked.
-     * Never derived from the caseworker's referral reasons.
+     * The Master's answer to "Are there any changes to the standard publications in the Gazette?" -- true for
+     * do not publish, or publish only as the direction text says; false for publish as standard. A
+     * {@link Boolean} rather than a primitive because absent and false are different answers: a referral with no
+     * direction has not been asked. Never derived from the caseworker's referral reasons. V41 renamed it from
+     * {@code publishToGazette} and inverted the stored answers.
      */
-    @Column(name = "publishToGazette")
-    private Boolean publishToGazette;
+    @Column(name = "changesToStandardPublication")
+    private Boolean changesToStandardPublication;
 
     @Column(name = "decisionDate")
     private LocalDateTime decisionDate;
