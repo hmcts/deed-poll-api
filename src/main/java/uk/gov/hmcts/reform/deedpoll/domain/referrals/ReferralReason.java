@@ -29,59 +29,70 @@ package uk.gov.hmcts.reform.deedpoll.domain.referrals;
 public enum ReferralReason {
 
     /** The applicant is a child. Policy refers every one of these. */
-    Minor,
+    Minor("Applicant is a minor"),
 
     /** Domestic abuse, where publication or disclosure carries a risk. */
-    DomesticAbuse,
+    DomesticAbuse("Domestic abuse considerations"),
 
     /** A request not to publish in the London Gazette. */
-    NonPublication,
+    NonPublication("Non-publication request"),
 
     /** The declarant does not meet the requirements. */
-    DeclarantRequirementsNotMet,
+    DeclarantRequirementsNotMet("Declarant requirements not met"),
 
     /** Separated or estranged parties, where consent is contested or absent. */
-    SeparatedOrEstranged,
+    SeparatedOrEstranged("Separated or estranged"),
 
     /** Anything else -- requires the referral's notes to say what. */
-    Other,
+    Other("Other"),
 
     /** A minor's detail: the applicant is transgender. */
-    MinorTransgender(true),
+    MinorTransgender("Transgender", true),
 
     /**
      * A minor's detail: there is parental consent. Contradicts {@link #MinorNoParentalConsent}.
      */
-    MinorParentalConsent(true),
+    MinorParentalConsent("Have parental consent", true),
 
     /** A minor's detail: there is no parental consent. */
-    MinorNoParentalConsent(true),
+    MinorNoParentalConsent("Do not have parental consent", true),
 
     /**
      * A minor's detail: a stepparent has consented. Contradicts {@link #MinorNoStepparentConsent}.
      */
-    MinorStepparentConsent(true),
+    MinorStepparentConsent("Stepparent parental consent", true),
 
     /** A minor's detail: there is no stepparent consent. */
-    MinorNoStepparentConsent(true),
+    MinorNoStepparentConsent("Do not have stepparent consent", true),
 
     /** A minor's detail: there is a court order. */
-    MinorCourtOrder(true),
+    MinorCourtOrder("Court Order", true),
 
     /** A minor's detail: the applicant is 16 or 17 and has consented. Contradicts the next. */
-    MinorAged16Or17Consented(true),
+    MinorAged16Or17Consented("16/17 year old applicant has consented", true),
 
     /** A minor's detail: the applicant is 16 or 17 and has not consented. */
-    MinorAged16Or17NotConsented(true);
+    MinorAged16Or17NotConsented("16/17 year old applicant has not consented", true);
+
+    private final String label;
 
     private final boolean minorDetail;
 
-    ReferralReason() {
-        this(false);
+    ReferralReason(String label) {
+        this(label, false);
     }
 
-    ReferralReason(boolean minorDetail) {
+    ReferralReason(String label, boolean minorDetail) {
+        this.label = label;
         this.minorDetail = minorDetail;
+    }
+
+    /**
+     * The reason in the business's words, as the admin screens show it (Steve, 2026-10-27: the case notes read as
+     * the screens do). The admin's {@code REFERRAL_REASON_LABEL} holds the same words.
+     */
+    public String label() {
+        return label;
     }
 
     /**

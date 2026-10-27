@@ -365,7 +365,8 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isCreated());
 
             assertThat(notes.findAll()).singleElement().satisfies(note -> {
-                assertThat(note.getNote()).contains("Referred to a Master", "Minor", "Hearing on Friday");
+                assertThat(note.getNote())
+                    .contains("Referred to a Master", "Applicant is a minor", "Hearing on Friday");
                 assertThat(note.getCreatedBy()).isEqualTo("A Caseworker");
                 assertThat(note.getDeedPoll().getId()).isEqualTo(caseId);
             });
@@ -603,7 +604,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
 
             assertThat(notes.findAll()).hasSize(2);
             assertThat(notes.findAll()).anySatisfy(note -> {
-                assertThat(note.getNote()).contains("withdrawn", "Minor");
+                assertThat(note.getNote()).contains("withdrawn", "Applicant is a minor");
                 assertThat(note.getCreatedBy()).isEqualTo("A Caseworker");
             });
         }
@@ -901,7 +902,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             // one step no column records after the fact, because it puts the case's column back to null.
             assertThat(notes.count()).isEqualTo(4);
             assertThat(notes.findAll()).anySatisfy(note -> {
-                assertThat(note.getNote()).contains("marked as actioned", "Minor");
+                assertThat(note.getNote()).contains("marked as actioned", "Applicant is a minor");
                 // The caseworker who actioned it, through a real token, while decidedBy on the row still says
                 // which judge directed it.
                 assertThat(note.getCreatedBy()).isEqualTo("Another Caseworker");

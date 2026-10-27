@@ -70,12 +70,33 @@ class ReferralNotesTest {
     }
 
     @Test
+    @DisplayName("folds a minor's details into Applicant is a minor, in the screens' words")
+    void foldsAMinorsDetails() {
+        // Steve, 2026-10-27: the notes read as the screens do. Semicolons between reasons, because the minor's
+        // details are themselves a comma list.
+        String text = ReferralNotes.raised(input(Map.of(
+            "reasons", List.of("Minor", "MinorTransgender", "DomesticAbuse", "MinorParentalConsent"))));
+
+        assertThat(text).isEqualTo("Referred to a Master. Reasons: Applicant is a minor: Transgender, Have parental"
+            + " consent; Domestic abuse considerations.");
+    }
+
+    @Test
+    @DisplayName("quotes a stored reason it no longer knows rather than dropping it")
+    void quotesAnUnknownStoredReason() {
+        String text = ReferralNotes.claimed(referral(List.of("Minor", "SomethingRetired"),
+            LocalDateTime.parse("2026-09-01T09:30:00")));
+
+        assertThat(text).contains("reasons: Applicant is a minor; SomethingRetired,");
+    }
+
+    @Test
     @DisplayName("names every reason on a raised referral rather than counting them")
     void namesEveryReason() {
         String text = ReferralNotes.raised(input(Map.of(
             "reasons", List.of("Minor", "SeparatedOrEstranged"))));
 
-        assertThat(text).isEqualTo("Referred to a Master. Reasons: Minor, SeparatedOrEstranged.");
+        assertThat(text).isEqualTo("Referred to a Master. Reasons: Applicant is a minor; Separated or estranged.");
     }
 
     @Test
@@ -129,7 +150,7 @@ class ReferralNotesTest {
             referral(List.of("Minor", "Other"), LocalDateTime.parse("2026-09-01T09:30:00")));
 
         assertThat(text).isEqualTo("Referral to a Master withdrawn."
-            + " It was raised on 1 September 2026, reasons: Minor, Other.");
+            + " It was raised on 1 September 2026, reasons: Applicant is a minor; Other.");
     }
 
     @Test
@@ -160,7 +181,7 @@ class ReferralNotesTest {
             referral(List.of("Minor", "Other"), LocalDateTime.parse("2026-09-01T09:30:00")));
 
         assertThat(text)
-            .isEqualTo("Referral raised on 1 September 2026, reasons: Minor, Other,"
+            .isEqualTo("Referral raised on 1 September 2026, reasons: Applicant is a minor; Other,"
                 + " claimed by a Master.");
     }
 
@@ -183,7 +204,7 @@ class ReferralNotesTest {
 
         assertThat(text)
             .isEqualTo("Master’s direction recorded for referral raised on 1 September 2026,"
-                + " reasons: Minor, Other. Decision: Approved."
+                + " reasons: Applicant is a minor; Other. Decision: Approved."
                 + " Changes to standard publication in the Gazette: No. See the referral for the full direction.");
     }
 
@@ -247,7 +268,7 @@ class ReferralNotesTest {
 
         assertThat(text)
             .isEqualTo("Master’s direction revised for referral raised on 1 September 2026,"
-                + " reasons: Minor, Other. Decision: Rejected."
+                + " reasons: Applicant is a minor; Other. Decision: Rejected."
                 + " Changes to standard publication in the Gazette: Yes. See the referral for the full direction.");
     }
 
@@ -274,7 +295,7 @@ class ReferralNotesTest {
 
         assertThat(text)
             .isEqualTo("Master’s direction withdrawn for referral raised on 1 September 2026,"
-                + " reasons: Minor, Other. The withdrawn decision was: Approved."
+                + " reasons: Applicant is a minor; Other. The withdrawn decision was: Approved."
                 + " Changes to standard publication in the Gazette: No."
                 + " The referral is back with the Master to direct again.");
     }
@@ -301,7 +322,7 @@ class ReferralNotesTest {
 
         assertThat(text)
             .isEqualTo("Master’s direction for referral raised on 1 September 2026,"
-                + " reasons: Minor, Other, marked as actioned.");
+                + " reasons: Applicant is a minor; Other, marked as actioned.");
     }
 
     @Test
@@ -345,7 +366,7 @@ class ReferralNotesTest {
 
         assertThat(ReferralNotes.confirmationRecorded(referral, Optional.of("Replied by email.")))
             .isEqualTo("Applicant's confirmation recorded for referral raised on 3 May 2026,"
-                + " reasons: NonPublication. Asked on 10 May 2026."
+                + " reasons: Non-publication request. Asked on 10 May 2026."
                 + " Answer: Confirmed -- the applicant wants the deed enrolled, knowing it will be published in"
                 + " the London Gazette."
                 + "\nNotes: Replied by email.");
