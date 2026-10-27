@@ -155,6 +155,41 @@ final class TiffStructure {
      * offset.
      */
     private long directory(long offset, int depth) throws IOException {
+        DirectoryTable directory = readDirectory(offset);
+        ByteBuffer table = directory.contents();
+        int entries = directory.entries();
+        List<Long> pointers = new ArrayList<>();
+        Set<Integer> pointerTags = new HashSet<>();
+        boolean offsets = false;
+        boolean byteCounts = false;
+        boolean jpegTag = false;
+        Set<Integer> dimensions = new HashSet<>();
+        for (int entry = 0; entry < entries; entry++) {
+            int at = entry * ENTRY;
+            DirectoryEntry field = readEntry(table, at, depth, pointerTags, pointers);
+            int tag = field.tag();
+            // The JDK estimates byte counts only when it finds none, so any offsets need any counts, and every count
+            // is added. The JPEGInterchangeFormat pair is not counted: it is refused below with every JPEG tag.
+            offsets |= tag == STRIP_OFFSETS || tag == TILE_OFFSETS;
+            if (tag == STRIP_BYTE_COUNTS || tag == TILE_BYTE_COUNTS) {
+                byteCounts = true;
+                imageData(field.type(), field.count(), field.bytes(), table, at + 8, field.value());
+            }
+            jpegTag |= tag == JPEG_TABLES || tag >= FIRST_OLD_JPEG_TAG && tag <= LAST_OLD_JPEG_TAG;
+            if (DIMENSIONS.contains(tag)) {
+                dimensions.add(tag);
+            }
+        }
+        requireSupported(jpegTag, depth, dimensions, offsets, byteCounts);
+        for (long pointer : pointers) {
+            budget.checkpoint();
+            // The JDK reads a pointed-to directory's entries and not its next-directory offset.
+            directory(pointer, depth + 1);
+        }
+        return Integer.toUnsignedLong(table.getInt(entries * ENTRY));
+    }
+
+    private DirectoryTable readDirectory(long offset) throws IOException {
         if (offset < HEADER || offset > length - 2) {
             throw new IIOException("TIFF directory outside the file");
         }
@@ -175,51 +210,47 @@ final class TiffStructure {
         }
         occupy(offset, size);
         ByteBuffer table = read(offset + 2, (int) size - 2);
-        List<Long> pointers = new ArrayList<>();
-        Set<Integer> pointerTags = new HashSet<>();
-        boolean offsets = false;
-        boolean byteCounts = false;
-        boolean jpegTag = false;
-        Set<Integer> dimensions = new HashSet<>();
-        for (int entry = 0; entry < entries; entry++) {
-            int at = entry * ENTRY;
-            int tag = table.getShort(at) & 0xFFFF;
-            int type = table.getShort(at + 2) & 0xFFFF;
-            long count = Integer.toUnsignedLong(table.getInt(at + 4));
-            long value = Integer.toUnsignedLong(table.getInt(at + 8));
-            long bytes = Math.multiplyExact(count, sizeOf(type));
-            if (tag == SUB_IFDS) {
-                throw new IIOException("TIFF SubIFDs");
-            }
-            if (tag == COMPRESSION) {
-                requireNotJpeg(type, count, table, at + 8);
-            }
-            if (tag == EXIF_IFD || tag == GPS_IFD || tag == INTEROPERABILITY_IFD) {
-                if (type != LONG && type != IFD || count != 1) {
-                    throw new IIOException("TIFF directory pointer of an unexpected type or count");
-                }
-                if (depth >= MAX_POINTER_DEPTH || !pointerTags.add(tag)) {
-                    throw new IIOException("TIFF directory pointers too deep or repeated");
-                }
-                pointers.add(value);
-            } else if (bytes > INLINE) {
-                if (value > length || bytes > length - value) {
-                    throw new IIOException("TIFF field value outside the file");
-                }
-                occupy(value, bytes);
-            }
-            // The JDK estimates byte counts only when it finds none, so any offsets need any counts, and every count
-            // is added. The JPEGInterchangeFormat pair is not counted: it is refused below with every JPEG tag.
-            offsets |= tag == STRIP_OFFSETS || tag == TILE_OFFSETS;
-            if (tag == STRIP_BYTE_COUNTS || tag == TILE_BYTE_COUNTS) {
-                byteCounts = true;
-                imageData(type, count, bytes, table, at + 8, value);
-            }
-            jpegTag |= tag == JPEG_TABLES || tag >= FIRST_OLD_JPEG_TAG && tag <= LAST_OLD_JPEG_TAG;
-            if (DIMENSIONS.contains(tag)) {
-                dimensions.add(tag);
-            }
+        return new DirectoryTable(table, entries);
+    }
+
+    private DirectoryEntry readEntry(ByteBuffer table, int at, int depth, Set<Integer> pointerTags,
+                                      List<Long> pointers) throws IIOException {
+        int tag = table.getShort(at) & 0xFFFF;
+        int type = table.getShort(at + 2) & 0xFFFF;
+        long count = Integer.toUnsignedLong(table.getInt(at + 4));
+        long value = Integer.toUnsignedLong(table.getInt(at + 8));
+        long bytes = Math.multiplyExact(count, sizeOf(type));
+        DirectoryEntry entry = new DirectoryEntry(tag, type, count, value, bytes);
+        if (tag == SUB_IFDS) {
+            throw new IIOException("TIFF SubIFDs");
         }
+        if (tag == COMPRESSION) {
+            requireNotJpeg(type, count, table, at + 8);
+        }
+        if (tag == EXIF_IFD || tag == GPS_IFD || tag == INTEROPERABILITY_IFD) {
+            addPointer(entry, depth, pointerTags, pointers);
+        } else if (bytes > INLINE) {
+            if (value > length || bytes > length - value) {
+                throw new IIOException("TIFF field value outside the file");
+            }
+            occupy(value, bytes);
+        }
+        return entry;
+    }
+
+    private static void addPointer(DirectoryEntry entry, int depth, Set<Integer> pointerTags, List<Long> pointers)
+        throws IIOException {
+        if (entry.type() != LONG && entry.type() != IFD || entry.count() != 1) {
+            throw new IIOException("TIFF directory pointer of an unexpected type or count");
+        }
+        if (depth >= MAX_POINTER_DEPTH || !pointerTags.add(entry.tag())) {
+            throw new IIOException("TIFF directory pointers too deep or repeated");
+        }
+        pointers.add(entry.value());
+    }
+
+    private static void requireSupported(boolean jpegTag, int depth, Set<Integer> dimensions, boolean offsets,
+                                           boolean byteCounts) throws IIOException {
         // Refused once every entry's bounds are checked, so a JPEG tag gets no exemption from the rules above.
         if (jpegTag) {
             throw new IIOException("TIFF JPEG tag");
@@ -235,12 +266,12 @@ final class TiffStructure {
         if (offsets && !byteCounts) {
             throw new IIOException("TIFF image data without byte counts");
         }
-        for (long pointer : pointers) {
-            budget.checkpoint();
-            // The JDK reads a pointed-to directory's entries and not its next-directory offset.
-            directory(pointer, depth + 1);
-        }
-        return Integer.toUnsignedLong(table.getInt(entries * ENTRY));
+    }
+
+    private record DirectoryTable(ByteBuffer contents, int entries) {
+    }
+
+    private record DirectoryEntry(int tag, int type, long count, long value, long bytes) {
     }
 
     /**
