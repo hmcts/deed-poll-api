@@ -224,8 +224,8 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
         AtomicBoolean secondWaited = new AtomicBoolean();
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            Future<Throwable> firstWrite = pool.submit(() -> {
-                Throwable failure = attempt(() -> new TransactionTemplate(transactionManager).execute(status -> {
+            Future<Throwable> firstWrite = pool.submit(() ->
+                attempt(() -> new TransactionTemplate(transactionManager).execute(status -> {
                     final int firstBackend = jdbc.queryForObject("SELECT pg_backend_pid()", Integer.class);
                     first.run();
                     firstWrote.countDown();
@@ -233,15 +233,12 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
                     awaitBlockedBy(firstBackend);
                     secondWaited.set(true);
                     return null;
-                }));
-                return failure;
-            });
+                })));
 
             Future<Throwable> secondWrite = pool.submit(() -> {
                 await(firstWrote);
                 secondStarting.countDown();
-                Throwable failure = attempt(second);
-                return failure;
+                return attempt(second);
             });
 
             Throwable firstFailure = firstWrite.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
