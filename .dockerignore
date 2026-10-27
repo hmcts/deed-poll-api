@@ -1,0 +1,7 @@
+# The image needs only what the Dockerfile copies. Without this file the build context was the whole Jenkins
+# workspace (build/ alone ~520 MB, plus .gradle), and `az acr build` failed packing it ("unexpected end of data").
+# Allowlist, as fpl-ccd-configuration and dm-store do: exclude everything, then re-include the Dockerfile's inputs.
+*
+!Dockerfile
+!lib/applicationinsights.json
+!build/libs/deed-poll-api.jar

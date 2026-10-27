@@ -30,8 +30,8 @@ public final class SecurityEvents {
     public static final String PATH = "path";
     public static final String REASON = "reason";
 
-    public static final String UNAUTHENTICATED = "auth.unauthenticated";
-    public static final String DENIED = "authz.denied";
+    public static final String UNAUTHENTICATED_EVENT = "auth.unauthenticated";
+    public static final String DENIED_EVENT = "authz.denied";
 
     /** A filter-chain rule refused the caller. */
     public static final String ACCESS_RULE = "access_rule";
@@ -49,8 +49,8 @@ public final class SecurityEvents {
     /** A request the chain could not authenticate. */
     public static void unauthenticated(String path, AuthenticationException failure) {
         String reason = reasonFor(failure);
-        log(UNAUTHENTICATED, null, path, reason,
-            () -> LOG.warn("{} path={} reason={}", UNAUTHENTICATED, path, reason));
+        log(UNAUTHENTICATED_EVENT, null, path, reason,
+            () -> LOG.warn("{} path={} reason={}", UNAUTHENTICATED_EVENT, path, reason));
     }
 
     /**
@@ -58,8 +58,8 @@ public final class SecurityEvents {
      */
     public static void denied(String path, String reason) {
         String subject = currentSubject();
-        log(DENIED, subject, path, reason,
-            () -> LOG.warn("{} subject={} path={} reason={}", DENIED, subject, path, reason));
+        log(DENIED_EVENT, subject, path, reason,
+            () -> LOG.warn("{} subject={} path={} reason={}", DENIED_EVENT, subject, path, reason));
     }
 
     static String reasonFor(AuthenticationException failure) {
