@@ -1,0 +1,5 @@
+# Allowlist: the image needs exactly the two files the Dockerfile copies. Without this the build context is the
+# whole workspace (build/, .gradle/, sources), which az acr build tars and uploads on every build.
+*
+!lib/applicationinsights.json
+!build/libs/deed-poll-api.jar
