@@ -1,11 +1,13 @@
 package uk.gov.hmcts.reform.deedpoll.domain.referrals;
 
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
@@ -30,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -61,9 +64,6 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
 
     private static final int TIMEOUT_SECONDS = 60;
 
-    /** How long the first transaction holds the row after the second has said it is on its way to it. */
-    private static final long OVERLAP_MILLIS = 500;
-
     private static final CurrentUser ADA =
         CurrentUser.currentUser(List.of(), "Ada Caseworker", "caseworker-1");
 
@@ -87,6 +87,9 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private JdbcTemplate jdbc;
 
     @BeforeEach
     @AfterEach
@@ -203,47 +206,44 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
             .satisfies(note -> assertThat(note.getNote()).contains("Judicial direction withdrawn"));
     }
 
-    /** What each transaction threw, in the order given, and whether the second finished after the first committed. */
+    /** What each transaction threw, in the order given, and whether PostgreSQL observed the second waiting. */
     private record Outcome(Throwable first, Throwable second, boolean secondWaited) {
     }
 
     /**
-     * Runs {@code first} in a transaction that holds the row until {@code second} has started, then commits; runs
-     * {@code second} once {@code first} has written.
+     * Runs {@code first} in a transaction that holds the row until PostgreSQL observes the second waiting on its
+     * lock, then commits. The second starts once the first has written.
      *
-     * <p>{@code ConfirmationConcurrencyTest.recordConcurrently}'s schedule. The second is called outside any
-     * transaction of the test's, because each service method under test opens its own, as a request does.
+     * <p>Observing the lock avoids a timing guess: the second may finish before the first thread resumes after
+     * commit. The second is called outside any transaction of the test's, because each service method under test
+     * opens its own, as a request does.
      */
     private Outcome second(Runnable first, Runnable second) throws Exception {
         CountDownLatch firstWrote = new CountDownLatch(1);
         CountDownLatch secondStarting = new CountDownLatch(1);
-        long[] committedAt = new long[1];
-        long[] finishedAt = new long[1];
+        AtomicBoolean secondWaited = new AtomicBoolean();
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            Future<Throwable> firstWrite = pool.submit(() -> {
-                Throwable failure = attempt(() -> new TransactionTemplate(transactionManager).execute(status -> {
+            Future<Throwable> firstWrite = pool.submit(() ->
+                attempt(() -> new TransactionTemplate(transactionManager).execute(status -> {
+                    final int firstBackend = jdbc.queryForObject("SELECT pg_backend_pid()", Integer.class);
                     first.run();
                     firstWrote.countDown();
                     await(secondStarting);
-                    sleep(OVERLAP_MILLIS);
+                    awaitBlockedBy(firstBackend);
+                    secondWaited.set(true);
                     return null;
-                }));
-                committedAt[0] = System.nanoTime();
-                return failure;
-            });
+                })));
 
             Future<Throwable> secondWrite = pool.submit(() -> {
                 await(firstWrote);
                 secondStarting.countDown();
-                Throwable failure = attempt(second);
-                finishedAt[0] = System.nanoTime();
-                return failure;
+                return attempt(second);
             });
 
             Throwable firstFailure = firstWrite.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             Throwable secondFailure = secondWrite.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            return new Outcome(firstFailure, secondFailure, finishedAt[0] >= committedAt[0]);
+            return new Outcome(firstFailure, secondFailure, secondWaited.get());
         } finally {
             pool.shutdownNow();
         }
@@ -301,12 +301,13 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
         }
     }
 
-    private static void sleep(long millis) {
-        try {
-            Thread.sleep(millis);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException(interrupted);
-        }
+    private void awaitBlockedBy(int firstBackend) {
+        Awaitility.await().pollInSameThread().atMost(TIMEOUT_SECONDS, TimeUnit.SECONDS).until(() ->
+            Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_locks
+                    WHERE NOT granted AND ? = ANY(pg_blocking_pids(pid))
+                )
+                """, Boolean.class, firstBackend)));
     }
 }
