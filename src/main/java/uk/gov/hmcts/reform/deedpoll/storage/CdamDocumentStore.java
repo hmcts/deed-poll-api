@@ -60,7 +60,7 @@ import java.util.UUID;
  * carries the hash token (decision 8).
  */
 @Component
-@ConditionalOnProperty(name = DocumentStoreProperties.STORE, havingValue = DocumentStoreProperties.CDAM)
+@ConditionalOnProperty(name = DocumentStoreProperties.STORE_PROPERTY, havingValue = DocumentStoreProperties.CDAM)
 public class CdamDocumentStore implements DocumentStore {
 
     /** The multipart field CDAM reads files from. */

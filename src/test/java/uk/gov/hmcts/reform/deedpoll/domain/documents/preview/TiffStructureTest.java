@@ -346,17 +346,23 @@ class TiffStructureTest {
 
     @Test
     @DisplayName("every committed TIFF, and JDK-written TIFFs of every compression, single and multi-frame, pass")
-    void ordinaryTiffs() throws IOException {
+    void ordinaryTiffs() {
         for (String name : List.of("two-frames.tiff", "three-frames.tiff", DocumentPreviewFixtures.OVERSIZED_TILE)) {
-            require(DocumentPreviewFixtures.read(name), PreviewProperties.MAX_PAGES);
+            assertThatCode(() -> require(DocumentPreviewFixtures.read(name), PreviewProperties.MAX_PAGES))
+                .as(name).doesNotThrowAnyException();
         }
         for (String compression : new String[] {null, "LZW", "Deflate", "ZLib", "PackBits", "CCITT RLE",
                                                 "CCITT T.4", "CCITT T.6"}) {
             Frame frame = new Frame(64, 48, RED, compression, 1);
-            require(DocumentPreviewFixtures.tiff(List.of(frame)), PreviewProperties.MAX_PAGES);
-            require(DocumentPreviewFixtures.tiff(Collections.nCopies(3, frame)), PreviewProperties.MAX_PAGES);
+            assertThatCode(() -> require(DocumentPreviewFixtures.tiff(List.of(frame)), PreviewProperties.MAX_PAGES))
+                .as("single frame with compression %s", compression).doesNotThrowAnyException();
+            assertThatCode(() -> require(DocumentPreviewFixtures.tiff(Collections.nCopies(3, frame)),
+                                        PreviewProperties.MAX_PAGES))
+                .as("three frames with compression %s", compression).doesNotThrowAnyException();
         }
-        require(DocumentPreviewFixtures.tiledGrey(300, 200, 64, 64, 0), PreviewProperties.MAX_PAGES);
+        assertThatCode(() -> require(DocumentPreviewFixtures.tiledGrey(300, 200, 64, 64, 0),
+                                    PreviewProperties.MAX_PAGES))
+            .as("tiled greyscale frame").doesNotThrowAnyException();
     }
 
     @Test

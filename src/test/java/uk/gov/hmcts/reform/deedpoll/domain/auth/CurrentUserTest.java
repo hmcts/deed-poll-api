@@ -10,6 +10,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.WriteContext;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -139,7 +140,9 @@ class CurrentUserTest {
         @Test
         @DisplayName("permits a caller who holds one of the required roles")
         void permitsAHolder() {
-            CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "A", SUBJECT).requireAnyRole(Role.DEEDPOLL_ADMIN);
+            CurrentUser user = CurrentUser.currentUser(List.of(Role.DEEDPOLL_ADMIN), "A", SUBJECT);
+
+            assertThatCode(() -> user.requireAnyRole(Role.DEEDPOLL_ADMIN)).doesNotThrowAnyException();
         }
 
         @Test
@@ -155,7 +158,9 @@ class CurrentUserTest {
         @Test
         @DisplayName("requiring nothing is open, so a dynamically built list cannot fail closed")
         void requiringNothingIsOpen() {
-            CurrentUser.currentUser(List.of(), "A", SUBJECT).requireAnyRole();
+            CurrentUser user = CurrentUser.currentUser(List.of(), "A", SUBJECT);
+
+            assertThatCode(user::requireAnyRole).doesNotThrowAnyException();
         }
     }
 

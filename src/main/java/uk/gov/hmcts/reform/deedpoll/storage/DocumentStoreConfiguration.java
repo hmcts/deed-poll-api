@@ -24,7 +24,7 @@ public class DocumentStoreConfiguration {
 
     /** CDAM's client, only when documents go to CDAM. */
     @Configuration
-    @ConditionalOnProperty(name = DocumentStoreProperties.STORE, havingValue = DocumentStoreProperties.CDAM)
+    @ConditionalOnProperty(name = DocumentStoreProperties.STORE_PROPERTY, havingValue = DocumentStoreProperties.CDAM)
     @EnableFeignClients(clients = CaseDocumentClientApi.class)
     static class Cdam {
     }
