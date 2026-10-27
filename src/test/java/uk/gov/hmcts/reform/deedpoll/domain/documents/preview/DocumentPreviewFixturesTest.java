@@ -47,7 +47,9 @@ class DocumentPreviewFixturesTest {
     void regenerate() throws IOException {
         Path directory = Path.of("src/test/resources/document-previews");
         for (String name : DocumentPreviewFixtures.NAMES) {
-            Files.write(directory.resolve(name), DocumentPreviewFixtures.generate(name));
+            byte[] generated = DocumentPreviewFixtures.generate(name);
+            Path written = Files.write(directory.resolve(name), generated);
+            assertThat(Files.readAllBytes(written)).as(name).isEqualTo(generated);
         }
     }
 
