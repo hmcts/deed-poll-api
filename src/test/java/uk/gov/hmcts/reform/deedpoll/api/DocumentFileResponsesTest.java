@@ -94,6 +94,7 @@ class DocumentFileResponsesTest {
 
                 @Override
                 public void setWriteListener(WriteListener listener) {
+                    // This blocking test stream writes synchronously, so it does not use async write callbacks.
                 }
             };
         }
