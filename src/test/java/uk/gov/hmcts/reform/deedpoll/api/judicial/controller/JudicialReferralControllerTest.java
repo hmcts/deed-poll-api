@@ -793,7 +793,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 // The timeline, read-only -- the referral's own "raised" note is on it, by the caseworker who
                 // raised it.
                 .andExpect(jsonPath("$.caseNotes.length()").value(1))
-                .andExpect(jsonPath("$.caseNotes[0].note").value(containsString("Referred to the judiciary")))
+                .andExpect(jsonPath("$.caseNotes[0].note").value(containsString("Referred to a Master")))
                 .andExpect(jsonPath("$.caseNotes[0].createdBy").value("Ada Caseworker"))
                 .andExpect(jsonPath("$.caseNotes[0].createdOn").exists());
         }
@@ -1050,7 +1050,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 // transition in the same request and therefore already on the timeline it answers with.
                 .andExpect(jsonPath("$.caseNotes.length()").value(2))
                 .andExpect(jsonPath("$.caseNotes[*].note",
-                                    hasItem(containsString("claimed by the judiciary"))));
+                                    hasItem(containsString("claimed by a Master"))));
 
             Referral claimed = stored(referralId);
             assertThat(claimed.getState()).isEqualTo(ReferralState.Claimed);
@@ -1061,7 +1061,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             // And the claim note is the judge's own, over a real token rather than a CurrentUser a test built:
             // createdBy is where the name lives, which is why the prose does not repeat it.
             assertThat(notes.findAll())
-                .filteredOn(note -> note.getNote().contains("claimed by the judiciary"))
+                .filteredOn(note -> note.getNote().contains("claimed by a Master"))
                 .singleElement()
                 .satisfies(note -> assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME));
         }
@@ -1214,7 +1214,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             // and the Gazette answer are in it and the directions text is not, because a direction may be twice
             // as long as a note may be.
             assertThat(notes.findAll())
-                .filteredOn(note -> note.getNote().contains("Judicial direction recorded"))
+                .filteredOn(note -> note.getNote().contains("Master’s direction recorded"))
                 .singleElement()
                 .satisfies(note -> {
                     assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME);
@@ -1389,7 +1389,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             assertThat(deedPolls.findById(caseOf(mine)).orElseThrow().getCurrentReferralState())
                 .isEqualTo(ReferralState.Decided);
             assertThat(notes.findAll())
-                .filteredOn(note -> note.getNote().contains("Judicial direction revised"))
+                .filteredOn(note -> note.getNote().contains("Master’s direction revised"))
                 .singleElement()
                 .satisfies(note -> {
                     assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME);
@@ -1519,7 +1519,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             assertThat(deedPolls.findById(caseOf(mine)).orElseThrow().getCurrentReferralState())
                 .isEqualTo(ReferralState.Claimed);
             assertThat(notes.findAll())
-                .filteredOn(note -> note.getNote().contains("Judicial direction withdrawn"))
+                .filteredOn(note -> note.getNote().contains("Master’s direction withdrawn"))
                 .singleElement()
                 .satisfies(note -> {
                     assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME);

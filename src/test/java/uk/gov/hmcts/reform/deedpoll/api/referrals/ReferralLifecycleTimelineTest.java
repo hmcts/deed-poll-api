@@ -195,16 +195,16 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
         String raisedOn = DAY.format(stored(referralId).getCreatedOn());
         assertThat(timeline(caseId)).satisfiesExactly(
             raised -> {
-                assertThat(raised.getNote()).isEqualTo("Referred to the judiciary. Reasons: " + REASON + ".");
+                assertThat(raised.getNote()).isEqualTo("Referred to a Master. Reasons: " + REASON + ".");
                 assertThat(raised.getCreatedBy()).isEqualTo(REFERRING_CASEWORKER);
             },
             claimed -> {
                 assertThat(claimed.getNote()).isEqualTo("Referral raised on " + raisedOn + ", reasons: " + REASON
-                    + ", claimed by the judiciary.");
+                    + ", claimed by a Master.");
                 assertThat(claimed.getCreatedBy()).isEqualTo(JUDGE);
             },
             directed -> {
-                assertThat(directed.getNote()).isEqualTo("Judicial direction recorded for referral raised on "
+                assertThat(directed.getNote()).isEqualTo("Master’s direction recorded for referral raised on "
                     + raisedOn + ", reasons: " + REASON + ". Decision: " + MasterDecision.Approved
                     + ". Publish to the London Gazette: Yes. See the referral for the full direction.");
                 assertThat(directed.getCreatedBy()).isEqualTo(JUDGE);
@@ -216,11 +216,11 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.state").value(ReferralState.Decided.name()))
             .andExpect(jsonPath("$.caseNotes.length()").value(3))
-            .andExpect(jsonPath("$.caseNotes[0].note").value(containsString("Judicial direction recorded")))
+            .andExpect(jsonPath("$.caseNotes[0].note").value(containsString("Master’s direction recorded")))
             .andExpect(jsonPath("$.caseNotes[0].createdBy").value(JUDGE))
-            .andExpect(jsonPath("$.caseNotes[1].note").value(containsString("claimed by the judiciary")))
+            .andExpect(jsonPath("$.caseNotes[1].note").value(containsString("claimed by a Master")))
             .andExpect(jsonPath("$.caseNotes[1].createdBy").value(JUDGE))
-            .andExpect(jsonPath("$.caseNotes[2].note").value(containsString("Referred to the judiciary")))
+            .andExpect(jsonPath("$.caseNotes[2].note").value(containsString("Referred to a Master")))
             .andExpect(jsonPath("$.caseNotes[2].createdBy").value(REFERRING_CASEWORKER))
             // The direction itself is on the referral and summarised in the note, never copied into it.
             .andExpect(jsonPath("$.directionsText").value(DIRECTIONS))
@@ -234,7 +234,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
         // it, and the note says who carried it out.
         assertThat(timeline(caseId)).hasSize(4);
         assertThat(timeline(caseId).get(3)).satisfies(actioned -> {
-            assertThat(actioned.getNote()).isEqualTo("Judicial direction for referral raised on " + raisedOn
+            assertThat(actioned.getNote()).isEqualTo("Master’s direction for referral raised on " + raisedOn
                 + ", reasons: " + REASON + ", marked as actioned.");
             assertThat(actioned.getCreatedBy()).isEqualTo(ACTIONING_CASEWORKER);
         });
@@ -250,11 +250,11 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
         authorised(get("/caseworker/cases/" + caseId))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.notes.length()").value(4))
-            .andExpect(jsonPath("$.notes[0].note").value(containsString("Referred to the judiciary")))
+            .andExpect(jsonPath("$.notes[0].note").value(containsString("Referred to a Master")))
             .andExpect(jsonPath("$.notes[0].createdBy").value(REFERRING_CASEWORKER))
-            .andExpect(jsonPath("$.notes[1].note").value(containsString("claimed by the judiciary")))
+            .andExpect(jsonPath("$.notes[1].note").value(containsString("claimed by a Master")))
             .andExpect(jsonPath("$.notes[1].createdBy").value(JUDGE))
-            .andExpect(jsonPath("$.notes[2].note").value(containsString("Judicial direction recorded")))
+            .andExpect(jsonPath("$.notes[2].note").value(containsString("Master’s direction recorded")))
             .andExpect(jsonPath("$.notes[2].createdBy").value(JUDGE))
             .andExpect(jsonPath("$.notes[3].note").value(containsString("marked as actioned")))
             .andExpect(jsonPath("$.notes[3].createdBy").value(ACTIONING_CASEWORKER))
@@ -265,7 +265,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.length()").value(4))
             .andExpect(jsonPath("$[0].note").value(containsString("marked as actioned")))
-            .andExpect(jsonPath("$[3].note").value(containsString("Referred to the judiciary")));
+            .andExpect(jsonPath("$[3].note").value(containsString("Referred to a Master")));
 
         // Four transitions, four notes: the three reads above added nothing, because reading is not a
         // transition -- and a note per read would bury the lifecycle in the grid it is written to.

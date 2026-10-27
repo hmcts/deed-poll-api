@@ -203,7 +203,7 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
         assertThat(stored.getDirectionChangedAt()).isNotNull();
         assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId))
             .singleElement()
-            .satisfies(note -> assertThat(note.getNote()).contains("Judicial direction withdrawn"));
+            .satisfies(note -> assertThat(note.getNote()).contains("Master’s direction withdrawn"));
     }
 
     /** What each transaction threw, in the order given, and whether PostgreSQL observed the second waiting. */
