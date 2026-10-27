@@ -73,16 +73,16 @@ public class CdamDocumentStore implements DocumentStore {
 
     private static final String NO_FILE = "The document store did not return this document's file. Try again.";
 
-    private final CaseDocumentClientApi cdam;
+    private final CaseDocumentClientApi cdamClient;
     private final SystemUserTokens systemUser;
     private final ObjectProvider<AuthTokenGenerator> serviceTokens;
     private final CcdProperties ccd;
 
-    public CdamDocumentStore(CaseDocumentClientApi cdam,
+    public CdamDocumentStore(CaseDocumentClientApi cdamClient,
                              SystemUserTokens systemUser,
                              ObjectProvider<AuthTokenGenerator> serviceTokens,
                              CcdProperties ccd) {
-        this.cdam = cdam;
+        this.cdamClient = cdamClient;
         this.systemUser = systemUser;
         this.serviceTokens = serviceTokens;
         this.ccd = ccd;
@@ -107,7 +107,7 @@ public class CdamDocumentStore implements DocumentStore {
         }
         UploadResponse response;
         try {
-            response = cdam.uploadDocuments(user, service, new DocumentUploadRequest(
+            response = cdamClient.uploadDocuments(user, service, new DocumentUploadRequest(
                 Classification.RESTRICTED.name(),
                 ccd.caseTypeId(),
                 ccd.jurisdictionId(),
@@ -182,7 +182,7 @@ public class CdamDocumentStore implements DocumentStore {
             .orElseThrow(() -> new NotFoundError("This document's file could not be found"));
         try {
             String service = serviceTokens.getObject().generate();
-            ResponseEntity<Resource> response = cdam.getDocumentBinary(caller, service, id);
+            ResponseEntity<Resource> response = cdamClient.getDocumentBinary(caller, service, id);
             if (response == null || response.getBody() == null) {
                 throw new UpstreamFailureError(NO_FILE);
             }
@@ -219,7 +219,7 @@ public class CdamDocumentStore implements DocumentStore {
         UUID id = documentId(storageKey)
             .orElseThrow(() -> new IllegalStateException("The key is not a CDAM document id"));
         try {
-            cdam.deleteDocument(systemUser.accessToken(), serviceTokens.getObject().generate(), id, false);
+            cdamClient.deleteDocument(systemUser.accessToken(), serviceTokens.getObject().generate(), id, false);
         } catch (RuntimeException failure) {
             throw new IllegalStateException("CDAM soft delete failed: " + CcdLinkingService.describe(CDAM, failure));
         }
