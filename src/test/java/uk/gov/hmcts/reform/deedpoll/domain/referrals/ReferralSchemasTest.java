@@ -67,7 +67,7 @@ class ReferralSchemasTest {
         @DisplayName("accepts a whole referral, as the enum members rather than the wire strings")
         void acceptsAWholeReferral() {
             CreateReferralInput created = parse(payload(
-                "reasons", List.of("Minor", "DomesticAbuse"),
+                "reasons", List.of("NonPublication", "DomesticAbuse"),
                 "notes", "  The applicant is nine.  ",
                 "urgency", "Urgent",
                 "urgencyReason", "Hearing on Friday"));
@@ -75,7 +75,7 @@ class ReferralSchemasTest {
             // The enum, not the strings: unlike a saved query's conditions, only the names are stored and
             // every later reader matches against the enum.
             assertThat(created.reasons())
-                .containsExactly(ReferralReason.Minor, ReferralReason.DomesticAbuse);
+                .containsExactly(ReferralReason.NonPublication, ReferralReason.DomesticAbuse);
             // Trimmed, and the trimmed value is what gets stored -- the rule every payload here applies.
             assertThat(created.notes()).contains("The applicant is nine.");
             assertThat(created.urgency()).isEqualTo(Urgency.Urgent);
@@ -152,12 +152,12 @@ class ReferralSchemasTest {
         @DisplayName("de-duplicates rather than refusing, keeping the order the caller sent")
         void deDuplicates() {
             CreateReferralInput created =
-                parse(payload("reasons", List.of("DomesticAbuse", "Minor", "DomesticAbuse")));
+                parse(payload("reasons", List.of("DomesticAbuse", "NonPublication", "DomesticAbuse")));
 
             // A multi-select posting the same box twice has one obvious correct reading, and the stored array
             // is a set in everything but type.
             assertThat(created.reasons())
-                .containsExactly(ReferralReason.DomesticAbuse, ReferralReason.Minor);
+                .containsExactly(ReferralReason.DomesticAbuse, ReferralReason.NonPublication);
         }
 
         @Test
@@ -215,10 +215,15 @@ class ReferralSchemasTest {
         }
 
         @Test
-        @DisplayName("still accepts Minor alone for now, because the admin beside this api can send it")
-        void stillAcceptsMinorAlone() {
-            // The "at least one detail" rule arrives with the contract step, once admin requires a detail itself.
-            assertThat(parse(payload("reasons", List.of("Minor"))).reasons()).containsExactly(ReferralReason.Minor);
+        @DisplayName("refuses Minor alone, because the Masters asked always to be told what kind of application it is")
+        void refusesMinorAlone() {
+            assertThat(errorsFrom(() -> parse(payload("reasons", List.of("Minor")))))
+                .singleElement()
+                .satisfies(error -> {
+                    assertThat(error.field()).isEqualTo("reasons");
+                    assertThat(error.message()).contains("names Minor without saying what applies",
+                        "MinorTransgender", "MinorAged16Or17NotConsented");
+                });
         }
 
         @Test
@@ -256,7 +261,7 @@ class ReferralSchemasTest {
         void requiresNotesWhenOtherIsOneOfSeveral() {
             // The rule is about the set containing Other, not about Other being the only selection -- which
             // is the reading an implementation checking `reasons.getFirst()` would get wrong.
-            assertThat(errorsFrom(() -> parse(payload("reasons", List.of("Minor", "Other")))))
+            assertThat(errorsFrom(() -> parse(payload("reasons", List.of("DomesticAbuse", "Other")))))
                 .singleElement()
                 .extracting(FieldError::field)
                 .isEqualTo("notes");
@@ -284,7 +289,7 @@ class ReferralSchemasTest {
         @Test
         @DisplayName("accepts notes on a referral that does not need them")
         void acceptsNotesWithoutOther() {
-            assertThat(parse(payload("reasons", List.of("Minor"), "notes", "Born 2019")).notes())
+            assertThat(parse(payload("reasons", List.of("DomesticAbuse"), "notes", "Born 2019")).notes())
                 .contains("Born 2019");
         }
 
@@ -292,12 +297,12 @@ class ReferralSchemasTest {
         @DisplayName("caps the notes, because the case note the referral writes is bounded")
         void capsTheNotes() {
             assertThat(errorsFrom(() ->
-                parse(payload("reasons", List.of("Minor"),
+                parse(payload("reasons", List.of("DomesticAbuse"),
                     "notes", repeated(ReferralSchemas.MAX_NOTES_LENGTH + 1)))))
                 .containsExactly(new FieldError(
                     "notes", "notes must be " + ReferralSchemas.MAX_NOTES_LENGTH + " characters or fewer"));
 
-            assertThat(parse(payload("reasons", List.of("Minor"),
+            assertThat(parse(payload("reasons", List.of("DomesticAbuse"),
                 "notes", repeated(ReferralSchemas.MAX_NOTES_LENGTH))).notes())
                 .isPresent();
         }
@@ -305,7 +310,7 @@ class ReferralSchemasTest {
         @Test
         @DisplayName("refuses notes that are not text")
         void refusesNotesThatAreNotText() {
-            assertThat(errorsFrom(() -> parse(payload("reasons", List.of("Minor"), "notes", 7))))
+            assertThat(errorsFrom(() -> parse(payload("reasons", List.of("DomesticAbuse"), "notes", 7))))
                 .containsExactly(new FieldError("notes", "notes must be text"));
         }
     }
@@ -319,8 +324,8 @@ class ReferralSchemasTest {
         void defaultsToNormal() {
             // Not demanded: most referrals are not urgent, and a required field whose usual answer is the
             // default is a field every caller fills in without reading.
-            assertThat(parse(payload("reasons", List.of("Minor"))).urgency()).isEqualTo(Urgency.Normal);
-            assertThat(parse(payload("reasons", List.of("Minor"), "urgency", "  ")).urgency())
+            assertThat(parse(payload("reasons", List.of("DomesticAbuse"))).urgency()).isEqualTo(Urgency.Normal);
+            assertThat(parse(payload("reasons", List.of("DomesticAbuse"), "urgency", "  ")).urgency())
                 .isEqualTo(Urgency.Normal);
         }
 
@@ -328,7 +333,7 @@ class ReferralSchemasTest {
         @DisplayName("requires a reason when the referral is Urgent")
         void requiresAReasonWhenUrgent() {
             List<FieldError> errors =
-                errorsFrom(() -> parse(payload("reasons", List.of("Minor"), "urgency", "Urgent")));
+                errorsFrom(() -> parse(payload("reasons", List.of("DomesticAbuse"), "urgency", "Urgent")));
 
             assertThat(errors).hasSize(1);
             assertThat(errors.getFirst().field()).isEqualTo("urgencyReason");
@@ -338,7 +343,7 @@ class ReferralSchemasTest {
         @Test
         @DisplayName("does not require one when the referral is Normal")
         void doesNotRequireOneWhenNormal() {
-            assertThat(parse(payload("reasons", List.of("Minor"), "urgency", "Normal")).urgencyReason())
+            assertThat(parse(payload("reasons", List.of("DomesticAbuse"), "urgency", "Normal")).urgencyReason())
                 .isEmpty();
         }
 
@@ -348,7 +353,7 @@ class ReferralSchemasTest {
             // Coercing would drop the one signal that gets a referral looked at today, so an unknown value is
             // refused the way a saved query's `shared` flag is.
             List<FieldError> errors =
-                errorsFrom(() -> parse(payload("reasons", List.of("Minor"), "urgency", "Standard")));
+                errorsFrom(() -> parse(payload("reasons", List.of("DomesticAbuse"), "urgency", "Standard")));
 
             assertThat(errors).hasSize(1);
             assertThat(errors.getFirst().field()).isEqualTo("urgency");
@@ -360,7 +365,7 @@ class ReferralSchemasTest {
         @DisplayName("caps the urgency reason")
         void capsTheUrgencyReason() {
             assertThat(errorsFrom(() -> parse(payload(
-                "reasons", List.of("Minor"),
+                "reasons", List.of("DomesticAbuse"),
                 "urgency", "Urgent",
                 "urgencyReason", repeated(ReferralSchemas.MAX_URGENCY_REASON_LENGTH + 1)))))
                 .contains(new FieldError("urgencyReason",
@@ -407,14 +412,14 @@ class ReferralSchemasTest {
             // caller cannot post a referral that is already Closed, one attributed to the backfill, or one
             // addressed to a chosen judge.
             CreateReferralInput created = parse(payload(
-                "reasons", List.of("Minor"),
+                "reasons", List.of("DomesticAbuse"),
                 "state", "Closed",
                 "migrated", true,
                 "masterName", "Master Someone",
                 "createdBy", "Somebody Else"));
 
             assertThat(created).isEqualTo(new CreateReferralInput(
-                List.of(ReferralReason.Minor), Optional.empty(), Urgency.Normal, Optional.empty()));
+                List.of(ReferralReason.DomesticAbuse), Optional.empty(), Urgency.Normal, Optional.empty()));
         }
     }
 
@@ -615,57 +620,13 @@ class ReferralSchemasTest {
                 .containsExactly("directionsText");
         }
 
-        @Nested
-        @DisplayName("the old publishToGazette name, for one release")
-        class LegacyGazetteName {
-
-            @Test
-            @DisplayName("reads it inverted: not publishing is a change to the standard publication")
-            void readsItInverted() {
-                assertThat(direction(payload("decision", "Rejected", "publishToGazette", false))
-                    .changesToStandardPublication()).isTrue();
-                assertThat(direction(payload("decision", "Approved", "publishToGazette", true))
-                    .changesToStandardPublication()).isFalse();
-            }
-
-            @Test
-            @DisplayName("does not ask it for directions, because the admin that sends it cannot ask for them")
-            void doesNotRequireDirections() {
-                assertThat(direction(payload("decision", "Rejected", "publishToGazette", false)).directionsText())
-                    .isEmpty();
-            }
-
-            @Test
-            @DisplayName("accepts both names when they agree, and the new name's rule then applies")
-            void acceptsBothWhenTheyAgree() {
-                assertThat(direction(payload(
-                    "decision", "Approved", "changesToStandardPublication", false, "publishToGazette", true))
-                    .changesToStandardPublication()).isFalse();
-                assertThat(errorsFrom(() -> direction(payload(
-                    "decision", "Approved", "changesToStandardPublication", true, "publishToGazette", false))))
-                    .extracting(FieldError::field)
-                    .containsExactly("directionsText");
-            }
-
-            @Test
-            @DisplayName("refuses both names when they disagree, rather than guessing which was meant")
-            void refusesThemDisagreeing() {
-                assertThat(errorsFrom(() -> direction(payload(
-                    "decision", "Approved", "directionsText", "Granted",
-                    "changesToStandardPublication", true, "publishToGazette", true))))
-                    .singleElement()
-                    .satisfies(error -> {
-                        assertThat(error.field()).isEqualTo("changesToStandardPublication");
-                        assertThat(error.message()).contains("disagree");
-                    });
-            }
-
-            @Test
-            @DisplayName("refuses a truthy string under its own name")
-            void refusesATruthyString() {
-                assertThat(errorsFrom(() -> direction(payload("decision", "Approved", "publishToGazette", "false"))))
-                    .containsExactly(new FieldError("publishToGazette", "publishToGazette must be true or false"));
-            }
+        @Test
+        @DisplayName("no longer reads the pre-2026-10-27 publishToGazette, so a body sending only it is refused")
+        void noLongerReadsTheOldGazetteName() {
+            // Stripped as any unknown key is: the answer it carried is not there, and has no default.
+            assertThat(errorsFrom(() -> direction(payload("decision", "Rejected", "publishToGazette", false))))
+                .extracting(FieldError::field)
+                .containsExactly("changesToStandardPublication");
         }
 
         @Test

@@ -94,9 +94,10 @@ class ReferralNotesTest {
     @DisplayName("names every reason on a raised referral rather than counting them")
     void namesEveryReason() {
         String text = ReferralNotes.raised(input(Map.of(
-            "reasons", List.of("Minor", "SeparatedOrEstranged"))));
+            "reasons", List.of("Minor", "MinorCourtOrder", "SeparatedOrEstranged"))));
 
-        assertThat(text).isEqualTo("Referred to a Master. Reasons: Applicant is a minor; Separated or estranged.");
+        assertThat(text).isEqualTo(
+            "Referred to a Master. Reasons: Applicant is a minor: Court Order; Separated or estranged.");
     }
 
     @Test
@@ -121,7 +122,7 @@ class ReferralNotesTest {
         // The urgency reason is optional when the referral is Normal, and a caller may still have sent one --
         // which must not be reported as urgency the referral does not claim.
         String text = ReferralNotes.raised(input(Map.of(
-            "reasons", List.of("Minor"),
+            "reasons", List.of("DomesticAbuse"),
             "urgencyReason", "Sent by a client that always fills this in")));
 
         assertThat(text).doesNotContain("urgent");

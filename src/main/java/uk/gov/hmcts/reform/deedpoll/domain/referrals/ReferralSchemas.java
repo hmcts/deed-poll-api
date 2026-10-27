@@ -118,12 +118,6 @@ public final class ReferralSchemas {
     private static final String DECISION = "decision";
     private static final String DIRECTIONS_TEXT = "directionsText";
     private static final String CHANGES_TO_STANDARD_PUBLICATION = "changesToStandardPublication";
-    /**
-     * The Gazette answer's name before 2026-10-27, accepted inverted for one release so the admin deployed beside
-     * this api keeps working until it sends {@link #CHANGES_TO_STANDARD_PUBLICATION}. Remove it, and its exemption
-     * from the directions rule, once that admin is deployed everywhere.
-     */
-    private static final String LEGACY_PUBLISH_TO_GAZETTE = "publishToGazette";
     private static final String OUTCOME = "outcome";
     private static final String NOTE = "note";
 
@@ -170,12 +164,19 @@ public final class ReferralSchemas {
      * The minor's details beneath {@link ReferralReason#Minor} (Master Sullivan's feedback, Steve, 2026-10-27): each
      * is accepted only beside {@code Minor}, and no referral may carry both halves of a contradictory pair.
      *
-     * <p>Both refusals are on {@link #REASONS}, the one control they belong to. That {@code Minor} needs at least one
-     * detail is deliberately <strong>not</strong> enforced yet: the admin deployed beside this api can send
-     * {@code Minor} alone, so the rule arrives with the contract step, once admin requires a detail itself.
+     * <p>All three refusals are on {@link #REASONS}, the one control they belong to, and the first is that
+     * {@code Minor} needs at least one detail: the Masters asked always to be told what kind of minor's application
+     * it is. Admin has required one since its item C; this api accepted {@code Minor} alone for that one release.
+     * A referral raised before then keeps its bare {@code Minor}, because the rule is checked only on a create.
      */
     private static void minorDetails(List<ReferralReason> reasons, List<FieldError> errors) {
         List<ReferralReason> details = reasons.stream().filter(ReferralReason::isMinorDetail).toList();
+        if (details.isEmpty() && reasons.contains(ReferralReason.Minor)) {
+            errors.add(new FieldError(REASONS, REASONS + " names " + ReferralReason.Minor
+                + " without saying what applies to the minor's application: name at least one of "
+                + Arrays.stream(ReferralReason.values()).filter(ReferralReason::isMinorDetail).map(Enum::name)
+                    .collect(Collectors.joining(", "))));
+        }
         if (!details.isEmpty() && !reasons.contains(ReferralReason.Minor)) {
             String named = details.stream().map(Enum::name).collect(Collectors.joining(", "));
             errors.add(new FieldError(REASONS, REASONS + " names a minor's detail (" + named + ") without "
@@ -195,14 +196,13 @@ public final class ReferralSchemas {
      * the judge makes rather than a preference with an obvious answer -- <strong>defaulting it either way
      * would silently make the choice on their behalf</strong>, in one direction publishing a change that was
      * to stay private and in the other withholding one the public notice depends on. Neither is derived from
-     * the caseworker's referral reasons. {@link #LEGACY_PUBLISH_TO_GAZETTE} answers it too, inverted, for one
-     * release; sent beside the new name it must agree with it.
+     * the caseworker's referral reasons. The pre-2026-10-27 {@code publishToGazette} is no longer read: it is
+     * stripped as any unknown key is, so a body that sends only it is refused for want of the answer.
      *
      * <p>{@link #DIRECTIONS_TEXT} is bounded, and optional on a standard publication: an approval that needs no
      * comment is a real answer, so a judge is not made to type one. <strong>It is required when there are changes
      * to the standard publication</strong>, because "Yes" alone does not say whether to publish nothing or only
-     * the last name, and the direction text is the one place that does. A body answering through the legacy name
-     * is exempt for its one release, because the admin that sends it has no way to ask for the text.
+     * the last name, and the direction text is the one place that does.
      *
      * <p>There is no field here for the referral, its state, the deciding judge or the date. Each is either the
      * path, the transition, the token or the clock -- see {@link DirectionInput}.
@@ -214,10 +214,9 @@ public final class ReferralSchemas {
 
         Optional<MasterDecision> decision = decision(raw, errors);
         Optional<String> directionsText = boundedText(raw, DIRECTIONS_TEXT, MAX_DIRECTIONS_LENGTH, errors);
-        Optional<GazetteAnswer> gazette = gazette(raw, errors);
+        Optional<Boolean> changes = gazette(raw, errors);
         boolean directionsRefused = errors.stream().anyMatch(error -> DIRECTIONS_TEXT.equals(error.field()));
-        if (gazette.map(GazetteAnswer::needsDirections).orElse(false) && directionsText.isEmpty()
-            && !directionsRefused) {
+        if (changes.orElse(false) && directionsText.isEmpty() && !directionsRefused) {
             errors.add(new FieldError(DIRECTIONS_TEXT, DIRECTIONS_TEXT
                 + " is required when there are changes to the standard publication in the Gazette: say whether"
                 + " to publish nothing, or what to publish"));
@@ -227,7 +226,7 @@ public final class ReferralSchemas {
         // Both are present once nothing was refused, so the gets cannot throw -- and reading them here rather
         // than defaulting them is what makes that true: an absent required field is an error above, not a
         // value invented below.
-        return new DirectionInput(decision.orElseThrow(), directionsText, gazette.orElseThrow().changes());
+        return new DirectionInput(decision.orElseThrow(), directionsText, changes.orElseThrow());
     }
 
     /**
@@ -322,58 +321,26 @@ public final class ReferralSchemas {
     }
 
     /**
-     * The Master's Gazette answer, required and never coerced: {@link #CHANGES_TO_STANDARD_PUBLICATION}, or for one
-     * release {@link #LEGACY_PUBLISH_TO_GAZETTE} inverted.
+     * The Master's Gazette answer, {@link #CHANGES_TO_STANDARD_PUBLICATION}, required and never coerced.
      *
      * <p>Refused rather than read truthily, as a saved query's {@code shared} is and for a sharper version of
      * the same reason: publication puts the applicant's former and new names in a public notice, so a
-     * {@code "false"} string quietly read as true is a disclosure that cannot be taken back. Both names sent and
-     * disagreeing is refused for the same reason: either reading would be a guess.
+     * {@code "false"} string quietly read as true is a disclosure that cannot be taken back.
      */
-    private static Optional<GazetteAnswer> gazette(Map<String, Object> raw, List<FieldError> errors) {
-        Optional<Boolean> changes = flag(raw, CHANGES_TO_STANDARD_PUBLICATION, errors);
-        Optional<Boolean> publish = flag(raw, LEGACY_PUBLISH_TO_GAZETTE, errors);
-        if (errors.stream().anyMatch(e -> CHANGES_TO_STANDARD_PUBLICATION.equals(e.field())
-            || LEGACY_PUBLISH_TO_GAZETTE.equals(e.field()))) {
-            return Optional.empty();
+    private static Optional<Boolean> gazette(Map<String, Object> raw, List<FieldError> errors) {
+        Object value = raw.get(CHANGES_TO_STANDARD_PUBLICATION);
+        if (value instanceof Boolean set) {
+            return Optional.of(set);
         }
-        if (changes.isPresent() && publish.isPresent() && changes.get().equals(publish.get())) {
+        if (value == null) {
             errors.add(new FieldError(CHANGES_TO_STANDARD_PUBLICATION, CHANGES_TO_STANDARD_PUBLICATION
-                + " and " + LEGACY_PUBLISH_TO_GAZETTE + " disagree: send " + CHANGES_TO_STANDARD_PUBLICATION
-                + " alone"));
+                + " is required: whether anything changes about the standard publication in the London Gazette is"
+                + " the judge's decision and has no default"));
             return Optional.empty();
-        }
-        if (changes.isPresent()) {
-            return Optional.of(new GazetteAnswer(changes.get(), false));
-        }
-        if (publish.isPresent()) {
-            return Optional.of(new GazetteAnswer(!publish.get(), true));
         }
         errors.add(new FieldError(CHANGES_TO_STANDARD_PUBLICATION, CHANGES_TO_STANDARD_PUBLICATION
-            + " is required: whether anything changes about the standard publication in the London Gazette is the"
-            + " judge's decision and has no default"));
+            + " must be true or false"));
         return Optional.empty();
-    }
-
-    /** One JSON boolean, absent or explicitly null as empty, and anything else refused under its own name. */
-    private static Optional<Boolean> flag(Map<String, Object> raw, String field, List<FieldError> errors) {
-        Object value = raw.get(field);
-        if (value == null || value instanceof Boolean) {
-            return Optional.ofNullable((Boolean) value);
-        }
-        errors.add(new FieldError(field, field + " must be true or false"));
-        return Optional.empty();
-    }
-
-    /**
-     * The Gazette answer, and whether it came through {@link #LEGACY_PUBLISH_TO_GAZETTE}, which is exempt from the
-     * directions rule for its one release.
-     */
-    private record GazetteAnswer(boolean changes, boolean legacy) {
-
-        boolean needsDirections() {
-            return changes && !legacy;
-        }
     }
 
     // --- reasons ---

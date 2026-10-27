@@ -1234,8 +1234,8 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("publishes the Gazette answer under both names for one release, the old one inverted")
-        void publishesBothGazetteNames() throws Exception {
+        @DisplayName("publishes the Gazette answer under its own name only, the one-release alias gone")
+        void publishesOnlyTheNewGazetteName() throws Exception {
             String mine = claimedBy(JUDGE_NAME);
 
             authorised(post(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content("""
@@ -1243,22 +1243,20 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                  "changesToStandardPublication": true}"""))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.changesToStandardPublication").value(true))
-                .andExpect(jsonPath("$.publishToGazette").value(false));
+                .andExpect(jsonPath("$.publishToGazette").doesNotExist());
         }
 
         @Test
-        @DisplayName("takes the old publishToGazette name inverted, and does not ask it for directions")
-        void acceptsTheLegacyGazetteName() throws Exception {
+        @DisplayName("400s a body that answers only through the old publishToGazette name, and records nothing")
+        void refusesTheLegacyGazetteName() throws Exception {
             String mine = claimedBy(JUDGE_NAME);
 
-            // The body today's admin sends: "do not publish" and no comment, which the new name would refuse.
             authorised(post(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content("""
                 {"decision": "Rejected", "publishToGazette": false}"""))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.changesToStandardPublication").value(true))
-                .andExpect(jsonPath("$.publishToGazette").value(false));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].field").value("changesToStandardPublication"));
 
-            assertThat(stored(mine).getChangesToStandardPublication()).isTrue();
+            assertThat(stored(mine).getState()).isEqualTo(ReferralState.Claimed);
         }
 
         @Test

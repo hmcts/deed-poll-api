@@ -246,7 +246,7 @@ class ReferralSecurityTest {
     }
 
     private static CreateReferralInput minimal() {
-        return ReferralSchemas.parseCreateReferral(Map.of("reasons", List.of("Minor")));
+        return ReferralSchemas.parseCreateReferral(Map.of("reasons", List.of("DomesticAbuse")));
     }
 
     /** The shortest direction the schema accepts: these tests are about who may record one, not what it says. */

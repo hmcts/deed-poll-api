@@ -105,7 +105,6 @@ public class OpenAPIWriteBodies {
 
     /** The Gazette flag, named once because it is the direction's second required field. */
     private static final String GAZETTE_FIELD = "changesToStandardPublication";
-    private static final String LEGACY_GAZETTE_FIELD = "publishToGazette";
 
     /** The referral's reasons array, named once because it is the create body's only required field. */
     private static final String REASONS_FIELD = "reasons";
@@ -504,9 +503,9 @@ public class OpenAPIWriteBodies {
             .minItems(1)
             .description("Why the case is being referred. At least one, de-duplicated, and stored in the order "
                 + "they are sent. " + ReferralReason.Other + " requires notes. The Minor* details (MinorTransgender "
-                + "and the rest) say what kind of minor's application it is: each is accepted only beside "
-                + ReferralReason.Minor + ", and the three consent pairs (parental, stepparent, a 16 or 17 year "
-                + "old's own) cannot both be named."));
+                + "and the rest) say what kind of minor's application it is: " + ReferralReason.Minor + " requires "
+                + "at least one, each is accepted only beside it, and the three consent pairs (parental, "
+                + "stepparent, a 16 or 17 year old's own) cannot both be named."));
         create.addProperty("notes", new StringSchema()
             .maxLength(ReferralSchemas.MAX_NOTES_LENGTH)
             .description("The single free-text field: the explanation " + ReferralReason.Other + " requires and "
@@ -595,9 +594,7 @@ public class OpenAPIWriteBodies {
      * a consumer.</strong> Publication puts the applicant's former and new names in a public notice, so the schema
      * refuses the string {@code "false"} rather than reading it truthily -- a document that called this a string
      * would have clients sending the one value that coerces wrongly. Required because a direction that did not
-     * answer it is not a direction. {@code publishToGazette}, its inverted predecessor, is published deprecated for
-     * the one release api still accepts it; a body that sends it alone satisfies the requirement, which the
-     * document states in prose because only {@code ReferralSchemas} can say it exactly.
+     * answer it is not a direction.
      *
      * <p>Nothing here can name the referral, the case, the state, the author or the date: the referral is the
      * path, the case is resolved from it, and the rest come from the clock and the token. Those keys are stripped
@@ -625,13 +622,7 @@ public class OpenAPIWriteBodies {
                 + "Gazette?\": true for do not publish, or publish only as directionsText says; false for publish "
                 + "as standard. The judge's decision, never derived from a caseworker's referral reasons. A JSON "
                 + "boolean -- the string \"false\" is refused rather than coerced, because publication cannot be "
-                + "taken back. publishToGazette alone is accepted in its place for one release."));
-        BooleanSchema legacy = new BooleanSchema();
-        legacy.setDeprecated(true);
-        legacy.setDescription("changesToStandardPublication inverted, under its name before 2026-10-27. Accepted for "
-            + "one release, and exempt from the directionsText requirement; sent beside changesToStandardPublication "
-            + "it must agree with it. Send changesToStandardPublication instead.");
-        direction.addProperty(LEGACY_GAZETTE_FIELD, legacy);
+                + "taken back."));
         direction.addRequiredItem(DECISION_FIELD);
         direction.addRequiredItem(GAZETTE_FIELD);
         direction.setAdditionalProperties(true);

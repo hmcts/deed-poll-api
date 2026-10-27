@@ -497,10 +497,10 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `MinorParentalConsent`/`MinorNoParentalConsent`, `MinorStepparentConsent`/`MinorNoStepparentConsent`,
   `MinorCourtOrder` and `MinorAged16Or17Consented`/`MinorAged16Or17NotConsented`. They are reasons, not a new field,
   so they need no migration. `ReferralSchemas.parseCreateReferral` accepts one only beside `Minor` and refuses both
-  halves of a pair (`CONTRADICTORY_MINOR_DETAILS`). **`Minor` alone is still accepted, deliberately, for one
-  release:** the admin deployed beside this api can send it, so "at least one detail" arrives with the contract step
-  after admin requires it. Never rename a member; the names are the stored form. **Each member's `label()` is the
-  admin screens' wording** (Steve, 2026-10-27), and `ReferralNotes` writes reasons with it, folding the details into
+  halves of a pair (`CONTRADICTORY_MINOR_DETAILS`), and **refuses `Minor` alone**: it was accepted for the one
+  release in which the admin beside it could still send it. A referral raised before that keeps its bare `Minor`,
+  because the rule is checked only on a create. Never rename a member; the names are the stored form. **Each
+  member's `label()` is the admin screens' wording** (Steve, 2026-10-27), and `ReferralNotes` writes reasons with it, folding the details into
   `Minor` ("Applicant is a minor: Transgender, Have parental consent; Other"), so change a label in admin's
   `REFERRAL_REASON_LABEL` and here together. Notes written before that keep the raw names; nothing parses note text.
 - **The Master's Gazette answer is "changes to the standard publication", not "publish".** Master Sullivan's feedback
@@ -508,10 +508,10 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   Yes means do not publish, or publish only as the direction text says (the last name only, for example). V41 renamed
   the referral's `publishToGazette` to `changesToStandardPublication` and **inverted** every stored answer; the audit
   trail's earlier rows and the case notes already written keep the old name and wording. `ReferralSchemas` requires
-  `directionsText` when the answer is Yes. **Expand-then-contract, one release:** the direction body still accepts
-  `publishToGazette` (inverted, exempt from the directions rule, refused if it disagrees with the new name) and both
-  referral DTOs still publish it, deprecated, so the admin deployed beside this api keeps working. A later api PR
-  removes both once admin sends the new name everywhere. The case's own `publishToLondonGazette` is a different fact
+  `directionsText` when the answer is Yes. **The one-release alias is gone:** `publishToGazette` was accepted inverted
+  and published deprecated while the admin beside this api still sent it, and the contract step removed both, so a
+  body sending only it is now refused for want of the answer. Do not assume every stored Yes has directions: the old
+  admin could record Yes with none during that release. The case's own `publishToLondonGazette` is a different fact
   and is untouched.
 - **The referral claim window is a stored process setting, read on every sweep.** `ReferralService` asks
   `ProcessSettingsService.referralClaimExpiry()` once per `reclaimStaleClaims`, so a Delivery Manager's `PUT` applies

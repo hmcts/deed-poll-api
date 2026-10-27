@@ -85,7 +85,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
     private static final String UNKNOWN_ID = "11111111-1111-1111-1111-111111111111";
 
     /** The smallest acceptable create body: one reason, and nothing that makes another field required. */
-    private static final String ONE_REASON = "{\"reasons\":[\"Minor\"]}";
+    private static final String ONE_REASON = "{\"reasons\":[\"DomesticAbuse\"]}";
 
     /** When the confirmation fixtures asked the applicant to confirm -- the instant the wait runs from. */
     private static final LocalDateTime ASKED = LocalDateTime.of(2026, 5, 3, 9, 30);
@@ -289,8 +289,8 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         void listsOnlyThatCasesReferrals() throws Exception {
             String caseId = newCase();
             String otherCaseId = newCase();
-            raise(caseId, "{\"reasons\":[\"Minor\"],\"notes\":\"Ours\"}");
-            raise(otherCaseId, "{\"reasons\":[\"Minor\"],\"notes\":\"Theirs\"}");
+            raise(caseId, "{\"reasons\":[\"DomesticAbuse\"],\"notes\":\"Ours\"}");
+            raise(otherCaseId, "{\"reasons\":[\"DomesticAbuse\"],\"notes\":\"Theirs\"}");
 
             authorised(get("/caseworker/cases/" + caseId + "/referrals"))
                 .andExpect(status().isOk())
@@ -309,7 +309,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             String caseId = newCase();
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals"),
-                "{\"reasons\":[\"Minor\",\"DomesticAbuse\"],\"notes\":\"Applicant is 14\"}")
+                "{\"reasons\":[\"NonPublication\",\"DomesticAbuse\"],\"notes\":\"Applicant is 14\"}")
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").exists())
                 // Open and unclaimed: the state is not the caller's to choose and there is no target judge.
@@ -317,7 +317,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                 // In the order they were ticked, so a round trip renders the checkboxes as the caseworker left
                 // them.
                 .andExpect(jsonPath("$.reasons.length()").value(2))
-                .andExpect(jsonPath("$.reasons[0]").value(ReferralReason.Minor.name()))
+                .andExpect(jsonPath("$.reasons[0]").value(ReferralReason.NonPublication.name()))
                 .andExpect(jsonPath("$.reasons[1]").value(ReferralReason.DomesticAbuse.name()))
                 .andExpect(jsonPath("$.notes").value("Applicant is 14"))
                 // Defaulted rather than demanded: most referrals are not urgent.
@@ -331,7 +331,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
 
             assertThat(referrals.findAll()).singleElement().satisfies(referral -> {
                 assertThat(referral.getState()).isEqualTo(ReferralState.Open);
-                assertThat(referral.getReasons()).containsExactly("Minor", "DomesticAbuse");
+                assertThat(referral.getReasons()).containsExactly("NonPublication", "DomesticAbuse");
                 assertThat(referral.getDeedPoll().getId()).isEqualTo(caseId);
                 assertThat(referral.isMigrated()).isFalse();
             });
@@ -361,12 +361,12 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             String caseId = newCase();
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals"),
-                "{\"reasons\":[\"Minor\"],\"urgency\":\"Urgent\",\"urgencyReason\":\"Hearing on Friday\"}")
+                "{\"reasons\":[\"DomesticAbuse\"],\"urgency\":\"Urgent\",\"urgencyReason\":\"Hearing on Friday\"}")
                 .andExpect(status().isCreated());
 
             assertThat(notes.findAll()).singleElement().satisfies(note -> {
                 assertThat(note.getNote())
-                    .contains("Referred to a Master", "Applicant is a minor", "Hearing on Friday");
+                    .contains("Referred to a Master", "Domestic abuse considerations", "Hearing on Friday");
                 assertThat(note.getCreatedBy()).isEqualTo("A Caseworker");
                 assertThat(note.getDeedPoll().getId()).isEqualTo(caseId);
             });
@@ -470,7 +470,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             // Structural rather than checked: CreateReferralInput has nowhere to put either, which is what stops
             // a caller raising a referral that is already Closed and so never reaches the pool.
             authorised(post("/caseworker/cases/" + newCase() + "/referrals"),
-                "{\"reasons\":[\"Minor\"],\"state\":\"Closed\",\"migrated\":true,\"masterName\":\"A Master\"}")
+                "{\"reasons\":[\"DomesticAbuse\"],\"state\":\"Closed\",\"migrated\":true,\"masterName\":\"A Master\"}")
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.state").value(ReferralState.Open.name()))
                 .andExpect(jsonPath("$.migrated").value(false));
@@ -604,7 +604,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
 
             assertThat(notes.findAll()).hasSize(2);
             assertThat(notes.findAll()).anySatisfy(note -> {
-                assertThat(note.getNote()).contains("withdrawn", "Applicant is a minor");
+                assertThat(note.getNote()).contains("withdrawn", "Domestic abuse considerations");
                 assertThat(note.getCreatedBy()).isEqualTo("A Caseworker");
             });
         }
@@ -770,8 +770,8 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.decision").value(MasterDecision.Approved.name()))
                 .andExpect(jsonPath("$.directionsText").value("Approved. Publish in the Gazette."))
                 .andExpect(jsonPath("$.changesToStandardPublication").value(false))
-                // And under its old name, inverted, for the admin deployed beside this api for one release.
-                .andExpect(jsonPath("$.publishToGazette").value(true))
+                // The one-release alias is gone.
+                .andExpect(jsonPath("$.publishToGazette").doesNotExist())
                 .andExpect(jsonPath("$.decisionDate").exists())
                 // The judge directed it and the caseworker closed it, and the response distinguishes them:
                 // decidedBy is not modifiedBy.
@@ -902,7 +902,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             // one step no column records after the fact, because it puts the case's column back to null.
             assertThat(notes.count()).isEqualTo(4);
             assertThat(notes.findAll()).anySatisfy(note -> {
-                assertThat(note.getNote()).contains("marked as actioned", "Applicant is a minor");
+                assertThat(note.getNote()).contains("marked as actioned", "Domestic abuse considerations");
                 // The caseworker who actioned it, through a real token, while decidedBy on the row still says
                 // which judge directed it.
                 assertThat(note.getCreatedBy()).isEqualTo("Another Caseworker");
