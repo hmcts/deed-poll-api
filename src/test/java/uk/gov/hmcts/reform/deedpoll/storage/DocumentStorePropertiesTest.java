@@ -36,7 +36,7 @@ class DocumentStorePropertiesTest {
     void anythingElseIsRefused(String store) {
         assertThatThrownBy(() -> new DocumentStoreProperties(store, null))
             .isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining(DocumentStoreProperties.STORE);
+            .hasMessageContaining(DocumentStoreProperties.STORE_PROPERTY);
     }
 
     @Test
