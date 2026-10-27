@@ -75,7 +75,7 @@ class ReferralNotesTest {
         String text = ReferralNotes.raised(input(Map.of(
             "reasons", List.of("Minor", "SeparatedOrEstranged"))));
 
-        assertThat(text).isEqualTo("Referred to the judiciary. Reasons: Minor, SeparatedOrEstranged.");
+        assertThat(text).isEqualTo("Referred to a Master. Reasons: Minor, SeparatedOrEstranged.");
     }
 
     @Test
@@ -89,7 +89,7 @@ class ReferralNotesTest {
 
         // Each piece of the caseworker's own text is on its own line, and no full stop is added after it: it
         // is prose they wrote, and one that already ended in a stop would read as "Friday..".
-        assertThat(text).isEqualTo("Referred to the judiciary. Reasons: Other."
+        assertThat(text).isEqualTo("Referred to a Master. Reasons: Other."
             + "\nMarked urgent: Hearing on Friday"
             + "\nNotes: The declarant is abroad until October");
     }
@@ -128,7 +128,7 @@ class ReferralNotesTest {
         String text = ReferralNotes.withdrawn(
             referral(List.of("Minor", "Other"), LocalDateTime.parse("2026-09-01T09:30:00")));
 
-        assertThat(text).isEqualTo("Referral to the judiciary withdrawn."
+        assertThat(text).isEqualTo("Referral to a Master withdrawn."
             + " It was raised on 1 September 2026, reasons: Minor, Other.");
     }
 
@@ -140,7 +140,7 @@ class ReferralNotesTest {
         String text = ReferralNotes.withdrawn(
             referral(List.of(), LocalDateTime.parse("2025-11-20T14:00:00")));
 
-        assertThat(text).isEqualTo("Referral to the judiciary withdrawn."
+        assertThat(text).isEqualTo("Referral to a Master withdrawn."
             + " It was raised on 20 November 2025, reasons: no reasons recorded.");
     }
 
@@ -161,7 +161,7 @@ class ReferralNotesTest {
 
         assertThat(text)
             .isEqualTo("Referral raised on 1 September 2026, reasons: Minor, Other,"
-                + " claimed by the judiciary.");
+                + " claimed by a Master.");
     }
 
     @Test
@@ -171,7 +171,7 @@ class ReferralNotesTest {
 
         assertThat(text)
             .isEqualTo("Referral raised on 20 November 2025, reasons: no reasons recorded,"
-                + " claimed by the judiciary.");
+                + " claimed by a Master.");
     }
 
     @Test
@@ -182,7 +182,7 @@ class ReferralNotesTest {
             MasterDecision.Approved, false));
 
         assertThat(text)
-            .isEqualTo("Judicial direction recorded for referral raised on 1 September 2026,"
+            .isEqualTo("Master’s direction recorded for referral raised on 1 September 2026,"
                 + " reasons: Minor, Other. Decision: Approved."
                 + " Publish to the London Gazette: No. See the referral for the full direction.");
     }
@@ -246,7 +246,7 @@ class ReferralNotesTest {
             MasterDecision.Rejected, true));
 
         assertThat(text)
-            .isEqualTo("Judicial direction revised for referral raised on 1 September 2026,"
+            .isEqualTo("Master’s direction revised for referral raised on 1 September 2026,"
                 + " reasons: Minor, Other. Decision: Rejected."
                 + " Publish to the London Gazette: Yes. See the referral for the full direction.");
     }
@@ -273,9 +273,9 @@ class ReferralNotesTest {
             MasterDecision.Approved, false));
 
         assertThat(text)
-            .isEqualTo("Judicial direction withdrawn for referral raised on 1 September 2026,"
+            .isEqualTo("Master’s direction withdrawn for referral raised on 1 September 2026,"
                 + " reasons: Minor, Other. The withdrawn decision was: Approved."
-                + " Publish to the London Gazette: No. The referral is back with the judge to direct again.");
+                + " Publish to the London Gazette: No. The referral is back with the Master to direct again.");
     }
 
     @Test
@@ -299,7 +299,7 @@ class ReferralNotesTest {
             MasterDecision.Approved, true));
 
         assertThat(text)
-            .isEqualTo("Judicial direction for referral raised on 1 September 2026,"
+            .isEqualTo("Master’s direction for referral raised on 1 September 2026,"
                 + " reasons: Minor, Other, marked as actioned.");
     }
 
@@ -310,7 +310,7 @@ class ReferralNotesTest {
             referral(List.of(), LocalDateTime.parse("2025-11-20T14:00:00")));
 
         assertThat(text)
-            .isEqualTo("Judicial direction for referral raised on 20 November 2025,"
+            .isEqualTo("Master’s direction for referral raised on 20 November 2025,"
                 + " reasons: no reasons recorded, marked as actioned.");
     }
 
@@ -418,7 +418,7 @@ class ReferralNotesTest {
         // record on the case that this judge ever had it.
         assertThat(ReferralNotes.claimLapsed("District Judge Bell"))
             .isEqualTo("Referral claim by District Judge Bell lapsed after inactivity."
-                + " The referral has been returned to the judicial pool and can be picked up again.");
+                + " The referral has been returned to the shared pool and can be picked up again.");
     }
 
     @Test
@@ -429,7 +429,7 @@ class ReferralNotesTest {
         for (String noName : Arrays.asList(null, "", "   ")) {
             assertThat(ReferralNotes.claimLapsed(noName))
                 .as("a claim held under %s", noName == null ? "null" : "blank")
-                .startsWith("Referral claim by an unnamed judge lapsed after inactivity.");
+                .startsWith("Referral claim by an unnamed Master lapsed after inactivity.");
         }
     }
 

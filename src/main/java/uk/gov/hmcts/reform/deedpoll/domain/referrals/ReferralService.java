@@ -488,7 +488,7 @@ public class ReferralService {
         audit(AuditAction.REFERRAL_CLAIMED, caller, deedPollId, saved, fromState,
               List.of(AuditValue.of("state", fromState, saved.getState())));
         // The claiming judge, not the service account: a person did this, and noteAuthor() is what puts their
-        // name in createdBy -- which is why the prose says "claimed by the judiciary" rather than naming them
+        // name in createdBy -- which is why the prose says "claimed by a Master" rather than naming them
         // a second time.
         notes.createNote(deedPollId, new CreateNoteInput(ReferralNotes.claimed(saved)), caller.noteAuthor());
         // After the sweep above, not instead of it: the sweep may have moved this very case's column to Open a

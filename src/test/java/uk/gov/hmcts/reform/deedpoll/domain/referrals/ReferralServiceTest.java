@@ -472,7 +472,7 @@ class ReferralServiceTest {
             // recorded as the machine's.
             assertThat(note.author().author()).isEqualTo("Ada Caseworker");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
-            assertThat(note.text()).contains("Referred to the judiciary", "Minor", "Hearing on Friday");
+            assertThat(note.text()).contains("Referred to a Master", "Minor", "Hearing on Friday");
         }
 
         @Test
@@ -983,7 +983,7 @@ class ReferralServiceTest {
             assertThat(notesWritten()).hasSize(2);
             assertThat(notesWritten().get(0).text())
                 .contains("District Judge Okafor", "lapsed after inactivity");
-            assertThat(notesWritten().get(1).text()).contains("claimed by the judiciary");
+            assertThat(notesWritten().get(1).text()).contains("claimed by a Master");
         }
 
         @Test
@@ -1026,7 +1026,7 @@ class ReferralServiceTest {
             assertThat(note.author().author()).isEqualTo("District Judge Bell");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text()).isEqualTo(
-                "Referral raised on 1 September 2026, reasons: Minor, claimed by the judiciary.");
+                "Referral raised on 1 September 2026, reasons: Minor, claimed by a Master.");
             // A case may carry several referrals over its life, so the note has to say which one -- by the
             // raised date and reasons a caseworker can recognise, never by a uuid they cannot.
             assertThat(note.text()).doesNotContain(REFERRAL_ID.toString());
@@ -1048,7 +1048,7 @@ class ReferralServiceTest {
             // next successful claim writes another claim note, so the grid reads claimed, lapsed, claimed.
             assertThat(notesWritten()).satisfiesExactly(
                 claimed -> {
-                    assertThat(claimed.text()).contains("claimed by the judiciary");
+                    assertThat(claimed.text()).contains("claimed by a Master");
                     assertThat(claimed.author().author()).isEqualTo("District Judge Okafor");
                 },
                 lapsed -> {
@@ -1058,7 +1058,7 @@ class ReferralServiceTest {
                     assertThat(lapsed.author()).isEqualTo(NoteAuthor.NONE);
                 },
                 reclaimed -> {
-                    assertThat(reclaimed.text()).contains("claimed by the judiciary");
+                    assertThat(reclaimed.text()).contains("claimed by a Master");
                     assertThat(reclaimed.author().author()).isEqualTo("District Judge Bell");
                 });
         }
@@ -1483,7 +1483,7 @@ class ReferralServiceTest {
             // The decision and the Gazette answer in full, because those two are what a caseworker scanning the
             // grid needs in order to know whether anything is waiting for them.
             assertThat(note.text()).isEqualTo(
-                "Judicial direction recorded for referral raised on 1 September 2026, reasons: Minor."
+                "Master’s direction recorded for referral raised on 1 September 2026, reasons: Minor."
                     + " Decision: Approved. Publish to the London Gazette: Yes."
                     + " See the referral for the full direction.");
             assertThat(note.text()).doesNotContain(REFERRAL_ID.toString());
@@ -1617,7 +1617,7 @@ class ReferralServiceTest {
             assertThat(note.author().author()).isEqualTo("District Judge Bell");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text()).isEqualTo(
-                "Judicial direction revised for referral raised on 1 September 2026, reasons: Minor."
+                "Master’s direction revised for referral raised on 1 September 2026, reasons: Minor."
                     + " Decision: Rejected. Publish to the London Gazette: No."
                     + " See the referral for the full direction.");
         }
@@ -1813,9 +1813,9 @@ class ReferralServiceTest {
             assertThat(note.author().author()).isEqualTo("District Judge Bell");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text()).isEqualTo(
-                "Judicial direction withdrawn for referral raised on 1 September 2026, reasons: Minor."
+                "Master’s direction withdrawn for referral raised on 1 September 2026, reasons: Minor."
                     + " The withdrawn decision was: Approved. Publish to the London Gazette: Yes."
-                    + " The referral is back with the judge to direct again.");
+                    + " The referral is back with the Master to direct again.");
         }
 
         @Test
@@ -2082,7 +2082,7 @@ class ReferralServiceTest {
             assertThat(note.author().author()).isEqualTo("Ada Caseworker");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text()).isEqualTo(
-                "Judicial direction for referral raised on 1 September 2026, reasons: Minor, marked as actioned.");
+                "Master’s direction for referral raised on 1 September 2026, reasons: Minor, marked as actioned.");
             // Pairable with the direction note a few rows above it in the same grid, by the raised date and
             // reasons a caseworker can recognise rather than by a uuid they cannot.
             assertThat(note.text()).doesNotContain(REFERRAL_ID.toString());

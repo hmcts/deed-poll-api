@@ -365,7 +365,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(status().isCreated());
 
             assertThat(notes.findAll()).singleElement().satisfies(note -> {
-                assertThat(note.getNote()).contains("Referred to the judiciary", "Minor", "Hearing on Friday");
+                assertThat(note.getNote()).contains("Referred to a Master", "Minor", "Hearing on Friday");
                 assertThat(note.getCreatedBy()).isEqualTo("A Caseworker");
                 assertThat(note.getDeedPoll().getId()).isEqualTo(caseId);
             });

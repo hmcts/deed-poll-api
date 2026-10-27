@@ -74,7 +74,7 @@ public final class ReferralNotes {
      * that tells the next caseworker nothing they wanted.
      */
     public static String raised(CreateReferralInput dto) {
-        StringBuilder text = new StringBuilder("Referred to the judiciary. Reasons: ");
+        StringBuilder text = new StringBuilder("Referred to a Master. Reasons: ");
         text.append(names(dto));
         text.append('.');
         // Each piece of the caseworker's own text goes on its own line, rather than being run into the
@@ -115,10 +115,10 @@ public final class ReferralNotes {
      */
     public static String claimLapsed(String judge) {
         String held = judge == null || judge.isBlank()
-            ? "an unnamed judge"
+            ? "an unnamed Master"
             : judge.substring(0, Math.min(judge.length(), MAX_JUDGE_NAME_LENGTH));
         return "Referral claim by " + held + " lapsed after inactivity. The referral has been returned to "
-            + "the judicial pool and can be picked up again.";
+            + "the shared pool and can be picked up again.";
     }
 
     /**
@@ -131,7 +131,7 @@ public final class ReferralNotes {
      * {@link #identifies}.
      */
     public static String withdrawn(Referral referral) {
-        return "Referral to the judiciary withdrawn. It was " + identifies(referral) + ".";
+        return "Referral to a Master withdrawn. It was " + identifies(referral) + ".";
     }
 
     /**
@@ -143,7 +143,7 @@ public final class ReferralNotes {
      * precisely because a lapse leaves no author to read it off.
      */
     public static String claimed(Referral referral) {
-        return "Referral " + identifies(referral) + ", claimed by the judiciary.";
+        return "Referral " + identifies(referral) + ", claimed by a Master.";
     }
 
     /**
@@ -166,7 +166,7 @@ public final class ReferralNotes {
      * reachable through the direction transition, which always stores both.
      */
     public static String directionRecorded(Referral referral) {
-        return "Judicial direction recorded for referral " + identifies(referral) + "."
+        return "Master’s direction recorded for referral " + identifies(referral) + "."
             + " Decision: " + decision(referral) + "."
             + " Publish to the London Gazette: " + gazette(referral) + "."
             + " See the referral for the full direction.";
@@ -183,7 +183,7 @@ public final class ReferralNotes {
      * which is what tells them the direction they may already be acting on has changed.
      */
     public static String directionRevised(Referral referral) {
-        return "Judicial direction revised for referral " + identifies(referral) + "."
+        return "Master’s direction revised for referral " + identifies(referral) + "."
             + " Decision: " + decision(referral) + "."
             + " Publish to the London Gazette: " + gazette(referral) + "."
             + " See the referral for the full direction.";
@@ -199,10 +199,10 @@ public final class ReferralNotes {
      * judge, because a withdrawn direction is a live claim again and the "returned -- action needed" queue drops it.
      */
     public static String directionWithdrawn(Referral referral) {
-        return "Judicial direction withdrawn for referral " + identifies(referral) + "."
+        return "Master’s direction withdrawn for referral " + identifies(referral) + "."
             + " The withdrawn decision was: " + decision(referral) + "."
             + " Publish to the London Gazette: " + gazette(referral) + "."
-            + " The referral is back with the judge to direct again.";
+            + " The referral is back with the Master to direct again.";
     }
 
     /**
@@ -215,7 +215,7 @@ public final class ReferralNotes {
      * the same grid.
      */
     public static String directionActioned(Referral referral) {
-        return "Judicial direction for referral " + identifies(referral) + ", marked as actioned.";
+        return "Master’s direction for referral " + identifies(referral) + ", marked as actioned.";
     }
 
     /**
