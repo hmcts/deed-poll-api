@@ -237,16 +237,17 @@ class ReferralServiceTest {
     }
 
     /** A direction as the schema would have produced it, so a test cannot build a shape a judge could not send. */
-    private static DirectionInput direction(String decision, String directionsText, boolean publishToGazette) {
+    private static DirectionInput direction(String decision, String directionsText,
+                                            boolean changesToStandardPublication) {
         return ReferralSchemas.parseDirection(Map.of(
             "decision", decision,
             "directionsText", directionsText,
-            "publishToGazette", publishToGazette));
+            "changesToStandardPublication", changesToStandardPublication));
     }
 
     /** The shortest acceptable direction, for the tests that are about who may record one rather than what. */
     private static DirectionInput approval() {
-        return direction("Approved", "Approved", false);
+        return direction("Approved", "Approved", true);
     }
 
     /**
@@ -1288,13 +1289,13 @@ class ReferralServiceTest {
             final LocalDateTime claimedAt = referral.getClaimedAt();
             final LocalDateTime before = AuditClock.now();
 
-            service.decide(CASE_ID, REFERRAL_ID.toString(), direction("Approved", "No publication", false), JUDGE);
+            service.decide(CASE_ID, REFERRAL_ID.toString(), direction("Approved", "No publication", true), JUDGE);
 
             Referral written = saved();
             assertThat(written.getState()).isEqualTo(ReferralState.Decided);
             assertThat(written.getDecision()).isEqualTo(MasterDecision.Approved);
             assertThat(written.getDirectionsText()).isEqualTo("No publication");
-            assertThat(written.getPublishToGazette()).isFalse();
+            assertThat(written.getChangesToStandardPublication()).isTrue();
             assertThat(written.getDecisionDate()).isBetween(before, AuditClock.now());
             // From the token and the clock, never from the payload: a direction that could name its own author
             // would be a signature anybody could forge.
@@ -1319,11 +1320,11 @@ class ReferralServiceTest {
             storedClaim(JUDGE, Duration.ofMinutes(1));
 
             service.decide(CASE_ID, REFERRAL_ID.toString(),
-                           direction("Rejected", "Refused: no consent from the second parent", true), JUDGE);
+                           direction("Rejected", "Refused: no consent from the second parent", false), JUDGE);
 
             Referral written = saved();
             assertThat(written.getDecision()).isEqualTo(MasterDecision.Rejected);
-            assertThat(written.getPublishToGazette()).isTrue();
+            assertThat(written.getChangesToStandardPublication()).isFalse();
             // Publication is the judge's decision and is not tied to the outcome, so a rejection that directs
             // publication is a real answer rather than a contradiction to normalise away.
             assertThat(written.getState()).isEqualTo(ReferralState.Decided);
@@ -1335,7 +1336,7 @@ class ReferralServiceTest {
             storedClaim(JUDGE, Duration.ofMinutes(1));
 
             service.decide(CASE_ID, REFERRAL_ID.toString(),
-                           new DirectionInput(MasterDecision.Approved, Optional.empty(), false), JUDGE);
+                           new DirectionInput(MasterDecision.Approved, Optional.empty(), true), JUDGE);
 
             assertThat(saved().getDirectionsText()).isNull();
         }
@@ -1475,7 +1476,7 @@ class ReferralServiceTest {
             storedClaim(JUDGE, Duration.ofMinutes(10));
 
             service.decide(CASE_ID, REFERRAL_ID.toString(),
-                           direction("Approved", "Granted. Publish in the Gazette.", true), JUDGE);
+                           direction("Approved", "Granted. Publish in the Gazette.", false), JUDGE);
 
             NoteWritten note = noteWritten();
             assertThat(note.author().author()).isEqualTo("District Judge Bell");
@@ -1484,7 +1485,7 @@ class ReferralServiceTest {
             // grid needs in order to know whether anything is waiting for them.
             assertThat(note.text()).isEqualTo(
                 "Master’s direction recorded for referral raised on 1 September 2026, reasons: Minor."
-                    + " Decision: Approved. Publish to the London Gazette: Yes."
+                    + " Decision: Approved. Changes to standard publication in the Gazette: No."
                     + " See the referral for the full direction.");
             assertThat(note.text()).doesNotContain(REFERRAL_ID.toString());
         }
@@ -1495,7 +1496,7 @@ class ReferralServiceTest {
             storedClaim(JUDGE, Duration.ofMinutes(10));
             String longest = "x".repeat(ReferralSchemas.MAX_DIRECTIONS_LENGTH);
 
-            service.decide(CASE_ID, REFERRAL_ID.toString(), direction("Rejected", longest, false), JUDGE);
+            service.decide(CASE_ID, REFERRAL_ID.toString(), direction("Rejected", longest, true), JUDGE);
 
             NoteWritten note = noteWritten();
             // The whole reason the note is a summary: a direction may be twice as long as a note may be, so
@@ -1530,7 +1531,7 @@ class ReferralServiceTest {
             parent.setMasterDirections("Approved by Master Someone, 2019");
             parent.setPublishToLondonGazette(true);
 
-            service.decide(CASE_ID, REFERRAL_ID.toString(), direction("Rejected", "Refused", false), JUDGE);
+            service.decide(CASE_ID, REFERRAL_ID.toString(), direction("Rejected", "Refused", true), JUDGE);
 
             // Untouched. Syncing the live direction back would make the case say two different things over time
             // -- the backfilled snapshot and whichever referral was latest -- and re-introduce the
@@ -1559,7 +1560,7 @@ class ReferralServiceTest {
             referral.setState(ReferralState.Decided);
             referral.setDecision(MasterDecision.Approved);
             referral.setDirectionsText("Granted");
-            referral.setPublishToGazette(true);
+            referral.setChangesToStandardPublication(false);
             referral.setDecisionDate(DIRECTED_AT);
             referral.setDecidedById(judge.userId());
             referral.setDecidedBy(judge.name());
@@ -1574,13 +1575,13 @@ class ReferralServiceTest {
             final LocalDateTime before = AuditClock.now();
 
             service.reviseDirection(CASE_ID, REFERRAL_ID.toString(),
-                                    direction("Rejected", "Refused on reflection", false), JUDGE);
+                                    direction("Rejected", "Refused on reflection", true), JUDGE);
 
             Referral written = saved();
             assertThat(written.getState()).isEqualTo(ReferralState.Decided);
             assertThat(written.getDecision()).isEqualTo(MasterDecision.Rejected);
             assertThat(written.getDirectionsText()).isEqualTo("Refused on reflection");
-            assertThat(written.getPublishToGazette()).isFalse();
+            assertThat(written.getChangesToStandardPublication()).isTrue();
             assertThat(written.getDecisionDate()).isBetween(before, AuditClock.now());
             // The flag the caseworker acts on, and never cleared: it is a fact about the referral's history.
             assertThat(written.getDirectionChangedAt()).isBetween(before, AuditClock.now());
@@ -1611,14 +1612,14 @@ class ReferralServiceTest {
             storedDirection(JUDGE);
 
             service.reviseDirection(CASE_ID, REFERRAL_ID.toString(),
-                                    direction("Rejected", "Refused on reflection", false), JUDGE);
+                                    direction("Rejected", "Refused on reflection", true), JUDGE);
 
             NoteWritten note = noteWritten();
             assertThat(note.author().author()).isEqualTo("District Judge Bell");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text()).isEqualTo(
                 "Master’s direction revised for referral raised on 1 September 2026, reasons: Minor."
-                    + " Decision: Rejected. Publish to the London Gazette: No."
+                    + " Decision: Rejected. Changes to standard publication in the Gazette: Yes."
                     + " See the referral for the full direction.");
         }
 
@@ -1628,7 +1629,7 @@ class ReferralServiceTest {
             storedDirection(JUDGE);
             String longest = "x".repeat(ReferralSchemas.MAX_DIRECTIONS_LENGTH);
 
-            service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), direction("Rejected", longest, false), JUDGE);
+            service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), direction("Rejected", longest, true), JUDGE);
 
             assertThat(noteWritten().text()).doesNotContain("xxx");
             assertThat(NoteForm.validateNoteText(noteWritten().text())).isEmpty();
@@ -1769,7 +1770,7 @@ class ReferralServiceTest {
             referral.setState(ReferralState.Decided);
             referral.setDecision(MasterDecision.Approved);
             referral.setDirectionsText("Granted");
-            referral.setPublishToGazette(true);
+            referral.setChangesToStandardPublication(false);
             referral.setDecisionDate(LocalDateTime.parse("2026-09-02T11:00:00"));
             referral.setDecidedById(judge.userId());
             referral.setDecidedBy(judge.name());
@@ -1794,7 +1795,7 @@ class ReferralServiceTest {
             assertThat(written.getLastTouchedAt()).isBetween(before, AuditClock.now());
             assertThat(written.getDecision()).isNull();
             assertThat(written.getDirectionsText()).isNull();
-            assertThat(written.getPublishToGazette()).isNull();
+            assertThat(written.getChangesToStandardPublication()).isNull();
             assertThat(written.getDecisionDate()).isNull();
             assertThat(written.getDecidedBy()).isNull();
             assertThat(written.getDecidedById()).isNull();
@@ -1814,7 +1815,7 @@ class ReferralServiceTest {
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text()).isEqualTo(
                 "Master’s direction withdrawn for referral raised on 1 September 2026, reasons: Minor."
-                    + " The withdrawn decision was: Approved. Publish to the London Gazette: Yes."
+                    + " The withdrawn decision was: Approved. Changes to standard publication in the Gazette: No."
                     + " The referral is back with the Master to direct again.");
         }
 
@@ -1852,7 +1853,7 @@ class ReferralServiceTest {
             service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
 
             Referral redirected = service.decide(CASE_ID, REFERRAL_ID.toString(),
-                                                 direction("Rejected", "Refused", false), JUDGE);
+                                                 direction("Rejected", "Refused", true), JUDGE);
 
             assertThat(redirected.getState()).isEqualTo(ReferralState.Decided);
             assertThat(redirected.getDecision()).isEqualTo(MasterDecision.Rejected);
@@ -1974,7 +1975,7 @@ class ReferralServiceTest {
             Referral referral = stored(ReferralState.Decided);
             referral.setDecision(MasterDecision.Approved);
             referral.setDirectionsText("Approved, publish");
-            referral.setPublishToGazette(true);
+            referral.setChangesToStandardPublication(false);
             referral.setDecidedBy("District Judge Bell");
             LocalDateTime decidedOn = LocalDateTime.parse("2026-09-10T11:00:00");
             referral.setDecisionDate(decidedOn);
@@ -1987,7 +1988,7 @@ class ReferralServiceTest {
             // readable afterwards, because it is the record of what they actioned.
             assertThat(written.getDecision()).isEqualTo(MasterDecision.Approved);
             assertThat(written.getDirectionsText()).isEqualTo("Approved, publish");
-            assertThat(written.getPublishToGazette()).isTrue();
+            assertThat(written.getChangesToStandardPublication()).isFalse();
             assertThat(written.getDecisionDate()).isEqualTo(decidedOn);
             assertThat(written.getDecidedBy()).isEqualTo("District Judge Bell");
             // And the closing caseworker is who last moved it, while decidedBy still says who directed it.
@@ -2095,7 +2096,7 @@ class ReferralServiceTest {
             String longest = "x".repeat(ReferralSchemas.MAX_DIRECTIONS_LENGTH);
             referral.setDecision(MasterDecision.Approved);
             referral.setDirectionsText(longest);
-            referral.setPublishToGazette(true);
+            referral.setChangesToStandardPublication(false);
             referral.setDecidedBy("District Judge Bell");
 
             service.close(CASE_ID, REFERRAL_ID.toString(), CASEWORKER);

@@ -8,10 +8,12 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
  * The body of {@code POST /judicial/referrals/&#123;referralId&#125;/direction} -- the only payload the judicial
  * surface accepts.
  *
- * <p>{@code decision} and {@code publishToGazette} are required, and {@code directionsText} is optional: an
- * approval that needs no comment is a real answer, and a required field whose usual value is empty is a field
- * every caller fills in without reading. The rules are {@link ReferralSchemas#parseDirection}'s rather than
- * annotations here, so the same direction validated for this route is validated for the admin's form post.
+ * <p>{@code decision} and {@code changesToStandardPublication} are required, and {@code directionsText} is optional
+ * on a standard publication -- an approval that needs no comment is a real answer, and a required field whose usual
+ * value is empty is a field every caller fills in without reading -- but required when there are changes, because it
+ * is the only place that says what they are. {@code publishToGazette}, inverted, is accepted for one release. The
+ * rules are {@link ReferralSchemas#parseDirection}'s rather than annotations here, so the same direction validated
+ * for this route is validated for the admin's form post.
  *
  * <p><strong>Four things have nowhere to land, and each absence is a rule.</strong> {@link DirectionInput} has no
  * component for them, so they are stripped as any unknown key is rather than refused with a message:

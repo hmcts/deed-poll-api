@@ -577,7 +577,7 @@ class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {
             CurrentUser judge = judge(JUDGE_NAME, JUDGE_SUBJECT);
             referralService.claim(caseId, referralId, judge);
             referralService.decide(caseId, referralId,
-                new DirectionInput(MasterDecision.Approved, Optional.of("Granted"), false), judge);
+                new DirectionInput(MasterDecision.Approved, Optional.of("Granted"), true), judge);
             referralService.close(caseId, referralId, OFFICE);
 
             authorised(get(judicialUrl(referralId, documentId)))

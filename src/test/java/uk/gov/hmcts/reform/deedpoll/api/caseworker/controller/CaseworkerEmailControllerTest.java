@@ -1807,7 +1807,7 @@ class CaseworkerEmailControllerTest extends AbstractPostgresContainerTest {
         CurrentUser judge = CurrentUser.currentUser(List.of(Role.JUDICIAL), JUDGE_NAME, "judge-1");
         referralService.claim(caseId, referralId, judge);
         referralService.decide(
-            caseId, referralId, new DirectionInput(decision, Optional.ofNullable(directionsText), false), judge);
+            caseId, referralId, new DirectionInput(decision, Optional.ofNullable(directionsText), true), judge);
     }
 
     /** The request, carrying a valid forwarded access token. */

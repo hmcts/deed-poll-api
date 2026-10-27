@@ -916,7 +916,7 @@ class JudicialReferralServiceTest {
     class Direct {
 
         private static final DirectionInput APPROVAL =
-            new DirectionInput(MasterDecision.Approved, Optional.of("Granted"), true);
+            new DirectionInput(MasterDecision.Approved, Optional.of("Granted"), false);
 
         @Test
         @DisplayName("refuses a caseworker and an admin, before resolving or recording anything")
@@ -1009,7 +1009,7 @@ class JudicialReferralServiceTest {
     class Revise {
 
         private static final DirectionInput REFUSAL =
-            new DirectionInput(MasterDecision.Rejected, Optional.of("Refused on reflection"), false);
+            new DirectionInput(MasterDecision.Rejected, Optional.of("Refused on reflection"), true);
 
         @Test
         @DisplayName("refuses a caseworker and an admin, before resolving or recording anything")

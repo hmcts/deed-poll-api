@@ -254,7 +254,7 @@ class ReferralSecurityTest {
         return ReferralSchemas.parseDirection(Map.of(
             "decision", "Approved",
             "directionsText", "Approved",
-            "publishToGazette", false));
+            "changesToStandardPublication", true));
     }
 
     /**
@@ -267,7 +267,7 @@ class ReferralSecurityTest {
         Referral referral = stored(ReferralState.Decided);
         referral.setDecision(MasterDecision.Approved);
         referral.setDirectionsText("Granted, publication as usual");
-        referral.setPublishToGazette(true);
+        referral.setChangesToStandardPublication(false);
         referral.setDecisionDate(LocalDateTime.parse("2026-09-02T11:00:00"));
         referral.setDecidedById(JUDGE.userId());
         referral.setDecidedBy(JUDGE.name());

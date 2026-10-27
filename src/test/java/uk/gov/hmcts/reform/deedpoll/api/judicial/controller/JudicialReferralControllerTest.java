@@ -59,6 +59,7 @@ import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -669,7 +670,8 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             authorised(post(POOL + "/" + referralId + "/direction")
                            .contentType(APPLICATION_JSON)
                            .content("""
-                               {"decision": "Approved", "directionsText": "Granted", "publishToGazette": true}"""))
+                               {"decision": "Approved", "directionsText": "Granted",
+                                "changesToStandardPublication": false}"""))
                 .andExpect(status().isOk());
             authorised(get(MINE))
                 .andExpect(status().isOk())
@@ -793,6 +795,22 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 // No timeline since 2026-10-27 (Master Sullivan's feedback), although raising the referral wrote
                 // a note.
                 .andExpect(jsonPath("$.caseNotes").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("sends a minor's parents, and an adult's as null whatever the row holds")
+        void sendsParentsOnlyForAMinor() throws Exception {
+            String adult = parented(named(newCase(), "Robin"), DeedPollType.Adult);
+            String minor = parented(named(newCase(), "Robin"), DeedPollType.Minor);
+
+            // Null rather than absent: the key is published and the value withheld, at the JSON a Master's
+            // browser is sent, not only in the record that builds it.
+            authorised(get(POOL + "/" + raise(adult, Urgency.Normal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.application.parents").value(nullValue()));
+            authorised(get(POOL + "/" + raise(minor, Urgency.Normal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.application.parents").value("Jane and Paul Smith"));
         }
 
         @Test
@@ -971,7 +989,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.state").value(ReferralState.Decided.name()))
                 .andExpect(jsonPath("$.decision").value(MasterDecision.Approved.name()))
                 .andExpect(jsonPath("$.directionsText").value("Granted, publication as usual"))
-                .andExpect(jsonPath("$.publishToGazette").value(true))
+                .andExpect(jsonPath("$.changesToStandardPublication").value(false))
                 .andExpect(jsonPath("$.decisionDate").exists())
                 .andExpect(jsonPath("$.decidedBy").value(JUDGE_NAME));
         }
@@ -1179,7 +1197,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
         /** The shortest complete direction: a decision, what was directed, and the Gazette answer. */
         private static final String APPROVAL = """
-            {"decision": "Approved", "directionsText": "Granted", "publishToGazette": true}""";
+            {"decision": "Approved", "directionsText": "Granted", "changesToStandardPublication": false}""";
 
         @Test
         @DisplayName("records the direction on a referral this judge holds, under their own name")
@@ -1191,7 +1209,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.state").value(ReferralState.Decided.name()))
                 .andExpect(jsonPath("$.decision").value(MasterDecision.Approved.name()))
                 .andExpect(jsonPath("$.directionsText").value("Granted"))
-                .andExpect(jsonPath("$.publishToGazette").value(true))
+                .andExpect(jsonPath("$.changesToStandardPublication").value(false))
                 .andExpect(jsonPath("$.decisionDate").exists())
                 // From the token and the clock, never from the payload: a direction that could name its own author
                 // would be a signature anybody could forge.
@@ -1200,7 +1218,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             Referral directed = stored(mine);
             assertThat(directed.getState()).isEqualTo(ReferralState.Decided);
             assertThat(directed.getDecidedBy()).isEqualTo(JUDGE_NAME);
-            assertThat(directed.getPublishToGazette()).isTrue();
+            assertThat(directed.getChangesToStandardPublication()).isFalse();
             // The direction note, authored by the deciding judge and a summary rather than a copy: the decision
             // and the Gazette answer are in it and the directions text is not, because a direction may be twice
             // as long as a note may be.
@@ -1210,9 +1228,51 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 .satisfies(note -> {
                     assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME);
                     assertThat(note.getNote()).contains("Decision: " + MasterDecision.Approved.name(),
-                                                        "Publish to the London Gazette: Yes");
+                                                        "Changes to standard publication in the Gazette: No");
                     assertThat(note.getNote()).doesNotContain("Granted");
                 });
+        }
+
+        @Test
+        @DisplayName("publishes the Gazette answer under both names for one release, the old one inverted")
+        void publishesBothGazetteNames() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            authorised(post(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content("""
+                {"decision": "Approved", "directionsText": "Publish the last name only",
+                 "changesToStandardPublication": true}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changesToStandardPublication").value(true))
+                .andExpect(jsonPath("$.publishToGazette").value(false));
+        }
+
+        @Test
+        @DisplayName("takes the old publishToGazette name inverted, and does not ask it for directions")
+        void acceptsTheLegacyGazetteName() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            // The body today's admin sends: "do not publish" and no comment, which the new name would refuse.
+            authorised(post(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content("""
+                {"decision": "Rejected", "publishToGazette": false}"""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changesToStandardPublication").value(true))
+                .andExpect(jsonPath("$.publishToGazette").value(false));
+
+            assertThat(stored(mine).getChangesToStandardPublication()).isTrue();
+        }
+
+        @Test
+        @DisplayName("400s changes to the standard publication with no directions, and records nothing")
+        void refusesChangesWithoutDirections() throws Exception {
+            String mine = claimedBy(JUDGE_NAME);
+
+            authorised(post(POOL + "/" + mine + "/direction").contentType(APPLICATION_JSON).content("""
+                {"decision": "Approved", "directionsText": "   ", "changesToStandardPublication": true}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.length()").value(1))
+                .andExpect(jsonPath("$.errors[0].field").value("directionsText"));
+
+            assertThat(stored(mine).getState()).isEqualTo(ReferralState.Claimed);
         }
 
         @Test
@@ -1223,7 +1283,8 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             authorised(post(POOL + "/" + mine + "/direction")
                            .contentType(APPLICATION_JSON)
                            .content("""
-                               {"decision": "Rejected", "publishToGazette": false, "state": "Closed",
+                               {"decision": "Rejected", "directionsText": "Do not publish",
+                                "changesToStandardPublication": true, "state": "Closed",
                                 "decidedBy": "Somebody Else", "decisionDate": "2020-01-01T00:00:00",
                                 "deedPollId": "forged"}"""))
                 .andExpect(status().isOk())
@@ -1232,7 +1293,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.state").value(ReferralState.Decided.name()))
                 .andExpect(jsonPath("$.decidedBy").value(JUDGE_NAME))
                 .andExpect(jsonPath("$.decision").value(MasterDecision.Rejected.name()))
-                .andExpect(jsonPath("$.publishToGazette").value(false));
+                .andExpect(jsonPath("$.changesToStandardPublication").value(true));
 
             assertThat(stored(mine).getState()).isEqualTo(ReferralState.Decided);
         }
@@ -1245,13 +1306,13 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             authorised(post(POOL + "/" + mine + "/direction")
                            .contentType(APPLICATION_JSON)
                            .content("""
-                               {"decision": "approved", "publishToGazette": "false"}"""))
+                               {"decision": "approved", "changesToStandardPublication": "false"}"""))
                 .andExpect(status().isBadRequest())
                 // Both wrong, both reported: a decision matched exactly rather than case-insensitively, and a
                 // Gazette flag that is a boolean rather than a string read truthily.
                 .andExpect(jsonPath("$.errors.length()").value(2))
                 .andExpect(jsonPath("$.errors[*].field")
-                               .value(containsInAnyOrder("decision", "publishToGazette")));
+                               .value(containsInAnyOrder("decision", "changesToStandardPublication")));
 
             assertThat(stored(mine).getState()).isEqualTo(ReferralState.Claimed);
             assertThat(stored(mine).getDecision()).isNull();
@@ -1354,7 +1415,8 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
         /** A different answer from the one directedBy records, in every field. */
         private static final String REFUSAL = """
-            {"decision": "Rejected", "directionsText": "Refused on reflection", "publishToGazette": false}""";
+            {"decision": "Rejected", "directionsText": "Refused on reflection",
+             "changesToStandardPublication": true}""";
 
         @Test
         @DisplayName("replaces the direction this judge gave, keeps their signature and flags the change")
@@ -1367,7 +1429,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.state").value(ReferralState.Decided.name()))
                 .andExpect(jsonPath("$.decision").value(MasterDecision.Rejected.name()))
                 .andExpect(jsonPath("$.directionsText").value("Refused on reflection"))
-                .andExpect(jsonPath("$.publishToGazette").value(false))
+                .andExpect(jsonPath("$.changesToStandardPublication").value(true))
                 .andExpect(jsonPath("$.decidedBy").value(JUDGE_NAME))
                 .andExpect(jsonPath("$.directionChangedAt").exists());
 
@@ -1385,7 +1447,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 .satisfies(note -> {
                     assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME);
                     assertThat(note.getNote()).contains("Decision: " + MasterDecision.Rejected.name(),
-                                                        "Publish to the London Gazette: No");
+                                                        "Changes to standard publication in the Gazette: Yes");
                     assertThat(note.getNote()).doesNotContain("Refused on reflection");
                 });
         }
@@ -1394,7 +1456,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         @DisplayName("400s an invalid body with the same messages the POST gives")
         void refusesAnInvalidDirectionAsThePostDoes() throws Exception {
             String body = """
-                {"decision": "approved", "publishToGazette": "false"}""";
+                {"decision": "approved", "changesToStandardPublication": "false"}""";
             String claimed = claimedBy(JUDGE_NAME);
             String posted = authorised(post(POOL + "/" + claimed + "/direction")
                                            .contentType(APPLICATION_JSON).content(body))
@@ -1478,7 +1540,8 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
         /** A different answer from the one directedBy records, in every field. */
         private static final String REFUSAL = """
-            {"decision": "Rejected", "directionsText": "Refused on reflection", "publishToGazette": false}""";
+            {"decision": "Rejected", "directionsText": "Refused on reflection",
+             "changesToStandardPublication": true}""";
 
         private String withdraw(String referralId) {
             return POOL + "/" + referralId + "/direction/withdraw";
@@ -1502,7 +1565,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             assertThat(withdrawn.getState()).isEqualTo(ReferralState.Claimed);
             assertThat(withdrawn.getClaimedById()).isEqualTo(JUDGE_SUBJECT);
             assertThat(withdrawn.getDecision()).isNull();
-            assertThat(withdrawn.getPublishToGazette()).isNull();
+            assertThat(withdrawn.getChangesToStandardPublication()).isNull();
             assertThat(withdrawn.getDecisionDate()).isNull();
             assertThat(withdrawn.getDecidedById()).isNull();
             assertThat(withdrawn.getDirectionChangedAt()).isNotNull();
@@ -1515,7 +1578,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 .satisfies(note -> {
                     assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME);
                     assertThat(note.getNote()).contains("The withdrawn decision was: " + MasterDecision.Approved.name(),
-                                                        "Publish to the London Gazette: Yes");
+                                                        "Changes to standard publication in the Gazette: No");
                     assertThat(note.getNote()).doesNotContain("Granted, publication as usual");
                 });
         }
@@ -1659,6 +1722,17 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     }
 
     /**
+     * The case as {@code type}, with parents on the row whatever the type, so only the view can withhold them.
+     */
+    private String parented(String caseId, DeedPollType type) {
+        DeedPoll application = deedPolls.findById(caseId).orElseThrow();
+        application.setType(type);
+        application.setParents("Jane and Paul Smith");
+        deedPolls.saveAndFlush(application);
+        return caseId;
+    }
+
+    /**
      * The case, with the names and the type a judge is shown.
      *
      * <p>Written onto the row rather than patched through the domain, as the referral fixtures in the caseworker
@@ -1776,7 +1850,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         referralService.decide(
             caseId,
             referralId,
-            new DirectionInput(MasterDecision.Approved, Optional.of("Granted, publication as usual"), true),
+            new DirectionInput(MasterDecision.Approved, Optional.of("Granted, publication as usual"), false),
             judicial(judge));
         return referralId;
     }

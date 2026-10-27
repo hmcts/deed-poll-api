@@ -6,7 +6,7 @@ import java.util.Optional;
 
 /**
  * A judge's direction on a referral, already validated: what they decided, what they directed, and whether
- * the change is to be published in the London Gazette.
+ * anything changes about the standard publication in the London Gazette.
  *
  * <p><strong>Not a port.</strong> The source store had no direction record -- a Master replied by email and a
  * caseworker typed the answer into the case's flat {@code masterDecision} / {@code masterDirections} /
@@ -36,16 +36,18 @@ import java.util.Optional;
  * </ul>
  *
  * @param decision the direction itself, required -- there is no third answer and no "not yet"
- * @param directionsText what the judge directed, absent where they sent none or sent only whitespace. Optional
- *     because an approval that needs no comment is a real answer, and a required field whose usual value is
- *     empty is a field every caller fills in without reading
- * @param publishToGazette whether the change is to be published in the London Gazette. <strong>Required, and
- *     the judge's to decide</strong> -- never derived from a caseworker's {@code NonPublication} referral
- *     reason or from any other field. A primitive rather than an {@link Optional} because a direction that did
- *     not answer it is not a direction; the column is nullable for the referrals that have no direction at all
+ * @param directionsText what the judge directed, absent where they sent none or sent only whitespace. Optional on
+ *     a standard publication, because an approval that needs no comment is a real answer; required when
+ *     {@code changesToStandardPublication} is true, because then it is the only place that says what changes
+ * @param changesToStandardPublication the Master's answer to "Are there any changes to the standard publications
+ *     in the Gazette?": true for do not publish, or publish only as the direction text says (the last name only,
+ *     for example), false for publish as standard. <strong>Required, and the judge's to decide</strong> -- never
+ *     derived from a caseworker's {@code NonPublication} referral reason or from any other field. A primitive
+ *     rather than an {@link Optional} because a direction that did not answer it is not a direction; the column is
+ *     nullable for the referrals that have no direction at all
  */
 public record DirectionInput(
     MasterDecision decision,
     Optional<String> directionsText,
-    boolean publishToGazette) {
+    boolean changesToStandardPublication) {
 }

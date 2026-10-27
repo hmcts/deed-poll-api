@@ -143,7 +143,7 @@ class RemainingWriteAuditTest extends AbstractPostgresContainerTest {
 
             referrals.claim(caseId, referralId, JUDGE);
             referrals.decide(caseId, referralId,
-                             new DirectionInput(MasterDecision.Approved, Optional.of("Proceed"), true), JUDGE);
+                             new DirectionInput(MasterDecision.Approved, Optional.of("Proceed"), false), JUDGE);
             referrals.close(caseId, referralId, TEAM_LEADER);
 
             List<Event> events = referralEvents(caseId).subList(1, 4);
@@ -153,13 +153,13 @@ class RemainingWriteAuditTest extends AbstractPostgresContainerTest {
                 .containsExactly("judge-subject", "judge-subject", SUBJECT);
             assertThat(events.get(0).row()).containsEntry("from_state", "Open").containsEntry("to_state", "Claimed");
             assertThat(events.get(1).row())
-                .containsEntry("fields", "state,decision,directionsText,publishToGazette")
+                .containsEntry("fields", "state,decision,directionsText,changesToStandardPublication")
                 .containsEntry("from_state", "Claimed")
                 .containsEntry("to_state", "Decided");
             assertThat(events.get(1).values()).containsExactly(
+                Arrays.asList("changesToStandardPublication", null, "false"),
                 Arrays.asList("decision", null, "Approved"),
                 Arrays.asList("directionsText", null, "Proceed"),
-                Arrays.asList("publishToGazette", null, "true"),
                 List.of("state", "Claimed", "Decided"));
             assertThat(events.get(2).row()).containsEntry("from_state", "Decided").containsEntry("to_state", "Closed");
         }
@@ -171,10 +171,10 @@ class RemainingWriteAuditTest extends AbstractPostgresContainerTest {
             String referralId = raised(caseId);
             referrals.claim(caseId, referralId, JUDGE);
             referrals.decide(caseId, referralId,
-                             new DirectionInput(MasterDecision.Approved, Optional.of("Proceed"), true), JUDGE);
+                             new DirectionInput(MasterDecision.Approved, Optional.of("Proceed"), false), JUDGE);
 
             referrals.reviseDirection(caseId, referralId,
-                                      new DirectionInput(MasterDecision.Rejected, Optional.of("Refuse"), false),
+                                      new DirectionInput(MasterDecision.Rejected, Optional.of("Refuse"), true),
                                       JUDGE);
 
             List<Event> events = referralEvents(caseId).subList(1, 4);
@@ -182,21 +182,21 @@ class RemainingWriteAuditTest extends AbstractPostgresContainerTest {
                 .containsExactly("REFERRAL_CLAIMED", "REFERRAL_DIRECTED", "REFERRAL_DIRECTION_REVISED");
             // The original direction, exactly as it was recorded: nothing in the trail is overwritten.
             assertThat(events.get(1).values()).containsExactly(
+                Arrays.asList("changesToStandardPublication", null, "false"),
                 Arrays.asList("decision", null, "Approved"),
                 Arrays.asList("directionsText", null, "Proceed"),
-                Arrays.asList("publishToGazette", null, "true"),
                 List.of("state", "Claimed", "Decided"));
             // The revision names the same four fields decide does, records a value row only where one changed,
             // and makes no transition, because the referral stays Decided.
             assertThat(events.get(2).row())
                 .containsEntry("actor_id", "judge-subject")
-                .containsEntry("fields", "state,decision,directionsText,publishToGazette")
+                .containsEntry("fields", "state,decision,directionsText,changesToStandardPublication")
                 .containsEntry("from_state", null)
                 .containsEntry("to_state", null);
             assertThat(events.get(2).values()).containsExactly(
+                List.of("changesToStandardPublication", "false", "true"),
                 List.of("decision", "Approved", "Rejected"),
-                List.of("directionsText", "Proceed", "Refuse"),
-                List.of("publishToGazette", "true", "false"));
+                List.of("directionsText", "Proceed", "Refuse"));
         }
 
         @Test
@@ -206,11 +206,11 @@ class RemainingWriteAuditTest extends AbstractPostgresContainerTest {
             String referralId = raised(caseId);
             referrals.claim(caseId, referralId, JUDGE);
             referrals.decide(caseId, referralId,
-                             new DirectionInput(MasterDecision.Approved, Optional.of("Proceed"), true), JUDGE);
+                             new DirectionInput(MasterDecision.Approved, Optional.of("Proceed"), false), JUDGE);
 
             referrals.withdrawDirection(caseId, referralId, JUDGE);
             referrals.decide(caseId, referralId,
-                             new DirectionInput(MasterDecision.Rejected, Optional.of("Refuse"), false), JUDGE);
+                             new DirectionInput(MasterDecision.Rejected, Optional.of("Refuse"), true), JUDGE);
 
             List<Event> events = referralEvents(caseId).subList(1, 5);
             assertThat(events).extracting(event -> event.row().get("action"))
@@ -218,24 +218,24 @@ class RemainingWriteAuditTest extends AbstractPostgresContainerTest {
                                  "REFERRAL_DIRECTED");
             // The original direction, exactly as it was recorded: nothing in the trail is overwritten.
             assertThat(events.get(1).values()).containsExactly(
+                Arrays.asList("changesToStandardPublication", null, "false"),
                 Arrays.asList("decision", null, "Approved"),
                 Arrays.asList("directionsText", null, "Proceed"),
-                Arrays.asList("publishToGazette", null, "true"),
                 List.of("state", "Claimed", "Decided"));
             assertThat(events.get(2).row())
                 .containsEntry("actor_id", "judge-subject")
-                .containsEntry("fields", "state,decision,directionsText,publishToGazette")
+                .containsEntry("fields", "state,decision,directionsText,changesToStandardPublication")
                 .containsEntry("from_state", "Decided")
                 .containsEntry("to_state", "Claimed");
             assertThat(events.get(2).values()).containsExactly(
+                Arrays.asList("changesToStandardPublication", "false", null),
                 Arrays.asList("decision", "Approved", null),
                 Arrays.asList("directionsText", "Proceed", null),
-                Arrays.asList("publishToGazette", "true", null),
                 List.of("state", "Decided", "Claimed"));
             assertThat(events.get(3).values()).containsExactly(
+                Arrays.asList("changesToStandardPublication", null, "true"),
                 Arrays.asList("decision", null, "Rejected"),
                 Arrays.asList("directionsText", null, "Refuse"),
-                Arrays.asList("publishToGazette", null, "false"),
                 List.of("state", "Claimed", "Decided"));
         }
 

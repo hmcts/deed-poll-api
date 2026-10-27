@@ -548,7 +548,7 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
         void decidedThenClosed() {
             referralService.claim(caseId, referralId, JUDGE);
             referralService.decide(caseId, referralId,
-                new DirectionInput(MasterDecision.Approved, Optional.of("Granted"), false), JUDGE);
+                new DirectionInput(MasterDecision.Approved, Optional.of("Granted"), true), JUDGE);
 
             assertThat(previewAsJudge(JUDGE)).isEqualTo(3);
             assertThatThrownBy(() -> previewAsJudge(OTHER_JUDGE)).isInstanceOf(NotFoundError.class);

@@ -71,7 +71,9 @@ class OpenAPIWriteBodiesTest {
 
         Schema<?> direction = schema(openApi, "JudicialDirectionRequest");
         assertThat(direction.getRequired())
-            .containsExactlyInAnyOrder("decision", "publishToGazette");
+            .containsExactlyInAnyOrder("decision", "changesToStandardPublication");
+        // The old name, accepted for one release, published deprecated so a client generated today avoids it.
+        assertThat(direction.getProperties().get("publishToGazette").getDeprecated()).isTrue();
 
         Schema<?> previewEmail = schema(openApi, "PreviewEmailRequest");
         assertThat(previewEmail.getAdditionalProperties()).isEqualTo(false);
