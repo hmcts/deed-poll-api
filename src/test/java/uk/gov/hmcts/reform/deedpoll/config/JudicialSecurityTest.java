@@ -236,7 +236,7 @@ class JudicialSecurityTest {
         return ReferralSchemas.parseDirection(Map.of(
             "decision", "Approved",
             "directionsText", "Approved",
-            "publishToGazette", false));
+            "changesToStandardPublication", true));
     }
 
     /**

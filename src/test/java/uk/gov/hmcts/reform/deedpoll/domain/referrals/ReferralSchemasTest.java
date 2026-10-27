@@ -355,12 +355,12 @@ class ReferralSchemasTest {
             DirectionInput recorded = direction(payload(
                 "decision", "Approved",
                 "directionsText", "  Approved. No publication necessary.  ",
-                "publishToGazette", false));
+                "changesToStandardPublication", true));
 
             assertThat(recorded.decision()).isEqualTo(MasterDecision.Approved);
             // Trimmed, and the trimmed value is what gets stored -- the rule every payload here applies.
             assertThat(recorded.directionsText()).contains("Approved. No publication necessary.");
-            assertThat(recorded.publishToGazette()).isFalse();
+            assertThat(recorded.changesToStandardPublication()).isTrue();
         }
 
         @Test
@@ -369,16 +369,16 @@ class ReferralSchemasTest {
             DirectionInput recorded = direction(payload(
                 "decision", "Rejected",
                 "directionsText", "Refused: the minor's second parent has not consented.",
-                "publishToGazette", true));
+                "changesToStandardPublication", false));
 
             assertThat(recorded.decision()).isEqualTo(MasterDecision.Rejected);
-            assertThat(recorded.publishToGazette()).isTrue();
+            assertThat(recorded.changesToStandardPublication()).isFalse();
         }
 
         @Test
         @DisplayName("requires a decision, naming the two acceptable values")
         void requiresADecision() {
-            List<FieldError> errors = errorsFrom(() -> direction(payload("publishToGazette", false)));
+            List<FieldError> errors = errorsFrom(() -> direction(payload("changesToStandardPublication", false)));
 
             assertThat(errors).extracting(FieldError::field).contains("decision");
             assertThat(errors.getFirst().message()).contains("required", "Approved", "Rejected");
@@ -388,7 +388,7 @@ class ReferralSchemasTest {
         @DisplayName("refuses a decision it does not know rather than guessing between two opposites")
         void refusesAnUnknownDecision() {
             List<FieldError> errors = errorsFrom(() -> direction(payload(
-                "decision", "Adjourned", "publishToGazette", false)));
+                "decision", "Adjourned", "changesToStandardPublication", false)));
 
             assertThat(errors).hasSize(1);
             assertThat(errors.getFirst().field()).isEqualTo("decision");
@@ -401,49 +401,52 @@ class ReferralSchemasTest {
         void matchesTheDecisionExactly() {
             // Accepting "approved" would send Postgres a label the "MasterDecision" type does not have, which
             // fails at the insert rather than here -- the same reason a referral reason is matched exactly.
-            assertThat(errorsFrom(() -> direction(payload("decision", "approved", "publishToGazette", true))))
+            assertThat(errorsFrom(() -> direction(payload(
+                "decision", "approved", "changesToStandardPublication", false))))
                 .extracting(FieldError::field)
                 .containsExactly("decision");
         }
 
         @Test
-        @DisplayName("requires publishToGazette, because it has no safe default in either direction")
-        void requiresPublishToGazette() {
+        @DisplayName("requires changesToStandardPublication, because it has no safe default in either direction")
+        void requiresTheGazetteAnswer() {
             // Defaulting it would make the judge's choice for them: false withholds a notice the public record
             // may depend on, and true publishes a change that was to stay private.
             List<FieldError> errors = errorsFrom(() -> direction(payload("decision", "Approved")));
 
             assertThat(errors).hasSize(1);
-            assertThat(errors.getFirst().field()).isEqualTo("publishToGazette");
+            assertThat(errors.getFirst().field()).isEqualTo("changesToStandardPublication");
             assertThat(errors.getFirst().message()).contains("required", "no default");
         }
 
         @Test
-        @DisplayName("refuses an explicit null publishToGazette as well as an absent one")
-        void refusesANullPublishToGazette() {
+        @DisplayName("refuses an explicit null changesToStandardPublication as well as an absent one")
+        void refusesANullGazetteAnswer() {
             Map<String, Object> raw = payload("decision", "Approved");
-            raw.put("publishToGazette", null);
+            raw.put("changesToStandardPublication", null);
 
             assertThat(errorsFrom(() -> direction(raw)))
                 .extracting(FieldError::field)
-                .containsExactly("publishToGazette");
+                .containsExactly("changesToStandardPublication");
         }
 
         @Test
         @DisplayName("refuses a truthy string rather than coercing it, because publication cannot be undone")
         void refusesATruthyString() {
             List<FieldError> errors = errorsFrom(() -> direction(payload(
-                "decision", "Approved", "publishToGazette", "false")));
+                "decision", "Approved", "changesToStandardPublication", "false")));
 
             assertThat(errors).hasSize(1);
             assertThat(errors.getFirst()).isEqualTo(
-                new FieldError("publishToGazette", "publishToGazette must be true or false"));
+                new FieldError("changesToStandardPublication", "changesToStandardPublication must be true or false"));
         }
 
         @Test
-        @DisplayName("does not require directions text, because an approval may need no comment")
+        @DisplayName("does not require directions text on a standard publication, because an approval may need no "
+            + "comment")
         void doesNotRequireDirectionsText() {
-            assertThat(direction(payload("decision", "Approved", "publishToGazette", true)).directionsText())
+            assertThat(direction(payload(
+                "decision", "Approved", "changesToStandardPublication", false)).directionsText())
                 .isEmpty();
         }
 
@@ -451,7 +454,8 @@ class ReferralSchemasTest {
         @DisplayName("reads whitespace-only directions as none, rather than storing an empty explanation")
         void readsBlankDirectionsAsNone() {
             assertThat(direction(payload(
-                "decision", "Approved", "directionsText", "   ", "publishToGazette", true)).directionsText())
+                "decision", "Approved", "directionsText", "   ",
+                "changesToStandardPublication", false)).directionsText())
                 .isEmpty();
         }
 
@@ -461,7 +465,7 @@ class ReferralSchemasTest {
             assertThat(errorsFrom(() -> direction(payload(
                 "decision", "Approved",
                 "directionsText", repeated(ReferralSchemas.MAX_DIRECTIONS_LENGTH + 1),
-                "publishToGazette", true))))
+                "changesToStandardPublication", false))))
                 .contains(new FieldError("directionsText",
                     "directionsText must be " + ReferralSchemas.MAX_DIRECTIONS_LENGTH + " characters or fewer"));
         }
@@ -474,7 +478,7 @@ class ReferralSchemasTest {
             assertThat(direction(payload(
                 "decision", "Approved",
                 "directionsText", repeated(ReferralSchemas.MAX_DIRECTIONS_LENGTH),
-                "publishToGazette", true)).directionsText())
+                "changesToStandardPublication", false)).directionsText())
                 .isPresent();
         }
 
@@ -483,7 +487,7 @@ class ReferralSchemasTest {
         void reportsEveryFailureAtOnce() {
             assertThat(errorsFrom(() -> direction(payload("directionsText", 7))))
                 .extracting(FieldError::field)
-                .containsExactlyInAnyOrder("decision", "directionsText", "publishToGazette");
+                .containsExactlyInAnyOrder("decision", "directionsText", "changesToStandardPublication");
         }
 
         @Test
@@ -497,20 +501,111 @@ class ReferralSchemasTest {
         }
 
         @Test
+        @DisplayName("requires directions text when there are changes to the standard publication")
+        void requiresDirectionsForChanges() {
+            // "Yes" alone does not say whether to publish nothing or only the last name; the text is what does.
+            List<FieldError> absent = errorsFrom(() -> direction(payload(
+                "decision", "Approved", "changesToStandardPublication", true)));
+            List<FieldError> blank = errorsFrom(() -> direction(payload(
+                "decision", "Approved", "directionsText", "   ", "changesToStandardPublication", true)));
+
+            assertThat(absent).singleElement().satisfies(error -> {
+                assertThat(error.field()).isEqualTo("directionsText");
+                assertThat(error.message()).contains("required", "changes to the standard publication");
+            });
+            assertThat(blank).extracting(FieldError::field).containsExactly("directionsText");
+        }
+
+        @Test
+        @DisplayName("accepts changes to the standard publication that say what they are")
+        void acceptsChangesWithDirections() {
+            DirectionInput recorded = direction(payload(
+                "decision", "Approved", "directionsText", "Publish the last name only",
+                "changesToStandardPublication", true));
+
+            assertThat(recorded.changesToStandardPublication()).isTrue();
+            assertThat(recorded.directionsText()).contains("Publish the last name only");
+        }
+
+        @Test
+        @DisplayName("reports a too-long directions text once, not also as missing")
+        void reportsALongDirectionsTextOnce() {
+            assertThat(errorsFrom(() -> direction(payload(
+                "decision", "Approved",
+                "directionsText", repeated(ReferralSchemas.MAX_DIRECTIONS_LENGTH + 1),
+                "changesToStandardPublication", true))))
+                .extracting(FieldError::field)
+                .containsExactly("directionsText");
+        }
+
+        @Nested
+        @DisplayName("the old publishToGazette name, for one release")
+        class LegacyGazetteName {
+
+            @Test
+            @DisplayName("reads it inverted: not publishing is a change to the standard publication")
+            void readsItInverted() {
+                assertThat(direction(payload("decision", "Rejected", "publishToGazette", false))
+                    .changesToStandardPublication()).isTrue();
+                assertThat(direction(payload("decision", "Approved", "publishToGazette", true))
+                    .changesToStandardPublication()).isFalse();
+            }
+
+            @Test
+            @DisplayName("does not ask it for directions, because the admin that sends it cannot ask for them")
+            void doesNotRequireDirections() {
+                assertThat(direction(payload("decision", "Rejected", "publishToGazette", false)).directionsText())
+                    .isEmpty();
+            }
+
+            @Test
+            @DisplayName("accepts both names when they agree, and the new name's rule then applies")
+            void acceptsBothWhenTheyAgree() {
+                assertThat(direction(payload(
+                    "decision", "Approved", "changesToStandardPublication", false, "publishToGazette", true))
+                    .changesToStandardPublication()).isFalse();
+                assertThat(errorsFrom(() -> direction(payload(
+                    "decision", "Approved", "changesToStandardPublication", true, "publishToGazette", false))))
+                    .extracting(FieldError::field)
+                    .containsExactly("directionsText");
+            }
+
+            @Test
+            @DisplayName("refuses both names when they disagree, rather than guessing which was meant")
+            void refusesThemDisagreeing() {
+                assertThat(errorsFrom(() -> direction(payload(
+                    "decision", "Approved", "directionsText", "Granted",
+                    "changesToStandardPublication", true, "publishToGazette", true))))
+                    .singleElement()
+                    .satisfies(error -> {
+                        assertThat(error.field()).isEqualTo("changesToStandardPublication");
+                        assertThat(error.message()).contains("disagree");
+                    });
+            }
+
+            @Test
+            @DisplayName("refuses a truthy string under its own name")
+            void refusesATruthyString() {
+                assertThat(errorsFrom(() -> direction(payload("decision", "Approved", "publishToGazette", "false"))))
+                    .containsExactly(new FieldError("publishToGazette", "publishToGazette must be true or false"));
+            }
+        }
+
+        @Test
         @DisplayName("strips what the judge may not set: the state, the author and the date")
         void stripsWhatTheJudgeMayNotSet() {
             // Structural rather than a check: DirectionInput has nowhere to put any of these, so a direction
             // cannot close its own referral, sign itself as another judge, or backdate itself.
             DirectionInput recorded = direction(payload(
                 "decision", "Approved",
-                "publishToGazette", true,
+                "changesToStandardPublication", false,
                 "state", "Closed",
                 "decidedBy", "Some Other Judge",
                 "decisionDate", "2020-01-01T00:00:00",
                 "claimedBy", "Some Other Judge"));
 
             assertThat(recorded).isEqualTo(
-                new DirectionInput(MasterDecision.Approved, Optional.empty(), true));
+                new DirectionInput(MasterDecision.Approved, Optional.empty(), false));
         }
     }
 

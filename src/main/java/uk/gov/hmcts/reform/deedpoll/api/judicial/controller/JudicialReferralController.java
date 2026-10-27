@@ -254,8 +254,8 @@ public class JudicialReferralController {
     }
 
     /**
-     * The holding judge recording their direction: what they decided, what they directed, and whether the change
-     * is to be published in the London Gazette.
+     * The holding judge recording their direction: what they decided, what they directed, and whether anything
+     * changes about the standard publication in the London Gazette.
      *
      * <p>{@code direction} rather than {@code decision} in the path, because what is recorded is the whole
      * direction and the decision is one field of it -- and the resource being created is the direction on this
@@ -301,9 +301,10 @@ public class JudicialReferralController {
         description = "Requires the judicial role. Permitted while the referral is Decided and this judge directed "
             + "it, which is until the office closes it; a visible referral that is not their direction (the pool, "
             + "or their own claim) is 409, and a closed one is 404. Takes the direction POST's body and refuses "
-            + "it in the same words (400). Replaces the decision, directionsText and publishToGazette, moves "
-            + "decisionDate to now, keeps decidedBy as first signed, and sets directionChangedAt. The original "
-            + "direction stays on the audit trail; the caseworker is told by a case note and directionChangedAt.")
+            + "it in the same words (400). Replaces the decision, directionsText and "
+            + "changesToStandardPublication, moves decisionDate to now, keeps decidedBy as first signed, and sets "
+            + "directionChangedAt. The original direction stays on the audit trail; the caseworker is told by a case "
+            + "note and directionChangedAt.")
     @PutMapping("/{referralId}/direction")
     public JudicialReferralDetail reviseDirection(@PathVariable("referralId") String referralId,
                                                   @RequestBody JudicialDirectionRequest request) {
@@ -327,10 +328,10 @@ public class JudicialReferralController {
     @Operation(summary = "Withdraw the direction this judge gave, to direct again",
         description = "Requires the judicial role. No body. Permitted while the referral is Decided and this judge "
             + "directed it; otherwise 409, or 404 once closed. The referral returns to Claimed, held by the same "
-            + "judge, with the decision, directionsText, publishToGazette, decisionDate and decidedBy cleared, and "
-            + "directionChangedAt set. The judge directs again with POST .../direction. A withdrawn direction is "
-            + "a live claim again: if the judge does not direct it within the claim's inactivity window, the "
-            + "inactivity sweep returns it to the shared pool, where any judge may claim it.")
+            + "judge, with the decision, directionsText, changesToStandardPublication, decisionDate and decidedBy "
+            + "cleared, and directionChangedAt set. The judge directs again with POST .../direction. A withdrawn "
+            + "direction is a live claim again: if the judge does not direct it within the claim's inactivity "
+            + "window, the inactivity sweep returns it to the shared pool, where any judge may claim it.")
     @PostMapping("/{referralId}/direction/withdraw")
     public JudicialReferralDetail withdrawDirection(@PathVariable("referralId") String referralId) {
         return JudicialReferralDetail.of(judicial.withdraw(referralId, CurrentUsers.required()));

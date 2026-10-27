@@ -503,7 +503,7 @@ class ConfirmationConcurrencyTest extends AbstractPostgresContainerTest {
         return ReferralSchemas.parseDirection(Map.of(
             "decision", "Approved",
             "directionsText", "Enrol the deed.",
-            "publishToGazette", true));
+            "changesToStandardPublication", false));
     }
 
     private static ConfirmationInput confirmation(String outcome) {

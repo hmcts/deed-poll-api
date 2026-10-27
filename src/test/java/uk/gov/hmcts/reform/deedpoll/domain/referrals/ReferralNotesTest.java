@@ -65,7 +65,7 @@ class ReferralNotesTest {
 
         Referral referral = referral(reasons, createdOn);
         referral.setDecision(decision);
-        referral.setPublishToGazette(gazette);
+        referral.setChangesToStandardPublication(gazette);
         return referral;
     }
 
@@ -184,7 +184,7 @@ class ReferralNotesTest {
         assertThat(text)
             .isEqualTo("Master’s direction recorded for referral raised on 1 September 2026,"
                 + " reasons: Minor, Other. Decision: Approved."
-                + " Publish to the London Gazette: No. See the referral for the full direction.");
+                + " Changes to standard publication in the Gazette: No. See the referral for the full direction.");
     }
 
     @Test
@@ -200,7 +200,7 @@ class ReferralNotesTest {
                 assertThat(text)
                     .as("%s, gazette %s", decision, gazette)
                     .contains("Decision: " + decision.name() + ".")
-                    .contains("Publish to the London Gazette: " + (gazette ? "Yes" : "No") + ".");
+                    .contains("Changes to standard publication in the Gazette: " + (gazette ? "Yes" : "No") + ".");
             }
         }
     }
@@ -216,7 +216,7 @@ class ReferralNotesTest {
 
         assertThat(text)
             .contains("Decision: not recorded.")
-            .contains("Publish to the London Gazette: not recorded.");
+            .contains("Changes to standard publication in the Gazette: not recorded.");
     }
 
     @Test
@@ -248,7 +248,7 @@ class ReferralNotesTest {
         assertThat(text)
             .isEqualTo("Master’s direction revised for referral raised on 1 September 2026,"
                 + " reasons: Minor, Other. Decision: Rejected."
-                + " Publish to the London Gazette: Yes. See the referral for the full direction.");
+                + " Changes to standard publication in the Gazette: Yes. See the referral for the full direction.");
     }
 
     @Test
@@ -275,7 +275,8 @@ class ReferralNotesTest {
         assertThat(text)
             .isEqualTo("Master’s direction withdrawn for referral raised on 1 September 2026,"
                 + " reasons: Minor, Other. The withdrawn decision was: Approved."
-                + " Publish to the London Gazette: No. The referral is back with the Master to direct again.");
+                + " Changes to standard publication in the Gazette: No."
+                + " The referral is back with the Master to direct again.");
     }
 
     @Test

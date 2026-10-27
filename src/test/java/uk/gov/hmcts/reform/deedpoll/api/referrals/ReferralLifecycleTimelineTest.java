@@ -186,7 +186,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
         authorised(post(POOL + "/" + referralId + "/claim")).andExpect(status().isOk());
         authorised(post(POOL + "/" + referralId + "/direction"),
             "{\"decision\":\"" + MasterDecision.Approved + "\",\"directionsText\":\"" + DIRECTIONS
-                + "\",\"publishToGazette\":true}")
+                + "\",\"changesToStandardPublication\":false}")
             .andExpect(status().isOk());
 
         // Three of the four, in the order they happened and each to the actor who caused it. Exact prose rather
@@ -206,7 +206,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
             directed -> {
                 assertThat(directed.getNote()).isEqualTo("Master’s direction recorded for referral raised on "
                     + raisedOn + ", reasons: " + REASON + ". Decision: " + MasterDecision.Approved
-                    + ". Publish to the London Gazette: Yes. See the referral for the full direction.");
+                    + ". Changes to standard publication in the Gazette: No. See the referral for the full direction.");
                 assertThat(directed.getCreatedBy()).isEqualTo(JUDGE);
             });
 

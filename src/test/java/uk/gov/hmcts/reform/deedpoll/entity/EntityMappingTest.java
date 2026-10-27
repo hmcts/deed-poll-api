@@ -406,13 +406,13 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         // V8's eight columns, all null on a referral nobody has picked up: an Open referral has no claim
         // and no direction, and neither does a backfilled one. Asserted rather than assumed, because a
         // NOT NULL or a default on any of them would have to invent a value for both cases -- and
-        // publishToGazette is the one where an invented false would read as a real judicial answer.
+        // changesToStandardPublication is the one where an invented false would read as a real judicial answer.
         assertThat(reloaded.getClaimedBy()).isNull();
         assertThat(reloaded.getClaimedAt()).isNull();
         assertThat(reloaded.getLastTouchedAt()).isNull();
         assertThat(reloaded.getDecision()).isNull();
         assertThat(reloaded.getDirectionsText()).isNull();
-        assertThat(reloaded.getPublishToGazette()).isNull();
+        assertThat(reloaded.getChangesToStandardPublication()).isNull();
         assertThat(reloaded.getDecisionDate()).isNull();
         assertThat(reloaded.getDecidedBy()).isNull();
         // And V14's two owner columns, for a stronger reason than the eight above: a NOT NULL or a default on
@@ -481,7 +481,7 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         referral.setLastTouchedAt(LocalDateTime.of(2026, 4, 1, 11, 15));
         referral.setDecision(MasterDecision.Approved);
         referral.setDirectionsText("Approved. Publish in the usual form; no further evidence required.");
-        referral.setPublishToGazette(true);
+        referral.setChangesToStandardPublication(false);
         referral.setDecisionDate(LocalDateTime.of(2026, 4, 1, 11, 15));
         referral.setDecidedBy("District Judge Example");
         referral.setDecidedById("idam-subject-9f3");
@@ -515,7 +515,7 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
             .isEqualTo(LocalDateTime.of(2026, 4, 1, 11, 15));
         assertThat(reloaded.getDirectionsText())
             .isEqualTo("Approved. Publish in the usual form; no further evidence required.");
-        assertThat(reloaded.getPublishToGazette()).isTrue();
+        assertThat(reloaded.getChangesToStandardPublication()).isFalse();
         assertThat(reloaded.getDecisionDate()).isEqualTo(LocalDateTime.of(2026, 4, 1, 11, 15));
         assertThat(reloaded.getDecidedBy()).isEqualTo("District Judge Example");
         // Mixed case like the rest, so only this statement proves the name.
@@ -567,7 +567,7 @@ class EntityMappingTest extends AbstractPostgresContainerTest {
         referral.setDeedPoll(deedPoll);
         referral.setState(ReferralState.Decided);
         referral.setDecision(MasterDecision.Rejected);
-        referral.setPublishToGazette(true);
+        referral.setChangesToStandardPublication(false);
         referral.setConfirmationRequestedAt(LocalDateTime.of(2026, 5, 3, 14, 5));
         referral.setConfirmationOutcome(outcome);
         referral.setConfirmationReceivedAt(LocalDateTime.of(2026, 6, 15, 9, 45));

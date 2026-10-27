@@ -119,7 +119,7 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
         assertThat(stored.getState()).isEqualTo(ReferralState.Closed);
         // The direction the office actioned, untouched by the revise that arrived too late.
         assertThat(stored.getDecision()).isEqualTo(MasterDecision.Approved);
-        assertThat(stored.getPublishToGazette()).isTrue();
+        assertThat(stored.getChangesToStandardPublication()).isFalse();
         assertThat(stored.getDirectionChangedAt()).isNull();
         assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId))
             .singleElement()
@@ -144,7 +144,7 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
         Referral stored = referrals.findById(UUID.fromString(referralId)).orElseThrow();
         assertThat(stored.getState()).isEqualTo(ReferralState.Closed);
         assertThat(stored.getDecision()).isEqualTo(MasterDecision.Rejected);
-        assertThat(stored.getPublishToGazette()).isFalse();
+        assertThat(stored.getChangesToStandardPublication()).isTrue();
         assertThat(stored.getDirectionChangedAt()).isNotNull();
         assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId))
             .extracting(note -> note.getNote().contains("revised") ? "revised" : "actioned")
@@ -198,7 +198,7 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
         assertThat(stored.getClaimedById()).isEqualTo(MARION.userId());
         assertThat(stored.getDecision()).isNull();
         assertThat(stored.getDirectionsText()).isNull();
-        assertThat(stored.getPublishToGazette()).isNull();
+        assertThat(stored.getChangesToStandardPublication()).isNull();
         assertThat(stored.getDecidedById()).isNull();
         assertThat(stored.getDirectionChangedAt()).isNotNull();
         assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId))
@@ -267,7 +267,7 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
         referral.setLastTouchedAt(picked);
         referral.setDecision(MasterDecision.Approved);
         referral.setDirectionsText("Enrol the deed.");
-        referral.setPublishToGazette(true);
+        referral.setChangesToStandardPublication(false);
         referral.setDecisionDate(picked.plusHours(1));
         referral.setDecidedById(MARION.userId());
         referral.setDecidedBy(MARION.name());
@@ -278,7 +278,7 @@ class DirectionRevisionConcurrencyTest extends AbstractPostgresContainerTest {
         return ReferralSchemas.parseDirection(Map.of(
             "decision", "Rejected",
             "directionsText", "Refused on reflection.",
-            "publishToGazette", false));
+            "changesToStandardPublication", true));
     }
 
     private static Throwable attempt(Runnable work) {
