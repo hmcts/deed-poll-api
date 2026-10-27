@@ -20,6 +20,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -536,12 +537,15 @@ class CcdCreationAttemptRepositoryTest extends AbstractPostgresContainerTest {
         CcdCreationAttempt attempt = exhausted(newCase());
 
         // The repository directly: the SQL must allow it on its own, as it refuses on its own.
+        // Align this immediately-due fixture with timestamp(3), which could otherwise round up past the next read.
+        LocalDateTime retryAt = AuditClock.now().truncatedTo(ChronoUnit.MILLIS);
         Integer moved = new TransactionTemplate(transactionManager)
-            .execute(status -> repository.retryFromScratch(attempt.getId(), "idam-admin", AuditClock.now()));
+            .execute(status -> repository.retryFromScratch(attempt.getId(), "idam-admin", retryAt));
         assertThat(moved).isOne();
 
         CcdCreationAttempt retried = repository.findById(attempt.getId()).orElseThrow();
         assertThat(retried.getStatus()).isEqualTo(Pending);
+        assertThat(retried.getNotBefore()).isEqualTo(retryAt).isBeforeOrEqualTo(AuditClock.now());
         assertThat(retried.getAttempts()).isZero();
         assertThat(retried.isSubmissionMayHaveReached()).as("the attempt's history").isTrue();
         assertThat(retried.isProvenNothingCreated()).as("the fresh run must earn its own").isFalse();
