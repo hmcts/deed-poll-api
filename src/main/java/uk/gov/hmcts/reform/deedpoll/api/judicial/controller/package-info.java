@@ -27,15 +27,16 @@
  *
  * <p><strong>Eight operations, on one controller, and the eight are the whole judicial persona.</strong> Four
  * reads -- the shared pool ({@code GET /judicial/referrals}), this judge's own outstanding work
- * ({@code GET /judicial/referrals/mine}), one referral with its application view, witnesses, documents and the
- * case's notes ({@code GET /judicial/referrals/&#123;referralId&#125;}), and one of those documents' files
+ * ({@code GET /judicial/referrals/mine}), one referral with its application view and documents
+ * ({@code GET /judicial/referrals/&#123;referralId&#125;}), and one of those documents' files
  * ({@code GET .../documents/&#123;documentId&#125;/file}) -- and four writes: claiming a pool referral
  * ({@code POST .../claim}), recording a direction on one they hold ({@code POST .../direction}), and revising
  * ({@code PUT .../direction}) or withdrawing ({@code POST .../direction/withdraw}) a direction they gave, until the
  * office closes the referral. Stated as a number here, unlike the caseworker package's deliberate refusal to keep a
  * running total, because eight is not a tally of what has accumulated: it is decision 13's boundary, widened
  * deliberately by the business on 2026-10-19 to the whole application, its documents and a revisable direction,
- * and a ninth route is a change to that boundary rather than a route.
+ * and narrowed again on 2026-10-27 (Master Sullivan's feedback) to the names, type, nationality, a minor's parents
+ * and the documents, with no case notes. A ninth route is a change to that boundary rather than a route.
  *
  * <p>The personal list was the boundary's missing half rather than an addition to it: {@code visibleTo} always
  * admitted a judge's own {@code Claimed} and {@code Decided} referrals, and until there was a list of them a

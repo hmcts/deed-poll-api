@@ -154,13 +154,15 @@ public class JudicialReferralController {
      * distinction is not visible here.
      *
      * <p><strong>Recorded as {@code CASE_VIEWED}</strong> (design decision 4 of the 2026-10-19 plan), because the
-     * judge now sees the whole application. After the read, so a refused referral records nothing, and outside its
-     * transaction, as the caseworker case view records it. It fails open: a view that could not be recorded is still
-     * answered -- see {@link ReadAudit}. The claim answers with the same papers and does not record it again.
+     * judge sees the application's names, type, nationality and documents. After the read, so a refused referral
+     * records nothing, and outside its transaction, as the caseworker case view records it. It fails open: a view
+     * that could not be recorded is still answered -- see {@link ReadAudit}. The claim answers with the same papers
+     * and does not record it again.
      */
-    @Operation(summary = "Read a referral and the whole application behind it",
-        description = "Requires the judicial role. The referral, the whole application (details, witnesses and "
-            + "the documents a download would serve, but no case id and no payment or refund data), and its notes. "
+    @Operation(summary = "Read a referral and the application behind it",
+        description = "Requires the judicial role. The referral and the application as a Master sees it: the "
+            + "reference, the new and old names, the type, the nationality and section, a minor's parents, and the "
+            + "documents a download would serve. No case id, contact details, witnesses or case notes. "
             + "Recorded as CASE_VIEWED. 404, in the words an unknown id gets, for a referral this judge may not "
             + "see: one held or directed by another judge, and every referral once it is closed or withdrawn.")
     @GetMapping("/{referralId}")

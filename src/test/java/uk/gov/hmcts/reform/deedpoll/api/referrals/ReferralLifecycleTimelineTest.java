@@ -46,7 +46,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * One referral through its whole life over HTTP -- raised, claimed, directed, actioned -- and the case timeline
- * the four transitions leave behind, read back through both surfaces that publish it.
+ * the four transitions leave behind, read back through the caseworker surface, the one that publishes it.
  *
  * <p><strong>Why a class of its own.</strong> The lifecycle crosses the two surfaces: raising and closing are
  * caseworker routes and claiming and directing are judicial ones, so neither
@@ -62,20 +62,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * -- four notes all reading "A Caseworker" would pass a journey that attributed every transition to whoever
  * happened to be first.
  *
- * <p><strong>The two read surfaces order the same chronology from opposite ends, and both are asserted.</strong>
- * {@code JudicialReferralDetail.caseNotes} and the caseworker notes grid are newest first -- the grid is a page
+ * <p><strong>The Master's surface carries no timeline</strong> since 2026-10-27 (Master Sullivan's feedback), and the
+ * journey asserts that it is absent mid-journey. <strong>The caseworker surfaces order the chronology from opposite
+ * ends, and both are asserted.</strong> The caseworker notes grid is newest first -- the grid is a page
  * of recent activity -- while {@code CaseDetailResponse.notes} is oldest first, because it comes off the case's
  * own {@code @OrderBy("createdOn ASC")} collection, reproducing the {@code orderBy: asc} the reference declares.
  * Neither is a preference to be tidied up: a client rendering one of them with the other's assumption would show
  * the lifecycle backwards, so the order each surface actually publishes is stated here rather than inferred from
  * the other.
  *
- * <p><strong>The judicial read happens mid-journey on purpose.</strong> A judge may see the pool plus their own
- * {@code Claimed}/{@code Decided} referrals, so the timeline is only reachable through
- * {@code /judicial/referrals/{id}} while the referral is still live to them -- once the office closes it the
- * answer is a 404, which {@code JudicialReferralControllerTest} pins. So the journey reads the judicial
- * projection after the direction and the caseworker projection after the closure, which is also the order the two
- * screens are really used in.
+ * <p><strong>The judicial read happens mid-journey on purpose.</strong> A Master may see the pool plus their own
+ * {@code Claimed}/{@code Decided} referrals, so {@code /judicial/referrals/{id}} is only reachable while the referral
+ * is still live to them -- once the office closes it the answer is a 404, which {@code JudicialReferralControllerTest}
+ * pins. So the journey reads the judicial projection after the direction and the caseworker projection after the
+ * closure, which is also the order the two screens are really used in.
  *
  * <p>The lapse and re-claim branch is deliberately absent: it needs a claim backdated past the expiry window,
  * which is time travel rather than a journey, and it is covered over the transitions in
@@ -108,7 +108,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
      * What the judge directs, long enough and distinctive enough to be found if it were ever copied.
      *
      * <p>The direction note is a summary: a direction may be twice as long as a note may be, so the text lives
-     * on the referral and the note points at it. Asserted absent from the timeline on both surfaces, because
+     * on the referral and the note points at it. Asserted absent from the caseworker timeline, because
      * this is the journey where a truncating composer would look harmless.
      */
     private static final String DIRECTIONS = "Granted. Serve the order on the applicant and publish as usual.";
@@ -210,21 +210,13 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
                 assertThat(directed.getCreatedBy()).isEqualTo(JUDGE);
             });
 
-        // The judicial projection, while the referral is still this judge's: the timeline they read before
-        // directing is the one their own direction has just been added to, newest first.
+        // The judicial projection, while the referral is still this Master's: the direction is on the referral, and
+        // the three notes the journey has written so far are not published here at all.
         authorised(get(POOL + "/" + referralId))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.state").value(ReferralState.Decided.name()))
-            .andExpect(jsonPath("$.caseNotes.length()").value(3))
-            .andExpect(jsonPath("$.caseNotes[0].note").value(containsString("Master’s direction recorded")))
-            .andExpect(jsonPath("$.caseNotes[0].createdBy").value(JUDGE))
-            .andExpect(jsonPath("$.caseNotes[1].note").value(containsString("claimed by a Master")))
-            .andExpect(jsonPath("$.caseNotes[1].createdBy").value(JUDGE))
-            .andExpect(jsonPath("$.caseNotes[2].note").value(containsString("Referred to a Master")))
-            .andExpect(jsonPath("$.caseNotes[2].createdBy").value(REFERRING_CASEWORKER))
-            // The direction itself is on the referral and summarised in the note, never copied into it.
             .andExpect(jsonPath("$.directionsText").value(DIRECTIONS))
-            .andExpect(jsonPath("$.caseNotes[0].note").value(not(containsString(DIRECTIONS))));
+            .andExpect(jsonPath("$.caseNotes").doesNotExist());
 
         asCaseworker(ACTIONING_CASEWORKER);
         authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))

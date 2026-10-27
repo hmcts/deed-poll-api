@@ -22,7 +22,6 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseDetailResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CaseSummaryResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.ReferralResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SavedCaseResponse;
-import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialCaseNote;
 import uk.gov.hmcts.reform.deedpoll.api.judicial.dto.JudicialReferralDetail;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
@@ -34,14 +33,11 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollFields;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ConfirmationInput;
-import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralView;
-import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralNotes;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
-import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
@@ -451,37 +447,17 @@ class ConfirmationSecurityTest {
         }
 
         @Test
-        @DisplayName("the confirmation note does reach the deciding judge, through the case timeline")
-        void theConfirmationNoteReachesTheDecidingJudge() {
-            // The limit of the three rules above, stated rather than left for somebody to discover: they are
-            // field-shaped and the timeline is not a field of the confirmation's. A recording writes a case note,
-            // JudicialReferralDetail returns the case's notes to any judge who may see a referral on it, and
-            // visibility admits a judge's own Decided referral -- which is what the confirmation email is only
-            // ever sent about. So the outcome and the caseworker's words about the reply are legible to the judge
-            // who refused publication.
-            //
-            // Asserted positively and deliberately, the way ReferralNotes.claimLapsed's judge name is: the
-            // disclosure was weighed -- a judge who directed a case may read what became of it -- and a test that
-            // pins it is what makes the next person's removal of it a decision rather than a side effect. See
-            // ReferralNotes.confirmationRecorded.
-            Referral referral = asked();
-            referral.setConfirmationOutcome(ConfirmationOutcome.Withdrawn);
-            referral.setConfirmationReceivedAt(LocalDateTime.parse("2026-05-20T11:00:00"));
-
-            String text = ReferralNotes.confirmationRecorded(
-                referral, Optional.of("She rang the office and asked for the fee back."));
-            DeedPollNote note = new DeedPollNote();
-            note.setNote(text);
-            note.setCreatedBy("Ada Caseworker");
-            note.setCreatedOn(LocalDateTime.parse("2026-05-20T11:05:00"));
-
-            JudicialReferralDetail detail = JudicialReferralDetail.of(
-                new JudicialReferralView(referral, referral.getDeedPoll(), List.of(note), List.of(), List.of()));
-
-            assertThat(detail.caseNotes()).extracting(JudicialCaseNote::note).containsExactly(text);
-            // Both halves, named, so a change to either composer is what fails here rather than the wrapper: the
-            // answer itself and the caseworker's free text alongside it.
-            assertThat(text).contains("Withdrawn", "She rang the office and asked for the fee back.");
+        @DisplayName("the confirmation note no longer reaches the deciding Master: the Master's view has no timeline")
+        void theConfirmationNoteNoLongerReachesTheDecidingMaster() {
+            // This used to assert the opposite, deliberately: a recording writes a case note, and the judicial detail
+            // returned the case's notes, so the Master who refused publication could read what became of the case.
+            // Removing that was decided, not a side effect (Master Sullivan's feedback, Steve, 2026-10-27: the Master's
+            // screen carries no case notes, and the api stops sending them). So the timeline is absent from every
+            // judicial response, and none of the confirmation fields is published there either.
+            assertThat(componentsOf(JudicialReferralDetail.class)).doesNotContain("caseNotes");
+            assertThat(componentsOf(JudicialReferralDetail.class))
+                .doesNotContain("confirmationRequestedAt", "confirmationOutcome", "confirmationReceivedAt",
+                                "confirmationRecordedBy");
         }
 
         private static List<String> componentsOf(Class<?> type) {
