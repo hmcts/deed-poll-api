@@ -297,6 +297,41 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    void documentsTheMastersListItsBoundsAndNoSubject() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+        JsonNode list = spec.get("paths").get("/caseworker/masters");
+        assertThat(list.fieldNames()).toIterable().containsExactlyInAnyOrder("get", "post");
+        assertThat(list.at("/get/operationId").asText()).isEqualTo("listMasters");
+        assertThat(list.at("/post/operationId").asText()).isEqualTo("createMaster");
+        assertThat(list.at("/post/responses/201").isMissingNode()).isFalse();
+        JsonNode one = spec.get("paths").get("/caseworker/masters/{id}");
+        assertThat(one.fieldNames()).toIterable().containsExactly("patch");
+        assertThat(one.at("/patch/operationId").asText()).isEqualTo("updateMaster");
+        assertThat(one.at("/patch/description").asText()).contains("409", "unlinks");
+        for (JsonNode operation : List.of(list.get("get"), list.get("post"), one.get("patch"))) {
+            assertThat(operation.at("/responses/403").isMissingNode()).isFalse();
+        }
+        for (String write : List.of("/post/description", "/patch/description")) {
+            assertThat((write.startsWith("/post") ? list : one).at(write).asText())
+                .contains("caseworker-deedpoll-delivery-manager", "MANAGE_PROCESS_CONFIG");
+        }
+        assertThat(spec.at("/components/schemas/MasterResponse/properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("id", "name", "email", "available", "linked", "revision");
+        JsonNode create = spec.at("/components/schemas/CreateMasterRequest");
+        assertThat(create.get("required")).extracting(JsonNode::asText).containsExactlyInAnyOrder("name", "email");
+        assertThat(create.get("additionalProperties").asBoolean()).isFalse();
+        assertThat(create.at("/properties/name/maxLength").asInt()).isEqualTo(200);
+        assertThat(create.at("/properties/name/minLength").asInt()).isOne();
+        assertThat(create.at("/properties/email/maxLength").asInt()).isEqualTo(320);
+        assertThat(create.at("/properties/available/type").asText()).isEqualTo("boolean");
+        JsonNode update = spec.at("/components/schemas/UpdateMasterRequest");
+        assertThat(update.get("required")).extracting(JsonNode::asText).containsExactly("revision");
+        assertThat(update.at("/properties/revision/minimum").asInt()).isZero();
+        assertThat(update.get("additionalProperties").asBoolean()).isFalse();
+    }
+
+    @Test
     void documentsEveryGazetteGateAndNamedWorklistRefusal() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
@@ -637,6 +672,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.add(GAZETTE_HISTORY_PATH);
         known.add("/caseworker/gazette-settings");
         known.add("/caseworker/process-settings");
+        known.add("/caseworker/masters");
+        known.add("/caseworker/masters/{id}");
         known.add("/caseworker/gazette-notice-previews");
         known.add("/caseworker/gazette-notice-requests");
         known.add("/caseworker/gazette-notices/{batchId}");

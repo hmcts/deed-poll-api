@@ -1,5 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.domain;
 
+import java.util.List;
+
 /**
  * The request is well-formed and permitted, but the current state of the data forbids it.
  *
@@ -25,7 +27,22 @@ public class ConflictError extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
 
+    private final List<FieldError> errors;
+
     public ConflictError(String message) {
+        this(message, List.of());
+    }
+
+    /**
+     * A conflict with one field's value, such as a Masters-list email another entry already holds, named so a form
+     * can show it against that input. The message must not echo the value.
+     */
+    public ConflictError(String message, List<FieldError> errors) {
         super(message);
+        this.errors = List.copyOf(errors);
+    }
+
+    public List<FieldError> errors() {
+        return errors;
     }
 }

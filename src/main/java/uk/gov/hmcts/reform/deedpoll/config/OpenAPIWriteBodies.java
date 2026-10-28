@@ -23,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteSettingsService;
+import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
@@ -148,6 +149,7 @@ public class OpenAPIWriteBodies {
             describeGazetteSettingsBody(openApi);
             describeGazetteBodies(openApi);
             describeProcessSettingsBody(openApi);
+            describeMasterBodies(openApi);
         };
     }
 
@@ -220,6 +222,36 @@ public class OpenAPIWriteBodies {
             .description("The revision returned by the settings read; stale values return 409."));
         settings.setRequired(java.util.List.of(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, REVISION_PROPERTY));
         settings.setAdditionalProperties(false);
+    }
+
+    private void describeMasterBodies(OpenAPI openApi) {
+        for (String name : java.util.List.of("CreateMasterRequest", "UpdateMasterRequest")) {
+            Schema<?> body = schema(openApi, name);
+            if (body == null) {
+                continue;
+            }
+            boolean create = name.startsWith("Create");
+            body.setType("object");
+            body.setProperties(null);
+            body.addProperty(MasterService.NAME, new StringSchema().minLength(1)
+                .maxLength(MasterService.MAX_NAME_LENGTH)
+                .description("Trimmed first: the bounds hold for the trimmed value, so a blank is refused."));
+            body.addProperty(MasterService.EMAIL, new StringSchema().maxLength(MasterService.MAX_EMAIL_LENGTH)
+                .description("Trimmed and lower-cased; exactly one @ and no whitespace. An address another Master"
+                    + " holds, in any case, returns 409."
+                    + (create ? "" : " Changing a linked Master's email unlinks it until the new address signs in.")));
+            body.addProperty(MasterService.AVAILABLE, new BooleanSchema()
+                .description(create ? "Defaults to true." : "False marks a Master who may not be assigned."));
+            if (create) {
+                body.setRequired(java.util.List.of(MasterService.NAME, MasterService.EMAIL));
+            } else {
+                body.addProperty(MasterService.REVISION, new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
+                    .description("The revision returned by the list; stale values return 409."));
+                body.setRequired(java.util.List.of(MasterService.REVISION));
+                body.setMinProperties(2);
+            }
+            body.setAdditionalProperties(false);
+        }
     }
 
     private static IntegerSchema wholeNumber(int minimum, int maximum, String description) {

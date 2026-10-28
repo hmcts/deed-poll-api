@@ -1,0 +1,101 @@
+package uk.gov.hmcts.reform.deedpoll.repository;
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.stereotype.Repository;
+import uk.gov.hmcts.reform.deedpoll.domain.masters.Master;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * V42's {@code deedpoll_master}. The IDAM subject is written here and compared here, and read out only as the
+ * {@link Linking} the linking rule needs, never onto a {@link Master}.
+ */
+@Repository
+public class MasterRepository {
+
+    // Compile-time constants, one per variant, so no statement is assembled at runtime.
+    private static final String SELECT = "SELECT id, name, email, available, idam_subject IS NOT NULL AS linked, "
+        + "revision FROM deedpoll_master";
+    private static final String LIST = SELECT + " ORDER BY name, id";
+    private static final String FIND = SELECT + " WHERE id = ?";
+    private static final String FIND_FOR_UPDATE = FIND + " FOR UPDATE";
+
+    private static final RowMapper<Master> MASTER = (row, index) -> new Master(row.getObject("id", UUID.class)
+        .toString(), row.getString("name"), row.getString("email"), row.getBoolean("available"),
+        row.getBoolean("linked"), row.getInt("revision"));
+
+    private final JdbcTemplate jdbc;
+
+    public MasterRepository(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /** Who an entry is linked to, for the linking rule alone. */
+    public record Linking(UUID id, String subject) {
+    }
+
+    public List<Master> list() {
+        return jdbc.query(LIST, MASTER);
+    }
+
+    public Optional<Master> find(UUID id, boolean lock) {
+        return jdbc.query(lock ? FIND_FOR_UPDATE : FIND, MASTER, id).stream().findFirst();
+    }
+
+    /** Whether another entry holds this address, in any case. */
+    public boolean emailTaken(String email, UUID except) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM deedpoll_master WHERE lower(email) = lower(?) AND id IS DISTINCT FROM ?)",
+            Boolean.class, email, except));
+    }
+
+    public void insert(UUID id, String name, String email, boolean available, LocalDateTime at, String byId,
+                       String byName) {
+        jdbc.update("""
+            INSERT INTO deedpoll_master (id, name, email, available, created_at, created_by_id, created_by_name,
+                revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+            """, id, name, email, available, at, byId, byName);
+    }
+
+    /**
+     * The whole editable row; {@code unlink} clears the account, as an email change must.
+     */
+    public void update(UUID id, String name, String email, boolean available, boolean unlink, int revision,
+                       LocalDateTime at, String byId, String byName) {
+        jdbc.update("""
+            UPDATE deedpoll_master SET name = ?, email = ?, available = ?,
+                idam_subject = CASE WHEN ? THEN NULL ELSE idam_subject END,
+                linked_at = CASE WHEN ? THEN NULL ELSE linked_at END,
+                revision = ?, updated_at = ?, updated_by_id = ?, updated_by_name = ?
+            WHERE id = ?
+            """, name, email, available, unlink, unlink, revision, at, byId, byName, id);
+    }
+
+    /** The entry holding this address, in any case, with whoever it is linked to. */
+    public Optional<Linking> linkingByEmail(String email) {
+        return jdbc.query("SELECT id, idam_subject FROM deedpoll_master WHERE lower(email) = lower(?)",
+                          (row, index) -> new Linking(row.getObject("id", UUID.class), row.getString("idam_subject")),
+                          email).stream().findFirst();
+    }
+
+    /** Whether any entry is already linked to this account. */
+    public boolean subjectLinked(String subject) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM deedpoll_master WHERE idam_subject = ?)", Boolean.class, subject));
+    }
+
+    /**
+     * Links an unlinked entry, conditionally, so of two racing requests one writes and the other matches nothing.
+     *
+     * @return whether this call linked it
+     */
+    public boolean link(UUID id, String subject, LocalDateTime at) {
+        return jdbc.update("UPDATE deedpoll_master SET idam_subject = ?, linked_at = ? "
+                               + "WHERE id = ? AND idam_subject IS NULL", subject, at, id) == 1;
+    }
+}

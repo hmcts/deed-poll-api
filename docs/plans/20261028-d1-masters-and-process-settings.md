@@ -190,8 +190,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement V42, the extended `ProcessSettings`, the service reads and the HTTP changes, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 3: The Masters list and linking
-- [ ] Add failing tests for every Masters rule and every linking case in the Development Approach.
-- [ ] Implement, run the focused tests and all Validation Commands, and record the results.
+- [x] Add failing tests for every Masters rule and every linking case in the Development Approach.
+- [x] Implement, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 4: Bank holidays
 - [ ] Add failing tests for the working-day rule and the three operations.
@@ -235,3 +235,23 @@ scratch schema: revision 0 → 10080, revision 3 at 120 → 1440 with one histor
 kept, defaults, the fresh seed and the Masters uniqueness), and new cases in the service, persistence, controller
 and OpenAPI tests. Full build SUCCESSFUL: `test` 5,032 tests, 0 failures, 1 skipped; `integration` passing.
 `checkstyle.sh` OK.
+
+**Task 3 (Masters list and linking):** `domain/masters/Master` (a record with `linked` and no subject component, so
+it cannot publish one) and `MasterService`; the JdbcTemplate `MasterRepository` sits in `repository/` beside
+`ProcessSettingsRepository` rather than in `domain/masters/`, matching the existing pattern. `list` admits the four
+roles `StaffArea.CASEWORKER` admits (checked in the domain too, so report mode does not open it to a roleless
+caller); `create`/`update` need `MANAGE_PROCESS_CONFIG`, the update is a keyed patch with the stale check before the
+no-op, and an email change on a linked entry clears the subject and `linked_at` and records `linked` beside `email`.
+A duplicate email is checked first and a raced `DuplicateKeyException` (whose message carries the address) is also
+turned into the same 409; `ConflictError` gained optional field errors so the 409 names `email`. Audit actions
+`MASTER_ADDED`, `MASTER_CHANGED`, `MASTER_LINKED` on `AuditEntities.MASTER`, names only. Linking is a
+`HandlerInterceptor` on `/judicial/**` (`config/MasterLinking`), because the judicial lists and document routes do
+not share `JudicialReferralService.visible` and a preview refuses an active transaction; it is best effort (a
+failure is a WARN with the exception class only). The conditional `UPDATE ... WHERE idam_subject IS NULL` links
+once; an entry linked elsewhere, or a judge already linked to another entry, logs a fixed WARN naming nobody.
+`GET/POST /caseworker/masters`, `PATCH /caseworker/masters/{id}`, with both bodies described in
+`OpenAPIWriteBodies`. `WriteEndpointAuditCoverageTest` now counts 32 writes, 28 audited. Tests: `MasterServiceTest`
+(unit) and `CaseworkerMastersControllerTest` (full context, Postgres: role matrix, duplicate in any case without the
+address, stale, unlink, unavailable listed, no subject in JSON, first/second/concurrent linking, linked-elsewhere
+WARN with the log captured, caseworker links nothing), plus an `OpenAPIPublisherTest` case. Full build SUCCESSFUL:
+`test` 5,088 tests, 0 failures, 1 skipped; `integration` 26 tests, 0 failures. `checkstyle.sh` OK.
