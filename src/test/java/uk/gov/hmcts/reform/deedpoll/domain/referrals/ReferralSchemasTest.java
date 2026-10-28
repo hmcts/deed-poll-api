@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -371,6 +372,47 @@ class ReferralSchemasTest {
                 .contains(new FieldError("urgencyReason",
                     "urgencyReason must be " + ReferralSchemas.MAX_URGENCY_REASON_LENGTH
                         + " characters or fewer"));
+        }
+    }
+
+    @Nested
+    @DisplayName("masterId (plan D2)")
+    class MasterId {
+
+        private static final String SULLIVAN = "aaaaaaaa-0000-0000-0000-000000000001";
+
+        @Test
+        @DisplayName("is optional on the create, and absent or null leaves the referral waiting for assignment")
+        void optional() {
+            assertThat(parse(payload("reasons", List.of("DomesticAbuse"))).masterId()).isEmpty();
+            assertThat(parse(payload("reasons", List.of("DomesticAbuse"), "masterId", null)).masterId()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("is read as a UUID, trimmed")
+        void read() {
+            assertThat(parse(payload("reasons", List.of("DomesticAbuse"), "masterId", " " + SULLIVAN + " "))
+                .masterId()).contains(UUID.fromString(SULLIVAN));
+        }
+
+        @Test
+        @DisplayName("refuses a malformed or non-string id on masterId, beside the other fields' errors")
+        void malformed() {
+            assertThat(errorsFrom(() -> parse(payload("reasons", List.of("DomesticAbuse"), "masterId", "nope"))))
+                .containsExactly(new FieldError("masterId", "Select a Master who is available"));
+            assertThat(errorsFrom(() -> parse(payload("masterId", 7))))
+                .extracting(FieldError::field).containsExactlyInAnyOrder("reasons", "masterId");
+        }
+
+        @Test
+        @DisplayName("is required on a reassignment")
+        void requiredOnAssignment() {
+            assertThat(ReferralSchemas.parseAssignment(payload("masterId", SULLIVAN)))
+                .isEqualTo(UUID.fromString(SULLIVAN));
+            for (Map<String, Object> raw : List.of(payload(), payload("masterId", null), payload("masterId", ""))) {
+                assertThat(errorsFrom(() -> ReferralSchemas.parseAssignment(raw)))
+                    .containsExactly(new FieldError("masterId", "Select a Master who is available"));
+            }
         }
     }
 

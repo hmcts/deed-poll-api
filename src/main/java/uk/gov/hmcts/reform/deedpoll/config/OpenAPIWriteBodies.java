@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.config;
 
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
+import io.swagger.v3.oas.models.PathItem;
 import io.swagger.v3.oas.models.media.ArraySchema;
 import io.swagger.v3.oas.models.media.BooleanSchema;
 import io.swagger.v3.oas.models.media.Content;
@@ -23,12 +24,15 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteSettingsService;
+import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQuerySchemas;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsTimes;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
@@ -85,6 +89,7 @@ public class OpenAPIWriteBodies {
 
     /** The referral create body. There is no update sibling: amending a referral is raising another. */
     private static final String CREATE_REFERRAL = "CreateReferralRequest";
+    private static final String ASSIGN_REFERRAL = "AssignReferralRequest";
 
     /**
      * The confirmation body -- the applicant's answer to the email that asks whether to proceed.
@@ -140,6 +145,7 @@ public class OpenAPIWriteBodies {
             describeWitnessBodies(openApi);
             describeSavedQueryBodies(openApi);
             describeReferralBody(openApi);
+            describeAssignment(openApi);
             describeConfirmationBody(openApi);
             describeDirectionBody(openApi);
             describeEmailBodies(openApi);
@@ -147,6 +153,8 @@ public class OpenAPIWriteBodies {
             describeGazetteSettingsBody(openApi);
             describeGazetteBodies(openApi);
             describeProcessSettingsBody(openApi);
+            describeMasterBodies(openApi);
+            describeBankHolidayBody(openApi);
         };
     }
 
@@ -196,16 +204,81 @@ public class OpenAPIWriteBodies {
         }
         settings.setType("object");
         settings.setProperties(null);
-        settings.addProperty(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, new IntegerSchema()
-            .format("int32")
-            .minimum(java.math.BigDecimal.valueOf(ProcessSettingsService.MIN_REFERRAL_CLAIM_EXPIRY_MINUTES))
-            .maximum(java.math.BigDecimal.valueOf(ProcessSettingsService.MAX_REFERRAL_CLAIM_EXPIRY_MINUTES))
-            .description("How long a judge's untouched claim survives before it returns to the pool, in whole"
-                + " minutes, from 30 to 1440 (24 hours). Null, a fraction and a string are refused."));
+        settings.addProperty(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, wholeNumber(
+            ProcessSettingsService.MIN_REFERRAL_CLAIM_EXPIRY_MINUTES,
+            ProcessSettingsService.MAX_REFERRAL_CLAIM_EXPIRY_MINUTES,
+            "The processing window: how long a Master has to give a direction before the referral is unassigned, in"
+                + " whole minutes, from 1440 (1 day) to 43200 (30 days). Null, a fraction and a string are refused."));
+        settings.addProperty(ProcessSettings.REMINDER_INTERVAL_HOURS, wholeNumber(
+            ProcessSettingsService.MIN_REMINDER_INTERVAL_HOURS, ProcessSettingsService.MAX_REMINDER_INTERVAL_HOURS,
+            "How often a Master is reminded of their undirected referrals, in whole hours, from 1 to 168. Optional"
+                + " for one release; absent leaves it unchanged, null is refused."));
+        settings.addProperty(ProcessSettings.MASTER_WINDOW_CAP, wholeNumber(
+            ProcessSettingsService.MIN_MASTER_WINDOW_CAP, ProcessSettingsService.MAX_MASTER_WINDOW_CAP,
+            "How many referrals one Master may be assigned per referral window, from 1 to 100. Optional for one"
+                + " release; absent leaves it unchanged, null is refused."));
+        for (String field : ProcessSettings.WINDOW_FIELDS) {
+            settings.addProperty(field, new StringSchema().pattern(ProcessSettingsTimes.PATTERN)
+                .description("A referral window time, Europe/London, HH:mm on the quarter hour. Each window starts"
+                    + " before it ends, and the morning window ends before the afternoon one starts. Optional for"
+                    + " one release; absent leaves it unchanged, null is refused."));
+        }
         settings.addProperty(REVISION_PROPERTY, new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
             .description("The revision returned by the settings read; stale values return 409."));
         settings.setRequired(java.util.List.of(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, REVISION_PROPERTY));
         settings.setAdditionalProperties(false);
+    }
+
+    private void describeMasterBodies(OpenAPI openApi) {
+        for (String name : java.util.List.of("CreateMasterRequest", "UpdateMasterRequest")) {
+            Schema<?> body = schema(openApi, name);
+            if (body == null) {
+                continue;
+            }
+            boolean create = name.startsWith("Create");
+            body.setType("object");
+            body.setProperties(null);
+            body.addProperty(MasterService.NAME, new StringSchema().minLength(1)
+                .maxLength(MasterService.MAX_NAME_LENGTH)
+                .description("Trimmed first: the bounds hold for the trimmed value, so a blank is refused."));
+            body.addProperty(MasterService.EMAIL, new StringSchema().maxLength(MasterService.MAX_EMAIL_LENGTH)
+                .description("Trimmed and lower-cased; exactly one @ and no whitespace. An address another Master"
+                    + " holds, in any case, returns 409."
+                    + (create ? "" : " Changing a linked Master's email unlinks it until the new address signs in.")));
+            body.addProperty(MasterService.AVAILABLE, new BooleanSchema()
+                .description(create ? "Defaults to true." : "False marks a Master who may not be assigned."));
+            if (create) {
+                body.setRequired(java.util.List.of(MasterService.NAME, MasterService.EMAIL));
+            } else {
+                body.addProperty(MasterService.REVISION, new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
+                    .description("The revision returned by the list; stale values return 409."));
+                body.setRequired(java.util.List.of(MasterService.REVISION));
+                body.setMinProperties(2);
+            }
+            body.setAdditionalProperties(false);
+        }
+    }
+
+    private void describeBankHolidayBody(OpenAPI openApi) {
+        Schema<?> body = schema(openApi, "CreateBankHolidayRequest");
+        if (body == null) {
+            return;
+        }
+        body.setType("object");
+        body.setProperties(null);
+        body.addProperty(BankHolidays.DATE, new StringSchema().format("date")
+            .description("yyyy-MM-dd. A date already listed returns 409."));
+        body.addProperty(BankHolidays.NAME, new StringSchema().minLength(1).maxLength(BankHolidays.MAX_NAME_LENGTH)
+            .description("Trimmed first: the bounds hold for the trimmed value, so a blank is refused."));
+        body.setRequired(java.util.List.of(BankHolidays.DATE, BankHolidays.NAME));
+        body.setAdditionalProperties(false);
+    }
+
+    private static IntegerSchema wholeNumber(int minimum, int maximum, String description) {
+        IntegerSchema schema = new IntegerSchema();
+        schema.format("int32").minimum(java.math.BigDecimal.valueOf(minimum))
+            .maximum(java.math.BigDecimal.valueOf(maximum)).description(description);
+        return schema;
     }
 
     /**
@@ -515,15 +588,68 @@ public class OpenAPIWriteBodies {
         create.addProperty("urgencyReason", new StringSchema()
             .maxLength(ReferralSchemas.MAX_URGENCY_REASON_LENGTH)
             .description("Why the referral jumped the queue. Required when urgency is " + Urgency.Urgent + "."));
+        create.addProperty(ReferralSchemas.MASTER_ID, masterId("The Masters-list entry to assign the referral to. "
+            + "Optional: without it the referral is created Open, waiting for a caseworker to assign it."));
         create.addRequiredItem(REASONS_FIELD);
         create.setAdditionalProperties(true);
-        create.setDescription("A referral of the case to the judiciary, raised unclaimed into the shared pool. "
+        create.setDescription("A referral of the case to a Master, assigned to the one masterId names or, without "
+            + "it, waiting for assignment. "
             + "reasons is the only field required outright; notes is required when " + ReferralReason.Other
             + " is among them, and urgencyReason when urgency is " + Urgency.Urgent + ". The case comes from "
-            + "the path, the state is always Open, and there is no target judge -- who picks a referral up is a "
-            + "later transition -- so state, migrated and any assignee are ignored rather than refused, as any "
-            + "unknown key is. A case may hold many referrals over its lifetime but only one that is not "
-            + "closed or withdrawn, so a second live referral is a 409 rather than a 400.");
+            + "the path and the state from the assignment, so state and migrated are ignored rather than refused, "
+            + "as any unknown key is. A case may hold many referrals over its lifetime but only one that is not "
+            + "closed or withdrawn, so a second live referral is a 409 rather than a 400. A refused assignment "
+            + "refuses the whole create, and nothing is written.");
+    }
+
+    /** A Masters-list entry id, as the create and the reassignment both take it. */
+    private static Schema<?> masterId(String description) {
+        return new StringSchema().format("uuid").description(description + " An unknown or unavailable Master is "
+            + "a 400 on masterId: \"" + ReferralSchemas.SELECT_A_MASTER + "\".");
+    }
+
+    /**
+     * The reassignment body, and the two refusals an assignment adds to the create and the reassignment (plan D2):
+     * the 400 on {@code masterId} and the 409 at the per-Master cap, beside the 409 for a referral that is not
+     * waiting for a direction. springdoc publishes none of them, because {@code DomainErrorHandler} answers them.
+     */
+    private void describeAssignment(OpenAPI openApi) {
+        Schema<?> body = schema(openApi, ASSIGN_REFERRAL);
+        if (body != null) {
+            body.setType("object");
+            body.setProperties(null);
+            body.addProperty(ReferralSchemas.MASTER_ID, masterId("The Masters-list entry to assign the referral to."));
+            body.setRequired(java.util.List.of(ReferralSchemas.MASTER_ID));
+            body.setAdditionalProperties(true);
+            body.setDescription("Assigns the referral to a Master, or moves it to another. Any caseworker, while the "
+                + "referral is Open (waiting for assignment) or Claimed (waiting for a direction). The Master it "
+                + "already has is a no-op that records nothing. A reassignment restarts the Master's processing "
+                + "window, and the referral counts towards the new Master's cap in the current window.");
+        }
+        if (openApi.getPaths() == null) {
+            return;
+        }
+        refusals(openApi.getPaths().get("/caseworker/cases/{id}/referrals"), false);
+        refusals(openApi.getPaths().get("/caseworker/cases/{id}/referrals/{referralId}/assignment"), true);
+    }
+
+    private static void refusals(PathItem path, boolean reassignment) {
+        Operation operation = path == null ? null : reassignment ? path.getPut() : path.getPost();
+        if (operation == null) {
+            return;
+        }
+        ApiResponses responses = operation.getResponses() == null ? new ApiResponses() : operation.getResponses();
+        responses.addApiResponse("400", new ApiResponse().description((reassignment ? "" : "The body is not valid, "
+            + "each field's error named; or ") + "masterId names no Master, or one who is not available: \""
+            + ReferralSchemas.SELECT_A_MASTER + "\"."));
+        responses.addApiResponse("409", new ApiResponse().description((reassignment
+            ? "The referral is not waiting for a direction (it is Decided, Closed or Withdrawn); or "
+            : "The case already has a referral that is not closed or withdrawn; or ")
+            + "the Master already holds the per-Master cap for the current referral window, with an error on "
+            + "masterId: \"This Master already has 10 referrals for the morning of 28 October 2026. Choose another "
+            + "Master.\" The window is the morning or afternoon of a working day in Europe/London; outside the "
+            + "windows a referral counts towards the next one."));
+        operation.setResponses(responses);
     }
 
     /**

@@ -8,6 +8,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.WriteContext;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -62,6 +63,51 @@ class CurrentUserTest {
             assertThat(CurrentUser.ANONYMOUS.isAdmin()).isFalse();
             assertThat(CurrentUser.ANONYMOUS.name()).isEqualTo(CurrentUser.SERVICE_ACCOUNT_NAME);
             assertThat(CurrentUser.ANONYMOUS.userId()).isNull();
+        }
+    }
+
+    /** Not in the reference: the address that links a Masters-list entry (plan D1), and authorises nothing. */
+    @Nested
+    @DisplayName("email")
+    class Email {
+
+        @Test
+        @DisplayName("is trimmed and lower-cased")
+        void isNormalised() {
+            assertThat(CurrentUser.currentUser(List.of(), "A", SUBJECT, "  Master.Sullivan@Example.GOV.uk ")
+                           .email()).isEqualTo("master.sullivan@example.gov.uk");
+        }
+
+        @Test
+        @DisplayName("is null when absent, blank or without an @")
+        void isNullWhenMalformed() {
+            assertThat(CurrentUser.currentUser(List.of(), "A", SUBJECT, null).email()).isNull();
+            assertThat(CurrentUser.currentUser(List.of(), "A", SUBJECT, "   ").email()).isNull();
+            assertThat(CurrentUser.currentUser(List.of(), "A", SUBJECT, "not-an-address").email()).isNull();
+        }
+
+        @Test
+        @DisplayName("is null for every caller not built with one")
+        void isNullWithoutOne() {
+            assertThat(CurrentUser.currentUser(List.of(), "A", SUBJECT).email()).isNull();
+            assertThat(CurrentUser.ANONYMOUS.email()).isNull();
+        }
+
+        @Test
+        @DisplayName("is left out of toString, which a debug line prints whole")
+        void isNotInToString() {
+            CurrentUser user = CurrentUser.currentUser(List.of(Role.JUDICIAL), "A Master", SUBJECT, "a@example.com");
+
+            assertThat(user.toString()).doesNotContain("a@example.com").contains("A Master", SUBJECT);
+        }
+
+        @Test
+        @DisplayName("is left out of toString when it is the subject, as HMCTS IDAM gives it")
+        void subjectAddressIsNotInToString() {
+            CurrentUser user = IdamClaims.userFromClaims(Map.of("sub", "Judge@Example.com"));
+
+            assertThat(user.email()).isEqualTo("judge@example.com");
+            assertThat(user.toString()).doesNotContainIgnoringCase("judge@example.com").contains("redacted");
         }
     }
 

@@ -26,7 +26,7 @@ import java.util.stream.Stream;
  * <p><strong>Roles have two sources; identity has one.</strong> The roles {@link AmRoleSource} reads from AM are
  * unioned with IDAM's, so a caseworker whose job title lives in Caseworker Reference Data is the same {@link Role}
  * as one IDAM names directly, and every capability check downstream is unchanged. The subject and display name are
- * IDAM's alone. AM can only add a role, and on any failure it adds none.
+ * IDAM's alone, and so is the email address. AM can only add a role, and on any failure it adds none.
  *
  * <p>An {@link UnauthorizedError} becomes an {@link InvalidBearerTokenException} so it answers 401. Anything
  * else -- IDAM unreachable, no audiences configured -- is deliberately left to propagate as a 500: the
@@ -61,6 +61,7 @@ public class IdamAuthenticationConverter implements Converter<Jwt, AbstractAuthe
         // In declaration order, so the union reads the same whichever source named a role first.
         Set<Role> held = Set.copyOf(Stream.concat(idamUser.roles().stream(), fromAm.stream()).toList());
         return new IdamAuthentication(token, CurrentUser.currentUser(
-            Stream.of(Role.values()).filter(held::contains).toList(), idamUser.name(), idamUser.userId()));
+            Stream.of(Role.values()).filter(held::contains).toList(), idamUser.name(), idamUser.userId(),
+            idamUser.email()));
     }
 }

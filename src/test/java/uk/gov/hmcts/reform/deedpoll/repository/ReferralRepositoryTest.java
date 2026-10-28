@@ -11,12 +11,12 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
-import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -43,20 +43,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>The scoping is asserted by getting the wrong answer's absence, not by reading the method names:
  * two cases each hold a referral, and each finder is asked about both.
  *
- * <p>The judicial pool is here for the same reason as the sweep, and it is the one read that is deliberately
- * <em>not</em> case-scoped: what makes it right is the database's ordering and paging. Urgent-first depends on
- * {@code "Urgency"} being declared {@code ('Normal', 'Urgent')} in {@code V1__enums.sql}, because Postgres
- * orders an enum by its declared order -- a fact only a real Postgres can assert -- and paging in working order
- * is the difference between the longest-waiting urgent referral being on page 1 and it never being worked.
- * {@code JudicialReferralServiceTest} asserts the other half container-free: that the service asks for that
- * order rather than fetching and reordering.
- *
- * <p>The personal list is here for the same reasons and one of its own. Its membership rule is <em>SQL</em> -- two
+ * <p>The personal list is here because what makes it right is the database's. Its membership rule is <em>SQL</em> --
+ * two
  * state arms reading two different owner columns, and a null owner matching nothing because {@code =} is never true
  * of one -- so a fake applying the same predicate in Java would be asserting a second implementation of it rather
- * than the one that runs. Its order adds two facts only Postgres can state: that {@code "ReferralState"} being
- * declared in lifecycle order puts {@code Claimed} above {@code Decided}, and that the {@code uuid} tie-break which
- * makes paging stable compares sixteen unsigned bytes rather than two signed longs.
+ * than the one that runs. Its order is a JPQL {@code ORDER BY} with {@code CASE} keys, and the {@code uuid}
+ * tie-break which makes paging stable compares sixteen unsigned bytes rather than two signed longs, which only
+ * Postgres can state.
  *
  * <p>The stale-claim sweep's two statements are here for a stronger reason: what makes them correct is SQL
  * that no fake can stand in for. {@code ReferralServiceTest} proves the arithmetic -- which rows the service
@@ -130,30 +123,32 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * An {@code Open} referral on a case of its own, with the urgency and age the pool orders by.
+     * A referral claimed by a judge at {@code claimedAt}, with no {@code assignedAt}: the shape of a claim made
+     * before V43, whose processing window runs from the claim.
      *
-     * <p>A case each because a case may hold only one live referral, so a pool of five is five cases -- which
-     * is also the shape the pool query has to cope with, being the one read here that is not case-scoped.
+     * <p>Both owner columns, as a real claim writes both: {@code claimedBy} is the display name the note
+     * reads and {@code claimedById} is the subject the claim belongs to. The subject is derived from the name here
+     * only so that a fixture reads as one judge; nothing under test compares the two.
      */
-    private Referral pooledReferral(Urgency urgency, LocalDateTime createdOn) {
-        Referral referral = persistedReferral(persistedCase(), ReferralState.Open, createdOn);
-        referral.setUrgency(urgency);
+    private Referral claimedReferral(DeedPoll parent, String judge, LocalDateTime claimedAt) {
+        Referral referral = persistedReferral(parent, ReferralState.Claimed, claimedAt);
+        referral.setClaimedBy(judge);
+        referral.setClaimedById(subjectOf(judge));
+        referral.setClaimedAt(claimedAt);
+        referral.setLastTouchedAt(claimedAt);
         return referral;
     }
 
     /**
-     * A referral held by a judge who last interacted with it at {@code lastTouchedAt}.
-     *
-     * <p>Both owner columns, as a real claim writes both: {@code claimedBy} is the display name the lapse note
-     * reads and {@code claimedById} is the subject the claim belongs to. The subject is derived from the name here
-     * only so that a fixture reads as one judge; nothing under test compares the two.
+     * A referral assigned to a Masters-list entry at {@code assignedAt}, in that day's morning window.
      */
-    private Referral claimedReferral(DeedPoll parent, String judge, LocalDateTime lastTouchedAt) {
-        Referral referral = persistedReferral(parent, ReferralState.Claimed, lastTouchedAt);
-        referral.setClaimedBy(judge);
-        referral.setClaimedById(subjectOf(judge));
-        referral.setClaimedAt(lastTouchedAt);
-        referral.setLastTouchedAt(lastTouchedAt);
+    private Referral assignedReferral(DeedPoll parent, UUID master, LocalDateTime claimedAt,
+                                      LocalDateTime assignedAt) {
+        Referral referral = claimedReferral(parent, "Master Sullivan", claimedAt);
+        referral.setAssignedMasterId(master);
+        referral.setAssignedAt(assignedAt);
+        referral.setWindowDate(assignedAt.toLocalDate());
+        referral.setWindowSlot(WindowSlot.AM);
         return referral;
     }
 
@@ -170,7 +165,7 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
      * really carry them, because what the personal list's two arms have to exclude is exactly an {@code Open},
      * {@code Closed} or {@code Withdrawn} row that still names the judge who had it.
      *
-     * <p>A case each, for the reason {@link #pooledReferral} takes one: a case may hold only one live referral.
+     * <p>A case each, because a case may hold only one live referral.
      */
     private Referral ownedReferral(ReferralState state, String judge, Urgency urgency, LocalDateTime createdOn) {
         Referral referral = persistedReferral(persistedCase(), state, createdOn);
@@ -187,8 +182,18 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
      */
     private Page<Referral> personalList(String judge, int page, int size) {
         return referrals.findOwnedBy(
-            subjectOf(judge), ReferralState.Claimed, ReferralState.Decided,
-            PageRequest.of(page, size, JudicialReferralService.MINE_ORDER));
+            subjectOf(judge), ReferralState.Claimed, ReferralState.Decided, Urgency.Urgent,
+            PageRequest.of(page, size));
+    }
+
+    /** A Masters-list entry, for the assignment's foreign key. */
+    private UUID persistedMaster() {
+        UUID id = UUID.randomUUID();
+        entityManager.createNativeQuery("""
+            insert into deedpoll_master (id, name, email, created_at, created_by_id, created_by_name)
+            values (?1, 'Master Sullivan', ?2, ?3, 'subject-dm', 'Dee Manager')
+            """).setParameter(1, id).setParameter(2, id + "@example.test").setParameter(3, NOW).executeUpdate();
+        return id;
     }
 
     @Test
@@ -280,68 +285,69 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("finds the claims nobody has touched since the cutoff, with the case and the judge on each")
+    @DisplayName("finds the claims made before the cutoff, with the case, the judge, the date and reasons on each")
     void findsTheClaimsNobodyHasTouchedSinceTheCutoff() {
         DeedPoll deedPoll = persistedCase();
         final Referral lapsed = claimedReferral(deedPoll, "District Judge Bell", CUTOFF.minusMinutes(1));
         final Referral fresh = claimedReferral(persistedCase(), "District Judge Okafor", CUTOFF.plusMinutes(1));
         // Withdrawn out from under the judge who held it, which is the withdraw-voids-a-claim case: the row
-        // still carries a stale lastTouchedAt, and the sweep must not treat it as a claim to hand back.
+        // still carries an old claimedAt, and the sweep must not treat it as an assignment to hand back.
         Referral withdrawn = claimedReferral(persistedCase(), "District Judge Bell", CUTOFF.minusHours(9));
         withdrawn.setState(ReferralState.Withdrawn);
         entityManager.flush();
         entityManager.clear();
 
-        List<StaleClaim> stale = referrals.findStaleClaims(ReferralState.Claimed, CUTOFF);
+        List<OverdueAssignment> stale = referrals.findOverdueAssignments(ReferralState.Claimed, CUTOFF);
 
-        assertThat(stale).extracting(StaleClaim::id)
+        assertThat(stale).extracting(OverdueAssignment::id)
             .containsExactly(lapsed.getId())
             .doesNotContain(fresh.getId(), withdrawn.getId());
-        // The two facts the note needs, taken before the release erases one of them. The case id comes off
+        // The facts the note needs, taken before the release erases one of them. The case id comes off
         // the foreign key without loading the case, which is what lets the sweep read it after the update.
         assertThat(stale.getFirst().deedPollId()).isEqualTo(deedPoll.getId());
         assertThat(stale.getFirst().claimedBy()).isEqualTo("District Judge Bell");
+        assertThat(stale.getFirst().createdOn()).isEqualTo(CUTOFF.minusMinutes(1));
+        assertThat(stale.getFirst().reasons()).isEmpty();
     }
 
     @Test
-    @DisplayName("releases a lapsed claim back to the pool in one statement, clearing every claim column")
+    @DisplayName("returns an overdue claim to the office in one statement, clearing every claim column")
     void releasesALapsedClaimInOneStatement() {
         DeedPoll deedPoll = persistedCase();
         Referral lapsed = claimedReferral(deedPoll, "District Judge Bell", CUTOFF.minusHours(1));
         entityManager.flush();
 
-        int released = referrals.releaseStaleClaim(lapsed.getId(), CUTOFF, NOW, SERVICE_ACCOUNT);
+        int released = referrals.releaseOverdueAssignment(lapsed.getId(), CUTOFF, NOW, SERVICE_ACCOUNT);
 
         assertThat(released).isEqualTo(1);
         Referral reloaded = entityManager.find(Referral.class, lapsed.getId());
         assertThat(reloaded.getState()).isEqualTo(ReferralState.Open);
         assertThat(reloaded.getClaimedBy()).isNull();
         // The owner, cleared by the same statement -- and this is the one of the four whose survival would be a
-        // security bug rather than stale data: the judge who abandoned the referral would still be able to direct
-        // it after the pool had re-offered it to everybody.
+        // security bug rather than stale data: the judge who gave no direction would still be able to give one
+        // after the office had taken the referral back.
         assertThat(reloaded.getClaimedById()).isNull();
         assertThat(reloaded.getClaimedAt()).isNull();
-        // The column the predicate reads, nulled by the statement that read it -- which is what makes the
-        // release happen once rather than on every sweep from here on.
+        // Bookkeeping, nulled with the claim it belonged to.
         assertThat(reloaded.getLastTouchedAt()).isNull();
         assertThat(reloaded.getModifiedBy()).isEqualTo(SERVICE_ACCOUNT);
         assertThat(reloaded.getModifiedOn()).isEqualTo(NOW);
     }
 
     @Test
-    @DisplayName("releases nothing a second time, so two replicas sweeping at once write one note between them")
+    @DisplayName("releases nothing a second time, so the timer and a request write one note between them")
     void releasesNothingASecondTime() {
         Referral lapsed = claimedReferral(persistedCase(), "District Judge Bell", CUTOFF.minusHours(1));
         entityManager.flush();
 
-        assertThat(referrals.releaseStaleClaim(lapsed.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isEqualTo(1);
+        assertThat(referrals.releaseOverdueAssignment(lapsed.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isEqualTo(1);
         // The whole multi-replica argument, as a fact about the statement rather than about the service: the
-        // second caller is told it changed nothing, so it writes no second lapse note.
-        assertThat(referrals.releaseStaleClaim(lapsed.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isZero();
+        // second caller is told it changed nothing, so it writes no second note.
+        assertThat(referrals.releaseOverdueAssignment(lapsed.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isZero();
     }
 
     @Test
-    @DisplayName("releases nothing when the judge touched it after the cutoff, or when nobody holds it")
+    @DisplayName("releases nothing claimed after the cutoff, or when nobody holds it")
     void releasesNothingItShouldNot() {
         DeedPoll deedPoll = persistedCase();
         Referral fresh = claimedReferral(deedPoll, "District Judge Bell", CUTOFF.plusSeconds(1));
@@ -349,11 +355,11 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         decided.setState(ReferralState.Decided);
         entityManager.flush();
 
-        // One second inside the window is a judge still working, and a decided referral is not a claim at
+        // One second inside the window is a judge still in time, and a decided referral is not a claim at
         // all -- both are rows the statement's own predicate has to refuse, because the candidate query and
         // the release are separated by however long the sweep's loop takes.
-        assertThat(referrals.releaseStaleClaim(fresh.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isZero();
-        assertThat(referrals.releaseStaleClaim(decided.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isZero();
+        assertThat(referrals.releaseOverdueAssignment(fresh.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isZero();
+        assertThat(referrals.releaseOverdueAssignment(decided.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isZero();
 
         entityManager.clear();
         assertThat(entityManager.find(Referral.class, fresh.getId()).getClaimedBy())
@@ -364,6 +370,82 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
             .isEqualTo(subjectOf("District Judge Bell"));
         assertThat(entityManager.find(Referral.class, decided.getId()).getState())
             .isEqualTo(ReferralState.Decided);
+    }
+
+    @Test
+    @DisplayName("the boundary minute: an assignment exactly at the cutoff stays, one a minute older is returned")
+    void theBoundaryMinute() {
+        UUID master = persistedMaster();
+        final Referral atTheCutoff = assignedReferral(persistedCase(), master, CUTOFF, CUTOFF);
+        Referral minuteOlder = assignedReferral(persistedCase(), master, CUTOFF.minusMinutes(1),
+                                                 CUTOFF.minusMinutes(1));
+        entityManager.flush();
+        entityManager.clear();
+
+        // Strictly before the cutoff, in the finder and in the release alike.
+        assertThat(referrals.findOverdueAssignments(ReferralState.Claimed, CUTOFF))
+            .extracting(OverdueAssignment::id).containsExactly(minuteOlder.getId());
+        assertThat(referrals.releaseOverdueAssignment(atTheCutoff.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isZero();
+        assertThat(referrals.releaseOverdueAssignment(minuteOlder.getId(), CUTOFF, NOW, SERVICE_ACCOUNT))
+            .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("counts from assignedAt before claimedAt, so a reassignment or withdrawn direction restarts it")
+    void countsFromAssignedAt() {
+        UUID master = persistedMaster();
+        // Claimed long ago, assigned (or a direction withdrawn) a minute inside the window.
+        final Referral restarted =
+            assignedReferral(persistedCase(), master, CUTOFF.minusDays(9), CUTOFF.plusMinutes(1));
+        // And the reverse: a lastTouchedAt inside the window extends nothing.
+        Referral readRecently = assignedReferral(persistedCase(), master, CUTOFF.minusDays(1), CUTOFF.minusDays(1));
+        readRecently.setLastTouchedAt(NOW);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(referrals.findOverdueAssignments(ReferralState.Claimed, CUTOFF))
+            .extracting(OverdueAssignment::id).containsExactly(readRecently.getId());
+        assertThat(referrals.releaseOverdueAssignment(restarted.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isZero();
+        assertThat(referrals.releaseOverdueAssignment(readRecently.getId(), CUTOFF, NOW, SERVICE_ACCOUNT))
+            .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("returns an assigned referral clearing the Master, assignment and window, as V43's check requires")
+    void clearsTheAssignmentColumns() {
+        UUID master = persistedMaster();
+        Referral assigned = assignedReferral(persistedCase(), master, CUTOFF.minusHours(1), CUTOFF.minusHours(1));
+        entityManager.flush();
+
+        assertThat(referrals.releaseOverdueAssignment(assigned.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isEqualTo(1);
+
+        Referral reloaded = entityManager.find(Referral.class, assigned.getId());
+        assertThat(reloaded.getState()).isEqualTo(ReferralState.Open);
+        assertThat(reloaded.getAssignedMasterId()).isNull();
+        assertThat(reloaded.getAssignedAt()).isNull();
+        assertThat(reloaded.getWindowDate()).isNull();
+        assertThat(reloaded.getWindowSlot()).isNull();
+        // It no longer counts towards the Master's cap.
+        assertThat(referrals.countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot(
+            ReferralState.Claimed, master, CUTOFF.minusHours(1).toLocalDate(), WindowSlot.AM)).isZero();
+    }
+
+    @Test
+    @DisplayName("go-live: a claim made before V43 and attached by linking is returned from its claimedAt")
+    void returnsALinkedLegacyClaim() {
+        UUID master = persistedMaster();
+        Referral legacy = claimedReferral(persistedCase(), "Master Sullivan", CUTOFF.minusMinutes(1));
+        entityManager.flush();
+        // Linking's go-live join gives it the Master and nothing else: no assignedAt, no window.
+        assertThat(referrals.attachLegacyClaims(master, subjectOf("Master Sullivan"))).isEqualTo(1);
+
+        assertThat(referrals.findOverdueAssignments(ReferralState.Claimed, CUTOFF))
+            .extracting(OverdueAssignment::id).containsExactly(legacy.getId());
+        assertThat(referrals.releaseOverdueAssignment(legacy.getId(), CUTOFF, NOW, SERVICE_ACCOUNT)).isEqualTo(1);
+        Referral reloaded = entityManager.find(Referral.class, legacy.getId());
+        assertThat(reloaded.getState()).isEqualTo(ReferralState.Open);
+        assertThat(reloaded.getAssignedMasterId()).isNull();
+        assertThat(reloaded.getClaimedById()).isNull();
     }
 
     @Test
@@ -510,92 +592,14 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("pools the Open referrals of every case, urgent first and longest-waiting within each band")
-    void poolsTheOpenReferralsInWorkingOrder() {
-        // Four cases, because the pool is the one read here that is deliberately not scoped to one: a judge
-        // reaches it without naming a case, which is what stops them naming one at all.
-        Referral normalAndNewer = pooledReferral(Urgency.Normal, LocalDateTime.of(2026, 4, 1, 9, 0));
-        Referral urgentAndOlder = pooledReferral(Urgency.Urgent, LocalDateTime.of(2026, 3, 1, 9, 0));
-        Referral normalAndOlder = pooledReferral(Urgency.Normal, LocalDateTime.of(2026, 2, 1, 9, 0));
-        Referral urgentAndNewer = pooledReferral(Urgency.Urgent, LocalDateTime.of(2026, 5, 1, 9, 0));
-        entityManager.flush();
-        entityManager.clear();
-
-        List<Referral> pool = referrals.findByState(
-            ReferralState.Open, PageRequest.of(0, 10, JudicialReferralService.POOL_ORDER)).getContent();
-
-        // Both halves of the order at once, and the fixture is built so that neither key alone produces this
-        // sequence: by age alone the oldest is a Normal one, and by urgency alone the two Urgent rows could come
-        // in either order. This is also what pins "Urgency" being declared ('Normal', 'Urgent') in V1 -- Postgres
-        // orders an enum by its declared order, which is the whole reason descending urgency means most urgent.
-        assertThat(pool).extracting(Referral::getId).containsExactly(
-            urgentAndOlder.getId(),
-            urgentAndNewer.getId(),
-            normalAndOlder.getId(),
-            normalAndNewer.getId());
-    }
-
-    @Test
-    @DisplayName("pools only Open referrals, so nothing a judge holds or a caseworker finished is offered again")
-    void poolsOnlyOpenReferrals() {
-        final Referral open = pooledReferral(Urgency.Normal, LocalDateTime.of(2026, 2, 1, 9, 0));
-        // One of every other state, each on its own case, because a case may hold only one live referral.
-        for (ReferralState state : List.of(ReferralState.Claimed, ReferralState.Decided,
-                                           ReferralState.Closed, ReferralState.Withdrawn)) {
-            persistedReferral(persistedCase(), state, LocalDateTime.of(2026, 1, 1, 9, 0));
-        }
-        entityManager.flush();
-        entityManager.clear();
-
-        Page<Referral> pool = referrals.findByState(
-            ReferralState.Open, PageRequest.of(0, 10, JudicialReferralService.POOL_ORDER));
-
-        // The filter is the pool's only scope, so it carries the weight the case id carries everywhere else
-        // here: a claimed referral shown in the pool would be two judges reading the same papers.
-        assertThat(pool.getContent()).extracting(Referral::getId).containsExactly(open.getId());
-        assertThat(pool.getTotalElements()).isEqualTo(1);
-    }
-
-    @Test
-    @DisplayName("pages the pool in the database, and reports the whole pool's total on every page")
-    void pagesThePoolInTheDatabase() {
-        List<Referral> byWorkingOrder = new ArrayList<>();
-        for (int day = 1; day <= 5; day++) {
-            byWorkingOrder.add(pooledReferral(Urgency.Normal, LocalDateTime.of(2026, 2, day, 9, 0)));
-        }
-        entityManager.flush();
-        entityManager.clear();
-
-        Page<Referral> first = referrals.findByState(
-            ReferralState.Open, PageRequest.of(0, 2, JudicialReferralService.POOL_ORDER));
-        Page<Referral> second = referrals.findByState(
-            ReferralState.Open, PageRequest.of(1, 2, JudicialReferralService.POOL_ORDER));
-        Page<Referral> pastTheEnd = referrals.findByState(
-            ReferralState.Open, PageRequest.of(9, 2, JudicialReferralService.POOL_ORDER));
-
-        // Two rows a page, sliced in working order rather than in insertion order, which is the claim a
-        // fetch-then-reorder would fail: the longest-waiting referral is on page 1 and not page 3.
-        assertThat(first.getContent()).extracting(Referral::getId)
-            .containsExactly(byWorkingOrder.get(0).getId(), byWorkingOrder.get(1).getId());
-        assertThat(second.getContent()).extracting(Referral::getId)
-            .containsExactly(byWorkingOrder.get(2).getId(), byWorkingOrder.get(3).getId());
-        // Empty rather than an error, and still counted: a judge on a page past the end is told how much is
-        // waiting, which is what makes a ten-row default a page size and not a cap.
-        assertThat(pastTheEnd.getContent()).isEmpty();
-        assertThat(pastTheEnd.getTotalElements()).isEqualTo(5);
-        assertThat(first.getTotalElements()).isEqualTo(5);
-        assertThat(first.getTotalPages()).isEqualTo(3);
-    }
-
-    @Test
     @DisplayName("lists a judge's own claimed and decided referrals, and no other state of theirs")
     void listsOneJudgesOwnOutstandingWork() {
         Referral claimed = ownedReferral(ReferralState.Claimed, "District Judge Bell",
                                         Urgency.Normal, LocalDateTime.of(2026, 2, 1, 9, 0));
         Referral decided = ownedReferral(ReferralState.Decided, "District Judge Bell",
                                         Urgency.Normal, LocalDateTime.of(2026, 3, 1, 9, 0));
-        // The three states that are not this judge's outstanding work, each still naming them: Open belongs to the
-        // shared pool however it got there, and Closed and Withdrawn are the office taking the referral back. A
+        // The three states that are not this judge's outstanding work, each still naming them: Open is waiting for
+        // the office however it got there, and Closed and Withdrawn are the office taking the referral back. A
         // predicate written on the owner columns alone would list all three.
         Referral open = ownedReferral(ReferralState.Open, "District Judge Bell",
                                       Urgency.Normal, LocalDateTime.of(2026, 1, 1, 9, 0));
@@ -644,45 +648,156 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(personalList("District Judge Okafor", 0, 10).getContent()).extracting(Referral::getId)
             .containsExactly(anotherJudges.getId());
         assertThat(referrals.findOwnedBy("idam-a-different-bell", ReferralState.Claimed, ReferralState.Decided,
-                                         PageRequest.of(0, 10, JudicialReferralService.MINE_ORDER)).getContent())
+                                         Urgency.Urgent, PageRequest.of(0, 10)).getContent())
             .extracting(Referral::getId)
             .containsExactly(namesakes.getId());
     }
 
-    @Test
-    @DisplayName("orders a judge's work claimed first, then urgent, then longest-held, then by id")
-    void ordersAJudgesWorkForResuming() {
-        String judge = "District Judge Bell";
-        // Deliberately built so that no single key produces the expected sequence: the oldest referral is Decided,
-        // the only Urgent Decided one is the newest, and the two tied rows differ in nothing but their ids.
-        Referral decidedNormal = ownedReferral(ReferralState.Decided, judge,
-                                               Urgency.Normal, LocalDateTime.of(2026, 1, 1, 9, 0));
-        Referral decidedUrgent = ownedReferral(ReferralState.Decided, judge,
-                                               Urgency.Urgent, LocalDateTime.of(2026, 6, 1, 9, 0));
-        Referral claimedNormal = ownedReferral(ReferralState.Claimed, judge,
-                                               Urgency.Normal, LocalDateTime.of(2026, 3, 1, 9, 0));
-        Referral claimedUrgentOlder = ownedReferral(ReferralState.Claimed, judge,
-                                                    Urgency.Urgent, LocalDateTime.of(2026, 2, 1, 9, 0));
-        Referral tiedA = ownedReferral(ReferralState.Claimed, judge,
-                                       Urgency.Urgent, LocalDateTime.of(2026, 2, 1, 9, 0));
+    /**
+     * Every combination of the three things the Master's page orders by: undirected or directed, urgent or not,
+     * older or newer -- plus a tie that differs only by id. Built so that no single key, and no plain {@code Sort},
+     * produces the expected sequence: urgency counts among the undirected and is ignored among the directed.
+     */
+    private List<UUID> everyCombination(String judge) {
+        LocalDateTime older = LocalDateTime.of(2026, 2, 1, 9, 0);
+        LocalDateTime newer = LocalDateTime.of(2026, 3, 1, 9, 0);
+        final Referral claimedNormalNewer = ownedReferral(ReferralState.Claimed, judge, Urgency.Normal, newer);
+        Referral decidedUrgentNewer = ownedReferral(ReferralState.Decided, judge, Urgency.Urgent, newer);
+        Referral claimedUrgentNewer = ownedReferral(ReferralState.Claimed, judge, Urgency.Urgent, newer);
+        Referral decidedNormalOlder = ownedReferral(ReferralState.Decided, judge, Urgency.Normal, older);
+        final Referral claimedNormalOlder = ownedReferral(ReferralState.Claimed, judge, Urgency.Normal, older);
+        Referral decidedUrgentOlder = ownedReferral(ReferralState.Decided, judge, Urgency.Urgent, older);
+        Referral claimedUrgentOlder = ownedReferral(ReferralState.Claimed, judge, Urgency.Urgent, older);
+        Referral decidedNormalNewer = ownedReferral(ReferralState.Decided, judge, Urgency.Normal, newer);
+        Referral claimedUrgentOlderTie = ownedReferral(ReferralState.Claimed, judge, Urgency.Urgent, older);
+        Referral decidedNormalOlderTie = ownedReferral(ReferralState.Decided, judge, Urgency.Normal, older);
         entityManager.flush();
         entityManager.clear();
 
-        List<Referral> mine = personalList(judge, 0, 10).getContent();
+        // Ties are compared in the order Postgres compares uuid in, which is what makes paging stable.
+        List<UUID> claimedUrgentOlders = Stream.of(claimedUrgentOlder.getId(), claimedUrgentOlderTie.getId())
+            .sorted(AS_POSTGRES_ORDERS_THEM).toList();
+        // Among the directed, urgency is ignored: the three older ones are one day, ordered by id alone.
+        List<UUID> decidedOlders = Stream.of(decidedNormalOlder.getId(), decidedUrgentOlder.getId(),
+                                             decidedNormalOlderTie.getId())
+            .sorted(AS_POSTGRES_ORDERS_THEM).toList();
+        List<UUID> decidedNewers = Stream.of(decidedUrgentNewer.getId(), decidedNormalNewer.getId())
+            .sorted(AS_POSTGRES_ORDERS_THEM).toList();
+        List<UUID> expected = new ArrayList<>(claimedUrgentOlders);
+        expected.add(claimedUrgentNewer.getId());
+        expected.add(claimedNormalOlder.getId());
+        expected.add(claimedNormalNewer.getId());
+        expected.addAll(decidedOlders);
+        expected.addAll(decidedNewers);
+        return expected;
+    }
 
-        // Claimed above Decided is the "ReferralState" type being declared in lifecycle order in V6 and Postgres
-        // ordering an enum by its declaration -- the same fact POOL_ORDER leans on for urgency, and only a real
-        // database can state it. The id is last, and the two tied rows are compared in the order Postgres compares
-        // uuid in, which is what makes paging through this list stable rather than nearly stable.
-        List<UUID> tied = Stream.of(claimedUrgentOlder.getId(), tiedA.getId())
-            .sorted(AS_POSTGRES_ORDERS_THEM)
-            .toList();
-        assertThat(mine).extracting(Referral::getId).containsExactly(
-            tied.get(0),
-            tied.get(1),
-            claimedNormal.getId(),
-            decidedUrgent.getId(),
-            decidedNormal.getId());
+    @Test
+    @DisplayName("orders the Master's page: undirected first, urgent first among them, then by day; directed by day")
+    void ordersAJudgesWorkForTheMastersPage() {
+        String judge = "District Judge Bell";
+        List<UUID> expected = everyCombination(judge);
+
+        assertThat(personalList(judge, 0, 20).getContent()).extracting(Referral::getId)
+            .containsExactlyElementsOf(expected);
+    }
+
+    @Test
+    @DisplayName("pages that order stably: the pages laid end to end are the whole list, each row once")
+    void pagesTheMastersOrderStably() {
+        String judge = "District Judge Bell";
+        List<UUID> expected = everyCombination(judge);
+
+        List<UUID> paged = new ArrayList<>();
+        for (int page = 0; page < 4; page++) {
+            Page<Referral> slice = personalList(judge, page, 3);
+            assertThat(slice.getTotalElements()).isEqualTo(expected.size());
+            slice.getContent().forEach(referral -> paged.add(referral.getId()));
+        }
+        assertThat(paged).containsExactlyElementsOf(expected);
+    }
+
+    @Test
+    @DisplayName("linking gives a Master the referrals assigned while unlinked, and never moves another's")
+    void attachesAssignmentsToALinkedMaster() {
+        UUID master = persistedMaster();
+        final UUID otherMaster = persistedMaster();
+        Referral assigned = persistedReferral(persistedCase(), ReferralState.Claimed, NOW);
+        assigned.setAssignedMasterId(master);
+        assigned.setClaimedBy("Master Sullivan");
+        assigned.setClaimedAt(NOW);
+        assigned.setAssignedAt(NOW);
+        Referral ownedByAnother = persistedReferral(persistedCase(), ReferralState.Claimed, NOW);
+        ownedByAnother.setAssignedMasterId(master);
+        ownedByAnother.setClaimedById("idam-someone-else");
+        ownedByAnother.setClaimedAt(NOW);
+        ownedByAnother.setAssignedAt(NOW);
+        Referral anotherMasters = persistedReferral(persistedCase(), ReferralState.Claimed, NOW);
+        anotherMasters.setAssignedMasterId(otherMaster);
+        anotherMasters.setClaimedAt(NOW);
+        anotherMasters.setAssignedAt(NOW);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(referrals.attachToLinkedMaster(master, "idam-master-sullivan")).isEqualTo(1);
+
+        assertThat(entityManager.find(Referral.class, assigned.getId()).getClaimedById())
+            .isEqualTo("idam-master-sullivan");
+        assertThat(entityManager.find(Referral.class, ownedByAnother.getId()).getClaimedById())
+            .isEqualTo("idam-someone-else");
+        assertThat(entityManager.find(Referral.class, anotherMasters.getId()).getClaimedById()).isNull();
+        // Run again, it finds nothing: the owner is written once.
+        assertThat(referrals.attachToLinkedMaster(master, "idam-master-sullivan")).isZero();
+    }
+
+    @Test
+    @DisplayName("unlinking a Master takes the old account off its Claimed referrals, and linking gives them back")
+    void detachesAnUnlinkedMastersReferrals() {
+        UUID master = persistedMaster();
+        Referral assigned = persistedReferral(persistedCase(), ReferralState.Claimed, NOW);
+        assigned.setAssignedMasterId(master);
+        assigned.setClaimedBy("Master Sullivan");
+        assigned.setClaimedById("idam-old-account");
+        assigned.setClaimedAt(NOW);
+        assigned.setAssignedAt(NOW);
+        Referral decided = ownedReferral(ReferralState.Decided, "Master Sullivan", Urgency.Normal, NOW);
+        decided.setAssignedMasterId(master);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(referrals.lockAssignedTo(master)).containsExactly(assigned.getId());
+        assertThat(referrals.lockForLinking(master, "idam-new-account"))
+            .containsExactlyInAnyOrder(assigned.getId(), decided.getId());
+        assertThat(referrals.detachFromUnlinkedMaster(master)).isEqualTo(1);
+        assertThat(entityManager.find(Referral.class, assigned.getId()).getClaimedById()).isNull();
+        // A direction already given stays with the judge who gave it.
+        assertThat(entityManager.find(Referral.class, decided.getId()).getClaimedById())
+            .isEqualTo(subjectOf("Master Sullivan"));
+
+        assertThat(referrals.attachToLinkedMaster(master, "idam-new-account")).isEqualTo(1);
+        assertThat(entityManager.find(Referral.class, assigned.getId()).getClaimedById())
+            .isEqualTo("idam-new-account");
+    }
+
+    @Test
+    @DisplayName("linking attaches a claimer's pre-V43 claims to their entry (D-10), and only Claimed ones")
+    void attachesLegacyClaimsToTheEntry() {
+        UUID master = persistedMaster();
+        final Referral legacy = claimedReferral(persistedCase(), "Master Sullivan", NOW);
+        final Referral decided = ownedReferral(ReferralState.Decided, "Master Sullivan", Urgency.Normal, NOW);
+        final Referral anotherClaimers = claimedReferral(persistedCase(), "District Judge Okafor", NOW);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(referrals.attachLegacyClaims(master, subjectOf("Master Sullivan"))).isEqualTo(1);
+
+        Referral attached = entityManager.find(Referral.class, legacy.getId());
+        assertThat(attached.getAssignedMasterId()).isEqualTo(master);
+        // No window, so it counts towards no cap; its processing window still runs from claimedAt.
+        assertThat(attached.getWindowDate()).isNull();
+        assertThat(attached.getAssignedAt()).isNull();
+        assertThat(entityManager.find(Referral.class, decided.getId()).getAssignedMasterId()).isNull();
+        assertThat(entityManager.find(Referral.class, anotherClaimers.getId()).getAssignedMasterId()).isNull();
     }
 
     @Test

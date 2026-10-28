@@ -82,7 +82,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
      * added afterwards, the saved-query routes after those, the referral routes after those, the closure the
      * referral state machine added, the three email routes the Notify send path added, and the referral's
-     * confirmation sub-resource that records the applicant's answer to the email ④ sends. Listed rather than
+     * confirmation sub-resource that records the applicant's answer to the email ④ sends, and plan D2's assignment
+     * sub-resource, through which a caseworker assigns a referral to a Master. Listed rather than
      * counted, because a count agrees with a spec that documents the right number of the wrong things.
      */
     private static final List<String> CASEWORKER_PATHS = List.of(
@@ -104,6 +105,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/cases/{id}/referrals/{referralId}/withdrawal",
         "/caseworker/cases/{id}/referrals/{referralId}/closure",
         "/caseworker/cases/{id}/referrals/{referralId}/confirmation",
+        "/caseworker/cases/{id}/referrals/{referralId}/assignment",
         "/caseworker/cases/{id}/emails",
         "/caseworker/cases/{id}/emails/{template}",
         "/caseworker/cases/{id}/emails/{template}/preview"
@@ -269,17 +271,100 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                 .contains("caseworker-deedpoll-delivery-manager", "MANAGE_PROCESS_CONFIG");
             assertThat(path.at("/" + method + "/responses/403").isMissingNode()).as(method).isFalse();
         }
-        assertThat(path.at("/put/description").asText()).contains("409", "next judicial pool");
+        assertThat(path.at("/put/description").asText())
+            .contains("409", "processing window", "optional for one release");
         assertThat(spec.at("/components/schemas/ProcessSettingsResponse/properties").fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "revision", "updatedAt", "updatedBy");
+            .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "reminderIntervalHours", "masterWindowCap",
+                "morningWindowStart", "morningWindowEnd", "afternoonWindowStart", "afternoonWindowEnd", "revision",
+                "updatedAt", "updatedBy");
         JsonNode body = spec.at("/components/schemas/UpdateProcessSettingsRequest");
+        assertThat(body.get("required")).extracting(JsonNode::asText)
+            .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "revision");
         assertThat(body.get("required").toString()).contains("referralClaimExpiryMinutes", "revision");
         assertThat(body.get("additionalProperties").asBoolean()).isFalse();
         JsonNode minutes = body.at("/properties/referralClaimExpiryMinutes");
-        assertThat(minutes.get("minimum").asInt()).isEqualTo(30);
-        assertThat(minutes.get("maximum").asInt()).isEqualTo(1440);
+        assertThat(minutes.get("minimum").asInt()).isEqualTo(1440);
+        assertThat(minutes.get("maximum").asInt()).isEqualTo(43200);
         assertThat(minutes.get("format").asText()).isEqualTo("int32");
+        assertThat(body.at("/properties/reminderIntervalHours/minimum").asInt()).isEqualTo(1);
+        assertThat(body.at("/properties/reminderIntervalHours/maximum").asInt()).isEqualTo(168);
+        assertThat(body.at("/properties/masterWindowCap/minimum").asInt()).isEqualTo(1);
+        assertThat(body.at("/properties/masterWindowCap/maximum").asInt()).isEqualTo(100);
+        for (String time : List.of("morningWindowStart", "morningWindowEnd", "afternoonWindowStart",
+                                   "afternoonWindowEnd")) {
+            assertThat(body.at("/properties/" + time + "/pattern").asText()).as(time)
+                .isEqualTo("^([01][0-9]|2[0-3]):(00|15|30|45)$");
+        }
         assertThat(body.at("/properties/revision/minimum").asInt()).isZero();
+    }
+
+    @Test
+    void documentsTheMastersListItsBoundsAndNoSubject() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+        JsonNode list = spec.get("paths").get("/caseworker/masters");
+        assertThat(list.fieldNames()).toIterable().containsExactlyInAnyOrder("get", "post");
+        assertThat(list.at("/get/operationId").asText()).isEqualTo("listMasters");
+        assertThat(list.at("/post/operationId").asText()).isEqualTo("createMaster");
+        assertThat(list.at("/post/responses/201").isMissingNode()).isFalse();
+        JsonNode one = spec.get("paths").get("/caseworker/masters/{id}");
+        assertThat(one.fieldNames()).toIterable().containsExactly("patch");
+        assertThat(one.at("/patch/operationId").asText()).isEqualTo("updateMaster");
+        assertThat(one.at("/patch/description").asText()).contains("409", "unlinks");
+        for (JsonNode operation : List.of(list.get("get"), list.get("post"), one.get("patch"))) {
+            assertThat(operation.at("/responses/403").isMissingNode()).isFalse();
+        }
+        for (String write : List.of("/post/description", "/patch/description")) {
+            assertThat((write.startsWith("/post") ? list : one).at(write).asText())
+                .contains("caseworker-deedpoll-delivery-manager", "MANAGE_PROCESS_CONFIG");
+        }
+        assertThat(spec.at("/components/schemas/MasterResponse/properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("id", "name", "email", "available", "linked", "revision");
+        JsonNode create = spec.at("/components/schemas/CreateMasterRequest");
+        assertThat(create.get("required")).extracting(JsonNode::asText).containsExactlyInAnyOrder("name", "email");
+        assertThat(create.get("additionalProperties").asBoolean()).isFalse();
+        assertThat(create.at("/properties/name/maxLength").asInt()).isEqualTo(200);
+        assertThat(create.at("/properties/name/minLength").asInt()).isOne();
+        assertThat(create.at("/properties/email/maxLength").asInt()).isEqualTo(320);
+        assertThat(create.at("/properties/available/type").asText()).isEqualTo("boolean");
+        JsonNode update = spec.at("/components/schemas/UpdateMasterRequest");
+        assertThat(update.get("required")).extracting(JsonNode::asText).containsExactly("revision");
+        assertThat(update.at("/properties/revision/minimum").asInt()).isZero();
+        assertThat(update.get("additionalProperties").asBoolean()).isFalse();
+        assertThat(update.get("minProperties").asInt()).isEqualTo(2);
+        assertThat(create.get("properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("name", "email", "available");
+        assertThat(update.get("properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("name", "email", "available", "revision");
+    }
+
+    @Test
+    void documentsTheBankHolidaysAndTheirBody() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+        JsonNode list = spec.get("paths").get("/caseworker/process-settings/bank-holidays");
+        assertThat(list.fieldNames()).toIterable().containsExactlyInAnyOrder("get", "post");
+        assertThat(list.at("/get/operationId").asText()).isEqualTo("listBankHolidays");
+        assertThat(list.at("/post/operationId").asText()).isEqualTo("addBankHoliday");
+        assertThat(list.at("/post/responses/201").isMissingNode()).isFalse();
+        assertThat(list.at("/post/description").asText())
+            .contains("caseworker-deedpoll-delivery-manager", "MANAGE_PROCESS_CONFIG", "409");
+        JsonNode one = spec.get("paths").get("/caseworker/process-settings/bank-holidays/{date}");
+        assertThat(one.fieldNames()).toIterable().containsExactly("delete");
+        assertThat(one.at("/delete/operationId").asText()).isEqualTo("removeBankHoliday");
+        assertThat(one.at("/delete/responses/204").isMissingNode()).isFalse();
+        assertThat(one.at("/delete/description").asText()).contains("MANAGE_PROCESS_CONFIG", "404");
+        for (JsonNode operation : List.of(list.get("get"), list.get("post"), one.get("delete"))) {
+            assertThat(operation.at("/responses/403").isMissingNode()).isFalse();
+        }
+        assertThat(spec.at("/components/schemas/BankHolidayResponse/properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("date", "name");
+        JsonNode create = spec.at("/components/schemas/CreateBankHolidayRequest");
+        assertThat(create.get("required")).extracting(JsonNode::asText).containsExactlyInAnyOrder("date", "name");
+        assertThat(create.get("additionalProperties").asBoolean()).isFalse();
+        assertThat(create.at("/properties/date/format").asText()).isEqualTo("date");
+        assertThat(create.at("/properties/name/minLength").asInt()).isOne();
+        assertThat(create.at("/properties/name/maxLength").asInt()).isEqualTo(200);
     }
 
     @Test
@@ -495,9 +580,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      *
      * <p>Asserted on the descriptions rather than only on the paths because {@code deed-poll-admin} writes its
      * screens from this document, and two of the rules are not visible in a schema: a revision keeps the first
-     * signature, and <strong>a withdrawn direction is a live claim again</strong>, which the inactivity sweep can
-     * return to the pool (design decision 6). A judge who withdraws and walks away loses the referral, and the
-     * admin has to be able to say so.
+     * signature, and <strong>withdrawing restarts the processing window</strong>, at whose end the referral is
+     * returned to the office (design decision 6, as plan D2 changed it). A judge who withdraws and walks away loses
+     * the referral, and the admin has to be able to say so.
      */
     @DisplayName("Documents the Master's application view, its documents, and revising or withdrawing a direction")
     @Test
@@ -529,7 +614,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         JsonNode withdraw = spec.at(referral.replace("}", "}~1direction~1withdraw") + "/post");
         assertThat(withdraw.has("requestBody")).as("withdrawing takes no body").isFalse();
         assertThat(withdraw.at("/description").asText())
-            .contains("Claimed", "directionChangedAt", "inactivity sweep", "pool");
+            .contains("Claimed", "directionChangedAt", "restarts the processing window", "returned to the office");
 
         assertThat(spec.at("/components/schemas/JudicialDirectionRequest/description").asText())
             .contains("PUT");
@@ -623,6 +708,10 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.add(GAZETTE_HISTORY_PATH);
         known.add("/caseworker/gazette-settings");
         known.add("/caseworker/process-settings");
+        known.add("/caseworker/masters");
+        known.add("/caseworker/masters/{id}");
+        known.add("/caseworker/process-settings/bank-holidays");
+        known.add("/caseworker/process-settings/bank-holidays/{date}");
         known.add("/caseworker/gazette-notice-previews");
         known.add("/caseworker/gazette-notice-requests");
         known.add("/caseworker/gazette-notices/{batchId}");
@@ -767,11 +856,13 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                .as("%s is optional, as it is on the pool", name)
                                .isFalse());
 
-        // The row type, unchanged and shared with the pool -- the referral speaking about itself, and no
-        // ownership, case or application field however this document might have acquired one.
+        // The row type, shared with the former pool -- the referral speaking about itself, plus plan D2's
+        // processing window, and no ownership, case or application field however this document might have acquired
+        // one.
         JsonNode row = spec.at("/components/schemas/JudicialReferralSummary/properties");
         assertThat(row.fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("id", "state", "reasons", "notes", "urgency", "urgencyReason", "createdOn");
+            .containsExactlyInAnyOrder("id", "state", "reasons", "notes", "urgency", "urgencyReason", "createdOn",
+                                       "assignedAt", "directionDueBy");
         assertThat(spec.at("/paths/~1judicial~1referrals/get/responses/200/content/*~1*/schema/$ref").asText())
             .as("the pool still answers with its own envelope")
             .isEqualTo("#/components/schemas/JudicialPoolResponse");
@@ -810,7 +901,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Thirty-four operations across twenty-one paths: `/caseworker/cases`, the notes and witnesses collections,
+        // Thirty-five operations across twenty-two paths (plan D2 added the referral's assignment PUT):
+        // `/caseworker/cases`, the notes and witnesses collections,
         // the saved-query collection and the referrals collection each carry a GET and a POST, the case carries a
         // GET and a PATCH, the note, the witness and the saved query each carry a GET, a PATCH and a DELETE, a
         // saved query's selection carries a PUT and a DELETE, one referral carries a GET, and its withdrawal, its
@@ -831,7 +923,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(34);
+        assertThat(operations).isEqualTo(35);
 
         JsonNode emailResponse = spec.at("/components/schemas/CaseEmailsResponse/properties");
         assertThat(emailResponse.fieldNames()).toIterable()
@@ -905,7 +997,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         // sub-resource did move -- that route is not an email route, and the assertions below are what say the two
         // email paths still carry one operation each.
         JsonNode paths = spec.get("paths");
-        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(34);
+        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(35);
         assertThat(paths.get("/caseworker/cases/{id}/emails/{template}").fieldNames()).toIterable()
             .containsExactly("post");
         assertThat(paths.get("/caseworker/cases/{id}/emails").fieldNames()).toIterable().containsExactly("get");
@@ -983,7 +1075,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
         // And the surface is unmoved: a header is part of an operation rather than one of its own.
         JsonNode paths = spec.get("paths");
-        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(34);
+        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(35);
         assertThat(paths.get("/caseworker/cases/{id}/emails/{template}").fieldNames()).toIterable()
             .containsExactly("post");
     }

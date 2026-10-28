@@ -1,5 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.api.judicial.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,9 +59,9 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -239,7 +241,8 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             // why every new route gets one of these.
             mockMvc.perform(get(POOL + "/" + referralId)).andExpect(status().isUnauthorized());
 
-            assertThat(stored(referralId).getLastTouchedAt()).isEqualTo(touched);
+            assertThat(stored(referralId).getClaimedAt()).isEqualTo(touched);
+            assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Claimed);
         }
     }
 
@@ -285,107 +288,42 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
     }
 
+    /**
+     * The former shared pool: always an empty page since plan D2, deprecated, and kept for one release because
+     * today's admin calls it.
+     */
     @Nested
     @DisplayName("GET /judicial/referrals")
     class Pool {
 
         @Test
-        @DisplayName("returns the Open referrals as judicial summaries, with the pool's total")
-        void returnsThePoolWithItsTotal() throws Exception {
-            String waiting = raise(newCase(), Urgency.Normal);
-
-            authorised(get(POOL))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.referrals.length()").value(1))
-                .andExpect(jsonPath("$.referrals[0].id").value(waiting))
-                .andExpect(jsonPath("$.referrals[0].state").value(ReferralState.Open.name()))
-                .andExpect(jsonPath("$.referrals[0].reasons[0]").value(ReferralReason.Minor.name()))
-                .andExpect(jsonPath("$.referrals[0].urgency").value(Urgency.Normal.name()))
-                .andExpect(jsonPath("$.referrals[0].createdOn").exists())
-                // The total is what makes ten a page size rather than a cap, so it is published even when the
-                // whole pool fits on one page.
-                .andExpect(jsonPath("$.total").value(1))
-                .andExpect(jsonPath("$.page").value(1))
-                .andExpect(jsonPath("$.size").value(JudicialReferralService.POOL_PAGE_SIZE))
-                .andExpect(jsonPath("$.totalPages").value(1));
-        }
-
-        @Test
-        @DisplayName("publishes no case data on a pool row, not even the reference")
-        void publishesNoCaseDataOnARow() throws Exception {
-            raise(named(newCase(), "Robin"), Urgency.Normal);
-
-            // A queue of referrals, not a list of applications: reaching the application is the detail read, which
-            // runs the visibility check. A pool row carrying names would be a case list a judge was never asked to
-            // see -- and this is the assertion that would catch CaseSummaryResponse being reused here.
-            authorised(get(POOL))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.referrals[0].newForename").doesNotExist())
-                .andExpect(jsonPath("$.referrals[0].displayReference").doesNotExist())
-                .andExpect(jsonPath("$.referrals[0].application").doesNotExist())
-                .andExpect(jsonPath("$.referrals[0].deedPoll").doesNotExist())
-                .andExpect(jsonPath("$.referrals[0].deedPollId").doesNotExist())
-                // Nor the referral's own audit trail, which decision 8 excludes.
-                .andExpect(jsonPath("$.referrals[0].createdBy").doesNotExist())
-                .andExpect(jsonPath("$.referrals[0].modifiedBy").doesNotExist())
-                .andExpect(jsonPath("$.referrals[0].lastTouchedAt").doesNotExist());
-        }
-
-        @Test
-        @DisplayName("orders the pool urgent first, then longest-waiting within each band")
-        void ordersThePool() throws Exception {
-            String urgentNewer = raise(newCase(), Urgency.Urgent);
-            String urgentOlder = raise(newCase(), Urgency.Urgent);
-            String normalOldest = raise(newCase(), Urgency.Normal);
-            // Backdated rather than trusting three inserts to land in different microseconds.
-            backdate(urgentNewer, LocalDateTime.of(2026, 8, 3, 9, 0));
-            backdate(urgentOlder, LocalDateTime.of(2026, 8, 2, 9, 0));
-            backdate(normalOldest, LocalDateTime.of(2026, 8, 1, 9, 0));
-
-            // The normal referral is the oldest of the three and still comes last: urgency is the first key, and
-            // oldest-first applies within a band rather than across the pool.
-            authorised(get(POOL))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.referrals[0].id").value(urgentOlder))
-                .andExpect(jsonPath("$.referrals[1].id").value(urgentNewer))
-                .andExpect(jsonPath("$.referrals[2].id").value(normalOldest));
-        }
-
-        @Test
-        @DisplayName("offers nothing a judge holds, a caseworker withdrew or the office finished")
-        void offersOnlyOpenReferrals() throws Exception {
-            String waiting = raise(newCase(), Urgency.Normal);
+        @DisplayName("is an empty page with a total of 0, whatever is waiting, held, withdrawn or finished")
+        void isAlwaysEmpty() throws Exception {
+            raise(newCase(), Urgency.Urgent);
             claimedBy(JUDGE_NAME);
+            directedBy(JUDGE_NAME);
             withdrawn();
 
             authorised(get(POOL))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.referrals.length()").value(1))
-                .andExpect(jsonPath("$.referrals[0].id").value(waiting))
-                .andExpect(jsonPath("$.total").value(1));
+                .andExpect(jsonPath("$.referrals.length()").value(0))
+                .andExpect(jsonPath("$.total").value(0))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.size").value(JudicialReferralService.POOL_PAGE_SIZE))
+                .andExpect(jsonPath("$.totalPages").value(0));
         }
 
         @Test
-        @DisplayName("pages, and says how much is waiting on every page")
-        void pagesThePool() throws Exception {
-            for (int referral = 0; referral < 3; referral++) {
-                backdate(raise(newCase(), Urgency.Normal), LocalDateTime.of(2026, 8, 1 + referral, 9, 0));
-            }
+        @DisplayName("is empty on any page, echoing the page asked for")
+        void isEmptyOnAnyPage() throws Exception {
+            raise(newCase(), Urgency.Normal);
 
             authorised(get(POOL + "?page=2&size=2"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.referrals.length()").value(1))
+                .andExpect(jsonPath("$.referrals.length()").value(0))
                 .andExpect(jsonPath("$.page").value(2))
                 .andExpect(jsonPath("$.size").value(2))
-                .andExpect(jsonPath("$.total").value(3))
-                .andExpect(jsonPath("$.totalPages").value(2));
-
-            // A page past the end of a pool that has been worked down is an empty page and not a 404: the total is
-            // what tells a judge where to look instead.
-            authorised(get(POOL + "?page=9&size=2"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.referrals.length()").value(0))
-                .andExpect(jsonPath("$.total").value(3));
+                .andExpect(jsonPath("$.total").value(0));
         }
 
         @Test
@@ -397,22 +335,18 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("releases a lapsed claim and offers it in the same response that noticed")
-        void releasesALapsedClaimInTheSameRequest() throws Exception {
+        @DisplayName("still sweeps, so a lapsed claim goes back to the office in the request that noticed")
+        void stillSweeps() throws Exception {
             String lapsed = claimedBy(OTHER_JUDGE_NAME);
             lapse(lapsed);
 
-            // Decision 22, end to end: the pool is the most-polled judicial page, so the sweep hangs off it, and
-            // the referral is back in the pool in the request that observed the lapse rather than the next one.
             authorised(get(POOL))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.referrals.length()").value(1))
-                .andExpect(jsonPath("$.referrals[0].id").value(lapsed));
+                .andExpect(jsonPath("$.referrals.length()").value(0));
 
             Referral released = stored(lapsed);
             assertThat(released.getState()).isEqualTo(ReferralState.Open);
             assertThat(released.getClaimedBy()).isNull();
-            // And the timeline says why, because a lapse erases the fact it is about.
             assertThat(notes.findAll())
                 .anySatisfy(note -> assertThat(note.getNote()).contains(OTHER_JUDGE_NAME));
         }
@@ -556,10 +490,11 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("orders claimed before decided, urgent before normal, then oldest first")
+        @DisplayName("orders undirected first, urgent first among them, then oldest; directed by age alone")
         void ordersTheList() throws Exception {
-            // Backdated rather than trusting five inserts to land in different microseconds, and the ages run
-            // deliberately the wrong way round: the oldest referral of the five is a decided one, and it comes last.
+            // The Master's page (Steve, 2026-10-28). Backdated rather than trusting five inserts to land in different
+            // microseconds, and the ages run deliberately the wrong way round: the oldest referral of the five is a
+            // directed one, and it comes after every undirected one. Among the directed, urgency is ignored.
             String claimedUrgent = claimedBy(JUDGE_NAME, Urgency.Urgent);
             backdate(claimedUrgent, LocalDateTime.of(2026, 8, 5, 9, 0));
             String claimedNormalOlder = claimedBy(JUDGE_NAME, Urgency.Normal);
@@ -576,8 +511,28 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.referrals[0].id").value(claimedUrgent))
                 .andExpect(jsonPath("$.referrals[1].id").value(claimedNormalOlder))
                 .andExpect(jsonPath("$.referrals[2].id").value(claimedNormalNewer))
-                .andExpect(jsonPath("$.referrals[3].id").value(decidedUrgent))
-                .andExpect(jsonPath("$.referrals[4].id").value(decidedNormal));
+                .andExpect(jsonPath("$.referrals[3].id").value(decidedNormal))
+                .andExpect(jsonPath("$.referrals[4].id").value(decidedUrgent));
+        }
+
+        @Test
+        @DisplayName("carries assignedAt and directionDueBy, the due date only while a direction is awaited")
+        void carriesTheProcessingWindow() throws Exception {
+            String held = claimedBy(JUDGE_NAME);
+            String directed = directedBy(JUDGE_NAME);
+            Referral stored = stored(held);
+            stored.setAssignedAt(stored.getClaimedAt().minusDays(1));
+            referrals.saveAndFlush(stored);
+
+            authorised(get(MINE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.referrals[0].id").value(held))
+                .andExpect(jsonPath("$.referrals[0].assignedAt").exists())
+                // Seven days, the seeded processing window, from assignedAt.
+                .andExpect(jsonPath("$.referrals[0].directionDueBy",
+                    startsWith(stored.getAssignedAt().plusDays(7).toLocalDate().toString())))
+                .andExpect(jsonPath("$.referrals[1].id").value(directed))
+                .andExpect(jsonPath("$.referrals[1].directionDueBy").isEmpty());
         }
 
         @Test
@@ -644,21 +599,22 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             String caseId = newCase();
             String referralId = raise(caseId, Urgency.Normal);
 
-            // Raised and unclaimed: the pool's, not this judge's.
+            // Raised without a Master: waiting for the office, so on nobody's list and claimable by nobody.
             authorised(get(MINE))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.referrals.length()").value(0));
+            authorised(post(POOL + "/" + referralId + "/claim")).andExpect(status().isNotFound());
 
-            // Claimed over HTTP, which is the failure business testing reported: the claim took it out of the pool,
-            // and this is the list it arrives on.
-            authorised(post(POOL + "/" + referralId + "/claim")).andExpect(status().isOk());
+            // Held by this judge -- the transition stands in for an assignment to their linked entry -- and this is
+            // the list it arrives on.
+            referralService.claim(caseId, referralId, judicial(JUDGE_NAME));
             authorised(get(MINE))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.referrals.length()").value(1))
                 .andExpect(jsonPath("$.referrals[0].id").value(referralId))
                 .andExpect(jsonPath("$.referrals[0].state").value(ReferralState.Claimed.name()));
 
-            // Reading the papers refreshes the claim and must not duplicate or reorder the row.
+            // Reading the papers must not duplicate or reorder the row.
             authorised(get(POOL + "/" + referralId)).andExpect(status().isOk());
             authorised(get(MINE))
                 .andExpect(status().isOk())
@@ -717,11 +673,9 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             Referral released = stored(lapsed);
             assertThat(released.getState()).isEqualTo(ReferralState.Open);
             assertThat(released.getClaimedById()).isNull();
-            // Back in the shared pool in the same request, and the lapse is on the timeline, because releasing a
-            // claim erases the fact it was about.
-            authorised(get(POOL))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.referrals[*].id", hasItem(lapsed)));
+            // Back with the office in the same request, so no judge reaches it, and the lapse is on the timeline,
+            // because releasing a claim erases the fact it was about.
+            authorised(get(POOL + "/" + lapsed)).andExpect(status().isNotFound());
             assertThat(notes.findAll())
                 .anySatisfy(note -> assertThat(note.getNote()).contains(JUDGE_NAME));
         }
@@ -772,12 +726,13 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         @DisplayName("returns the referral and the application view, with no case notes")
         void returnsTheReferralAndItsApplication() throws Exception {
             String caseId = named(newCase(), "Robin");
-            String referralId = raise(caseId, Urgency.Urgent);
+            String referralId = mine(caseId, raise(caseId, Urgency.Urgent));
 
             authorised(get(POOL + "/" + referralId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(referralId))
-                .andExpect(jsonPath("$.state").value(ReferralState.Open.name()))
+                .andExpect(jsonPath("$.state").value(ReferralState.Claimed.name()))
+                .andExpect(jsonPath("$.directionDueBy").exists())
                 .andExpect(jsonPath("$.reasons[0]").value(ReferralReason.Minor.name()))
                 .andExpect(jsonPath("$.notes").value("Applicant is 14"))
                 .andExpect(jsonPath("$.urgency").value(Urgency.Urgent.name()))
@@ -805,10 +760,10 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
 
             // Null rather than absent: the key is published and the value withheld, at the JSON a Master's
             // browser is sent, not only in the record that builds it.
-            authorised(get(POOL + "/" + raise(adult, Urgency.Normal)))
+            authorised(get(POOL + "/" + mine(adult, raise(adult, Urgency.Normal))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.application.parents").value(nullValue()));
-            authorised(get(POOL + "/" + raise(minor, Urgency.Normal)))
+            authorised(get(POOL + "/" + mine(minor, raise(minor, Urgency.Normal))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.application.parents").value("Jane and Paul Smith"));
         }
@@ -822,7 +777,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             witnessed(caseId);
             String attached = documented(caseId, "Birth certificate, scanned", "stored-blob");
             documented(caseId, "Not arrived yet", null);
-            String referralId = raise(caseId, Urgency.Normal);
+            String referralId = mine(caseId, raise(caseId, Urgency.Normal));
 
             authorised(get(POOL + "/" + referralId))
                 .andExpect(status().isOk())
@@ -846,7 +801,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         void publishesNoneOfTheExcludedFields() throws Exception {
             String caseId = named(newCase(), "Robin");
             administrative(caseId);
-            String referralId = raise(caseId, Urgency.Normal);
+            String referralId = mine(caseId, raise(caseId, Urgency.Normal));
 
             String body = authorised(get(POOL + "/" + referralId))
                 .andExpect(status().isOk())
@@ -1010,15 +965,16 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("touches nothing when the referral is one in the pool")
-        void touchesNothingOnAPoolReferral() throws Exception {
+        @DisplayName("404s a referral waiting for assignment, in an unknown id's words, and touches nothing")
+        void notFoundForAReferralWaitingForAssignment() throws Exception {
             String waiting = raise(newCase(), Urgency.Normal);
             LocalDateTime modified = stored(waiting).getModifiedOn();
 
-            authorised(get(POOL + "/" + waiting)).andExpect(status().isOk());
+            // Plan D2: no judge sees an Open referral, so it is the unknown id's 404, and nothing is stamped.
+            authorised(get(POOL + "/" + waiting))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + waiting + " not found"));
 
-            // A pool referral is visible to every judge, so a read that stamped it would let any of them move a
-            // row they have not claimed, and make looking indistinguishable from working.
             Referral unchanged = stored(waiting);
             assertThat(unchanged.getLastTouchedAt()).isNull();
             assertThat(unchanged.getModifiedOn()).isEqualTo(modified);
@@ -1044,48 +1000,19 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     class ClaimReferral {
 
         @Test
-        @DisplayName("takes a pool referral, records the claim under this judge, and answers with the papers")
-        void claimsAPoolReferral() throws Exception {
+        @DisplayName("404s a referral waiting for assignment, which no judge may see or take (deprecated, plan D2)")
+        void notFoundForAReferralWaitingForAssignment() throws Exception {
             String caseId = named(newCase(), "Robin");
             String referralId = raise(caseId, Urgency.Normal);
 
             authorised(post(POOL + "/" + referralId + "/claim"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(referralId))
-                .andExpect(jsonPath("$.state").value(ReferralState.Claimed.name()))
-                .andExpect(jsonPath("$.claimedBy").value(JUDGE_NAME))
-                .andExpect(jsonPath("$.claimedAt").exists())
-                // The same document the read gives, because the screen after a claim is the papers -- so a client
-                // renders them without a second call.
-                .andExpect(jsonPath("$.application.newSurname").value("Smyth"))
-                // The claim still writes its case note, but the Master's answer carries no timeline.
-                .andExpect(jsonPath("$.caseNotes").doesNotExist());
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + referralId + " not found"));
 
-            Referral claimed = stored(referralId);
-            assertThat(claimed.getState()).isEqualTo(ReferralState.Claimed);
-            assertThat(claimed.getClaimedBy()).isEqualTo(JUDGE_NAME);
-            // Stamped at the claim as well, so a referral picked up and never touched again lapses two hours after
-            // it was picked up rather than never.
-            assertThat(claimed.getLastTouchedAt()).isNotNull();
-            // And the claim note is the judge's own, over a real token rather than a CurrentUser a test built:
-            // createdBy is where the name lives, which is why the prose does not repeat it.
-            assertThat(notes.findAll())
-                .filteredOn(note -> note.getNote().contains("claimed by a Master"))
-                .singleElement()
-                .satisfies(note -> assertThat(note.getCreatedBy()).isEqualTo(JUDGE_NAME));
-        }
-
-        @Test
-        @DisplayName("drops it off the shared pool, so no second judge is offered it")
-        void takesItOutOfThePool() throws Exception {
-            String referralId = raise(newCase(), Urgency.Normal);
-
-            authorised(post(POOL + "/" + referralId + "/claim")).andExpect(status().isOk());
-
-            authorised(get(POOL))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.referrals.length()").value(0))
-                .andExpect(jsonPath("$.total").value(0));
+            Referral untouched = stored(referralId);
+            assertThat(untouched.getState()).isEqualTo(ReferralState.Open);
+            assertThat(untouched.getClaimedBy()).isNull();
+            assertThat(notes.findAll()).noneSatisfy(note -> assertThat(note.getNote()).contains("claimed by a Master"));
         }
 
         @Test
@@ -1150,18 +1077,19 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("claims a referral whose previous claim has just lapsed, rather than answering 404")
-        void claimsAReferralWhoseClaimHasLapsed() throws Exception {
+        @DisplayName("404s a referral whose claim has just lapsed: the sweep returns it to the office, not this judge")
+        void notFoundForAReferralWhoseClaimHasLapsed() throws Exception {
             String lapsed = claimedBy(OTHER_JUDGE_NAME);
             lapse(lapsed);
 
-            // The sweep runs before the visibility check for exactly this: the row is still Claimed by the other
-            // judge, so a check-first order would refuse a referral the pool would have offered.
-            authorised(post(POOL + "/" + lapsed + "/claim"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.claimedBy").value(JUDGE_NAME));
+            authorised(post(POOL + "/" + lapsed + "/claim")).andExpect(status().isNotFound());
+            // The 404 rolls the claim's transaction back, sweep included; the next list load releases it.
+            assertThat(stored(lapsed).getState()).isEqualTo(ReferralState.Claimed);
+            authorised(get(MINE)).andExpect(status().isOk());
 
-            assertThat(stored(lapsed).getClaimedBy()).isEqualTo(JUDGE_NAME);
+            Referral released = stored(lapsed);
+            assertThat(released.getState()).isEqualTo(ReferralState.Open);
+            assertThat(released.getClaimedBy()).isNull();
             // And the lapse is on the timeline, because releasing a claim erases the fact it is about.
             assertThat(notes.findAll())
                 .anySatisfy(note -> assertThat(note.getNote()).contains(OTHER_JUDGE_NAME));
@@ -1317,15 +1245,14 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("409s a pool referral this judge has not claimed, and records nothing")
-        void conflictsOnAReferralItDoesNotHold() throws Exception {
+        @DisplayName("404s a referral waiting for assignment, and records nothing")
+        void notFoundForAReferralWaitingForAssignment() throws Exception {
             String waiting = raise(newCase(), Urgency.Normal);
 
-            // Visible to every judge and held by none: directing it would write a direction onto an unclaimed
-            // referral, so the transition's holder check answers instead.
+            // Plan D2: visible to no judge, so the unknown id's 404 before any holder check.
             authorised(post(POOL + "/" + waiting + "/direction").contentType(APPLICATION_JSON).content(APPROVAL))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error").value(containsString("not claimed by " + JUDGE_NAME)));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + waiting + " not found"));
 
             assertThat(stored(waiting).getDecision()).isNull();
             assertThat(stored(waiting).getState()).isEqualTo(ReferralState.Open);
@@ -1617,7 +1544,21 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("is a claim like any other to the inactivity sweep, which returns it to the pool once it lapses")
+        @DisplayName("restarts the processing window, so directionDueBy moves with the withdrawal")
+        void restartsTheProcessingWindow() throws Exception {
+            String referralId = directedBy(JUDGE_NAME);
+            LocalDateTime before = LocalDateTime.now().minusMinutes(1);
+
+            authorised(post(withdraw(referralId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.assignedAt").exists())
+                .andExpect(jsonPath("$.directionDueBy").exists());
+
+            assertThat(stored(referralId).getAssignedAt()).isAfter(before);
+        }
+
+        @Test
+        @DisplayName("is an assignment like any other to the sweep, which returns it to the office once it lapses")
         void lapsesLikeAnyOtherClaim() throws Exception {
             String lapsing = directedBy(JUDGE_NAME);
             String fresh = directedBy(JUDGE_NAME);
@@ -1625,7 +1566,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             authorised(post(withdraw(fresh))).andExpect(status().isOk());
             lapse(lapsing);
 
-            assertThat(referralService.reclaimStaleClaims()).isEqualTo(1);
+            assertThat(referralService.unassignOverdue()).isEqualTo(1);
 
             Referral released = stored(lapsing);
             assertThat(released.getState()).isEqualTo(ReferralState.Open);
@@ -1633,9 +1574,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             // The flag survives the sweep: it is a fact about the referral's history.
             assertThat(released.getDirectionChangedAt()).isNotNull();
             assertThat(stored(fresh).getState()).isEqualTo(ReferralState.Claimed);
-            authorised(get(POOL))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.referrals[?(@.id == '" + lapsing + "')]").exists());
+            authorised(get(POOL + "/" + lapsing)).andExpect(status().isNotFound());
         }
 
         @Test
@@ -1704,6 +1643,31 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             String mine = directedBy(JUDGE_NAME);
 
             mockMvc.perform(post(withdraw(mine))).andExpect(status().isUnauthorized());
+        }
+    }
+
+    @Test
+    @DisplayName("the document deprecates the pool and the claim, and publishes the processing window (plan D2)")
+    void openApi() throws Exception {
+        JsonNode document = new ObjectMapper().readTree(mockMvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        JsonNode paths = document.path("paths");
+        final JsonNode schemas = document.path("components").path("schemas");
+
+        JsonNode pool = paths.path(POOL).path("get");
+        assertThat(pool.path("deprecated").asBoolean()).isTrue();
+        assertThat(pool.path("description").asText()).contains("assigned to a Master by the office");
+        JsonNode claim = paths.path(POOL + "/{referralId}/claim").path("post");
+        assertThat(claim.path("deprecated").asBoolean()).isTrue();
+        assertThat(claim.path("description").asText()).contains("visible to no judge");
+        assertThat(paths.path(POOL + "/mine").path("get").path("deprecated").asBoolean()).isFalse();
+        assertThat(paths.path(POOL + "/{referralId}/direction/withdraw").path("post").path("description").asText())
+            .contains("restarts the processing window");
+        for (String schema : List.of("JudicialReferralDetail", "JudicialReferralSummary")) {
+            assertThat(schemas.path(schema).path("properties").fieldNames()).toIterable()
+                .as(schema)
+                .contains("assignedAt", "directionDueBy")
+                .doesNotContain("claimedById", "decidedById", "assignedMasterId", "windowDate", "windowSlot");
         }
     }
 
@@ -1817,6 +1781,15 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         return raised.getId().toString();
     }
 
+    /**
+     * The referral, held by this test's judge: the api-2 transition stands in for an assignment to their linked
+     * Masters-list entry, which leaves the same row, so the reads under test have something visible.
+     */
+    private String mine(String caseId, String referralId) {
+        referralService.claim(caseId, referralId, judicial(JUDGE_NAME));
+        return referralId;
+    }
+
     /** A referral on a case of its own, claimed by the named judge through the api-2 transition. */
     private String claimedBy(String judge) {
         return claimedBy(judge, Urgency.Normal);
@@ -1899,13 +1872,22 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * Backdates a claim nine hours, past the seeded two-hour window, so the next sweep takes it back.
+     * Backdates an assignment eight days, past the seeded seven-day processing window, so the next sweep returns it
+     * to the office: {@code claimedAt}, and {@code assignedAt} where there is one, which the window runs from first.
      *
-     * <p>Off the row's own {@code claimedAt} rather than off {@code LocalDateTime.now()}, so the arithmetic
-     * cannot depend on which clock the test and the service each read.
+     * <p>Off the row's own times rather than off {@code LocalDateTime.now()}, so the arithmetic cannot depend on
+     * which clock the test and the service each read.
+     *
+     * @return the backdated {@code claimedAt}
      */
     private LocalDateTime lapse(String referralId) {
-        return backdateTouch(referralId, 9);
+        Referral referral = stored(referralId);
+        referral.setClaimedAt(referral.getClaimedAt().minusDays(8));
+        if (referral.getAssignedAt() != null) {
+            referral.setAssignedAt(referral.getAssignedAt().minusDays(8));
+        }
+        referrals.saveAndFlush(referral);
+        return referral.getClaimedAt();
     }
 
     /** Moves a claim's last interaction the given number of hours into the past, and says where it landed. */

@@ -508,10 +508,27 @@ class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {
 
         private String referralId;
 
+        /**
+         * A referral held by this judge: since plan D2 no judge sees an {@code Open} one, so the fixture is the
+         * Master's claim, which is what an assignment to a linked Master leaves.
+         */
         @BeforeEach
         void raiseAReferral() {
             referralId = raise(caseId);
+            referralService.claim(caseId, referralId, judge(JUDGE_NAME, JUDGE_SUBJECT));
             asJudge(JUDGE_NAME, JUDGE_SUBJECT);
+        }
+
+        @Test
+        @DisplayName("is the referral's 404 to every judge while it waits for assignment (plan D2)")
+        void hiddenWhileWaitingForAssignment() throws Exception {
+            final String documentId = uploaded(caseId, "three-pages.docx", DOCX, fixture("three-pages.docx"));
+            String waiting = raise(newCase());
+
+            authorised(get(judicialUrl(waiting, documentId)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + waiting + " not found"));
+            assertNothingReadOrSent();
         }
 
         @ParameterizedTest(name = "{0}")
@@ -522,7 +539,7 @@ class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {
             "two-frames.tiff, image/tiff, 2",
             "table-and-image.docx, application/vnd.openxmlformats-officedocument.wordprocessingml.document, 3"
         })
-        @DisplayName("answers any judge on an Open referral with the whole PDF, recorded as the judge")
+        @DisplayName("answers the assigned Master with the whole PDF, recorded as the judge, and another judge 404")
         void previewsEveryFormat(String fixture, String mimeType, int pages) throws Exception {
             String documentId = uploaded(caseId, fixture, mimeType, fixture(fixture));
 
@@ -535,7 +552,7 @@ class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {
                 assertThat(row).containsEntry("actor_id", JUDGE_SUBJECT).containsEntry("entity_id", documentId));
 
             asJudge(OTHER_JUDGE_NAME, OTHER_JUDGE_SUBJECT);
-            authorised(get(judicialUrl(referralId, documentId))).andExpect(status().isOk());
+            authorised(get(judicialUrl(referralId, documentId))).andExpect(status().isNotFound());
         }
 
         @Test
@@ -558,7 +575,6 @@ class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {
         @DisplayName("is the referral's 404 to another judge once one has claimed it, and the holder's 200")
         void onlyTheHolderOfAClaim() throws Exception {
             String documentId = uploaded(caseId, "three-pages.docx", DOCX, fixture("three-pages.docx"));
-            referralService.claim(caseId, referralId, judge(JUDGE_NAME, JUDGE_SUBJECT));
 
             asJudge(OTHER_JUDGE_NAME, OTHER_JUDGE_SUBJECT);
             authorised(get(judicialUrl(referralId, documentId)))
@@ -575,7 +591,6 @@ class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {
         void hiddenOnceClosedOrWithdrawn() throws Exception {
             final String documentId = uploaded(caseId, "three-pages.docx", DOCX, fixture("three-pages.docx"));
             CurrentUser judge = judge(JUDGE_NAME, JUDGE_SUBJECT);
-            referralService.claim(caseId, referralId, judge);
             referralService.decide(caseId, referralId,
                 new DirectionInput(MasterDecision.Approved, Optional.of("Granted"), true), judge);
             referralService.close(caseId, referralId, OFFICE);

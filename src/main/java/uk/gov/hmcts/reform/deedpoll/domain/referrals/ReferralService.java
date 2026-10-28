@@ -4,7 +4,9 @@ import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
+import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
+import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
@@ -18,22 +20,30 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.MasterWindowCount;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
-import uk.gov.hmcts.reform.deedpoll.repository.StaleClaim;
+import uk.gov.hmcts.reform.deedpoll.repository.OverdueAssignment;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -42,8 +52,8 @@ import java.util.stream.Collectors;
 /**
  * Referrals of a case to the judiciary: raising one, reading them, pulling one back, closing a returned one,
  * recording what the applicant answered when the office asked them whether to proceed, and the judicial
- * transitions -- claiming one out of the shared pool, recording a direction on one, and the inactivity sweep that
- * gives a forgotten claim back to it.
+ * transitions -- assigning one to a Master, the deprecated claim, recording a direction on one, and the processing
+ * window that returns an assignment with no direction to the office.
  *
  * <p><strong>Not a port.</strong> There is nothing for this in {@code src/test/resources/reference} -- the
  * source store held a referral inline on the case, one per case, latest-wins, and those columns are still on
@@ -73,6 +83,10 @@ import java.util.stream.Collectors;
  * judicial-surface plan's -- so they are exercised by tests holding a {@code CurrentUser} rather than a token.
  * Keeping each transition beside the columns it mutates is deliberate: one place owns how a referral changes
  * state, and a transition needs a role claim rather than a real judicial identity to be provable.
+ *
+ * <p><strong>Since plan D2 a caseworker assigns a referral to a Master</strong> -- {@link #assign}, on the create or
+ * later -- and {@code Claimed} means assigned: {@code Open} is waiting for assignment. {@link #assign} is the one
+ * caseworker write that enters {@code Claimed}, and it also locks the Master's row, always after the referral's.
  *
  * <p>The two long-standing guards each ask the enum a named question rather than listing states, so a
  * transition added later cannot leave one of them out of date -- and <strong>they ask two different
@@ -113,24 +127,24 @@ import java.util.stream.Collectors;
  * and a caseworker does not decide one, because closing is the acknowledgement that the direction has been
  * actioned by the office that has to action it.
  *
- * <p><strong>{@link #reclaimStaleClaims()} is a mutating read, on purpose. Do not "fix" it.</strong> A claim
- * lapses after {@link ProcessSettingsService#referralClaimExpiry()} of the holding judge's inactivity, and there is no
- * scheduling in this service to notice that on a timer -- no {@code @EnableScheduling}, no injectable clock,
- * only {@link AuditClock}. Rather than introduce one, lapses are computed and taken back as a side effect of
- * loading the judicial pool, which is the most-polled judicial page, and defensively at the top of
- * {@link #claim} so a lapsed claim cannot block a new one. Three things follow, and each is a decision rather
- * than an accident:
+ * <p><strong>{@link #unassignOverdue()} runs on a timer and as a mutating read, on purpose. Do not "fix"
+ * either.</strong> An assignment with no direction ends after {@link ProcessSettingsService#processingWindow()} from
+ * {@code assignedAt} (decision D-3), and the referral goes back to the office to be assigned again.
+ * {@code ReferralUnassignment} runs it every {@code deedpoll.referrals.unassign-interval}, so a referral nobody looks
+ * at is still returned; and it is still run as a side effect of the judicial reads and the deprecated claim, so the
+ * Master's own page never offers a referral whose window has just ended. Three things follow, and each is a decision
+ * rather than an accident:
  *
  * <ul>
  *   <li><strong>It is race-safe without a lock.</strong> Each release is one conditional {@code UPDATE} that
- *       re-checks the state and the cutoff, so two replicas loading the pool at the same instant release a
- *       given referral once between them and the timeline gets exactly one lapse note. The database settles
- *       it; a distributed lock would be solving a race that does not exist.</li>
- *   <li><strong>The note may lag the window by one pool load</strong>, which in practice is minutes. The only
- *       case that goes unnoted indefinitely is a lapse on a referral nobody ever looks at again, where the
- *       note has no reader either.</li>
- *   <li><strong>A timed sweep is a clean follow-up, not a correction</strong> -- the same statement fired by a
- *       timer -- and it is deliberately out of scope.</li>
+ *       re-checks the state and the cutoff, so the timer and a request, or two replicas, release a given referral
+ *       once between them and the timeline gets exactly one note. The database settles it; a distributed lock
+ *       would be solving a race that does not exist.</li>
+ *   <li><strong>The release may lag the window by up to one timer interval</strong>, fifteen minutes by default,
+ *       against a window counted in days.</li>
+ *   <li><strong>A request-time sweep joins its caller's transaction</strong>, so a request that then fails rolls
+ *       its releases back with it, and the next sweep repeats them. Nothing is lost, because the release is a rule
+ *       over the row rather than an event.</li>
  * </ul>
  *
  * <p><strong>Every successful transition writes exactly one case note, and the only write here that is not a
@@ -138,7 +152,7 @@ import java.util.stream.Collectors;
  * Raise, withdraw, {@link #claim}, {@link #decide}, {@link #close} and {@link #recordConfirmation} each call
  * {@code notes.createNote} once,
  * with prose from {@link ReferralNotes} and {@code caller.noteAuthor()} as the author -- the person who caused
- * the transition, which on a claim or a direction is the judge. {@link #reclaimStaleClaims()} is the one
+ * the transition, which on a claim or a direction is the judge. {@link #unassignOverdue()} is the one
  * exception to the authorship rule, not to the counting rule: it writes one note per released claim as
  * {@link NoteAuthor#NONE}, because no person did it. Each note is created after the referral is saved and
  * inside the same transaction, so there is no successful transition without its note and no note for one that
@@ -153,7 +167,7 @@ import java.util.stream.Collectors;
  * <p><strong>Every transition also refreshes the case's denormalised {@code currentReferralState}</strong>, in
  * the transition's own transaction, so a case never persists with a referral in one state and its column naming
  * another. The rule and the reason it is a recompute rather than a push are on {@link CurrentReferralState};
- * {@link #reclaimStaleClaims()} does it set-based because it is the one site that moves many referrals at once.
+ * {@link #unassignOverdue()} does it set-based because it is the one site that moves many referrals at once.
  * {@link #touch} does not do it, and that is not an omission: it moves {@code lastTouchedAt} and never
  * {@code state}, so there is nothing for the column to have changed to. {@link #recordConfirmation} does not
  * either, for the same reason -- and there is deliberately no ninth case state for "awaiting confirmation": a
@@ -168,7 +182,7 @@ import java.util.stream.Collectors;
  * <p><strong>Not a port either: every caller's write records one audit event</strong>, in its own transaction, so
  * a transition whose event cannot be recorded does not commit. It names the referral columns the write set, with
  * their before and after, and the state it moved between. {@link #touch} records none, because it is a judge reading,
- * and {@link #reclaimStaleClaims()} none, because no person did it and its note already says so.
+ * and {@link #unassignOverdue()} none, because no person did it and its note already says so.
  *
  * <p>The service returns entities, not view models, as {@code NoteService} does. Mapping to DTOs is the
  * controller's job.
@@ -203,6 +217,8 @@ public class ReferralService {
     private final NoteService notes;
     private final ProcessSettingsService settings;
     private final AuditTrail audit;
+    private final MasterRepository masters;
+    private final BankHolidays bankHolidays;
 
     /**
      * For one thing only: bringing a referral loaded earlier in the transaction up to the row the lock now
@@ -215,21 +231,27 @@ public class ReferralService {
                            NoteService notes,
                            ProcessSettingsService settings,
                            EntityManager entityManager,
-                           AuditTrail audit) {
+                           AuditTrail audit,
+                           MasterRepository masters,
+                           BankHolidays bankHolidays) {
         this.deedPolls = deedPolls;
         this.referrals = referrals;
         this.notes = notes;
         this.settings = settings;
         this.entityManager = entityManager;
         this.audit = audit;
+        this.masters = masters;
+        this.bankHolidays = bankHolidays;
     }
 
     /**
-     * Raises a referral on a case, unclaimed and in the shared pool.
+     * Raises a referral on a case, assigned to the Master the caseworker chose or, with none, waiting for assignment.
      *
      * <p><strong>The state is not the caller's to choose</strong> -- {@link CreateReferralInput} cannot carry
-     * one -- and neither is a target judge. The referral goes into the pool; who picks it up is a later
-     * transition.
+     * one. With a {@code masterId} the referral is created and then assigned by {@link #assign}'s own rules in this
+     * transaction, so a refused assignment (an unknown or unavailable Master, or one at the cap) refuses the whole
+     * create and nothing is written; that writes the assignment's own note and audit event beside the create's.
+     * Without one it is {@code Open}, which is what the admin deployed before plan D2 sends.
      *
      * <p>A case note is written as the acting caseworker, so the referral appears on the timeline the case's
      * own workers read. Written after the referral is stored and inside the same transaction, so a refused
@@ -237,7 +259,8 @@ public class ReferralService {
      * never mentions.
      *
      * @throws NotFoundError if there is no such case
-     * @throws ConflictError if the case already holds a referral that is not terminal
+     * @throws ConflictError if the case already holds a referral that is not terminal, or the Master is at the cap
+     * @throws InvalidInputError if {@code masterId} names no Master, or one who is not available
      */
     @Transactional
     public Referral createReferral(String deedPollId, CreateReferralInput dto, CurrentUser caller) {
@@ -270,8 +293,147 @@ public class ReferralService {
             AuditValue.created("urgency", saved.getUrgency()),
             AuditValue.created("urgencyReason", saved.getUrgencyReason())));
         notes.createNote(deedPollId, new CreateNoteInput(ReferralNotes.raised(dto)), caller.noteAuthor());
+        if (dto.masterId().isPresent()) {
+            saved = assignLocked(deedPollId, saved, dto.masterId().get(), caller, AuditClock.now());
+            refreshAwaitingConfirmation(deedPollId);
+        }
         refreshCurrentReferralState(deedPollId);
         return saved;
+    }
+
+    /**
+     * A caseworker assigning a referral to a Master, or moving it to another (plan D2, decisions D-1, D-5 to D-8).
+     *
+     * <p><strong>Any staff caller</strong>, with no role gate, as raising and withdrawing have none (D-8). The
+     * referral's row is locked first and then the Master's, in that order on every path, so two assignments to one
+     * Master serialise on the Master's row and the second counts what the first committed: the cap holds under
+     * concurrency without a lock of its own.
+     *
+     * <p>In order: the Master must exist and be available (400 on {@code masterId}); the referral must be
+     * {@code Open} or {@code Claimed}, that is waiting for a direction (409); assigning it to the Master it already
+     * has changes nothing and records nothing; and the Master must hold fewer than
+     * {@link ProcessSettingsService#masterWindowCap()} {@code Claimed} referrals in the window {@link ReferralWindows}
+     * gives for now (409, naming the window). Then it is {@code Claimed} by that Master: {@code claimedBy} is the
+     * list's name, {@code claimedById} the linked subject or null until the Master signs in, and
+     * {@code claimedAt}, {@code assignedAt} and {@code lastTouchedAt} are now, so a reassignment restarts the
+     * processing window. Nothing else is cleared.
+     *
+     * <p>One case note, naming the Master (and the previous one on a reassignment), one
+     * {@link AuditAction#REFERRAL_ASSIGNED} event with old and new {@code state}, {@code claimedBy} and
+     * {@code assignedAt} -- never the subject -- and both read-models recomputed, all in this transaction.
+     *
+     * @throws NotFoundError     if there is no such referral, or it belongs to another case
+     * @throws InvalidInputError if there is no such Master, or the Master is not available
+     * @throws ConflictError     if the referral is not waiting for a direction, or the Master is at the cap
+     */
+    @Transactional
+    public Referral assign(String deedPollId, String id, UUID masterId, CurrentUser caller) {
+        return assign(deedPollId, id, masterId, caller, AuditClock.now());
+    }
+
+    /**
+     * {@link #assign} at a given moment, so a test can say which window it falls in.
+     */
+    Referral assign(String deedPollId, String id, UUID masterId, CurrentUser caller, LocalDateTime now) {
+        Referral referral = findReferralForUpdate(deedPollId, id);
+        ReferralState fromState = referral.getState();
+        UUID fromMaster = referral.getAssignedMasterId();
+        Referral saved = assignLocked(deedPollId, referral, masterId, caller, now);
+        if (saved.getState() != fromState || !masterId.equals(fromMaster)) {
+            refreshCurrentReferralState(deedPollId);
+            refreshAwaitingConfirmation(deedPollId);
+        }
+        return saved;
+    }
+
+    /**
+     * Every Master's assignments in the window a referral raised now would count towards, with the cap, for the
+     * Masters list (plan D2): one grouped count, not one per Master.
+     */
+    @Transactional(readOnly = true)
+    public ReferralWindowLoad currentWindowLoad() {
+        ReferralWindow window = windowAt(AuditClock.now());
+        Map<UUID, Long> assigned = referrals.countByMasterInWindow(ReferralState.Claimed, window.date(), window.slot())
+            .stream()
+            .collect(Collectors.toUnmodifiableMap(MasterWindowCount::masterId, MasterWindowCount::assigned));
+        return new ReferralWindowLoad(window, settings.masterWindowCap(), assigned);
+    }
+
+    /**
+     * The assignment itself, on a referral this transaction has already locked or has just created -- see
+     * {@link #assign}. Writes the note and the audit event; the caller recomputes the read-models.
+     */
+    private Referral assignLocked(String deedPollId, Referral referral, UUID masterId, CurrentUser caller,
+                                  LocalDateTime now) {
+        // A clock read before the locks were waited on can name a window the digest has since taken (plan D3). The
+        // window lock comes before the Master's: the digest holds it while its email rows' foreign key waits on
+        // that row, so taking it after the Master's lock would deadlock the two.
+        ReferralWindow window = windowAt(now);
+        while (masters.digestTook(window.date(), window.slot())) {
+            window = windowAt(ReferralWindows.closesAt(window, settings.referralWindows()));
+        }
+        final MasterRepository.Assignee master = masters.findAssigneeForUpdate(masterId)
+            .filter(MasterRepository.Assignee::available)
+            .orElseThrow(() -> new InvalidInputError(ReferralSchemas.SELECT_A_MASTER, List.of(
+                new FieldError(ReferralSchemas.MASTER_ID, ReferralSchemas.SELECT_A_MASTER))));
+        final ReferralState fromState = referral.getState();
+        if (fromState != ReferralState.Open && fromState != ReferralState.Claimed) {
+            throw new ConflictError("Referral " + referral.getId() + " is " + fromState
+                + ": only a referral waiting for a direction can be assigned");
+        }
+        if (fromState == ReferralState.Claimed && masterId.equals(referral.getAssignedMasterId())) {
+            return referral;
+        }
+
+        long held = referrals.countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot(
+            ReferralState.Claimed, masterId, window.date(), window.slot());
+        if (held >= settings.masterWindowCap()) {
+            String full = "This Master already has " + held + (held == 1 ? " referral" : " referrals") + " for "
+                + inWords(window) + ". Choose another Master.";
+            throw new ConflictError(full, List.of(new FieldError(ReferralSchemas.MASTER_ID, full)));
+        }
+
+        final String fromName = fromState == ReferralState.Claimed ? referral.getClaimedBy() : null;
+        final LocalDateTime fromAssignedAt = referral.getAssignedAt();
+        referral.setState(ReferralState.Claimed);
+        referral.setClaimedBy(master.name());
+        // Null until the Master first signs in and linking fills it in; nobody can see the referral until then.
+        referral.setClaimedById(master.subject());
+        referral.setClaimedAt(now);
+        referral.setAssignedAt(now);
+        referral.setLastTouchedAt(now);
+        referral.setAssignedMasterId(masterId);
+        referral.setWindowDate(window.date());
+        referral.setWindowSlot(window.slot());
+        // A fresh clock earns its reminders afresh (plan D3).
+        referral.setRemindersSent(0);
+        referral.setModifiedBy(caller.name());
+        referral.setModifiedOn(now);
+
+        Referral saved = referrals.save(referral);
+        audit(AuditAction.REFERRAL_ASSIGNED, caller, deedPollId, saved, fromState, List.of(
+            AuditValue.of("state", fromState, saved.getState()),
+            AuditValue.of("claimedBy", fromName, saved.getClaimedBy()),
+            AuditValue.of("assignedAt", fromAssignedAt, saved.getAssignedAt())));
+        String note = fromName == null
+            ? ReferralNotes.assigned(saved, master.name())
+            : ReferralNotes.reassigned(saved, fromName, master.name());
+        notes.createNote(deedPollId, new CreateNoteInput(note), caller.noteAuthor());
+        return saved;
+    }
+
+    /** The referral window a moment counts towards, from the stored window times and the bank holidays. */
+    private ReferralWindow windowAt(LocalDateTime now) {
+        return windowAt(now.toInstant(ZoneOffset.UTC));
+    }
+
+    private ReferralWindow windowAt(Instant at) {
+        return ReferralWindows.windowFor(at, settings.referralWindows(), bankHolidays::isWorkingDay);
+    }
+
+    /** "the morning of 28 October 2026", for a refusal a caseworker reads. */
+    private static String inWords(ReferralWindow window) {
+        return (window.slot() == WindowSlot.AM ? "the morning of " : "the afternoon of ") + DAY.format(window.date());
     }
 
     /**
@@ -424,14 +586,14 @@ public class ReferralService {
     /**
      * A judge taking a referral out of the shared pool: it becomes theirs and drops off everyone else's.
      *
-     * <p>Lapsed claims are taken back first, so a referral a judge picked up and abandoned three hours ago is
-     * claimable by the next judge who tries rather than by the next judge who happens to load the pool.
+     * <p>Overdue assignments are returned first, by {@link #unassignOverdue()}, so the row read below is the
+     * post-sweep row.
      *
      * <p><strong>Only an {@code Open} referral can be claimed, and there is no silent re-claim.</strong> A
      * referral already {@code Claimed} is a conflict even for the judge already holding it: two judges each
      * shown "claimed by me" for different reasons is a worse outcome than one of them being told plainly that
-     * somebody got there first. A judge who is still working keeps their claim by interacting with it, which
-     * refreshes {@code lastTouchedAt} -- see {@link #touch}.
+     * somebody got there first. Since plan D2 nothing a judge does extends the processing window -- see
+     * {@link #touch}.
      *
      * <p><strong>One case note, authored by the claiming judge.</strong> The referral's own row says who holds
      * it <em>now</em>, and the Notes grid is the only place that says when each step happened -- so without this
@@ -462,7 +624,7 @@ public class ReferralService {
         final String owner = caller.requireUserId();
         // Before the lookup, not after: the referral this caller is asking for may be the stale one, and
         // reading it first would load the row that is about to change underneath.
-        reclaimStaleClaims();
+        unassignOverdue();
 
         Referral referral = findReferralForUpdate(deedPollId, id);
         if (referral.getState() != ReferralState.Open) {
@@ -478,8 +640,8 @@ public class ReferralService {
         referral.setClaimedById(owner);
         referral.setClaimedBy(caller.name());
         referral.setClaimedAt(now);
-        // Stamped at the claim as well as at every later interaction, so a referral picked up and never
-        // touched again lapses two hours after it was picked up rather than never.
+        // Bookkeeping only since plan D2: the processing window runs from claimedAt for a claim, which has no
+        // assignedAt.
         referral.setLastTouchedAt(now);
         referral.setModifiedBy(caller.name());
         referral.setModifiedOn(now);
@@ -498,17 +660,17 @@ public class ReferralService {
     }
 
     /**
-     * Records that the holding judge is still working on a referral, so the sweep leaves it alone.
+     * Records when the Master it is assigned to last opened a referral, and nothing else.
      *
-     * <p>The counterpart to the expiry being measured from the last interaction rather than from the claim:
-     * every judicial read and write of a held referral goes through here, which is what lets a judge spend a
-     * morning on one set of papers without losing it. The judicial surface calls it; {@link #claim} stamps the
-     * same column itself, because there is no claim to refresh until it has made one.
+     * <p><strong>Since plan D2 it extends nothing.</strong> The processing window runs from {@code assignedAt}
+     * (or, for a claim made before assignment existed, {@code claimedAt}), so a Master reading the papers does
+     * not hold on to a referral past the window: only a direction or a reassignment ends or restarts it. The
+     * operation is kept working because the judicial read calls it and today's admin relies on that read; it moves
+     * {@code lastTouchedAt} and the row's audit stamps, never {@code assignedAt}, {@code claimedAt} or the window.
      *
-     * <p><strong>Only the judge holding it may touch it</strong>, and the check is by the subject the claim was
-     * made under -- see {@link #requireHeldBy}. A referral that has been withdrawn, decided, or taken back by the
-     * sweep is no longer held by anybody, so a judge who left the page open gets a conflict rather than silently
-     * reviving a claim the pool has already re-offered.
+     * <p><strong>Only the judge holding it may touch it</strong>, and the check is by the subject the assignment
+     * carries -- see {@link #requireHeldBy}. A referral that has been withdrawn, decided, or returned to the office
+     * is no longer held by anybody, so a judge who left the page open gets a conflict.
      *
      * @throws ForbiddenError    if the caller does not hold {@link Role#JUDICIAL}
      * @throws UnauthorizedError if the caller carries no stable subject, so they can hold nothing
@@ -542,8 +704,8 @@ public class ReferralService {
      *       direction afterwards gets a conflict rather than writing a direction onto a referral that was
      *       pulled back.</li>
      *   <li>A referral the sweep took back is {@code Open} with no {@code claimedById}, so the same is true of a
-     *       judge whose claim lapsed while they were reading. The referral may by then be another judge's, and
-     *       the two of them must not both be able to direct it.</li>
+     *       Master whose processing window ended while they were reading. The referral may by then be another
+     *       Master's, and the two of them must not both be able to direct it.</li>
      * </ul>
      *
      * <p><strong>One transition, not a draft and a submit.</strong> The check-your-answers page and the
@@ -692,14 +854,15 @@ public class ReferralService {
      * just closed -- and a 409 for what they can see and did not direct.
      *
      * <p>{@code Decided -> Claimed}, held by the same judge: {@code claimedById} and {@code claimedBy} are left as
-     * they were, {@code claimedAt} and {@code lastTouchedAt} restart now. The decision, {@code directionsText},
+     * they were, {@code claimedAt}, {@code assignedAt} and {@code lastTouchedAt} restart now, so the processing
+     * window starts again. {@code windowDate} and {@code windowSlot} are kept: no fresh window is taken for the cap.
+     * The decision, {@code directionsText},
      * {@code changesToStandardPublication}, {@code decisionDate}, {@code decidedBy} and {@code decidedById} are
      * cleared, because a claim carries no direction. {@code directionChangedAt} is set and never cleared.
      *
-     * <p><strong>The consequence to keep visible:</strong> a withdrawn direction is a live claim again, so
-     * {@link #reclaimStaleClaims()} returns it to the shared pool after
-     * {@link ProcessSettingsService#referralClaimExpiry()} of inactivity, exactly as it would any other claim. That
-     * is decided, not an oversight; the sweep is unchanged.
+     * <p><strong>The consequence to keep visible:</strong> a withdrawn direction is a live assignment again, so
+     * {@link #unassignOverdue()} returns it to the office after {@link ProcessSettingsService#processingWindow()}
+     * from the withdrawal, exactly as it would any other assignment. That is decided, not an oversight.
      *
      * <p>One {@code REFERRAL_DIRECTION_WITHDRAWN} event with old and new values of the state, decision,
      * {@code directionsText} and {@code changesToStandardPublication}, as {@link #decide} records, and one case note
@@ -718,7 +881,7 @@ public class ReferralService {
         caller.requireAnyRole(Role.JUDICIAL);
         Referral referral = requireDirectedBy(findReferralForUpdate(deedPollId, id), id, "withdrawn", caller);
 
-        LocalDateTime now = AuditClock.now();
+        final LocalDateTime now = AuditClock.now();
         final ReferralState fromState = referral.getState();
         final List<AuditValue> values = List.of(
             AuditValue.of("state", fromState, ReferralState.Claimed),
@@ -734,9 +897,21 @@ public class ReferralService {
         referral.setDecisionDate(null);
         referral.setDecidedBy(null);
         referral.setDecidedById(null);
-        // claimedById and claimedBy are left alone: visibleTo has established the direction is this caller's, and
-        // decide required the same subject to hold the claim it directed.
+        // The live assignment goes to whoever the Master is linked to now, not to the caller: an email change that
+        // unlinked them (MasterService.update) cut this subject off, and detachFromUnlinkedMaster could not take a
+        // Decided referral away from it. The Master's lock follows the referral's, as in assignLocked. A pre-V43
+        // claim has no Master and stays with the subject that claimed it; claimedBy is the Master's name either way.
+        if (referral.getAssignedMasterId() != null) {
+            referral.setClaimedById(masters.findAssigneeForUpdate(referral.getAssignedMasterId())
+                                        .map(MasterRepository.Assignee::subject)
+                                        .orElse(null));
+        }
         referral.setClaimedAt(now);
+        // The processing window restarts (plan D2), but no fresh window is taken for the cap: windowDate and
+        // windowSlot stay as the assignment set them, so the referral counts where it counted before.
+        referral.setAssignedAt(now);
+        // And the reminders with it (plan D3): the first falls due one reminder interval from now.
+        referral.setRemindersSent(0);
         referral.setLastTouchedAt(now);
         referral.setDirectionChangedAt(now);
         referral.setModifiedBy(caller.name());
@@ -908,60 +1083,69 @@ public class ReferralService {
     }
 
     /**
-     * Gives every lapsed claim back to the shared pool, and says on each case's timeline that it happened.
+     * Returns every assignment whose processing window has ended without a direction to the office, waiting for
+     * assignment, and says on each case's timeline that it happened (plan D2, decision D-3).
      *
-     * <p><strong>Read the class javadoc before changing this.</strong> That a read mutates, that there is no
-     * lock, and that the note can lag the window are all decided; the reasoning is there rather than here so
-     * that it is found by somebody reading the service rather than only by somebody already reading this
-     * method.
+     * <p><strong>Read the class javadoc before changing this.</strong> That a read mutates, that there is no lock,
+     * and that the release can lag the window are all decided; the reasoning is there rather than here so that it is
+     * found by somebody reading the service rather than only by somebody already reading this method.
      *
-     * <p>The window is {@link ProcessSettingsService#referralClaimExpiry()} and is never hard-coded: it is a
-     * Delivery Manager setting ({@code /caseworker/process-settings}), seeded at two hours, so correcting the guess
-     * about how judges work needs no release. It is read once per call, uncached, before anything is released, so
+     * <p>The window is {@link ProcessSettingsService#processingWindow()} and is never hard-coded: it is a
+     * Delivery Manager setting ({@code /caseworker/process-settings}), seeded at seven days, so correcting the guess
+     * about how Masters work needs no release. It is read once per call, uncached, before anything is released, so
      * a missing settings row fails the sweep before it changes anything, and a change committed while a sweep runs
      * applies from the next one.
      *
+     * <p><strong>The window runs from {@code assignedAt}, else {@code claimedAt}.</strong> An assignment, a
+     * reassignment and a withdrawn direction each set {@code assignedAt} to now, so each restarts it; a referral
+     * claimed before V43 has no {@code assignedAt}, and its window counts from its claim (D-10). {@code touch}
+     * extends nothing.
+     *
      * <p>Each candidate is released by its own conditional statement, and a candidate whose statement changes
-     * nothing gets no note -- that is the case where the judge touched it, a caseworker withdrew it, or
-     * another replica released it in the moment between the two queries.
+     * nothing gets no note -- that is the case where the Master directed it, a caseworker reassigned or withdrew
+     * it, or another sweep released it in the moment between the two queries.
      *
      * <p><strong>The case columns are refreshed by one set-based statement at the end, not by the per-case
      * recompute in the loop.</strong> This is the one transition that moves many referrals, so its read-model
      * counterpart is one statement over the whole set for the same reason the releases are conditional: only a
-     * single statement is atomic, and a per-row recompute would also be a query pair per reclaimed claim.
-     * Exactly the cases this call released are refreshed -- not every candidate -- because a candidate whose
-     * release answered 0 belongs to another replica, which refreshes its case itself.
+     * single statement is atomic, and a per-row recompute would also be a query pair per release. Exactly the
+     * cases this call released are refreshed -- not every candidate -- because a candidate whose release answered
+     * 0 belongs to another sweep, which refreshes its case itself. {@code awaitingConfirmationSince} needs no
+     * refresh: it follows confirmation requests, which a release does not touch.
      *
-     * @return how many claims this call released, which is the number of notes it wrote
+     * <p>No audit event, because no person did it and its note already says so.
+     *
+     * @return how many referrals this call returned to the office, which is the number of notes it wrote
      */
     @Transactional
-    public int reclaimStaleClaims() {
+    public int unassignOverdue() {
         LocalDateTime now = AuditClock.now();
-        LocalDateTime cutoff = now.minus(settings.referralClaimExpiry());
+        Duration window = settings.processingWindow();
+        LocalDateTime cutoff = now.minus(window);
 
-        // Insertion-ordered and de-duplicated: one case can hold only one claim, so this is normally one entry
-        // per release, and the set is what the single closing statement is keyed on.
-        Set<String> reclaimedCases = new LinkedHashSet<>();
-        int reclaimed = 0;
-        for (StaleClaim stale : referrals.findStaleClaims(ReferralState.Claimed, cutoff)) {
+        // Insertion-ordered and de-duplicated: one case can hold only one live referral, so this is normally one
+        // entry per release, and the set is what the single closing statement is keyed on.
+        Set<String> releasedCases = new LinkedHashSet<>();
+        int released = 0;
+        for (OverdueAssignment overdue : referrals.findOverdueAssignments(ReferralState.Claimed, cutoff)) {
             // The same cutoff the candidates were found with, not a freshly computed one: the two have to be
             // the same instant or a candidate could be released against a window it did not qualify under.
-            if (referrals.releaseStaleClaim(stale.id(), cutoff, now, CurrentUser.SERVICE_ACCOUNT_NAME) == 0) {
+            if (referrals.releaseOverdueAssignment(overdue.id(), cutoff, now, CurrentUser.SERVICE_ACCOUNT_NAME) == 0) {
                 continue;
             }
-            reclaimed++;
-            reclaimedCases.add(stale.deedPollId());
+            released++;
+            releasedCases.add(overdue.deedPollId());
             // NoteAuthor.NONE: no person did this, so it is attributed to the service account rather than to
-            // whichever caseworker or judge happened to trigger the load that noticed it.
-            notes.createNote(stale.deedPollId(),
-                             new CreateNoteInput(ReferralNotes.claimLapsed(stale.claimedBy())),
+            // the timer or whichever caseworker or judge happened to trigger the load that noticed it.
+            notes.createNote(overdue.deedPollId(),
+                             new CreateNoteInput(ReferralNotes.returnedForAssignment(overdue, window)),
                              NoteAuthor.NONE);
         }
 
-        if (!reclaimedCases.isEmpty()) {
-            deedPolls.refreshCurrentReferralStates(reclaimedCases, LIVE_STATES);
+        if (!releasedCases.isEmpty()) {
+            deedPolls.refreshCurrentReferralStates(releasedCases, LIVE_STATES);
         }
-        return reclaimed;
+        return released;
     }
 
     private void audit(AuditAction action, CurrentUser caller, String deedPollId, Referral saved,
@@ -1074,7 +1258,7 @@ public class ReferralService {
      * reason {@code SavedQueryPermissions} does: a caller with no subject is refused outright instead of being
      * compared against a null owner, which would make every unidentified caller the holder of every
      * pre-migration claim at once. A claim made before that migration therefore has no owner and is held by
-     * nobody -- it fails closed, and the inactivity sweep returns it to the pool as it would any other.
+     * nobody -- it fails closed, and the processing window returns it to the office as it would any other.
      *
      * <p>The refusal still names the caller's <em>display name</em>, because it is read by a person and a
      * subject would tell them nothing. It says the same thing it always did: this is not yours.

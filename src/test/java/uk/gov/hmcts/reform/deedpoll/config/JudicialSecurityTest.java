@@ -23,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
 import java.lang.reflect.Field;
@@ -427,8 +428,7 @@ class JudicialSecurityTest {
                 "name", JUDGE.name(),
                 "sub", "judge-3"));
             Referral held = stored(ReferralState.Claimed, judgeFromToken);
-            when(referrals.findByState(any(), any())).thenReturn(emptyPool());
-            when(referrals.findOwnedBy(anyString(), any(), any(), any())).thenReturn(emptyPool());
+            when(referrals.findOwnedBy(anyString(), any(), any(), any(), any())).thenReturn(emptyPool());
             when(transitions.claim(anyString(), anyString(), any())).thenReturn(held);
             when(transitions.decide(anyString(), anyString(), any(), any())).thenReturn(held);
 
@@ -533,25 +533,22 @@ class JudicialSecurityTest {
         }
 
         @Test
-        @DisplayName("is not offered in the pool either, because the pool asks for the unclaimed work only")
+        @DisplayName("is not offered in the former pool either, which since plan D2 loads no referral at all")
         void isNotOfferedInThePool() {
             stored(ReferralState.Claimed, OTHER_JUDGE);
-            when(referrals.findByState(any(), any())).thenReturn(new PageImpl<>(List.of()));
 
-            service.pool(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
+            assertThat(service.pool(JUDGE, JudicialReferralService.FIRST_POOL_PAGE).isEmpty()).isTrue();
 
-            // The state is in the query rather than in a filter over its result, so a referral somebody holds is
-            // never loaded for another judge at all. A filter afterwards is a step that can be forgotten, and the
-            // rows it forgot would already be in memory behind a response.
-            verify(referrals).findByState(eq(ReferralState.Open), any());
             verify(referrals, never()).findAll();
+            verify(referrals, never()).findWithCaseById(any());
         }
 
         @Test
         @DisplayName("is not on another judge's personal list, which is asked for by subject and never by name")
         void isNotOnAnotherJudgesPersonalList() {
             stored(ReferralState.Claimed, OTHER_JUDGE);
-            when(referrals.findOwnedBy(anyString(), any(), any(), any())).thenReturn(new PageImpl<>(List.of()));
+            when(referrals.findOwnedBy(anyString(), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of()));
 
             service.mine(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
 
@@ -561,9 +558,9 @@ class JudicialSecurityTest {
             // namesake's whole outstanding work rather than requiring them to guess a referral id -- which is why
             // neither name appears in the question asked.
             verify(referrals).findOwnedBy(
-                eq(JUDGE.userId()), eq(ReferralState.Claimed), eq(ReferralState.Decided), any());
-            verify(referrals, never()).findOwnedBy(eq(OTHER_JUDGE.userId()), any(), any(), any());
-            verify(referrals, never()).findOwnedBy(eq(JUDGE.name()), any(), any(), any());
+                eq(JUDGE.userId()), eq(ReferralState.Claimed), eq(ReferralState.Decided), eq(Urgency.Urgent), any());
+            verify(referrals, never()).findOwnedBy(eq(OTHER_JUDGE.userId()), any(), any(), any(), any());
+            verify(referrals, never()).findOwnedBy(eq(JUDGE.name()), any(), any(), any(), any());
             verify(referrals, never()).findAll();
         }
 
@@ -571,14 +568,15 @@ class JudicialSecurityTest {
         @DisplayName("and a namesake of the holder gets their own list, not the holder's")
         void namesakeGetsTheirOwnPersonalList() {
             stored(ReferralState.Claimed, JUDGE);
-            when(referrals.findOwnedBy(anyString(), any(), any(), any())).thenReturn(new PageImpl<>(List.of()));
+            when(referrals.findOwnedBy(anyString(), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of()));
 
             service.mine(NAMESAKE_JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
 
             // These two callers differ in nothing a referral row records except the subject, and the subject is the
             // only thing asked for -- so the namesake's list is theirs and empty, rather than the holder's.
-            verify(referrals).findOwnedBy(eq(NAMESAKE_JUDGE.userId()), any(), any(), any());
-            verify(referrals, never()).findOwnedBy(eq(JUDGE.userId()), any(), any(), any());
+            verify(referrals).findOwnedBy(eq(NAMESAKE_JUDGE.userId()), any(), any(), any(), any());
+            verify(referrals, never()).findOwnedBy(eq(JUDGE.userId()), any(), any(), any(), any());
         }
     }
 }

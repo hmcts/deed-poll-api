@@ -327,7 +327,8 @@ class RemainingWriteAuditTest extends AbstractPostgresContainerTest {
             "SELECT referral_claim_expiry_minutes FROM deedpoll_process_settings WHERE id = 1", Integer.class);
 
         processSettings.update(DELIVERY_MANAGER,
-                               Map.of("referralClaimExpiryMinutes", minutes == 45 ? 46 : 45, "revision", revision));
+                               Map.of("referralClaimExpiryMinutes", minutes == 1445 ? 1446 : 1445,
+                                      "revision", revision));
 
         List<Event> events = events("entity_type = 'ProcessSettings' AND actor_id = ?", "delivery-manager-subject");
         assertThat(events).singleElement().satisfies(event -> {

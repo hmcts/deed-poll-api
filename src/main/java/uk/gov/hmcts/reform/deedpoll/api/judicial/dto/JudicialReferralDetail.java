@@ -1,12 +1,14 @@
 package uk.gov.hmcts.reform.deedpoll.api.judicial.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionDue;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralView;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -25,8 +27,8 @@ import java.util.List;
  *
  * <p><strong>The claim and the decision columns are published, and they cannot name another judge.</strong>
  * {@code claimedBy} and {@code decidedBy} are only ever this caller or null by the time a response gets here:
- * visibility admits an {@code Open} referral, which has no holder, and a {@code Claimed} or {@code Decided} one
- * only when the caller is the judge on it. So publishing them tells a judge which of their own referrals this is
+ * visibility admits a {@code Claimed} or {@code Decided} referral only when the caller is the judge on it. So
+ * publishing them tells a judge which of their own referrals this is
  * without being able to tell them who else holds anything.
  *
  * <p><strong>No {@code createdBy}, {@code modifiedBy} or {@code modifiedOn}, and no {@code lastTouchedAt}.</strong>
@@ -36,8 +38,8 @@ import java.util.List;
  * long a referral has waited is a fact about the referral that a judge is entitled to weigh.
  *
  * @param id the referral id, which the claim and direction routes address
- * @param state where the referral has got to -- {@code Open} in the pool, or {@code Claimed}/{@code Decided} when
- *     it is this judge's
+ * @param state where the referral has got to -- {@code Claimed} or {@code Decided}, because only this judge's are
+ *     visible
  * @param reasons why the case was referred, as stored, in the order the caseworker ticked them; empty for a
  *     backfilled referral
  * @param notes the caseworker's free text for the judiciary, or null
@@ -46,6 +48,8 @@ import java.util.List;
  * @param createdOn when the referral was raised, which is how long it has waited
  * @param claimedBy the judge holding it, which is this caller or null -- never another judge
  * @param claimedAt when they picked it up, or null
+ * @param assignedAt when it was assigned to this Master, which starts the processing window, or null
+ * @param directionDueBy when the processing window ends while it waits for a direction, else null
  * @param decision the direction, or null until this judge records one
  * @param directionsText what was directed, or null -- including on a decision that needed no comment
  * @param changesToStandardPublication the Master's answer to "Are there any changes to the standard publications in
@@ -69,6 +73,12 @@ public record JudicialReferralDetail(
     LocalDateTime createdOn,
     String claimedBy,
     LocalDateTime claimedAt,
+    @Schema(nullable = true, description = "When the referral was assigned to this Master, which starts the "
+        + "processing window; null for a claim made before assignment existed.")
+    LocalDateTime assignedAt,
+    @Schema(nullable = true, description = "When the Master's direction is due: the processing window's start "
+        + "plus its length as configured now. Null once directed.")
+    LocalDateTime directionDueBy,
     MasterDecision decision,
     String directionsText,
     @Schema(nullable = true, description = "The Master's answer to \"Are there any changes to the standard "
@@ -86,7 +96,7 @@ public record JudicialReferralDetail(
     JudicialApplicationView application) {
 
     /** The referral and its application, as the domain resolved them for this Master. */
-    public static JudicialReferralDetail of(JudicialReferralView view) {
+    public static JudicialReferralDetail of(JudicialReferralView view, Duration processingWindow) {
         Referral referral = view.referral();
         return new JudicialReferralDetail(
             referral.getId().toString(),
@@ -98,6 +108,8 @@ public record JudicialReferralDetail(
             referral.getCreatedOn(),
             referral.getClaimedBy(),
             referral.getClaimedAt(),
+            referral.getAssignedAt(),
+            DirectionDue.by(referral, processingWindow),
             referral.getDecision(),
             referral.getDirectionsText(),
             referral.getChangesToStandardPublication(),

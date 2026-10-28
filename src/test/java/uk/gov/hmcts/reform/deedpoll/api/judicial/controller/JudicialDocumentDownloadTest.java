@@ -79,8 +79,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * the 2026-10-19 plan).
  *
  * <p><strong>The document is reached through the referral, never through the case.</strong> Visibility is
- * {@code JudicialReferralService.visibleTo}, unchanged: every judge for an {@code Open} referral, only the holder for
- * a {@code Claimed} one, and nobody once it is {@code Closed} or {@code Withdrawn}. Every refusal is the same 404 the
+ * {@code JudicialReferralService.visibleTo}: since plan D2 nobody for an {@code Open} referral, which is waiting for
+ * the office, only the assigned Master for a {@code Claimed} one, and nobody once it is {@code Closed} or
+ * {@code Withdrawn}. Every refusal is the same 404 the
  * referral read gives, and a document of another case is the document's own 404, exactly as the caseworker route
  * answers it.
  *
@@ -223,18 +224,18 @@ class JudicialDocumentDownloadTest extends AbstractPostgresContainerTest {
     class Download {
 
         @Test
-        @DisplayName("any judge downloads a document of an Open referral, not only the one who will claim it")
-        void anyJudgeDownloadsFromAnOpenReferral() throws Exception {
+        @DisplayName("no judge downloads a document of a referral waiting for assignment (plan D2)")
+        void noJudgeDownloadsFromAnOpenReferral() throws Exception {
             String documentId = uploaded(caseId, "birth.pdf", "application/pdf");
 
             authorised(get(fileUrl(referralId, documentId)))
-                .andExpect(status().isOk())
-                .andExpect(content().bytes(PDF_BYTES));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Referral " + referralId + " not found"));
 
             asJudge(OTHER_JUDGE_NAME, OTHER_JUDGE_SUBJECT);
-            authorised(get(fileUrl(referralId, documentId)))
-                .andExpect(status().isOk())
-                .andExpect(content().bytes(PDF_BYTES));
+            authorised(get(fileUrl(referralId, documentId))).andExpect(status().isNotFound());
+            verify(store, never()).open(any());
+            assertThat(reads("DOCUMENT_DOWNLOADED")).isEmpty();
         }
 
         @Test
@@ -284,6 +285,7 @@ class JudicialDocumentDownloadTest extends AbstractPostgresContainerTest {
         @Test
         @DisplayName("is the document's 404 for a document of another case, so a referral reaches only its own")
         void notFoundForAnotherCasesDocument() throws Exception {
+            assignedTo(JUDGE_NAME, JUDGE_SUBJECT);
             String elsewhere = uploaded(newCase(), "birth.pdf", "application/pdf");
 
             authorised(get(fileUrl(referralId, elsewhere)))
@@ -297,6 +299,7 @@ class JudicialDocumentDownloadTest extends AbstractPostgresContainerTest {
         @Test
         @DisplayName("records one DOCUMENT_DOWNLOADED row per download, as the judge, on the document")
         void recordsEachDownload() throws Exception {
+            assignedTo(JUDGE_NAME, JUDGE_SUBJECT);
             String documentId = uploaded(caseId, "birth.pdf", "application/pdf");
 
             authorised(get(fileUrl(referralId, documentId))).andExpect(status().isOk());
@@ -315,6 +318,7 @@ class JudicialDocumentDownloadTest extends AbstractPostgresContainerTest {
         @DisplayName("serves nothing when the audit insert fails, and never opens the file")
         void failsClosed() {
             String documentId = uploaded(caseId, "birth.pdf", "application/pdf");
+            assignedTo(JUDGE_NAME, UNRECORDABLE);
             asJudge(JUDGE_NAME, UNRECORDABLE);
 
             // Nothing maps a database failure, so MockMvc surfaces it rather than a rendered 500.
@@ -336,6 +340,7 @@ class JudicialDocumentDownloadTest extends AbstractPostgresContainerTest {
         })
         @DisplayName("sends exactly the headers the caseworker download sends, for every type it covers")
         void matchesTheCaseworkerHeaders(String mimeType, String filename) throws Exception {
+            assignedTo(JUDGE_NAME, JUDGE_SUBJECT);
             String documentId = uploaded(caseId, filename, mimeType);
 
             MockHttpServletResponse judicial = authorised(get(fileUrl(referralId, documentId)))
@@ -399,6 +404,7 @@ class JudicialDocumentDownloadTest extends AbstractPostgresContainerTest {
         @Test
         @DisplayName("records one CASE_VIEWED row on the case, as the judge, with no values")
         void recordsTheView() throws Exception {
+            assignedTo(JUDGE_NAME, JUDGE_SUBJECT);
             authorised(get("/judicial/referrals/" + referralId)).andExpect(status().isOk());
 
             assertThat(reads("CASE_VIEWED")).singleElement().satisfies(row ->
@@ -411,6 +417,7 @@ class JudicialDocumentDownloadTest extends AbstractPostgresContainerTest {
         @Test
         @DisplayName("still serves the referral when the audit insert fails")
         void failsOpen() throws Exception {
+            assignedTo(JUDGE_NAME, UNRECORDABLE);
             asJudge(JUDGE_NAME, UNRECORDABLE);
 
             authorised(get("/judicial/referrals/" + referralId))
@@ -431,10 +438,10 @@ class JudicialDocumentDownloadTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("is not recorded again by a claim, which answers with the same papers")
+        @DisplayName("is not recorded by the deprecated claim, which 404s a referral waiting for assignment")
         void claimRecordsNoView() throws Exception {
             authorised(post("/judicial/referrals/" + referralId + "/claim"))
-                .andExpect(status().isOk());
+                .andExpect(status().isNotFound());
 
             assertThat(reads("CASE_VIEWED")).isEmpty();
         }
@@ -482,6 +489,16 @@ class JudicialDocumentDownloadTest extends AbstractPostgresContainerTest {
         return jdbc.queryForList(
             "SELECT actor_id, actor_name, entity_type, entity_id FROM deedpoll_audit_event "
                 + "WHERE case_id = ? AND action = ?", caseId, action);
+    }
+
+    /**
+     * The referral as an assignment to this judge, already linked: what {@code ReferralService.assign} and linking
+     * leave behind, written directly so that a subject the audit trail cannot record still holds it.
+     */
+    private void assignedTo(String name, String subject) {
+        jdbc.update("UPDATE deedpoll_referral SET state = 'Claimed', \"claimedBy\" = ?, \"claimedById\" = ?, "
+                        + "\"claimedAt\" = now(), \"lastTouchedAt\" = now() WHERE id = ?::uuid",
+                    name, subject, referralId);
     }
 
     private static CurrentUser judge(String name, String subject) {

@@ -155,7 +155,7 @@ public class DomainErrorHandler {
 
     @ExceptionHandler(ConflictError.class)
     public ResponseEntity<ApiError> conflict(ConflictError error) {
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiError.of(error.getMessage()));
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiError.of(error.getMessage(), error.errors()));
     }
 
     /**

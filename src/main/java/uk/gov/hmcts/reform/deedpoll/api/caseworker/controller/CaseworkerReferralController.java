@@ -4,17 +4,20 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.AssignReferralRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CreateReferralRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.RecordConfirmationRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.ReferralResponse;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 
 import java.util.List;
 
@@ -78,9 +81,15 @@ import java.util.List;
 public class CaseworkerReferralController {
 
     private final ReferralService referrals;
+    private final ProcessSettingsService settings;
 
-    public CaseworkerReferralController(ReferralService referrals) {
+    /**
+     * {@code settings} supplies the processing window for {@code directionDueBy}, as it does for the judicial
+     * controller.
+     */
+    public CaseworkerReferralController(ReferralService referrals, ProcessSettingsService settings) {
         this.referrals = referrals;
+        this.settings = settings;
     }
 
     /**
@@ -96,24 +105,26 @@ public class CaseworkerReferralController {
      */
     @GetMapping
     public List<ReferralResponse> referrals(@PathVariable("id") String id) {
-        return ReferralResponse.from(referrals.findReferrals(id));
+        return ReferralResponse.from(referrals.findReferrals(id), settings.processingWindow());
     }
 
     /**
-     * Raises a referral on a case, unclaimed and in the shared pool.
+     * Raises a referral on a case, assigned to the Master named by {@code masterId} or, with none, waiting for
+     * assignment.
      *
      * <p>201 with the created referral, as the note, witness and saved-query creates answer.
      *
      * <p><strong>409 if the case already holds a referral that is not terminal.</strong> Not a 400: nothing
      * about the payload is wrong, and the same request succeeds unchanged once the live referral is closed or
-     * withdrawn. A case whose referrals are all terminal may be referred again.
+     * withdrawn. A case whose referrals are all terminal may be referred again. With a {@code masterId}, the
+     * assignment's refusals refuse the create, and nothing is written: see {@link #assign}.
      */
     @AuditedAs(AuditAction.REFERRAL_CREATED)
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ReferralResponse create(@PathVariable("id") String id, @RequestBody CreateReferralRequest request) {
-        return ReferralResponse.from(
-            referrals.createReferral(id, request.toInput(), CurrentUsers.required()));
+        return ReferralResponse.from(referrals.createReferral(id, request.toInput(), CurrentUsers.required()),
+                                     settings.processingWindow());
     }
 
     /**
@@ -127,7 +138,8 @@ public class CaseworkerReferralController {
     public ReferralResponse referral(@PathVariable("id") String id,
                                      @PathVariable("referralId") String referralId) {
 
-        return ReferralResponse.from(referrals.findReferral(id, referralId));
+        return ReferralResponse.from(referrals.findReferral(id, referralId),
+                                     settings.processingWindow());
     }
 
     /**
@@ -155,8 +167,8 @@ public class CaseworkerReferralController {
     public ReferralResponse withdraw(@PathVariable("id") String id,
                                      @PathVariable("referralId") String referralId) {
 
-        return ReferralResponse.from(
-            referrals.withdrawReferral(id, referralId, CurrentUsers.required()));
+        return ReferralResponse.from(referrals.withdrawReferral(id, referralId, CurrentUsers.required()),
+                                     settings.processingWindow());
     }
 
     /**
@@ -184,7 +196,8 @@ public class CaseworkerReferralController {
     public ReferralResponse close(@PathVariable("id") String id,
                                   @PathVariable("referralId") String referralId) {
 
-        return ReferralResponse.from(referrals.close(id, referralId, CurrentUsers.required()));
+        return ReferralResponse.from(referrals.close(id, referralId, CurrentUsers.required()),
+                                     settings.processingWindow());
     }
 
     /**
@@ -222,6 +235,27 @@ public class CaseworkerReferralController {
                                                @RequestBody RecordConfirmationRequest request) {
 
         return ReferralResponse.from(
-            referrals.recordConfirmation(id, referralId, request.toInput(), CurrentUsers.required()));
+            referrals.recordConfirmation(id, referralId, request.toInput(), CurrentUsers.required()),
+            settings.processingWindow());
+    }
+
+    /**
+     * Assigns a referral to a Master, or moves it to another (plan D2, D-8): any caseworker, on a referral that is
+     * waiting for assignment ({@code Open}) or for a direction ({@code Claimed}).
+     *
+     * <p>A {@code PUT} of a sub-resource, because the assignment is a fact the caller replaces: putting the Master
+     * it already has is a no-op 200 that records nothing. 400 on {@code masterId} for an unknown or unavailable
+     * Master; 409 for a referral that is not waiting for a direction, and 409 on {@code masterId} when the Master
+     * already holds the cap for the current window. A reassignment restarts the Master's processing window.
+     */
+    @AuditedAs(AuditAction.REFERRAL_ASSIGNED)
+    @PutMapping("/{referralId}/assignment")
+    public ReferralResponse assign(@PathVariable("id") String id,
+                                   @PathVariable("referralId") String referralId,
+                                   @RequestBody AssignReferralRequest request) {
+
+        return ReferralResponse.from(
+            referrals.assign(id, referralId, request.toMasterId(), CurrentUsers.required()),
+            settings.processingWindow());
     }
 }

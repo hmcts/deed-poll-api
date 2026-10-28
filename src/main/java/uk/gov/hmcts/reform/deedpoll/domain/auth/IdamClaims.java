@@ -43,12 +43,18 @@ public final class IdamClaims {
      * which is what a saved query records as its owner; and it is the last fallback for the display name,
      * because {@code createdBy} reading as an opaque identifier is still traceable. Those are not the same
      * use and must not be collapsed: the name is substituted when it is missing, and the id never is.
+     *
+     * <p>{@code email} is not in the reference. It is carried for one reader, linking a Masters-list entry, and
+     * {@link CurrentUser#currentUser(List, String, String, String)} normalises it. HMCTS IDAM's userinfo carries
+     * no {@code email} claim (the address is its {@code sub}), so an absent or blank claim falls back to
+     * {@code sub}; one that is not an address is then refused by the normalisation, as a malformed claim is.
      */
     public static CurrentUser userFromClaims(Map<String, ?> claims) {
         return CurrentUser.currentUser(
             rolesFrom(claims.get("roles")),
             displayNameFrom(claims),
-            string(claims.get("sub")).orElse(null));
+            string(claims.get("sub")).orElse(null),
+            string(claims.get("email")).or(() -> string(claims.get("sub"))).orElse(null));
     }
 
     /**

@@ -1,12 +1,16 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionDue;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 
+import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -45,6 +49,11 @@ import java.util.List;
  * array validated on write, so a backfilled or hand-corrected row is published as it stands rather than
  * failing to deserialise on the way out. It is <strong>empty for a migrated referral</strong> -- the source
  * store had no such field -- which is what {@code migrated} exists to explain.
+ *
+ * <p><strong>The assignment is published as the Master's list entry, never their account</strong> (plan D2):
+ * {@code assignedMaster} is the entry's id and the name it was assigned under, and the linked IDAM subject and the
+ * email are on no response. {@code directionDueBy} is computed at read time from the processing window as it is
+ * set now, so a Delivery Manager's change shows at once.
  *
  * @param id the referral id, which the get and the withdrawal sub-resource address
  * @param state where the referral has got to; {@code Closed} and {@code Withdrawn} are terminal, and at most
@@ -115,13 +124,34 @@ public record ReferralResponse(
     ConfirmationOutcome confirmationOutcome,
     LocalDateTime confirmationReceivedAt,
     String confirmationRecordedBy,
+    @Schema(nullable = true, description = "The Masters-list entry the referral is assigned to, as its id and the "
+        + "name it was assigned under, or null: an Open referral is waiting for assignment, and a referral claimed "
+        + "before assignment existed has none until that Master is listed and signs in. Kept once directed.")
+    AssignedMasterResponse assignedMaster,
+    @Schema(nullable = true, description = "When the referral was last assigned, which starts the Master's "
+        + "processing window; a reassignment restarts it. Null when it is not assigned.")
+    LocalDateTime assignedAt,
+    @Schema(nullable = true, description = "The working day, in Europe/London, whose referral window the "
+        + "assignment counts towards for the per-Master cap. Null when it is not assigned.")
+    LocalDate windowDate,
+    @Schema(nullable = true, description = "The morning (AM) or afternoon (PM) of windowDate. Null when it is not "
+        + "assigned.")
+    WindowSlot windowSlot,
+    @Schema(nullable = true, description = "When the referral is unassigned and returned to the office if the "
+        + "Master has given no direction: the start of the processing window plus its length as currently set. "
+        + "Only while the referral is Claimed; null otherwise.")
+    LocalDateTime directionDueBy,
     String createdBy,
     String modifiedBy,
     LocalDateTime createdOn,
     LocalDateTime modifiedOn) {
 
-    /** One stored referral as the response carries it. */
-    public static ReferralResponse from(Referral referral) {
+    /**
+     * One stored referral as the response carries it.
+     *
+     * @param processingWindow how long a Master has to give a direction, as set now
+     */
+    public static ReferralResponse from(Referral referral, Duration processingWindow) {
         return new ReferralResponse(
             referral.getId().toString(),
             referral.getState(),
@@ -142,6 +172,12 @@ public record ReferralResponse(
             referral.getConfirmationOutcome(),
             referral.getConfirmationReceivedAt(),
             referral.getConfirmationRecordedBy(),
+            referral.getAssignedMasterId() == null ? null
+                : new AssignedMasterResponse(referral.getAssignedMasterId().toString(), referral.getClaimedBy()),
+            referral.getAssignedAt(),
+            referral.getWindowDate(),
+            referral.getWindowSlot(),
+            DirectionDue.by(referral, processingWindow),
             referral.getCreatedBy(),
             referral.getModifiedBy(),
             referral.getCreatedOn(),
@@ -149,7 +185,7 @@ public record ReferralResponse(
     }
 
     /** A case's referrals, preserving the order the domain fetched them in -- newest first. */
-    public static List<ReferralResponse> from(List<Referral> referrals) {
-        return referrals.stream().map(ReferralResponse::from).toList();
+    public static List<ReferralResponse> from(List<Referral> referrals, Duration processingWindow) {
+        return referrals.stream().map(referral -> from(referral, processingWindow)).toList();
     }
 }

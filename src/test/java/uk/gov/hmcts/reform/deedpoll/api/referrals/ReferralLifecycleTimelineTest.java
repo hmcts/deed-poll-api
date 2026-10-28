@@ -11,6 +11,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -45,11 +46,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * One referral through its whole life over HTTP -- raised, claimed, directed, actioned -- and the case timeline
- * the four transitions leave behind, read back through the caseworker surface, the one that publishes it.
+ * One referral through its whole life over HTTP -- raised and assigned to a Master, linked by that Master's first
+ * judicial request, directed, actioned -- and the case timeline the four notes leave behind, read back through the
+ * caseworker surface, the one that publishes it. Plan D2 replaced the claim from a shared pool with the assignment.
  *
  * <p><strong>Why a class of its own.</strong> The lifecycle crosses the two surfaces: raising and closing are
- * caseworker routes and claiming and directing are judicial ones, so neither
+ * caseworker routes and directing is a judicial one, so neither
  * {@code CaseworkerReferralControllerTest} nor {@code JudicialReferralControllerTest} can walk it -- each holds
  * one persona's token and reaches the other surface's transitions through the service instead. Those classes
  * pin what each transition writes; this one pins that the four notes are <em>one chronology</em>, written in
@@ -57,7 +59,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p><strong>The token changes persona between steps, which is the point.</strong> Every request here is a real
  * forwarded access token whose userinfo document is re-stubbed as the journey hands the referral over: the
- * caseworker who raises it is not the judge who claims and directs it, and the caseworker who actions the
+ * caseworker who raises it is not the Master who directs it, and the caseworker who actions the
  * direction is a third person. That is what makes each note's {@code createdBy} evidence rather than a constant
  * -- four notes all reading "A Caseworker" would pass a journey that attributed every transition to whoever
  * happened to be first.
@@ -71,7 +73,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * the lifecycle backwards, so the order each surface actually publishes is stated here rather than inferred from
  * the other.
  *
- * <p><strong>The judicial read happens mid-journey on purpose.</strong> A Master may see the pool plus their own
+ * <p><strong>The judicial read happens mid-journey on purpose.</strong> A Master may see only their own
  * {@code Claimed}/{@code Decided} referrals, so {@code /judicial/referrals/{id}} is only reachable while the referral
  * is still live to them -- once the office closes it the answer is a 404, which {@code JudicialReferralControllerTest}
  * pins. So the journey reads the judicial projection after the direction and the caseworker projection after the
@@ -95,8 +97,11 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
     /** The caseworker who refers the case to the judiciary. */
     private static final String REFERRING_CASEWORKER = "Ada Caseworker";
 
-    /** The judge who takes it out of the pool and directs it. */
+    /** The Master the referral is assigned to, who directs it: the Masters-list name and the IDAM name agree. */
     private static final String JUDGE = "District Judge Bell";
+
+    /** The Master's address, on the Masters list and in IDAM's userinfo, which is how linking finds the entry. */
+    private static final String JUDGE_EMAIL = "judge.bell@judiciary.example";
 
     /** A third person: the office actions the direction, and need not be whoever raised the referral. */
     private static final String ACTIONING_CASEWORKER = "Bo Caseworker";
@@ -161,6 +166,9 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
     @Autowired
     private ReferenceCounterRepository referenceCounters;
 
+    @Autowired
+    private JdbcTemplate jdbc;
+
     @BeforeEach
     void setUp() {
         clearTables();
@@ -174,6 +182,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
 
     private void clearTables() {
         referrals.deleteAll();
+        jdbc.update("DELETE FROM deedpoll_master");
         notes.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
@@ -184,11 +193,18 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
     void writesTheWholeLifecycleAndBothSurfacesReadItBack() throws Exception {
         String caseId = newCase();
 
-        asCaseworker(REFERRING_CASEWORKER);
-        String referralId = raise(caseId);
+        UUID master = listedMaster();
 
+        asCaseworker(REFERRING_CASEWORKER);
+        String referralId = raise(caseId, master);
+
+        // The Master's first judicial request links their entry, and with it the referral assigned while it was
+        // unlinked, so the list that request answers already carries it.
         asJudge();
-        authorised(post(POOL + "/" + referralId + "/claim")).andExpect(status().isOk());
+        authorised(get(POOL + "/mine"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.referrals[0].id").value(referralId))
+            .andExpect(jsonPath("$.referrals[0].directionDueBy").exists());
         authorised(post(POOL + "/" + referralId + "/direction"),
             "{\"decision\":\"" + MasterDecision.Approved + "\",\"directionsText\":\"" + DIRECTIONS
                 + "\",\"changesToStandardPublication\":false}")
@@ -203,10 +219,10 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
                 assertThat(raised.getNote()).isEqualTo("Referred to a Master. Reasons: " + REASON_LABEL + ".");
                 assertThat(raised.getCreatedBy()).isEqualTo(REFERRING_CASEWORKER);
             },
-            claimed -> {
-                assertThat(claimed.getNote()).isEqualTo("Referral raised on " + raisedOn + ", reasons: " + REASON_LABEL
-                    + ", claimed by a Master.");
-                assertThat(claimed.getCreatedBy()).isEqualTo(JUDGE);
+            assigned -> {
+                assertThat(assigned.getNote()).isEqualTo("Referral raised on " + raisedOn + ", reasons: "
+                    + REASON_LABEL + ", assigned to " + JUDGE + ".");
+                assertThat(assigned.getCreatedBy()).isEqualTo(REFERRING_CASEWORKER);
             },
             directed -> {
                 assertThat(directed.getNote()).isEqualTo("Master’s direction recorded for referral raised on "
@@ -249,8 +265,8 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
             .andExpect(jsonPath("$.notes.length()").value(4))
             .andExpect(jsonPath("$.notes[0].note").value(containsString("Referred to a Master")))
             .andExpect(jsonPath("$.notes[0].createdBy").value(REFERRING_CASEWORKER))
-            .andExpect(jsonPath("$.notes[1].note").value(containsString("claimed by a Master")))
-            .andExpect(jsonPath("$.notes[1].createdBy").value(JUDGE))
+            .andExpect(jsonPath("$.notes[1].note").value(containsString("assigned to " + JUDGE)))
+            .andExpect(jsonPath("$.notes[1].createdBy").value(REFERRING_CASEWORKER))
             .andExpect(jsonPath("$.notes[2].note").value(containsString("Master’s direction recorded")))
             .andExpect(jsonPath("$.notes[2].createdBy").value(JUDGE))
             .andExpect(jsonPath("$.notes[3].note").value(containsString("marked as actioned")))
@@ -264,8 +280,8 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
             .andExpect(jsonPath("$[0].note").value(containsString("marked as actioned")))
             .andExpect(jsonPath("$[3].note").value(containsString("Referred to a Master")));
 
-        // Four transitions, four notes: the three reads above added nothing, because reading is not a
-        // transition -- and a note per read would bury the lifecycle in the grid it is written to.
+        // Four notes: the reads above and the linking added nothing, because neither is a transition -- and a note
+        // per read would bury the lifecycle in the grid it is written to.
         assertThat(notes.count()).isEqualTo(4);
     }
 
@@ -282,9 +298,9 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
      * <p>Over HTTP like every other step of the journey, rather than through the service: the whole claim of this
      * class is that the four notes appear when the four <em>requests</em> are made by four real tokens.
      */
-    private String raise(String caseId) throws Exception {
+    private String raise(String caseId, UUID master) throws Exception {
         String created = authorised(post("/caseworker/cases/" + caseId + "/referrals"),
-            "{\"reasons\":[\"" + REASON + "\"]}")
+            "{\"reasons\":[\"" + REASON + "\"],\"masterId\":\"" + master + "\"}")
             .andExpect(status().isCreated())
             .andReturn()
             .getResponse()
@@ -312,9 +328,21 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
         IDAM.stubUserInfo(StubIdam.SUBJECT, name, List.of("caseworker-civil"));
     }
 
-    /** The token the next requests carry is a judge's, holding the role IDAM does not issue yet. */
+    /** The token the next requests carry is a judge's, with the email linking matches on the Masters list. */
     private static void asJudge() {
-        IDAM.stubUserInfo(StubIdam.SUBJECT, JUDGE, List.of(Role.JUDICIAL.claimValue()));
+        IDAM.stubUserInfoBody("""
+            {"sub": "%s", "name": "%s", "email": "%s", "roles": ["%s"]}
+            """.formatted(StubIdam.SUBJECT, JUDGE, JUDGE_EMAIL, Role.JUDICIAL.claimValue()));
+    }
+
+    /** The Master on the Delivery Manager's list, not yet linked: they have never used the service. */
+    private UUID listedMaster() {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+            INSERT INTO deedpoll_master (id, name, email, available, created_at, created_by_id, created_by_name)
+            VALUES (?, ?, ?, true, now(), 'dm-subject', 'Dee Manager')
+            """, id, JUDGE, JUDGE_EMAIL);
+        return id;
     }
 
     /** The request, carrying a valid forwarded access token. */

@@ -39,6 +39,10 @@ public abstract class AbstractPostgresContainerTest {
     static void datasourceProperties(DynamicPropertyRegistry registry) {
         // Recovery is exercised explicitly in tests, without cached contexts racing another test's fixtures.
         registry.add("deedpoll.gazette.recovery-initial-delay-ms", () -> 3_600_000);
+        // The processing-window sweep likewise: tests call ReferralService.unassignOverdue themselves.
+        registry.add("deedpoll.referrals.unassign-enabled", () -> false);
+        // And the Master email timers (plan D3): tests run the digest, reminder and drain themselves.
+        registry.add("deedpoll.masters.emails-enabled", () -> false);
         registry.add("spring.datasource.url", () -> JDBC_URL);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);

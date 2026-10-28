@@ -151,7 +151,9 @@ class ConfirmationSecurityTest {
         service = new ReferralService(deedPolls, referrals, notes,
                                       claimWindow(Duration.ofHours(2)),
                                       mock(EntityManager.class),
-                                      mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
+                                      mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
+                                      mock(uk.gov.hmcts.reform.deedpoll.repository.MasterRepository.class),
+                                      mock(uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays.class));
 
         when(referrals.save(any())).thenAnswer(call -> call.getArgument(0));
     }
@@ -576,7 +578,7 @@ class ConfirmationSecurityTest {
     /** The stored claim window, as the sweep reads it. */
     private static ProcessSettingsService claimWindow(Duration window) {
         ProcessSettingsService settings = mock(ProcessSettingsService.class);
-        when(settings.referralClaimExpiry()).thenReturn(window);
+        when(settings.processingWindow()).thenReturn(window);
         return settings;
     }
 }

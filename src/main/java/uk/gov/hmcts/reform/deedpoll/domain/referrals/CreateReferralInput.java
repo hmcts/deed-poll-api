@@ -4,6 +4,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Create payload for a referral to the judiciary, already validated.
@@ -12,7 +13,7 @@ import java.util.Optional;
  * {@code CreateWitnessInput} there is no {@code reference/ts} module behind this and none to look for.
  *
  * <p>Only reachable through {@link ReferralSchemas#parseCreateReferral}, which is what makes "unknown keys
- * are stripped" structural rather than a rule someone has to remember. Three things in particular have
+ * are stripped" structural rather than a rule someone has to remember. Two things in particular have
  * nowhere to land, and each is a rule rather than an omission:
  *
  * <ul>
@@ -20,11 +21,13 @@ import java.util.Optional;
  *       cannot post a referral onto a case other than the one they addressed.</li>
  *   <li><strong>The state</strong> -- a created referral is {@code Open}, and every later state is reached
  *       through a transition that has its own guard. A body that could name {@code Closed} would let a
- *       caller skip the pool entirely.</li>
- *   <li><strong>A target judge</strong> -- the form's "To: master name" was the manual tracking mechanism
- *       this feature replaces. Who picks a referral up is a {@code Claimed}-state concern, not a field the
- *       caseworker raising it fills in.</li>
+ *       caller skip assignment entirely.</li>
  * </ul>
+ *
+ * <p>The Master is the exception that plan D2 made (decision D-1): {@code masterId} names a Masters-list entry, and
+ * the referral is created assigned to it in the same transaction. It is an entry id and never a judge's identity;
+ * absent, the referral is created {@code Open}, waiting for assignment, which is what the admin deployed before D2
+ * sends.
  *
  * <p>Types, not wire strings, which is the one place this differs from {@code CreateSavedQueryInput}: a
  * saved query stores the strings it was sent, so its input carries them through unparsed, whereas a
@@ -37,19 +40,23 @@ import java.util.Optional;
  * @param urgency the referral's own urgency, defaulting to {@link Urgency#Normal}. Separate from the case's,
  *     and a primitive value rather than an {@link Optional} because the column has a default and no null
  * @param urgencyReason why it jumped the queue, required when {@code urgency} is {@link Urgency#Urgent}
+ * @param masterId the Masters-list entry to assign the referral to, absent to leave it waiting for assignment
  */
 public record CreateReferralInput(
     List<ReferralReason> reasons,
     Optional<String> notes,
     Urgency urgency,
-    Optional<String> urgencyReason) {
+    Optional<String> urgencyReason,
+    Optional<UUID> masterId) {
 
+    public CreateReferralInput {
+        reasons = List.copyOf(reasons);
+    }
+
+    /** A referral raised with no Master, waiting for assignment. */
     public CreateReferralInput(
         List<ReferralReason> reasons, Optional<String> notes, Urgency urgency, Optional<String> urgencyReason) {
 
-        this.reasons = List.copyOf(reasons);
-        this.notes = notes;
-        this.urgency = urgency;
-        this.urgencyReason = urgencyReason;
+        this(reasons, notes, urgency, urgencyReason, Optional.empty());
     }
 }

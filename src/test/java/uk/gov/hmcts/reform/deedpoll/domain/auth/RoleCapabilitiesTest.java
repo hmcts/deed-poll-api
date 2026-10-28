@@ -73,7 +73,7 @@ class RoleCapabilitiesTest {
     @Test
     void rolesAndCapabilitiesCannotBeMutatedOrIndependentlyAsserted() {
         List<Role> roles = new ArrayList<>(List.of(Role.CASEWORKER));
-        CurrentUser user = new CurrentUser(roles, true, "Audit name", "stable-subject");
+        CurrentUser user = new CurrentUser(roles, true, "Audit name", "stable-subject", null);
         roles.add(Role.DELIVERY_MANAGER);
         assertThat(user.isAdmin()).isFalse();
         assertThat(user.can(Capability.ACCESS_GAZETTE)).isFalse();
@@ -81,7 +81,8 @@ class RoleCapabilitiesTest {
             .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> RoleCapabilities.forRoles(List.of(Role.TEAM_LEADER))
             .add(Capability.ACCESS_GAZETTE)).isInstanceOf(UnsupportedOperationException.class);
-        CurrentUser manager = new CurrentUser(List.of(Role.DELIVERY_MANAGER), false, "Audit name", "stable-subject");
+        CurrentUser manager =
+            new CurrentUser(List.of(Role.DELIVERY_MANAGER), false, "Audit name", "stable-subject", null);
         assertThat(manager.isAdmin()).isTrue();
         assertThat(manager.name()).isEqualTo("Audit name");
         assertThat(manager.requireUserId()).isEqualTo("stable-subject");

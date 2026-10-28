@@ -6,19 +6,21 @@ import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * The singleton is seeded by Flyway (V40), so the first editor has the same lock and revision as every later one,
- * and a missing row is an error rather than a default.
+ * The singleton is seeded by Flyway (V40, extended by V42), so the first editor has the same lock and revision as
+ * every later one, and a missing row is an error rather than a default.
  */
 @Repository
 public class ProcessSettingsRepository {
 
     // Compile-time constants, one per variant, so no statement is assembled at runtime.
-    private static final String READ = "SELECT referral_claim_expiry_minutes, revision, updated_at, updated_by_name "
-        + "FROM deedpoll_process_settings WHERE id = 1";
+    private static final String READ = "SELECT referral_claim_expiry_minutes, reminder_interval_hours, "
+        + "master_window_cap, morning_window_start, morning_window_end, afternoon_window_start, afternoon_window_end, "
+        + "revision, updated_at, updated_by_name FROM deedpoll_process_settings WHERE id = 1";
     private static final String READ_FOR_UPDATE = READ + " FOR UPDATE";
 
     private final JdbcTemplate jdbc;
@@ -31,6 +33,11 @@ public class ProcessSettingsRepository {
     public Optional<ProcessSettings> read(boolean lock) {
         List<ProcessSettings> rows = jdbc.query(lock ? READ_FOR_UPDATE : READ,
             (row, index) -> new ProcessSettings(Duration.ofMinutes(row.getInt("referral_claim_expiry_minutes")),
+                Duration.ofHours(row.getInt("reminder_interval_hours")), row.getInt("master_window_cap"),
+                row.getObject("morning_window_start", LocalTime.class),
+                row.getObject("morning_window_end", LocalTime.class),
+                row.getObject("afternoon_window_start", LocalTime.class),
+                row.getObject("afternoon_window_end", LocalTime.class),
                 row.getInt("revision"), row.getObject("updated_at", LocalDateTime.class),
                 row.getString("updated_by_name")));
         return rows.stream().findFirst();
@@ -46,20 +53,16 @@ public class ProcessSettingsRepository {
                 INSERT INTO deedpoll_process_settings_change
                     (revision, field, previous_value, new_value, changed_at, changed_by_id, changed_by_name)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, next.revision(), field, valueOf(previous, field), valueOf(next, field), next.updatedAt(),
+                """, next.revision(), field, previous.valueOf(field), next.valueOf(field), next.updatedAt(),
                 subject, next.updatedBy());
         }
         jdbc.update("""
-            UPDATE deedpoll_process_settings SET referral_claim_expiry_minutes = ?, revision = ?, updated_at = ?,
-                updated_by_id = ?, updated_by_name = ? WHERE id = 1
-            """, next.referralClaimExpiryMinutes(), next.revision(), next.updatedAt(), subject, next.updatedBy());
-    }
-
-    private static String valueOf(ProcessSettings settings, String field) {
-        return switch (field) {
-            case ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES ->
-                String.valueOf(settings.referralClaimExpiryMinutes());
-            default -> throw new IllegalArgumentException("Not a process setting: " + field);
-        };
+            UPDATE deedpoll_process_settings SET referral_claim_expiry_minutes = ?, reminder_interval_hours = ?,
+                master_window_cap = ?, morning_window_start = ?, morning_window_end = ?, afternoon_window_start = ?,
+                afternoon_window_end = ?, revision = ?, updated_at = ?, updated_by_id = ?, updated_by_name = ?
+            WHERE id = 1
+            """, next.referralClaimExpiryMinutes(), next.reminderIntervalHours(), next.masterWindowCap(),
+            next.morningWindowStart(), next.morningWindowEnd(), next.afternoonWindowStart(),
+            next.afternoonWindowEnd(), next.revision(), next.updatedAt(), subject, next.updatedBy());
     }
 }

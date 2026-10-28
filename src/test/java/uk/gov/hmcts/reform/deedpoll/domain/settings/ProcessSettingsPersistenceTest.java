@@ -18,6 +18,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 
 import java.time.Duration;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -38,7 +39,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 
 /**
- * V40 and the service against a real Postgres, each update in its own committed transaction.
+ * V40, V42 and the service against a real Postgres, each update in its own committed transaction.
  *
  * <p>Not rolled back, because the concurrency and rollback cases are only meaningful across real commits. The
  * singleton and its history are reset around every test; the audit rows cannot be (V36 refuses the delete), so each
@@ -68,52 +69,65 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
     void reseed() {
         jdbc.update("DELETE FROM deedpoll_process_settings_change");
         jdbc.update("""
-            INSERT INTO deedpoll_process_settings (id, referral_claim_expiry_minutes, revision) VALUES (1, 120, 0)
-            ON CONFLICT (id) DO UPDATE SET referral_claim_expiry_minutes = 120, revision = 0, updated_at = NULL,
+            INSERT INTO deedpoll_process_settings (id, referral_claim_expiry_minutes, revision) VALUES (1, 10080, 0)
+            ON CONFLICT (id) DO UPDATE SET referral_claim_expiry_minutes = 10080, reminder_interval_hours = 48,
+                master_window_cap = 10, morning_window_start = '07:00', morning_window_end = '10:30',
+                afternoon_window_start = '14:00', afternoon_window_end = '14:30', revision = 0, updated_at = NULL,
                 updated_by_id = NULL, updated_by_name = NULL
             """);
         subject = "process-settings-" + UUID.randomUUID();
     }
 
     @Test
-    @DisplayName("the migration seeds two hours at revision 0 with no attribution")
+    @DisplayName("the seed: seven days, 48 hours, a cap of 10 and the two windows, at revision 0 with no attribution")
     void seeded() {
         ProcessSettings settings = service.get(deliveryManager(subject));
 
-        assertThat(settings).isEqualTo(new ProcessSettings(Duration.ofHours(2), 0, null, null));
-        assertThat(service.referralClaimExpiry()).isEqualTo(Duration.ofMinutes(120));
+        assertThat(settings).isEqualTo(new ProcessSettings(Duration.ofDays(7), Duration.ofHours(48), 10,
+            LocalTime.of(7, 0), LocalTime.of(10, 30), LocalTime.of(14, 0), LocalTime.of(14, 30), 0, null, null));
+        assertThat(service.processingWindow()).isEqualTo(Duration.ofMinutes(10080));
+        assertThat(service.reminderInterval()).isEqualTo(Duration.ofHours(48));
+        assertThat(service.masterWindowCap()).isEqualTo(10);
+        assertThat(service.referralWindows()).isEqualTo(settings.referralWindows());
     }
 
     @Test
-    @DisplayName("the database refuses a window outside 30 to 1440 minutes, and attribution without a revision")
+    @DisplayName("the database refuses every value outside its bounds, misordered windows, and unrevised attribution")
     void databaseChecks() {
-        assertThatThrownBy(() -> jdbc.update(
-            "UPDATE deedpoll_process_settings SET referral_claim_expiry_minutes = 29 WHERE id = 1"))
-            .isInstanceOf(DataIntegrityViolationException.class);
-        assertThatThrownBy(() -> jdbc.update(
-            "UPDATE deedpoll_process_settings SET referral_claim_expiry_minutes = 1441 WHERE id = 1"))
-            .isInstanceOf(DataIntegrityViolationException.class);
+        for (String assignment : List.of("referral_claim_expiry_minutes = 1439",
+                                         "referral_claim_expiry_minutes = 43201",
+                                         "reminder_interval_hours = 0", "reminder_interval_hours = 169",
+                                         "master_window_cap = 0", "master_window_cap = 101",
+                                         "morning_window_start = '07:10'", "afternoon_window_end = '14:30:30'",
+                                         "morning_window_end = '07:00'", "morning_window_end = '14:00'",
+                                         "afternoon_window_end = '14:00'")) {
+            assertThatThrownBy(() -> jdbc.update("UPDATE deedpoll_process_settings SET " + assignment
+                + " WHERE id = 1")).as(assignment).isInstanceOf(DataIntegrityViolationException.class);
+        }
+        assertThat(jdbc.update("UPDATE deedpoll_process_settings SET referral_claim_expiry_minutes = 43200, "
+            + "reminder_interval_hours = 1, master_window_cap = 100, morning_window_end = '13:45' WHERE id = 1"))
+            .isOne();
         assertThatThrownBy(() -> jdbc.update("UPDATE deedpoll_process_settings SET revision = 1 WHERE id = 1"))
             .isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> jdbc.update(
-            "INSERT INTO deedpoll_process_settings (id, referral_claim_expiry_minutes, revision) VALUES (2, 120, 0)"))
+            "INSERT INTO deedpoll_process_settings (id, referral_claim_expiry_minutes, revision) VALUES (2, 10080, 0)"))
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     @DisplayName("a change commits the row, one history row with both values, and one audit event with no values")
     void change() {
-        ProcessSettings next = service.update(deliveryManager(subject), body(45, 0));
+        ProcessSettings next = service.update(deliveryManager(subject), body(1445, 0));
 
         assertThat(next.revision()).isOne();
-        assertThat(row()).containsEntry("referral_claim_expiry_minutes", 45).containsEntry("revision", 1)
+        assertThat(row()).containsEntry("referral_claim_expiry_minutes", 1445).containsEntry("revision", 1)
             .containsEntry("updated_by_id", subject).containsEntry("updated_by_name", "A Delivery Manager");
         assertThat(row().get("updated_at")).isNotNull();
         assertThat(history()).singleElement().satisfies(change -> assertThat(change)
             .containsEntry("revision", 1)
             .containsEntry("field", "referralClaimExpiryMinutes")
-            .containsEntry("previous_value", "120")
-            .containsEntry("new_value", "45")
+            .containsEntry("previous_value", "10080")
+            .containsEntry("new_value", "1445")
             .containsEntry("changed_by_id", subject)
             .containsEntry("changed_by_name", "A Delivery Manager"));
         assertThat(events()).singleElement().satisfies(event -> assertThat(event)
@@ -123,7 +137,7 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
             .containsEntry("case_id", null)
             .containsEntry("fields", "referralClaimExpiryMinutes")
             .containsEntry("value_rows", 0L));
-        assertThat(service.referralClaimExpiry()).isEqualTo(Duration.ofMinutes(45));
+        assertThat(service.processingWindow()).isEqualTo(Duration.ofMinutes(1445));
     }
 
     @Test
@@ -131,9 +145,9 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
     void nothingWritten() {
         CurrentUser caller = deliveryManager(subject);
 
-        assertThat(service.update(caller, body(120, 0)).revision()).isZero();
-        assertThatThrownBy(() -> service.update(caller, body(60, 1))).isInstanceOf(ConflictError.class);
-        assertThatThrownBy(() -> service.update(caller, body(29, 0))).isInstanceOf(InvalidInputError.class);
+        assertThat(service.update(caller, body(10080, 0)).revision()).isZero();
+        assertThatThrownBy(() -> service.update(caller, body(2880, 1))).isInstanceOf(ConflictError.class);
+        assertThatThrownBy(() -> service.update(caller, body(1439, 0))).isInstanceOf(InvalidInputError.class);
 
         assertUnchanged();
     }
@@ -141,9 +155,9 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("a stale revision carrying the value the row now holds is still a conflict, not a save")
     void staleBeatsNoOp() {
-        service.update(deliveryManager("first-" + subject), body(60, 0));
+        service.update(deliveryManager("first-" + subject), body(2880, 0));
 
-        assertThatThrownBy(() -> service.update(deliveryManager(subject), body(60, 0)))
+        assertThatThrownBy(() -> service.update(deliveryManager(subject), body(2880, 0)))
             .isInstanceOf(ConflictError.class);
         assertThat(row()).containsEntry("revision", 1);
         assertThat(history()).hasSize(1);
@@ -167,9 +181,9 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             final Future<ProcessSettings> winner =
-                pool.submit(() -> service.update(deliveryManager(subject), body(60, 0)));
+                pool.submit(() -> service.update(deliveryManager(subject), body(2880, 0)));
             await(holding);
-            Future<ProcessSettings> loser = pool.submit(() -> service.update(deliveryManager(subject), body(90, 0)));
+            Future<ProcessSettings> loser = pool.submit(() -> service.update(deliveryManager(subject), body(4320, 0)));
             awaitLockWaiter();
             release.countDown();
 
@@ -188,8 +202,9 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
             pool.shutdownNow();
         }
 
-        assertThat(row()).containsEntry("revision", 1).containsEntry("referral_claim_expiry_minutes", 60);
-        assertThat(history()).singleElement().satisfies(change -> assertThat(change).containsEntry("new_value", "60"));
+        assertThat(row()).containsEntry("revision", 1).containsEntry("referral_claim_expiry_minutes", 2880);
+        assertThat(history()).singleElement()
+            .satisfies(change -> assertThat(change).containsEntry("new_value", "2880"));
         assertThat(events()).hasSize(1);
     }
 
@@ -198,7 +213,7 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
     void auditFailureRollsBack() {
         stub(() -> doThrow(new IllegalStateException("audit refused")).when(audit).record(any(), any()));
 
-        assertThatThrownBy(() -> service.update(deliveryManager(subject), body(60, 0)))
+        assertThatThrownBy(() -> service.update(deliveryManager(subject), body(2880, 0)))
             .isInstanceOf(IllegalStateException.class);
 
         assertUnchanged();
@@ -210,13 +225,13 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
         jdbc.update("""
             INSERT INTO deedpoll_process_settings_change
                 (revision, field, previous_value, new_value, changed_at, changed_by_id, changed_by_name)
-            VALUES (1, 'referralClaimExpiryMinutes', '120', '30', now(), 'someone', 'Someone')
+            VALUES (1, 'referralClaimExpiryMinutes', '10080', '1440', now(), 'someone', 'Someone')
             """);
 
-        assertThatThrownBy(() -> service.update(deliveryManager(subject), body(60, 0)))
+        assertThatThrownBy(() -> service.update(deliveryManager(subject), body(2880, 0)))
             .isInstanceOf(DataIntegrityViolationException.class);
 
-        assertThat(row()).containsEntry("referral_claim_expiry_minutes", 120).containsEntry("revision", 0);
+        assertThat(row()).containsEntry("referral_claim_expiry_minutes", 10080).containsEntry("revision", 0);
         assertThat(history()).singleElement().satisfies(change -> assertThat(change)
             .containsEntry("changed_by_id", "someone"));
         assertThat(events()).isEmpty();
@@ -227,7 +242,7 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
     void missingRow() {
         jdbc.update("DELETE FROM deedpoll_process_settings");
 
-        assertThatThrownBy(service::referralClaimExpiry).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(service::processingWindow).isInstanceOf(IllegalStateException.class);
     }
 
     /**
@@ -239,7 +254,7 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
     }
 
     private void assertUnchanged() {
-        assertThat(row()).containsEntry("referral_claim_expiry_minutes", 120).containsEntry("revision", 0)
+        assertThat(row()).containsEntry("referral_claim_expiry_minutes", 10080).containsEntry("revision", 0)
             .containsEntry("updated_at", null).containsEntry("updated_by_id", null);
         assertThat(history()).isEmpty();
         assertThat(events()).isEmpty();

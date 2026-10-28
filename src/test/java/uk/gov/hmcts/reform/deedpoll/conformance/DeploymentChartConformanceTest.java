@@ -156,9 +156,11 @@ class DeploymentChartConformanceTest {
         Map<String, Object> notify = new TreeMap<>(environment());
         notify.keySet().removeIf(name -> !name.startsWith("NOTIFY_"));
 
+        // A plain DEED_POLL_PLACEHOLDER is a template no environment has yet (the Master emails), so prod's too.
         assertThat(notify).isNotEmpty().allSatisfy((name, value) -> assertThat(String.valueOf(value))
             .as("%s is a non-prod value; prod must render it as DEED_POLL_PLACEHOLDER or empty", name)
             .satisfiesAnyOf(
+                v -> assertThat(v).isEqualTo("DEED_POLL_PLACEHOLDER"),
                 v -> assertThat(v).startsWith("{{ if eq .Values.global.environment `prod` }}DEED_POLL_PLACEHOLDER"
                     + "{{ else }}"),
                 v -> assertThat(v).startsWith("{{ if ne .Values.global.environment `prod` }}")
@@ -189,6 +191,19 @@ class DeploymentChartConformanceTest {
         Map<String, Object> java = (Map<String, Object>) values.get("java");
         Map<String, Object> environment = (Map<String, Object>) java.get("environment");
         assertThat(environment).containsEntry("ENVIRONMENT_NAME", "preview");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void previewTurnsOffTheTimersThatWouldActOnAatData() throws IOException {
+        // A preview runs against AAT's database before merge, so its sweep and Master email jobs must not run.
+        Map<String, Object> values = new Yaml().loadAs(
+            read(CHART_DIR.resolve("values.preview.template.yaml")), Map.class);
+        Map<String, Object> java = (Map<String, Object>) values.get("java");
+        Map<String, Object> environment = (Map<String, Object>) java.get("environment");
+        assertThat(environment)
+            .containsEntry("REFERRAL_UNASSIGN_ENABLED", "false")
+            .containsEntry("MASTER_EMAILS_ENABLED", "false");
     }
 
     @SuppressWarnings("unchecked")

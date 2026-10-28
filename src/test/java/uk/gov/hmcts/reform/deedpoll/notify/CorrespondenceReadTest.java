@@ -39,6 +39,7 @@ import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
 import uk.gov.service.notify.NotificationClient;
 import uk.gov.service.notify.SendEmailResponse;
 
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
 
@@ -105,6 +106,8 @@ class CorrespondenceReadTest extends AbstractPostgresContainerTest {
         row.setPersonalisation(Map.of("deed_document", document.getId(), "additional_notes", "frozen"));
         row.setState(NotificationState.Pending);
         row.setCreatedBy("Original worker");
+        // Ahead of any Pending row an earlier class left in the shared database, so drain(1) takes this one.
+        row.setNextAttemptAt(LocalDateTime.of(2000, 1, 1, 0, 0));
         row = notifications.saveAndFlush(row);
         when(tokens.accessToken()).thenReturn("Bearer system");
         when(s2s.generate()).thenReturn("Bearer s2s");
@@ -130,7 +133,7 @@ class CorrespondenceReadTest extends AbstractPostgresContainerTest {
         if (signedIn) {
             signIn();
         }
-        assertThat(outbox.drain()).isEqualTo(1);
+        assertThat(outbox.drain(1)).isEqualTo(1);
         verify(cdam).getDocumentBinary("Bearer system", "Bearer s2s", document.getCdamDocumentId());
         verify(notify).sendEmail(eq("adult-template"), eq("frozen@example.test"), anyMap(),
             eq(row.getId().toString()), eq("reply-to"));
@@ -147,7 +150,7 @@ class CorrespondenceReadTest extends AbstractPostgresContainerTest {
             when(cdam.getDocumentBinary(anyString(), anyString(), any()))
                 .thenThrow(new IllegalStateException("read unavailable"));
         }
-        assertThat(outbox.drain()).isZero();
+        assertThat(outbox.drain(1)).isZero();
         Notification stored = notifications.findById(row.getId()).orElseThrow();
         assertThat(stored.getAttempts()).isEqualTo(1);
         assertThat(stored.getState()).isEqualTo(NotificationState.Pending);
@@ -166,7 +169,7 @@ class CorrespondenceReadTest extends AbstractPostgresContainerTest {
             document.setCdamHashToken("transient-test-token");
         }
         documents.saveAndFlush(document);
-        assertThat(outbox.drain()).isZero();
+        assertThat(outbox.drain(1)).isZero();
         verifyNoInteractions(cdam, tokens, notify);
     }
 
@@ -186,7 +189,7 @@ class CorrespondenceReadTest extends AbstractPostgresContainerTest {
         try {
             jdbc.update("UPDATE deedpoll_supportingdocument SET \"deedPollId\" = ? WHERE id = ?",
                 other, document.getId());
-            assertThat(outbox.drain()).isZero();
+            assertThat(outbox.drain(1)).isZero();
             verifyNoInteractions(cdam, tokens, notify);
         } finally {
             caseRows.deleteById(other);

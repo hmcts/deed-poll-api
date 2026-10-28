@@ -170,7 +170,7 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
     @Test
     void concurrentFirstSavesHaveOnlyOneWinnerAndOneAuditRow() throws Exception {
         CurrentUser deliveryManager =
-            new CurrentUser(List.of(Role.DELIVERY_MANAGER), true, "Delivery Manager", "subject");
+            new CurrentUser(List.of(Role.DELIVERY_MANAGER), true, "Delivery Manager", "subject", null);
         CountDownLatch start = new CountDownLatch(1);
         try (var executor = Executors.newFixedThreadPool(2)) {
             var attempts = List.of("one@example.com", "two@example.com").stream().map(email -> executor.submit(() -> {
@@ -192,7 +192,7 @@ class CaseworkerGazetteSettingsControllerTest extends AbstractPostgresContainerT
     @Test
     void failedAuditWriteLeavesTheSettingUnchanged() {
         CurrentUser deliveryManager =
-            new CurrentUser(List.of(Role.DELIVERY_MANAGER), true, "a".repeat(300), "subject");
+            new CurrentUser(List.of(Role.DELIVERY_MANAGER), true, "a".repeat(300), "subject", null);
         assertThatThrownBy(() -> service.update(
             deliveryManager, Map.of("recipientEmail", "a@example.com", "revision", 0)))
             .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
