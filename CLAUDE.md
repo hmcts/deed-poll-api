@@ -492,6 +492,17 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   values, and recompute both read-models. No email, and no Gazette code changes. **A withdrawn direction is a live
   claim again:** if the judge does not direct it, the inactivity sweep returns it to the pool like any other claim.
   That is deliberate and published in withdraw's OpenAPI description; do not special-case the sweep.
+- **A minor's referral says what kind it is, as `Minor*` reasons beside `Minor`.** Master Sullivan's feedback (Steve,
+  2026-10-27) added eight `ReferralReason` members marked `isMinorDetail()`: `MinorTransgender`,
+  `MinorParentalConsent`/`MinorNoParentalConsent`, `MinorStepparentConsent`/`MinorNoStepparentConsent`,
+  `MinorCourtOrder` and `MinorAged16Or17Consented`/`MinorAged16Or17NotConsented`. They are reasons, not a new field,
+  so they need no migration. `ReferralSchemas.parseCreateReferral` accepts one only beside `Minor` and refuses both
+  halves of a pair (`CONTRADICTORY_MINOR_DETAILS`). **`Minor` alone is still accepted, deliberately, for one
+  release:** the admin deployed beside this api can send it, so "at least one detail" arrives with the contract step
+  after admin requires it. Never rename a member; the names are the stored form. **Each member's `label()` is the
+  admin screens' wording** (Steve, 2026-10-27), and `ReferralNotes` writes reasons with it, folding the details into
+  `Minor` ("Applicant is a minor: Transgender, Have parental consent; Other"), so change a label in admin's
+  `REFERRAL_REASON_LABEL` and here together. Notes written before that keep the raw names; nothing parses note text.
 - **The Master's Gazette answer is "changes to the standard publication", not "publish".** Master Sullivan's feedback
   (Steve, 2026-10-27): the direction asks "Are there any changes to the standard publications in the Gazette?", and
   Yes means do not publish, or publish only as the direction text says (the last name only, for example). V41 renamed

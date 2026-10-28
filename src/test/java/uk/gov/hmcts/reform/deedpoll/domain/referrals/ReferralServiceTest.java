@@ -473,7 +473,7 @@ class ReferralServiceTest {
             // recorded as the machine's.
             assertThat(note.author().author()).isEqualTo("Ada Caseworker");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
-            assertThat(note.text()).contains("Referred to a Master", "Minor", "Hearing on Friday");
+            assertThat(note.text()).contains("Referred to a Master", "Applicant is a minor", "Hearing on Friday");
         }
 
         @Test
@@ -707,7 +707,7 @@ class ReferralServiceTest {
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             // A case may carry several referrals over its life, so a bare "referral withdrawn" in a grid of
             // thirty notes would not say which.
-            assertThat(note.text()).contains("withdrawn", "1 September 2026", "Minor");
+            assertThat(note.text()).contains("withdrawn", "1 September 2026", "Applicant is a minor");
         }
 
         @Test
@@ -1027,7 +1027,7 @@ class ReferralServiceTest {
             assertThat(note.author().author()).isEqualTo("District Judge Bell");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text()).isEqualTo(
-                "Referral raised on 1 September 2026, reasons: Minor, claimed by a Master.");
+                "Referral raised on 1 September 2026, reasons: Applicant is a minor, claimed by a Master.");
             // A case may carry several referrals over its life, so the note has to say which one -- by the
             // raised date and reasons a caseworker can recognise, never by a uuid they cannot.
             assertThat(note.text()).doesNotContain(REFERRAL_ID.toString());
@@ -1484,7 +1484,7 @@ class ReferralServiceTest {
             // The decision and the Gazette answer in full, because those two are what a caseworker scanning the
             // grid needs in order to know whether anything is waiting for them.
             assertThat(note.text()).isEqualTo(
-                "Master’s direction recorded for referral raised on 1 September 2026, reasons: Minor."
+                "Master’s direction recorded for referral raised on 1 September 2026, reasons: Applicant is a minor."
                     + " Decision: Approved. Changes to standard publication in the Gazette: No."
                     + " See the referral for the full direction.");
             assertThat(note.text()).doesNotContain(REFERRAL_ID.toString());
@@ -1618,7 +1618,7 @@ class ReferralServiceTest {
             assertThat(note.author().author()).isEqualTo("District Judge Bell");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text()).isEqualTo(
-                "Master’s direction revised for referral raised on 1 September 2026, reasons: Minor."
+                "Master’s direction revised for referral raised on 1 September 2026, reasons: Applicant is a minor."
                     + " Decision: Rejected. Changes to standard publication in the Gazette: Yes."
                     + " See the referral for the full direction.");
         }
@@ -1814,7 +1814,7 @@ class ReferralServiceTest {
             assertThat(note.author().author()).isEqualTo("District Judge Bell");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text()).isEqualTo(
-                "Master’s direction withdrawn for referral raised on 1 September 2026, reasons: Minor."
+                "Master’s direction withdrawn for referral raised on 1 September 2026, reasons: Applicant is a minor."
                     + " The withdrawn decision was: Approved. Changes to standard publication in the Gazette: No."
                     + " The referral is back with the Master to direct again.");
         }
@@ -2083,7 +2083,8 @@ class ReferralServiceTest {
             assertThat(note.author().author()).isEqualTo("Ada Caseworker");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text()).isEqualTo(
-                "Master’s direction for referral raised on 1 September 2026, reasons: Minor, marked as actioned.");
+                "Master’s direction for referral raised on 1 September 2026, reasons: Applicant is a minor,"
+                    + " marked as actioned.");
             // Pairable with the direction note a few rows above it in the same grid, by the raised date and
             // reasons a caseworker can recognise rather than by a uuid they cannot.
             assertThat(note.text()).doesNotContain(REFERRAL_ID.toString());

@@ -503,7 +503,10 @@ public class OpenAPIWriteBodies {
             .items(reason)
             .minItems(1)
             .description("Why the case is being referred. At least one, de-duplicated, and stored in the order "
-                + "they are sent. " + ReferralReason.Other + " requires notes."));
+                + "they are sent. " + ReferralReason.Other + " requires notes. The Minor* details (MinorTransgender "
+                + "and the rest) say what kind of minor's application it is: each is accepted only beside "
+                + ReferralReason.Minor + ", and the three consent pairs (parental, stepparent, a 16 or 17 year "
+                + "old's own) cannot both be named."));
         create.addProperty("notes", new StringSchema()
             .maxLength(ReferralSchemas.MAX_NOTES_LENGTH)
             .description("The single free-text field: the explanation " + ReferralReason.Other + " requires and "

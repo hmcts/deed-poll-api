@@ -106,6 +106,12 @@ public final class ReferralSchemas {
     private static final String INVALID_CONFIRMATION = "Confirmation is not valid";
 
     private static final String REASONS = "reasons";
+
+    /** The minor's details that cannot both be true of one application, as the Masters listed them in pairs. */
+    private static final List<List<ReferralReason>> CONTRADICTORY_MINOR_DETAILS = List.of(
+        List.of(ReferralReason.MinorParentalConsent, ReferralReason.MinorNoParentalConsent),
+        List.of(ReferralReason.MinorStepparentConsent, ReferralReason.MinorNoStepparentConsent),
+        List.of(ReferralReason.MinorAged16Or17Consented, ReferralReason.MinorAged16Or17NotConsented));
     private static final String NOTES = "notes";
     private static final String URGENCY = "urgency";
     private static final String URGENCY_REASON = "urgencyReason";
@@ -154,9 +160,31 @@ public final class ReferralSchemas {
             errors.add(new FieldError(URGENCY_REASON, URGENCY_REASON + " is required when " + URGENCY
                 + " is " + Urgency.Urgent));
         }
+        minorDetails(reasons, errors);
 
         refuseIfAny(INVALID_REFERRAL, errors);
         return new CreateReferralInput(reasons, notes, urgency, urgencyReason);
+    }
+
+    /**
+     * The minor's details beneath {@link ReferralReason#Minor} (Master Sullivan's feedback, Steve, 2026-10-27): each
+     * is accepted only beside {@code Minor}, and no referral may carry both halves of a contradictory pair.
+     *
+     * <p>Both refusals are on {@link #REASONS}, the one control they belong to. That {@code Minor} needs at least one
+     * detail is deliberately <strong>not</strong> enforced yet: the admin deployed beside this api can send
+     * {@code Minor} alone, so the rule arrives with the contract step, once admin requires a detail itself.
+     */
+    private static void minorDetails(List<ReferralReason> reasons, List<FieldError> errors) {
+        List<ReferralReason> details = reasons.stream().filter(ReferralReason::isMinorDetail).toList();
+        if (!details.isEmpty() && !reasons.contains(ReferralReason.Minor)) {
+            String named = details.stream().map(Enum::name).collect(Collectors.joining(", "));
+            errors.add(new FieldError(REASONS, REASONS + " names a minor's detail (" + named + ") without "
+                + ReferralReason.Minor));
+        }
+        CONTRADICTORY_MINOR_DETAILS.stream()
+            .filter(pair -> reasons.containsAll(pair))
+            .forEach(pair -> errors.add(new FieldError(REASONS, REASONS + " cannot name both " + pair.get(0)
+                + " and " + pair.get(1))));
     }
 
     /**

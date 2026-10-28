@@ -7,8 +7,11 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * The text of the case notes a referral writes as it moves through its lifecycle: raised, claimed, directed,
@@ -289,7 +292,7 @@ public final class ReferralNotes {
     private static String identifies(Referral referral) {
         String reasons = referral.getReasons().isEmpty()
             ? "no reasons recorded"
-            : String.join(", ", referral.getReasons());
+            : described(referral.getReasons());
         return "raised on " + DAY.format(referral.getCreatedOn()) + ", reasons: " + reasons;
     }
 
@@ -336,6 +339,36 @@ public final class ReferralNotes {
     }
 
     private static String names(CreateReferralInput dto) {
-        return dto.reasons().stream().map(ReferralReason::name).reduce((a, b) -> a + ", " + b).orElse("");
+        return described(dto.reasons().stream().map(Enum::name).toList());
+    }
+
+    /**
+     * Stored reasons in the screens' words (Steve, 2026-10-27), with a minor's details folded into
+     * {@link ReferralReason#Minor} as the admin's {@code referralReasonLabels} folds them: "Applicant is a minor:
+     * Transgender, Have parental consent; Other". Semicolons between reasons, because the details are themselves a
+     * comma list. A stored name this enum no longer knows, from a backfilled or hand-corrected row, is quoted as it
+     * stands rather than dropped, and so is a detail stored without {@code Minor}, which api refuses but an older row
+     * could hold.
+     */
+    private static String described(List<String> reasons) {
+        List<String> details = reasons.stream()
+            .filter(name -> reasonNamed(name).map(ReferralReason::isMinorDetail).orElse(false))
+            .toList();
+        boolean folded = reasons.contains(ReferralReason.Minor.name()) && !details.isEmpty();
+        return reasons.stream()
+            .filter(name -> !(folded && details.contains(name)))
+            .map(name -> folded && ReferralReason.Minor.name().equals(name)
+                ? ReferralReason.Minor.label() + ": " + details.stream().map(ReferralNotes::label)
+                    .collect(Collectors.joining(", "))
+                : label(name))
+            .collect(Collectors.joining("; "));
+    }
+
+    private static String label(String name) {
+        return reasonNamed(name).map(ReferralReason::label).orElse(name);
+    }
+
+    private static Optional<ReferralReason> reasonNamed(String name) {
+        return Arrays.stream(ReferralReason.values()).filter(reason -> reason.name().equals(name)).findFirst();
     }
 }

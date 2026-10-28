@@ -105,6 +105,11 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
     private static final String REASON = "Minor";
 
     /**
+     * {@link #REASON} as the notes write it: in the screens' words (Steve, 2026-10-27).
+     */
+    private static final String REASON_LABEL = "Applicant is a minor";
+
+    /**
      * What the judge directs, long enough and distinctive enough to be found if it were ever copied.
      *
      * <p>The direction note is a summary: a direction may be twice as long as a note may be, so the text lives
@@ -195,17 +200,17 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
         String raisedOn = DAY.format(stored(referralId).getCreatedOn());
         assertThat(timeline(caseId)).satisfiesExactly(
             raised -> {
-                assertThat(raised.getNote()).isEqualTo("Referred to a Master. Reasons: " + REASON + ".");
+                assertThat(raised.getNote()).isEqualTo("Referred to a Master. Reasons: " + REASON_LABEL + ".");
                 assertThat(raised.getCreatedBy()).isEqualTo(REFERRING_CASEWORKER);
             },
             claimed -> {
-                assertThat(claimed.getNote()).isEqualTo("Referral raised on " + raisedOn + ", reasons: " + REASON
+                assertThat(claimed.getNote()).isEqualTo("Referral raised on " + raisedOn + ", reasons: " + REASON_LABEL
                     + ", claimed by a Master.");
                 assertThat(claimed.getCreatedBy()).isEqualTo(JUDGE);
             },
             directed -> {
                 assertThat(directed.getNote()).isEqualTo("Master’s direction recorded for referral raised on "
-                    + raisedOn + ", reasons: " + REASON + ". Decision: " + MasterDecision.Approved
+                    + raisedOn + ", reasons: " + REASON_LABEL + ". Decision: " + MasterDecision.Approved
                     + ". Changes to standard publication in the Gazette: No. See the referral for the full direction.");
                 assertThat(directed.getCreatedBy()).isEqualTo(JUDGE);
             });
@@ -227,7 +232,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
         assertThat(timeline(caseId)).hasSize(4);
         assertThat(timeline(caseId).get(3)).satisfies(actioned -> {
             assertThat(actioned.getNote()).isEqualTo("Master’s direction for referral raised on " + raisedOn
-                + ", reasons: " + REASON + ", marked as actioned.");
+                + ", reasons: " + REASON_LABEL + ", marked as actioned.");
             assertThat(actioned.getCreatedBy()).isEqualTo(ACTIONING_CASEWORKER);
         });
         Referral closed = stored(referralId);
