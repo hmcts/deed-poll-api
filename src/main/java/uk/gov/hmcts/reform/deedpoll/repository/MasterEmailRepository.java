@@ -5,10 +5,12 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterEmailKind;
 import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterEmailState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 
 import java.sql.Array;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
@@ -164,6 +166,39 @@ public class MasterEmailRepository {
                 settled_at = ?
              WHERE state = 'Sending' AND lease_until <= ?
             """, failure, now, now);
+    }
+
+    /** A referral counted towards a window, and the Masters-list entry it is assigned to, if any. */
+    public record WindowReferral(UUID referralId, UUID masterId) {
+    }
+
+    /**
+     * V44's {@code deedpoll_window_digest_run}: takes a closed window's digests for the caller's transaction. A
+     * second pod inserting the same window waits for the first's commit and then writes nothing; if the first rolls
+     * back, the second writes it.
+     *
+     * @return whether this call wrote the row, and so owns the window's digests
+     */
+    public boolean recordDigestRun(LocalDate windowDate, WindowSlot windowSlot, LocalDateTime now) {
+        return jdbc.update("""
+            INSERT INTO deedpoll_window_digest_run (window_date, window_slot, ran_at) VALUES (?, ?, ?)
+            ON CONFLICT (window_date, window_slot) DO NOTHING
+            """, windowDate, windowSlot.name(), now) == 1;
+    }
+
+    /**
+     * The referrals still {@code Claimed} in a window, in the Master's page order for undirected work
+     * ({@code ReferralRepository.findOwnedBy}): urgent first, then the day referred, then the id. A row with no
+     * {@code assignedMasterId} (a pre-V43 claim) comes back with a null Master, for the caller to count and skip.
+     */
+    public List<WindowReferral> claimedInWindow(LocalDate windowDate, WindowSlot windowSlot) {
+        return jdbc.query("""
+            SELECT "id", "assignedMasterId" FROM "deedpoll_referral"
+             WHERE "state" = 'Claimed' AND "windowDate" = ? AND "windowSlot" = ?
+             ORDER BY CASE WHEN "urgency" = 'Urgent' THEN 0 ELSE 1 END, "createdOn", "id"
+            """, (row, index) -> new WindowReferral(row.getObject("id", UUID.class),
+                                                    row.getObject("assignedMasterId", UUID.class)),
+            windowDate, windowSlot.name());
     }
 
     private static List<UUID> uuids(Array array) throws SQLException {

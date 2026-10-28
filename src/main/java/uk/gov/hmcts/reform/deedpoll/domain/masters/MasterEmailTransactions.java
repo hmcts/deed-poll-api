@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.masters;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralWindow;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.notify.NotificationBackoff;
@@ -13,6 +14,8 @@ import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -59,6 +62,51 @@ public class MasterEmailTransactions {
         MasterEmailState state = links.isProvisioned(kind) ? MasterEmailState.Pending : MasterEmailState.Skipped;
         return emails.enqueue(UUID.randomUUID(), masterId, kind, periodKey, referralIds, state, AuditClock.now())
             ? Optional.of(state) : Optional.empty();
+    }
+
+    /**
+     * What one closed window's digest step did.
+     *
+     * @param emails how many Masters were given a digest row
+     * @param state the state those rows were written in: {@code Pending}, or {@code Skipped} when the digest template
+     *     is unprovisioned
+     * @param unassigned referrals counted towards the window with no Masters-list entry (pre-V43 claims), not listed
+     */
+    public record DigestEnqueued(int emails, MasterEmailState state, int unassigned) {
+    }
+
+    /**
+     * A closed window's digests (plan D3, step 2), in one transaction: its {@code deedpoll_window_digest_run} row,
+     * then one {@code DIGEST} row per Master with referrals still {@code Claimed} in it, listing them in the Master's
+     * page order. The run row and the emails commit together, so a pod that fails part-way leaves the window for the
+     * next run, and a pod that finds the run row already written enqueues nothing.
+     *
+     * @return empty when another run already took this window
+     */
+    @Transactional
+    public Optional<DigestEnqueued> enqueueDigests(ReferralWindow window) {
+        if (!emails.recordDigestRun(window.date(), window.slot(), AuditClock.now())) {
+            return Optional.empty();
+        }
+        Map<UUID, List<UUID>> byMaster = new LinkedHashMap<>();
+        int unassigned = 0;
+        for (MasterEmailRepository.WindowReferral referral : emails.claimedInWindow(window.date(), window.slot())) {
+            if (referral.masterId() == null) {
+                unassigned++;
+            } else {
+                byMaster.computeIfAbsent(referral.masterId(), master -> new ArrayList<>()).add(referral.referralId());
+            }
+        }
+        MasterEmailState state = links.isProvisioned(MasterEmailKind.DIGEST)
+            ? MasterEmailState.Pending : MasterEmailState.Skipped;
+        String periodKey = MasterEmailPersonalisation.digestPeriod(window);
+        int written = 0;
+        for (Map.Entry<UUID, List<UUID>> master : byMaster.entrySet()) {
+            if (enqueue(master.getKey(), MasterEmailKind.DIGEST, periodKey, master.getValue()).isPresent()) {
+                written++;
+            }
+        }
+        return Optional.of(new DigestEnqueued(written, state, unassigned));
     }
 
     @Transactional(readOnly = true)

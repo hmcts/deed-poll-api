@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.domain.masters;
 
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralNotes;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralWindow;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 
@@ -62,6 +63,13 @@ public final class MasterEmailPersonalisation {
         personalisation.put(REFERRAL_LIST, lines.stream().map(line -> line(line, links))
             .collect(Collectors.joining("\n")));
         return personalisation;
+    }
+
+    /**
+     * A digest's period key, {@code 2026-10-28:AM}: the window's date and slot, which {@link #period} reads.
+     */
+    public static String digestPeriod(ReferralWindow window) {
+        return window.date() + ":" + window.slot().name();
     }
 
     /** "the morning of 28-10-26", "the afternoon of 28-10-26", or a reminder's "waiting for your direction". */

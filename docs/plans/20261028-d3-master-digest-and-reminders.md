@@ -167,8 +167,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement `MasterEmailDelivery` and its drain, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 3: The digest
-- [ ] Add failing tests for every digest case in the Development Approach.
-- [ ] Implement `MasterDigests`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Add failing tests for every digest case in the Development Approach.
+- [x] Implement `MasterDigests`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 4: The reminders
 - [ ] Add failing tests for every reminder case in the Development Approach.
@@ -235,3 +235,24 @@ unavailable Master, logs and ledger columns free of any address, refusal inside 
 rule. Focused run (those plus `NotificationSecurityTest`, the referral, Master, schema, health, entity-mapping,
 Notify-configuration and email-template classes): 1,309 tests, 0 failures. Compile of every source set OK;
 `checkstyle.sh` OK.
+
+**Task 3 (the digest):** `MasterDigests.run(now)` (refuses a caller transaction) lists the windows whose end fell
+in the 24 hours up to `now` on working days (`closedWindows`, pure, oldest first), reading the window times and bank
+holidays every run, and calls `MasterEmailTransactions.enqueueDigests` for each. **That one transaction writes the
+window's `deedpoll_window_digest_run` row and its digest rows together**, which the plan left open: a pod that fails
+part-way leaves the window for the next run instead of losing it, and a second pod's run-row insert waits on the
+first's commit and then writes nothing. The referrals are read by `MasterEmailRepository.claimedInWindow` (JDBC, not
+a new `ReferralRepository` finder, so `ReferralSecurityTest`'s unscoped list is unchanged): `Claimed` in the window,
+in `findOwnedBy`'s undirected order (urgent, then `createdOn`, then id); a row with no `assignedMasterId` is counted
+in the run's INFO and left out. The period key is `MasterEmailPersonalisation.digestPeriod`. One INFO per run names
+`master-referral-digest` when rows were written `Skipped`; the drain runs only when something is `Pending`.
+`MasterDigestTimer` (`@Scheduled` on `digest-interval`, off with `emails-enabled`, one WARN naming the exception
+class). Tests: `MasterDigestWindowsTest` (5, pure: the end time exactly, the 24-hour look-back, Saturday and a bank
+holiday, Monday morning, summer time), `MasterDigestsTest` (9, Postgres plus StubNotify: two Masters with page order,
+links and no address in the logs; an empty window recorded; a pre-V43 referral left out; two pods concurrently send
+once; a window closed 25 hours ago not sent or recorded; a Saturday; a referral reassigned through
+`ReferralService.assign` goes to the new Master; a window `Skipped` before provisioning stays unsent while the next
+one goes; refusal inside a transaction), `MasterDigestsUnprovisionedTest` (1, default context: run recorded, row
+`Skipped`, Notify untouched, one INFO naming the key). Focused run (`*Master*`, `*Referral*`,
+`ReferralSecurityTest`, `NotificationSecurityTest`, `*Architecture*`): 885 tests, 0 failures; the Master classes
+again after the checkstyle fixes: 56, 0 failures. Compile of every source set OK; `checkstyle.sh` OK.
