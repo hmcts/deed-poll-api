@@ -6,7 +6,8 @@ commits only, not pushed (it sits on unmerged api #155 and the contract-step bra
 window becomes the processing window (1–30 days, seeded 7), plus the reminder interval, the per-Master cap and the two
 referral windows. `/caseworker/masters` and `/caseworker/process-settings/bank-holidays` read for any staff role and
 write under `MANAGE_PROCESS_CONFIG`; a judge is linked to their Masters-list entry by IDAM email on their first judicial
-request. No referral behaviour changes yet. Next: D2 (assignment) and D3 (reminders and digests), then Juniper rebases
+request. No new referral behaviour yet, except that the re-seeded 7-day window means the existing sweep now returns an
+untouched claim to the pool after 7 days rather than 2 hours. Next: D2 (assignment) and D3 (reminders and digests), then Juniper rebases
 and raises the PRs. See [the plan](plans/20261028-d1-masters-and-process-settings.md).
 
 **Delivery Manager process settings, 2026-10-26:** on `feat/dm-process-config`, not pushed. V40 adds a revisioned,

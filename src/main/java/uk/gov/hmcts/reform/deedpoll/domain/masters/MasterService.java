@@ -136,7 +136,7 @@ public class MasterService {
             throw invalid(REVISION, "Reload the Masters list before saving.");
         }
         UUID key = parseId(id);
-        Master previous = repository.find(key, true).orElseThrow(MasterService::notFound);
+        Master previous = repository.findForUpdate(key).orElseThrow(MasterService::notFound);
         // Before the no-op, so an out-of-date form holding the values the row now has is never told it saved.
         if (previous.revision() != revision) {
             throw new ConflictError("This Master has changed. Reload the Masters list before saving.");

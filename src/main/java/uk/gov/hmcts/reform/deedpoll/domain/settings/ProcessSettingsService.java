@@ -142,10 +142,7 @@ public class ProcessSettingsService {
         if (changed.isEmpty()) {
             return previous;
         }
-        ProcessSettings next = new ProcessSettings(
-            candidate.processingWindow(), candidate.reminderInterval(), candidate.masterWindowCap(),
-            candidate.morningWindowStart(), candidate.morningWindowEnd(), candidate.afternoonWindowStart(),
-            candidate.afternoonWindowEnd(), Math.incrementExact(revision), AuditClock.now(), caller.name());
+        ProcessSettings next = candidate.revised(Math.incrementExact(revision), AuditClock.now(), caller.name());
         repository.change(previous, next, subject, changed);
         audit.record(AuditEntry.of(AuditAction.PROCESS_SETTINGS_CHANGED, AuditActor.of(caller),
                                    AuditEntities.PROCESS_SETTINGS, SETTINGS_ID, null)

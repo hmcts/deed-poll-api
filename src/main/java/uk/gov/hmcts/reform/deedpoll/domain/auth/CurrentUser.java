@@ -88,11 +88,6 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
         this.email = email;
     }
 
-    /** A caller with no email address, which is every caller not built from IDAM's userinfo. */
-    public CurrentUser(List<Role> roles, boolean isAdmin, String name, String userId) {
-        this(roles, isAdmin, name, userId, null);
-    }
-
     /**
      * Build a caller from a resolved set of roles, an optional display name and the token's subject.
      *

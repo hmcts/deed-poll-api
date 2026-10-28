@@ -144,10 +144,13 @@ class MastersAndReferralProcessSettingsMigrationTest extends AbstractPostgresCon
         List<LocalDate> dates = jdbcTemplate.queryForList(
             "SELECT holiday_date FROM deedpoll_bank_holiday ORDER BY holiday_date", Date.class)
             .stream().map(Date::toLocalDate).toList();
-        assertThat(dates).hasSize(24)
-            .contains(LocalDate.of(2026, 12, 28), LocalDate.of(2027, 3, 26), LocalDate.of(2028, 1, 3),
-                      LocalDate.of(2028, 12, 26))
-            .allSatisfy(date -> assertThat(date.getYear()).isBetween(2026, 2028));
+        // GOV.UK's England and Wales list, substitute days included, copied independently of the migration.
+        assertThat(dates).map(LocalDate::toString).containsExactly(
+            "2026-01-01", "2026-04-03", "2026-04-06", "2026-05-04", "2026-05-25", "2026-08-31", "2026-12-25",
+            "2026-12-28", "2027-01-01", "2027-03-26", "2027-03-29", "2027-05-03", "2027-05-31", "2027-08-30",
+            "2027-12-27", "2027-12-28", "2028-01-03", "2028-04-14", "2028-04-17", "2028-05-01", "2028-05-29",
+            "2028-08-28", "2028-12-25", "2028-12-26");
+        assertThat(dates).allSatisfy(date -> assertThat(date.getDayOfWeek().getValue()).isLessThan(6));
         assertThat(jdbcTemplate.queryForObject(
             "SELECT count(DISTINCT created_by_name) FROM deedpoll_bank_holiday WHERE created_by_name = ?",
             Integer.class, CurrentUser.SERVICE_ACCOUNT_NAME)).isOne();

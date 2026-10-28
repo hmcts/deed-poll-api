@@ -34,7 +34,8 @@ endpoint (http://localhost:4550/prometheus). Those are the only actuator endpoin
 Thirty-four caseworker operations across twenty-one paths, plus eight judicial ones on a namespace of their
 own (below), three privileged CCD-attempt ones (see [Repairing attempts](#repairing-attempts)), eight
 Delivery Manager-only Gazette operations (see [Gazette publication foundation](#gazette-publication-foundation)),
-two Delivery Manager-only process-settings operations (see [Process settings](#process-settings)),
+two Delivery Manager-only process-settings operations, three Masters-list and three bank-holiday operations whose
+reads any staff role may call and whose writes need `MANAGE_PROCESS_CONFIG` (see [Process settings](#process-settings)),
 and two document previews, one per surface (see [Document previews](#document-previews)), counted apart.
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
 `capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
@@ -1082,7 +1083,8 @@ them. A working day is Monday to Friday and not listed. Adds and removes are aud
 **The Masters list** holds a name, a unique email (compared without case) and an available flag. There is no delete:
 a Master who leaves is made unavailable. A Master is linked to their IDAM account on their first judicial request,
 when a judicial caller's IDAM email matches an unlinked entry; linking is conditional, so it happens once, and is
-audited as `MASTER_LINKED` by the system. Changing a linked Master's email unlinks it. A duplicate email is a 409 on
+audited as `MASTER_LINKED` by the system. Adds and edits are audited as `MASTER_ADDED` and `MASTER_CHANGED` with field
+names only; an email change on a linked entry also names `linked`. Changing a linked Master's email unlinks it. A duplicate email is a 409 on
 `email` that does not echo the address. The linked IDAM subject is never published, and the caller's email is never
 logged or audited.
 
@@ -1090,6 +1092,10 @@ logged or audited.
 yaml window (`PT2H` unless the environment overrode it) and ignore the stored one. So nobody edits the process settings until every old api pod is
 replaced, and admin does not deploy its settings page until this api serves on every replica in that environment.
 Raising the window afterwards cannot restore a claim the sweep has already released.
+V42 has the same rule. Its re-seeded seven-day window reaches every pod's sweep as soon as the migration runs, but a
+pod still on the previous version validates a `PUT` against the old 30–1,440 minute bounds, which the database now
+refuses below 1,440, so such a save is a 500 rather than a 400. Admin's copied spec needs a refresh before its
+settings page sends the wider range or the six new keys.
 
 ### The OpenAPI document
 

@@ -10,6 +10,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntities;
@@ -95,6 +96,17 @@ class BankHolidaysTest {
         assertThatThrownBy(() -> holidays.add(caller, Map.of("date", "2029-01-01", "name", "New Year's Day")))
             .isInstanceOf(ForbiddenError.class);
         assertThatThrownBy(() -> holidays.remove(caller, "2029-01-01")).isInstanceOf(ForbiddenError.class);
+        verifyNoInteractions(repository, audit);
+    }
+
+    @Test
+    @DisplayName("a Delivery Manager with no subject is refused both writes before anything is read")
+    void noSubject() {
+        CurrentUser caller = CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "A Delivery Manager", null);
+
+        assertThatThrownBy(() -> holidays.add(caller, Map.of("date", "2029-01-01", "name", "New Year's Day")))
+            .isInstanceOf(UnauthorizedError.class);
+        assertThatThrownBy(() -> holidays.remove(caller, "2029-01-01")).isInstanceOf(UnauthorizedError.class);
         verifyNoInteractions(repository, audit);
     }
 

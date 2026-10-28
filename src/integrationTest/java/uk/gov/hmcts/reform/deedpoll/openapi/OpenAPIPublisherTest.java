@@ -329,6 +329,11 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(update.get("required")).extracting(JsonNode::asText).containsExactly("revision");
         assertThat(update.at("/properties/revision/minimum").asInt()).isZero();
         assertThat(update.get("additionalProperties").asBoolean()).isFalse();
+        assertThat(update.get("minProperties").asInt()).isEqualTo(2);
+        assertThat(create.get("properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("name", "email", "available");
+        assertThat(update.get("properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("name", "email", "available", "revision");
     }
 
     @Test

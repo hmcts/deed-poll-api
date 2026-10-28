@@ -207,7 +207,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   and the field *names*, plus `detail` restricted to `AuditEntry`'s allowlisted keys; it holds no applicant data and
   is kept for 7 years. `deedpoll_audit_event_value` holds the before/after values (decision 5's text encoding, a
   row only for a changed field), which are applicant data disposed with the case, so `AuditTrail` refuses values on
-  an entity with no case (saved queries, Gazette settings, process settings and batches record names only; process settings keep
+  an entity with no case (saved queries, Gazette settings, process settings, the Masters list, bank holidays and batches record names only; process settings keep
   their values in V40's `deedpoll_process_settings_change`). `record` is
   `MANDATORY`: it joins the change's transaction, so a change whose audit insert fails rolls back, and it refuses a
   user write with no subject — only an explicitly system write uses `AuditActor.system()`. Reads (`CASE_VIEWED`,
@@ -540,7 +540,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `/judicial/**` (not `JudicialReferralService.visible`, which the judicial lists and document routes do not share),
   calls `MasterService.linkIfListed` on every judicial request: a `Role.JUDICIAL` caller with a subject and an IDAM
   email (`CurrentUser.email`, from userinfo) links an **unlinked** entry with that email by one conditional `UPDATE
-  … WHERE idam_subject IS NULL`, so racing pods link once, and records `MASTER_LINKED` with the system actor. Linking
+  … WHERE idam_subject IS NULL`, so racing pods link once, and records `MASTER_LINKED` with the system actor (adds and
+  edits are `MASTER_ADDED`/`MASTER_CHANGED`, field names only, an unlinking email change naming `linked`). Linking
   never creates an entry, never relinks one held by another subject (a fixed WARN naming nobody), and is best effort:
   a failure is a WARN with the exception class only and the request proceeds. Changing a linked Master's email unlinks
   it, so the new address must sign in to link again. **The subject is never published** (`Master` has no component

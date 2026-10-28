@@ -28,8 +28,8 @@ Read before changing anything:
 
 - `CLAUDE.md`: the judicial-surface rules ("scoped by visibility, not by the case", `JudicialReferralService.visibleTo`,
   the shared 404), "Ownership is the token's IDAM subject", "A case column that mirrors the referral table is
-  recomputed from truth" (`refreshCurrentReferralState`), the audit rules, "The referral claim window is a stored
-  process setting".
+  recomputed from truth" (`refreshCurrentReferralState`), the audit rules, "The referral process settings are
+  stored, and read on every decision".
 - `domain/referrals/ReferralService` (`claim`, `touch`, `reclaimStaleClaims` and its class javadoc on the mutating
   read), `JudicialReferralService` (`visibleTo`, `POOL_ORDER`, `MINE_ORDER`, the pool and mine reads),
   `ReferralSchemas.parseCreateReferral`, `ReferralNotes`, `entity/Referral`, `repository/ReferralRepository`,

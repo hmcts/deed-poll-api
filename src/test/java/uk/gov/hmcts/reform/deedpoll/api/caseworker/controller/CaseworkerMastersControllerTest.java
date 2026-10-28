@@ -210,6 +210,35 @@ class CaseworkerMastersControllerTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("two concurrent edits of one revision: one saves, the other is 409, and one change is audited")
+    void concurrentEdits() throws Exception {
+        String id = create("Master Sullivan", ADDRESS);
+        String token = IDAM.accessToken();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        List<Integer> statuses = new ArrayList<>();
+        try {
+            List<Future<Integer>> results = new ArrayList<>();
+            for (String body : List.of("{\"name\":\"Master A\",\"revision\":0}",
+                                       "{\"name\":\"Master B\",\"revision\":0}")) {
+                Callable<Integer> call = () -> mvc.perform(patch(PATH + "/" + id)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + token).contentType("application/json")
+                    .content(body)).andReturn().getResponse().getStatus();
+                results.add(pool.submit(call));
+            }
+            for (Future<Integer> result : results) {
+                statuses.add(result.get());
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(statuses).containsExactlyInAnyOrder(200, 409);
+        assertThat(jdbc.queryForObject("SELECT revision FROM deedpoll_master", Integer.class)).isOne();
+        assertThat(jdbc.queryForObject(
+            "SELECT count(*) FROM deedpoll_audit_event WHERE entity_id = ? AND action = 'MASTER_CHANGED'",
+            Integer.class, id)).isOne();
+    }
+
+    @Test
     @DisplayName("a judge whose email is listed is linked on their first judicial request, and only once")
     void linksOnFirstJudicialRequest() throws Exception {
         String id = create("Master Sullivan", ADDRESS);

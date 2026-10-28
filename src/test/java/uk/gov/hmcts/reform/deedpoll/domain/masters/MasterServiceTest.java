@@ -18,6 +18,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditActor;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntities;
@@ -76,6 +77,18 @@ class MasterServiceTest {
             .isInstanceOf(ForbiddenError.class);
         assertThatThrownBy(() -> service.update(caller, ID.toString(), Map.of("name", "A", "revision", 0)))
             .isInstanceOf(ForbiddenError.class);
+        verifyNoInteractions(repository, audit);
+    }
+
+    @Test
+    @DisplayName("a Delivery Manager with no subject is refused both writes before anything is read")
+    void noSubject() {
+        CurrentUser caller = CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "A Delivery Manager", null);
+
+        assertThatThrownBy(() -> service.create(caller, Map.of("name", "A", "email", ADDRESS)))
+            .isInstanceOf(UnauthorizedError.class);
+        assertThatThrownBy(() -> service.update(caller, ID.toString(), Map.of("name", "A", "revision", 3)))
+            .isInstanceOf(UnauthorizedError.class);
         verifyNoInteractions(repository, audit);
     }
 
@@ -205,7 +218,7 @@ class MasterServiceTest {
 
         @BeforeEach
         void stored() {
-            given(repository.find(ID, true)).willReturn(Optional.of(SULLIVAN));
+            given(repository.findForUpdate(ID)).willReturn(Optional.of(SULLIVAN));
         }
 
         @Test
@@ -245,7 +258,7 @@ class MasterServiceTest {
         @Test
         @DisplayName("changing a linked Master's email unlinks it, and the audit says so")
         void emailChangeUnlinks() {
-            given(repository.find(ID, true)).willReturn(Optional.of(
+            given(repository.findForUpdate(ID)).willReturn(Optional.of(
                 new Master(ID.toString(), "Master Sullivan", ADDRESS, true, true, 3)));
 
             Master changed = service.update(DELIVERY_MANAGER, ID.toString(),
@@ -262,7 +275,7 @@ class MasterServiceTest {
         @Test
         @DisplayName("a name change leaves a linked Master linked")
         void nameChangeKeepsTheLink() {
-            given(repository.find(ID, true)).willReturn(Optional.of(
+            given(repository.findForUpdate(ID)).willReturn(Optional.of(
                 new Master(ID.toString(), "Master Sullivan", ADDRESS, true, true, 3)));
 
             assertThat(service.update(DELIVERY_MANAGER, ID.toString(), Map.of("name", "Master S", "revision", 3))
@@ -283,6 +296,23 @@ class MasterServiceTest {
         }
 
         @Test
+        @DisplayName("a duplicate that races past the check is still 409, and records nothing")
+        void racedDuplicate() {
+            willThrow(new DuplicateKeyException("Key (lower(email))=(other@judiciary.example) already exists"))
+                .given(repository).update(any(), any(), any(), anyBoolean(), anyBoolean(), anyInt(), any(), any(),
+                    any());
+
+            assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, ID.toString(),
+                Map.of("email", "other@judiciary.example", "revision", 3)))
+                .isInstanceOfSatisfying(ConflictError.class, error -> {
+                    assertThat(error.getMessage()).isEqualTo("Another Master already has this email address.");
+                    assertThat(error.errors()).extracting(FieldError::field).containsExactly("email");
+                })
+                .hasNoCause();
+            verifyNoInteractions(audit);
+        }
+
+        @Test
         @DisplayName("no field, no revision or an unknown key is refused; an unknown or malformed id is 404")
         void malformed() {
             assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, ID.toString(), Map.of("revision", 3)))
@@ -294,7 +324,7 @@ class MasterServiceTest {
             assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, "not-a-uuid",
                 Map.of("name", "M", "revision", 3))).isInstanceOf(NotFoundError.class);
             UUID unknown = UUID.randomUUID();
-            given(repository.find(unknown, true)).willReturn(Optional.empty());
+            given(repository.findForUpdate(unknown)).willReturn(Optional.empty());
             assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, unknown.toString(),
                 Map.of("name", "M", "revision", 3))).isInstanceOf(NotFoundError.class);
         }
@@ -379,8 +409,9 @@ class MasterServiceTest {
             service.linkIfListed(JUDGE);
 
             verify(repository, never()).link(any(), anyString(), any());
-            assertThat(logs.list).hasSize(1).allSatisfy(event -> assertThat(event.getFormattedMessage())
-                .doesNotContain(ADDRESS, "judge-subject"));
+            verifyNoInteractions(audit);
+            assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
+                .containsExactly("A judicial caller already linked to one Master has the email of another");
         }
 
         @Test
@@ -410,7 +441,7 @@ class MasterServiceTest {
     @Test
     @DisplayName("the update's unlink flag reaches the repository only for a changed email on a linked Master")
     void unlinkOnlyWhenLinked() {
-        given(repository.find(ID, true)).willReturn(Optional.of(SULLIVAN));
+        given(repository.findForUpdate(ID)).willReturn(Optional.of(SULLIVAN));
         Map<String, Object> fields = new HashMap<>();
         fields.put("email", "new@judiciary.example");
         fields.put("revision", 3);

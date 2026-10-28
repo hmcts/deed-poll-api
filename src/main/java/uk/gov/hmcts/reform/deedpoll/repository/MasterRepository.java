@@ -21,8 +21,7 @@ public class MasterRepository {
     private static final String SELECT = "SELECT id, name, email, available, idam_subject IS NOT NULL AS linked, "
         + "revision FROM deedpoll_master";
     private static final String LIST = SELECT + " ORDER BY name, id";
-    private static final String FIND = SELECT + " WHERE id = ?";
-    private static final String FIND_FOR_UPDATE = FIND + " FOR UPDATE";
+    private static final String FIND_FOR_UPDATE = SELECT + " WHERE id = ? FOR UPDATE";
 
     private static final RowMapper<Master> MASTER = (row, index) -> new Master(row.getObject("id", UUID.class)
         .toString(), row.getString("name"), row.getString("email"), row.getBoolean("available"),
@@ -42,8 +41,9 @@ public class MasterRepository {
         return jdbc.query(LIST, MASTER);
     }
 
-    public Optional<Master> find(UUID id, boolean lock) {
-        return jdbc.query(lock ? FIND_FOR_UPDATE : FIND, MASTER, id).stream().findFirst();
+    /** The entry, locked until the caller's transaction ends, so two edits of it serialise on the revision. */
+    public Optional<Master> findForUpdate(UUID id) {
+        return jdbc.query(FIND_FOR_UPDATE, MASTER, id).stream().findFirst();
     }
 
     /** Whether another entry holds this address, in any case. */

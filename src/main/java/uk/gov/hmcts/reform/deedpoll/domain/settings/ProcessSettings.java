@@ -52,6 +52,12 @@ public record ProcessSettings(Duration processingWindow, Duration reminderInterv
         return Math.toIntExact(reminderInterval.toHours());
     }
 
+    /** These values under a new revision and attribution. */
+    public ProcessSettings revised(int nextRevision, LocalDateTime at, String by) {
+        return new ProcessSettings(processingWindow, reminderInterval, masterWindowCap, morningWindowStart,
+                                   morningWindowEnd, afternoonWindowStart, afternoonWindowEnd, nextRevision, at, by);
+    }
+
     public ReferralWindows referralWindows() {
         return new ReferralWindows(morningWindowStart, morningWindowEnd, afternoonWindowStart, afternoonWindowEnd);
     }

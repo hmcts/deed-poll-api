@@ -65,13 +65,6 @@ class CurrentUserTest {
         }
     }
 
-    /**
-     * The caller's stable id, which the reference interface does not have.
-     *
-     * <p>Added because a saved query is owned by a caseworker, and a display name is not an identity: two
-     * caseworkers can share one and one caseworker's changes over time, so a name as the owner key would
-     * reassign queries when somebody marries.
-     */
     /** Not in the reference: the address that links a Masters-list entry (plan D1), and authorises nothing. */
     @Nested
     @DisplayName("email")
@@ -96,7 +89,6 @@ class CurrentUserTest {
         @DisplayName("is null for every caller not built with one")
         void isNullWithoutOne() {
             assertThat(CurrentUser.currentUser(List.of(), "A", SUBJECT).email()).isNull();
-            assertThat(new CurrentUser(List.of(), false, "A", SUBJECT).email()).isNull();
             assertThat(CurrentUser.ANONYMOUS.email()).isNull();
         }
 
@@ -109,6 +101,13 @@ class CurrentUserTest {
         }
     }
 
+    /**
+     * The caller's stable id, which the reference interface does not have.
+     *
+     * <p>Added because a saved query is owned by a caseworker, and a display name is not an identity: two
+     * caseworkers can share one and one caseworker's changes over time, so a name as the owner key would
+     * reassign queries when somebody marries.
+     */
     @Nested
     @DisplayName("userId")
     class Identity {

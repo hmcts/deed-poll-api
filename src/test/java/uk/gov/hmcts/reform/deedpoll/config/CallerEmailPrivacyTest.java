@@ -41,9 +41,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * The caller's email address reaches {@code CurrentUser} and goes nowhere else (plan D1).
  *
  * <p>Through the real filter chain against real Postgres: a caller whose userinfo carries an address signs in, reads
- * {@code /me}, creates a case, writes a note, views the case and is refused a Delivery Manager route. The address is
- * then looked for, in any case, in every response body, every log line the requests produced and every row of the
- * audit trail and the notes. Its one reader is linking a Masters-list entry, which arrives in a later task.
+ * {@code /me}, creates a case, writes a note, views the case and is refused a Delivery Manager route; then a judge
+ * with the same address, listed as a Master, is linked by a judicial request and makes another. The address is then
+ * looked for, in any case, in every response body, every log line the requests produced and every row of the audit
+ * trail and the notes, the {@code MASTER_LINKED} event included. Linking is its one reader.
  */
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @SpringBootTest
@@ -110,6 +111,7 @@ class CallerEmailPrivacyTest extends AbstractPostgresContainerTest {
         notes.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
+        jdbc.update("DELETE FROM deedpoll_master");
     }
 
     @Test
@@ -123,8 +125,20 @@ class CallerEmailPrivacyTest extends AbstractPostgresContainerTest {
                     .content("{\"note\": \"A note\"}"));
         perform(200, get("/caseworker/cases/" + caseId));
         perform(403, get("/caseworker/process-settings"));
+        jdbc.update("INSERT INTO deedpoll_master (id, name, email, available, created_at, created_by_id, "
+                        + "created_by_name, revision) VALUES (gen_random_uuid(), 'Master', ?, true, now(), 's', "
+                        + "'A Delivery Manager', 0)", NEEDLE);
+        IDAM.stubUserInfoBody("""
+            {"sub": "%s", "name": "A Master", "email": "  %s ", "roles": ["%s"]}
+            """.formatted(StubIdam.SUBJECT, ADDRESS, Role.JUDICIAL.claimValue()));
+        perform(200, get("/judicial/referrals"));
+        perform(200, get("/judicial/referrals"));
 
-        assertThat(bodies).hasSize(5).allSatisfy(body -> assertThat(body.toLowerCase(Locale.ROOT))
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_master WHERE idam_subject = ?", Integer.class,
+                                       StubIdam.SUBJECT)).isOne();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_audit_event WHERE action = 'MASTER_LINKED'",
+                                       Integer.class)).isPositive();
+        assertThat(bodies).hasSize(7).allSatisfy(body -> assertThat(body.toLowerCase(Locale.ROOT))
             .doesNotContain(NEEDLE));
         assertThat(logs.list).extracting(event -> event.getFormattedMessage().toLowerCase(Locale.ROOT))
             .noneMatch(line -> line.contains(NEEDLE));
