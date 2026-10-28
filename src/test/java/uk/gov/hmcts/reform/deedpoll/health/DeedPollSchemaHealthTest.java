@@ -130,6 +130,8 @@ class DeedPollSchemaHealthTest extends AbstractPostgresContainerTest {
             "deedpoll_process_settings",
             "deedpoll_process_settings_change",
             "deedpoll_master",
+            "deedpoll_master_email",
+            "deedpoll_window_digest_run",
             "deedpoll_bank_holiday",
             "deedpoll_gazette_request",
             "deedpoll_gazette_request_case",

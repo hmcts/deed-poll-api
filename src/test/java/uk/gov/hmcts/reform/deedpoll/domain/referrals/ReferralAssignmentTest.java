@@ -159,6 +159,18 @@ class ReferralAssignmentTest {
         }
 
         @Test
+        @DisplayName("starts the reminder count again, though the processing window left it on the row (plan D3)")
+        void resetsTheReminders() {
+            // unassignOverdue returns a referral to Open with one UPDATE that leaves the count; assigning clears it.
+            referral.setRemindersSent(3);
+
+            Referral saved = service.assign(CASE_ID, REFERRAL_ID.toString(), SULLIVAN, CASEWORKER,
+                                            london(2026, 10, 28, 9, 15));
+
+            assertThat(saved.getRemindersSent()).isZero();
+        }
+
+        @Test
         @DisplayName("to a Master not yet linked leaves the owner subject null")
         void unlinked() {
             Referral saved = service.assign(CASE_ID, REFERRAL_ID.toString(), OKAFOR, CASEWORKER,
@@ -377,6 +389,27 @@ class ReferralAssignmentTest {
             assertThat(saved.getWindowSlot()).isEqualTo(WindowSlot.PM);
             verify(referrals).countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot(
                 ReferralState.Claimed, OKAFOR, LocalDate.of(2026, 10, 28), WindowSlot.PM);
+        }
+
+        @Test
+        @DisplayName("restarts the reminder count with the clock (plan D3)")
+        void resetsTheReminders() {
+            referral.setRemindersSent(2);
+
+            Referral saved = service.assign(CASE_ID, REFERRAL_ID.toString(), OKAFOR, CASEWORKER,
+                                            london(2026, 10, 28, 14, 10));
+
+            assertThat(saved.getRemindersSent()).isZero();
+        }
+
+        @Test
+        @DisplayName("to the same Master leaves the reminder count alone, as it leaves the clock")
+        void sameMasterKeepsTheReminders() {
+            referral.setRemindersSent(2);
+
+            service.assign(CASE_ID, REFERRAL_ID.toString(), SULLIVAN, CASEWORKER, london(2026, 10, 28, 14, 10));
+
+            assertThat(referral.getRemindersSent()).isEqualTo(2);
         }
 
         @Test

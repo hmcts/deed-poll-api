@@ -158,9 +158,9 @@ session, and the next one builds over it, wiping the results.
 ## Implementation Steps
 
 ### Task 1: Ledger and configuration
-- [ ] Record the execution baseline in the execution notes.
-- [ ] Add failing tests for the migration, the configuration keys, the base-URL start-up rule and the `remindersSent` reset in `assign` and `withdrawDirection`.
-- [ ] Implement V44, the properties and the resets, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Record the execution baseline in the execution notes.
+- [x] Add failing tests for the migration, the configuration keys, the base-URL start-up rule and the `remindersSent` reset in `assign` and `withdrawDirection`.
+- [x] Implement V44, the properties and the resets, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 2: Delivery
 - [ ] Add failing tests for claiming, `Sending` before the call, settlement, retries, the unknown outcome and the unprovisioned skip.
@@ -179,3 +179,29 @@ session, and the next one builds over it, wiping the results.
 - [ ] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
 
 ## Execution notes
+
+**Baseline:** commit `41b238d` (D2 complete, plus its two review-fix commits), highest migration V43. Forced
+`cleanTest cleanIntegration build`: SUCCESSFUL in 8m 22s, `test` 5,250 tests, 0 failures, 1 skipped; `integration`
+27 tests, 0 failures. `checkstyle.sh` OK.
+
+**Task 1 (ledger and configuration):** `V44__master_emails.sql` adds `deedpoll_master_email` as step 1 states, plus
+two things the plan did not name: a `claim_check` (`owner` and `lease_until` set together, as the outbox's claim is)
+and a partial index on `created_at` where `state = 'Pending'` for the drain; `attempts >= 0` is checked. It adds
+`deedpoll_window_digest_run` (primary key on the window, slot checked `AM`/`PM`) and `"remindersSent"` (default 0,
+checked non-negative), mapped on `Referral` as a primitive `int`. Both tables are in `DeedPollSchema.DEED_POLL_TABLES`
+and the health test's not-a-port list. `assign` resets the count with the rest of the clock (a same-Master no-op
+leaves it, as it leaves the clock); `withdrawDirection` resets it with `assignedAt`. `unassignOverdue`'s one `UPDATE`
+leaves it on the `Open` row, and the next assignment clears it. **Configuration** lives in `domain/masters`:
+`MasterEmailKind` (`DIGEST`/`REMINDER`, each carrying its `notify.templates` key; not `EmailTemplate` members, whose
+switches are case-scoped), `MasterEmailProperties` (`deedpoll.masters.emails-enabled`, `digest-interval` PT5M,
+`reminder-interval-check` PT15M, `drain-interval` PT1M; `AbstractPostgresContainerTest` switches the timers off),
+`AdminProperties` (`deedpoll.admin.base-url` from `ADMIN_BASE_URL`, **empty by default**: a local default would make the
+start-up rule unreachable, so a sending test sets its own) and `MasterEmailLinks`, built by `MasterEmailConfiguration`,
+which refuses start-up in fixed words when either template is provisioned with no base URL, and whenever a set base URL
+is not an absolute http(s) URL with a host and no query or fragment. A blank template id counts as unprovisioned.
+Tests: `MasterEmailMigrationTest` (11, Postgres: defaults, the unique key, order kept, every check and the foreign key
+by name, the digest run once per window, the referral count mapped), `MasterEmailConfigurationTest` (13: both keys and
+`ADMIN_BASE_URL` in `application.yaml`, the committed defaults, the refusals, the link shape), the reset cases in
+`ReferralAssignmentTest` (3) and `ReferralServiceTest` (1), and `NotifyConfigurationTest`'s template map. Focused run
+(those plus the schema health, health probe, entity mapping, schema conformance, email template, assignment-columns
+and judicial classes): 932 tests, 0 failures. Compile of every source set OK; `checkstyle.sh` OK.

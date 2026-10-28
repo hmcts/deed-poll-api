@@ -398,6 +398,8 @@ public class ReferralService {
         referral.setAssignedMasterId(masterId);
         referral.setWindowDate(window.date());
         referral.setWindowSlot(window.slot());
+        // A fresh clock earns its reminders afresh (plan D3).
+        referral.setRemindersSent(0);
         referral.setModifiedBy(caller.name());
         referral.setModifiedOn(now);
 
@@ -898,6 +900,8 @@ public class ReferralService {
         // The processing window restarts (plan D2), but no fresh window is taken for the cap: windowDate and
         // windowSlot stay as the assignment set them, so the referral counts where it counted before.
         referral.setAssignedAt(now);
+        // And the reminders with it (plan D3): the first falls due one reminder interval from now.
+        referral.setRemindersSent(0);
         referral.setLastTouchedAt(now);
         referral.setDirectionChangedAt(now);
         referral.setModifiedBy(caller.name());

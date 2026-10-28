@@ -187,6 +187,14 @@ public class Referral {
     private WindowSlot windowSlot;
 
     /**
+     * How many reminders the current assignment has had (V44, plan D3). The reminder job's claim raises it with a
+     * conditional {@code UPDATE}; {@code ReferralService.assign} and {@code withdrawDirection} reset it to 0 when they
+     * restart the clock. Never published.
+     */
+    @Column(name = "remindersSent", nullable = false)
+    private int remindersSent;
+
+    /**
      * The direction, reusing the ported {@link MasterDecision} vocabulary rather than a
      * referral-specific copy of it. A real Postgres enum type, so it needs
      * {@link SqlTypes#NAMED_ENUM} like {@code state} and {@code urgency}.

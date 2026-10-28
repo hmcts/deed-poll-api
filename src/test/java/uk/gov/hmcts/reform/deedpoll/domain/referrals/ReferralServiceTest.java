@@ -1843,6 +1843,17 @@ class ReferralServiceTest {
         }
 
         @Test
+        @DisplayName("restarts the reminder count with the processing window (plan D3)")
+        void restartsTheReminders() {
+            Referral referral = storedDirection(JUDGE);
+            referral.setRemindersSent(3);
+
+            service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            assertThat(saved().getRemindersSent()).isZero();
+        }
+
+        @Test
         @DisplayName("restarts the processing window, and keeps the window the cap counted it in (plan D2)")
         void restartsTheProcessingWindow() {
             Referral referral = storedDirection(JUDGE);

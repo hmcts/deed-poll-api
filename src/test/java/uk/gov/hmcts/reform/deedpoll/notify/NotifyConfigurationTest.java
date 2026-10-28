@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterEmailKind;
 import uk.gov.service.notify.NotificationClient;
 
 import java.util.Arrays;
@@ -77,6 +78,10 @@ class NotifyConfigurationTest {
                 // nobody reads. One grep for the literal lists both.
                 var expected = Arrays.stream(EmailTemplate.values()).collect(Collectors.toMap(
                     EmailTemplate::key, template -> "DEED_POLL_PLACEHOLDER"));
+                // The Master emails (plan D3) are not EmailTemplate members, because they are not a case's.
+                for (MasterEmailKind kind : MasterEmailKind.values()) {
+                    expected.put(kind.templateKey(), "DEED_POLL_PLACEHOLDER");
+                }
                 for (String key : java.util.List.of("gazette-adult", "gazette-minor", "gazette-mixed")) {
                     expected.put(key, "DEED_POLL_PLACEHOLDER");
                 }
