@@ -4,7 +4,9 @@ import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
+import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
+import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
@@ -18,22 +20,29 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.MasterWindowCount;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.StaleClaim;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -73,6 +82,10 @@ import java.util.stream.Collectors;
  * judicial-surface plan's -- so they are exercised by tests holding a {@code CurrentUser} rather than a token.
  * Keeping each transition beside the columns it mutates is deliberate: one place owns how a referral changes
  * state, and a transition needs a role claim rather than a real judicial identity to be provable.
+ *
+ * <p><strong>Since plan D2 a caseworker assigns a referral to a Master</strong> -- {@link #assign}, on the create or
+ * later -- and {@code Claimed} means assigned: {@code Open} is waiting for assignment. {@link #assign} is the one
+ * caseworker write that enters {@code Claimed}, and it also locks the Master's row, always after the referral's.
  *
  * <p>The two long-standing guards each ask the enum a named question rather than listing states, so a
  * transition added later cannot leave one of them out of date -- and <strong>they ask two different
@@ -203,6 +216,8 @@ public class ReferralService {
     private final NoteService notes;
     private final ProcessSettingsService settings;
     private final AuditTrail audit;
+    private final MasterRepository masters;
+    private final BankHolidays bankHolidays;
 
     /**
      * For one thing only: bringing a referral loaded earlier in the transaction up to the row the lock now
@@ -215,21 +230,27 @@ public class ReferralService {
                            NoteService notes,
                            ProcessSettingsService settings,
                            EntityManager entityManager,
-                           AuditTrail audit) {
+                           AuditTrail audit,
+                           MasterRepository masters,
+                           BankHolidays bankHolidays) {
         this.deedPolls = deedPolls;
         this.referrals = referrals;
         this.notes = notes;
         this.settings = settings;
         this.entityManager = entityManager;
         this.audit = audit;
+        this.masters = masters;
+        this.bankHolidays = bankHolidays;
     }
 
     /**
-     * Raises a referral on a case, unclaimed and in the shared pool.
+     * Raises a referral on a case, assigned to the Master the caseworker chose or, with none, waiting for assignment.
      *
      * <p><strong>The state is not the caller's to choose</strong> -- {@link CreateReferralInput} cannot carry
-     * one -- and neither is a target judge. The referral goes into the pool; who picks it up is a later
-     * transition.
+     * one. With a {@code masterId} the referral is created and then assigned by {@link #assign}'s own rules in this
+     * transaction, so a refused assignment (an unknown or unavailable Master, or one at the cap) refuses the whole
+     * create and nothing is written; that writes the assignment's own note and audit event beside the create's.
+     * Without one it is {@code Open}, which is what the admin deployed before plan D2 sends.
      *
      * <p>A case note is written as the acting caseworker, so the referral appears on the timeline the case's
      * own workers read. Written after the referral is stored and inside the same transaction, so a refused
@@ -237,7 +258,8 @@ public class ReferralService {
      * never mentions.
      *
      * @throws NotFoundError if there is no such case
-     * @throws ConflictError if the case already holds a referral that is not terminal
+     * @throws ConflictError if the case already holds a referral that is not terminal, or the Master is at the cap
+     * @throws InvalidInputError if {@code masterId} names no Master, or one who is not available
      */
     @Transactional
     public Referral createReferral(String deedPollId, CreateReferralInput dto, CurrentUser caller) {
@@ -270,8 +292,142 @@ public class ReferralService {
             AuditValue.created("urgency", saved.getUrgency()),
             AuditValue.created("urgencyReason", saved.getUrgencyReason())));
         notes.createNote(deedPollId, new CreateNoteInput(ReferralNotes.raised(dto)), caller.noteAuthor());
+        if (dto.masterId().isPresent()) {
+            saved = assignLocked(deedPollId, saved, dto.masterId().get(), caller, AuditClock.now());
+            refreshAwaitingConfirmation(deedPollId);
+        }
         refreshCurrentReferralState(deedPollId);
         return saved;
+    }
+
+    /**
+     * A caseworker assigning a referral to a Master, or moving it to another (plan D2, decisions D-1, D-5 to D-8).
+     *
+     * <p><strong>Any staff caller</strong>, with no role gate, as raising and withdrawing have none (D-8). The
+     * referral's row is locked first and then the Master's, in that order on every path, so two assignments to one
+     * Master serialise on the Master's row and the second counts what the first committed: the cap holds under
+     * concurrency without a lock of its own.
+     *
+     * <p>In order: the Master must exist and be available (400 on {@code masterId}); the referral must be
+     * {@code Open} or {@code Claimed}, that is waiting for a direction (409); assigning it to the Master it already
+     * has changes nothing and records nothing; and the Master must hold fewer than
+     * {@link ProcessSettingsService#masterWindowCap()} {@code Claimed} referrals in the window {@link ReferralWindows}
+     * gives for now (409, naming the window). Then it is {@code Claimed} by that Master: {@code claimedBy} is the
+     * list's name, {@code claimedById} the linked subject or null until the Master signs in, and
+     * {@code claimedAt}, {@code assignedAt} and {@code lastTouchedAt} are now, so a reassignment restarts the
+     * processing window. Nothing else is cleared.
+     *
+     * <p>One case note, naming the Master (and the previous one on a reassignment), one
+     * {@link AuditAction#REFERRAL_ASSIGNED} event with old and new {@code state}, {@code claimedBy} and
+     * {@code assignedAt} -- never the subject -- and both read-models recomputed, all in this transaction.
+     *
+     * @throws NotFoundError     if there is no such referral, or it belongs to another case
+     * @throws InvalidInputError if there is no such Master, or the Master is not available
+     * @throws ConflictError     if the referral is not waiting for a direction, or the Master is at the cap
+     */
+    @Transactional
+    public Referral assign(String deedPollId, String id, UUID masterId, CurrentUser caller) {
+        return assign(deedPollId, id, masterId, caller, AuditClock.now());
+    }
+
+    /**
+     * {@link #assign} at a given moment, so a test can say which window it falls in.
+     */
+    Referral assign(String deedPollId, String id, UUID masterId, CurrentUser caller, LocalDateTime now) {
+        Referral referral = findReferralForUpdate(deedPollId, id);
+        ReferralState fromState = referral.getState();
+        UUID fromMaster = referral.getAssignedMasterId();
+        Referral saved = assignLocked(deedPollId, referral, masterId, caller, now);
+        if (saved.getState() != fromState || !masterId.equals(fromMaster)) {
+            refreshCurrentReferralState(deedPollId);
+            refreshAwaitingConfirmation(deedPollId);
+        }
+        return saved;
+    }
+
+    /**
+     * Every Master's assignments in the window a referral raised now would count towards, with the cap, for the
+     * Masters list (plan D2): one grouped count, not one per Master.
+     */
+    @Transactional(readOnly = true)
+    public ReferralWindowLoad currentWindowLoad() {
+        ReferralWindow window = windowAt(AuditClock.now());
+        Map<UUID, Long> assigned = referrals.countByMasterInWindow(ReferralState.Claimed, window.date(), window.slot())
+            .stream()
+            .collect(Collectors.toUnmodifiableMap(MasterWindowCount::masterId, MasterWindowCount::assigned));
+        return new ReferralWindowLoad(window, settings.masterWindowCap(), assigned);
+    }
+
+    /** How long a Master has to give a direction, from the stored setting, for a response's due date. */
+    @Transactional(readOnly = true)
+    public Duration processingWindow() {
+        return settings.processingWindow();
+    }
+
+    /**
+     * The assignment itself, on a referral this transaction has already locked or has just created -- see
+     * {@link #assign}. Writes the note and the audit event; the caller recomputes the read-models.
+     */
+    private Referral assignLocked(String deedPollId, Referral referral, UUID masterId, CurrentUser caller,
+                                  LocalDateTime now) {
+        final MasterRepository.Assignee master = masters.findAssigneeForUpdate(masterId)
+            .filter(MasterRepository.Assignee::available)
+            .orElseThrow(() -> new InvalidInputError(ReferralSchemas.SELECT_A_MASTER, List.of(
+                new FieldError(ReferralSchemas.MASTER_ID, ReferralSchemas.SELECT_A_MASTER))));
+        final ReferralState fromState = referral.getState();
+        if (fromState != ReferralState.Open && fromState != ReferralState.Claimed) {
+            throw new ConflictError("Referral " + referral.getId() + " is " + fromState
+                + ": only a referral waiting for a direction can be assigned");
+        }
+        if (fromState == ReferralState.Claimed && masterId.equals(referral.getAssignedMasterId())) {
+            return referral;
+        }
+
+        ReferralWindow window = windowAt(now);
+        long held = referrals.countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot(
+            ReferralState.Claimed, masterId, window.date(), window.slot());
+        if (held >= settings.masterWindowCap()) {
+            String full = "This Master already has " + held + (held == 1 ? " referral" : " referrals") + " for "
+                + inWords(window) + ". Choose another Master.";
+            throw new ConflictError(full, List.of(new FieldError(ReferralSchemas.MASTER_ID, full)));
+        }
+
+        final String fromName = fromState == ReferralState.Claimed ? referral.getClaimedBy() : null;
+        final LocalDateTime fromAssignedAt = referral.getAssignedAt();
+        referral.setState(ReferralState.Claimed);
+        referral.setClaimedBy(master.name());
+        // Null until the Master first signs in and linking fills it in; nobody can see the referral until then.
+        referral.setClaimedById(master.subject());
+        referral.setClaimedAt(now);
+        referral.setAssignedAt(now);
+        referral.setLastTouchedAt(now);
+        referral.setAssignedMasterId(masterId);
+        referral.setWindowDate(window.date());
+        referral.setWindowSlot(window.slot());
+        referral.setModifiedBy(caller.name());
+        referral.setModifiedOn(now);
+
+        Referral saved = referrals.save(referral);
+        audit(AuditAction.REFERRAL_ASSIGNED, caller, deedPollId, saved, fromState, List.of(
+            AuditValue.of("state", fromState, saved.getState()),
+            AuditValue.of("claimedBy", fromName, saved.getClaimedBy()),
+            AuditValue.of("assignedAt", fromAssignedAt, saved.getAssignedAt())));
+        String note = fromName == null
+            ? ReferralNotes.assigned(saved, master.name())
+            : ReferralNotes.reassigned(saved, fromName, master.name());
+        notes.createNote(deedPollId, new CreateNoteInput(note), caller.noteAuthor());
+        return saved;
+    }
+
+    /** The referral window a moment counts towards, from the stored window times and the bank holidays. */
+    private ReferralWindow windowAt(LocalDateTime now) {
+        return ReferralWindows.windowFor(now.toInstant(ZoneOffset.UTC), settings.referralWindows(),
+                                         bankHolidays::isWorkingDay);
+    }
+
+    /** "the morning of 28 October 2026", for a refusal a caseworker reads. */
+    private static String inWords(ReferralWindow window) {
+        return (window.slot() == WindowSlot.AM ? "the morning of " : "the afternoon of ") + DAY.format(window.date());
     }
 
     /**

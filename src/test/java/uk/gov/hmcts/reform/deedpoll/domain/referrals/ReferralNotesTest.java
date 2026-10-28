@@ -467,4 +467,27 @@ class ReferralNotesTest {
         assertThat(NoteForm.validateNoteText(text)).isEmpty();
         assertThat(text.length()).isLessThanOrEqualTo(NoteForm.MAX_NOTE_LENGTH);
     }
+
+    @Test
+    @DisplayName("an assignment note names the Master, and a reassignment both, in the screens' words")
+    void assignmentNotes() {
+        Referral referral = referral(List.of("DomesticAbuse"), LocalDateTime.parse("2026-10-27T09:30:00"));
+
+        assertThat(ReferralNotes.assigned(referral, "Master Sullivan")).isEqualTo(
+            "Referral raised on 27 October 2026, reasons: Domestic abuse considerations, assigned to Master Sullivan.");
+        assertThat(ReferralNotes.reassigned(referral, "Master Sullivan", "Master Okafor")).isEqualTo(
+            "Referral raised on 27 October 2026, reasons: Domestic abuse considerations, reassigned from Master "
+                + "Sullivan to Master Okafor.");
+    }
+
+    @Test
+    @DisplayName("an assignment note is acceptable to the notes column however long the names are")
+    void assignmentNotesAreBounded() {
+        Referral referral = referral(EVERY_REASON, LocalDateTime.parse("2026-10-27T09:30:00"));
+
+        String text = ReferralNotes.reassigned(referral, "M".repeat(5000), "N".repeat(5000));
+
+        assertThat(NoteForm.validateNoteText(text)).isEmpty();
+        assertThat(ReferralNotes.assigned(referral, null)).endsWith("assigned to an unnamed Master.");
+    }
 }

@@ -155,8 +155,15 @@ class ReferralSecurityTest {
      */
     private static final Set<String> PERSONAL_LIST = Set.of("findOwnedBy");
 
+    /**
+     * The per-Master cap's two counts (plan D2), which name no parent case because a Master's window spans cases.
+     * Admitted on the sweep's terms: each answers a number per Master and never a referral.
+     */
+    private static final Set<String> CAP_COUNTS =
+        Set.of("countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot", "countByMasterInWindow");
+
     /** Every finder that names no parent case, for the declaration rule that admits each one deliberately. */
-    private static final Set<String> UNSCOPED = Stream.of(SWEEP, POOL, PERSONAL_LIST, JUDICIAL_READ)
+    private static final Set<String> UNSCOPED = Stream.of(SWEEP, POOL, PERSONAL_LIST, JUDICIAL_READ, CAP_COUNTS)
         .flatMap(Set::stream)
         .collect(Collectors.toUnmodifiableSet());
 
@@ -203,7 +210,9 @@ class ReferralSecurityTest {
         service = new ReferralService(deedPolls, referrals, notes,
                                       claimWindow(Duration.ofHours(2)),
                                       mock(EntityManager.class),
-                                      mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class));
+                                      mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
+                                      mock(uk.gov.hmcts.reform.deedpoll.repository.MasterRepository.class),
+                                      mock(uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays.class));
 
         when(referrals.save(any())).thenAnswer(call -> {
             // An id, as a real save allocates one: the audit event is keyed on it.
@@ -969,7 +978,7 @@ class ReferralSecurityTest {
                         .isEqualTo(Page.class);
                     continue;
                 }
-                if (SWEEP.contains(finder.getName())) {
+                if (SWEEP.contains(finder.getName()) || CAP_COUNTS.contains(finder.getName())) {
                     // What keeps the sweep inside the rule instead of beside it: neither statement hands back
                     // a referral. The candidate query returns a three-field projection and the release returns
                     // a row count, so an unscoped query cannot become an unscoped read of case data.

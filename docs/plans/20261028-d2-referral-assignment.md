@@ -198,8 +198,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement V43, the entity mapping and `ReferralWindows`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 2: Assignment and the cap
-- [ ] Add failing tests for `assign`: the rules, the note, the audit, the cap, the concurrency case, create with and without `masterId`, and reassignment over HTTP.
-- [ ] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Add failing tests for `assign`: the rules, the note, the audit, the cap, the concurrency case, create with and without `masterId`, and reassignment over HTTP.
+- [x] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 3: The Master side
 - [ ] Add failing tests for visibility, the empty pool, linking's referral side, `touch`, a withdrawn direction and `MINE_ORDER`.
@@ -236,3 +236,33 @@ holiday, Christmas to 4 January 2027, BST, `closesAt` in both offsets, both 2026
 round trip with the slot stored as its name, a legacy and a linked-legacy claim admitted, each check and the foreign
 key refusing by name). Focused run (those two plus `ProcessSettingsServiceTest`, `ReferralRepositoryTest`,
 `EntityMappingTest`): 146 tests, 0 failures. Compile of every source set OK; `checkstyle.sh` OK.
+
+**Task 2 (assignment and the cap):** `ReferralService.assign` locks the referral, then the Master
+(`MasterRepository.findAssigneeForUpdate`, `FOR UPDATE`), checks in the plan's order (Master exists and is available,
+400 on `masterId` "Select a Master who is available"; `Open`/`Claimed` else 409; the same Master a no-op with no note
+or audit; the cap via `countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot`, 409 with a `masterId` field error
+naming the window), then writes the claim columns, one note (`ReferralNotes.assigned`/`reassigned`), one new
+`REFERRAL_ASSIGNED` event (state, claimedBy, assignedAt) and both read-models. The cap message counts what the Master
+holds (so a lowered cap reads truthfully) and is singular for one. Create with `masterId` assigns in the same
+transaction and writes the create's note and event and then the assignment's (two of each); without it the referral
+is `Open`. `PUT /caseworker/cases/{id}/referrals/{referralId}/assignment` (`AssignReferralRequest`, keyed, `masterId`
+required). `ReferralResponse` gains `assignedMaster` (`AssignedMasterResponse` id and name), `assignedAt`,
+`windowDate`, `windowSlot` and `directionDueBy` (only while `Claimed`, from `assignedAt`, else `claimedAt` for a
+pre-V43 claim, plus the processing window read per response). **Deviation:** `GET /caseworker/masters` now answers an
+envelope `MasterListResponse {masters, window, cap}` rather than a bare array, each entry
+`MasterListEntryResponse` with `assignedInWindow` from one grouped count (`countByMasterInWindow`). D1 is unmerged, so
+no deployed client reads the array; create/update keep answering `MasterResponse`. `OpenAPIWriteBodies` publishes
+`masterId` on the create, `AssignReferralRequest`, and the 400 and 409 descriptions on both operations. The judicial
+DTOs' `assignedAt`/`directionDueBy` are left to Task 3 with the rest of the Master side. To keep V43's
+`open_unassigned_check` true before Task 4 renames the sweep, `releaseStaleClaim` already clears the four assignment
+columns. `ReferralSecurityTest` admits the two cap counts as unscoped finders on the sweep's terms (they return
+numbers, never a referral). `WriteEndpointAuditCoverageTest` now counts 35 writes, 31 audited. Tests:
+`ReferralAssignmentTest` (26, unit: order of locks and checks, windows at 10:31, 14:31, a Saturday and a bank holiday,
+the cap and its message, the no-op, a pre-V43 claim, create with and without), `ReferralAssignmentConcurrencyTest`
+(Postgres, cap 1: one success, the waiter is a 409 and wrote nothing), `CaseworkerReferralAssignmentTest` (10, HTTP:
+create assigned with no subject or email in the JSON, 400s and the cap 409 writing nothing, reassignment and the old
+Master's count falling, same-Master no-op, Decided 409, wrong case 404, the Masters list window, the OpenAPI document),
+plus cases in `ReferralSchemasTest`, `ReferralNotesTest` and `CaseworkerMastersControllerTest`. A wide focused run
+(referral, judicial, confirmation, master, OpenAPI, security, audit and architecture tests: 1,334) found only three
+`ReferralSecurityTest` reflection rules, since fixed; the final focused run: 540 tests, 0 failures. Compile of every
+source set OK; `checkstyle.sh` OK.

@@ -10,7 +10,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
@@ -297,6 +299,36 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
     List<LocalDateTime> findOutstandingConfirmationRequestsByDeedPollId(@Param("deedPollId") String deedPollId);
 
     /**
+     * How many referrals one Master holds in one referral window: the per-Master cap's count (D-5).
+     *
+     * <p><strong>Not scoped to a case</strong>, like {@link #findStaleClaims}, and safe for its reason: it returns
+     * a number, no case data, and only {@code ReferralService.assign} calls it, under the Master's row lock. It
+     * counts current assignments only, so a referral reassigned away, unassigned or directed no longer counts.
+     *
+     * @param claimed the state an assigned referral is in, {@link ReferralState#Claimed}
+     */
+    long countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot(ReferralState claimed, UUID assignedMasterId,
+                                                                   LocalDate windowDate, WindowSlot windowSlot);
+
+    /**
+     * Every Master's count for one window, in one grouped statement, for the Masters list (D-5). A Master with
+     * none has no row. Unscoped and case-free for {@link #countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot}'s
+     * reason.
+     */
+    @Query("""
+        select new uk.gov.hmcts.reform.deedpoll.repository.MasterWindowCount(r.assignedMasterId, count(r))
+          from Referral r
+         where r.state = :claimed
+           and r.windowDate = :windowDate
+           and r.windowSlot = :windowSlot
+           and r.assignedMasterId is not null
+         group by r.assignedMasterId
+        """)
+    List<MasterWindowCount> countByMasterInWindow(@Param("claimed") ReferralState claimed,
+                                                  @Param("windowDate") LocalDate windowDate,
+                                                  @Param("windowSlot") WindowSlot windowSlot);
+
+    /**
      * The claimed referrals nobody has touched since {@code cutoff} -- the sweep's candidates.
      *
      * <p><strong>Not scoped to a case, and it is the one finder that is not.</strong> The rule stated at the
@@ -369,6 +401,10 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
                "claimedById" = null,
                "claimedAt" = null,
                "lastTouchedAt" = null,
+               "assignedMasterId" = null,
+               "assignedAt" = null,
+               "windowDate" = null,
+               "windowSlot" = null,
                "modifiedOn" = :now,
                "modifiedBy" = :releasedBy
          WHERE "id" = :id

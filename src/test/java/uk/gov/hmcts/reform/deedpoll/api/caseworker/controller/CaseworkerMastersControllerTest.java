@@ -119,7 +119,7 @@ class CaseworkerMastersControllerTest extends AbstractPostgresContainerTest {
         String id = create("Master Sullivan", ADDRESS);
         asStaff(role);
 
-        authorised(get(PATH)).andExpect(status().isOk()).andExpect(jsonPath("$[0].id").value(id));
+        authorised(get(PATH)).andExpect(status().isOk()).andExpect(jsonPath("$.masters[0].id").value(id));
     }
 
     @ParameterizedTest
@@ -154,14 +154,15 @@ class CaseworkerMastersControllerTest extends AbstractPostgresContainerTest {
         String brown = create("Master Brown", "master.brown@judiciary.example");
 
         JsonNode list = json.readTree(authorised(get(PATH)).andExpect(status().isOk()).andReturn().getResponse()
-            .getContentAsString());
+            .getContentAsString()).get("masters");
         assertThat(list).extracting(row -> row.get("id").asText()).containsExactly(brown, sullivan);
+        assertThat(list).extracting(row -> row.get("assignedInWindow").asInt()).containsExactly(0, 0);
         assertThat(list.get(1).get("email").asText()).isEqualTo(ADDRESS);
         assertThat(list.get(1).get("available").asBoolean()).isTrue();
         assertThat(list.get(1).get("linked").asBoolean()).isFalse();
         assertThat(list.get(1).get("revision").asInt()).isZero();
         assertThat(list.get(1).fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("id", "name", "email", "available", "linked", "revision");
+            .containsExactlyInAnyOrder("id", "name", "email", "available", "linked", "revision", "assignedInWindow");
         assertThat(jdbc.queryForObject("""
             SELECT array_to_string(fields, ',') FROM deedpoll_audit_event
             WHERE entity_type = 'Master' AND entity_id = ? AND action = 'MASTER_ADDED'
@@ -200,8 +201,8 @@ class CaseworkerMastersControllerTest extends AbstractPostgresContainerTest {
         send(patch(PATH + "/" + id), "{\"available\":false,\"revision\":0}").andExpect(status().isConflict());
         send(patch(PATH + "/" + id), "{\"available\":false,\"revision\":1}").andExpect(status().isOk())
             .andExpect(jsonPath("$.revision").value(1));
-        authorised(get(PATH)).andExpect(jsonPath("$[0].id").value(id))
-            .andExpect(jsonPath("$[0].available").value(false));
+        authorised(get(PATH)).andExpect(jsonPath("$.masters[0].id").value(id))
+            .andExpect(jsonPath("$.masters[0].available").value(false));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_audit_event WHERE entity_id = ?",
                                        Integer.class, id)).isEqualTo(2);
         send(patch(PATH + "/" + id), "{\"revision\":1}").andExpect(status().isBadRequest());
@@ -254,7 +255,7 @@ class CaseworkerMastersControllerTest extends AbstractPostgresContainerTest {
             String.class, id)).isEqualTo("# svc_HMCTS_LCPT_Dev");
 
         asStaff(Role.DELIVERY_MANAGER.claimValue());
-        String list = authorised(get(PATH)).andExpect(jsonPath("$[0].linked").value(true)).andReturn()
+        String list = authorised(get(PATH)).andExpect(jsonPath("$.masters[0].linked").value(true)).andReturn()
             .getResponse().getContentAsString();
         assertThat(list).doesNotContain(JUDGE);
         String changed = send(patch(PATH + "/" + id), "{\"email\":\"new@judiciary.example\",\"revision\":0}")

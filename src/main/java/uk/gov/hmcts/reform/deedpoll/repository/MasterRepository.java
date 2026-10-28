@@ -37,6 +37,24 @@ public class MasterRepository {
     public record Linking(UUID id, String subject) {
     }
 
+    /**
+     * What an assignment needs of an entry: its name for {@code claimedBy}, whether it may be assigned, and the
+     * linked subject for {@code claimedById}. The subject goes no further than the referral row.
+     */
+    public record Assignee(UUID id, String name, boolean available, String subject) {
+    }
+
+    /**
+     * The entry, locked until the caller's transaction ends, so two assignments to one Master serialise and the
+     * per-Master cap's count is read after the other has committed. Always taken after the referral's own lock.
+     */
+    public Optional<Assignee> findAssigneeForUpdate(UUID id) {
+        return jdbc.query("SELECT id, name, available, idam_subject FROM deedpoll_master WHERE id = ? FOR UPDATE",
+                          (row, index) -> new Assignee(row.getObject("id", UUID.class), row.getString("name"),
+                                                       row.getBoolean("available"), row.getString("idam_subject")),
+                          id).stream().findFirst();
+    }
+
     public List<Master> list() {
         return jdbc.query(LIST, MASTER);
     }

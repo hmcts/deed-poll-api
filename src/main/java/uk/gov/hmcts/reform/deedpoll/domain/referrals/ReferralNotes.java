@@ -117,11 +117,30 @@ public final class ReferralNotes {
      * @param judge the display name the claim was held under, blank or null on a row that somehow has none
      */
     public static String claimLapsed(String judge) {
-        String held = judge == null || judge.isBlank()
-            ? "an unnamed Master"
-            : judge.substring(0, Math.min(judge.length(), MAX_JUDGE_NAME_LENGTH));
-        return "Referral claim by " + held + " lapsed after inactivity. The referral has been returned to "
+        return "Referral claim by " + named(judge) + " lapsed after inactivity. The referral has been returned to "
             + "the shared pool and can be picked up again.";
+    }
+
+    /**
+     * The note for a caseworker assigning a referral to a Master (plan D2), on the create or on a later assignment
+     * of one that was waiting.
+     *
+     * <p>"Referral raised on …, reasons: …, assigned to {name}."
+     *
+     * <p>Names the Master, because the note's author is the caseworker and the Master is who has the papers now.
+     * The name is the Masters list's, bounded as {@link #claimLapsed}'s is; never an email address or a subject.
+     */
+    public static String assigned(Referral referral, String master) {
+        return "Referral " + identifies(referral) + ", assigned to " + named(master) + ".";
+    }
+
+    /**
+     * The note for a referral moved from one Master to another (D-8).
+     *
+     * <p>"Referral raised on …, reasons: …, reassigned from {old} to {new}."
+     */
+    public static String reassigned(Referral referral, String from, String to) {
+        return "Referral " + identifies(referral) + ", reassigned from " + named(from) + " to " + named(to) + ".";
     }
 
     /**
@@ -336,6 +355,13 @@ public final class ReferralNotes {
             return "not recorded";
         }
         return changes ? "Yes" : "No";
+    }
+
+    /** A Master's display name, bounded, or "an unnamed Master" for a row that somehow has none. */
+    private static String named(String master) {
+        return master == null || master.isBlank()
+            ? "an unnamed Master"
+            : master.substring(0, Math.min(master.length(), MAX_JUDGE_NAME_LENGTH));
     }
 
     private static String names(CreateReferralInput dto) {

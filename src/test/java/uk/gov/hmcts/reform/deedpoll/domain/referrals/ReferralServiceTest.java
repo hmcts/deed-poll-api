@@ -20,6 +20,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
@@ -29,6 +30,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.StaleClaim;
 
@@ -206,7 +208,8 @@ class ReferralServiceTest {
         ProcessSettingsService settings = mock(ProcessSettingsService.class);
         when(settings.processingWindow()).thenReturn(window);
         return new ReferralService(deedPolls, referrals, notes, settings,
-                                   mock(EntityManager.class), mock(AuditTrail.class));
+                                   mock(EntityManager.class), mock(AuditTrail.class),
+                                   mock(MasterRepository.class), mock(BankHolidays.class));
     }
 
     /** The case exists, so the parent check passes. */

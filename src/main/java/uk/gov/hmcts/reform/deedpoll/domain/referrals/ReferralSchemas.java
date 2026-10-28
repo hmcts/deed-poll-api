@@ -13,6 +13,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -112,6 +113,14 @@ public final class ReferralSchemas {
         List.of(ReferralReason.MinorParentalConsent, ReferralReason.MinorNoParentalConsent),
         List.of(ReferralReason.MinorStepparentConsent, ReferralReason.MinorNoStepparentConsent),
         List.of(ReferralReason.MinorAged16Or17Consented, ReferralReason.MinorAged16Or17NotConsented));
+    /** The Masters-list entry a referral is assigned to, on the create and on a reassignment (plan D2). */
+    public static final String MASTER_ID = "masterId";
+
+    /**
+     * Every refusal of a {@link #MASTER_ID}, here and in {@code ReferralService.assign}, says this.
+     */
+    public static final String SELECT_A_MASTER = "Select a Master who is available";
+
     private static final String NOTES = "notes";
     private static final String URGENCY = "urgency";
     private static final String URGENCY_REASON = "urgencyReason";
@@ -155,9 +164,41 @@ public final class ReferralSchemas {
                 + " is " + Urgency.Urgent));
         }
         minorDetails(reasons, errors);
+        Optional<UUID> masterId = raw.get(MASTER_ID) == null ? Optional.empty() : masterId(raw, errors);
 
         refuseIfAny(INVALID_REFERRAL, errors);
-        return new CreateReferralInput(reasons, notes, urgency, urgencyReason);
+        return new CreateReferralInput(reasons, notes, urgency, urgencyReason, masterId);
+    }
+
+    /**
+     * Validates the body of a reassignment: {@code masterId}, required, as a Masters-list entry id. Whether that
+     * entry exists and is available is the service's question, answered in the same words.
+     */
+    public static UUID parseAssignment(Map<String, Object> raw) {
+        List<FieldError> errors = new ArrayList<>();
+        Optional<UUID> masterId = masterId(raw, errors);
+        refuseIfAny(SELECT_A_MASTER, errors);
+        return masterId.orElseThrow();
+    }
+
+    /**
+     * {@code masterId} as a UUID, or one error on it: absent, null, not a string and malformed alike.
+     */
+    private static Optional<UUID> masterId(Map<String, Object> raw, List<FieldError> errors) {
+        Optional<UUID> id = raw.get(MASTER_ID) instanceof String text ? uuid(text.trim()) : Optional.empty();
+        if (id.isEmpty()) {
+            // The same sentence as an unknown entry: either way, the caseworker chooses again.
+            errors.add(new FieldError(MASTER_ID, SELECT_A_MASTER));
+        }
+        return id;
+    }
+
+    private static Optional<UUID> uuid(String text) {
+        try {
+            return Optional.of(UUID.fromString(text));
+        } catch (IllegalArgumentException malformed) {
+            return Optional.empty();
+        }
     }
 
     /**
