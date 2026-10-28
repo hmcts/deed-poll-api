@@ -186,8 +186,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 2: Migration and settings
-- [ ] Add failing tests for the seed, the widened window rule (all three migration branches), the new bounds, the ordering rule, old-shape PUTs, history and audit.
-- [ ] Implement V42, the extended `ProcessSettings`, the service reads and the HTTP changes, run the focused tests and all Validation Commands, and record the results.
+- [x] Add failing tests for the seed, the widened window rule (all three migration branches), the new bounds, the ordering rule, old-shape PUTs, history and audit.
+- [x] Implement V42, the extended `ProcessSettings`, the service reads and the HTTP changes, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 3: The Masters list and linking
 - [ ] Add failing tests for every Masters rule and every linking case in the Development Approach.
@@ -217,4 +217,21 @@ tables and the notes). Full build: `test` 4,976 tests, 1 failure, 1 skipped; `in
 failure, `CorrespondenceReadTest.preSendFailureCommitsRetryWithoutNotifyOrRollbackPoisoning [tokenFailure=true]`
 (attempts 0, expected 1), is outside this change and passed alone (14/14); the machine was heavily loaded (the build
 took 20m 52s against the baseline's 4m 48s), so it is recorded as intermittent rather than a regression.
+`checkstyle.sh` OK.
+
+**Task 2 (migration and settings):** V42 holds all three D1 tables at once, so Tasks 3 and 4 add no migration:
+`deedpoll_master` (unique `lower(email)`, unique subject where not null, subject and `linked_at` set together),
+`deedpoll_bank_holiday` with the 24 GOV.UK England and Wales dates for 2026–2028 (copied 2026-10-28, substitute days
+named so), and the six new settings columns with bound, quarter-hour and ordering checks. The window's check is
+dropped by V40's default name, the row re-seeded to 10080 at revision 0, raised to 1440 with a history row and the
+service account as both id and name when chosen and below a day, and otherwise left alone. `ProcessSettings` gains
+the six values plus `referralWindows()` and `valueOf(field)`; `ProcessSettingsTimes` owns the `HH:mm` quarter-hour
+pattern the service, the DTO and the OpenAPI share. The ordering check runs after the stale check, against stored
+values for absent keys, and names `morningWindowEnd`, `afternoonWindowStart` or `afternoonWindowEnd`.
+`referralClaimExpiry()` is now `processingWindow()`. Existing tests that leaned on the 2-hour seed now use day-scale
+values (claims backdated 8 days; `JudicialClaimWindowTest` uses 1440/2880 with fixtures 25 hours old), and
+`SdkMigrationOrderTest` expects V1–V42. New: `MastersAndReferralProcessSettingsMigrationTest` (V40 then V42 in a
+scratch schema: revision 0 → 10080, revision 3 at 120 → 1440 with one history row, revision 3 at 5000 kept, 1440
+kept, defaults, the fresh seed and the Masters uniqueness), and new cases in the service, persistence, controller
+and OpenAPI tests. Full build SUCCESSFUL: `test` 5,032 tests, 0 failures, 1 skipped; `integration` passing.
 `checkstyle.sh` OK.

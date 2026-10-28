@@ -29,6 +29,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQuerySchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsTimes;
 import uk.gov.hmcts.reform.deedpoll.domain.witnesses.WitnessSchemas;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
@@ -196,16 +197,36 @@ public class OpenAPIWriteBodies {
         }
         settings.setType("object");
         settings.setProperties(null);
-        settings.addProperty(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, new IntegerSchema()
-            .format("int32")
-            .minimum(java.math.BigDecimal.valueOf(ProcessSettingsService.MIN_REFERRAL_CLAIM_EXPIRY_MINUTES))
-            .maximum(java.math.BigDecimal.valueOf(ProcessSettingsService.MAX_REFERRAL_CLAIM_EXPIRY_MINUTES))
-            .description("How long a judge's untouched claim survives before it returns to the pool, in whole"
-                + " minutes, from 30 to 1440 (24 hours). Null, a fraction and a string are refused."));
+        settings.addProperty(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, wholeNumber(
+            ProcessSettingsService.MIN_REFERRAL_CLAIM_EXPIRY_MINUTES,
+            ProcessSettingsService.MAX_REFERRAL_CLAIM_EXPIRY_MINUTES,
+            "The processing window: how long a Master has to give a direction before the referral is unassigned, in"
+                + " whole minutes, from 1440 (1 day) to 43200 (30 days). Null, a fraction and a string are refused."));
+        settings.addProperty(ProcessSettings.REMINDER_INTERVAL_HOURS, wholeNumber(
+            ProcessSettingsService.MIN_REMINDER_INTERVAL_HOURS, ProcessSettingsService.MAX_REMINDER_INTERVAL_HOURS,
+            "How often a Master is reminded of their undirected referrals, in whole hours, from 1 to 168. Optional"
+                + " for one release; absent leaves it unchanged, null is refused."));
+        settings.addProperty(ProcessSettings.MASTER_WINDOW_CAP, wholeNumber(
+            ProcessSettingsService.MIN_MASTER_WINDOW_CAP, ProcessSettingsService.MAX_MASTER_WINDOW_CAP,
+            "How many referrals one Master may be assigned per referral window, from 1 to 100. Optional for one"
+                + " release; absent leaves it unchanged, null is refused."));
+        for (String field : ProcessSettings.WINDOW_FIELDS) {
+            settings.addProperty(field, new StringSchema().pattern(ProcessSettingsTimes.PATTERN)
+                .description("A referral window time, Europe/London, HH:mm on the quarter hour. Each window starts"
+                    + " before it ends, and the morning window ends before the afternoon one starts. Optional for"
+                    + " one release; absent leaves it unchanged, null is refused."));
+        }
         settings.addProperty(REVISION_PROPERTY, new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
             .description("The revision returned by the settings read; stale values return 409."));
         settings.setRequired(java.util.List.of(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, REVISION_PROPERTY));
         settings.setAdditionalProperties(false);
+    }
+
+    private static IntegerSchema wholeNumber(int minimum, int maximum, String description) {
+        IntegerSchema schema = new IntegerSchema();
+        schema.format("int32").minimum(java.math.BigDecimal.valueOf(minimum))
+            .maximum(java.math.BigDecimal.valueOf(maximum)).description(description);
+        return schema;
     }
 
     /**

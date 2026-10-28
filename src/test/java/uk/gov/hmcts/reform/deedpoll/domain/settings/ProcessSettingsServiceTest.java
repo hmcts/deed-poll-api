@@ -21,6 +21,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.ProcessSettingsRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +44,7 @@ class ProcessSettingsServiceTest {
 
     private static final CurrentUser DELIVERY_MANAGER =
         CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "A Delivery Manager", "dm-subject");
-    private static final ProcessSettings SEEDED = new ProcessSettings(Duration.ofHours(2), 0, null, null);
+    private static final ProcessSettings SEEDED = seeded(Duration.ofDays(7), 0, null, null);
 
     private final ProcessSettingsRepository repository = mock(ProcessSettingsRepository.class);
     private final AuditTrail audit = mock(AuditTrail.class);
@@ -61,7 +62,7 @@ class ProcessSettingsServiceTest {
         CurrentUser caller = CurrentUser.currentUser(roles, "Staff", "subject");
 
         assertThatThrownBy(() -> service.get(caller)).isInstanceOf(ForbiddenError.class);
-        assertThatThrownBy(() -> service.update(caller, valid(60, 0))).isInstanceOf(ForbiddenError.class);
+        assertThatThrownBy(() -> service.update(caller, valid(2880, 0))).isInstanceOf(ForbiddenError.class);
         verifyNoInteractions(repository, audit);
     }
 
@@ -78,27 +79,41 @@ class ProcessSettingsServiceTest {
     void noSubject() {
         CurrentUser anonymous = CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "A Delivery Manager", null);
 
-        assertThatThrownBy(() -> service.update(anonymous, valid(60, 0))).isInstanceOf(UnauthorizedError.class);
+        assertThatThrownBy(() -> service.update(anonymous, valid(2880, 0))).isInstanceOf(UnauthorizedError.class);
         verifyNoInteractions(repository, audit);
     }
 
     static Stream<Arguments> refusedBodies() {
         return Stream.of(
-            Arguments.of(body("referralClaimExpiryMinutes", 29, "revision", 0), "referralClaimExpiryMinutes"),
-            Arguments.of(body("referralClaimExpiryMinutes", 1441, "revision", 0), "referralClaimExpiryMinutes"),
+            Arguments.of(body("referralClaimExpiryMinutes", 1439, "revision", 0), "referralClaimExpiryMinutes"),
+            Arguments.of(body("referralClaimExpiryMinutes", 43201, "revision", 0), "referralClaimExpiryMinutes"),
             Arguments.of(body("referralClaimExpiryMinutes", 0, "revision", 0), "referralClaimExpiryMinutes"),
+            Arguments.of(body("referralClaimExpiryMinutes", 120, "revision", 0), "referralClaimExpiryMinutes"),
+            Arguments.of(withMinutes("reminderIntervalHours", 0), "reminderIntervalHours"),
+            Arguments.of(withMinutes("reminderIntervalHours", 169), "reminderIntervalHours"),
+            Arguments.of(withMinutes("reminderIntervalHours", null), "reminderIntervalHours"),
+            Arguments.of(withMinutes("reminderIntervalHours", 48L), "reminderIntervalHours"),
+            Arguments.of(withMinutes("masterWindowCap", 0), "masterWindowCap"),
+            Arguments.of(withMinutes("masterWindowCap", 101), "masterWindowCap"),
+            Arguments.of(withMinutes("masterWindowCap", "10"), "masterWindowCap"),
+            Arguments.of(withMinutes("morningWindowStart", "07:05"), "morningWindowStart"),
+            Arguments.of(withMinutes("morningWindowStart", "7:00"), "morningWindowStart"),
+            Arguments.of(withMinutes("morningWindowEnd", "10:30:00"), "morningWindowEnd"),
+            Arguments.of(withMinutes("afternoonWindowStart", null), "afternoonWindowStart"),
+            Arguments.of(withMinutes("afternoonWindowEnd", "24:00"), "afternoonWindowEnd"),
             Arguments.of(body("referralClaimExpiryMinutes", -5, "revision", 0), "referralClaimExpiryMinutes"),
             Arguments.of(body("referralClaimExpiryMinutes", 90.5, "revision", 0), "referralClaimExpiryMinutes"),
             Arguments.of(body("referralClaimExpiryMinutes", 90.0, "revision", 0), "referralClaimExpiryMinutes"),
-            Arguments.of(body("referralClaimExpiryMinutes", 120L, "revision", 0), "referralClaimExpiryMinutes"),
-            Arguments.of(body("referralClaimExpiryMinutes", "120", "revision", 0), "referralClaimExpiryMinutes"),
+            Arguments.of(body("referralClaimExpiryMinutes", 10080L, "revision", 0), "referralClaimExpiryMinutes"),
+            Arguments.of(body("referralClaimExpiryMinutes", "10080", "revision", 0), "referralClaimExpiryMinutes"),
             Arguments.of(body("referralClaimExpiryMinutes", null, "revision", 0), "referralClaimExpiryMinutes"),
             Arguments.of(body("revision", 0), "referralClaimExpiryMinutes"),
-            Arguments.of(body("referralClaimExpiryMinutes", 60), "revision"),
-            Arguments.of(body("referralClaimExpiryMinutes", 60, "revision", null), "revision"),
-            Arguments.of(body("referralClaimExpiryMinutes", 60, "revision", -1), "revision"),
-            Arguments.of(body("referralClaimExpiryMinutes", 60, "revision", "0"), "revision"),
-            Arguments.of(body("referralClaimExpiryMinutes", 60, "revision", 0, "escalationDays", 3), "escalationDays"));
+            Arguments.of(body("referralClaimExpiryMinutes", 2880), "revision"),
+            Arguments.of(body("referralClaimExpiryMinutes", 2880, "revision", null), "revision"),
+            Arguments.of(body("referralClaimExpiryMinutes", 2880, "revision", -1), "revision"),
+            Arguments.of(body("referralClaimExpiryMinutes", 2880, "revision", "0"), "revision"),
+            Arguments.of(body("referralClaimExpiryMinutes", 2880, "revision", 0, "escalationDays", 3),
+                         "escalationDays"));
     }
 
     @ParameterizedTest
@@ -112,25 +127,29 @@ class ProcessSettingsServiceTest {
     }
 
     @Test
-    @DisplayName("the bounds are in the claim window's refusal")
+    @DisplayName("the bounds are in each whole-number refusal")
     void boundsInTheMessage() {
-        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, valid(29, 0)))
-            .hasMessageContaining("30").hasMessageContaining("1440");
+        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, valid(1439, 0)))
+            .hasMessageContaining("1440").hasMessageContaining("43200");
+        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, withMinutes("reminderIntervalHours", 169)))
+            .hasMessageContaining("1 to 168");
+        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, withMinutes("masterWindowCap", 101)))
+            .hasMessageContaining("1 to 100");
     }
 
     @ParameterizedTest
     @MethodSource("boundaries")
-    @DisplayName("30 and 1440 minutes are both accepted")
+    @DisplayName("1440 and 43200 minutes are both accepted")
     void boundariesAccepted(int minutes) {
         given(repository.read(true)).willReturn(Optional.of(SEEDED));
 
         ProcessSettings next = service.update(DELIVERY_MANAGER, valid(minutes, 0));
 
-        assertThat(next.referralClaimExpiry()).isEqualTo(Duration.ofMinutes(minutes));
+        assertThat(next.processingWindow()).isEqualTo(Duration.ofMinutes(minutes));
     }
 
     static Stream<Integer> boundaries() {
-        return Stream.of(30, 1440);
+        return Stream.of(1440, 43200);
     }
 
     @Test
@@ -138,7 +157,7 @@ class ProcessSettingsServiceTest {
     void staleRevision() {
         given(repository.read(true)).willReturn(Optional.of(SEEDED));
 
-        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, valid(60, 1))).isInstanceOf(ConflictError.class);
+        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, valid(2880, 1))).isInstanceOf(ConflictError.class);
         verify(repository, never()).change(any(), any(), any(), anyList());
         verifyNoInteractions(audit);
     }
@@ -146,10 +165,10 @@ class ProcessSettingsServiceTest {
     @Test
     @DisplayName("a stale revision beats the no-op: an old form holding today's value is still a conflict")
     void staleBeatsNoOp() {
-        ProcessSettings current = new ProcessSettings(Duration.ofMinutes(60), 3, LocalDateTime.now(), "Someone");
+        ProcessSettings current = seeded(Duration.ofMinutes(2880), 3, LocalDateTime.now(), "Someone");
         given(repository.read(true)).willReturn(Optional.of(current));
 
-        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, valid(60, 2))).isInstanceOf(ConflictError.class);
+        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, valid(2880, 2))).isInstanceOf(ConflictError.class);
         verify(repository, never()).change(any(), any(), any(), anyList());
         verifyNoInteractions(audit);
     }
@@ -159,7 +178,8 @@ class ProcessSettingsServiceTest {
     void unchangedIsANoOp() {
         given(repository.read(true)).willReturn(Optional.of(SEEDED));
 
-        assertThat(service.update(DELIVERY_MANAGER, valid(120, 0))).isSameAs(SEEDED);
+        assertThat(service.update(DELIVERY_MANAGER, valid(10080, 0))).isSameAs(SEEDED);
+        assertThat(service.update(DELIVERY_MANAGER, withMinutes("morningWindowStart", "07:00"))).isSameAs(SEEDED);
         verify(repository, never()).change(any(), any(), any(), anyList());
         verifyNoInteractions(audit);
     }
@@ -169,9 +189,9 @@ class ProcessSettingsServiceTest {
     void change() {
         given(repository.read(true)).willReturn(Optional.of(SEEDED));
 
-        ProcessSettings next = service.update(DELIVERY_MANAGER, valid(45, 0));
+        ProcessSettings next = service.update(DELIVERY_MANAGER, valid(1445, 0));
 
-        assertThat(next.referralClaimExpiryMinutes()).isEqualTo(45);
+        assertThat(next.referralClaimExpiryMinutes()).isEqualTo(1445);
         assertThat(next.revision()).isOne();
         assertThat(next.updatedBy()).isEqualTo("A Delivery Manager");
         assertThat(next.updatedAt()).isNotNull();
@@ -187,8 +207,12 @@ class ProcessSettingsServiceTest {
     void sweepRead() {
         given(repository.read(anyBoolean())).willReturn(Optional.of(SEEDED));
 
-        assertThat(service.referralClaimExpiry()).isEqualTo(Duration.ofHours(2));
-        verify(repository).read(false);
+        assertThat(service.processingWindow()).isEqualTo(Duration.ofDays(7));
+        assertThat(service.reminderInterval()).isEqualTo(Duration.ofHours(48));
+        assertThat(service.masterWindowCap()).isEqualTo(10);
+        assertThat(service.referralWindows()).isEqualTo(new ReferralWindows(
+            LocalTime.of(7, 0), LocalTime.of(10, 30), LocalTime.of(14, 0), LocalTime.of(14, 30)));
+        verify(repository, never()).read(true);
     }
 
     @Test
@@ -196,7 +220,86 @@ class ProcessSettingsServiceTest {
     void sweepReadNoDefault() {
         given(repository.read(false)).willReturn(Optional.empty());
 
-        assertThatThrownBy(service::referralClaimExpiry).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(service::processingWindow).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(service::reminderInterval).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(service::masterWindowCap).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(service::referralWindows).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    @DisplayName("only the two old keys leave every new setting as stored, and history names only the window")
+    void oldShapeBody() {
+        given(repository.read(true)).willReturn(Optional.of(SEEDED));
+
+        ProcessSettings next = service.update(DELIVERY_MANAGER, valid(2880, 0));
+
+        assertThat(next.reminderInterval()).isEqualTo(SEEDED.reminderInterval());
+        assertThat(next.masterWindowCap()).isEqualTo(10);
+        assertThat(next.referralWindows()).isEqualTo(SEEDED.referralWindows());
+        verify(repository).change(SEEDED, next, "dm-subject", List.of("referralClaimExpiryMinutes"));
+    }
+
+    @Test
+    @DisplayName("each changed setting is named once, in a fixed order, and an unchanged one is not")
+    void namesEveryChangedField() {
+        given(repository.read(true)).willReturn(Optional.of(SEEDED));
+        Map<String, Object> fields = valid(10080, 0);
+        fields.put("afternoonWindowEnd", "15:00");
+        fields.put("masterWindowCap", 12);
+        fields.put("reminderIntervalHours", 48);
+
+        ProcessSettings next = service.update(DELIVERY_MANAGER, fields);
+
+        assertThat(next.afternoonWindowEnd()).isEqualTo(LocalTime.of(15, 0));
+        verify(repository).change(SEEDED, next, "dm-subject", List.of("masterWindowCap", "afternoonWindowEnd"));
+        verify(audit).record(eq(AuditEntry.of(AuditAction.PROCESS_SETTINGS_CHANGED, AuditActor.of(DELIVERY_MANAGER),
+                                              AuditEntities.PROCESS_SETTINGS, "1", null)
+                                      .withFields(List.of("masterWindowCap", "afternoonWindowEnd"))),
+                             eq(List.of()));
+    }
+
+    static Stream<Arguments> misordered() {
+        return Stream.of(
+            Arguments.of("morningWindowEnd", "07:00", "morningWindowEnd"),
+            Arguments.of("morningWindowStart", "11:00", "morningWindowEnd"),
+            Arguments.of("morningWindowEnd", "14:00", "afternoonWindowStart"),
+            Arguments.of("afternoonWindowStart", "10:15", "afternoonWindowStart"),
+            Arguments.of("afternoonWindowEnd", "14:00", "afternoonWindowEnd"),
+            Arguments.of("afternoonWindowStart", "15:00", "afternoonWindowEnd"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("misordered")
+    @DisplayName("misordered windows, judged with the stored values for absent keys, name a field and write nothing")
+    void misorderedWindows(String field, String time, String named) {
+        given(repository.read(true)).willReturn(Optional.of(SEEDED));
+
+        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, withMinutes(field, time)))
+            .isInstanceOfSatisfying(InvalidInputError.class, error -> assertThat(error.errors())
+                .extracting(FieldError::field).containsExactly(named));
+        verify(repository, never()).change(any(), any(), any(), anyList());
+        verifyNoInteractions(audit);
+    }
+
+    @Test
+    @DisplayName("the morning window may end a quarter hour before the afternoon one starts")
+    void adjacentWindows() {
+        given(repository.read(true)).willReturn(Optional.of(SEEDED));
+
+        assertThat(service.update(DELIVERY_MANAGER, withMinutes("morningWindowEnd", "13:45")).morningWindowEnd())
+            .isEqualTo(LocalTime.of(13, 45));
+    }
+
+    private static ProcessSettings seeded(Duration window, int revision, LocalDateTime at, String by) {
+        return new ProcessSettings(window, Duration.ofHours(48), 10, LocalTime.of(7, 0), LocalTime.of(10, 30),
+                                   LocalTime.of(14, 0), LocalTime.of(14, 30), revision, at, by);
+    }
+
+    /** The seeded window at revision 0, beside one other key. */
+    private static Map<String, Object> withMinutes(String field, Object value) {
+        Map<String, Object> fields = valid(10080, 0);
+        fields.put(field, value);
+        return fields;
     }
 
     private static Map<String, Object> valid(int minutes, int revision) {

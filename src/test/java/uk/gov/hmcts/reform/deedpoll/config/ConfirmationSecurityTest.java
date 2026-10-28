@@ -576,7 +576,7 @@ class ConfirmationSecurityTest {
     /** The stored claim window, as the sweep reads it. */
     private static ProcessSettingsService claimWindow(Duration window) {
         ProcessSettingsService settings = mock(ProcessSettingsService.class);
-        when(settings.referralClaimExpiry()).thenReturn(window);
+        when(settings.processingWindow()).thenReturn(window);
         return settings;
     }
 }

@@ -1097,14 +1097,14 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         /**
-         * Backdates a claim nine hours, past the seeded two-hour window, so the next sweep takes it back.
+         * Backdates a claim eight days, past the seeded seven-day window, so the next sweep takes it back.
          *
          * <p>Off the row's own {@code claimedAt} rather than off {@code LocalDateTime.now()}, so the arithmetic
          * cannot depend on which clock the test and the service each read.
          */
         private void lapse(String referralId) {
             Referral referral = stored(referralId);
-            referral.setLastTouchedAt(referral.getClaimedAt().minusHours(9));
+            referral.setLastTouchedAt(referral.getClaimedAt().minusDays(8));
             referrals.saveAndFlush(referral);
         }
     }

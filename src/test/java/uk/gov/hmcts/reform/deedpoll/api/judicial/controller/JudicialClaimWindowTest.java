@@ -55,8 +55,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * /caseworker/process-settings} rather than written onto the row.
  *
  * <p>A released claim is {@code Open} and nothing makes it {@code Claimed} again, so every step asks about a claim
- * that is still {@code Claimed}. Each fixture was last touched 31 minutes ago: inside a 60-minute window, outside a
- * 30-minute one.
+ * that is still {@code Claimed}. Each fixture was last touched 25 hours ago: inside a two-day window, outside a
+ * one-day one.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -111,7 +111,7 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
     void setUp() throws Exception {
         IDAM.stubDefaults();
         clear();
-        window(60);
+        window(2880);
     }
 
     @AfterEach
@@ -122,8 +122,8 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
         referenceCounters.deleteAll();
         jdbc.update("DELETE FROM deedpoll_process_settings_change");
         jdbc.update("""
-            INSERT INTO deedpoll_process_settings (id, referral_claim_expiry_minutes, revision) VALUES (1, 120, 0)
-            ON CONFLICT (id) DO UPDATE SET referral_claim_expiry_minutes = 120, revision = 0, updated_at = NULL,
+            INSERT INTO deedpoll_process_settings (id, referral_claim_expiry_minutes, revision) VALUES (1, 10080, 0)
+            ON CONFLICT (id) DO UPDATE SET referral_claim_expiry_minutes = 10080, revision = 0, updated_at = NULL,
                 updated_by_id = NULL, updated_by_name = NULL
             """);
     }
@@ -137,7 +137,7 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
         authorised(get(POOL)).andExpect(status().isOk());
         assertStillClaimed(a);
 
-        window(30);
+        window(1440);
         // The PUT is not a sweep.
         assertStillClaimed(a);
 
@@ -146,7 +146,7 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
             .andExpect(jsonPath("$.referrals[*].id", hasItem(a)));
         assertReleased(a);
 
-        window(60);
+        window(2880);
         asJudge();
         authorised(get(POOL)).andExpect(status().isOk());
         assertReleased(a);
@@ -155,9 +155,9 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("the pool: a raised window keeps a claim the lower one would have released but no sweep had")
     void poolKeepsAClaimARaisedWindowCovers() throws Exception {
-        window(30);
+        window(1440);
         String b = claimedBy(OTHER_JUDGE_NAME, OTHER_JUDGE_SUBJECT);
-        window(60);
+        window(2880);
 
         asJudge();
         authorised(get(POOL)).andExpect(status().isOk())
@@ -175,7 +175,7 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
             .andExpect(jsonPath("$.referrals[*].id", hasItem(held)));
         assertStillClaimed(held);
 
-        window(30);
+        window(1440);
         assertStillClaimed(held);
 
         asJudge();
@@ -194,7 +194,7 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
         authorised(post(POOL + "/" + other + "/claim")).andExpect(status().isNotFound());
         assertStillClaimed(other);
 
-        window(30);
+        window(1440);
         assertStillClaimed(other);
 
         asJudge();
@@ -207,7 +207,7 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("with the settings row missing the pool load fails, and nothing is released, noted or refreshed")
     void missingSettingsReleaseNothing() throws Exception {
-        window(30);
+        window(1440);
         String a = claimedBy(OTHER_JUDGE_NAME, OTHER_JUDGE_SUBJECT);
         final int notesBefore = notesOn(a);
         jdbc.update("DELETE FROM deedpoll_process_settings");
@@ -231,7 +231,7 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
             .andExpect(jsonPath("$.referralClaimExpiryMinutes").value(minutes));
     }
 
-    /** A referral on a case of its own, claimed by the named judge and last touched 31 minutes ago. */
+    /** A referral on a case of its own, claimed by the named judge and last touched 25 hours ago. */
     private String claimedBy(String judge, String subject) {
         String caseId = deedPollService.createDeedPoll(DeedPollPatch.of(Map.of("dateReceived", RECEIVED)))
             .deedPoll().getId();
@@ -242,7 +242,7 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
             CurrentUser.currentUser(List.of(), "Ada Caseworker", "caseworker-1")).getId().toString();
         referralService.claim(caseId, referralId, CurrentUser.currentUser(List.of(Role.JUDICIAL), judge, subject));
         Referral referral = stored(referralId);
-        referral.setLastTouchedAt(referral.getClaimedAt().minusMinutes(31));
+        referral.setLastTouchedAt(referral.getClaimedAt().minusHours(25));
         referrals.saveAndFlush(referral);
         return referralId;
     }

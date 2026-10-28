@@ -1064,7 +1064,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             Referral claimed = stored(referralId);
             assertThat(claimed.getState()).isEqualTo(ReferralState.Claimed);
             assertThat(claimed.getClaimedBy()).isEqualTo(JUDGE_NAME);
-            // Stamped at the claim as well, so a referral picked up and never touched again lapses two hours after
+            // Stamped at the claim as well, so a referral picked up and never touched again lapses seven days after
             // it was picked up rather than never.
             assertThat(claimed.getLastTouchedAt()).isNotNull();
             // And the claim note is the judge's own, over a real token rather than a CurrentUser a test built:
@@ -1899,13 +1899,13 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * Backdates a claim nine hours, past the seeded two-hour window, so the next sweep takes it back.
+     * Backdates a claim eight days, past the seeded seven-day window, so the next sweep takes it back.
      *
      * <p>Off the row's own {@code claimedAt} rather than off {@code LocalDateTime.now()}, so the arithmetic
      * cannot depend on which clock the test and the service each read.
      */
     private LocalDateTime lapse(String referralId) {
-        return backdateTouch(referralId, 9);
+        return backdateTouch(referralId, 8 * 24);
     }
 
     /** Moves a claim's last interaction the given number of hours into the past, and says where it landed. */

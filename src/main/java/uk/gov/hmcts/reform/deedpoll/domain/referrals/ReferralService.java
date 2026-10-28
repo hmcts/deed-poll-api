@@ -114,7 +114,7 @@ import java.util.stream.Collectors;
  * actioned by the office that has to action it.
  *
  * <p><strong>{@link #reclaimStaleClaims()} is a mutating read, on purpose. Do not "fix" it.</strong> A claim
- * lapses after {@link ProcessSettingsService#referralClaimExpiry()} of the holding judge's inactivity, and there is no
+ * lapses after {@link ProcessSettingsService#processingWindow()} of the holding judge's inactivity, and there is no
  * scheduling in this service to notice that on a timer -- no {@code @EnableScheduling}, no injectable clock,
  * only {@link AuditClock}. Rather than introduce one, lapses are computed and taken back as a side effect of
  * loading the judicial pool, which is the most-polled judicial page, and defensively at the top of
@@ -698,7 +698,7 @@ public class ReferralService {
      *
      * <p><strong>The consequence to keep visible:</strong> a withdrawn direction is a live claim again, so
      * {@link #reclaimStaleClaims()} returns it to the shared pool after
-     * {@link ProcessSettingsService#referralClaimExpiry()} of inactivity, exactly as it would any other claim. That
+     * {@link ProcessSettingsService#processingWindow()} of inactivity, exactly as it would any other claim. That
      * is decided, not an oversight; the sweep is unchanged.
      *
      * <p>One {@code REFERRAL_DIRECTION_WITHDRAWN} event with old and new values of the state, decision,
@@ -915,8 +915,8 @@ public class ReferralService {
      * that it is found by somebody reading the service rather than only by somebody already reading this
      * method.
      *
-     * <p>The window is {@link ProcessSettingsService#referralClaimExpiry()} and is never hard-coded: it is a
-     * Delivery Manager setting ({@code /caseworker/process-settings}), seeded at two hours, so correcting the guess
+     * <p>The window is {@link ProcessSettingsService#processingWindow()} and is never hard-coded: it is a
+     * Delivery Manager setting ({@code /caseworker/process-settings}), seeded at seven days, so correcting the guess
      * about how judges work needs no release. It is read once per call, uncached, before anything is released, so
      * a missing settings row fails the sweep before it changes anything, and a change committed while a sweep runs
      * applies from the next one.
@@ -937,7 +937,7 @@ public class ReferralService {
     @Transactional
     public int reclaimStaleClaims() {
         LocalDateTime now = AuditClock.now();
-        LocalDateTime cutoff = now.minus(settings.referralClaimExpiry());
+        LocalDateTime cutoff = now.minus(settings.processingWindow());
 
         // Insertion-ordered and de-duplicated: one case can hold only one claim, so this is normally one entry
         // per release, and the set is what the single closing statement is keyed on.

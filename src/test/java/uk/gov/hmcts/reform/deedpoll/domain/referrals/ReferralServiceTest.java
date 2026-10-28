@@ -204,7 +204,7 @@ class ReferralServiceTest {
      */
     private ReferralService serviceWithClaimExpiry(Duration window) {
         ProcessSettingsService settings = mock(ProcessSettingsService.class);
-        when(settings.referralClaimExpiry()).thenReturn(window);
+        when(settings.processingWindow()).thenReturn(window);
         return new ReferralService(deedPolls, referrals, notes, settings,
                                    mock(EntityManager.class), mock(AuditTrail.class));
     }

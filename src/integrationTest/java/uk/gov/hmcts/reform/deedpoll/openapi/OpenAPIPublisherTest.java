@@ -269,16 +269,30 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                 .contains("caseworker-deedpoll-delivery-manager", "MANAGE_PROCESS_CONFIG");
             assertThat(path.at("/" + method + "/responses/403").isMissingNode()).as(method).isFalse();
         }
-        assertThat(path.at("/put/description").asText()).contains("409", "next judicial pool");
+        assertThat(path.at("/put/description").asText())
+            .contains("409", "processing window", "optional for one release");
         assertThat(spec.at("/components/schemas/ProcessSettingsResponse/properties").fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "revision", "updatedAt", "updatedBy");
+            .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "reminderIntervalHours", "masterWindowCap",
+                "morningWindowStart", "morningWindowEnd", "afternoonWindowStart", "afternoonWindowEnd", "revision",
+                "updatedAt", "updatedBy");
         JsonNode body = spec.at("/components/schemas/UpdateProcessSettingsRequest");
+        assertThat(body.get("required")).extracting(JsonNode::asText)
+            .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "revision");
         assertThat(body.get("required").toString()).contains("referralClaimExpiryMinutes", "revision");
         assertThat(body.get("additionalProperties").asBoolean()).isFalse();
         JsonNode minutes = body.at("/properties/referralClaimExpiryMinutes");
-        assertThat(minutes.get("minimum").asInt()).isEqualTo(30);
-        assertThat(minutes.get("maximum").asInt()).isEqualTo(1440);
+        assertThat(minutes.get("minimum").asInt()).isEqualTo(1440);
+        assertThat(minutes.get("maximum").asInt()).isEqualTo(43200);
         assertThat(minutes.get("format").asText()).isEqualTo("int32");
+        assertThat(body.at("/properties/reminderIntervalHours/minimum").asInt()).isEqualTo(1);
+        assertThat(body.at("/properties/reminderIntervalHours/maximum").asInt()).isEqualTo(168);
+        assertThat(body.at("/properties/masterWindowCap/minimum").asInt()).isEqualTo(1);
+        assertThat(body.at("/properties/masterWindowCap/maximum").asInt()).isEqualTo(100);
+        for (String time : List.of("morningWindowStart", "morningWindowEnd", "afternoonWindowStart",
+                                   "afternoonWindowEnd")) {
+            assertThat(body.at("/properties/" + time + "/pattern").asText()).as(time)
+                .isEqualTo("^([01][0-9]|2[0-3]):(00|15|30|45)$");
+        }
         assertThat(body.at("/properties/revision/minimum").asInt()).isZero();
     }
 

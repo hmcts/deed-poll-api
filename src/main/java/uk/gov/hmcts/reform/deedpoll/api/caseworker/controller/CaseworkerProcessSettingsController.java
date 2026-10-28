@@ -25,7 +25,9 @@ public class CaseworkerProcessSettingsController {
 
     @Operation(operationId = "getProcessSettings", summary = "Read the Delivery Manager's process settings",
         description = "Requires caseworker-deedpoll-delivery-manager (MANAGE_PROCESS_CONFIG). "
-            + "The referral claim window starts at 120 minutes, revision 0, with null attribution.")
+            + "Seeded with a processing window of 10080 minutes (7 days), a 48-hour reminder interval, a cap of 10 "
+            + "referrals per Master per window, and referral windows of 07:00-10:30 and 14:00-14:30 Europe/London, "
+            + "at revision 0 with null attribution.")
     @GetMapping
     public ProcessSettingsResponse get() {
         return ProcessSettingsResponse.from(service.get(CurrentUsers.required()));
@@ -35,9 +37,13 @@ public class CaseworkerProcessSettingsController {
         description = "Requires caseworker-deedpoll-delivery-manager (MANAGE_PROCESS_CONFIG). "
             + "Supply the revision read with the form; a stale revision returns 409 with no change, even when the "
             + "value already matches. A change increments revision, records attribution and is audited. Saving the "
-            + "current value at the current revision is a no-op. A new claim window applies to every live claim "
-            + "from the next judicial pool, My referrals or claim request; saving it releases nothing itself, and "
-            + "raising it never restores a claim already released.")
+            + "current values at the current revision is a no-op. referralClaimExpiryMinutes (the processing window: "
+            + "how long a Master has to give a direction before the referral is unassigned) and revision are "
+            + "required. The other settings are optional for one release: an absent one keeps its stored value, and "
+            + "each changed setting writes its own history row. Window times are HH:mm on the quarter hour, each "
+            + "window starting before it ends and the morning window ending before the afternoon one starts. A new "
+            + "processing window applies from the next sweep; saving it releases nothing itself, and raising it "
+            + "never restores a referral already released.")
     @AuditedAs(AuditAction.PROCESS_SETTINGS_CHANGED)
     @PutMapping
     public ProcessSettingsResponse update(@RequestBody UpdateProcessSettingsRequest request) {
