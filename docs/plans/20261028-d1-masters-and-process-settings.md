@@ -198,8 +198,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 5: Documentation and final verification
-- [ ] Update `CLAUDE.md` (layout counts, staff permissions, a new paragraph for the Masters list and its linking rule, the process settings paragraph) and any doc that calls the window a claim window.
-- [ ] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
+- [x] Update `CLAUDE.md` (layout counts, staff permissions, a new paragraph for the Masters list and its linking rule, the process settings paragraph) and any doc that calls the window a claim window.
+- [x] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
 
 ## Execution notes
 
@@ -271,3 +271,14 @@ weekend, listed, added and removed rule, role matrix, bounds, 409, 404, audit) a
 then not a working day, 409 and 400 changing nothing, removing a seeded date then 404, a substitute day), plus an
 `OpenAPIPublisherTest` case and its two known paths. Full build SUCCESSFUL: `test` 5,129 tests, 0 failures,
 1 skipped; `integration` 27 tests, 0 failures. `checkstyle.sh` OK.
+
+**Task 5 (documentation and final verification):** `CLAUDE.md`'s layout lists `/caseworker/masters` and
+`/caseworker/process-settings/bank-holidays` (counted apart, as the process settings are; no test holds the
+thirty-four), `domain/settings` and the new `domain/masters`; the staff-permissions text says which of them
+`MANAGE_PROCESS_CONFIG` gates; the claim-window paragraph is now the referral process settings paragraph, with new
+paragraphs for the Masters list and its linking rule and for bank holidays. `README.md`'s Process settings section
+gains the five new operations, a settings table with bounds and seeds, and the V42 re-seed rule, and its referral
+paragraph says processing window (seven days); `docs/RESUME.md` gains a D1 entry. No other doc names the claim window
+outside `docs/plans/`. Forced final run (`cleanTest cleanIntegration build`): SUCCESSFUL in 5m 4s, `test` 5,129 tests,
+0 failures, 1 skipped; `integration` 27 tests, 0 failures. Against the baseline (4,968 / 25): +161 unit and +2
+integration tests, no regressions. `checkstyle.sh` OK. `git status` clean apart from this commit.

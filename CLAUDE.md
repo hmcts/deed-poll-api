@@ -30,6 +30,10 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations 
                                   and /caseworker/gazette-notices (1 history GET, counted apart)
                                   and /caseworker/gazette-settings (Delivery Manager-only GET/PUT)
                                   and /caseworker/process-settings (MANAGE_PROCESS_CONFIG GET/PUT, counted apart)
+                                  and /caseworker/process-settings/bank-holidays (any staff GET; POST and
+                                  DELETE …/{date} need MANAGE_PROCESS_CONFIG; counted apart)
+                                  and /caseworker/masters (any staff GET; POST and PATCH …/{id} need
+                                  MANAGE_PROCESS_CONFIG; counted apart)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
                                   plus GET …/documents/{documentId}/preview (counted apart as PREVIEW_PATHS)
 api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case,
@@ -40,8 +44,11 @@ api/caller/{controller,dto}       GET /me, the caller's own areas and capabiliti
 domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
 domain/referrals                  referrals to the judiciary and the applicant's confirmation — NOT a port
-domain/settings                   the Delivery Manager's process settings (V40), starting with the referral claim
-                                  window — NOT a port
+domain/settings                   the Delivery Manager's process settings (V40, extended by V42): the processing
+                                  window, reminder interval, per-Master cap and two referral windows, plus the
+                                  England and Wales bank holidays (BankHolidays.isWorkingDay) — NOT a port
+domain/masters                    the Masters list (V42) a Delivery Manager keeps, linked to IDAM by email on a
+                                  judge's first judicial request (config/MasterLinking) — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
 domain/documents/preview          transient PDF renditions for the admin viewer, DOCX via Docmosis — NOT a port;
                                   domain/documents must not depend on it (PreviewBoundaryTest)
@@ -69,7 +76,8 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
 
 `caseworker-deedpoll-team-leader` grants OVERRIDE_PRIVACY, DELETE_NOTE, DELETE_WITNESS,
 MANAGE_SHARED_QUERIES and REPAIR_CCD. `caseworker-deedpoll-delivery-manager` inherits all five
-and alone grants ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG (the process settings). The deprecated
+and alone grants ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG (the process settings, the bank holidays and the
+Masters list's writes; any staff role reads the Masters list and the bank holidays). The deprecated
 `caseworker-deedpoll-admin` temporarily grants only the first five. Resolve capabilities from verified roles; the retained privacy boolean is derived.
 Every Gazette operation and the named `readyForPublication` worklist/count (including saved-query
 links) requires ACCESS_GAZETTE, with 403 before reads or side effects. Ordinary field conditions
@@ -513,11 +521,37 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   body sending only it is now refused for want of the answer. Do not assume every stored Yes has directions: the old
   admin could record Yes with none during that release. The case's own `publishToLondonGazette` is a different fact
   and is untouched.
-- **The referral claim window is a stored process setting, read on every sweep.** `ReferralService` asks
-  `ProcessSettingsService.referralClaimExpiry()` once per `reclaimStaleClaims`, so a Delivery Manager's `PUT` applies
-  at once; never cache it or reintroduce a property default, and a missing V40 row fails the sweep rather than
-  guessing. Values go in `deedpoll_process_settings_change`, never in the audit trail (no case owns them). A new
-  setting arrives with the behaviour that reads it, not as a placeholder column.
+- **The referral process settings are stored, and read on every decision.** V40's singleton, extended by V42, holds
+  the processing window (`referralClaimExpiryMinutes` on the wire, a name kept for admin: how long a Master has to
+  give a direction, 1–30 days, seeded 7), the reminder interval (1–168 hours, 48), the per-Master cap per window
+  (1–100, 10) and the morning and afternoon windows (`HH:mm` on the quarter hour, `Europe/London`, 07:00–10:30 and
+  14:00–14:30, each start before its end and the morning end before the afternoon start). `ProcessSettingsService`
+  reads them through `processingWindow()`, `reminderInterval()`, `masterWindowCap()` and `referralWindows()` with no
+  capability check and no cache; `ReferralService` asks `processingWindow()` once per `reclaimStaleClaims`, so a
+  Delivery Manager's `PUT` applies at once. Never cache them or reintroduce a property default, and a missing row
+  fails the caller rather than guessing. The six V42 keys are **optional on the PUT for one release** so today's admin,
+  which sends only the window and `revision`, keeps working; an absent key leaves its column alone. V42 re-seeded the
+  window to 7 days only at revision 0, and raised a chosen value below a day to 1440 with a history row attributed to
+  the service account. Values go in `deedpoll_process_settings_change`, one row per changed field, never in the audit
+  trail (no case owns them). D1 added the four new values for D2 and D3 to read; nothing in D1 reads them yet.
+- **The Masters list is the Delivery Manager's, and a Master is linked by email, once.** `deedpoll_master` (V42)
+  holds a name, a lower-cased unique email and an available flag; there is no delete, because referrals and history
+  refer to a Master, so one who leaves is made unavailable. `config/MasterLinking`, a `HandlerInterceptor` on
+  `/judicial/**` (not `JudicialReferralService.visible`, which the judicial lists and document routes do not share),
+  calls `MasterService.linkIfListed` on every judicial request: a `Role.JUDICIAL` caller with a subject and an IDAM
+  email (`CurrentUser.email`, from userinfo) links an **unlinked** entry with that email by one conditional `UPDATE
+  … WHERE idam_subject IS NULL`, so racing pods link once, and records `MASTER_LINKED` with the system actor. Linking
+  never creates an entry, never relinks one held by another subject (a fixed WARN naming nobody), and is best effort:
+  a failure is a WARN with the exception class only and the request proceeds. Changing a linked Master's email unlinks
+  it, so the new address must sign in to link again. **The subject is never published** (`Master` has no component
+  for it) and **the caller's email is never logged, audited, noted or put in an error**: a duplicate is a 409 naming
+  the `email` field in words that do not echo the address, including when a race reaches the unique index.
+- **Bank holidays are a list, not a fetch.** `deedpoll_bank_holiday` (V42) is seeded with GOV.UK's England and Wales
+  dates for 2026–2028 as literals; nothing calls the internet. `BankHolidays.isWorkingDay` is Monday to Friday and
+  not listed, with no capability check and no cache, and never reads the table for a weekend. A Delivery Manager adds
+  (409 on a listed date) and removes (404 on an unlisted one) under `MANAGE_PROCESS_CONFIG`, audited as
+  `BANK_HOLIDAY_ADDED`/`_REMOVED` with field names only. Dates beyond 2028 must be added by a Delivery Manager or a
+  later migration before D2's windows reach them.
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
   only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback

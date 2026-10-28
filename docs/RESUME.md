@@ -1,9 +1,18 @@
 # Resume state — where the next session picks up
 
+**Plan D1, the Masters list and the referral process settings, 2026-10-28:** on `feat/d-referral-assignment`, local
+commits only, not pushed (it sits on unmerged api #155 and the contract-step branch). V42 adds `deedpoll_master` and
+`deedpoll_bank_holiday` (GOV.UK England and Wales dates for 2026–2028) and five more process settings: the claim
+window becomes the processing window (1–30 days, seeded 7), plus the reminder interval, the per-Master cap and the two
+referral windows. `/caseworker/masters` and `/caseworker/process-settings/bank-holidays` read for any staff role and
+write under `MANAGE_PROCESS_CONFIG`; a judge is linked to their Masters-list entry by IDAM email on their first judicial
+request. No referral behaviour changes yet. Next: D2 (assignment) and D3 (reminders and digests), then Juniper rebases
+and raises the PRs. See [the plan](plans/20261028-d1-masters-and-process-settings.md).
+
 **Delivery Manager process settings, 2026-10-26:** on `feat/dm-process-config`, not pushed. V40 adds a revisioned,
 attributed singleton (`deedpoll_process_settings`) and its change history; `GET`/`PUT /caseworker/process-settings`
-read and change it under the new `MANAGE_PROCESS_CONFIG`, granted to Delivery Managers only. Its one value is the
-referral claim window (30–1,440 minutes, seeded 120), which `ReferralService.reclaimStaleClaims` now reads on every
+read and change it under the new `MANAGE_PROCESS_CONFIG`, granted to Delivery Managers only. Its one value was then the
+referral claim window (30–1,440 minutes, seeded 120; D1's V42 widens and re-seeds it), which `ReferralService.reclaimStaleClaims` now reads on every
 sweep with no cache; `deedpoll.referrals.claim-expiry` / `DEEDPOLL_REFERRAL_CLAIM_EXPIRY` are removed. Next: open the
 PR; after merge and deploy, admin's `docs/plans/20261026-dm-settings-page.md` refreshes `openapi.json` and builds the
 page. See [the plan](plans/completed/20261026-dm-process-settings.md).

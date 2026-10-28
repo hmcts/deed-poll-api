@@ -234,7 +234,7 @@ can put a case into the waiting list or take it out without an answer.
 **Claiming a referral and recording a direction are the judge's half of the loop, and they have no route on this
 surface.** Both are transitions on `ReferralService` — role-gated to `Role.JUDICIAL` — exposed on the judicial
 namespace below rather than bolted onto the caseworker one. A claim lapses after
-the claim window (two hours as V40 seeds it; see [Process settings](#process-settings)) of the holding judge's
+the processing window (seven days as V42 seeds it; see [Process settings](#process-settings)) of the holding judge's
 inactivity, taken back as a side effect of loading either judicial list — the shared pool or the judge's own — or of
 a claim, rather than by a scheduler.
 
@@ -1036,25 +1036,55 @@ See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md),
 
 ### Process settings
 
-Values a Delivery Manager adjusts while the service runs, with no release. The first, and so far the only, is the
-referral claim window: how long a judge's untouched claim survives before the next pool load, personal-list load or
-claim returns it to the pool.
+Values a Delivery Manager adjusts while the service runs, with no release. The processing window was V40's referral
+claim window, and is now how long a Master has to give a direction before the referral is unassigned; until D2 lands,
+the sweep still uses it to return an untouched claim to the pool on the next pool load, personal-list load or claim.
+V42 added the reminder interval, the per-Master cap and the two referral windows for D2 and D3 to read; nothing reads
+them yet.
 
 | Method | Path | Access and response |
 |---|---|---|
-| GET | `/caseworker/process-settings` (`getProcessSettings`) | `MANAGE_PROCESS_CONFIG` (Delivery Manager only): `referralClaimExpiryMinutes`, `revision` and the last change's attribution |
-| PUT | `/caseworker/process-settings` (`updateProcessSettings`) | The same capability; takes exactly `referralClaimExpiryMinutes` and `revision` |
+| GET | `/caseworker/process-settings` (`getProcessSettings`) | `MANAGE_PROCESS_CONFIG` (Delivery Manager only): every value below, `revision` and the last change's attribution |
+| PUT | `/caseworker/process-settings` (`updateProcessSettings`) | The same capability; requires `referralClaimExpiryMinutes` and `revision`, and takes the six V42 keys optionally |
+| GET | `/caseworker/process-settings/bank-holidays` (`listBankHolidays`) | Any staff role: `date` and `name`, ordered by date |
+| POST | `/caseworker/process-settings/bank-holidays` (`addBankHoliday`) | `MANAGE_PROCESS_CONFIG`; `{date, name}`, 409 on a listed date |
+| DELETE | `/caseworker/process-settings/bank-holidays/{date}` (`removeBankHoliday`) | `MANAGE_PROCESS_CONFIG`; 204, or 404 on an unlisted date |
+| GET | `/caseworker/masters` (`listMasters`) | Any staff role: `id`, `name`, `email`, `available`, `linked` and `revision`, ordered by name |
+| POST | `/caseworker/masters` (`createMaster`) | `MANAGE_PROCESS_CONFIG`; `name`, `email` and optionally `available` |
+| PATCH | `/caseworker/masters/{id}` (`updateMaster`) | `MANAGE_PROCESS_CONFIG`; any of `name`, `email`, `available`, with `revision` |
 
-V40 seeds one row at revision 0 with 120 minutes. The window is whole minutes from 30 to 1,440; anything else,
-an unknown key or a missing revision is a 400 naming its field. A stale revision is a 409 and changes nothing, even
-when the value is unchanged; an unchanged value at the current revision is a no-op. Each change writes one
-`deedpoll_process_settings_change` row with the old and new values and the caller's subject and display name, and one
-`PROCESS_SETTINGS_CHANGED` audit event naming the field only, because the audit trail holds no values for an entity
-with no case. The subject is never published. There is no cache: the sweep reads the stored value each time it runs,
-so once every replica runs this version a change applies to every claim at once; a sweep already running finishes
-with the value it read. Lowering the window releases nothing by itself; the next sweep does. A
-missing row fails the sweep rather than falling back to a default. `deedpoll.referrals.claim-expiry` and
-`DEEDPOLL_REFERRAL_CLAIM_EXPIRY` no longer exist.
+| Setting | Wire name | Bounds | Seed |
+|---|---|---|---|
+| Processing window | `referralClaimExpiryMinutes` (kept for admin) | 1,440–43,200 minutes (1–30 days) | 10,080 (7 days) |
+| Reminder interval | `reminderIntervalHours` | 1–168 hours | 48 |
+| Per-Master cap per window | `masterWindowCap` | 1–100 | 10 |
+| Morning window | `morningWindowStart`, `morningWindowEnd` | `HH:mm` on the quarter hour, `Europe/London` | 07:00–10:30 |
+| Afternoon window | `afternoonWindowStart`, `afternoonWindowEnd` | the same | 14:00–14:30 |
+
+Each window's start must be before its end, and the morning end before the afternoon start. The six V42 keys are
+optional for one release, so an admin that sends only the window and `revision` keeps working; an absent key leaves
+its value alone. V42 re-seeded the window to 7 days only where the row was still at revision 0; a value a Delivery
+Manager had chosen below a day was raised to 1,440 minutes with a history row attributed to the service account, and
+any other chosen value was kept. A value out of bounds, an unknown key or a missing revision is a 400 naming its
+field. A stale revision is a 409 and changes nothing, even when the values are unchanged; unchanged values at the
+current revision are a no-op. Each changed value writes one `deedpoll_process_settings_change` row with the old and
+new values and the caller's subject and display name, and each PUT one `PROCESS_SETTINGS_CHANGED` audit event naming
+the fields only, because the audit trail holds no values for an entity with no case. The subject is never published.
+There is no cache: the sweep reads the stored value each time it runs, so once every replica runs this version a
+change applies to every claim at once; a sweep already running finishes with the value it read. Lowering the window
+releases nothing by itself; the next sweep does. A missing row fails the sweep rather than falling back to a default.
+`deedpoll.referrals.claim-expiry` and `DEEDPOLL_REFERRAL_CLAIM_EXPIRY` no longer exist.
+
+**Bank holidays** are V42's seed of GOV.UK's England and Wales dates for 2026–2028, copied by hand; nothing fetches
+them. A working day is Monday to Friday and not listed. Adds and removes are audited as `BANK_HOLIDAY_ADDED` and
+`BANK_HOLIDAY_REMOVED` with field names only. Dates after 2028 must be added before D2's windows reach them.
+
+**The Masters list** holds a name, a unique email (compared without case) and an available flag. There is no delete:
+a Master who leaves is made unavailable. A Master is linked to their IDAM account on their first judicial request,
+when a judicial caller's IDAM email matches an unlinked entry; linking is conditional, so it happens once, and is
+audited as `MASTER_LINKED` by the system. Changing a linked Master's email unlinks it. A duplicate email is a 409 on
+`email` that does not echo the address. The linked IDAM subject is never published, and the caller's email is never
+logged or audited.
 
 **Activation rule.** During the rolling deployment that brings V40, pods still on the previous version read the old
 yaml window (`PT2H` unless the environment overrode it) and ignore the stored one. So nobody edits the process settings until every old api pod is
