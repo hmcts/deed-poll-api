@@ -253,6 +253,32 @@ class ReferralAssignmentTest {
             assertWindow(london(2026, 8, 31, 9, 0), LocalDate.of(2026, 9, 1), WindowSlot.AM);
         }
 
+        @Test
+        @DisplayName("a morning the digest already took counts towards that afternoon")
+        void morningAlreadyDigested() {
+            when(masters.digestTook(LocalDate.of(2026, 10, 28), WindowSlot.AM)).thenReturn(true);
+
+            assertWindow(london(2026, 10, 28, 10, 29), LocalDate.of(2026, 10, 28), WindowSlot.PM);
+        }
+
+        @Test
+        @DisplayName("an afternoon the digest already took counts towards the next working day's morning")
+        void afternoonAlreadyDigested() {
+            when(masters.digestTook(LocalDate.of(2026, 10, 30), WindowSlot.PM)).thenReturn(true);
+
+            assertWindow(london(2026, 10, 30, 14, 29), LocalDate.of(2026, 11, 2), WindowSlot.AM);
+        }
+
+        @Test
+        @DisplayName("takes the window lock before the Master's, which the digest's email rows wait on")
+        void asksBeforeTheMastersLock() {
+            service.assign(CASE_ID, REFERRAL_ID.toString(), SULLIVAN, CASEWORKER, london(2026, 10, 28, 9, 0));
+
+            InOrder order = inOrder(masters);
+            order.verify(masters).digestTook(LocalDate.of(2026, 10, 28), WindowSlot.AM);
+            order.verify(masters).findAssigneeForUpdate(SULLIVAN);
+        }
+
         private void assertWindow(LocalDateTime now, LocalDate date, WindowSlot slot) {
             Referral saved = service.assign(CASE_ID, REFERRAL_ID.toString(), SULLIVAN, CASEWORKER, now);
 

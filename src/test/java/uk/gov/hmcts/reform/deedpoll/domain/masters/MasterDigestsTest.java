@@ -296,6 +296,63 @@ class MasterDigestsTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("a digest waits for an assignment still stamping its window, and lists it")
+    void waitsForAnAssignmentInFlight() throws Exception {
+        UUID sullivan = master("m-inflight@example.test", "Master Sullivan");
+        Referral referral = open("DP2026-000161");
+        CountDownLatch assigned = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            final Future<Referral> assignment = pool.submit(() -> new TransactionTemplate(manager).execute(status -> {
+                Referral held = referralService.assign(referral.getDeedPoll().getId(), referral.getId().toString(),
+                                                       sullivan, CASEWORKER);
+                assigned.countDown();
+                await(commit);
+                return held;
+            }));
+            assertThat(assigned.await(30, TimeUnit.SECONDS)).isTrue();
+            Referral uncommitted = referrals.findById(referral.getId()).orElseThrow();
+            assertThat(uncommitted.getWindowDate()).isNull();
+            Instant closed = closedAfter(referralService.currentWindowLoad().window());
+            Future<Integer> digest = pool.submit(() -> digests.run(closed));
+
+            // Long past any settling delay: only the lock holds the digest back.
+            Thread.sleep(500);
+            assertThat(digest.isDone()).as("the digest waits for the assignment's commit").isFalse();
+            commit.countDown();
+            Referral held = assignment.get(30, TimeUnit.SECONDS);
+            windowDays.add(held.getWindowDate());
+
+            assertThat(digest.get(30, TimeUnit.SECONDS)).isOne();
+            assertThat(rows(sullivan)).singleElement()
+                .satisfies(row -> assertThat(ids(row)).containsExactly(referral.getId()));
+        } finally {
+            commit.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("an assignment after the digest took its window counts towards the next one")
+    void assignedAfterTheDigest() {
+        UUID sullivan = master("m-late@example.test", "Master Sullivan");
+        Referral referral = open("DP2026-000171");
+        ReferralWindow current = referralService.currentWindowLoad().window();
+        windowDays.add(current.date());
+        jdbc.update("INSERT INTO deedpoll_window_digest_run (window_date, window_slot, ran_at) VALUES (?, ?, ?)",
+                    current.date(), current.slot().name(), LocalDateTime.now());
+
+        Referral moved = referralService.assign(referral.getDeedPoll().getId(), referral.getId().toString(), sullivan,
+                                                CASEWORKER);
+
+        ReferralWindow next = ReferralWindows.windowFor(ReferralWindows.closesAt(current, settings.referralWindows()),
+                                                        settings.referralWindows(), bankHolidays::isWorkingDay);
+        windowDays.add(next.date());
+        assertThat(new ReferralWindow(moved.getWindowDate(), moved.getWindowSlot())).isEqualTo(next);
+    }
+
+    @Test
     @DisplayName("a window recorded Skipped before the template was provisioned is not sent; the next window is")
     void provisionedLater() {
         UUID sullivan = master("m-later@example.test", "Master Sullivan");
@@ -331,6 +388,20 @@ class MasterDigestsTest extends AbstractPostgresContainerTest {
             .isInstanceOf(IllegalStateException.class);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_window_digest_run WHERE window_date = ?",
                                        Integer.class, WEDNESDAY)).isZero();
+    }
+
+    private Instant closedAfter(ReferralWindow window) {
+        windowDays.add(window.date());
+        return ReferralWindows.closesAt(window, settings.referralWindows()).plusSeconds(60);
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     private UUID master(String email, String name) {

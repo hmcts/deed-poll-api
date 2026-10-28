@@ -34,6 +34,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.OverdueAssignment;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -364,6 +365,13 @@ public class ReferralService {
      */
     private Referral assignLocked(String deedPollId, Referral referral, UUID masterId, CurrentUser caller,
                                   LocalDateTime now) {
+        // A clock read before the locks were waited on can name a window the digest has since taken (plan D3). The
+        // window lock comes before the Master's: the digest holds it while its email rows' foreign key waits on
+        // that row, so taking it after the Master's lock would deadlock the two.
+        ReferralWindow window = windowAt(now);
+        while (masters.digestTook(window.date(), window.slot())) {
+            window = windowAt(ReferralWindows.closesAt(window, settings.referralWindows()));
+        }
         final MasterRepository.Assignee master = masters.findAssigneeForUpdate(masterId)
             .filter(MasterRepository.Assignee::available)
             .orElseThrow(() -> new InvalidInputError(ReferralSchemas.SELECT_A_MASTER, List.of(
@@ -377,7 +385,6 @@ public class ReferralService {
             return referral;
         }
 
-        ReferralWindow window = windowAt(now);
         long held = referrals.countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot(
             ReferralState.Claimed, masterId, window.date(), window.slot());
         if (held >= settings.masterWindowCap()) {
@@ -417,8 +424,11 @@ public class ReferralService {
 
     /** The referral window a moment counts towards, from the stored window times and the bank holidays. */
     private ReferralWindow windowAt(LocalDateTime now) {
-        return ReferralWindows.windowFor(now.toInstant(ZoneOffset.UTC), settings.referralWindows(),
-                                         bankHolidays::isWorkingDay);
+        return windowAt(now.toInstant(ZoneOffset.UTC));
+    }
+
+    private ReferralWindow windowAt(Instant at) {
+        return ReferralWindows.windowFor(at, settings.referralWindows(), bankHolidays::isWorkingDay);
     }
 
     /** "the morning of 28 October 2026", for a refusal a caseworker reads. */

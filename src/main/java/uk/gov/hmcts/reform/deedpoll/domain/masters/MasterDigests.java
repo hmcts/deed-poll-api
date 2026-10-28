@@ -40,8 +40,10 @@ public class MasterDigests {
     public static final Duration LOOKBACK = Duration.ofHours(24);
 
     /**
-     * How long after its end a window is first taken: an assignment that read the window just before it closed may
-     * commit just after, and the run row is written once, so a digest taken at the end itself could miss it for good.
+     * How long after its end a window is first taken, so an assignment that read the window just before it closed has
+     * usually committed in it. Only usually: correctness rests on the window lock that
+     * {@code MasterEmailRepository.recordDigestRun} takes and every assignment shares, which makes a late assignment
+     * either be listed or count towards the next window.
      */
     public static final Duration SETTLE = Duration.ofMinutes(1);
 

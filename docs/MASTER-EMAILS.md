@@ -18,8 +18,12 @@ When a referral window closes (by default the morning window at 10:30 and the af
 
 - `MasterDigests` runs every `MASTER_DIGEST_INTERVAL` (default `PT5M`) and looks at every window that closed in the
   last 24 hours. A window older than that is never sent, so a long outage does not flood Masters with stale digests.
-  A window is first taken one minute after its end (`MasterDigests.SETTLE`), so an assignment that read the window
-  just before it closed has committed by then.
+  A window is first taken one minute after its end (`MasterDigests.SETTLE`), so most assignments that read the window
+  just before it closed have committed by then. The settle is not what guarantees it: the digest takes a transaction
+  advisory lock exclusively before it writes the run row, and every assignment shares it after the referral's lock and before the Master's (the digest's email rows
+  key-share-lock the Master's row, so the other order deadlocks), so the
+  digest waits for an assignment still stamping the window, and an assignment after the digest sees the run row and
+  counts towards the next window instead.
 - One `deedpoll_window_digest_run` row per window, written in the same transaction as that window's email rows:
   whichever pod commits first enqueues the window; the others write nothing.
 - A referral reassigned before the window closed goes in its new Master's digest. A referral with no
