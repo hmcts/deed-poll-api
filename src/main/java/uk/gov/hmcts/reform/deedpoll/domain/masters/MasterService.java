@@ -19,6 +19,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -73,10 +74,12 @@ public class MasterService {
     private static final Logger LOG = LoggerFactory.getLogger(MasterService.class);
 
     private final MasterRepository repository;
+    private final ReferralRepository referrals;
     private final AuditTrail audit;
 
-    public MasterService(MasterRepository repository, AuditTrail audit) {
+    public MasterService(MasterRepository repository, ReferralRepository referrals, AuditTrail audit) {
         this.repository = repository;
+        this.referrals = referrals;
         this.audit = audit;
     }
 
@@ -188,6 +191,11 @@ public class MasterService {
      * another account, or an account already linked to another entry, is left alone with a fixed WARN that names
      * neither the address nor the subject. The write is conditional on the entry still being unlinked, so two pods
      * racing link it once, and only the one that wrote records {@link AuditAction#MASTER_LINKED}, as the service.
+     *
+     * <p><strong>The referral side, in the same transaction (plan D2).</strong> The one that wrote also gives the
+     * Master the referrals assigned to the entry while it was unlinked, and attaches to the entry the referrals this
+     * subject claimed before assignment existed (decision D-10), so the Master sees both from this request. Neither
+     * statement moves a referral another subject owns.
      */
     @Transactional
     public void linkIfListed(CurrentUser caller) {
@@ -209,6 +217,8 @@ public class MasterService {
         }
         LocalDateTime now = AuditClock.now();
         if (repository.link(entry.get().id(), caller.email(), subject, now)) {
+            referrals.attachToLinkedMaster(entry.get().id(), subject);
+            referrals.attachLegacyClaims(entry.get().id(), subject);
             audit.record(AuditEntry.of(AuditAction.MASTER_LINKED, AuditActor.system(), AuditEntities.MASTER,
                                        entry.get().id().toString(), null)
                              .withFields(List.of(LINKED)),

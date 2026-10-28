@@ -28,6 +28,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
@@ -35,6 +36,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.StaleClaim;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -1092,6 +1094,29 @@ class ReferralServiceTest {
         }
 
         @Test
+        @DisplayName("extends nothing: the assignment and its window are left exactly as they were (plan D2)")
+        void extendsNothing() {
+            Referral referral = storedClaim(JUDGE, Duration.ofMinutes(90));
+            final LocalDateTime assignedAt = referral.getClaimedAt();
+            final UUID master = UUID.randomUUID();
+            referral.setAssignedAt(assignedAt);
+            referral.setAssignedMasterId(master);
+            referral.setWindowDate(LocalDate.of(2026, 10, 28));
+            referral.setWindowSlot(WindowSlot.AM);
+
+            service.touch(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            // The processing window runs from assignedAt, so opening the papers must not move it.
+            Referral written = saved();
+            assertThat(written.getAssignedAt()).isEqualTo(assignedAt);
+            assertThat(written.getClaimedAt()).isEqualTo(assignedAt);
+            assertThat(written.getAssignedMasterId()).isEqualTo(master);
+            assertThat(written.getWindowDate()).isEqualTo(LocalDate.of(2026, 10, 28));
+            assertThat(written.getWindowSlot()).isEqualTo(WindowSlot.AM);
+            verifyNoInteractions(notes);
+        }
+
+        @Test
         @DisplayName("refuses a caseworker, and writes nothing")
         void refusesACaseworker() {
             storedClaim(JUDGE, Duration.ofMinutes(5));
@@ -1699,12 +1724,13 @@ class ReferralServiceTest {
         }
 
         @Test
-        @DisplayName("409s a pool referral, which every judge can see and nobody has directed")
-        void conflictsOnAPoolReferral() {
+        @DisplayName("404s a referral waiting for assignment, which no judge can see (plan D2)")
+        void notFoundForAnOpenReferral() {
             stored(ReferralState.Open);
 
             assertThatThrownBy(() -> service.reviseDirection(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
-                .isInstanceOf(ConflictError.class);
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
 
             verify(referrals, never()).save(any());
         }
@@ -1805,6 +1831,27 @@ class ReferralServiceTest {
             assertThat(written.getDecidedById()).isNull();
             assertThat(written.getDirectionChangedAt()).isBetween(before, AuditClock.now());
             assertThat(written.getModifiedBy()).isEqualTo("District Judge Bell");
+        }
+
+        @Test
+        @DisplayName("restarts the processing window, and keeps the window the cap counted it in (plan D2)")
+        void restartsTheProcessingWindow() {
+            Referral referral = storedDirection(JUDGE);
+            final UUID master = UUID.randomUUID();
+            referral.setAssignedMasterId(master);
+            referral.setAssignedAt(referral.getClaimedAt());
+            referral.setWindowDate(LocalDate.of(2026, 10, 26));
+            referral.setWindowSlot(WindowSlot.PM);
+            final LocalDateTime before = AuditClock.now();
+
+            service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            Referral written = saved();
+            assertThat(written.getAssignedAt()).isBetween(before, AuditClock.now());
+            // No fresh window is taken: it counts where it counted before.
+            assertThat(written.getWindowDate()).isEqualTo(LocalDate.of(2026, 10, 26));
+            assertThat(written.getWindowSlot()).isEqualTo(WindowSlot.PM);
+            assertThat(written.getAssignedMasterId()).isEqualTo(master);
         }
 
         @Test
@@ -1911,12 +1958,13 @@ class ReferralServiceTest {
         }
 
         @Test
-        @DisplayName("409s a pool referral, which every judge can see and nobody has directed")
-        void conflictsOnAPoolReferral() {
+        @DisplayName("404s a referral waiting for assignment, which no judge can see (plan D2)")
+        void notFoundForAnOpenReferral() {
             stored(ReferralState.Open);
 
             assertThatThrownBy(() -> service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE))
-                .isInstanceOf(ConflictError.class);
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
 
             verify(referrals, never()).save(any());
         }

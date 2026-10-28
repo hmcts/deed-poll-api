@@ -35,6 +35,8 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
+import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterService;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
@@ -120,15 +122,14 @@ class ReferralSecurityTest {
     private static final Set<String> SWEEP = Set.of("findStaleClaims", "releaseStaleClaim");
 
     /**
-     * The judicial pool, which names no parent case either -- because the shared pool <em>is</em> the cross-case
-     * list, and a judge reaches it without naming any case, which is what stops them naming one at all.
+     * Linking's two statements (plan D2), which name no parent case because a Master's referrals span cases.
      *
-     * <p>Listed separately from {@link #SWEEP} because it cannot make the sweep's promise: it hands back
-     * referrals. What it promises instead is asserted below -- it can only ever answer "a page of the referrals
-     * in this state", never "this referral" -- and the scoping it does without is replaced by
-     * {@code JudicialReferralService.visibleTo} on every read of an individual referral.
+     * <p>Each answers a row count and never a referral, and writes only an owner or Master column, keyed on the
+     * Masters-list entry and the subject {@code MasterService.linkIfListed} has just linked to it. So the rule is the
+     * sweep's shape plus a caller rule: nothing but {@code MasterService} may call them, because a second caller
+     * would be a second place that could hand a referral to a subject a request had named.
      */
-    private static final Set<String> POOL = Set.of("findByState");
+    private static final Set<String> LINKING = Set.of("attachToLinkedMaster", "attachLegacyClaims");
 
     /**
      * The judicial read of one referral, which is the finder by referral id alone that the interface's own rule
@@ -147,8 +148,7 @@ class ReferralSecurityTest {
      * The judge's personal list, which names no parent case either -- and is the one unscoped finder that carries
      * a scope of its own.
      *
-     * <p>Listed separately from {@link #POOL} because what makes it safe is different: the pool's rows are the
-     * shared work every judge may see, whereas these are one judge's, so the filter has to be an identity. It is
+     * <p>What makes it safe is that these are one judge's referrals, so the filter has to be an identity. It is
      * the caller's IDAM subject, which comes from their token and not from the request, so a judge cannot widen it
      * to another's -- and the states are the two {@code JudicialReferralService.visibleTo} admits for an owner,
      * which is what keeps the list and the boundary from disagreeing.
@@ -163,7 +163,7 @@ class ReferralSecurityTest {
         Set.of("countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot", "countByMasterInWindow");
 
     /** Every finder that names no parent case, for the declaration rule that admits each one deliberately. */
-    private static final Set<String> UNSCOPED = Stream.of(SWEEP, POOL, PERSONAL_LIST, JUDICIAL_READ, CAP_COUNTS)
+    private static final Set<String> UNSCOPED = Stream.of(SWEEP, LINKING, PERSONAL_LIST, JUDICIAL_READ, CAP_COUNTS)
         .flatMap(Set::stream)
         .collect(Collectors.toUnmodifiableSet());
 
@@ -332,22 +332,20 @@ class ReferralSecurityTest {
         }
 
         /**
-         * The unscoped finder the judicial pool needs is reachable from the judicial service and nowhere else.
+         * Linking's unscoped statements are reachable from {@code MasterService} and nowhere else.
          *
-         * <p>This is what keeps decision 2 from being a hole. {@code findByState} carries no case id, so a
-         * caseworker path that called it would have a cross-case read of referrals with none of the caseworker
-         * surface's scoping and none of the judicial surface's role gate -- and the declaration rule above
-         * cannot catch that, because it admits the method deliberately. The gate lives on
-         * {@code JudicialReferralService.pool}, so the rule is that nothing else calls the finder at all.
+         * <p>They carry no case id and write an owner, so a caseworker or judicial path that called them could give a
+         * Master's referrals to whichever subject it liked. The gate is {@code MasterService.linkIfListed}, which calls
+         * them only after its own conditional link wrote the entry, with the subject it linked.
          */
         @Test
-        @DisplayName("only the judicial service reaches the unscoped pool finder")
-        void onlyTheJudicialServiceReachesThePoolFinder() {
+        @DisplayName("only the Masters service reaches linking's unscoped statements")
+        void onlyTheMastersServiceReachesTheLinkingStatements() {
             noClasses()
-                .that().doNotHaveFullyQualifiedName(JudicialReferralService.class.getName())
+                .that().doNotHaveFullyQualifiedName(MasterService.class.getName())
                 .should().callMethodWhere(DescribedPredicate.describe(
-                    "a call to the unscoped pool finder",
-                    (JavaMethodCall call) -> POOL.contains(call.getName())
+                    "a call to one of linking's unscoped statements",
+                    (JavaMethodCall call) -> LINKING.contains(call.getName())
                         && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
                 .check(mainClasses());
         }
@@ -949,30 +947,29 @@ class ReferralSecurityTest {
                         .containsExactly(UUID.class);
                     continue;
                 }
-                if (POOL.contains(finder.getName())) {
-                    // The pool cannot make the sweep's promise, because handing back referrals is the point of
-                    // it. Its own promise is that the question it can be asked has no referral in it: a state
-                    // and a page, so the answer is always "the referrals in this state" and never "this
-                    // referral". The state is JudicialReferralService's -- Open -- rather than a caller's, and
-                    // the individual reads the judicial surface does are guarded by visibleTo instead.
+                if (LINKING.contains(finder.getName())) {
+                    // A Masters-list entry and a subject, answering a row count: never a referral, and no case id a
+                    // caller could think it was scoping by.
                     assertThat(finder.getParameterTypes())
-                        .as("%s takes a state and a page, and no referral id", finder.getName())
-                        .containsExactly(ReferralState.class, Pageable.class);
+                        .as("%s takes an entry and a subject", finder.getName())
+                        .containsExactly(UUID.class, String.class);
                     assertThat(finder.getReturnType())
-                        .as("%s answers a page rather than one referral", finder.getName())
-                        .isEqualTo(Page.class);
+                        .as("%s answers a row count", finder.getName())
+                        .isEqualTo(int.class);
                     continue;
                 }
                 if (PERSONAL_LIST.contains(finder.getName())) {
-                    // The personal list hands back referrals like the pool, so its promise is also about the
-                    // question it can be asked: an owner, the two states a judge's own work is in, and a page --
+                    // The personal list hands back referrals, so its promise is about the question it can be asked:
+                    // an owner, the two states a judge's own work is in, the urgency it orders by, and a page --
                     // and no referral id, so the answer is always "this owner's referrals" and never "this
                     // referral". The owner is a subject rather than a case id, which is why this is admitted here
                     // instead of satisfying the DeedPollId rule below: it is scoped by identity, and the identity
                     // is the caller's own token.
                     assertThat(finder.getParameterTypes())
-                        .as("%s takes an owner, two states and a page, and no referral id", finder.getName())
-                        .containsExactly(String.class, ReferralState.class, ReferralState.class, Pageable.class);
+                        .as("%s takes an owner, two states, an urgency and a page, and no referral id",
+                            finder.getName())
+                        .containsExactly(String.class, ReferralState.class, ReferralState.class, Urgency.class,
+                                         Pageable.class);
                     assertThat(finder.getReturnType())
                         .as("%s answers a page rather than one referral", finder.getName())
                         .isEqualTo(Page.class);

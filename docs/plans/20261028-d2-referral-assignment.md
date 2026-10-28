@@ -202,8 +202,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 3: The Master side
-- [ ] Add failing tests for visibility, the empty pool, linking's referral side, `touch`, a withdrawn direction and `MINE_ORDER`.
-- [ ] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Add failing tests for visibility, the empty pool, linking's referral side, `touch`, a withdrawn direction and `MINE_ORDER`.
+- [x] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 4: The processing window
 - [ ] Add failing tests for `unassignOverdue`, the timer, the go-live cases and the race.
@@ -266,3 +266,35 @@ plus cases in `ReferralSchemasTest`, `ReferralNotesTest` and `CaseworkerMastersC
 (referral, judicial, confirmation, master, OpenAPI, security, audit and architecture tests: 1,334) found only three
 `ReferralSecurityTest` reflection rules, since fixed; the final focused run: 540 tests, 0 failures. Compile of every
 source set OK; `checkstyle.sh` OK.
+
+**Task 3 (the Master side):** `JudicialReferralService.visibleTo` answers false for `Open` (an assigned, unlinked
+referral has no `claimedById` and is visible to nobody until linking). `pool` still gates and sweeps, then answers
+`ReferralPool.of(List.of(), paging, 0)` without a query; `findByState` and `POOL_ORDER` are gone. The pool and claim
+operations are `@Operation(deprecated = true)` with descriptions saying referrals are assigned by the office.
+**`MINE_ORDER` is no longer a `Sort`:** `ReferralRepository.findOwnedBy` carries the order as a JPQL `ORDER BY` with
+two `CASE` keys (undirected first; urgent first among the undirected only; then `createdOn`; then `id`), takes
+`Urgency.Urgent` as a parameter, and has an explicit `countQuery` repeating the predicate; `mine` passes an unsorted
+page. Linking: `MasterService.linkIfListed`, only when its conditional link wrote, calls the new
+`ReferralRepository.attachToLinkedMaster` (owner subject on `Claimed`/`Decided` rows of that entry with no owner) and
+`attachLegacyClaims` (D-10: `assignedMasterId` on this subject's pre-V43 `Claimed` rows), in the same transaction.
+`ReferralSecurityTest` replaces the pool's admitted finder with these two (shape `UUID, String -> int`, and an ArchUnit
+rule that only `MasterService` calls them). `touch` is unchanged in code and documented as extending nothing (Task 4
+moves the sweep onto `assignedAt`). `withdrawDirection` now sets `assignedAt` = now and keeps the window. The
+`directionDueBy` rule moved to `domain/referrals/DirectionDue`, shared by `ReferralResponse` and the judicial DTOs;
+`JudicialReferralSummary` and `JudicialReferralDetail` gain `assignedAt` and `directionDueBy`, the processing window
+read per response from `ProcessSettingsService` in `JudicialReferralController` (not a method on
+`JudicialReferralService`, whose every public method `JudicialSecurityTest` treats as a gated operation).
+**Behaviour to know:** the deprecated claim route's sweep runs in the claim's transaction, so its 404 on a released
+referral rolls the release back; the next list load releases it (two tests now say so). Fixtures that relied on an
+`Open` referral being visible to every judge now hold the referral for the judge (the claim transition, or a direct
+`UPDATE` where the audit trail cannot record the subject). `ReferralLifecycleTimelineTest` is now the D2 journey:
+raised with `masterId`, linked by the Master's first judicial request (userinfo `email`), directed, actioned.
+**Two leftovers from Tasks 1 and 2 fixed here:** `SdkMigrationOrderTest` expected V1 to V42, and
+`OpenAPIPublisherTest` did not list the assignment path (now 35 caseworker operations across 22 paths;
+`CLAUDE.md`'s counts are Task 5's). Tests: `JudicialReferralServiceTest` (visibility, the empty pool, unsorted mine),
+`ReferralRepositoryTest` (every-combination order fixture, stable paging across four pages, both linking
+statements), `MasterServiceTest`, `ReferralServiceTest` (touch extends nothing; withdrawal restarts the window),
+`JudicialReferralControllerTest` (empty pool, order, `directionDueBy`, 404s for `Open`, the OpenAPI deprecations and
+fields), and the judicial download/preview tests. Runs: the whole `test` task once (5,227 tests, 3 failures, all in
+`DocumentPreviewServiceTest`'s `Open`-referral fixtures, since fixed and re-run green), the affected classes again
+(0 failures), `integration` 23 tests 0 failures (1 skipped), every source set compiles, `checkstyle.sh` OK.

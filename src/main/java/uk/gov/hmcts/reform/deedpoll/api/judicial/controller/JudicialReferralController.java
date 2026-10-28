@@ -26,12 +26,15 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.DocumentPreviewService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralView;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 
 import java.io.IOException;
 
 /**
- * What a judge does, all nine of it: read the shared pool, read their own outstanding work, open a referral they
- * may see, download or preview one of its supporting documents, claim one, direct one they hold, and revise or
+ * What a judge does, all nine of it: read the former shared pool (empty and deprecated since plan D2), read their
+ * own outstanding work, open a referral they
+ * may see, download or preview one of its supporting documents, claim one (deprecated), direct one they hold, and
+ * revise or
  * withdraw a direction they gave.
  *
  * <p><strong>Five reads and four writes.</strong> The fifth operation is the personal list, and it completes the
@@ -69,22 +72,27 @@ public class JudicialReferralController {
     private final JudicialReferralService judicial;
     private final ReadAudit readAudit;
     private final DocumentPreviewService previews;
+    private final ProcessSettingsService settings;
 
+    /**
+     * {@code settings} supplies the processing window for {@code directionDueBy}, read per response with no
+     * capability check, as {@code ProcessSettingsService} reads it for every decision.
+     */
     public JudicialReferralController(JudicialReferralService judicial, ReadAudit readAudit,
-                                      DocumentPreviewService previews) {
+                                      DocumentPreviewService previews, ProcessSettingsService settings) {
         this.judicial = judicial;
         this.readAudit = readAudit;
         this.previews = previews;
+        this.settings = settings;
     }
 
     /**
-     * The shared pool: the referrals waiting for a judge, urgent first then longest-waiting, one page at a time.
+     * The former shared pool, always an empty page since plan D2, because the office assigns every referral to a
+     * Master. Deprecated and kept for one release because today's admin still calls it.
      *
-     * <p><strong>A read that writes, on purpose.</strong> The domain runs the inactivity sweep before it queries
-     * (decision 22), so a claim that lapsed while nobody was looking is handed back and the referral is in the
-     * page this request returns rather than in whichever later request happened to trigger a sweep. The pool is
-     * the most-polled judicial page, which is why the sweep hangs off it -- {@code ReferralService}'s javadoc has
-     * the full argument.
+     * <p><strong>A read that writes, on purpose.</strong> The domain still runs the sweep first, so this remains
+     * one of the request-time triggers of the processing window -- {@code ReferralService}'s javadoc has the
+     * argument.
      *
      * <p>{@code page} and {@code size} bind as single strings and are read by {@code CasePaging}, which refuses
      * what it cannot understand and clamps an over-cap size rather than refusing it. The default size is the
@@ -95,13 +103,17 @@ public class JudicialReferralController {
      * <p>They are parsed rather than bound as {@code int}s so that an unreadable value is this service's 400 with
      * a field-addressed message, rather than Spring's type-mismatch answer about a parameter a judge did not type.
      */
+    @Operation(summary = "The former shared pool, now always empty", deprecated = true,
+        description = "Deprecated: referrals are assigned to a Master by the office, so no judge can see a referral "
+            + "waiting for assignment and this always answers an empty page, with a total of 0. Kept for one release "
+            + "for the admin that still calls it; a later release removes it. Use GET /judicial/referrals/mine.")
     @GetMapping
     public JudicialPoolResponse pool(@RequestParam(name = "page", required = false) String page,
                                      @RequestParam(name = "size", required = false) String size) {
 
         return JudicialPoolResponse.of(judicial.pool(
             CurrentUsers.required(),
-            CasePaging.parse(page, size, JudicialReferralService.POOL_PAGE_SIZE)));
+            CasePaging.parse(page, size, JudicialReferralService.POOL_PAGE_SIZE)), settings.processingWindow());
     }
 
     /**
@@ -137,7 +149,7 @@ public class JudicialReferralController {
 
         return JudicialMyReferralsResponse.of(judicial.mine(
             CurrentUsers.required(),
-            CasePaging.parse(page, size, JudicialReferralService.POOL_PAGE_SIZE)));
+            CasePaging.parse(page, size, JudicialReferralService.POOL_PAGE_SIZE)), settings.processingWindow());
     }
 
     /**
@@ -164,13 +176,14 @@ public class JudicialReferralController {
             + "reference, the new and old names, the type, the nationality and section, a minor's parents, and the "
             + "documents a download would serve. No case id, contact details, witnesses or case notes. "
             + "Recorded as CASE_VIEWED. 404, in the words an unknown id gets, for a referral this judge may not "
-            + "see: one held or directed by another judge, and every referral once it is closed or withdrawn.")
+            + "see: one waiting for assignment, one assigned to or directed by another judge, and every referral "
+            + "once it is closed or withdrawn. Opening it does not extend the processing window.")
     @GetMapping("/{referralId}")
     public JudicialReferralDetail referral(@PathVariable("referralId") String referralId) {
         CurrentUser caller = CurrentUsers.required();
         JudicialReferralView view = judicial.referral(referralId, caller);
         readAudit.caseViewed(view.application().getId(), caller);
-        return JudicialReferralDetail.of(view);
+        return JudicialReferralDetail.of(view, settings.processingWindow());
     }
 
     /**
@@ -180,16 +193,16 @@ public class JudicialReferralController {
      * <p>The document ids are the ones the referral's {@code application.documents} lists. The domain resolves the
      * referral, refuses one this judge may not see with the referral read's own 404, and serves only a readable
      * document of that referral's case: another case's document is the document's 404, exactly as on the caseworker
-     * route. So any judge may open the documents of an {@code Open} referral, the holder those of a {@code Claimed}
-     * one, the directing judge those of a {@code Decided} one, and nobody once the office closes it.
+     * route. So the assigned Master may open the documents of a {@code Claimed} referral, the directing judge those
+     * of a {@code Decided} one, and nobody those of one waiting for assignment or once the office closes it.
      *
      * <p>The response and its headers are {@link DocumentFileResponses#of}, the caseworker download's own. Recorded
      * as {@code DOCUMENT_DOWNLOADED} before the file is opened, and refused if it cannot be: it fails closed.
      */
     @Operation(summary = "Download one of the application's supporting documents",
         description = "Requires the judicial role. The documentId is one of the referral's "
-            + "application.documents. Any judge may open the documents of an Open referral, the holder those of a "
-            + "Claimed one and the directing judge those of a Decided one. Recorded as DOCUMENT_DOWNLOADED before "
+            + "application.documents. The assigned Master may open the documents of a Claimed referral and the "
+            + "directing judge those of a Decided one. Recorded as DOCUMENT_DOWNLOADED before "
             + "the file is opened, and refused if that cannot be recorded. Served with the caseworker download's "
             + "headers: the recorded MIME type, its disposition and Cache-Control: no-store. 404 for a referral "
             + "this judge may not see, and for a document that is not this referral's case's or has no readable "
@@ -211,8 +224,8 @@ public class JudicialReferralController {
     @Operation(operationId = "previewReferralDocument",
         summary = "Preview one of the application's supporting documents as a PDF",
         description = "Requires the judicial role. The documentId is one of the referral's application.documents, "
-            + "and who may preview it is exactly who may download it from /file: any judge for an Open referral, "
-            + "the holder for a Claimed one and the directing judge for a Decided one. A read-only rendition as "
+            + "and who may preview it is exactly who may download it from /file: the assigned Master for a Claimed "
+            + "referral and the directing judge for a Decided one. A read-only rendition as "
             + "one complete PDF; the original stays on /file, unchanged. PDF passes through after checks, JPEG and "
             + "PNG become one page, a TIFF one page per frame in order (a JPEG-compressed TIFF, Compression 6 or 7, "
             + "is deliberately not previewed and answers PREVIEW_INVALID_DOCUMENT), and DOCX is converted. "
@@ -232,7 +245,8 @@ public class JudicialReferralController {
     }
 
     /**
-     * A judge taking a referral out of the shared pool: it becomes theirs and drops off every other judge's.
+     * A judge taking a referral out of the shared pool. <strong>Deprecated by plan D2</strong>: an {@code Open}
+     * referral is visible to no judge, so this is now always a 404 or a 409. Kept for one release.
      *
      * <p>A sub-resource and a {@code POST} rather than a {@code PATCH} carrying a state, exactly as the
      * caseworker surface's withdrawal and closure are: the state is not a field a caller sets, it is the result
@@ -248,9 +262,14 @@ public class JudicialReferralController {
      * 409, which is the honest answer to a stale dashboard rather than a silent re-claim.
      */
     @AuditedAs(AuditAction.REFERRAL_CLAIMED)
+    @Operation(summary = "Claim a referral from the former shared pool", deprecated = true,
+        description = "Deprecated: referrals are assigned to a Master by the office. A referral waiting for assignment "
+            + "is visible to no judge, so this is 404 for it, and 409 for a referral already assigned to this judge. "
+            + "Kept for one release for the admin that still calls it; a later release removes it.")
     @PostMapping("/{referralId}/claim")
     public JudicialReferralDetail claim(@PathVariable("referralId") String referralId) {
-        return JudicialReferralDetail.of(judicial.claim(referralId, CurrentUsers.required()));
+        return JudicialReferralDetail.of(judicial.claim(referralId, CurrentUsers.required()),
+                                         settings.processingWindow());
     }
 
     /**
@@ -280,7 +299,7 @@ public class JudicialReferralController {
                                             @RequestBody JudicialDirectionRequest request) {
 
         return JudicialReferralDetail.of(
-            judicial.direct(referralId, request.toInput(), CurrentUsers.required()));
+            judicial.direct(referralId, request.toInput(), CurrentUsers.required()), settings.processingWindow());
     }
 
     /**
@@ -299,8 +318,8 @@ public class JudicialReferralController {
     @AuditedAs(AuditAction.REFERRAL_DIRECTION_REVISED)
     @Operation(summary = "Revise the direction this judge gave",
         description = "Requires the judicial role. Permitted while the referral is Decided and this judge directed "
-            + "it, which is until the office closes it; a visible referral that is not their direction (the pool, "
-            + "or their own claim) is 409, and a closed one is 404. Takes the direction POST's body and refuses "
+            + "it, which is until the office closes it; a visible referral that is not their direction (their own "
+            + "undirected one) is 409, and a closed one is 404. Takes the direction POST's body and refuses "
             + "it in the same words (400). Replaces the decision, directionsText and "
             + "changesToStandardPublication, moves decisionDate to now, keeps decidedBy as first signed, and sets "
             + "directionChangedAt. The original direction stays on the audit trail; the caseworker is told by a case "
@@ -310,7 +329,7 @@ public class JudicialReferralController {
                                                   @RequestBody JudicialDirectionRequest request) {
 
         return JudicialReferralDetail.of(
-            judicial.revise(referralId, request.toInput(), CurrentUsers.required()));
+            judicial.revise(referralId, request.toInput(), CurrentUsers.required()), settings.processingWindow());
     }
 
     /**
@@ -318,8 +337,8 @@ public class JudicialReferralController {
      * direction {@code POST}, until the office closes it.
      *
      * <p>No body: the referral goes back to {@code Claimed}, held by the same judge, with no direction on it, and
-     * {@code directionChangedAt} is set. <strong>A withdrawn direction is a live claim again</strong>, so if the judge
-     * does not direct it again the inactivity sweep returns it to the shared pool, as it would any other claim.
+     * {@code directionChangedAt} is set. <strong>Withdrawing restarts the processing window</strong>, so if the judge
+     * does not direct it again within the window it is returned to the office for assignment, like any other.
      *
      * <p>The same answers as revising: 403 without the judicial role, 404 for a referral this judge may not see --
      * including one the office closed -- and 409 for one they can see that is not a direction of theirs.
@@ -329,11 +348,12 @@ public class JudicialReferralController {
         description = "Requires the judicial role. No body. Permitted while the referral is Decided and this judge "
             + "directed it; otherwise 409, or 404 once closed. The referral returns to Claimed, held by the same "
             + "judge, with the decision, directionsText, changesToStandardPublication, decisionDate and decidedBy "
-            + "cleared, and directionChangedAt set. The judge directs again with POST .../direction. A withdrawn "
-            + "direction is a live claim again: if the judge does not direct it within the claim's inactivity "
-            + "window, the inactivity sweep returns it to the shared pool, where any judge may claim it.")
+            + "cleared, and directionChangedAt set. The judge directs again with POST .../direction. Withdrawing "
+            + "restarts the processing window: assignedAt becomes now, and directionDueBy moves with it. If the judge "
+            + "does not direct it within the window, it is returned to the office for assignment like any other.")
     @PostMapping("/{referralId}/direction/withdraw")
     public JudicialReferralDetail withdrawDirection(@PathVariable("referralId") String referralId) {
-        return JudicialReferralDetail.of(judicial.withdraw(referralId, CurrentUsers.required()));
+        return JudicialReferralDetail.of(judicial.withdraw(referralId, CurrentUsers.required()),
+                                         settings.processingWindow());
     }
 }

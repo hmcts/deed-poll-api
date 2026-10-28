@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionDue;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
@@ -176,7 +177,7 @@ public record ReferralResponse(
             referral.getAssignedAt(),
             referral.getWindowDate(),
             referral.getWindowSlot(),
-            directionDueBy(referral, processingWindow),
+            DirectionDue.by(referral, processingWindow),
             referral.getCreatedBy(),
             referral.getModifiedBy(),
             referral.getCreatedOn(),
@@ -186,17 +187,5 @@ public record ReferralResponse(
     /** A case's referrals, preserving the order the domain fetched them in -- newest first. */
     public static List<ReferralResponse> from(List<Referral> referrals, Duration processingWindow) {
         return referrals.stream().map(referral -> from(referral, processingWindow)).toList();
-    }
-
-    /**
-     * The window's start plus its length, while the referral is waiting for a direction. A claim made before
-     * assignment existed counts from {@code claimedAt}, as the processing window does (D-10).
-     */
-    private static LocalDateTime directionDueBy(Referral referral, Duration processingWindow) {
-        if (referral.getState() != ReferralState.Claimed) {
-            return null;
-        }
-        LocalDateTime started = referral.getAssignedAt() != null ? referral.getAssignedAt() : referral.getClaimedAt();
-        return started == null ? null : started.plus(processingWindow);
     }
 }

@@ -654,17 +654,17 @@ public class ReferralService {
     }
 
     /**
-     * Records that the holding judge is still working on a referral, so the sweep leaves it alone.
+     * Records when the Master it is assigned to last opened a referral, and nothing else.
      *
-     * <p>The counterpart to the expiry being measured from the last interaction rather than from the claim:
-     * every judicial read and write of a held referral goes through here, which is what lets a judge spend a
-     * morning on one set of papers without losing it. The judicial surface calls it; {@link #claim} stamps the
-     * same column itself, because there is no claim to refresh until it has made one.
+     * <p><strong>Since plan D2 it extends nothing.</strong> The processing window runs from {@code assignedAt}
+     * (or, for a claim made before assignment existed, {@code claimedAt}), so a Master reading the papers does
+     * not hold on to a referral past the window: only a direction or a reassignment ends or restarts it. The
+     * operation is kept working because the judicial read calls it and today's admin relies on that read; it moves
+     * {@code lastTouchedAt} and the row's audit stamps, never {@code assignedAt}, {@code claimedAt} or the window.
      *
-     * <p><strong>Only the judge holding it may touch it</strong>, and the check is by the subject the claim was
-     * made under -- see {@link #requireHeldBy}. A referral that has been withdrawn, decided, or taken back by the
-     * sweep is no longer held by anybody, so a judge who left the page open gets a conflict rather than silently
-     * reviving a claim the pool has already re-offered.
+     * <p><strong>Only the judge holding it may touch it</strong>, and the check is by the subject the assignment
+     * carries -- see {@link #requireHeldBy}. A referral that has been withdrawn, decided, or returned to the office
+     * is no longer held by anybody, so a judge who left the page open gets a conflict.
      *
      * @throws ForbiddenError    if the caller does not hold {@link Role#JUDICIAL}
      * @throws UnauthorizedError if the caller carries no stable subject, so they can hold nothing
@@ -848,14 +848,15 @@ public class ReferralService {
      * just closed -- and a 409 for what they can see and did not direct.
      *
      * <p>{@code Decided -> Claimed}, held by the same judge: {@code claimedById} and {@code claimedBy} are left as
-     * they were, {@code claimedAt} and {@code lastTouchedAt} restart now. The decision, {@code directionsText},
+     * they were, {@code claimedAt}, {@code assignedAt} and {@code lastTouchedAt} restart now, so the processing
+     * window starts again. {@code windowDate} and {@code windowSlot} are kept: no fresh window is taken for the cap.
+     * The decision, {@code directionsText},
      * {@code changesToStandardPublication}, {@code decisionDate}, {@code decidedBy} and {@code decidedById} are
      * cleared, because a claim carries no direction. {@code directionChangedAt} is set and never cleared.
      *
-     * <p><strong>The consequence to keep visible:</strong> a withdrawn direction is a live claim again, so
-     * {@link #reclaimStaleClaims()} returns it to the shared pool after
-     * {@link ProcessSettingsService#processingWindow()} of inactivity, exactly as it would any other claim. That
-     * is decided, not an oversight; the sweep is unchanged.
+     * <p><strong>The consequence to keep visible:</strong> a withdrawn direction is a live assignment again, so
+     * {@link #reclaimStaleClaims()} returns it to the office after {@link ProcessSettingsService#processingWindow()}
+     * from the withdrawal, exactly as it would any other assignment. That is decided, not an oversight.
      *
      * <p>One {@code REFERRAL_DIRECTION_WITHDRAWN} event with old and new values of the state, decision,
      * {@code directionsText} and {@code changesToStandardPublication}, as {@link #decide} records, and one case note
@@ -893,6 +894,9 @@ public class ReferralService {
         // claimedById and claimedBy are left alone: visibleTo has established the direction is this caller's, and
         // decide required the same subject to hold the claim it directed.
         referral.setClaimedAt(now);
+        // The processing window restarts (plan D2), but no fresh window is taken for the cap: windowDate and
+        // windowSlot stay as the assignment set them, so the referral counts where it counted before.
+        referral.setAssignedAt(now);
         referral.setLastTouchedAt(now);
         referral.setDirectionChangedAt(now);
         referral.setModifiedBy(caller.name());

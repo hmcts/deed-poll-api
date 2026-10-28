@@ -12,7 +12,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
@@ -139,13 +138,13 @@ class JudicialReferralServiceTest {
     @DisplayName("visibleTo")
     class VisibleTo {
 
-        /** The states a judge may see when the referral is theirs: the pool, plus their own work. */
+        /** The states a judge may see when the referral is theirs: their own work, and since plan D2 nothing else. */
         private static final Set<ReferralState> VISIBLE_TO_THE_HOLDER =
-            EnumSet.of(ReferralState.Open, ReferralState.Claimed, ReferralState.Decided);
+            EnumSet.of(ReferralState.Claimed, ReferralState.Decided);
 
         @ParameterizedTest
         @EnumSource(ReferralState.class)
-        @DisplayName("the judge who holds or decided it sees Open, Claimed and Decided, and nothing terminal")
+        @DisplayName("the judge it is assigned to or who decided it sees Claimed and Decided, and nothing else")
         void theHoldingJudgeSeesTheirOwnLiveReferrals(ReferralState state) {
             Referral referral = referral(state, JUDGE);
 
@@ -156,8 +155,8 @@ class JudicialReferralServiceTest {
 
         @ParameterizedTest
         @EnumSource(ReferralState.class)
-        @DisplayName("another judge sees only the pool, whatever state the referral is in")
-        void anotherJudgeSeesOnlyThePool(ReferralState state) {
+        @DisplayName("another judge sees nothing, whatever state the referral is in")
+        void anotherJudgeSeesNothing(ReferralState state) {
             Referral referral = referral(state, JUDGE);
 
             // The whole of decision 3's second half: a claimed or decided referral is invisible to every judge
@@ -165,7 +164,36 @@ class JudicialReferralServiceTest {
             // caller turns this into cannot be told apart from a wrong id.
             assertThat(JudicialReferralService.visibleTo(referral, OTHER_JUDGE))
                 .as("a %s referral belonging to another judge", state)
-                .isEqualTo(state == ReferralState.Open);
+                .isFalse();
+        }
+
+        @Test
+        @DisplayName("an Open referral is waiting for the office and visible to no judge, even one it once named")
+        void nobodySeesAnOpenReferral() {
+            // Plan D2: there is no pool. A referral raised without a Master, or returned at the end of the
+            // processing window, is the office's to assign, and a judge reaching it by id gets the unknown id's 404.
+            Referral waiting = new Referral();
+            waiting.setState(ReferralState.Open);
+
+            assertThat(JudicialReferralService.visibleTo(waiting, JUDGE)).isFalse();
+            assertThat(JudicialReferralService.visibleTo(waiting, OTHER_JUDGE)).isFalse();
+            assertThat(JudicialReferralService.visibleTo(referral(ReferralState.Open, JUDGE), JUDGE)).isFalse();
+        }
+
+        @Test
+        @DisplayName("an assignment to a Master who is not yet linked is visible to nobody until linking")
+        void anUnlinkedAssignmentIsVisibleToNobody() {
+            Referral assigned = new Referral();
+            assigned.setState(ReferralState.Claimed);
+            assigned.setAssignedMasterId(UUID.randomUUID());
+            assigned.setClaimedBy("Master Unlinked");
+
+            assertThat(JudicialReferralService.visibleTo(assigned, JUDGE)).isFalse();
+
+            // What linking writes, and from then on the Master sees it.
+            assigned.setClaimedById(JUDGE.userId());
+            assertThat(JudicialReferralService.visibleTo(assigned, JUDGE)).isTrue();
+            assertThat(JudicialReferralService.visibleTo(assigned, OTHER_JUDGE)).isFalse();
         }
 
         @Test
@@ -238,7 +266,7 @@ class JudicialReferralServiceTest {
         }
 
         @Test
-        @DisplayName("a caller with no subject is refused rather than compared, even for the shared pool")
+        @DisplayName("a caller with no subject is refused rather than compared, whatever the state")
         void refusesACallerWithNoSubject() {
             // Resolved before the switch rather than inside the Claimed and Decided arms, which is why the pool
             // is in this assertion too: a guard that short-circuited past an unidentified caller on the one
@@ -271,11 +299,15 @@ class JudicialReferralServiceTest {
             // A caseworker never reaches this: requireAnyRole(JUDICIAL) refuses them first, and the pool test
             // below asserts that. Pinned so that nobody adds a role check here and leaves two places able to
             // disagree about which error a non-judicial caller gets -- 403 for the role, 404 for the referral.
-            assertThat(JudicialReferralService.visibleTo(referral(ReferralState.Open, JUDGE), CASEWORKER)).isTrue();
+            assertThat(JudicialReferralService.visibleTo(referral(ReferralState.Claimed, CASEWORKER), CASEWORKER))
+                .isTrue();
             assertThat(JudicialReferralService.visibleTo(referral(ReferralState.Claimed, JUDGE), ADMIN)).isFalse();
         }
     }
 
+    /**
+     * The former shared pool, always empty since plan D2 and kept for one release because today's admin calls it.
+     */
     @Nested
     @DisplayName("pool")
     class Pool {
@@ -287,8 +319,6 @@ class JudicialReferralServiceTest {
                 .isInstanceOf(ForbiddenError.class)
                 .hasMessageContaining(Role.JUDICIAL.claimValue());
 
-            // The gate is the first statement, so a refused caller costs no query and -- more to the point --
-            // cannot trigger the mutating sweep. An ungated read that swept would let any token move rows.
             verifyNoInteractions(referralService);
             referrals.verifyNothingRead();
         }
@@ -296,45 +326,39 @@ class JudicialReferralServiceTest {
         @Test
         @DisplayName("refuses an admin too: judicial is not a level of seniority")
         void refusesAnAdmin() {
-            // DEEDPOLL_ADMIN is the most privileged caseworker role there is, and it is still not a judge.
             assertThatThrownBy(() -> service.pool(ADMIN, JudicialReferralService.FIRST_POOL_PAGE))
                 .isInstanceOf(ForbiddenError.class);
         }
 
         @Test
-        @DisplayName("sweeps lapsed claims before it queries, so a released referral is in the page it returns")
-        void sweepsBeforeItQueries() {
-            referrals.returning(List.of(), 0);
+        @DisplayName("is an empty page with a total of nought, and reads no referral")
+        void isAlwaysEmpty() {
+            ReferralPool pool = service.pool(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
 
-            service.pool(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
-
-            // Order, not merely occurrence: decision 22 is that the referral is back in the pool in the same
-            // request that observes the lapse, and a sweep after the query would be one request too late.
-            InOrder order = inOrder(referralService, referrals.repository());
-            order.verify(referralService).reclaimStaleClaims();
-            order.verify(referrals.repository()).findByState(any(), any());
+            assertThat(pool.isEmpty()).isTrue();
+            assertThat(pool.total()).isZero();
+            assertThat(pool.totalPages()).isZero();
+            assertThat(pool.page()).isEqualTo(1);
+            assertThat(pool.size()).isEqualTo(10);
+            referrals.verifyNothingRead();
         }
 
         @Test
-        @DisplayName("asks for Open referrals only, urgent first then oldest, one page at a time")
-        void asksForTheOpenReferralsInWorkingOrder() {
-            referrals.returning(List.of(), 0);
+        @DisplayName("is empty on any page, echoing the page asked for")
+        void isEmptyOnAnyPage() {
+            ReferralPool pool = service.pool(JUDGE, new CasePaging(9, 20));
 
-            service.pool(JUDGE, new CasePaging(3, 20));
+            assertThat(pool.isEmpty()).isTrue();
+            assertThat(pool.page()).isEqualTo(9);
+            assertThat(pool.size()).isEqualTo(20);
+        }
 
-            ArgumentCaptor<Pageable> asked = ArgumentCaptor.forClass(Pageable.class);
-            verify(referrals.repository()).findByState(eq(ReferralState.Open), asked.capture());
-            Pageable pageable = asked.getValue();
+        @Test
+        @DisplayName("still sweeps, so it stays a request-time trigger of the processing window")
+        void stillSweeps() {
+            service.pool(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
 
-            // Spelled out rather than compared against POOL_ORDER, which would assert the constant against
-            // itself. Descending urgency is the most urgent first because the "Urgency" Postgres type is
-            // declared ('Normal', 'Urgent'); ReferralRepositoryTest runs that against a real database.
-            assertThat(pageable.getSort()).containsExactly(
-                Sort.Order.desc("urgency"),
-                Sort.Order.asc("createdOn"));
-            // Zero-based where the wire number is 1-based, which is the one translation CasePaging owns.
-            assertThat(pageable.getPageNumber()).isEqualTo(2);
-            assertThat(pageable.getPageSize()).isEqualTo(20);
+            verify(referralService).reclaimStaleClaims();
         }
 
         @Test
@@ -344,70 +368,6 @@ class JudicialReferralServiceTest {
             assertThat(JudicialReferralService.FIRST_POOL_PAGE.size())
                 .isEqualTo(JudicialReferralService.POOL_PAGE_SIZE)
                 .isEqualTo(10);
-        }
-
-        @Test
-        @DisplayName("returns the page in the order the database gave it, with the whole pool's total")
-        void returnsThePageAsTheDatabaseOrderedIt() {
-            Referral urgentAndOldest = referral(ReferralState.Open, null);
-            urgentAndOldest.setUrgency(Urgency.Urgent);
-            Referral normalAndNewest = referral(ReferralState.Open, null);
-            Referral normalAndOldest = referral(ReferralState.Open, null);
-            // Handed back in the order the query would have produced. A service that re-sorted by createdOn, or
-            // by urgency alone, would not leave these three in this order.
-            List<Referral> asOrdered = List.of(urgentAndOldest, normalAndOldest, normalAndNewest);
-            referrals.returning(asOrdered, 37);
-
-            ReferralPool pool = service.pool(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
-
-            assertThat(pool.referrals()).containsExactlyElementsOf(asOrdered);
-            // The total is the pool's, not the page's: thirty-seven referrals waiting, ten of them shown, so
-            // four pages. That is the number that makes a small default page size safe.
-            assertThat(pool.total()).isEqualTo(37);
-            assertThat(pool.totalPages()).isEqualTo(4);
-            assertThat(pool.page()).isEqualTo(1);
-            assertThat(pool.size()).isEqualTo(10);
-            assertThat(pool.isEmpty()).isFalse();
-        }
-
-        @Test
-        @DisplayName("an empty pool is a page with no rows and no pages, not an error")
-        void anEmptyPoolIsAnEmptyPage() {
-            referrals.returning(List.of(), 0);
-
-            ReferralPool pool = service.pool(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
-
-            assertThat(pool.isEmpty()).isTrue();
-            // Zero pages rather than one: "page 1 of 0" is the truth about a pool with nothing in it, where
-            // "page 1 of 1" claims a page that has no rows on it.
-            assertThat(pool.totalPages()).isZero();
-            assertThat(pool.total()).isZero();
-        }
-
-        @Test
-        @DisplayName("a page past the end of the pool is empty but still says how much work is waiting")
-        void pagePastTheEndStillReportsTheTotal() {
-            referrals.returning(List.of(), 12);
-
-            ReferralPool pool = service.pool(JUDGE, new CasePaging(9, 10));
-
-            // A judge who bookmarked a page of a pool that has since been worked down gets an answer, not a
-            // 404: nothing on this page, twelve in the pool, two pages -- which is where to look instead.
-            assertThat(pool.isEmpty()).isTrue();
-            assertThat(pool.total()).isEqualTo(12);
-            assertThat(pool.totalPages()).isEqualTo(2);
-            assertThat(pool.page()).isEqualTo(9);
-        }
-
-        @Test
-        @DisplayName("the returned page cannot be modified through the caller's list")
-        void theReturnedPageIsACopy() {
-            referrals.returning(List.of(referral(ReferralState.Open, null)), 1);
-
-            ReferralPool pool = service.pool(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
-
-            assertThatThrownBy(() -> pool.referrals().add(new Referral()))
-                .isInstanceOf(UnsupportedOperationException.class);
         }
     }
 
@@ -473,7 +433,7 @@ class JudicialReferralServiceTest {
             // revived by the very list that should have stopped showing it.
             InOrder order = inOrder(referralService, referrals.repository());
             order.verify(referralService).reclaimStaleClaims();
-            order.verify(referrals.repository()).findOwnedBy(any(), any(), any(), any());
+            order.verify(referrals.repository()).findOwnedBy(any(), any(), any(), any(), any());
         }
 
         @Test
@@ -485,17 +445,14 @@ class JudicialReferralServiceTest {
 
             ArgumentCaptor<Pageable> asked = ArgumentCaptor.forClass(Pageable.class);
             verify(referrals.repository()).findOwnedBy(
-                eq(JUDGE.userId()), eq(ReferralState.Claimed), eq(ReferralState.Decided), asked.capture());
+                eq(JUDGE.userId()), eq(ReferralState.Claimed), eq(ReferralState.Decided), eq(Urgency.Urgent),
+                asked.capture());
             Pageable pageable = asked.getValue();
 
-            // Spelled out rather than compared against MINE_ORDER, which would assert the constant against itself.
-            // Ascending state is Claimed before Decided because "ReferralState" is declared in lifecycle order;
-            // ReferralRepositoryTest runs that, and the urgency and id keys, against a real database.
-            assertThat(pageable.getSort()).containsExactly(
-                Sort.Order.asc("state"),
-                Sort.Order.desc("urgency"),
-                Sort.Order.asc("createdOn"),
-                Sort.Order.asc("id"));
+            // Unsorted: the order is the query's own ORDER BY (urgency counts among the undirected only, which no
+            // Sort can say), and a Sort here would be appended after it. ReferralRepositoryTest runs the order
+            // against a real database.
+            assertThat(pageable.getSort().isUnsorted()).isTrue();
             assertThat(pageable.getPageNumber()).isEqualTo(2);
             assertThat(pageable.getPageSize()).isEqualTo(20);
         }
@@ -510,8 +467,8 @@ class JudicialReferralServiceTest {
             // The whole reason the ownership migration comes before this list rather than after it. Keyed on the
             // display name, "my referrals" would have listed a namesake's outstanding work -- an enumeration, where
             // the individual read at least needed the referral's id.
-            verify(referrals.repository(), never()).findOwnedBy(eq(JUDGE.name()), any(), any(), any());
-            verify(referrals.repository()).findOwnedBy(eq("judge-3"), any(), any(), any());
+            verify(referrals.repository(), never()).findOwnedBy(eq(JUDGE.name()), any(), any(), any(), any());
+            verify(referrals.repository()).findOwnedBy(eq("judge-3"), any(), any(), any(), any());
         }
 
         @Test
@@ -524,7 +481,7 @@ class JudicialReferralServiceTest {
             // new display name has no bearing on.
             service.mine(RENAMED_JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
 
-            verify(referrals.repository()).findOwnedBy(eq(JUDGE.userId()), any(), any(), any());
+            verify(referrals.repository()).findOwnedBy(eq(JUDGE.userId()), any(), any(), any(), any());
         }
 
         @Test
@@ -638,7 +595,7 @@ class JudicialReferralServiceTest {
         }
 
         @ParameterizedTest
-        @EnumSource(value = ReferralState.class, names = {"Open", "Claimed", "Decided"})
+        @EnumSource(value = ReferralState.class, names = {"Claimed", "Decided"})
         @DisplayName("returns the referral, its application and its readable documents for one this judge may see")
         void returnsAVisibleReferral(ReferralState state) {
             Referral referral = stored(state, JUDGE);
@@ -657,7 +614,7 @@ class JudicialReferralServiceTest {
         @Test
         @DisplayName("returns a private case's readable documents, as for any other case")
         void returnsThePrivateCaseInFull() {
-            Referral referral = stored(ReferralState.Open, JUDGE);
+            Referral referral = stored(ReferralState.Decided, JUDGE);
             referral.getDeedPoll().setPrivacy(Privacy.Private);
             DeedPollSupportingDocument document = new DeedPollSupportingDocument();
             when(documents.readableDocuments(CASE_ID)).thenReturn(List.of(document));
@@ -731,14 +688,14 @@ class JudicialReferralServiceTest {
         }
 
         @Test
-        @DisplayName("touches nothing when the referral is in the pool")
-        void touchesNothingOnAPoolReferral() {
+        @DisplayName("404s a referral waiting for assignment, even one that names this judge, and touches nothing")
+        void notFoundForAnOpenReferral() {
             stored(ReferralState.Open, JUDGE);
 
-            service.referral(REFERRAL_ID.toString(), JUDGE);
-
-            // A pool referral is visible to every judge, so a read that stamped it would let any judge move a row
-            // they have not claimed -- and would make looking indistinguishable from working.
+            // Plan D2: an Open referral is the office's, so the unknown id's own words.
+            assertThatThrownBy(() -> service.referral(REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
             verifyNoInteractions(referralService);
         }
 
@@ -816,15 +773,15 @@ class JudicialReferralServiceTest {
         }
 
         @Test
-        @DisplayName("sweeps before it resolves, so a claim that has just lapsed is claimable rather than a 404")
+        @DisplayName("sweeps before it resolves, as a request-time trigger of the processing window")
         void sweepsBeforeItResolves() {
-            stored(ReferralState.Open, null);
+            stored(ReferralState.Claimed, JUDGE);
+            when(referralService.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE))
+                .thenThrow(new ConflictError("Referral " + REFERRAL_ID + " is Claimed"));
 
-            service.claim(REFERRAL_ID.toString(), JUDGE);
+            assertThatThrownBy(() -> service.claim(REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(ConflictError.class);
 
-            // Order, and it is the whole reason the sweep is here at all: a referral whose claim lapsed a moment
-            // ago is still Claimed by the judge who abandoned it, which visibleTo says this caller may not see. So
-            // resolving first would answer 404 for a referral the pool is about to offer them.
             InOrder order = inOrder(referralService, referrals.repository());
             order.verify(referralService).reclaimStaleClaims();
             order.verify(referrals.repository()).findWithCaseById(REFERRAL_ID);
@@ -834,7 +791,7 @@ class JudicialReferralServiceTest {
         @Test
         @DisplayName("hands the transition the case resolved from the referral, and answers with the papers")
         void delegatesToTheTransition() {
-            Referral pooled = stored(ReferralState.Open, null);
+            Referral pooled = stored(ReferralState.Claimed, JUDGE);
             Referral claimed = referral(ReferralState.Claimed, JUDGE);
             when(referralService.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE)).thenReturn(claimed);
             DeedPollSupportingDocument document = new DeedPollSupportingDocument();
@@ -850,6 +807,18 @@ class JudicialReferralServiceTest {
             assertThat(view.application().getId()).isEqualTo(CASE_ID);
             // The same things a read answers with, because the screen after a claim is the papers.
             assertThat(view.documents()).containsExactly(document);
+        }
+
+        @Test
+        @DisplayName("404s a referral waiting for assignment, which no judge may see, and claims nothing")
+        void notFoundForAnOpenReferral() {
+            stored(ReferralState.Open, null);
+
+            assertThatThrownBy(() -> service.claim(REFERRAL_ID.toString(), JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + REFERRAL_ID + " not found");
+
+            verify(referralService, never()).claim(any(), any(), any());
         }
 
         @ParameterizedTest
@@ -897,8 +866,8 @@ class JudicialReferralServiceTest {
         @Test
         @DisplayName("lets the transition's conflict out untouched, rather than deciding claimability itself")
         void passesTheTransitionsConflictThrough() {
-            // A referral this judge may see and may not claim -- their own Decided one, or an Open one another
-            // judge took between their loading the pool and their clicking. ReferralService owns that rule, and the
+            // A referral this judge may see and may not claim -- their own Decided one, or their own assignment.
+            // ReferralService owns that rule, and the
             // point of this test is that nothing here duplicates it: a 409 from the transition is the answer, where
             // a second guard in this service would eventually disagree with the first.
             stored(ReferralState.Decided, JUDGE);
@@ -989,12 +958,11 @@ class JudicialReferralServiceTest {
         }
 
         @Test
-        @DisplayName("lets the transition's conflict out untouched for a pool referral nobody holds")
+        @DisplayName("lets the transition's conflict out untouched for a visible referral this judge does not hold")
         void passesTheTransitionsConflictThrough() {
-            // Visible and not held: an Open referral is visible to every judge, and directing one nobody has
-            // claimed is the transition's conflict rather than this service's -- so a judge who skipped the claim
-            // is told plainly instead of writing a direction onto an unclaimed referral.
-            stored(ReferralState.Open, null);
+            // Visible and not held: this judge's own Decided referral. Directing it again is the transition's
+            // conflict rather than this service's.
+            stored(ReferralState.Decided, JUDGE);
             when(referralService.decide(CASE_ID, REFERRAL_ID.toString(), APPROVAL, JUDGE))
                 .thenThrow(new ConflictError("Referral " + REFERRAL_ID + " is not claimed by " + JUDGE.name()));
 
@@ -1215,16 +1183,6 @@ class JudicialReferralServiceTest {
         }
 
         /**
-         * The pool holds {@code total} referrals, of which these are the ones on the page asked for.
-         */
-        void returning(List<Referral> page, long total) {
-            when(repository.findByState(any(), any())).thenAnswer(call -> {
-                Pageable asked = call.getArgument(1);
-                return page(page, asked, total);
-            });
-        }
-
-        /**
          * The caller's personal list holds {@code total} referrals, of which these are the ones on the page asked
          * for.
          *
@@ -1233,8 +1191,8 @@ class JudicialReferralServiceTest {
          * implementation of it -- and would hide a service that filtered in Java.
          */
         void owning(List<Referral> page, long total) {
-            when(repository.findOwnedBy(any(), any(), any(), any())).thenAnswer(call -> {
-                Pageable asked = call.getArgument(3);
+            when(repository.findOwnedBy(any(), any(), any(), any(), any())).thenAnswer(call -> {
+                Pageable asked = call.getArgument(4);
                 return page(page, asked, total);
             });
         }

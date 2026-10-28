@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.api.judicial.dto;
 
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralWorkload;
 
+import java.time.Duration;
 import java.util.List;
 
 /**
@@ -38,9 +39,9 @@ public record JudicialMyReferralsResponse(
     int totalPages) {
 
     /** This judge's own work, as the domain resolved it. */
-    public static JudicialMyReferralsResponse of(ReferralWorkload workload) {
+    public static JudicialMyReferralsResponse of(ReferralWorkload workload, Duration processingWindow) {
         return new JudicialMyReferralsResponse(
-            JudicialReferralSummary.from(workload.referrals()),
+            JudicialReferralSummary.from(workload.referrals(), processingWindow),
             workload.page(),
             workload.size(),
             workload.total(),

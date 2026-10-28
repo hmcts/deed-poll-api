@@ -1,15 +1,18 @@
 package uk.gov.hmcts.reform.deedpoll.api.judicial.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionDue;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * One row of the shared judicial pool: enough to choose which referral to pick up, and nothing about the
- * application behind it.
+ * One row of a judge's list of their own referrals (and of the former shared pool, empty since plan D2): enough to
+ * choose which referral to open, and nothing about the application behind it.
  *
  * <p><strong>No case fields at all, which is the difference between this and a case list row.</strong> A judge
  * choosing their next piece of work is choosing between <em>referrals</em> -- why each was raised, how urgent it
@@ -33,13 +36,16 @@ import java.util.List;
  * application.
  *
  * @param id the referral id, which the detail, claim and direction routes address
- * @param state where the referral has got to; every row of the pool is {@code Open}
+ * @param state where the referral has got to: {@code Claimed} waiting for this Master's direction, or
+ *     {@code Decided}
  * @param reasons why the case was referred, as stored, in the order the caseworker ticked them; empty for a
  *     referral backfilled from the case's legacy columns
  * @param notes the caseworker's free text for the judiciary, or null
  * @param urgency the referral's own urgency, which is the pool's first sort key
  * @param urgencyReason why it jumped the queue, or null when it did not
  * @param createdOn when the referral was raised, which is the second sort key -- oldest first within a band
+ * @param assignedAt when the referral was assigned to this Master, which starts the processing window, or null
+ * @param directionDueBy when the processing window ends while the referral waits for a direction, else null
  */
 public record JudicialReferralSummary(
     String id,
@@ -48,10 +54,16 @@ public record JudicialReferralSummary(
     String notes,
     Urgency urgency,
     String urgencyReason,
-    LocalDateTime createdOn) {
+    LocalDateTime createdOn,
+    @Schema(nullable = true, description = "When the referral was assigned to this Master, which starts the "
+        + "processing window; null for a claim made before assignment existed.")
+    LocalDateTime assignedAt,
+    @Schema(nullable = true, description = "When the Master's direction is due: the processing window's start "
+        + "plus its length as configured now. Null once directed.")
+    LocalDateTime directionDueBy) {
 
-    /** One pooled referral as a row. */
-    public static JudicialReferralSummary from(Referral referral) {
+    /** One referral as a row. */
+    public static JudicialReferralSummary from(Referral referral, Duration processingWindow) {
         return new JudicialReferralSummary(
             referral.getId().toString(),
             referral.getState(),
@@ -59,17 +71,18 @@ public record JudicialReferralSummary(
             referral.getNotes(),
             referral.getUrgency(),
             referral.getUrgencyReason(),
-            referral.getCreatedOn());
+            referral.getCreatedOn(),
+            referral.getAssignedAt(),
+            DirectionDue.by(referral, processingWindow));
     }
 
     /**
-     * A page of the pool, preserving the order the database produced -- urgent first, then longest-waiting.
+     * A page, preserving the order the database produced.
      *
-     * <p>The order is not re-established here, and must not be: {@code JudicialReferralService.POOL_ORDER} goes
-     * to the query, so a sort at this layer would only be able to reorder the page it was handed rather than the
-     * pool it came from.
+     * <p>The order is not re-established here, and must not be: it is the query's, so a sort at this layer would
+     * only be able to reorder the page it was handed rather than the list it came from.
      */
-    public static List<JudicialReferralSummary> from(List<Referral> referrals) {
-        return referrals.stream().map(JudicialReferralSummary::from).toList();
+    public static List<JudicialReferralSummary> from(List<Referral> referrals, Duration processingWindow) {
+        return referrals.stream().map(referral -> from(referral, processingWindow)).toList();
     }
 }

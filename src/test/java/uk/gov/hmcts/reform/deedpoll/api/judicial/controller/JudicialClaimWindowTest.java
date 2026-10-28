@@ -142,8 +142,9 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
         assertStillClaimed(a);
 
         asJudge();
+        // Released to the office, not offered to judges: the former pool is always empty (plan D2).
         authorised(get(POOL)).andExpect(status().isOk())
-            .andExpect(jsonPath("$.referrals[*].id", hasItem(a)));
+            .andExpect(jsonPath("$.referrals").isEmpty());
         assertReleased(a);
 
         window(2880);
@@ -185,7 +186,7 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("claim sweeps with the stored window, so another judge's lapsed claim can be taken")
+    @DisplayName("claim sweeps with the stored window, and a released referral is the office's, not the next judge's")
     void claimReadsTheStoredWindow() throws Exception {
         String other = claimedBy(OTHER_JUDGE_NAME, OTHER_JUDGE_SUBJECT);
 
@@ -198,10 +199,12 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
         assertStillClaimed(other);
 
         asJudge();
-        authorised(post(POOL + "/" + other + "/claim")).andExpect(status().isOk())
-            .andExpect(jsonPath("$.claimedBy").value(JUDGE_NAME));
-        assertThat(stored(other).getClaimedBy()).isEqualTo(JUDGE_NAME);
-        assertThat(lapseNotes(other)).isEqualTo(1);
+        // Released to Open, which no judge may see or claim since plan D2. The 404 rolls back the claim's own
+        // transaction, sweep included, so the release lands with the next list load instead.
+        authorised(post(POOL + "/" + other + "/claim")).andExpect(status().isNotFound());
+        assertStillClaimed(other);
+        authorised(get(POOL)).andExpect(status().isOk());
+        assertReleased(other);
     }
 
     @Test

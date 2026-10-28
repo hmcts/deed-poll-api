@@ -520,13 +520,13 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("any judge previews a document of an Open referral, recorded as that judge")
-        void anyJudgeOnAnOpenReferral() {
-            assertThat(previewAsJudge(JUDGE)).isEqualTo(3);
-            assertThat(previewAsJudge(OTHER_JUDGE)).isEqualTo(3);
-
-            assertThat(reads("DOCUMENT_PREVIEWED")).extracting(row -> row.get("actor_id"))
-                .containsExactlyInAnyOrder(JUDGE.userId(), OTHER_JUDGE.userId());
+        @DisplayName("no judge previews a document of a referral waiting for assignment (plan D2)")
+        void noJudgeOnAnOpenReferral() {
+            assertThatThrownBy(() -> previewAsJudge(JUDGE))
+                .isInstanceOf(NotFoundError.class)
+                .hasMessage("Referral " + referralId + " not found");
+            assertThatThrownBy(() -> previewAsJudge(OTHER_JUDGE)).isInstanceOf(NotFoundError.class);
+            assertNothingRead();
         }
 
         @Test
@@ -587,6 +587,7 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
         @Test
         @DisplayName("a document of another case is the document's 404, so a referral reaches only its own")
         void anotherCasesDocument() {
+            referralService.claim(caseId, referralId, JUDGE);
             String elsewhere = uploadedFixture(newCase(), "three-pages.docx", DOCX);
 
             assertThatThrownBy(() -> previews.judicialPreview(referralId, elsewhere, JUDGE, previews.budget()))
@@ -608,6 +609,10 @@ class DocumentPreviewServiceTest extends AbstractPostgresContainerTest {
         @DisplayName("fails closed for a judge too")
         void failsClosed() {
             CurrentUser unrecordable = CurrentUser.currentUser(List.of(Role.JUDICIAL), "Judge", UNRECORDABLE);
+            // Held by that subject, written directly: the claim transition's own audit could not record it either.
+            jdbc.update("UPDATE deedpoll_referral SET state = 'Claimed', \"claimedBy\" = 'Judge', "
+                            + "\"claimedById\" = ?, \"claimedAt\" = now(), \"lastTouchedAt\" = now() "
+                            + "WHERE id = ?::uuid", UNRECORDABLE, referralId);
 
             assertThatThrownBy(() -> previewAsJudge(unrecordable)).isInstanceOf(DataAccessException.class);
             assertNothingRead();

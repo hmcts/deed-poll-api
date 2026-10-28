@@ -27,6 +27,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
 import java.util.HashMap;
 import java.util.List;
@@ -59,8 +60,9 @@ class MasterServiceTest {
     private static final Master SULLIVAN = new Master(ID.toString(), "Master Sullivan", ADDRESS, true, false, 3);
 
     private final MasterRepository repository = mock(MasterRepository.class);
+    private final ReferralRepository referrals = mock(ReferralRepository.class);
     private final AuditTrail audit = mock(AuditTrail.class);
-    private final MasterService service = new MasterService(repository, audit);
+    private final MasterService service = new MasterService(repository, referrals, audit);
 
     static Stream<List<Role>> notDeliveryManagers() {
         return Stream.of(List.of(Role.CASEWORKER), List.of(Role.TEAM_LEADER), List.of(Role.DEEDPOLL_ADMIN),
@@ -101,7 +103,7 @@ class MasterServiceTest {
         }
         for (List<Role> roles : List.of(List.of(Role.JUDICIAL), List.<Role>of())) {
             MasterRepository untouched = mock(MasterRepository.class);
-            assertThatThrownBy(() -> new MasterService(untouched, audit)
+            assertThatThrownBy(() -> new MasterService(untouched, referrals, audit)
                 .list(CurrentUser.currentUser(roles, "Not staff", "s"))).isInstanceOf(ForbiddenError.class);
             verifyNoInteractions(untouched);
         }
@@ -209,7 +211,7 @@ class MasterServiceTest {
             assertThatThrownBy(() -> service.create(DELIVERY_MANAGER,
                 Map.of("name", "M", "email", ADDRESS, "available", "yes")))
                 .isInstanceOf(InvalidInputError.class);
-            verifyNoInteractions(repository, audit);
+            verifyNoInteractions(repository, audit, referrals);
         }
     }
 
@@ -363,6 +365,19 @@ class MasterServiceTest {
         }
 
         @Test
+        @DisplayName("linking gives the Master the referrals assigned while unlinked and attaches their pre-V43 claims")
+        void linksTheReferralSide() {
+            given(repository.linkingByEmail(ADDRESS)).willReturn(Optional.of(new MasterRepository.Linking(ID, null)));
+            given(repository.link(eq(ID), eq(ADDRESS), eq("judge-subject"), any())).willReturn(true);
+
+            service.linkIfListed(JUDGE);
+
+            // Plan D2, in the linking transaction: both by this entry and this subject, never another's.
+            verify(referrals).attachToLinkedMaster(ID, "judge-subject");
+            verify(referrals).attachLegacyClaims(ID, "judge-subject");
+        }
+
+        @Test
         @DisplayName("losing the race to link records nothing")
         void lostTheRace() {
             given(repository.linkingByEmail(ADDRESS)).willReturn(Optional.of(new MasterRepository.Linking(ID, null)));
@@ -370,7 +385,7 @@ class MasterServiceTest {
 
             service.linkIfListed(JUDGE);
 
-            verifyNoInteractions(audit);
+            verifyNoInteractions(audit, referrals);
         }
 
         @Test
@@ -382,7 +397,7 @@ class MasterServiceTest {
             service.linkIfListed(JUDGE);
 
             verify(repository, never()).link(any(), anyString(), anyString(), any());
-            verifyNoInteractions(audit);
+            verifyNoInteractions(audit, referrals);
             assertThat(logs.list).isEmpty();
         }
 

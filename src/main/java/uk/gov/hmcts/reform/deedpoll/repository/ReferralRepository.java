@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 
 import java.time.LocalDate;
@@ -29,23 +30,21 @@ import java.util.UUID;
  * A caller wanting one referral has to say which case it belongs to, so a cross-case read or write is
  * not expressible rather than merely discouraged.
  *
- * <p>There are four exceptions, and every one of them belongs to the judicial surface or to the sweep, which
- * are the two things in this service that are about every case at once rather than about <em>a</em> case's
- * referrals:
+ * <p>The exceptions belong to the judicial surface, the sweep, the per-Master cap and linking, which are the
+ * things in this service that are about every case at once rather than about <em>a</em> case's referrals:
  *
  * <ul>
  *   <li>the inactivity sweep -- {@link #findStaleClaims} and {@link #releaseStaleClaim}. It stays inside the
  *       rule rather than beside it: the finder returns a three-field projection instead of an entity, and
  *       neither is reachable from a request path that names a case;</li>
- *   <li>the judicial pool -- {@link #findByState}. The shared pool <em>is</em> the cross-case list, and a
- *       judge reaches it without naming any case, which is the point of it: the judicial surface is keyed on
- *       the referral so that a judge cannot name an application at all. The scoping this drops is replaced by
- *       a state filter the caller does not choose ({@code Open} only) and, on every read of an individual
- *       referral, by {@code JudicialReferralService.visibleTo};</li>
- *   <li>one judge's own work -- {@link #findOwnedBy}. The personal list is the other cross-case judicial list,
- *       and it names no case for the same reason the pool does not. What replaces the scoping here is narrower
- *       than the pool's: the rows are those whose owner column holds the caller's own IDAM subject, which is a
- *       scope a caller cannot widen because it comes from their token rather than from the request;</li>
+ *   <li>the cap's counts, which return numbers and never a referral;</li>
+ *   <li>linking's two statements, {@link #attachToLinkedMaster} and {@link #attachLegacyClaims}, which return a
+ *       count, write only an owner or Master column, and are keyed on a Masters-list entry and the subject
+ *       {@code MasterService.linkIfListed} has just linked to it;</li>
+ *   <li>one judge's own work -- {@link #findOwnedBy}. The personal list is the cross-case judicial list, and it
+ *       names no case because a judge cannot name an application at all. What replaces the scoping is the owner
+ *       column holding the caller's own IDAM subject, which is a scope a caller cannot widen because it comes
+ *       from their token rather than from the request;</li>
  *   <li>the judicial read of one referral -- {@link #findWithCaseById}. This is the exception that is a finder
  *       by referral id alone, which the paragraph above forbids, and it exists because the judicial surface
  *       carries no case id to scope with: a judicial URL is {@code /judicial/referrals/{referralId}} precisely
@@ -132,33 +131,6 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
                                                       @Param("deedPollId") String deedPollId);
 
     /**
-     * One page of the referrals in a given state, across every case -- the judicial pool.
-     *
-     * <p><strong>The order and the page are the database's, and that is the requirement rather than an
-     * implementation detail.</strong> The pool is worked urgent-first and oldest-first within each urgency
-     * band, so a caller that fetched and reordered would be sorting one page of an arbitrary slice -- the
-     * longest-waiting urgent referral would sit on page 4 and never be worked.
-     * {@code JudicialReferralService.POOL_ORDER} is the sort, and it relies on {@code "Urgency"} being declared
-     * {@code ('Normal', 'Urgent')} in {@code V1__enums.sql}: Postgres orders an enum by its declared order, so
-     * descending urgency is the most urgent first. {@code ReferralRepositoryTest} asserts that against a real
-     * Postgres, because the declaration order is the load-bearing part and no fake can stand in for it.
-     *
-     * <p>{@link org.springframework.data.domain.Page} rather than a list, because a pool without its total is
-     * a pool that cannot say how much work is waiting -- which is the number decision 15 is about, and the
-     * reason the page size is a page size and not a cap. The count is the same criterion the page was drawn
-     * from, so it comes from the same call.
-     *
-     * <p>No index backs this: the table is small, the plan that added the pool adds no migration, and an index
-     * on {@code "state"} alone would be nearly the whole table anyway. Adding one when the pool is slow is a
-     * migration, not a redesign.
-     *
-     * @param state the state a pooled referral is in, {@link ReferralState#Open}
-     * @param pageable the page and the order, which the caller supplies rather than this method naming
-     * @return the referrals on that page, with the total across every page
-     */
-    Page<Referral> findByState(ReferralState state, Pageable pageable);
-
-    /**
      * One page of the referrals a single judge has in hand -- the personal list behind
      * {@code GET /judicial/referrals/mine}.
      *
@@ -171,7 +143,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * answers 404.
      *
      * <p><strong>No other state appears, and that is the membership rule rather than a filter.</strong>
-     * {@code Open} belongs to the shared pool, and {@code Closed}/{@code Withdrawn} are the office taking the
+     * {@code Open} is waiting for the office, and {@code Closed}/{@code Withdrawn} are the office taking the
      * referral back -- so a terminal row that still names the judge who had it is excluded by the state arms,
      * whatever its owner columns still hold.
      *
@@ -184,31 +156,47 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      *
      * <p><strong>The database filters, orders, pages and counts.</strong> The alternative -- read the referrals
      * and pick the caller's out in Java -- would page an arbitrary slice and would have to count separately, so a
-     * judge's second page could omit work their first page's total had promised.
-     * {@code JudicialReferralService.MINE_ORDER} is the sort, and the count is Spring Data's over this same
-     * predicate, so the two cannot describe different result sets.
+     * judge's second page could omit work their first page's total had promised. The count query repeats this
+     * predicate word for word, so the two cannot describe different result sets.
+     *
+     * <p><strong>The order is the Master's page (Steve, 2026-10-28), and it is not a {@code Sort}</strong>, because
+     * urgency counts in one state and not the other: {@code Claimed} (undirected) before {@code Decided}; within
+     * {@code Claimed}, {@code urgent} first, then the oldest {@code createdOn}; within {@code Decided}, the oldest
+     * {@code createdOn} alone, because the page groups directed referrals by day; then the id, which is not shown
+     * and only makes the sequence stable from one page to the next. The caller passes an unsorted page, since a
+     * {@code Sort} would be appended after this one.
      *
      * <p>The states are parameters rather than literals in the JPQL for the reason {@link #findStaleClaims}'s is:
      * the caller says out loud which states it means a judge's own work to be in, instead of two places having to
      * be kept in step.
      *
-     * <p>No index backs this either, for the reason given above for the pool and in V14: the table is small and
-     * the predicate reads the same {@code "state"} column the pool already scans without one.
+     * <p>No index backs this, for the reason given in V14: the table is small.
      *
      * @param owner the caller's IDAM subject, from their token and never from the request
      * @param claimed the state a held referral is in, {@link ReferralState#Claimed}
      * @param decided the state a directed referral is in, {@link ReferralState#Decided}
+     * @param urgent the urgency that sorts first among the undirected, {@link Urgency#Urgent}
      * @param pageable the page and the order, which the caller supplies rather than this method naming
      * @return the referrals on that page, with the total across every page
      */
-    @Query("""
+    @Query(value = """
         select r from Referral r
+         where (r.state = :claimed and r.claimedById = :owner)
+            or (r.state = :decided and r.decidedById = :owner)
+         order by case when r.state = :claimed then 0 else 1 end,
+                  case when r.state = :claimed and r.urgency = :urgent then 0 else 1 end,
+                  r.createdOn,
+                  r.id
+        """,
+        countQuery = """
+        select count(r) from Referral r
          where (r.state = :claimed and r.claimedById = :owner)
             or (r.state = :decided and r.decidedById = :owner)
         """)
     Page<Referral> findOwnedBy(@Param("owner") String owner,
                                @Param("claimed") ReferralState claimed,
                                @Param("decided") ReferralState decided,
+                               @Param("urgent") Urgency urgent,
                                Pageable pageable);
 
     /**
@@ -217,8 +205,8 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * <p><strong>The one finder here that names no case, and the reason is the judicial surface's shape rather
      * than convenience.</strong> A judicial URL carries a referral id and nothing else, so there is no parent to
      * scope with; the check that replaces the scope is
-     * {@code JudicialReferralService.visibleTo}, which admits the shared pool and the caller's own claimed and
-     * decided referrals and answers 404 for everything else. It is therefore only safe while it is reachable
+     * {@code JudicialReferralService.visibleTo}, which admits only the caller's own claimed and decided referrals and
+     * answers 404 for everything else. It is therefore only safe while it is reachable
      * from that one gated place, which is a rule {@code ReferralSecurityTest} asserts in bytecode rather than a
      * comment: a caseworker path calling this would have an unscoped read of any referral with neither the
      * caseworker surface's parent id nor the judicial surface's visibility check in front of it.
@@ -415,6 +403,49 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
                           @Param("cutoff") LocalDateTime cutoff,
                           @Param("now") LocalDateTime now,
                           @Param("releasedBy") String releasedBy);
+
+    /**
+     * Gives a newly linked Master the referrals assigned to them before they were linked (plan D2): the owner
+     * subject on every {@code Claimed} or {@code Decided} referral with this {@code assignedMasterId} and no owner
+     * yet. Called only by {@code MasterService.linkIfListed}, inside the transaction that linked the entry, so the
+     * Master sees them from the request that linked them.
+     *
+     * <p>Native and conditional on a null owner, so a referral another subject already owns is never moved. Quoted
+     * mixed-case identifiers and untyped state literals, for {@link #releaseStaleClaim}'s reasons.
+     *
+     * @param masterId the entry just linked
+     * @param subject the IDAM subject it was linked to
+     * @return how many referrals were given an owner
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+        UPDATE "deedpoll_referral"
+           SET "claimedById" = :subject
+         WHERE "assignedMasterId" = :masterId
+           AND "claimedById" IS NULL
+           AND "state" IN ('Claimed', 'Decided')
+        """)
+    int attachToLinkedMaster(@Param("masterId") UUID masterId, @Param("subject") String subject);
+
+    /**
+     * The go-live join (decision D-10): a referral {@code Claimed} before V43 has its claimer's subject and no
+     * {@code assignedMasterId}, so when that claimer is linked to a Masters-list entry it becomes that entry's
+     * assignment. Its window is not set, so it counts towards no cap, and its processing window still runs from
+     * {@code claimedAt}. Called only by {@code MasterService.linkIfListed}, beside {@link #attachToLinkedMaster}.
+     *
+     * @param masterId the entry just linked
+     * @param subject the IDAM subject it was linked to
+     * @return how many referrals were attached to the entry
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+        UPDATE "deedpoll_referral"
+           SET "assignedMasterId" = :masterId
+         WHERE "claimedById" = :subject
+           AND "assignedMasterId" IS NULL
+           AND "state" = 'Claimed'
+        """)
+    int attachLegacyClaims(@Param("masterId") UUID masterId, @Param("subject") String subject);
 
     /**
      * Starts the clock on one referral's confirmation, if nobody has answered it yet.

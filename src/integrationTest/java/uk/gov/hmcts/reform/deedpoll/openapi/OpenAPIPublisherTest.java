@@ -82,7 +82,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      * Every route the caseworker surface has, as plan 01's tasks 13 to 15 enumerate them, plus the witness routes
      * added afterwards, the saved-query routes after those, the referral routes after those, the closure the
      * referral state machine added, the three email routes the Notify send path added, and the referral's
-     * confirmation sub-resource that records the applicant's answer to the email ④ sends. Listed rather than
+     * confirmation sub-resource that records the applicant's answer to the email ④ sends, and plan D2's assignment
+     * sub-resource, through which a caseworker assigns a referral to a Master. Listed rather than
      * counted, because a count agrees with a spec that documents the right number of the wrong things.
      */
     private static final List<String> CASEWORKER_PATHS = List.of(
@@ -104,6 +105,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/cases/{id}/referrals/{referralId}/withdrawal",
         "/caseworker/cases/{id}/referrals/{referralId}/closure",
         "/caseworker/cases/{id}/referrals/{referralId}/confirmation",
+        "/caseworker/cases/{id}/referrals/{referralId}/assignment",
         "/caseworker/cases/{id}/emails",
         "/caseworker/cases/{id}/emails/{template}",
         "/caseworker/cases/{id}/emails/{template}/preview"
@@ -578,9 +580,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      *
      * <p>Asserted on the descriptions rather than only on the paths because {@code deed-poll-admin} writes its
      * screens from this document, and two of the rules are not visible in a schema: a revision keeps the first
-     * signature, and <strong>a withdrawn direction is a live claim again</strong>, which the inactivity sweep can
-     * return to the pool (design decision 6). A judge who withdraws and walks away loses the referral, and the
-     * admin has to be able to say so.
+     * signature, and <strong>withdrawing restarts the processing window</strong>, at whose end the referral is
+     * returned to the office (design decision 6, as plan D2 changed it). A judge who withdraws and walks away loses
+     * the referral, and the admin has to be able to say so.
      */
     @DisplayName("Documents the Master's application view, its documents, and revising or withdrawing a direction")
     @Test
@@ -612,7 +614,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         JsonNode withdraw = spec.at(referral.replace("}", "}~1direction~1withdraw") + "/post");
         assertThat(withdraw.has("requestBody")).as("withdrawing takes no body").isFalse();
         assertThat(withdraw.at("/description").asText())
-            .contains("Claimed", "directionChangedAt", "inactivity sweep", "pool");
+            .contains("Claimed", "directionChangedAt", "restarts the processing window", "returned to the office");
 
         assertThat(spec.at("/components/schemas/JudicialDirectionRequest/description").asText())
             .contains("PUT");
@@ -854,11 +856,13 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                .as("%s is optional, as it is on the pool", name)
                                .isFalse());
 
-        // The row type, unchanged and shared with the pool -- the referral speaking about itself, and no
-        // ownership, case or application field however this document might have acquired one.
+        // The row type, shared with the former pool -- the referral speaking about itself, plus plan D2's
+        // processing window, and no ownership, case or application field however this document might have acquired
+        // one.
         JsonNode row = spec.at("/components/schemas/JudicialReferralSummary/properties");
         assertThat(row.fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("id", "state", "reasons", "notes", "urgency", "urgencyReason", "createdOn");
+            .containsExactlyInAnyOrder("id", "state", "reasons", "notes", "urgency", "urgencyReason", "createdOn",
+                                       "assignedAt", "directionDueBy");
         assertThat(spec.at("/paths/~1judicial~1referrals/get/responses/200/content/*~1*/schema/$ref").asText())
             .as("the pool still answers with its own envelope")
             .isEqualTo("#/components/schemas/JudicialPoolResponse");
@@ -897,7 +901,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
                                           .getContentAsByteArray());
 
         JsonNode paths = spec.get("paths");
-        // Thirty-four operations across twenty-one paths: `/caseworker/cases`, the notes and witnesses collections,
+        // Thirty-five operations across twenty-two paths (plan D2 added the referral's assignment PUT):
+        // `/caseworker/cases`, the notes and witnesses collections,
         // the saved-query collection and the referrals collection each carry a GET and a POST, the case carries a
         // GET and a PATCH, the note, the witness and the saved query each carry a GET, a PATCH and a DELETE, a
         // saved query's selection carries a PUT and a DELETE, one referral carries a GET, and its withdrawal, its
@@ -918,7 +923,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         long operations = CASEWORKER_PATHS.stream()
             .mapToLong(path -> paths.get(path).size())
             .sum();
-        assertThat(operations).isEqualTo(34);
+        assertThat(operations).isEqualTo(35);
 
         JsonNode emailResponse = spec.at("/components/schemas/CaseEmailsResponse/properties");
         assertThat(emailResponse.fieldNames()).toIterable()
@@ -992,7 +997,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         // sub-resource did move -- that route is not an email route, and the assertions below are what say the two
         // email paths still carry one operation each.
         JsonNode paths = spec.get("paths");
-        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(34);
+        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(35);
         assertThat(paths.get("/caseworker/cases/{id}/emails/{template}").fieldNames()).toIterable()
             .containsExactly("post");
         assertThat(paths.get("/caseworker/cases/{id}/emails").fieldNames()).toIterable().containsExactly("get");
@@ -1070,7 +1075,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
         // And the surface is unmoved: a header is part of an operation rather than one of its own.
         JsonNode paths = spec.get("paths");
-        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(34);
+        assertThat(CASEWORKER_PATHS.stream().mapToLong(path -> paths.get(path).size()).sum()).isEqualTo(35);
         assertThat(paths.get("/caseworker/cases/{id}/emails/{template}").fieldNames()).toIterable()
             .containsExactly("post");
     }
