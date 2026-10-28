@@ -163,7 +163,12 @@ How the existing states are reused, so no `ReferralState` member is added (it is
 
 ## Validation Commands
 
-Run from the repository root before implementation and after each task:
+Run the full build from the repository root **twice only**: before implementation (the baseline) and in the
+final task, forced. **After each other task**, run only the task's focused tests (`./gradlew test --tests '…'` and,
+where the task touched them, `./gradlew integration --tests '…'`), the compile of every source set
+(`./gradlew compileJava compileTestJava compileIntegrationTestJava -I <no-checkstyle.gradle>`) and `checkstyle.sh`.
+This keeps the night's quality gate (one forced full build at the end) at a fraction of the time. If a focused run
+shows something outside the task failing, run the full build then rather than carry it forward. The full build:
 
 ```bash
 export JAVA_TOOL_OPTIONS=-XX:UseSVE=0 TESTCONTAINERS_RYUK_DISABLED=true
@@ -190,19 +195,19 @@ session, and the next one builds over it, wiping the results.
 ### Task 1: Migration and the windows
 - [ ] Record the execution baseline (commit, highest migration, test counts) in the execution notes.
 - [ ] Add the failing `ReferralWindows` unit tests and a mapping test for the new columns.
-- [ ] Implement V43, the entity mapping and `ReferralWindows`, run the focused tests and all Validation Commands, and record the results.
+- [ ] Implement V43, the entity mapping and `ReferralWindows`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 2: Assignment and the cap
 - [ ] Add failing tests for `assign`: the rules, the note, the audit, the cap, the concurrency case, create with and without `masterId`, and reassignment over HTTP.
-- [ ] Implement, run the focused tests and all Validation Commands, and record the results.
+- [ ] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 3: The Master side
 - [ ] Add failing tests for visibility, the empty pool, linking's referral side, `touch`, a withdrawn direction and `MINE_ORDER`.
-- [ ] Implement, run the focused tests and all Validation Commands, and record the results.
+- [ ] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 4: The processing window
 - [ ] Add failing tests for `unassignOverdue`, the timer, the go-live cases and the race.
-- [ ] Implement, rename every caller, run the focused tests and all Validation Commands, and record the results.
+- [ ] Implement, rename every caller, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 5: Documentation and final verification
 - [ ] Update `CLAUDE.md`: the judicial-surface paragraph (no pool; visibility), the claim-window paragraph (now the processing window and `unassignOverdue`), a new assignment paragraph (cap, windows, notes, go-live), the operation counts.

@@ -129,7 +129,12 @@ Read before changing anything:
 
 ## Validation Commands
 
-Run from the repository root before implementation and after each task:
+Run the full build from the repository root **twice only**: before implementation (the baseline) and in the
+final task, forced. **After each other task**, run only the task's focused tests (`./gradlew test --tests '…'` and,
+where the task touched them, `./gradlew integration --tests '…'`), the compile of every source set
+(`./gradlew compileJava compileTestJava compileIntegrationTestJava -I <no-checkstyle.gradle>`) and `checkstyle.sh`.
+This keeps the night's quality gate (one forced full build at the end) at a fraction of the time. If a focused run
+shows something outside the task failing, run the full build then rather than carry it forward. The full build:
 
 ```bash
 export JAVA_TOOL_OPTIONS=-XX:UseSVE=0 TESTCONTAINERS_RYUK_DISABLED=true
@@ -155,19 +160,19 @@ session, and the next one builds over it, wiping the results.
 ### Task 1: Ledger and configuration
 - [ ] Record the execution baseline in the execution notes.
 - [ ] Add failing tests for the migration, the configuration keys, the base-URL start-up rule and the `remindersSent` reset in `assign` and `withdrawDirection`.
-- [ ] Implement V44, the properties and the resets, run the focused tests and all Validation Commands, and record the results.
+- [ ] Implement V44, the properties and the resets, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 2: Delivery
 - [ ] Add failing tests for claiming, `Sending` before the call, settlement, retries, the unknown outcome and the unprovisioned skip.
-- [ ] Implement `MasterEmailDelivery` and its drain, run the focused tests and all Validation Commands, and record the results.
+- [ ] Implement `MasterEmailDelivery` and its drain, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 3: The digest
 - [ ] Add failing tests for every digest case in the Development Approach.
-- [ ] Implement `MasterDigests`, run the focused tests and all Validation Commands, and record the results.
+- [ ] Implement `MasterDigests`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 4: The reminders
 - [ ] Add failing tests for every reminder case in the Development Approach.
-- [ ] Implement `MasterReminders`, run the focused tests and all Validation Commands, and record the results.
+- [ ] Implement `MasterReminders`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 5: Chart, docs and final verification
 - [ ] Chart values and version bump; `docs/MASTER-EMAILS.md`; `CLAUDE.md`.
