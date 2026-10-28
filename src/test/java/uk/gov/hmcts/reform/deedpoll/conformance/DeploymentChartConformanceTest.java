@@ -193,6 +193,19 @@ class DeploymentChartConformanceTest {
         assertThat(environment).containsEntry("ENVIRONMENT_NAME", "preview");
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void previewTurnsOffTheTimersThatWouldActOnAatData() throws IOException {
+        // A preview runs against AAT's database before merge, so its sweep and Master email jobs must not run.
+        Map<String, Object> values = new Yaml().loadAs(
+            read(CHART_DIR.resolve("values.preview.template.yaml")), Map.class);
+        Map<String, Object> java = (Map<String, Object>) values.get("java");
+        Map<String, Object> environment = (Map<String, Object>) java.get("environment");
+        assertThat(environment)
+            .containsEntry("REFERRAL_UNASSIGN_ENABLED", "false")
+            .containsEntry("MASTER_EMAILS_ENABLED", "false");
+    }
+
     @SuppressWarnings("unchecked")
     private static Map<String, Object> chart() throws IOException {
         return new Yaml().loadAs(read(CHART_DIR.resolve("Chart.yaml")), Map.class);
