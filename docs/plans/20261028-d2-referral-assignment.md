@@ -210,8 +210,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement, rename every caller, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 5: Documentation and final verification
-- [ ] Update `CLAUDE.md`: the judicial-surface paragraph (no pool; visibility), the claim-window paragraph (now the processing window and `unassignOverdue`), a new assignment paragraph (cap, windows, notes, go-live), the operation counts.
-- [ ] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
+- [x] Update `CLAUDE.md`: the judicial-surface paragraph (no pool; visibility), the claim-window paragraph (now the processing window and `unassignOverdue`), a new assignment paragraph (cap, windows, notes, go-live), the operation counts.
+- [x] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
 
 ## Execution notes
 
@@ -328,3 +328,14 @@ its claimer by id and in mine, then leaves both once its window from `claimedAt`
 through `lastTouchedAt` now backdate `claimedAt` (and `assignedAt` where set). Runs: the focused referral, judicial,
 security, repository, architecture, OpenAPI, master, assignment and timeline classes, 377 tests, 0 failures; every
 source set compiles; `checkstyle.sh` OK.
+
+**Task 5 (documentation and final verification):** `CLAUDE.md`: the caseworker count is 35 operations across 22
+paths (the judicial surface stays 8); the judicial-surface paragraph says there is no pool, `Open` is visible to no
+judge, an unlinked assignment to nobody, and the pool and claim are deprecated for one release; the document-access
+sentence and the withdrawn-direction paragraph follow (withdrawal restarts the processing window and
+`unassignOverdue` returns it to the office); the process-settings paragraph names `unassignOverdue` and says D2 reads
+the cap and windows; a new paragraph covers assignment (lock order, check order, cap, windows, notes, audit,
+responses, `unassignOverdue`, the timer and go-live). Final forced `cleanTest cleanIntegration build`: SUCCESSFUL in
+4m 43s, `test` 5,246 tests, 0 failures, 1 skipped (baseline 5,138, +108); `integration` 27 tests, 0 failures
+(baseline 27). `checkstyle.sh` OK. The known intermittent `CcdCreationAttemptRepositoryTest` case passed.
+`git status` clean apart from this task's commit.

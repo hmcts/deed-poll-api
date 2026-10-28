@@ -25,7 +25,7 @@ require 03c. Local proof is not onboarding or rollout approval. See
 ## Layout
 
 ```
-api/caseworker/{controller,dto}   the caseworker HTTP surface — 34 operations across 21 paths, plus the REPAIR_CCD-protected
+api/caseworker/{controller,dto}   the caseworker HTTP surface — 35 operations across 22 paths, plus the REPAIR_CCD-protected
                                   /caseworker/ccd-attempts (3 operations, counted apart as CCD_ATTEMPT_PATHS)
                                   and /caseworker/gazette-notices (1 history GET, counted apart)
                                   and /caseworker/gazette-settings (Delivery Manager-only GET/PUT)
@@ -468,8 +468,12 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   under `api/…/dto`.
 - **The judicial surface is scoped by visibility, not by the case.** A caseworker read names its parent
   (`/caseworker/cases/{id}/…`); a judicial URL carries a referral id and no case id at all, so
-  `JudicialReferralService.visibleTo` stands where the parent id stands — the pool, plus this judge's own
-  `Claimed`/`Decided` referrals — which `GET /judicial/referrals/mine` is the list of. Anything else is **404**,
+  `JudicialReferralService.visibleTo` stands where the parent id stands — this judge's own `Claimed`/`Decided`
+  referrals, by `claimedById`/`decidedById` — which `GET /judicial/referrals/mine` is the list of. **There is no
+  pool** (D2): an `Open` referral is waiting for the office to assign it and is visible to no judge, and an assigned
+  referral whose Master is not yet linked is visible to nobody until linking. `GET /judicial/referrals` answers an
+  empty page and it and `POST …/claim` are `deprecated` for one release, because today's admin still calls them; do
+  not 404 them, a later contract step removes both. Anything else is **404**,
   in the same words an unknown id gets; the only 403 is the `Role.JUDICIAL` gate. Its eight operations must not
   reuse a caseworker DTO, and an ArchUnit rule fails the build if one does. Every new judicial read or write goes
   through `JudicialReferralService.visible`, so a closed or withdrawn referral is that same 404.
@@ -487,7 +491,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   the deciding Master. Never add a field by choosing; it is the business's call.
   Opening a referral records `CASE_VIEWED` (fail-open); `GET /judicial/referrals/{referralId}/documents/{documentId}/file`
   records `DOCUMENT_DOWNLOADED` (fail-closed) and answers with `api/DocumentFileResponses`, the caseworker download's
-  own headers. Any judge who can see an `Open` referral can open its documents.
+  own headers. The judge a referral is visible to can open its documents; no judge can open an `Open` one's.
 - **The directing judge may revise or withdraw their direction until the office closes the referral.**
   `PUT /judicial/referrals/{referralId}/direction` (the `POST`'s body and validation) and
   `POST …/direction/withdraw` (no body) both require `Decided` with `decidedById` = caller, decided by
@@ -498,7 +502,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   directs again with `POST`. Both set V38's `directionChangedAt`, which is **never cleared** and is the caseworker's
   flag (with a case note from `ReferralNotes`), record `REFERRAL_DIRECTION_REVISED`/`_WITHDRAWN` with old and new
   values, and recompute both read-models. No email, and no Gazette code changes. **A withdrawn direction is a live
-  claim again:** if the judge does not direct it, the inactivity sweep returns it to the pool like any other claim.
+  assignment again:** withdrawal restarts the processing window (`assignedAt` = now, keeping the cap's window), and
+  if the judge does not direct it within it, `unassignOverdue` returns it to the office like any other assignment.
   That is deliberate and published in withdraw's OpenAPI description; do not special-case the sweep.
 - **A minor's referral says what kind it is, as `Minor*` reasons beside `Minor`.** Master Sullivan's feedback (Steve,
   2026-10-27) added eight `ReferralReason` members marked `isMinorDetail()`: `MinorTransgender`,
@@ -527,13 +532,41 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   (1–100, 10) and the morning and afternoon windows (`HH:mm` on the quarter hour, `Europe/London`, 07:00–10:30 and
   14:00–14:30, each start before its end and the morning end before the afternoon start). `ProcessSettingsService`
   reads them through `processingWindow()`, `reminderInterval()`, `masterWindowCap()` and `referralWindows()` with no
-  capability check and no cache; `ReferralService` asks `processingWindow()` once per `reclaimStaleClaims`, so a
+  capability check and no cache; `ReferralService` asks `processingWindow()` once per `unassignOverdue`, so a
   Delivery Manager's `PUT` applies at once. Never cache them or reintroduce a property default, and a missing row
   fails the caller rather than guessing. The six V42 keys are **optional on the PUT for one release** so today's admin,
   which sends only the window and `revision`, keeps working; an absent key leaves its column alone. V42 re-seeded the
   window to 7 days only at revision 0, and raised a chosen value below a day to 1440 with a history row attributed to
   the service account. Values go in `deedpoll_process_settings_change`, one row per changed field, never in the audit
-  trail (no case owns them). D1 added the four new values for D2 and D3 to read; nothing in D1 reads them yet.
+  trail (no case owns them). D2's assignment reads the cap and the windows; the reminder interval is D3's to read.
+- **A referral is assigned to a Master by the office, and the processing window gives it back.** D2 (Master
+  Sullivan's item D, Steve, 2026-10-28) reuses the states rather than adding a Postgres enum member: `Open` is
+  *waiting for assignment*, `Claimed` is *assigned* (`claimedBy` the Master's name, `claimedById` their linked
+  subject, null until linked). `ReferralService.assign`, the one operation behind create with `masterId` and
+  `PUT /caseworker/cases/{id}/referrals/{referralId}/assignment` (`@AuditedAs(REFERRAL_ASSIGNED)`, any staff role),
+  **locks the referral row, then the Master's row** (`MasterRepository.findAssigneeForUpdate`) — keep that order
+  everywhere, or two assignments deadlock — so the cap holds under concurrency. Its checks run in a fixed order: the
+  Master exists and is available (400 on `masterId`), the referral is `Open` or `Claimed` (409), the same Master is a
+  no-op (no note, no audit), then the cap: V43's `assignedMasterId`/`windowDate`/`windowSlot` count `Claimed` rows for
+  that Master in the window `ReferralWindows.windowFor(now)` gives, and at `masterWindowCap()` it is a 409 naming the
+  window in words. The cap counts **current** assignments only, so a reassignment away or a release lowers it.
+  `ReferralWindows` is pure (`Europe/London`, working days from `BankHolidays.isWorkingDay`): inside or before the
+  morning window is that day's `AM`, inside or before the afternoon one is `PM`, after it or on a non-working day is
+  the next working day's `AM`. Without `masterId` a create is `Open`, which is what today's admin sends. Each
+  assignment writes one `ReferralNotes` note ("assigned to …" / "reassigned from … to …", never an email), one
+  `REFERRAL_ASSIGNED` event (state, `claimedBy`, `assignedAt`; never a subject) and recomputes both read-models.
+  Responses carry `assignedMaster` (`{id, name}` only), `assignedAt`, the window and `directionDueBy` (computed at read
+  time from the setting); `GET /caseworker/masters` answers `{masters, window, cap}` with each entry's
+  `assignedInWindow` from one grouped count. **`unassignOverdue`** (was `reclaimStaleClaims`) releases a `Claimed`
+  referral whose `coalesce("assignedAt", "claimedAt")` is older than `processingWindow()` by one conditional `UPDATE`
+  re-checking state and cutoff, clearing the claim and all four assignment columns (V43's checks require it), with
+  one "returned to the office for assignment" note; `touch` changes only `lastTouchedAt` and extends nothing. It runs
+  at the judicial request-time triggers and on `ReferralUnassignment`'s timer (`REFERRAL_UNASSIGN_ENABLED`, default
+  true; `REFERRAL_UNASSIGN_INTERVAL`, `PT15M`), which refuses a caller transaction and never throws (one WARN, the
+  exception class only). **Go-live needs no data rewrite:** a pre-V43 claim keeps its subject and no Master, stays
+  visible to its claimer, counts its window from `claimedAt`, and `MasterService.linkIfListed` attaches it
+  (`attachLegacyClaims`) and gives a newly linked Master the referrals assigned while unlinked
+  (`attachToLinkedMaster`), in the link's transaction. Emails are D3. See `docs/plans/20261028-d2-referral-assignment.md`.
 - **The Masters list is the Delivery Manager's, and a Master is linked by email, once.** `deedpoll_master` (V42)
   holds a name, a lower-cased unique email and an available flag; there is no delete, because referrals and history
   refer to a Master, so one who leaves is made unavailable. `config/MasterLinking`, a `HandlerInterceptor` on
@@ -552,7 +585,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   not listed, with no capability check and no cache, and never reads the table for a weekend. A Delivery Manager adds
   (409 on a listed date) and removes (404 on an unlisted one) under `MANAGE_PROCESS_CONFIG`, audited as
   `BANK_HOLIDAY_ADDED`/`_REMOVED` with field names only. Dates beyond 2028 must be added by a Delivery Manager or a
-  later migration before D2's windows reach them.
+  later migration before the referral windows reach them.
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
   only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback
