@@ -10,6 +10,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 import java.sql.Array;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Arrays;
@@ -199,6 +200,47 @@ public class MasterEmailRepository {
             """, (row, index) -> new WindowReferral(row.getObject("id", UUID.class),
                                                     row.getObject("assignedMasterId", UUID.class)),
             windowDate, windowSlot.name());
+    }
+
+    /** A referral whose reminder this run claimed, and the Masters-list entry it is assigned to. */
+    public record DueReminder(UUID referralId, UUID masterId, int reminder) {
+    }
+
+    /**
+     * Claims every reminder due at {@code now} (plan D3, step 3), in one conditional statement: a referral still
+     * {@code Claimed} by a Masters-list entry, with no decision, is due reminder
+     * {@code k = floor((now - assignedAt) / interval)} once {@code k > remindersSent}, and the statement sets
+     * {@code remindersSent} to {@code k}. A second pod's statement waits on the first's row locks, re-reads the
+     * count and claims nothing.
+     *
+     * @param now UTC wall time, as {@code assignedAt} is stored
+     * @return the referrals claimed, each with the reminder it is now on
+     */
+    public List<DueReminder> claimDueReminders(LocalDateTime now, Duration interval) {
+        long seconds = interval.toSeconds();
+        return jdbc.query("""
+            UPDATE "deedpoll_referral"
+               SET "remindersSent" = floor(extract(epoch FROM (CAST(? AS timestamp) - "assignedAt")) / ?)::integer
+             WHERE "state" = 'Claimed' AND "assignedMasterId" IS NOT NULL AND "decision" IS NULL
+               AND "assignedAt" IS NOT NULL
+               AND floor(extract(epoch FROM (CAST(? AS timestamp) - "assignedAt")) / ?) > "remindersSent"
+            RETURNING "id", "assignedMasterId", "remindersSent"
+            """, (row, index) -> new DueReminder(row.getObject("id", UUID.class),
+                                                 row.getObject("assignedMasterId", UUID.class),
+                                                 row.getInt("remindersSent")),
+            now, seconds, now, seconds);
+    }
+
+    /**
+     * Every referral still waiting for this Master's direction, in the Master's page order for undirected work, as
+     * {@link #claimedInWindow} orders a window's.
+     */
+    public List<UUID> outstandingFor(UUID masterId) {
+        return jdbc.queryForList("""
+            SELECT "id" FROM "deedpoll_referral"
+             WHERE "state" = 'Claimed' AND "assignedMasterId" = ? AND "decision" IS NULL
+             ORDER BY CASE WHEN "urgency" = 'Urgent' THEN 0 ELSE 1 END, "createdOn", "id"
+            """, UUID.class, masterId);
     }
 
     private static List<UUID> uuids(Array array) throws SQLException {

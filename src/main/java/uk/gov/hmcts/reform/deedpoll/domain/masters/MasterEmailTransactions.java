@@ -13,13 +13,16 @@ import uk.gov.hmcts.reform.deedpoll.repository.MasterEmailRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -107,6 +110,42 @@ public class MasterEmailTransactions {
             }
         }
         return Optional.of(new DigestEnqueued(written, state, unassigned));
+    }
+
+    /**
+     * What one reminder run's step did.
+     *
+     * @param emails how many Masters were given a reminder row
+     * @param state the state those rows were written in: {@code Pending}, or {@code Skipped} when the reminder
+     *     template is unprovisioned
+     * @param reminders how many referrals' reminders were claimed
+     */
+    public record RemindersEnqueued(int emails, MasterEmailState state, int reminders) {
+    }
+
+    /**
+     * A reminder run (plan D3, step 3), in one transaction: claims every reminder due at {@code now}, then gives each
+     * Master with one claimed a {@code REMINDER} row listing <strong>every</strong> referral still waiting for their
+     * direction (D-4), not only the ones that fell due. The claims and the emails commit together, so a run that
+     * fails part-way claims nothing.
+     *
+     * @param periodKey the run's key, which no other run shares
+     * @throws IllegalStateException when a Master already has a reminder under {@code periodKey}, which rolls the
+     *     run's claims back rather than leave them claimed with no email
+     */
+    @Transactional
+    public RemindersEnqueued enqueueReminders(LocalDateTime now, Duration interval, String periodKey) {
+        List<MasterEmailRepository.DueReminder> due = emails.claimDueReminders(now, interval);
+        Set<UUID> byMaster = new LinkedHashSet<>();
+        due.forEach(reminder -> byMaster.add(reminder.masterId()));
+        MasterEmailState state = links.isProvisioned(MasterEmailKind.REMINDER)
+            ? MasterEmailState.Pending : MasterEmailState.Skipped;
+        for (UUID master : byMaster) {
+            if (enqueue(master, MasterEmailKind.REMINDER, periodKey, emails.outstandingFor(master)).isEmpty()) {
+                throw new IllegalStateException("A reminder run's key was used twice");
+            }
+        }
+        return new RemindersEnqueued(byMaster.size(), state, due.size());
     }
 
     @Transactional(readOnly = true)

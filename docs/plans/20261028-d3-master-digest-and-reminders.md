@@ -171,8 +171,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement `MasterDigests`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 4: The reminders
-- [ ] Add failing tests for every reminder case in the Development Approach.
-- [ ] Implement `MasterReminders`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Add failing tests for every reminder case in the Development Approach.
+- [x] Implement `MasterReminders`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 5: Chart, docs and final verification
 - [ ] Chart values and version bump; `docs/MASTER-EMAILS.md`; `CLAUDE.md`.
@@ -256,3 +256,28 @@ one goes; refusal inside a transaction), `MasterDigestsUnprovisionedTest` (1, de
 `Skipped`, Notify untouched, one INFO naming the key). Focused run (`*Master*`, `*Referral*`,
 `ReferralSecurityTest`, `NotificationSecurityTest`, `*Architecture*`): 885 tests, 0 failures; the Master classes
 again after the checkstyle fixes: 56, 0 failures. Compile of every source set OK; `checkstyle.sh` OK.
+
+**Task 4 (the reminders):** `MasterReminders.run(now)` (refuses a caller transaction) does nothing outside working
+days 07:00 to before 18:00 `Europe/London` (`inSendingHours`, pure, bank holidays and the interval read every run),
+then calls `MasterEmailTransactions.enqueueReminders`. **The claims and the emails are one transaction**, as the
+digest's run row and emails are: `MasterEmailRepository.claimDueReminders` is a single conditional `UPDATE … RETURNING`
+over every `Claimed` referral with an `assignedMasterId`, no decision and an `assignedAt`, setting `remindersSent` to
+`k = floor((now - assignedAt) / interval)` where `k > remindersSent` (a second pod waits on the row locks, re-reads
+the count and claims nothing). It is JDBC in `MasterEmailRepository`, like `claimedInWindow`, so
+`ReferralSecurityTest`'s finder list is unchanged. Each Master with a claim gets one `REMINDER` row listing
+`outstandingFor` (every undirected `Claimed` referral assigned to them, in page order). The period key is the run's
+minute plus a per-pod run id (`2026-11-04T12:15:00Z:{uuid}`, 57 characters). Two choices the plan left open: a key
+already used for a Master throws and **rolls the run's claims back** rather than leave them claimed with no email; and
+a referral owed several reminders by the first in-hours run (an outage, a weekend) is claimed at its current count and
+gets one email, not one per missed interval. Unprovisioned: rows `Skipped`, the claims kept, one INFO naming
+`master-referral-reminder`. `MasterReminderTimer` (`@Scheduled` on `reminder-interval-check`, off with
+`emails-enabled`, one WARN naming the exception class). Tests: `MasterReminderHoursTest` (4, pure: the hour
+boundaries, a weekend and a holiday, summer time, the period key), `MasterRemindersTest` (8, Postgres plus
+StubNotify: 47h59m not due and 48h due 1 with the email's wording, link and no address in the logs; 96h due 2 and one
+email for a referral owed two; directed and unassigned not reminded; reassignment through `ReferralService.assign`
+resets the count and reminds the new Master; 18:00, 06:59, Christmas Day, a Saturday and Boxing Day's substitute send
+nothing and the next in-hours run sends one; two pods concurrently claim once; the email lists every outstanding
+referral in page order, not only the due one; refusal inside a transaction), `MasterRemindersUnprovisionedTest` (1,
+default context). Focused run (`*Master*`, `*Referral*`, `NotificationSecurityTest`, `*Architecture*`): 897 tests,
+0 failures; the reminder classes again after the checkstyle fixes: 13, 0 failures. Compile of every source set OK;
+`checkstyle.sh` OK.
