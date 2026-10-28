@@ -358,12 +358,6 @@ public class ReferralService {
         return new ReferralWindowLoad(window, settings.masterWindowCap(), assigned);
     }
 
-    /** How long a Master has to give a direction, from the stored setting, for a response's due date. */
-    @Transactional(readOnly = true)
-    public Duration processingWindow() {
-        return settings.processingWindow();
-    }
-
     /**
      * The assignment itself, on a referral this transaction has already locked or has just created -- see
      * {@link #assign}. Writes the note and the audit event; the caller recomputes the read-models.

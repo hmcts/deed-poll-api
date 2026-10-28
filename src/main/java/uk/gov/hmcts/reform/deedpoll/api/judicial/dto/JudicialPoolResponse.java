@@ -2,7 +2,6 @@ package uk.gov.hmcts.reform.deedpoll.api.judicial.dto;
 
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralPool;
 
-import java.time.Duration;
 import java.util.List;
 
 /**
@@ -35,10 +34,10 @@ public record JudicialPoolResponse(
     long total,
     int totalPages) {
 
-    /** The pool as the domain resolved it. */
-    public static JudicialPoolResponse of(ReferralPool pool, Duration processingWindow) {
+    /** The pool as the domain resolved it, which since plan D2 holds no referral to map. */
+    public static JudicialPoolResponse of(ReferralPool pool) {
         return new JudicialPoolResponse(
-            JudicialReferralSummary.from(pool.referrals(), processingWindow),
+            List.of(),
             pool.page(),
             pool.size(),
             pool.total(),

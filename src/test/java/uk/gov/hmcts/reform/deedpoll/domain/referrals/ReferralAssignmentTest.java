@@ -120,9 +120,9 @@ class ReferralAssignmentTest {
         });
         when(referrals.findStatesByDeedPollId(anyString())).thenAnswer(call -> List.of(referral.getState()));
         when(masters.findAssigneeForUpdate(SULLIVAN))
-            .thenReturn(Optional.of(new Assignee(SULLIVAN, "Master Sullivan", true, "sullivan-subject")));
+            .thenReturn(Optional.of(new Assignee("Master Sullivan", true, "sullivan-subject")));
         when(masters.findAssigneeForUpdate(OKAFOR))
-            .thenReturn(Optional.of(new Assignee(OKAFOR, "Master Okafor", true, null)));
+            .thenReturn(Optional.of(new Assignee("Master Okafor", true, null)));
 
         referral = new Referral();
         referral.setId(REFERRAL_ID);
@@ -319,7 +319,7 @@ class ReferralAssignmentTest {
         @DisplayName("an unavailable Master is the same 400")
         void unavailableMaster() {
             when(masters.findAssigneeForUpdate(SULLIVAN))
-                .thenReturn(Optional.of(new Assignee(SULLIVAN, "Master Sullivan", false, null)));
+                .thenReturn(Optional.of(new Assignee("Master Sullivan", false, null)));
 
             assertThatThrownBy(() -> service.assign(CASE_ID, REFERRAL_ID.toString(), SULLIVAN, CASEWORKER))
                 .isInstanceOf(InvalidInputError.class)
@@ -490,7 +490,7 @@ class ReferralAssignmentTest {
         @DisplayName("with an unavailable Master refuses the whole create")
         void refusedAssignment() {
             when(masters.findAssigneeForUpdate(SULLIVAN))
-                .thenReturn(Optional.of(new Assignee(SULLIVAN, "Master Sullivan", false, null)));
+                .thenReturn(Optional.of(new Assignee("Master Sullivan", false, null)));
 
             assertThatThrownBy(() -> service.createReferral(CASE_ID, input(Optional.of(SULLIVAN)), CASEWORKER))
                 .isInstanceOf(InvalidInputError.class);

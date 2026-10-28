@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.InOrder;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
@@ -46,6 +47,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -275,6 +277,20 @@ class MasterServiceTest {
         }
 
         @Test
+        @DisplayName("unlinking takes the old account off the Master's referrals, locked before the Master's row")
+        void emailChangeDetachesTheReferrals() {
+            given(repository.findForUpdate(ID)).willReturn(Optional.of(
+                new Master(ID.toString(), "Master Sullivan", ADDRESS, true, true, 3)));
+
+            service.update(DELIVERY_MANAGER, ID.toString(), Map.of("email", "new@judiciary.example", "revision", 3));
+
+            InOrder order = inOrder(referrals, repository);
+            order.verify(referrals).lockAssignedTo(ID);
+            order.verify(repository).findForUpdate(ID);
+            order.verify(referrals).detachFromUnlinkedMaster(ID);
+        }
+
+        @Test
         @DisplayName("a name change leaves a linked Master linked")
         void nameChangeKeepsTheLink() {
             given(repository.findForUpdate(ID)).willReturn(Optional.of(
@@ -284,6 +300,7 @@ class MasterServiceTest {
                 .linked()).isTrue();
             verify(repository).update(eq(ID), eq("Master S"), eq(ADDRESS), eq(true), eq(false), eq(4), any(), any(),
                 any());
+            verifyNoInteractions(referrals);
         }
 
         @Test
@@ -372,9 +389,13 @@ class MasterServiceTest {
 
             service.linkIfListed(JUDGE);
 
-            // Plan D2, in the linking transaction: both by this entry and this subject, never another's.
-            verify(referrals).attachToLinkedMaster(ID, "judge-subject");
-            verify(referrals).attachLegacyClaims(ID, "judge-subject");
+            // Plan D2, in the linking transaction: both by this entry and this subject, never another's, and the
+            // referrals locked before the Master's row, in assignment's order, so the two cannot deadlock.
+            InOrder order = inOrder(referrals, repository);
+            order.verify(referrals).lockForLinking(ID, "judge-subject");
+            order.verify(repository).link(eq(ID), eq(ADDRESS), eq("judge-subject"), any());
+            order.verify(referrals).attachToLinkedMaster(ID, "judge-subject");
+            order.verify(referrals).attachLegacyClaims(ID, "judge-subject");
         }
 
         @Test
@@ -385,7 +406,9 @@ class MasterServiceTest {
 
             service.linkIfListed(JUDGE);
 
-            verifyNoInteractions(audit, referrals);
+            verifyNoInteractions(audit);
+            verify(referrals, never()).attachToLinkedMaster(any(), any());
+            verify(referrals, never()).attachLegacyClaims(any(), any());
         }
 
         @Test

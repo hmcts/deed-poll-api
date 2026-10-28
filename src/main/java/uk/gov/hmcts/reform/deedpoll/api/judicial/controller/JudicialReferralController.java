@@ -113,7 +113,7 @@ public class JudicialReferralController {
 
         return JudicialPoolResponse.of(judicial.pool(
             CurrentUsers.required(),
-            CasePaging.parse(page, size, JudicialReferralService.POOL_PAGE_SIZE)), settings.processingWindow());
+            CasePaging.parse(page, size, JudicialReferralService.POOL_PAGE_SIZE)));
     }
 
     /**

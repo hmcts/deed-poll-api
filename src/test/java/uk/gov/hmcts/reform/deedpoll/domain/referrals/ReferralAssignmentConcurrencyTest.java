@@ -46,6 +46,9 @@ class ReferralAssignmentConcurrencyTest extends AbstractPostgresContainerTest {
 
     private static final int TIMEOUT_SECONDS = 60;
 
+    /** One moment for both assignments, so they count towards one window however long the lock wait takes. */
+    private static final LocalDateTime AT = LocalDateTime.of(2026, 10, 28, 9, 0);
+
     private static final CurrentUser ADA = CurrentUser.currentUser(List.of(), "Ada Caseworker", "caseworker-1");
     private static final CurrentUser BEN = CurrentUser.currentUser(List.of(), "Ben Caseworker", "caseworker-2");
 
@@ -103,7 +106,7 @@ class ReferralAssignmentConcurrencyTest extends AbstractPostgresContainerTest {
             Future<Throwable> firstAssign = pool.submit(() ->
                 attempt(() -> new TransactionTemplate(transactionManager).execute(status -> {
                     final int firstBackend = jdbc.queryForObject("SELECT pg_backend_pid()", Integer.class);
-                    service.assign(firstCase, first, master, ADA);
+                    service.assign(firstCase, first, master, ADA, AT);
                     firstWrote.countDown();
                     await(secondStarting);
                     awaitBlockedBy(firstBackend);
@@ -113,7 +116,8 @@ class ReferralAssignmentConcurrencyTest extends AbstractPostgresContainerTest {
             Future<Throwable> secondAssign = pool.submit(() -> {
                 await(firstWrote);
                 secondStarting.countDown();
-                return attempt(() -> service.assign(secondCase, second, master, BEN));
+                return attempt(() -> new TransactionTemplate(transactionManager).execute(status ->
+                    service.assign(secondCase, second, master, BEN, AT)));
             });
 
             assertThat(firstAssign.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isNull();

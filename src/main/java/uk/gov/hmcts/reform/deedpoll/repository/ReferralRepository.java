@@ -338,7 +338,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * @param claimed the state an assigned referral is in, {@link ReferralState#Claimed}
      * @param cutoff  the instant an assignment must have started after to survive, normally now minus the
      *                processing window
-     * @return one row per candidate, in no particular order
+     * @return one row per candidate, in id order, the order linking locks referrals in
      */
     @Query("""
         select new uk.gov.hmcts.reform.deedpoll.repository.OverdueAssignment(
@@ -346,6 +346,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
           from Referral r
          where r.state = :claimed
            and coalesce(r.assignedAt, r.claimedAt) < :cutoff
+         order by r.id
         """)
     List<OverdueAssignment> findOverdueAssignments(@Param("claimed") ReferralState claimed,
                                                    @Param("cutoff") LocalDateTime cutoff);
@@ -453,6 +454,61 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
            AND "state" = 'Claimed'
         """)
     int attachLegacyClaims(@Param("masterId") UUID masterId, @Param("subject") String subject);
+
+    /**
+     * Locks, in id order, every referral {@link #attachToLinkedMaster} and {@link #attachLegacyClaims} could
+     * write, before {@code MasterService.linkIfListed} writes the Master's row. Assignment locks the referral and
+     * then the Master, so linking has to take them in that order too, or a caseworker assigning one of these
+     * referrals while its Master first signs in deadlocks with them.
+     *
+     * @param masterId the entry about to be linked
+     * @param subject the IDAM subject it is about to be linked to
+     * @return the ids locked, which the caller does not need
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT "id" FROM "deedpoll_referral"
+         WHERE ("assignedMasterId" = :masterId OR "claimedById" = :subject)
+           AND "state" IN ('Claimed', 'Decided')
+         ORDER BY "id"
+           FOR UPDATE
+        """)
+    List<UUID> lockForLinking(@Param("masterId") UUID masterId, @Param("subject") String subject);
+
+    /**
+     * Locks, in id order, the referrals assigned to one Master and waiting for a direction, before
+     * {@code MasterService.update} locks the Master's row, for {@link #lockForLinking}'s reason.
+     *
+     * @param masterId the entry about to be edited
+     * @return the ids locked, which the caller does not need
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT "id" FROM "deedpoll_referral"
+         WHERE "assignedMasterId" = :masterId
+           AND "state" = 'Claimed'
+         ORDER BY "id"
+           FOR UPDATE
+        """)
+    List<UUID> lockAssignedTo(@Param("masterId") UUID masterId);
+
+    /**
+     * Takes the owner subject off the referrals assigned to a Master whose email change has just unlinked them,
+     * so the account the Delivery Manager cut off cannot see or direct them, and {@link #attachToLinkedMaster}
+     * gives them to whichever account links next. Only {@code Claimed}: a {@code Decided} referral is the judge's
+     * who directed it, by {@code decidedById}. Called only by {@code MasterService.update}, in the unlinking
+     * transaction.
+     *
+     * @param masterId the entry just unlinked
+     * @return how many referrals lost their owner
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+        UPDATE "deedpoll_referral"
+           SET "claimedById" = null
+         WHERE "assignedMasterId" = :masterId
+           AND "claimedById" IS NOT NULL
+           AND "state" = 'Claimed'
+        """)
+    int detachFromUnlinkedMaster(@Param("masterId") UUID masterId);
 
     /**
      * Starts the clock on one referral's confirmation, if nobody has answered it yet.

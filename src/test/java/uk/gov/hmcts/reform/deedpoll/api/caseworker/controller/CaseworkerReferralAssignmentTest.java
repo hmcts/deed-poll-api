@@ -49,6 +49,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -198,10 +199,15 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     @DisplayName("at the cap a create is a 409 on masterId naming the window, and nothing is written")
     void createAtCap() throws Exception {
         jdbc.update("UPDATE deedpoll_process_settings SET master_window_cap = 1");
+        ReferralWindow before = windowAt(AuditClock.now());
         authorised(post(referralsOf(newCase())), withMaster(sullivan)).andExpect(status().isCreated());
         String second = newCase();
 
-        authorised(post(referralsOf(second)), withMaster(sullivan))
+        ResultActions refused = authorised(post(referralsOf(second)), withMaster(sullivan));
+        // The two creates count towards the window of the moment each was made, so a boundary between them is no
+        // test of the cap.
+        assumeTrue(before.equals(windowAt(AuditClock.now())), "a referral window boundary fell between the creates");
+        refused
             .andExpect(status().isConflict())
             .andExpect(jsonPath("$.errors[0].field").value("masterId"))
             .andExpect(jsonPath("$.errors[0].message").value(Matchers.matchesPattern(

@@ -17,6 +17,7 @@ import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.ReferralResponse;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 
 import java.util.List;
 
@@ -80,9 +81,15 @@ import java.util.List;
 public class CaseworkerReferralController {
 
     private final ReferralService referrals;
+    private final ProcessSettingsService settings;
 
-    public CaseworkerReferralController(ReferralService referrals) {
+    /**
+     * {@code settings} supplies the processing window for {@code directionDueBy}, as it does for the judicial
+     * controller.
+     */
+    public CaseworkerReferralController(ReferralService referrals, ProcessSettingsService settings) {
         this.referrals = referrals;
+        this.settings = settings;
     }
 
     /**
@@ -98,7 +105,7 @@ public class CaseworkerReferralController {
      */
     @GetMapping
     public List<ReferralResponse> referrals(@PathVariable("id") String id) {
-        return ReferralResponse.from(referrals.findReferrals(id), referrals.processingWindow());
+        return ReferralResponse.from(referrals.findReferrals(id), settings.processingWindow());
     }
 
     /**
@@ -117,7 +124,7 @@ public class CaseworkerReferralController {
     @ResponseStatus(HttpStatus.CREATED)
     public ReferralResponse create(@PathVariable("id") String id, @RequestBody CreateReferralRequest request) {
         return ReferralResponse.from(referrals.createReferral(id, request.toInput(), CurrentUsers.required()),
-                                     referrals.processingWindow());
+                                     settings.processingWindow());
     }
 
     /**
@@ -132,7 +139,7 @@ public class CaseworkerReferralController {
                                      @PathVariable("referralId") String referralId) {
 
         return ReferralResponse.from(referrals.findReferral(id, referralId),
-                                     referrals.processingWindow());
+                                     settings.processingWindow());
     }
 
     /**
@@ -161,7 +168,7 @@ public class CaseworkerReferralController {
                                      @PathVariable("referralId") String referralId) {
 
         return ReferralResponse.from(referrals.withdrawReferral(id, referralId, CurrentUsers.required()),
-                                     referrals.processingWindow());
+                                     settings.processingWindow());
     }
 
     /**
@@ -190,7 +197,7 @@ public class CaseworkerReferralController {
                                   @PathVariable("referralId") String referralId) {
 
         return ReferralResponse.from(referrals.close(id, referralId, CurrentUsers.required()),
-                                     referrals.processingWindow());
+                                     settings.processingWindow());
     }
 
     /**
@@ -229,7 +236,7 @@ public class CaseworkerReferralController {
 
         return ReferralResponse.from(
             referrals.recordConfirmation(id, referralId, request.toInput(), CurrentUsers.required()),
-            referrals.processingWindow());
+            settings.processingWindow());
     }
 
     /**
@@ -249,6 +256,6 @@ public class CaseworkerReferralController {
 
         return ReferralResponse.from(
             referrals.assign(id, referralId, request.toMasterId(), CurrentUsers.required()),
-            referrals.processingWindow());
+            settings.processingWindow());
     }
 }

@@ -121,7 +121,8 @@ public class MasterService {
     /**
      * A keyed patch of {@code name}, {@code email} and {@code available}, at least one of them, with the revision
      * the form read. A stale revision is 409 even when nothing would change; saving the current values is a no-op
-     * with no audit. A changed email unlinks the entry, so the new address has to sign in to link it again.
+     * with no audit. A changed email unlinks the entry, so the new address has to sign in to link it again, and
+     * takes the old account off the entry's {@code Claimed} referrals, which linking then gives to the new one.
      */
     @Transactional
     public Master update(CurrentUser caller, String id, Map<String, Object> fields) {
@@ -131,14 +132,18 @@ public class MasterService {
         if (!fields.containsKey(NAME) && !fields.containsKey(EMAIL) && !fields.containsKey(AVAILABLE)) {
             throw invalid(NAME, "Supply at least one of name, email and available.");
         }
-        Optional<String> name = fields.containsKey(NAME) ? Optional.of(name(fields.get(NAME))) : Optional.empty();
+        final Optional<String> name = fields.containsKey(NAME) ? Optional.of(name(fields.get(NAME))) : Optional.empty();
         Optional<String> email = fields.containsKey(EMAIL) ? Optional.of(email(fields.get(EMAIL))) : Optional.empty();
-        Optional<Boolean> available = fields.containsKey(AVAILABLE)
+        final Optional<Boolean> available = fields.containsKey(AVAILABLE)
             ? Optional.of(available(fields.get(AVAILABLE))) : Optional.empty();
         if (!(fields.get(REVISION) instanceof Integer revision) || revision < 0) {
             throw invalid(REVISION, "Reload the Masters list before saving.");
         }
         UUID key = parseId(id);
+        if (email.isPresent()) {
+            // The referrals before the Master, as assignment takes them, because an unlinking change writes both.
+            referrals.lockAssignedTo(key);
+        }
         Master previous = repository.findForUpdate(key).orElseThrow(MasterService::notFound);
         // Before the no-op, so an out-of-date form holding the values the row now has is never told it saved.
         if (previous.revision() != revision) {
@@ -174,6 +179,9 @@ public class MasterService {
                               subject, caller.name());
         } catch (DuplicateKeyException raced) {
             throw duplicateEmail();
+        }
+        if (unlink) {
+            referrals.detachFromUnlinkedMaster(key);
         }
         audit.record(AuditEntry.of(AuditAction.MASTER_CHANGED, AuditActor.of(caller), AuditEntities.MASTER,
                                    key.toString(), null)
@@ -216,6 +224,7 @@ public class MasterService {
             return;
         }
         LocalDateTime now = AuditClock.now();
+        referrals.lockForLinking(entry.get().id(), subject);
         if (repository.link(entry.get().id(), caller.email(), subject, now)) {
             referrals.attachToLinkedMaster(entry.get().id(), subject);
             referrals.attachLegacyClaims(entry.get().id(), subject);

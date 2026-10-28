@@ -1,5 +1,15 @@
 # Resume state — where the next session picks up
 
+**Plan D2, referral assignment, 2026-10-28:** on `feat/d-referral-assignment`, local commits only, not pushed. V43
+adds `assignedMasterId`, `assignedAt` and the referral window (`windowDate`, `windowSlot`) to `deedpoll_referral`. A
+caseworker assigns a referral to a Master on the create (`masterId`) or by
+`PUT /caseworker/cases/{id}/referrals/{referralId}/assignment`, under a per-Master cap per morning/afternoon window.
+There is no pool any more: `GET /judicial/referrals` answers an empty page and it and `POST …/claim` are deprecated for
+one release. `unassignOverdue` (was `reclaimStaleClaims`) returns an undirected assignment to the office after the
+processing window, on the judicial list loads and every 15 minutes on `ReferralUnassignment`'s timer. Go-live rewrites
+no data; linking attaches pre-V43 claims. Next: D3 (reminders and digests), then Juniper rebases and raises the PRs.
+See [the plan](plans/20261028-d2-referral-assignment.md).
+
 **Plan D1, the Masters list and the referral process settings, 2026-10-28:** on `feat/d-referral-assignment`, local
 commits only, not pushed (it sits on unmerged api #155 and the contract-step branch). V42 adds `deedpoll_master` and
 `deedpoll_bank_holiday` (GOV.UK England and Wales dates for 2026–2028) and five more process settings: the claim

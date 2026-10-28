@@ -132,6 +132,13 @@ class ReferralSecurityTest {
     private static final Set<String> LINKING = Set.of("attachToLinkedMaster", "attachLegacyClaims");
 
     /**
+     * The statements that keep linking and an email change in assignment's lock order, and take an unlinked
+     * Master's account off its referrals: keyed on a Masters-list entry, answering referral ids or a row count.
+     */
+    private static final Set<String> MASTER_LOCKS =
+        Set.of("lockForLinking", "lockAssignedTo", "detachFromUnlinkedMaster");
+
+    /**
      * The judicial read of one referral, which is the finder by referral id alone that the interface's own rule
      * forbids -- admitted here because the judicial surface has no case id to scope with.
      *
@@ -163,7 +170,8 @@ class ReferralSecurityTest {
         Set.of("countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot", "countByMasterInWindow");
 
     /** Every finder that names no parent case, for the declaration rule that admits each one deliberately. */
-    private static final Set<String> UNSCOPED = Stream.of(SWEEP, LINKING, PERSONAL_LIST, JUDICIAL_READ, CAP_COUNTS)
+    private static final Set<String> UNSCOPED = Stream.of(SWEEP, LINKING, MASTER_LOCKS, PERSONAL_LIST, JUDICIAL_READ,
+                                                              CAP_COUNTS)
         .flatMap(Set::stream)
         .collect(Collectors.toUnmodifiableSet());
 
@@ -956,6 +964,16 @@ class ReferralSecurityTest {
                     assertThat(finder.getReturnType())
                         .as("%s answers a row count", finder.getName())
                         .isEqualTo(int.class);
+                    continue;
+                }
+                if (MASTER_LOCKS.contains(finder.getName())) {
+                    // Keyed on a Masters-list entry, and handing back ids or a count, never a referral.
+                    assertThat(finder.getParameterTypes()[0])
+                        .as("%s is keyed on a Masters-list entry", finder.getName())
+                        .isEqualTo(UUID.class);
+                    assertThat(finder.getGenericReturnType().getTypeName())
+                        .as("%s hands back no referral", finder.getName())
+                        .doesNotContain(Referral.class.getName());
                     continue;
                 }
                 if (PERSONAL_LIST.contains(finder.getName())) {

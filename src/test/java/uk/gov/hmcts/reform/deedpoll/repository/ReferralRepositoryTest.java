@@ -751,6 +751,35 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("unlinking a Master takes the old account off its Claimed referrals, and linking gives them back")
+    void detachesAnUnlinkedMastersReferrals() {
+        UUID master = persistedMaster();
+        Referral assigned = persistedReferral(persistedCase(), ReferralState.Claimed, NOW);
+        assigned.setAssignedMasterId(master);
+        assigned.setClaimedBy("Master Sullivan");
+        assigned.setClaimedById("idam-old-account");
+        assigned.setClaimedAt(NOW);
+        assigned.setAssignedAt(NOW);
+        Referral decided = ownedReferral(ReferralState.Decided, "Master Sullivan", Urgency.Normal, NOW);
+        decided.setAssignedMasterId(master);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(referrals.lockAssignedTo(master)).containsExactly(assigned.getId());
+        assertThat(referrals.lockForLinking(master, "idam-new-account"))
+            .containsExactlyInAnyOrder(assigned.getId(), decided.getId());
+        assertThat(referrals.detachFromUnlinkedMaster(master)).isEqualTo(1);
+        assertThat(entityManager.find(Referral.class, assigned.getId()).getClaimedById()).isNull();
+        // A direction already given stays with the judge who gave it.
+        assertThat(entityManager.find(Referral.class, decided.getId()).getClaimedById())
+            .isEqualTo(subjectOf("Master Sullivan"));
+
+        assertThat(referrals.attachToLinkedMaster(master, "idam-new-account")).isEqualTo(1);
+        assertThat(entityManager.find(Referral.class, assigned.getId()).getClaimedById())
+            .isEqualTo("idam-new-account");
+    }
+
+    @Test
     @DisplayName("linking attaches a claimer's pre-V43 claims to their entry (D-10), and only Claimed ones")
     void attachesLegacyClaimsToTheEntry() {
         UUID master = persistedMaster();

@@ -1,12 +1,14 @@
 package uk.gov.hmcts.reform.deedpoll.domain.referrals;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.boot.test.system.CapturedOutput;
-import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -27,14 +29,22 @@ import static org.mockito.Mockito.when;
  * The processing window's timer (plan D2): it runs the sweep, never throws into the scheduler, logs a failure by
  * exception class only, refuses a caller transaction, and is switched on unless a deployment or a test says otherwise.
  */
-@ExtendWith(OutputCaptureExtension.class)
 class ReferralUnassignmentTest {
 
     private final ReferralService referrals = mock(ReferralService.class);
     private final ReferralUnassignment job = new ReferralUnassignment(referrals);
+    private final Logger logger = (Logger) LoggerFactory.getLogger(ReferralUnassignment.class);
+    private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
+
+    @BeforeEach
+    void capture() {
+        logs.start();
+        logger.addAppender(logs);
+    }
 
     @AfterEach
-    void noTransaction() {
+    void release() {
+        logger.detachAppender(logs);
         TransactionSynchronizationManager.setActualTransactionActive(false);
     }
 
@@ -50,15 +60,20 @@ class ReferralUnassignmentTest {
 
     @Test
     @DisplayName("never throws into the scheduler, and logs the exception class, never its message")
-    void neverThrows(CapturedOutput output) {
+    void neverThrows() {
         when(referrals.unassignOverdue()).thenThrow(
             new DataAccessResourceFailureException("connection to db-host refused for UPDATE deedpoll_referral"));
 
         assertThatCode(job::run).doesNotThrowAnyException();
 
-        assertThat(output).contains("Processing-window sweep failed; the next run will try again",
-                                    DataAccessResourceFailureException.class.getName());
-        assertThat(output).doesNotContain("db-host", "UPDATE deedpoll_referral");
+        assertThat(logs.list).singleElement().satisfies(event -> {
+            assertThat(event.getFormattedMessage()).contains(
+                "Processing-window sweep failed; the next run will try again",
+                DataAccessResourceFailureException.class.getName());
+            assertThat(event.getThrowableProxy()).isNull();
+        });
+        assertThat(logs.list).allSatisfy(event -> assertThat(event.getFormattedMessage())
+            .doesNotContain("db-host", "UPDATE deedpoll_referral"));
     }
 
     @Test
