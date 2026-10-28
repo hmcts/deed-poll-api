@@ -58,8 +58,8 @@ public record ProcessSettings(Duration processingWindow, Duration reminderInterv
                                    morningWindowEnd, afternoonWindowStart, afternoonWindowEnd, nextRevision, at, by);
     }
 
-    public ReferralWindows referralWindows() {
-        return new ReferralWindows(morningWindowStart, morningWindowEnd, afternoonWindowStart, afternoonWindowEnd);
+    public ReferralWindowTimes referralWindows() {
+        return new ReferralWindowTimes(morningWindowStart, morningWindowEnd, afternoonWindowStart, afternoonWindowEnd);
     }
 
     /**

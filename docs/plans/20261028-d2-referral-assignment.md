@@ -193,9 +193,9 @@ session, and the next one builds over it, wiping the results.
 ## Implementation Steps
 
 ### Task 1: Migration and the windows
-- [ ] Record the execution baseline (commit, highest migration, test counts) in the execution notes.
-- [ ] Add the failing `ReferralWindows` unit tests and a mapping test for the new columns.
-- [ ] Implement V43, the entity mapping and `ReferralWindows`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Record the execution baseline (commit, highest migration, test counts) in the execution notes.
+- [x] Add the failing `ReferralWindows` unit tests and a mapping test for the new columns.
+- [x] Implement V43, the entity mapping and `ReferralWindows`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 2: Assignment and the cap
 - [ ] Add failing tests for `assign`: the rules, the note, the audit, the cap, the concurrency case, create with and without `masterId`, and reassignment over HTTP.
@@ -214,3 +214,25 @@ session, and the next one builds over it, wiping the results.
 - [ ] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
 
 ## Execution notes
+
+**Baseline:** commit `504ce4b` (D1 complete, plus its two review-fix commits), highest migration V42. Forced
+`cleanTest cleanIntegration build`: SUCCESSFUL in 5m 50s, `test` 5,138 tests, 0 failures, 1 skipped; `integration`
+27 tests, 0 failures.
+
+**Task 1 (migration and the windows):** `V43__referral_assignment.sql` adds `"assignedMasterId"` (uuid, foreign key to
+`deedpoll_master`), `"assignedAt"`, `"windowDate"`, `"windowSlot"` (`varchar(2)`, check `AM`/`PM`) and the index on
+`("assignedMasterId", "windowDate", "windowSlot")`. **Deviation in the consistency check:** the plan's "all null or
+all set, except a null Master beside a subject" would refuse two rows this plan itself writes: a pre-V43 claim that
+linking attaches (a Master but no `assignedAt` or window, step 7) and such a claim after a withdrawn direction
+restarts its window (`assignedAt` but no window). So V43 states the rules as four named checks instead: the date and
+slot are set together; a window implies `assignedAt`; an `assignedAt` belongs to a Master or a claimer subject; and
+an `Open` referral holds no Master, `assignedAt` or window. D1's settings record `domain/settings/ReferralWindows`
+was renamed `ReferralWindowTimes`, the name the plan's signature uses, so `domain/referrals/ReferralWindows` (the
+pure function: `windowFor`, `closesAt`, a next-working-day search bounded at 366 days) does not share its name. New
+`ReferralWindow(date, slot)` record and `entity/enums/WindowSlot` (plain `STRING`, not a Postgres enum). Tests:
+`ReferralWindowsTest` (35: each boundary to the minute and below, Friday afternoon, weekend, the August bank
+holiday, Christmas to 4 January 2027, BST, `closesAt` in both offsets, both 2026 clock changes with
+`ZonedDateTime.of`'s gap/overlap rules stated, the bounded search) and `ReferralAssignmentColumnsTest` (9, Postgres:
+round trip with the slot stored as its name, a legacy and a linked-legacy claim admitted, each check and the foreign
+key refusing by name). Focused run (those two plus `ProcessSettingsServiceTest`, `ReferralRepositoryTest`,
+`EntityMappingTest`): 146 tests, 0 failures. Compile of every source set OK; `checkstyle.sh` OK.

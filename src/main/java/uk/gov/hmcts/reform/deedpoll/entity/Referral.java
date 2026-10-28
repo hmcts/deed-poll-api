@@ -21,7 +21,9 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,8 +33,9 @@ import java.util.UUID;
  * A referral of a case to the judiciary: {@code deedpoll_referral}, from {@code V6__referrals.sql},
  * with the claim and direction columns {@code V8__referral_claim_and_direction.sql} adds, the two owner
  * subjects {@code V14__referral_owner_subjects.sql} adds, and the confirmation columns
- * {@code V16__referral_confirmation.sql} adds, and the direction-changed flag
- * {@code V38__referral_direction_changed_at.sql} adds.
+ * {@code V16__referral_confirmation.sql} adds, the direction-changed flag
+ * {@code V38__referral_direction_changed_at.sql} adds, and the assignment columns
+ * {@code V43__referral_assignment.sql} adds.
  *
  * <p><strong>Not a port.</strong> Like {@link SavedQuery}, this has no model in
  * {@code reference/deed-poll.prisma}. The source store held one referral inline on the case,
@@ -149,6 +152,39 @@ public class Referral {
      */
     @Column(name = "lastTouchedAt")
     private LocalDateTime lastTouchedAt;
+
+    /**
+     * The Masters-list entry this referral is assigned to, from {@code V43__referral_assignment.sql}. A bare id
+     * rather than a relation: nothing here reads the Master through the referral, and the cap counts by this column.
+     *
+     * <p>Null on an {@code Open} referral and on a claim made before V43 until linking attaches it. Kept once
+     * directed, so a {@code Decided} or {@code Closed} referral still says whose it was; cleared only when the
+     * processing window unassigns it. Never published: responses carry the Master's id and name, never a subject.
+     */
+    @Column(name = "assignedMasterId")
+    private UUID assignedMasterId;
+
+    /**
+     * When this referral was last assigned, and so when its processing window started. Null on a claim made before
+     * V43, whose window counts from {@link #claimedAt}.
+     */
+    @Column(name = "assignedAt")
+    private LocalDateTime assignedAt;
+
+    /**
+     * The working day whose referral window this assignment counts towards for the per-Master cap, in
+     * {@code Europe/London}. Set with {@link #windowSlot}, never alone (V43's check).
+     */
+    @Column(name = "windowDate")
+    private LocalDate windowDate;
+
+    /**
+     * The morning or afternoon of {@link #windowDate}. A {@code varchar(2)} with a check, not a Postgres enum, so
+     * plain {@link EnumType#STRING} without {@link SqlTypes#NAMED_ENUM}.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "windowSlot", length = 2)
+    private WindowSlot windowSlot;
 
     /**
      * The direction, reusing the ported {@link MasterDecision} vocabulary rather than a

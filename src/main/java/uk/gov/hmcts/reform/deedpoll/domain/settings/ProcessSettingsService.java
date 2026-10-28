@@ -172,9 +172,9 @@ public class ProcessSettingsService {
     }
 
     /**
-     * The two daily referral windows, in {@link ReferralWindows#ZONE}. No capability check, no cache.
+     * The two daily referral windows, in {@link ReferralWindowTimes#ZONE}. No capability check, no cache.
      */
-    public ReferralWindows referralWindows() {
+    public ReferralWindowTimes referralWindows() {
         return read(false).referralWindows();
     }
 

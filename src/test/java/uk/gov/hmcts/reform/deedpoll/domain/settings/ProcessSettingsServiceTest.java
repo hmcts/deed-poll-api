@@ -210,7 +210,7 @@ class ProcessSettingsServiceTest {
         assertThat(service.processingWindow()).isEqualTo(Duration.ofDays(7));
         assertThat(service.reminderInterval()).isEqualTo(Duration.ofHours(48));
         assertThat(service.masterWindowCap()).isEqualTo(10);
-        assertThat(service.referralWindows()).isEqualTo(new ReferralWindows(
+        assertThat(service.referralWindows()).isEqualTo(new ReferralWindowTimes(
             LocalTime.of(7, 0), LocalTime.of(10, 30), LocalTime.of(14, 0), LocalTime.of(14, 30)));
         verify(repository, never()).read(true);
     }
