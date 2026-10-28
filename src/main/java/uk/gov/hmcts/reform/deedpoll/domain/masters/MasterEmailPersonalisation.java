@@ -2,11 +2,13 @@ package uk.gov.hmcts.reform.deedpoll.domain.masters;
 
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralNotes;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralWindow;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ReferralWindowTimes;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -42,7 +44,7 @@ public final class MasterEmailPersonalisation {
      * One referral as an email lists it.
      *
      * @param reasons the stored {@code ReferralReason} names
-     * @param referredOn when the referral was raised
+     * @param referredOn when the referral was raised, as UTC wall time ({@code AuditClock}); written as London's day
      */
     public record Line(UUID referralId, String displayReference, List<String> reasons, Urgency urgency,
                        LocalDateTime referredOn) {
@@ -96,7 +98,8 @@ public final class MasterEmailPersonalisation {
         return reference
             + SEPARATOR + (reasons.isEmpty() ? "no reasons recorded" : reasons)
             + SEPARATOR + (line.urgency() == Urgency.Urgent ? "Urgent" : "Standard")
-            + SEPARATOR + "referred " + DAY.format(line.referredOn())
+            + SEPARATOR + "referred " + DAY.format(line.referredOn().atOffset(ZoneOffset.UTC)
+                                                    .atZoneSameInstant(ReferralWindowTimes.ZONE))
             + SEPARATOR + links.referralLink(line.referralId());
     }
 }

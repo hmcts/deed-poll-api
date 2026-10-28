@@ -39,6 +39,12 @@ public class MasterDigests {
     /** How far back a closed window is still sent. */
     public static final Duration LOOKBACK = Duration.ofHours(24);
 
+    /**
+     * How long after its end a window is first taken: an assignment that read the window just before it closed may
+     * commit just after, and the run row is written once, so a digest taken at the end itself could miss it for good.
+     */
+    public static final Duration SETTLE = Duration.ofMinutes(1);
+
     private final MasterEmailTransactions transactions;
     private final MasterEmailDelivery delivery;
     private final ProcessSettingsService settings;
@@ -93,8 +99,8 @@ public class MasterDigests {
     }
 
     /**
-     * The windows that closed in the {@link #LOOKBACK} before {@code now}, up to and including {@code now}, oldest
-     * first. Pure.
+     * The windows that closed, {@link #SETTLE} counted, in the {@link #LOOKBACK} before {@code now}, up to and
+     * including {@code now}, oldest first. Pure.
      */
     static List<ReferralWindow> closedWindows(Instant now, ReferralWindowTimes times,
                                               Predicate<LocalDate> isWorkingDay) {
@@ -108,8 +114,8 @@ public class MasterDigests {
             }
             for (WindowSlot slot : WindowSlot.values()) {
                 ReferralWindow window = new ReferralWindow(day, slot);
-                Instant closes = ReferralWindows.closesAt(window, times);
-                if (closes.isAfter(from) && !closes.isAfter(now)) {
+                Instant taken = ReferralWindows.closesAt(window, times).plus(SETTLE);
+                if (taken.isAfter(from) && !taken.isAfter(now)) {
                     closed.add(window);
                 }
             }

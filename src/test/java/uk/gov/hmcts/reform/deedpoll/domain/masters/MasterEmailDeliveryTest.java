@@ -301,9 +301,10 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
         UUID master = master("m10@example.test");
         UUID referral = referral("DP2026-000012").getId();
 
-        assertThat(transactions.enqueue(master, MasterEmailKind.REMINDER, "run-1", List.of(referral)))
-            .contains(MasterEmailState.Skipped);
-        assertThat(transactions.enqueue(master, MasterEmailKind.REMINDER, "run-1", List.of(referral))).isEmpty();
+        assertThat(transactions.enqueue(master, MasterEmailKind.REMINDER, "run-1", List.of(referral))).isTrue();
+        assertThat(transactions.enqueue(master, MasterEmailKind.REMINDER, "run-1", List.of(referral))).isFalse();
+        assertThat(jdbc.queryForObject("SELECT state FROM deedpoll_master_email WHERE master_id = ?", String.class,
+                                       master)).isEqualTo("Skipped");
         UUID pending = UUID.randomUUID();
         jdbc.update("""
             INSERT INTO deedpoll_master_email (id, master_id, kind, period_key, referral_ids, state, created_at)
@@ -327,6 +328,74 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
         assertThat(delivery.drain()).isZero();
 
         assertThat(stored(row)).containsEntry("state", "Skipped");
+        assertThat(STUB.emailRequests()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("lists only what still waits for this Master's direction when it is sent, and skips an empty list")
+    void listedAsAtSendTime() throws Exception {
+        UUID master = master("m13@example.test");
+        UUID other = master("m14@example.test");
+        Referral waiting = referral("DP2026-000017");
+        Referral reassigned = referral("DP2026-000018");
+        Referral directed = referral("DP2026-000019");
+        final UUID row = enqueue(master, MasterEmailKind.DIGEST,
+                                 List.of(waiting.getId(), reassigned.getId(), directed.getId()));
+        final UUID emptied = enqueue(master, MasterEmailKind.DIGEST, "2026-10-28:PM", List.of(reassigned.getId()));
+        jdbc.update("UPDATE \"deedpoll_referral\" SET \"assignedMasterId\" = ? WHERE \"id\" = ?", other,
+                    reassigned.getId());
+        jdbc.update("UPDATE \"deedpoll_referral\" SET \"state\" = 'Decided' WHERE \"id\" = ?", directed.getId());
+
+        assertThat(delivery.drain()).isOne();
+
+        assertThat(STUB.emailRequests()).hasSize(1);
+        JsonNode personalisation = JSON.readTree(STUB.emailRequests().getFirst().getBodyAsString())
+            .path("personalisation");
+        assertThat(personalisation.path("referral_count").asText()).isEqualTo("1");
+        assertThat(personalisation.path("referral_list").asText()).startsWith("DP2026-000017 – ")
+            .doesNotContain("DP2026-000018").doesNotContain("DP2026-000019");
+        assertThat(stored(row)).containsEntry("state", "Sent");
+        assertThat(stored(emptied)).containsEntry("state", "Skipped");
+    }
+
+    @Test
+    @DisplayName("an email that cannot be read is a temporary failure before Sending, retried, then Failed")
+    void contentFailure() {
+        // A digest's period that names no window cannot be put into words, so reading the email throws.
+        UUID row = enqueue(master("m15@example.test"), MasterEmailKind.DIGEST, "no-window",
+                           List.of(referral("DP2026-000020").getId()));
+
+        assertThat(delivery.drain()).isZero();
+
+        assertThat(stored(row)).containsEntry("state", "Pending").containsEntry("failure", "TEMPORARY")
+            .containsEntry("attempts", 1).containsEntry("send_started_at", null).containsEntry("owner", null);
+        assertThat(stored(row).get("next_attempt_at")).isNotNull();
+
+        jdbc.update("UPDATE deedpoll_master_email SET attempts = 7 WHERE id = ?", row);
+        due(row);
+        assertThat(delivery.drain()).isZero();
+
+        assertThat(stored(row)).containsEntry("state", "Failed").containsEntry("failure", "TEMPORARY")
+            .containsEntry("attempts", 8);
+        assertThat(STUB.emailRequests()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a claim whose lease ran out, or that another worker took over, gets no send authority")
+    void staleClaimSendsNothing() {
+        UUID row = enqueue(master("m16@example.test"), MasterEmailKind.DIGEST,
+                           List.of(referral("DP2026-000021").getId()));
+        MasterEmailClaim expired = transactions.claim(row).orElseThrow();
+        jdbc.update("UPDATE deedpoll_master_email SET lease_until = ? WHERE id = ?",
+                    LocalDateTime.now().minusSeconds(1), row);
+
+        assertThat(transactions.startSend(expired)).isFalse();
+
+        MasterEmailClaim current = transactions.claim(row).orElseThrow();
+        assertThat(transactions.startSend(expired)).isFalse();
+        assertThat(stored(row)).containsEntry("state", "Pending").containsEntry("send_started_at", null)
+            .containsEntry("owner", current.owner());
+        assertThat(transactions.startSend(current)).isTrue();
         assertThat(STUB.emailRequests()).isEmpty();
     }
 
@@ -429,7 +498,10 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     }
 
     private UUID enqueue(UUID master, MasterEmailKind kind, String period, List<UUID> referralIds) {
-        assertThat(transactions.enqueue(master, kind, period, referralIds)).isPresent();
+        assertThat(transactions.enqueue(master, kind, period, referralIds)).isTrue();
+        // The fixtures are Claimed with no Master, and an email lists only what still waits for its own Master.
+        jdbc.update("UPDATE \"deedpoll_referral\" SET \"assignedMasterId\" = ? WHERE \"id\" = ANY(?)", master,
+                    referralIds.toArray(UUID[]::new));
         return jdbc.queryForObject(
             "SELECT id FROM deedpoll_master_email WHERE master_id = ? AND kind = ? AND period_key = ?",
             UUID.class, master, kind.name(), period);

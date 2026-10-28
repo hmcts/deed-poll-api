@@ -255,6 +255,29 @@ list and on `ReferralUnassignment`'s timer:
 | `REFERRAL_UNASSIGN_ENABLED` | `true` | Runs the processing-window timer (tests switch it off) |
 | `REFERRAL_UNASSIGN_INTERVAL` | `PT15M` | Its fixed and initial delay, ISO-8601 |
 
+### Master emails
+
+Two emails go to Masters rather than applicants: a **digest** when each referral window closes (working days only,
+windows closed in the last 24 hours, one email per Master listing their referrals in it) and a **reminder** every
+reminder interval from assignment (working days, 07:00 to before 18:00 `Europe/London`, one email per Master listing
+every referral still waiting for their direction). They have their own ledger, `deedpoll_master_email` (V44, V45),
+not the case outbox, and a row whose send may have started is never sent again. Both templates ship as
+`DEED_POLL_PLACEHOLDER`; while one is unprovisioned its runs are still recorded and its rows written `Skipped`, so
+provisioning it later sends no backlog.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `MASTER_EMAILS_ENABLED` | `true` | Runs the digest, reminder and drain timers (tests switch it off) |
+| `MASTER_DIGEST_INTERVAL` | `PT5M` | How often the digest job looks for a closed window |
+| `MASTER_REMINDER_INTERVAL_CHECK` | `PT15M` | How often the reminder job looks for reminders due |
+| `MASTER_EMAIL_DRAIN_INTERVAL` | `PT1M` | How often the ledger's pending rows are sent |
+| `NOTIFY_TEMPLATE_MASTER_REFERRAL_DIGEST` | `DEED_POLL_PLACEHOLDER` | The digest's Notify template id |
+| `NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER` | `DEED_POLL_PLACEHOLDER` | The reminder's Notify template id |
+| `ADMIN_BASE_URL` | empty | The admin host the emails' referral links point at |
+
+Start-up fails if either template is provisioned without `ADMIN_BASE_URL`. See
+[docs/MASTER-EMAILS.md](docs/MASTER-EMAILS.md) for the wording, the ledger's states and investigating a `Failed` row.
+
 ### The judicial surface
 
 **Eight operations, on a namespace of their own.** They are *not* part of the thirty-five above: a judge is not a
@@ -1053,7 +1076,7 @@ See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md),
 Values a Delivery Manager adjusts while the service runs, with no release. The processing window was V40's referral
 claim window, and is now how long a Master has to give a direction before the referral is returned to the office.
 V42 added the reminder interval, the per-Master cap and the two referral windows. Assignment reads the cap and the
-windows; the reminder interval is D3's to read.
+windows; the [Master emails](#master-emails) read the reminder interval and the windows' end times.
 
 | Method | Path | Access and response |
 |---|---|---|

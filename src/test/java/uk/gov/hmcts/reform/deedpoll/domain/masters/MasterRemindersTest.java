@@ -287,6 +287,42 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("a run key a Master already has rolls the whole run back, claims included")
+    void reusedKeyRollsBack() {
+        UUID sullivan = master("m-key@example.test", "Master Sullivan");
+        Referral referral = assigned("DP2026-000381", sullivan, NOON_UTC.minusHours(48));
+        assertThat(transactions.enqueue(sullivan, MasterEmailKind.REMINDER, "run-taken", List.of(referral.getId())))
+            .isTrue();
+
+        assertThatThrownBy(() -> transactions.enqueueReminders(NOON_UTC, INTERVAL, "run-taken"))
+            .isInstanceOf(IllegalStateException.class);
+
+        assertThat(remindersSent(referral)).isZero();
+        assertThat(rows(sullivan)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("a pre-V43 claim attached to a Master never falls due itself, but is listed beside one that does")
+    void legacyClaim() throws IOException {
+        UUID sullivan = master("m-legacy@example.test", "Master Sullivan");
+        Referral legacy = assigned("DP2026-000391", sullivan, NOON_UTC.minusHours(200));
+        jdbc.update("""
+            UPDATE "deedpoll_referral" SET "assignedAt" = NULL, "windowDate" = NULL, "windowSlot" = NULL
+             WHERE "id" = ?
+            """, legacy.getId());
+
+        assertThat(reminders.run(NOON)).isZero();
+        assertThat(rows(sullivan)).isEmpty();
+
+        assigned("DP2026-000392", sullivan, NOON_UTC.minusHours(48));
+        assertThat(reminders.run(NOON)).isOne();
+
+        assertThat(remindersSent(legacy)).isZero();
+        assertThat(ids(rows(sullivan).getFirst())).contains(legacy.getId());
+        assertThat(sentTo("m-legacy@example.test").path("referral_count").asText()).isEqualTo("2");
+    }
+
+    @Test
     @DisplayName("refuses to run inside a transaction, before anything is claimed")
     void refusesATransaction() {
         UUID sullivan = master("m-tx@example.test", "Master Sullivan");

@@ -18,10 +18,16 @@ When a referral window closes (by default the morning window at 10:30 and the af
 
 - `MasterDigests` runs every `MASTER_DIGEST_INTERVAL` (default `PT5M`) and looks at every window that closed in the
   last 24 hours. A window older than that is never sent, so a long outage does not flood Masters with stale digests.
+  A window is first taken one minute after its end (`MasterDigests.SETTLE`), so an assignment that read the window
+  just before it closed has committed by then.
 - One `deedpoll_window_digest_run` row per window, written in the same transaction as that window's email rows:
   whichever pod commits first enqueues the window; the others write nothing.
 - A referral reassigned before the window closed goes in its new Master's digest. A referral with no
   `assignedMasterId` (claimed before V43) is left out and counted in the run's INFO line.
+- Either email's list is read again at send time, and keeps only referrals still `Claimed` by that Master with no
+  direction: a row that waited out a backoff never names one since directed, unassigned or reassigned. If nothing
+  is left, the row is `Skipped`.
+- A window's end time changed after its digest ran does not run it again.
 
 ### The reminder (`master-referral-reminder`)
 
@@ -37,6 +43,8 @@ waiting for that Master's direction, not only the ones that fell due.
   outage or a weekend) gets one email, not one per missed interval.
 - Reminders stop when the Master directs the referral or it is unassigned. An assignment, a reassignment and a
   withdrawn direction reset `remindersSent` to 0, because each restarts the clock.
+- A claim from before V43 that linking attached to a Master has no `assignedAt`, so it never falls due itself (the
+  plan counts reminders from assignment). It is still listed when another of that Master's referrals falls due.
 
 ## Personalisation
 

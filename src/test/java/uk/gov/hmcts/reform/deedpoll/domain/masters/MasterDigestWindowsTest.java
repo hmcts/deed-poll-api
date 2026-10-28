@@ -29,11 +29,11 @@ class MasterDigestWindowsTest {
         && day.getDayOfWeek() != DayOfWeek.SUNDAY && !day.equals(CHRISTMAS);
 
     @Test
-    @DisplayName("a window is closed from its end time exactly, and not a minute before")
+    @DisplayName("a window is taken a settling minute after its end time, and not at the end itself")
     void closesAtItsEnd() {
-        assertThat(MasterDigests.closedWindows(london(2026, 11, 4, 10, 29), WINDOWS, WORKING_DAY))
-            .doesNotContain(new ReferralWindow(LocalDate.of(2026, 11, 4), WindowSlot.AM));
         assertThat(MasterDigests.closedWindows(london(2026, 11, 4, 10, 30), WINDOWS, WORKING_DAY))
+            .doesNotContain(new ReferralWindow(LocalDate.of(2026, 11, 4), WindowSlot.AM));
+        assertThat(MasterDigests.closedWindows(london(2026, 11, 4, 10, 31), WINDOWS, WORKING_DAY))
             .contains(new ReferralWindow(LocalDate.of(2026, 11, 4), WindowSlot.AM));
     }
 

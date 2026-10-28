@@ -47,6 +47,15 @@ class MasterEmailPersonalisationTest {
     }
 
     @Test
+    @DisplayName("the day referred is London's: 23:30 UTC in British Summer Time is the next day")
+    void referredInLondon() {
+        String line = MasterEmailPersonalisation.line(new MasterEmailPersonalisation.Line(
+            FIRST, "DP2026-000125", List.of("Other"), Urgency.Normal, LocalDateTime.of(2026, 6, 30, 23, 30)), links);
+
+        assertThat(line).contains(" – referred 01-07-26 – ");
+    }
+
+    @Test
     @DisplayName("a morning digest says so, and a reminder says what it is waiting for")
     void periods() {
         assertThat(MasterEmailPersonalisation.period(MasterEmailKind.DIGEST, "2026-10-28:AM"))

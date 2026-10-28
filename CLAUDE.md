@@ -539,7 +539,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   which sends only the window and `revision`, keeps working; an absent key leaves its column alone. V42 re-seeded the
   window to 7 days only at revision 0, and raised a chosen value below a day to 1440 with a history row attributed to
   the service account. Values go in `deedpoll_process_settings_change`, one row per changed field, never in the audit
-  trail (no case owns them). D2's assignment reads the cap and the windows; the reminder interval is D3's to read.
+  trail (no case owns them). D2's assignment reads the cap and the windows; D3's `MasterReminders` reads the reminder interval on every run.
 - **A referral is assigned to a Master by the office, and the processing window gives it back.** D2 (Master
   Sullivan's item D, Steve, 2026-10-28) reuses the states rather than adding a Postgres enum member: `Open` is
   *waiting for assignment*, `Claimed` is *assigned* (`claimedBy` the Master's name, `claimedById` their linked
@@ -567,7 +567,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   exception class only). **Go-live needs no data rewrite:** a pre-V43 claim keeps its subject and no Master, stays
   visible to its claimer, counts its window from `claimedAt`, and `MasterService.linkIfListed` attaches it
   (`attachLegacyClaims`) and gives a newly linked Master the referrals assigned while unlinked
-  (`attachToLinkedMaster`), in the link's transaction. Emails are D3. See `docs/plans/20261028-d2-referral-assignment.md`.
+  (`attachToLinkedMaster`), in the link's transaction. Emails are D3's, below. See `docs/plans/completed/20261028-d2-referral-assignment.md`.
 - **The Masters list is the Delivery Manager's, and a Master is linked by email, once.** `deedpoll_master` (V42)
   holds a name, a lower-cased unique email and an available flag; there is no delete, because referrals and history
   refer to a Master, so one who leaves is made unavailable. `config/MasterLinking`, a `HandlerInterceptor` on
@@ -602,6 +602,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   (the chart's value everywhere until the templates exist) runs and claims are recorded and rows written `Skipped`,
   so provisioning later never sends a backlog. A provisioned template with no `ADMIN_BASE_URL` fails start-up. The
   ledger holds the Master's id, never the address, which is read from the Masters list at send time and never logged.
+  The frozen referral list is re-read at send time too, keeping only those still `Claimed` by that Master with no
+  decision, so a backed-off row never names one since directed or reassigned. A digest takes its window
+  `MasterDigests.SETTLE` (one minute) after it closes, so an assignment racing the close is in it.
   The templates are not `EmailTemplate` members (`MasterEmailKind` carries their keys). See `docs/MASTER-EMAILS.md`.
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution

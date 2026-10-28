@@ -1,5 +1,13 @@
 # Resume state — where the next session picks up
 
+**Plan D3, the Master's referral digest and reminders, 2026-10-28:** on `feat/d-referral-assignment`, local commits
+only, not pushed. V44 adds the Master email ledger `deedpoll_master_email`, `deedpoll_window_digest_run` and
+`deedpoll_referral."remindersSent"`; V45 adds `next_attempt_at`. `MasterDigests` sends one digest per Master per
+closed window, and `MasterReminders` one reminder per Master in working hours, listing every undirected referral.
+Both templates are `DEED_POLL_PLACEHOLDER` everywhere, so rows are written `Skipped`; chart 0.0.29 sets
+`ADMIN_BASE_URL`. Next: create the two Notify templates, then Juniper rebases and raises the PRs. See
+[the plan](plans/20261028-d3-master-digest-and-reminders.md) and [MASTER-EMAILS.md](MASTER-EMAILS.md).
+
 **Plan D2, referral assignment, 2026-10-28:** on `feat/d-referral-assignment`, local commits only, not pushed. V43
 adds `assignedMasterId`, `assignedAt` and the referral window (`windowDate`, `windowSlot`) to `deedpoll_referral`. A
 caseworker assigns a referral to a Master on the create (`masterId`) or by
@@ -8,7 +16,7 @@ There is no pool any more: `GET /judicial/referrals` answers an empty page and i
 one release. `unassignOverdue` (was `reclaimStaleClaims`) returns an undirected assignment to the office after the
 processing window, on the judicial list loads and every 15 minutes on `ReferralUnassignment`'s timer. Go-live rewrites
 no data; linking attaches pre-V43 claims. Next: D3 (reminders and digests), then Juniper rebases and raises the PRs.
-See [the plan](plans/20261028-d2-referral-assignment.md).
+See [the plan](plans/completed/20261028-d2-referral-assignment.md).
 
 **Plan D1, the Masters list and the referral process settings, 2026-10-28:** on `feat/d-referral-assignment`, local
 commits only, not pushed (it sits on unmerged api #155 and the contract-step branch). V42 adds `deedpoll_master` and

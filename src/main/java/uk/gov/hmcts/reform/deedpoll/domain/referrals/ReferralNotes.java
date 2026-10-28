@@ -318,7 +318,7 @@ public final class ReferralNotes {
     }
 
     private static String identifies(LocalDateTime createdOn, List<String> reasons) {
-        String described = reasons.isEmpty() ? "no reasons recorded" : described(reasons);
+        String described = reasons.isEmpty() ? "no reasons recorded" : reasonsInWords(reasons);
         return "raised on " + DAY.format(createdOn) + ", reasons: " + described;
     }
 
@@ -390,14 +390,7 @@ public final class ReferralNotes {
     }
 
     private static String names(CreateReferralInput dto) {
-        return described(dto.reasons().stream().map(Enum::name).toList());
-    }
-
-    /**
-     * {@link #described}, for the Master emails (plan D3), which list a referral's reasons as its notes do.
-     */
-    public static String reasonsInWords(List<String> reasons) {
-        return described(reasons);
+        return reasonsInWords(dto.reasons().stream().map(Enum::name).toList());
     }
 
     /**
@@ -406,9 +399,9 @@ public final class ReferralNotes {
      * Transgender, Have parental consent; Other". Semicolons between reasons, because the details are themselves a
      * comma list. A stored name this enum no longer knows, from a backfilled or hand-corrected row, is quoted as it
      * stands rather than dropped, and so is a detail stored without {@code Minor}, which api refuses but an older row
-     * could hold.
+     * could hold. Public for the Master emails (plan D3), which list a referral's reasons as its notes do.
      */
-    private static String described(List<String> reasons) {
+    public static String reasonsInWords(List<String> reasons) {
         List<String> details = reasons.stream()
             .filter(name -> reasonNamed(name).map(ReferralReason::isMinorDetail).orElse(false))
             .toList();

@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralWindow;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.notify.NotificationBackoff;
 import uk.gov.hmcts.reform.deedpoll.notify.NotificationFailure;
 import uk.gov.hmcts.reform.deedpoll.notify.SendOutcome;
@@ -57,14 +58,16 @@ public class MasterEmailTransactions {
      * One email for this Master and period, unless they already have one: {@code Pending}, or {@code Skipped} when
      * the kind's template is unprovisioned, so provisioning it later never sends what was owed before.
      *
-     * @return the state written, or empty when the row already existed
+     * @return whether this call wrote the row, rather than finding it already there
      */
     @Transactional
-    public Optional<MasterEmailState> enqueue(UUID masterId, MasterEmailKind kind, String periodKey,
-                                              List<UUID> referralIds) {
-        MasterEmailState state = links.isProvisioned(kind) ? MasterEmailState.Pending : MasterEmailState.Skipped;
-        return emails.enqueue(UUID.randomUUID(), masterId, kind, periodKey, referralIds, state, AuditClock.now())
-            ? Optional.of(state) : Optional.empty();
+    public boolean enqueue(UUID masterId, MasterEmailKind kind, String periodKey, List<UUID> referralIds) {
+        return emails.enqueue(UUID.randomUUID(), masterId, kind, periodKey, referralIds, stateFor(kind),
+                              AuditClock.now());
+    }
+
+    private MasterEmailState stateFor(MasterEmailKind kind) {
+        return links.isProvisioned(kind) ? MasterEmailState.Pending : MasterEmailState.Skipped;
     }
 
     /**
@@ -100,16 +103,14 @@ public class MasterEmailTransactions {
                 byMaster.computeIfAbsent(referral.masterId(), master -> new ArrayList<>()).add(referral.referralId());
             }
         }
-        MasterEmailState state = links.isProvisioned(MasterEmailKind.DIGEST)
-            ? MasterEmailState.Pending : MasterEmailState.Skipped;
         String periodKey = MasterEmailPersonalisation.digestPeriod(window);
         int written = 0;
         for (Map.Entry<UUID, List<UUID>> master : byMaster.entrySet()) {
-            if (enqueue(master.getKey(), MasterEmailKind.DIGEST, periodKey, master.getValue()).isPresent()) {
+            if (enqueue(master.getKey(), MasterEmailKind.DIGEST, periodKey, master.getValue())) {
                 written++;
             }
         }
-        return Optional.of(new DigestEnqueued(written, state, unassigned));
+        return Optional.of(new DigestEnqueued(written, stateFor(MasterEmailKind.DIGEST), unassigned));
     }
 
     /**
@@ -135,17 +136,14 @@ public class MasterEmailTransactions {
      */
     @Transactional
     public RemindersEnqueued enqueueReminders(LocalDateTime now, Duration interval, String periodKey) {
-        List<MasterEmailRepository.DueReminder> due = emails.claimDueReminders(now, interval);
-        Set<UUID> byMaster = new LinkedHashSet<>();
-        due.forEach(reminder -> byMaster.add(reminder.masterId()));
-        MasterEmailState state = links.isProvisioned(MasterEmailKind.REMINDER)
-            ? MasterEmailState.Pending : MasterEmailState.Skipped;
+        List<UUID> due = emails.claimDueReminders(now, interval);
+        Set<UUID> byMaster = new LinkedHashSet<>(due);
         for (UUID master : byMaster) {
-            if (enqueue(master, MasterEmailKind.REMINDER, periodKey, emails.outstandingFor(master)).isEmpty()) {
+            if (!enqueue(master, MasterEmailKind.REMINDER, periodKey, emails.outstandingFor(master))) {
                 throw new IllegalStateException("A reminder run's key was used twice");
             }
         }
-        return new RemindersEnqueued(byMaster.size(), state, due.size());
+        return new RemindersEnqueued(byMaster.size(), stateFor(MasterEmailKind.REMINDER), due.size());
     }
 
     @Transactional(readOnly = true)
@@ -205,9 +203,11 @@ public class MasterEmailTransactions {
     }
 
     /**
-     * The email, read now: the Masters list's current address and name, and the listed referrals as they are.
+     * The email, read now: the Masters list's current address and name, and the listed referrals as they are. A
+     * referral is listed only while it still waits for this Master's direction, so a row that waited out a backoff
+     * never names one since directed, unassigned or reassigned to somebody else.
      *
-     * @return empty when none of the referrals is left to list (their cases were deleted)
+     * @return empty when none of the referrals is left to list (directed, no longer this Master's, or deleted)
      * @throws IllegalStateException when the Master is missing, which V44's foreign key forbids
      */
     @Transactional(readOnly = true)
@@ -219,6 +219,7 @@ public class MasterEmailTransactions {
         List<MasterEmailPersonalisation.Line> lines = claim.referralIds().stream()
             .map(found::get)
             .filter(Objects::nonNull)
+            .filter(referral -> stillWaitingFor(referral, claim.masterId()))
             .map(referral -> new MasterEmailPersonalisation.Line(
                 referral.getId(), referral.getDeedPoll().getDisplayReference(), referral.getReasons(),
                 referral.getUrgency(), referral.getCreatedOn()))
@@ -229,6 +230,11 @@ public class MasterEmailTransactions {
         return Optional.of(new MasterEmailContent(
             links.templateId(claim.kind()), master.email(),
             MasterEmailPersonalisation.of(master.name(), claim.kind(), claim.periodKey(), lines, links)));
+    }
+
+    private static boolean stillWaitingFor(Referral referral, UUID masterId) {
+        return referral.getState() == ReferralState.Claimed && masterId.equals(referral.getAssignedMasterId())
+            && referral.getDecision() == null;
     }
 
     /**
