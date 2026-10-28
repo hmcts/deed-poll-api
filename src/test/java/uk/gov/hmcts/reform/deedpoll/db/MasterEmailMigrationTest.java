@@ -59,13 +59,13 @@ class MasterEmailMigrationTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("a new email starts with no attempts, no claim and no send")
+    @DisplayName("a new email starts with no attempts, no claim, no send and no backoff (V45)")
     void defaults() {
         UUID masterId = master();
         email(masterId, "DIGEST", "2026-10-28:AM", "Pending");
 
         assertThat(jdbcTemplate.queryForMap("""
-            select attempts, owner, lease_until, send_started_at, notify_id, failure, settled_at
+            select attempts, owner, lease_until, send_started_at, notify_id, failure, settled_at, next_attempt_at
               from deedpoll_master_email where master_id = ?
             """, masterId))
             .containsEntry("attempts", 0)
@@ -74,7 +74,8 @@ class MasterEmailMigrationTest extends AbstractPostgresContainerTest {
             .containsEntry("send_started_at", null)
             .containsEntry("notify_id", null)
             .containsEntry("failure", null)
-            .containsEntry("settled_at", null);
+            .containsEntry("settled_at", null)
+            .containsEntry("next_attempt_at", null);
     }
 
     @Test

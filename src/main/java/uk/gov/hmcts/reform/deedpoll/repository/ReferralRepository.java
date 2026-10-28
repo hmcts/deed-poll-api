@@ -52,6 +52,9 @@ import java.util.UUID;
  *       gone</strong> -- {@code JudicialReferralService.visibleTo} is what stands where the parent id stands on
  *       the caseworker surface -- and {@code ReferralSecurityTest} enforces that by asserting nothing but
  *       {@code JudicialReferralService} calls it.</li>
+ *   <li>the Master emails' read -- {@link #findWithCaseByIdIn}. The ids are the ones a ledger row froze when its
+ *       job enqueued it, never a request's, and the only caller is {@code MasterEmailTransactions}, which renders
+ *       a reference, the reasons, the urgency and the day referred, and nothing about the applicant.</li>
  * </ul>
  *
  * <p>This differs from {@link SavedQueryRepository}, which does read by id: a saved query's visibility
@@ -222,6 +225,13 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      */
     @Query("select r from Referral r join fetch r.deedPoll where r.id = :id")
     Optional<Referral> findWithCaseById(@Param("id") UUID id);
+
+    /**
+     * The referrals a Master email lists, with their applications, in no particular order (plan D3). Ids that no
+     * longer exist, because their case was deleted, are simply absent.
+     */
+    @Query("select r from Referral r join fetch r.deedPoll where r.id in :ids")
+    List<Referral> findWithCaseByIdIn(@Param("ids") Collection<UUID> ids);
 
     /**
      * Whether the case already holds a referral in one of the given states.

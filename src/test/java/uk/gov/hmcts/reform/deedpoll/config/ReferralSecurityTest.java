@@ -35,6 +35,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
+import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterEmailTransactions;
 import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterService;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
@@ -44,6 +45,7 @@ import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -169,9 +171,15 @@ class ReferralSecurityTest {
     private static final Set<String> CAP_COUNTS =
         Set.of("countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot", "countByMasterInWindow");
 
+    /**
+     * The Master emails' read (plan D3), which names no parent case because a digest spans cases. Admitted with two
+     * rules: it takes nothing but the ids a ledger row froze, and nothing but {@code MasterEmailTransactions} calls it.
+     */
+    private static final Set<String> MASTER_EMAILS = Set.of("findWithCaseByIdIn");
+
     /** Every finder that names no parent case, for the declaration rule that admits each one deliberately. */
     private static final Set<String> UNSCOPED = Stream.of(SWEEP, LINKING, MASTER_LOCKS, PERSONAL_LIST, JUDICIAL_READ,
-                                                              CAP_COUNTS)
+                                                              CAP_COUNTS, MASTER_EMAILS)
         .flatMap(Set::stream)
         .collect(Collectors.toUnmodifiableSet());
 
@@ -397,6 +405,18 @@ class ReferralSecurityTest {
                 .should().callMethodWhere(DescribedPredicate.describe(
                     "a call to the unscoped by-id finder",
                     (JavaMethodCall call) -> JUDICIAL_READ.contains(call.getName())
+                        && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
+                .check(mainClasses());
+        }
+
+        @Test
+        @DisplayName("only the Master email ledger reaches the read by referral ids")
+        void onlyTheMasterEmailLedgerReachesTheByIdsRead() {
+            noClasses()
+                .that().doNotHaveFullyQualifiedName(MasterEmailTransactions.class.getName())
+                .should().callMethodWhere(DescribedPredicate.describe(
+                    "a call to the Master emails' read",
+                    (JavaMethodCall call) -> MASTER_EMAILS.contains(call.getName())
                         && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
                 .check(mainClasses());
         }
@@ -953,6 +973,12 @@ class ReferralSecurityTest {
                     assertThat(finder.getParameterTypes())
                         .as("%s takes a referral id and nothing else", finder.getName())
                         .containsExactly(UUID.class);
+                    continue;
+                }
+                if (MASTER_EMAILS.contains(finder.getName())) {
+                    assertThat(finder.getParameterTypes())
+                        .as("%s takes a ledger row's referral ids and nothing else", finder.getName())
+                        .containsExactly(Collection.class);
                     continue;
                 }
                 if (LINKING.contains(finder.getName())) {

@@ -163,8 +163,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement V44, the properties and the resets, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 2: Delivery
-- [ ] Add failing tests for claiming, `Sending` before the call, settlement, retries, the unknown outcome and the unprovisioned skip.
-- [ ] Implement `MasterEmailDelivery` and its drain, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Add failing tests for claiming, `Sending` before the call, settlement, retries, the unknown outcome and the unprovisioned skip.
+- [x] Implement `MasterEmailDelivery` and its drain, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 3: The digest
 - [ ] Add failing tests for every digest case in the Development Approach.
@@ -205,3 +205,33 @@ by name, the digest run once per window, the referral count mapped), `MasterEmai
 `ReferralAssignmentTest` (3) and `ReferralServiceTest` (1), and `NotifyConfigurationTest`'s template map. Focused run
 (those plus the schema health, health probe, entity mapping, schema conformance, email template, assignment-columns
 and judicial classes): 932 tests, 0 failures. Compile of every source set OK; `checkstyle.sh` OK.
+
+**Task 2 (delivery):** **V45 adds `next_attempt_at`**, which V44 lacked: a 429 retried on every one-minute drain is
+how a service stays rate-limited, so the outbox's `NotificationBackoff` (now reused as it is, with its eight attempts
+and five-minute lease) defers a known temporary refusal. V44 was committed, so it was not edited. **The Notify call is
+`notify/MasterEmailSender`**, not a class in `domain/masters`, because `NotificationSecurityTest` keeps
+`NotificationClient` inside `notify`; it uses the shared client bean and `NotificationFailure.classify`, logs the row
+id, verdict and status only, and lets a client `RuntimeException` propagate as an unknown outcome.
+`repository/MasterEmailRepository` makes every transition after the claim one conditional statement naming the state
+it leaves, the owner and the attempt. `MasterEmailTransactions` (each step its own commit) enqueues (`Skipped`, with
+`settled_at`, when the kind's template is unprovisioned; Tasks 3 and 4 call it), claims (a row unprovisioned since it
+was written is `Skipped`, one with eight attempts used is `Failed`/`TEMPORARY`), reads the content (the Masters list's
+address and name now, the referrals through a new `ReferralRepository.findWithCaseByIdIn`, admitted in
+`ReferralSecurityTest` with a shape rule and an ArchUnit rule that only `MasterEmailTransactions` calls it), commits
+`Sending` with `send_started_at`, and settles: `Sent` with the Notify id; a `TEMPORARY` refusal back to `Pending` with
+the send start cleared, backed off; anything else `Failed` with the `NotificationFailure` name. `Sending` rows whose
+lease has ended are `Failed`/`TECHNICAL` at the start of every drain, never resent. Two choices the plan did not
+make: a content read that throws (before `Sending`) is a `TEMPORARY` retry, as the outbox treats a preparation
+failure; and an email none of whose referrals is left (their cases deleted) is `Skipped` rather than sent empty.
+`MasterEmailPersonalisation` renders the four keys (step 5's line format, reasons through a new public
+`ReferralNotes.reasonsInWords`, "(no reference)" and "no reasons recorded" for backfilled rows).
+`MasterEmailDelivery.drain` (25 rows, refuses a caller transaction) and `MasterEmailDrain` (`@Scheduled` on
+`drain-interval`, off with `emails-enabled`, one WARN naming the exception class). Tests: `MasterEmailDeliveryTest`
+(14, Postgres plus StubNotify: send and body, `Sending` seen during the call then `Failed` and never resent, 500, 400,
+429 eight times then `Failed`, 429 then `Sent`, an abandoned `Sending`, a held and an exhausted claim, two concurrent
+drains send once, unprovisioned enqueue and claim `Skipped`, nothing left `Skipped`, the address at send time and an
+unavailable Master, logs and ledger columns free of any address, refusal inside a transaction),
+`MasterEmailPersonalisationTest` (3), the V45 default in `MasterEmailMigrationTest`, and `ReferralSecurityTest`'s new
+rule. Focused run (those plus `NotificationSecurityTest`, the referral, Master, schema, health, entity-mapping,
+Notify-configuration and email-template classes): 1,309 tests, 0 failures. Compile of every source set OK;
+`checkstyle.sh` OK.

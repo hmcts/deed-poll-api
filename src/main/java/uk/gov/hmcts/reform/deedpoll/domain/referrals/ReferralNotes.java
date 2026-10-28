@@ -394,6 +394,13 @@ public final class ReferralNotes {
     }
 
     /**
+     * {@link #described}, for the Master emails (plan D3), which list a referral's reasons as its notes do.
+     */
+    public static String reasonsInWords(List<String> reasons) {
+        return described(reasons);
+    }
+
+    /**
      * Stored reasons in the screens' words (Steve, 2026-10-27), with a minor's details folded into
      * {@link ReferralReason#Minor} as the admin's {@code referralReasonLabels} folds them: "Applicant is a minor:
      * Transgender, Have parental consent; Other". Semicolons between reasons, because the details are themselves a
