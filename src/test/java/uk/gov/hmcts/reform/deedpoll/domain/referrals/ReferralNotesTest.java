@@ -7,12 +7,15 @@ import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
+import uk.gov.hmcts.reform.deedpoll.repository.OverdueAssignment;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -435,37 +438,71 @@ class ReferralNotesTest {
     }
 
     @Test
-    @DisplayName("a lapsed claim names the judge who was holding it and says it is back in the pool")
-    void lapsedClaimNamesTheJudge() {
-        // The judge is named because the release erases claimedBy: after the sweep, the note is the only
-        // record on the case that this judge ever had it.
-        assertThat(ReferralNotes.claimLapsed("District Judge Bell"))
-            .isEqualTo("Referral claim by District Judge Bell lapsed after inactivity."
-                + " The referral has been returned to the shared pool and can be picked up again.");
+    @DisplayName("an overdue assignment names the Master who had it and the window in words")
+    void returnedForAssignmentNamesTheMaster() {
+        // The Master is named because the release erases claimedBy: after the sweep, the note is the only
+        // record on the case that this Master ever had it.
+        assertThat(ReferralNotes.returnedForAssignment(
+            overdue("Master Sullivan", List.of("DomesticAbuse")), Duration.ofDays(7)))
+            .isEqualTo("Referral raised on 27 October 2026, reasons: Domestic abuse considerations, returned to the"
+                + " office for assignment: no direction from Master Sullivan within 7 days.");
     }
 
     @Test
-    @DisplayName("a lapsed claim with no name on it still reads as a lapse")
-    void lapsedClaimWithNoNameStillReadsAsALapse() {
-        // Not reachable through claim(), which always stamps a name -- but a row backfilled or repaired by
-        // hand could hold a claim with none, and the sweep must still be able to say what happened.
+    @DisplayName("an overdue assignment folds minor details into Minor, as every referral note does")
+    void returnedForAssignmentFoldsMinorDetails() {
+        assertThat(ReferralNotes.returnedForAssignment(
+            overdue("Master Sullivan", List.of("Minor", "MinorTransgender")), Duration.ofDays(7)))
+            .startsWith("Referral raised on 27 October 2026, reasons: Applicant is a minor: Transgender, returned");
+    }
+
+    @Test
+    @DisplayName("a backfilled referral with no reasons says so")
+    void returnedForAssignmentWithNoReasons() {
+        assertThat(ReferralNotes.returnedForAssignment(overdue("Master Sullivan", List.of()), Duration.ofDays(1)))
+            .isEqualTo("Referral raised on 27 October 2026, reasons: no reasons recorded, returned to the office for"
+                + " assignment: no direction from Master Sullivan within 1 day.");
+    }
+
+    @Test
+    @DisplayName("the window reads in days, else hours, else minutes")
+    void windowInWords() {
+        assertThat(ReferralNotes.inWords(Duration.ofDays(30))).isEqualTo("30 days");
+        assertThat(ReferralNotes.inWords(Duration.ofDays(1))).isEqualTo("1 day");
+        assertThat(ReferralNotes.inWords(Duration.ofHours(25))).isEqualTo("25 hours");
+        assertThat(ReferralNotes.inWords(Duration.ofHours(1))).isEqualTo("1 hour");
+        assertThat(ReferralNotes.inWords(Duration.ofMinutes(1500))).isEqualTo("25 hours");
+        assertThat(ReferralNotes.inWords(Duration.ofMinutes(1441))).isEqualTo("1441 minutes");
+    }
+
+    @Test
+    @DisplayName("an overdue assignment with no name on it still reads as a return")
+    void returnedForAssignmentWithNoName() {
+        // Not reachable through assign(), which always stamps a name -- but a row backfilled or repaired by
+        // hand could hold an assignment with none, and the sweep must still be able to say what happened.
         for (String noName : Arrays.asList(null, "", "   ")) {
-            assertThat(ReferralNotes.claimLapsed(noName))
-                .as("a claim held under %s", noName == null ? "null" : "blank")
-                .startsWith("Referral claim by an unnamed Master lapsed after inactivity.");
+            assertThat(ReferralNotes.returnedForAssignment(overdue(noName, List.of()), Duration.ofDays(7)))
+                .as("an assignment held under %s", noName == null ? "null" : "blank")
+                .endsWith("no direction from an unnamed Master within 7 days.");
         }
     }
 
     @Test
-    @DisplayName("a lapse note is acceptable to the notes column however long the name on the claim is")
-    void lapseNoteIsAcceptableHoweverLongTheNameIs() {
-        // claimedBy is unbounded text and comes from a token, so the note it composes has to be bounded here
-        // -- a note the validator refused would roll back the release rather than just the note, leaving the
-        // claim stuck on a judge who has gone home.
-        String text = ReferralNotes.claimLapsed("J".repeat(5000));
+    @DisplayName("an overdue-assignment note is acceptable to the notes column however long the name or reasons")
+    void returnedForAssignmentIsAcceptableHoweverLong() {
+        // claimedBy is unbounded text, so the note it composes has to be bounded here -- a note the validator
+        // refused would roll back the release rather than just the note, leaving the referral stuck on a Master.
+        List<String> every = Arrays.stream(ReferralReason.values()).map(Enum::name).toList();
+        String text = ReferralNotes.returnedForAssignment(overdue("J".repeat(5000), every), Duration.ofMinutes(1441));
 
         assertThat(NoteForm.validateNoteText(text)).isEmpty();
         assertThat(text.length()).isLessThanOrEqualTo(NoteForm.MAX_NOTE_LENGTH);
+        assertThat(text).doesNotContain("@");
+    }
+
+    private static OverdueAssignment overdue(String master, List<String> reasons) {
+        return new OverdueAssignment(UUID.randomUUID(), "case-1", master,
+                                     LocalDateTime.parse("2026-10-27T09:30:00"), reasons);
     }
 
     @Test

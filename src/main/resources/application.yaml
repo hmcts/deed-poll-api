@@ -318,6 +318,12 @@ deedpoll:
     # transaction-locally, so no other query on the connection inherits it. Over it, the read fails as any failed
     # database read does. Below 1ms refuses to start, because Postgres reads 0 as no timeout.
     statement-timeout: ${LIST_STATEMENT_TIMEOUT:5s}
+  referrals:
+    # The processing window's timer (ReferralUnassignment, plan D2): how often an assignment with no direction
+    # after the processing window is returned to the office, as an ISO-8601 duration. The window itself is the
+    # Delivery Manager's setting, not this. Switched off only by tests, which run the sweep explicitly.
+    unassign-enabled: ${REFERRAL_UNASSIGN_ENABLED:true}
+    unassign-interval: ${REFERRAL_UNASSIGN_INTERVAL:PT15M}
   gazette:
     # Enables provisioned previews and new confirmed sends. Recovery runs independently while disabled.
     enabled: ${GAZETTE_ENABLED:false}

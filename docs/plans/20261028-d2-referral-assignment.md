@@ -206,8 +206,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 4: The processing window
-- [ ] Add failing tests for `unassignOverdue`, the timer, the go-live cases and the race.
-- [ ] Implement, rename every caller, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Add failing tests for `unassignOverdue`, the timer, the go-live cases and the race.
+- [x] Implement, rename every caller, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 5: Documentation and final verification
 - [ ] Update `CLAUDE.md`: the judicial-surface paragraph (no pool; visibility), the claim-window paragraph (now the processing window and `unassignOverdue`), a new assignment paragraph (cap, windows, notes, go-live), the operation counts.
@@ -298,3 +298,33 @@ statements), `MasterServiceTest`, `ReferralServiceTest` (touch extends nothing; 
 fields), and the judicial download/preview tests. Runs: the whole `test` task once (5,227 tests, 3 failures, all in
 `DocumentPreviewServiceTest`'s `Open`-referral fixtures, since fixed and re-run green), the affected classes again
 (0 failures), `integration` 23 tests 0 failures (1 skipped), every source set compiles, `checkstyle.sh` OK.
+
+**Task 4 (the processing window):** `reclaimStaleClaims` is `ReferralService.unassignOverdue`, and with it
+`ReferralRepository.findOverdueAssignments`/`releaseOverdueAssignment` and the projection `OverdueAssignment` (was
+`StaleClaim`; it now carries `createdOn` and `reasons` for the note). Every caller renamed (the three judicial
+request-time triggers and the deprecated claim); V16's comment naming the old method is a committed migration and was
+left alone. Both statements match `coalesce("assignedAt", "claimedAt") < cutoff`, so an assignment, a reassignment and
+a withdrawn direction restart the window, a pre-V43 claim counts from `claimedAt` (D-10), and `lastTouchedAt` no longer
+plays any part. The release clears the Master, `assignedAt` and the window too, keeping V43's `open_unassigned_check`.
+The note is `ReferralNotes.returnedForAssignment` ("Referral raised on …, reasons: …, returned to the office for
+assignment: no direction from {name} within 7 days."), the window in words from the setting (days, else hours, else
+minutes), the name bounded as before; `claimLapsed` is gone. **The timer** is `domain/referrals/ReferralUnassignment`,
+a `@Component` with `@EnableScheduling`, `@Scheduled(fixedDelayString = initialDelayString =
+"${deedpoll.referrals.unassign-interval:PT15M}")`, and `@ConditionalOnProperty("deedpoll.referrals.unassign-enabled",
+matchIfMissing = true)`; `application.yaml` binds `REFERRAL_UNASSIGN_ENABLED` (true) and `REFERRAL_UNASSIGN_INTERVAL`
+(`PT15M`, an ISO-8601 duration like the other `*-interval` strings would need), and `AbstractPostgresContainerTest` sets
+it false. It refuses an active transaction with `IllegalStateException` (as `GazetteRecovery` does), and otherwise
+catches every `RuntimeException` and logs one fixed WARN naming the exception class only. The request-time triggers
+stay. Tests: `ReferralUnassignmentTest` (6, unit: runs, never throws and never logs the message, refuses a transaction,
+the schedule's expression, the property switch through `ApplicationContextRunner`, the yaml defaults),
+`ReferralUnassignmentConcurrencyTest` (2, Postgres: a request's sweep holding its release until PostgreSQL shows the
+real timer blocked on it, then one release, one note, case column `Open`; and the timer alone), new
+`ReferralRepositoryTest` cases (the boundary minute both statements, `assignedAt` before `claimedAt` and touch
+extending nothing, the assignment columns cleared and the cap count falling, a linked pre-V43 claim released from
+`claimedAt`), `ReferralServiceTest`'s renamed `UnassigningOverdue` (plus window from `assignedAt`, a legacy claim, a
+touch extending nothing, the note's exact text), `ReferralNotesTest` (the note, minor folding, no reasons, no name,
+bounded length, `inWords`), and `JudicialClaimWindowTest`'s go-live journey (a claim without a Master stays visible to
+its claimer by id and in mine, then leaves both once its window from `claimedAt` ends). Fixtures that made a claim stale
+through `lastTouchedAt` now backdate `claimedAt` (and `assignedAt` where set). Runs: the focused referral, judicial,
+security, repository, architecture, OpenAPI, master, assignment and timeline classes, 377 tests, 0 failures; every
+source set compiles; `checkstyle.sh` OK.

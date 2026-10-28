@@ -119,7 +119,7 @@ class ReferralSecurityTest {
      * The two statements of the inactivity sweep, which name no parent case -- because a sweep is about every
      * case at once and there is no case to name.
      */
-    private static final Set<String> SWEEP = Set.of("findStaleClaims", "releaseStaleClaim");
+    private static final Set<String> SWEEP = Set.of("findOverdueAssignments", "releaseOverdueAssignment");
 
     /**
      * Linking's two statements (plan D2), which name no parent case because a Master's referrals span cases.
@@ -222,7 +222,7 @@ class ReferralSecurityTest {
             }
             return written;
         });
-        when(referrals.findStaleClaims(any(), any())).thenReturn(List.of());
+        when(referrals.findOverdueAssignments(any(), any())).thenReturn(List.of());
     }
 
     /** Both cases exist, so no refusal below is the parent check answering instead of the rule under test. */
@@ -726,7 +726,7 @@ class ReferralSecurityTest {
             // only the unlocked one would be about a call they never make.
             verify(referrals, never()).findByIdAndDeedPollIdForUpdate(any(), anyString());
             verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
-            verify(referrals, never()).findStaleClaims(any(), any());
+            verify(referrals, never()).findOverdueAssignments(any(), any());
             verify(referrals, never()).save(any());
         }
 

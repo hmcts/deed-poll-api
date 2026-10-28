@@ -241,7 +241,8 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             // why every new route gets one of these.
             mockMvc.perform(get(POOL + "/" + referralId)).andExpect(status().isUnauthorized());
 
-            assertThat(stored(referralId).getLastTouchedAt()).isEqualTo(touched);
+            assertThat(stored(referralId).getClaimedAt()).isEqualTo(touched);
+            assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Claimed);
         }
     }
 
@@ -1565,7 +1566,7 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
             authorised(post(withdraw(fresh))).andExpect(status().isOk());
             lapse(lapsing);
 
-            assertThat(referralService.reclaimStaleClaims()).isEqualTo(1);
+            assertThat(referralService.unassignOverdue()).isEqualTo(1);
 
             Referral released = stored(lapsing);
             assertThat(released.getState()).isEqualTo(ReferralState.Open);
@@ -1871,13 +1872,22 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * Backdates a claim eight days, past the seeded seven-day window, so the next sweep takes it back.
+     * Backdates an assignment eight days, past the seeded seven-day processing window, so the next sweep returns it
+     * to the office: {@code claimedAt}, and {@code assignedAt} where there is one, which the window runs from first.
      *
-     * <p>Off the row's own {@code claimedAt} rather than off {@code LocalDateTime.now()}, so the arithmetic
-     * cannot depend on which clock the test and the service each read.
+     * <p>Off the row's own times rather than off {@code LocalDateTime.now()}, so the arithmetic cannot depend on
+     * which clock the test and the service each read.
+     *
+     * @return the backdated {@code claimedAt}
      */
     private LocalDateTime lapse(String referralId) {
-        return backdateTouch(referralId, 8 * 24);
+        Referral referral = stored(referralId);
+        referral.setClaimedAt(referral.getClaimedAt().minusDays(8));
+        if (referral.getAssignedAt() != null) {
+            referral.setAssignedAt(referral.getAssignedAt().minusDays(8));
+        }
+        referrals.saveAndFlush(referral);
+        return referral.getClaimedAt();
     }
 
     /** Moves a claim's last interaction the given number of hours into the past, and says where it landed. */

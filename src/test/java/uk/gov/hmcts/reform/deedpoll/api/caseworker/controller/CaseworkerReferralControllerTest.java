@@ -1014,7 +1014,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("goes back to Open when the sweep hands a lapsed claim back to the pool")
+        @DisplayName("goes back to Open when the processing window returns a claim to the office")
         void followsTheSweep() throws Exception {
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
@@ -1022,7 +1022,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             assertThat(currentReferralState(caseId)).isEqualTo(ReferralState.Claimed);
             lapse(referralId);
 
-            assertThat(referralService.reclaimStaleClaims()).isEqualTo(1);
+            assertThat(referralService.unassignOverdue()).isEqualTo(1);
 
             // The one transition whose column write is a single set-based statement rather than the per-case
             // recompute, asserted through the real statement, a real referral row and a real commit.
@@ -1044,7 +1044,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             lapse(heldHere);
             lapse(heldElsewhere);
 
-            assertThat(referralService.reclaimStaleClaims()).isEqualTo(2);
+            assertThat(referralService.unassignOverdue()).isEqualTo(2);
 
             assertThat(currentReferralState(lapsedHere)).isEqualTo(ReferralState.Open);
             assertThat(currentReferralState(lapsedElsewhere)).isEqualTo(ReferralState.Open);
@@ -1104,7 +1104,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
          */
         private void lapse(String referralId) {
             Referral referral = stored(referralId);
-            referral.setLastTouchedAt(referral.getClaimedAt().minusDays(8));
+            referral.setClaimedAt(referral.getClaimedAt().minusDays(8));
             referrals.saveAndFlush(referral);
         }
     }

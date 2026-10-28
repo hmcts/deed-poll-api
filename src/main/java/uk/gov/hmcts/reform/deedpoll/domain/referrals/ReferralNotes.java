@@ -4,7 +4,9 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
+import uk.gov.hmcts.reform.deedpoll.repository.OverdueAssignment;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
@@ -15,8 +17,8 @@ import java.util.stream.Collectors;
 
 /**
  * The text of the case notes a referral writes as it moves through its lifecycle: raised, claimed, directed,
- * actioned, withdrawn, taken back from a judge who stopped working on it, and -- where the office asked the
- * applicant whether to proceed after a refused non-publication request -- the answer that came back.
+ * actioned, withdrawn, returned to the office when the processing window ends without a direction, and -- where the
+ * office asked the applicant whether to proceed after a refused non-publication request -- the answer that came back.
  *
  * <p><strong>Why a referral writes a note at all.</strong> There is no timeline concept in this domain --
  * only the human-authored Notes grid -- and the referral has to be visible where caseworkers already look,
@@ -31,8 +33,8 @@ import java.util.stream.Collectors;
  * caseworker reading the Notes grid saw a referral leave and come back with nothing in between, because the
  * referral's own row states only where it is <em>now</em> and the grid is the only place that says when each
  * step happened. So {@link #claimed}, {@link #directionRecorded} and {@link #directionActioned} exist, and
- * the duplication is accepted on the same terms as the lapse note's: the prose is history, the row is the
- * current state, and nothing parses either. See {@code docs/plans/referrals-api-5-lifecycle-case-notes.md}.
+ * the duplication is accepted on the same terms as the returned-for-assignment note's: the prose is history, the
+ * row is the current state, and nothing parses either. See {@code docs/plans/referrals-api-5-lifecycle-case-notes.md}.
  *
  * <p><strong>Composed here rather than in the service</strong>, for one reason worth the class: the notes
  * column is bounded at {@link NoteForm#MAX_NOTE_LENGTH} and the referral's own free text is not bounded by
@@ -59,13 +61,17 @@ public final class ReferralNotes {
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK);
 
     /**
-     * How much of a judge's display name a lapse note will quote.
+     * How much of a judge's or Master's name a note will quote.
      *
      * <p>The audit columns' own bound, {@code varchar(200)}, rather than a number chosen here: a name too
      * long for {@code createdBy} is already too long to be a name, and matching it means the note quotes
      * exactly as much of it as the rest of the schema keeps.
      */
     private static final int MAX_JUDGE_NAME_LENGTH = 200;
+
+    private static final long MINUTES_PER_DAY = 1440;
+
+    private static final long MINUTES_PER_HOUR = 60;
 
     private ReferralNotes() {
     }
@@ -91,34 +97,32 @@ public final class ReferralNotes {
     }
 
     /**
-     * The note for a claim the inactivity sweep took back, naming the judge who was holding it.
+     * The note for an assignment the processing window returned to the office (plan D2, decision D-3), naming the
+     * Master who gave no direction and the window in words.
      *
-     * <p><strong>The only event on the timeline that no column records.</strong> Claiming a referral is
-     * visible in {@code claimedBy} and deciding one in the direction columns, so neither needs a note to be
-     * discoverable; a lapse <em>erases</em> the claim it is about, so without this the case would show a
-     * referral that had quietly gone back into the pool with nothing to say it ever left. It is authored by
-     * the service account rather than by a caseworker, because no person did it.
+     * <p>"Referral raised on …, reasons: …, returned to the office for assignment: no direction from {name} within
+     * 7 days."
      *
-     * <p><strong>Naming the judge is deliberate and it is not only for the office (Steve, 2026-09-18). Do not
-     * remove the name to narrow what the judiciary can see.</strong> This note reaches other judges: it is on the
-     * case's timeline, and {@code JudicialReferralDetail} returns that timeline to any judge who can see a
-     * referral on the case -- so the judge who picks a lapsed referral out of the pool learns who had it before
-     * them. That is the point rather than a leak. A lapse says nothing about why: the previous judge may have
-     * been part-way through a complex point of law, and the one picking it up can now go and ask them instead of
-     * starting again or duplicating their work. An anonymous "a claim lapsed" would cost exactly that
-     * conversation. The residual disclosure -- that a judge's inactivity is legible to colleagues -- was weighed
-     * and accepted for that reason; see flag 6 of {@code docs/plans/completed/referrals-api-3-judicial-surface.md}.
+     * <p><strong>The only event on the timeline that no column records.</strong> The release <em>erases</em> the
+     * assignment it is about, so without this the case would show a referral that had quietly gone back to waiting
+     * with nothing to say it was ever with a Master. It is authored by the service account rather than by a
+     * caseworker, because no person did it.
      *
-     * <p>The judge's name is bounded here rather than trusted. It arrives from a token, the column holding
-     * it is unbounded {@code text}, and the notes column is not -- so a pathological display name would make
-     * the sweep compose a note the notes validator refuses, and the refusal would roll back the release
-     * rather than the note. Truncating is the safe failure: the note still says a claim lapsed.
+     * <p><strong>Naming the Master is deliberate</strong>: the caseworker who assigns it again can ask them where they
+     * had got to rather than starting again. The note reaches no judge since the judicial detail carries no case notes
+     * (2026-10-27). Never an email address or a subject.
      *
-     * @param judge the display name the claim was held under, blank or null on a row that somehow has none
+     * <p>The Master's name is bounded here rather than trusted. The column holding it is unbounded {@code text} and
+     * the notes column is not, so a pathological name would make the sweep compose a note the notes validator
+     * refuses, and the refusal would roll back the release rather than the note. Truncating is the safe failure.
+     *
+     * @param overdue the released referral, as the sweep read it before the release cleared the Master's name
+     * @param window  the processing window the referral exceeded, as the setting gave it to that sweep
      */
-    public static String claimLapsed(String judge) {
-        return "Referral claim by " + named(judge) + " lapsed after inactivity. The referral has been returned to "
-            + "the shared pool and can be picked up again.";
+    public static String returnedForAssignment(OverdueAssignment overdue, Duration window) {
+        return "Referral " + identifies(overdue.createdOn(), overdue.reasons())
+            + ", returned to the office for assignment: no direction from " + named(overdue.claimedBy())
+            + " within " + inWords(window) + ".";
     }
 
     /**
@@ -128,7 +132,8 @@ public final class ReferralNotes {
      * <p>"Referral raised on …, reasons: …, assigned to {name}."
      *
      * <p>Names the Master, because the note's author is the caseworker and the Master is who has the papers now.
-     * The name is the Masters list's, bounded as {@link #claimLapsed}'s is; never an email address or a subject.
+     * The name is the Masters list's, bounded as {@link #returnedForAssignment}'s is; never an email address or a
+     * subject.
      */
     public static String assigned(Referral referral, String master) {
         return "Referral " + identifies(referral) + ", assigned to " + named(master) + ".";
@@ -265,7 +270,7 @@ public final class ReferralNotes {
      * case's timeline, and {@code JudicialReferralDetail} returns that timeline to any judge who may see a
      * referral on the case -- which, for the referral this note is about, is the judge who refused the
      * non-publication request. So the outcome and the free text below are legible to them, exactly as
-     * {@link #claimLapsed}'s name is. That is the same decision rather than an oversight: the judge refused
+     * {@link #returnedForAssignment}'s name is. That is the same decision rather than an oversight: the judge refused
      * publication on the applicant's stated wishes, so whether the applicant then went ahead, withdrew or asked
      * for a refund is the result of their own direction, and a judge who directed a case is entitled to read what
      * became of it. The confirmation <em>columns</em> are a different matter and are not published on that surface
@@ -309,10 +314,30 @@ public final class ReferralNotes {
      * it. That is what lets the withdrawal note keep the exact words it has always had.
      */
     private static String identifies(Referral referral) {
-        String reasons = referral.getReasons().isEmpty()
-            ? "no reasons recorded"
-            : described(referral.getReasons());
-        return "raised on " + DAY.format(referral.getCreatedOn()) + ", reasons: " + reasons;
+        return identifies(referral.getCreatedOn(), referral.getReasons());
+    }
+
+    private static String identifies(LocalDateTime createdOn, List<String> reasons) {
+        String described = reasons.isEmpty() ? "no reasons recorded" : described(reasons);
+        return "raised on " + DAY.format(createdOn) + ", reasons: " + described;
+    }
+
+    /**
+     * A processing window as a caseworker would say it: whole days where it is whole days (the setting is chosen
+     * in days, so this is the normal case), otherwise whole hours, otherwise minutes.
+     */
+    static String inWords(Duration window) {
+        if (window.toMinutes() % MINUTES_PER_DAY == 0) {
+            return plural(window.toDays(), "day");
+        }
+        if (window.toMinutes() % MINUTES_PER_HOUR == 0) {
+            return plural(window.toHours(), "hour");
+        }
+        return plural(window.toMinutes(), "minute");
+    }
+
+    private static String plural(long count, String unit) {
+        return count + " " + unit + (count == 1 ? "" : "s");
     }
 
     /**

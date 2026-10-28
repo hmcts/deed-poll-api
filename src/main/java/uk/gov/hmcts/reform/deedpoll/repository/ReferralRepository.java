@@ -34,8 +34,8 @@ import java.util.UUID;
  * things in this service that are about every case at once rather than about <em>a</em> case's referrals:
  *
  * <ul>
- *   <li>the inactivity sweep -- {@link #findStaleClaims} and {@link #releaseStaleClaim}. It stays inside the
- *       rule rather than beside it: the finder returns a three-field projection instead of an entity, and
+ *   <li>the processing-window sweep -- {@link #findOverdueAssignments} and {@link #releaseOverdueAssignment}. It
+ *       stays inside the rule rather than beside it: the finder returns a projection instead of an entity, and
  *       neither is reachable from a request path that names a case;</li>
  *   <li>the cap's counts, which return numbers and never a referral;</li>
  *   <li>linking's two statements, {@link #attachToLinkedMaster} and {@link #attachLegacyClaims}, which return a
@@ -166,8 +166,8 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * and only makes the sequence stable from one page to the next. The caller passes an unsorted page, since a
      * {@code Sort} would be appended after this one.
      *
-     * <p>The states are parameters rather than literals in the JPQL for the reason {@link #findStaleClaims}'s is:
-     * the caller says out loud which states it means a judge's own work to be in, instead of two places having to
+     * <p>The states are parameters rather than literals in the JPQL for the reason {@link #findOverdueAssignments}'s
+     * is: the caller says out loud which states it means a judge's own work to be in, instead of two places having to
      * be kept in step.
      *
      * <p>No index backs this, for the reason given in V14: the table is small.
@@ -289,8 +289,8 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
     /**
      * How many referrals one Master holds in one referral window: the per-Master cap's count (D-5).
      *
-     * <p><strong>Not scoped to a case</strong>, like {@link #findStaleClaims}, and safe for its reason: it returns
-     * a number, no case data, and only {@code ReferralService.assign} calls it, under the Master's row lock. It
+     * <p><strong>Not scoped to a case</strong>, like {@link #findOverdueAssignments}, and safe for its reason: it
+     * returns a number, no case data, and only {@code ReferralService.assign} calls it, under the Master's row lock. It
      * counts current assignments only, so a referral reassigned away, unassigned or directed no longer counts.
      *
      * @param claimed the state an assigned referral is in, {@link ReferralState#Claimed}
@@ -317,53 +317,60 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
                                                   @Param("windowSlot") WindowSlot windowSlot);
 
     /**
-     * The claimed referrals nobody has touched since {@code cutoff} -- the sweep's candidates.
+     * The assigned referrals whose processing window has ended without a direction -- the sweep's candidates.
      *
-     * <p><strong>Not scoped to a case, and it is the one finder that is not.</strong> The rule stated at the
-     * top of this interface is about reading and writing <em>a</em> referral, which a caller names by case;
-     * an inactivity sweep is by definition about every case at once, and there is no case id to scope it to.
-     * It is safe for the reason the scoping rule exists: it returns no case data -- three fields of a
-     * {@link StaleClaim}, no entity -- and it is reachable only through {@code ReferralService}'s sweep,
-     * never from a request path carrying a case id.
+     * <p><strong>Not scoped to a case.</strong> The rule stated at the top of this interface is about reading and
+     * writing <em>a</em> referral, which a caller names by case; the processing window is by definition about every
+     * case at once, and there is no case id to scope it to. It is safe for the reason the scoping rule exists: it
+     * returns no entity -- the five fields of an {@link OverdueAssignment} -- and it is reachable only through
+     * {@code ReferralService.unassignOverdue}, never from a request path carrying a case id.
+     *
+     * <p><strong>The window runs from {@code assignedAt}, or from {@code claimedAt} where there is none</strong>:
+     * a referral claimed before V43 has a claim time and no assignment time, and decision D-10 counts its window
+     * from the claim. {@code lastTouchedAt} plays no part since plan D2, so a Master opening the papers extends
+     * nothing.
      *
      * <p>{@code claimed} is a parameter rather than baked into the JPQL so that the caller says out loud
-     * which state it is sweeping, matching the conditional {@link #releaseStaleClaim} that follows it: the
+     * which state it is sweeping, matching the conditional {@link #releaseOverdueAssignment} that follows it: the
      * two predicates have to agree, and a state named in one place and hard-coded in the other is how they
      * would come to disagree.
      *
-     * @param claimed the state a held referral is in, {@link ReferralState#Claimed}
-     * @param cutoff  the instant a claim must have been touched after to survive, normally now minus the
-     *                configured window
+     * @param claimed the state an assigned referral is in, {@link ReferralState#Claimed}
+     * @param cutoff  the instant an assignment must have started after to survive, normally now minus the
+     *                processing window
      * @return one row per candidate, in no particular order
      */
     @Query("""
-        select new uk.gov.hmcts.reform.deedpoll.repository.StaleClaim(r.id, r.deedPoll.id, r.claimedBy)
+        select new uk.gov.hmcts.reform.deedpoll.repository.OverdueAssignment(
+                   r.id, r.deedPoll.id, r.claimedBy, r.createdOn, r.reasons)
           from Referral r
          where r.state = :claimed
-           and r.lastTouchedAt < :cutoff
+           and coalesce(r.assignedAt, r.claimedAt) < :cutoff
         """)
-    List<StaleClaim> findStaleClaims(@Param("claimed") ReferralState claimed,
-                                     @Param("cutoff") LocalDateTime cutoff);
+    List<OverdueAssignment> findOverdueAssignments(@Param("claimed") ReferralState claimed,
+                                                   @Param("cutoff") LocalDateTime cutoff);
 
     /**
-     * Returns one lapsed claim to the shared pool, if it is still lapsed when the statement runs.
+     * Returns one overdue assignment to the office, waiting for assignment, if it is still overdue when the
+     * statement runs.
      *
-     * <p><strong>The conditions in the {@code WHERE} are what make the sweep safe with several replicas,
-     * and they are not redundant with the query that found the row.</strong> Between the candidate list and
-     * this statement, the judge may have touched the referral, a caseworker may have withdrawn it, or
-     * another replica's sweep may have released it already -- and each of those makes the predicate false,
-     * so this answers 0 and the caller writes no note. Exactly one replica gets 1 for a given lapse, which
-     * is why the timeline gets exactly one lapse note however many pool loads happen at once. There is no
-     * lock and none is needed: a single {@code UPDATE} evaluating its own predicate is atomic.
+     * <p><strong>The conditions in the {@code WHERE} are what make the sweep safe with several replicas and
+     * beside the timer, and they are not redundant with the query that found the row.</strong> Between the
+     * candidate list and this statement, the Master may have directed it, a caseworker may have reassigned or
+     * withdrawn it, or another sweep -- the timer's or a request's, on this pod or another -- may have released it
+     * already, and each of those makes the predicate false, so this answers 0 and the caller writes no note.
+     * Exactly one statement gets 1 for a given release, which is why the timeline gets exactly one note however
+     * many sweeps run at once. There is no lock and none is needed: a single {@code UPDATE} evaluating its own
+     * predicate is atomic, and a second one waits on the first's row lock and then re-evaluates against what it
+     * committed.
      *
-     * <p>Nulling {@code "lastTouchedAt"} is part of that, not tidiness -- it is what stops the predicate
-     * matching the same row on the next sweep.
-     *
-     * <p>{@code "claimedById"} is cleared alongside {@code "claimedBy"}, and it is the one of the two that
-     * matters: it is what every ownership check compares, so a released claim whose owner survived would leave
-     * the judge who abandoned the referral still able to direct it, and would keep it on their personal list
-     * after the pool had re-offered it. {@code "decidedById"} is never cleared here -- a direction is permanent,
-     * and this statement only ever touches rows that are still {@code Claimed}.
+     * <p>Every assignment column is cleared, because V43's {@code open_unassigned_check} requires an {@code Open}
+     * referral to hold no Master, assignment time or window, and because a released referral counts towards no
+     * Master's cap. {@code "claimedById"} is the one that matters most: it is what every ownership check compares,
+     * so a released referral whose owner survived would leave the Master who gave no direction still able to give
+     * one, and would keep it on their personal list after the office had taken it back. {@code "decidedById"} is
+     * never cleared here -- a direction is permanent, and this statement only ever touches rows that are still
+     * {@code Claimed}.
      *
      * <p>Native SQL, and {@code {@literal @}Modifying}: this <em>is</em> the statement, so it is written
      * where a reader can check it against the rule rather than assembled by a translator. Identifiers are
@@ -379,7 +386,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * @param cutoff    the same cutoff the candidate list was taken with
      * @param now       the audit stamp for the release
      * @param releasedBy who to record as having written it, the service account
-     * @return 1 if this statement released the claim, 0 if it was no longer there to release
+     * @return 1 if this statement released the referral, 0 if it was no longer there to release
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(nativeQuery = true, value = """
@@ -397,12 +404,12 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
                "modifiedBy" = :releasedBy
          WHERE "id" = :id
            AND "state" = 'Claimed'
-           AND "lastTouchedAt" < :cutoff
+           AND coalesce("assignedAt", "claimedAt") < :cutoff
         """)
-    int releaseStaleClaim(@Param("id") UUID id,
-                          @Param("cutoff") LocalDateTime cutoff,
-                          @Param("now") LocalDateTime now,
-                          @Param("releasedBy") String releasedBy);
+    int releaseOverdueAssignment(@Param("id") UUID id,
+                                 @Param("cutoff") LocalDateTime cutoff,
+                                 @Param("now") LocalDateTime now,
+                                 @Param("releasedBy") String releasedBy);
 
     /**
      * Gives a newly linked Master the referrals assigned to them before they were linked (plan D2): the owner
@@ -411,7 +418,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * Master sees them from the request that linked them.
      *
      * <p>Native and conditional on a null owner, so a referral another subject already owns is never moved. Quoted
-     * mixed-case identifiers and untyped state literals, for {@link #releaseStaleClaim}'s reasons.
+     * mixed-case identifiers and untyped state literals, for {@link #releaseOverdueAssignment}'s reasons.
      *
      * @param masterId the entry just linked
      * @param subject the IDAM subject it was linked to
@@ -465,7 +472,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * {@code CaseEmailService} refuses ④ for a referral that has already been answered, but that check and this
      * statement are two steps: an answer recorded in between them would otherwise be overwritten back to NULL by
      * a re-stamp, erasing the applicant's reply and restarting a wait they have already ended. Answering 0 is how
-     * this says that happened, for the reason {@link #releaseStaleClaim} answers 0: a single {@code UPDATE}
+     * this says that happened, for the reason {@link #releaseOverdueAssignment} answers 0: a single {@code UPDATE}
      * evaluating its own predicate is atomic, and no lock is needed for a rule the statement itself states. The
      * caller turns that 0 into the same 409 its own check would have given, so the send -- and the outbox row it
      * had already written -- is rolled back rather than an answered applicant being asked again.
@@ -473,9 +480,9 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * <p>The parent case is in the {@code WHERE} as it is in every finder here, so a send resolved on one case
      * cannot stamp another case's referral even if it were handed the wrong id.
      *
-     * <p>Native SQL and {@code {@literal @}Modifying} for {@link #releaseStaleClaim}'s reasons, quoted mixed-case
-     * identifiers included. {@code clearAutomatically} because a statement Hibernate did not route through the
-     * session leaves any loaded copy of the row stale -- here that is the detached one this exists to stop the
+     * <p>Native SQL and {@code {@literal @}Modifying} for {@link #releaseOverdueAssignment}'s reasons, quoted
+     * mixed-case identifiers included. {@code clearAutomatically} because a statement Hibernate did not route through
+     * the session leaves any loaded copy of the row stale -- here that is the detached one this exists to stop the
      * caller writing through -- and {@code flushAutomatically} so a pending write cannot be lost behind it.
      *
      * @param id the referral that was asked

@@ -33,7 +33,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
-import uk.gov.hmcts.reform.deedpoll.repository.StaleClaim;
+import uk.gov.hmcts.reform.deedpoll.repository.OverdueAssignment;
 
 import java.time.Duration;
 import java.time.LocalDate;
@@ -176,7 +176,7 @@ class ReferralServiceTest {
             return written;
         });
         // No stale claims unless a test says otherwise, so the sweep at the top of claim() is a no-op.
-        when(referrals.findStaleClaims(any(), any())).thenReturn(List.of());
+        when(referrals.findOverdueAssignments(any(), any())).thenReturn(List.of());
         // Scoped to the case asked about, as the real query is: a recompute that read another case's referrals
         // would pass a stub that ignored the argument.
         when(referrals.findStatesByDeedPollId(anyString()))
@@ -319,7 +319,7 @@ class ReferralServiceTest {
      * Makes the mocked repository answer the sweep's two statements the way the SQL does, over the given rows.
      *
      * <p><strong>This is what makes the staleness rule provable without a container.</strong> The rule is
-     * arithmetic -- a claim untouched since {@code now - window} lapses and one touched since does not -- and
+     * arithmetic -- an assignment started before {@code now - window} is returned and one started since is not -- and
      * the service owns the window and the cutoff while the database owns only the comparison. So the
      * comparison is written once here, applied by both fake statements exactly as {@code ReferralRepository}
      * applies it in both real ones, and every test below asserts the service's half: which rows it asks
@@ -331,14 +331,15 @@ class ReferralServiceTest {
      */
     private void rowsInTheDatabase(Referral... rows) {
         List<Referral> all = List.of(rows);
-        when(referrals.findStaleClaims(eq(ReferralState.Claimed), any())).thenAnswer(call -> {
+        when(referrals.findOverdueAssignments(eq(ReferralState.Claimed), any())).thenAnswer(call -> {
             LocalDateTime cutoff = call.getArgument(1);
             return all.stream()
                 .filter(row -> lapsedBy(row, cutoff))
-                .map(row -> new StaleClaim(row.getId(), row.getDeedPoll().getId(), row.getClaimedBy()))
+                .map(row -> new OverdueAssignment(row.getId(), row.getDeedPoll().getId(), row.getClaimedBy(),
+                                                  row.getCreatedOn(), row.getReasons()))
                 .toList();
         });
-        when(referrals.releaseStaleClaim(any(), any(), any(), anyString())).thenAnswer(call -> {
+        when(referrals.releaseOverdueAssignment(any(), any(), any(), anyString())).thenAnswer(call -> {
             UUID id = call.getArgument(0);
             LocalDateTime cutoff = call.getArgument(1);
             for (Referral row : all) {
@@ -351,6 +352,10 @@ class ReferralServiceTest {
                     row.setClaimedById(null);
                     row.setClaimedAt(null);
                     row.setLastTouchedAt(null);
+                    row.setAssignedMasterId(null);
+                    row.setAssignedAt(null);
+                    row.setWindowDate(null);
+                    row.setWindowSlot(null);
                     row.setModifiedBy(call.getArgument(3));
                     row.setModifiedOn(call.getArgument(2));
                     return 1;
@@ -364,15 +369,16 @@ class ReferralServiceTest {
 
     /** The predicate both sweep statements carry, in one place here as it is in one place in the SQL. */
     private static boolean lapsedBy(Referral row, LocalDateTime cutoff) {
+        LocalDateTime started = row.getAssignedAt() != null ? row.getAssignedAt() : row.getClaimedAt();
         return row.getState() == ReferralState.Claimed
-            && row.getLastTouchedAt() != null
-            && row.getLastTouchedAt().isBefore(cutoff);
+            && started != null
+            && started.isBefore(cutoff);
     }
 
     /** The cutoff the service asked the candidate query about. */
     private LocalDateTime cutoffAsked() {
         ArgumentCaptor<LocalDateTime> cutoff = ArgumentCaptor.forClass(LocalDateTime.class);
-        verify(referrals).findStaleClaims(eq(ReferralState.Claimed), cutoff.capture());
+        verify(referrals).findOverdueAssignments(eq(ReferralState.Claimed), cutoff.capture());
         return cutoff.getValue();
     }
 
@@ -882,7 +888,7 @@ class ReferralServiceTest {
 
             // Refused before any state change at all, the sweep included: the other judge's lapsed claim is
             // still there, so an unidentified caller cannot release one by being refused.
-            verify(referrals, never()).findStaleClaims(any(), any());
+            verify(referrals, never()).findOverdueAssignments(any(), any());
             verify(referrals, never()).save(any());
             verifyNoInteractions(notes);
             assertThat(referral.getState()).isEqualTo(ReferralState.Claimed);
@@ -928,7 +934,7 @@ class ReferralServiceTest {
             // only the unlocked one would be an assertion about a call this operation never makes.
             verify(referrals, never()).findByIdAndDeedPollIdForUpdate(any(), anyString());
             verify(referrals, never()).findByIdAndDeedPollId(any(), anyString());
-            verify(referrals, never()).findStaleClaims(any(), any());
+            verify(referrals, never()).findOverdueAssignments(any(), any());
         }
 
         @ParameterizedTest
@@ -989,7 +995,7 @@ class ReferralServiceTest {
             // says the second judge has it, which is this call's own transition.
             assertThat(notesWritten()).hasSize(2);
             assertThat(notesWritten().get(0).text())
-                .contains("District Judge Okafor", "lapsed after inactivity");
+                .contains("District Judge Okafor", "returned to the office for assignment");
             assertThat(notesWritten().get(1).text()).contains("claimed by a Master");
         }
 
@@ -1048,7 +1054,7 @@ class ReferralServiceTest {
             service.claim(CASE_ID, REFERRAL_ID.toString(), OTHER_JUDGE);
             // The first judge stops working on it, which is what an abandoned claim is: the row is otherwise
             // exactly the one their claim produced.
-            referral.setLastTouchedAt(AuditClock.now().minus(CLAIM_EXPIRY.plusMinutes(1)));
+            referral.setClaimedAt(AuditClock.now().minus(CLAIM_EXPIRY.plusMinutes(1)));
             service.claim(CASE_ID, REFERRAL_ID.toString(), JUDGE);
 
             // There is no "reclaimed" transition, and this is the honest sequence rather than a summary: the
@@ -1059,7 +1065,8 @@ class ReferralServiceTest {
                     assertThat(claimed.author().author()).isEqualTo("District Judge Okafor");
                 },
                 lapsed -> {
-                    assertThat(lapsed.text()).contains("District Judge Okafor", "lapsed after inactivity");
+                    assertThat(lapsed.text())
+                        .contains("District Judge Okafor", "returned to the office for assignment");
                     // The service released it, not the judge whose claim call happened to notice, so the lapse
                     // stays the service account's note between two human-authored ones.
                     assertThat(lapsed.author()).isEqualTo(NoteAuthor.NONE);
@@ -1293,7 +1300,7 @@ class ReferralServiceTest {
             Referral lapsed = storedClaim(JUDGE, CLAIM_EXPIRY.plusMinutes(1));
             rowsInTheDatabase(lapsed);
 
-            assertThat(service.reclaimStaleClaims()).isEqualTo(1);
+            assertThat(service.unassignOverdue()).isEqualTo(1);
 
             // The owner is cleared with the rest of the active-claim fields, which is what stops the judge who
             // abandoned it directing a referral the pool has re-offered to everybody.
@@ -1456,7 +1463,7 @@ class ReferralServiceTest {
             // hold it by now, and both of them directing the same referral is the outcome this prevents.
             Referral referral = storedClaim(JUDGE, CLAIM_EXPIRY.plusMinutes(5));
             rowsInTheDatabase(referral);
-            assertThat(service.reclaimStaleClaims()).isEqualTo(1);
+            assertThat(service.unassignOverdue()).isEqualTo(1);
 
             assertThatThrownBy(() -> service.decide(CASE_ID, REFERRAL_ID.toString(), approval(), JUDGE))
                 .isInstanceOf(ConflictError.class)
@@ -1467,7 +1474,7 @@ class ReferralServiceTest {
             // The sweep's lapse note and nothing after it: the direction that arrived too late left no trace
             // suggesting it landed.
             assertThat(notesWritten()).singleElement()
-                .satisfies(note -> assertThat(note.text()).contains("lapsed after inactivity"));
+                .satisfies(note -> assertThat(note.text()).contains("returned to the office for assignment"));
         }
 
         @ParameterizedTest
@@ -1913,17 +1920,18 @@ class ReferralServiceTest {
         }
 
         @Test
-        @DisplayName("is swept back to the pool once it lapses, as any other claim is")
+        @DisplayName("is returned to the office once its window ends, as any other assignment is")
         void lapsesLikeAnyOtherClaim() {
             Referral referral = storedDirection(JUDGE);
             rowsInTheDatabase(referral);
             service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
 
             // Just withdrawn, so its clock has only just started: nothing to reclaim.
-            assertThat(service.reclaimStaleClaims()).isZero();
+            assertThat(service.unassignOverdue()).isZero();
 
-            referral.setLastTouchedAt(AuditClock.now().minus(CLAIM_EXPIRY).minusMinutes(1));
-            assertThat(service.reclaimStaleClaims()).isEqualTo(1);
+            // The window restarts from the withdrawal's assignedAt, so that is what has to be older than it.
+            referral.setAssignedAt(AuditClock.now().minus(CLAIM_EXPIRY).minusMinutes(1));
+            assertThat(service.unassignOverdue()).isEqualTo(1);
             assertThat(referral.getState()).isEqualTo(ReferralState.Open);
             assertThat(referral.getClaimedById()).isNull();
         }
@@ -2189,66 +2197,107 @@ class ReferralServiceTest {
 
             // The mutating read is contained to the pool load and to claim(). A caseworker closing a referral
             // has no business releasing another judge's claim on a different case.
-            verify(referrals, never()).findStaleClaims(any(), any());
+            verify(referrals, never()).findOverdueAssignments(any(), any());
         }
     }
 
     @Nested
-    @DisplayName("the stale-claim sweep")
-    class ReclaimingStaleClaims {
+    @DisplayName("the processing window (unassignOverdue)")
+    class UnassigningOverdue {
 
         private static final UUID SECOND_REFERRAL_ID = UUID.fromString("55555555-5555-5555-5555-555555555555");
 
         @Test
-        @DisplayName("releases a claim untouched for longer than the window, and says so on the case")
-        void releasesAClaimUntouchedForLongerThanTheWindow() {
+        @DisplayName("returns an assignment older than the window to the office, and says so on the case")
+        void returnsAnOverdueAssignment() {
             Referral lapsed = storedClaim(OTHER_JUDGE, CLAIM_EXPIRY.plusMinutes(30));
             rowsInTheDatabase(lapsed);
 
-            assertThat(service.reclaimStaleClaims()).isEqualTo(1);
+            assertThat(service.unassignOverdue()).isEqualTo(1);
 
             assertThat(lapsed.getState()).isEqualTo(ReferralState.Open);
             assertThat(lapsed.getClaimedBy()).isNull();
             assertThat(lapsed.getClaimedAt()).isNull();
             // Nulled rather than left behind: it is what stops the next sweep matching the same row and
-            // writing a second note about one lapse.
+            // writing a second note about one release.
             assertThat(lapsed.getLastTouchedAt()).isNull();
+            assertThat(lapsed.getAssignedAt()).isNull();
 
             NoteWritten note = noteWritten();
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
-            assertThat(note.text()).contains("District Judge Okafor", "lapsed after inactivity");
+            assertThat(note.text()).isEqualTo(ReferralNotes.returnedForAssignment(
+                new OverdueAssignment(REFERRAL_ID, CASE_ID, "District Judge Okafor", lapsed.getCreatedOn(),
+                                      lapsed.getReasons()), CLAIM_EXPIRY));
+            assertThat(note.text()).contains("returned to the office for assignment",
+                                             "no direction from District Judge Okafor within 2 hours");
             // No person did this, so it is the service account rather than whoever's page load noticed.
             assertThat(note.author()).isEqualTo(NoteAuthor.NONE);
             assertThat(note.author().author()).isEqualTo(CurrentUser.SERVICE_ACCOUNT_NAME);
         }
 
         @Test
-        @DisplayName("leaves a claim touched inside the window alone, and writes no note")
+        @DisplayName("counts from assignedAt, so a reassignment or a withdrawn direction restarts the window")
+        void countsFromAssignedAt() {
+            // A claim made long ago, assigned again a minute ago: the assignment is what the window runs from.
+            Referral reassigned = storedClaim(OTHER_JUDGE, CLAIM_EXPIRY.plusDays(3));
+            reassigned.setAssignedAt(AuditClock.now().minusMinutes(1));
+            rowsInTheDatabase(reassigned);
+
+            assertThat(service.unassignOverdue()).isZero();
+            assertThat(reassigned.getState()).isEqualTo(ReferralState.Claimed);
+            verifyNoInteractions(notes);
+        }
+
+        @Test
+        @DisplayName("counts a claim made before V43, with no assignedAt, from claimedAt (go-live, D-10)")
+        void countsALegacyClaimFromClaimedAt() {
+            Referral legacy = storedClaim(OTHER_JUDGE, CLAIM_EXPIRY.plusMinutes(1));
+            assertThat(legacy.getAssignedAt()).isNull();
+            rowsInTheDatabase(legacy);
+
+            assertThat(service.unassignOverdue()).isEqualTo(1);
+            assertThat(legacy.getState()).isEqualTo(ReferralState.Open);
+            assertThat(legacy.getClaimedById()).isNull();
+        }
+
+        @Test
+        @DisplayName("is not extended by a Master reading the papers: lastTouchedAt plays no part")
+        void isNotExtendedByATouch() {
+            Referral read = storedClaim(OTHER_JUDGE, CLAIM_EXPIRY.plusMinutes(1));
+            read.setLastTouchedAt(AuditClock.now());
+            rowsInTheDatabase(read);
+
+            assertThat(service.unassignOverdue()).isEqualTo(1);
+            assertThat(read.getState()).isEqualTo(ReferralState.Open);
+        }
+
+        @Test
+        @DisplayName("leaves an assignment inside the window alone, and writes no note")
         void leavesAFreshClaimAlone() {
             Referral held = storedClaim(JUDGE, CLAIM_EXPIRY.minusSeconds(30));
             rowsInTheDatabase(held);
 
-            assertThat(service.reclaimStaleClaims()).isZero();
+            assertThat(service.unassignOverdue()).isZero();
 
             assertThat(held.getState()).isEqualTo(ReferralState.Claimed);
             assertThat(held.getClaimedBy()).isEqualTo("District Judge Bell");
             verifyNoInteractions(notes);
-            verify(referrals, never()).releaseStaleClaim(any(), any(), any(), anyString());
+            verify(referrals, never()).releaseOverdueAssignment(any(), any(), any(), anyString());
         }
 
         @Test
-        @DisplayName("reads the window from the process settings rather than assuming two hours")
+        @DisplayName("reads the window from the process settings rather than assuming one")
         void readsTheWindowFromTheProcessSettings() {
             Referral held = storedClaim(JUDGE, Duration.ofMinutes(45));
             rowsInTheDatabase(held);
 
-            // Untouched for 45 minutes: inside the seeded two hours and well outside a stored half hour. The
+            // Assigned 45 minutes ago: inside this fixture's two hours and well outside a stored half hour. The
             // same row, swept against two different stored windows, is the claim that the window is not
             // hard-coded -- and it is why a Delivery Manager can correct the guess without a release.
-            assertThat(service.reclaimStaleClaims()).isZero();
+            assertThat(service.unassignOverdue()).isZero();
             assertThat(held.getState()).isEqualTo(ReferralState.Claimed);
 
-            assertThat(serviceWithClaimExpiry(Duration.ofMinutes(30)).reclaimStaleClaims()).isEqualTo(1);
+            assertThat(serviceWithClaimExpiry(Duration.ofMinutes(30)).unassignOverdue()).isEqualTo(1);
             assertThat(held.getState()).isEqualTo(ReferralState.Open);
         }
 
@@ -2257,7 +2306,7 @@ class ReferralServiceTest {
         void asksForCandidatesAsOfNowMinusTheWindow() {
             LocalDateTime before = AuditClock.now();
 
-            service.reclaimStaleClaims();
+            service.unassignOverdue();
 
             // The arithmetic on its own, so a service that swept with the right rows for the wrong reason --
             // an absolute date, or a window applied the other way round -- fails here rather than passing
@@ -2271,10 +2320,10 @@ class ReferralServiceTest {
         void releasesAgainstTheSameCutoff() {
             rowsInTheDatabase(storedClaim(JUDGE, CLAIM_EXPIRY.plusMinutes(1)));
 
-            service.reclaimStaleClaims();
+            service.unassignOverdue();
 
             ArgumentCaptor<LocalDateTime> released = ArgumentCaptor.forClass(LocalDateTime.class);
-            verify(referrals).releaseStaleClaim(eq(REFERRAL_ID), released.capture(), any(), anyString());
+            verify(referrals).releaseOverdueAssignment(eq(REFERRAL_ID), released.capture(), any(), anyString());
             // Recomputing it per row would let a candidate found under one cutoff be released under a later
             // one -- and, an instant either side of the window, release a claim that no longer qualified.
             assertThat(released.getValue()).isEqualTo(cutoffAsked());
@@ -2284,14 +2333,15 @@ class ReferralServiceTest {
         @DisplayName("writes no note when the release changed nothing, because another replica got there")
         void writesNoNoteWhenTheReleaseChangedNothing() {
             storedClaim(OTHER_JUDGE, CLAIM_EXPIRY.plusMinutes(1));
-            when(referrals.findStaleClaims(eq(ReferralState.Claimed), any()))
-                .thenReturn(List.of(new StaleClaim(REFERRAL_ID, CASE_ID, OTHER_JUDGE.name())));
-            when(referrals.releaseStaleClaim(any(), any(), any(), anyString())).thenReturn(0);
+            when(referrals.findOverdueAssignments(eq(ReferralState.Claimed), any()))
+                .thenReturn(List.of(new OverdueAssignment(REFERRAL_ID, CASE_ID, OTHER_JUDGE.name(),
+                                                          AuditClock.now(), List.of())));
+            when(referrals.releaseOverdueAssignment(any(), any(), any(), anyString())).thenReturn(0);
 
-            // The multi-replica case, which is the whole reason the release is conditional: two pool loads at
-            // the same instant both see the candidate, one statement changes the row, and exactly one note is
-            // written -- so the count and the note both follow the rows-affected rather than the candidate.
-            assertThat(service.reclaimStaleClaims()).isZero();
+            // The race, which is the whole reason the release is conditional: the timer and a request (or two
+            // replicas) at the same instant both see the candidate, one statement changes the row, and exactly one
+            // note is written -- so the count and the note both follow the rows-affected rather than the candidate.
+            assertThat(service.unassignOverdue()).isZero();
 
             verifyNoInteractions(notes);
         }
@@ -2305,7 +2355,7 @@ class ReferralServiceTest {
             Referral stillHeld = storedClaimOn("case-3", UNKNOWN_ID, JUDGE, Duration.ofMinutes(1));
             rowsInTheDatabase(lapsedHere, lapsedElsewhere, stillHeld);
 
-            assertThat(service.reclaimStaleClaims()).isEqualTo(2);
+            assertThat(service.unassignOverdue()).isEqualTo(2);
 
             assertThat(lapsedHere.getState()).isEqualTo(ReferralState.Open);
             assertThat(lapsedElsewhere.getState()).isEqualTo(ReferralState.Open);
@@ -2318,13 +2368,13 @@ class ReferralServiceTest {
         }
 
         @Test
-        @DisplayName("does nothing at all when no claim has lapsed")
+        @DisplayName("does nothing at all when no assignment is overdue")
         void doesNothingWhenNoClaimHasLapsed() {
-            assertThat(service.reclaimStaleClaims()).isZero();
+            assertThat(service.unassignOverdue()).isZero();
 
             // The ordinary case, and the one every pool load pays for: a sweep with nothing to do costs one
             // query and writes nothing.
-            verify(referrals, never()).releaseStaleClaim(any(), any(), any(), anyString());
+            verify(referrals, never()).releaseOverdueAssignment(any(), any(), any(), anyString());
             verify(referrals, never()).save(any());
             verifyNoInteractions(notes);
         }
@@ -2338,7 +2388,7 @@ class ReferralServiceTest {
             Referral stillHeld = storedClaimOn("case-3", UNKNOWN_ID, JUDGE, Duration.ofMinutes(1));
             rowsInTheDatabase(lapsedHere, lapsedElsewhere, stillHeld);
 
-            assertThat(service.reclaimStaleClaims()).isEqualTo(2);
+            assertThat(service.unassignOverdue()).isEqualTo(2);
 
             // One statement for the whole sweep rather than a recompute per row: the sweep's argument is that a
             // single statement settles a multi-replica race without a lock, and a read-model carried by a loop
@@ -2356,7 +2406,7 @@ class ReferralServiceTest {
             Referral lapsed = storedClaim(OTHER_JUDGE, CLAIM_EXPIRY.plusMinutes(5));
             rowsInTheDatabase(lapsed);
 
-            service.reclaimStaleClaims();
+            service.unassignOverdue();
 
             // The same derivation the one-live-referral guard uses. Passed to the statement rather than spelled
             // out in JPQL so that "in play" has one definition -- ReferralState.isTerminal() -- and a sixth
@@ -2371,7 +2421,7 @@ class ReferralServiceTest {
             Referral fresh = storedClaim(JUDGE, Duration.ofMinutes(1));
             rowsInTheDatabase(fresh);
 
-            assertThat(service.reclaimStaleClaims()).isZero();
+            assertThat(service.unassignOverdue()).isZero();
 
             // The ordinary pool load. A sweep with nothing to do must not touch the case table, or the most
             // polled judicial page would write to every case that has ever held a claim.

@@ -39,7 +39,7 @@ import java.util.stream.Collectors;
  *       a namesake's referrals rather than needing one of their ids, which is why it waited for this;</li>
  *   <li>a judge whose IDAM display name changed stopped being able to see their own claimed referral -- 404 to
  *       read, 409 to direct -- until the inactivity sweep released it, which it did, because
- *       {@code releaseStaleClaim} matches on {@code lastTouchedAt} and never on the owner.</li>
+ *       the sweep matched on {@code lastTouchedAt} and never on the owner.</li>
  * </ul>
  *
  * <p>So the rule is plain rather than conditional now: <strong>authorise on {@link #userId} through

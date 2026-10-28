@@ -358,7 +358,7 @@ class JudicialReferralServiceTest {
         void stillSweeps() {
             service.pool(JUDGE, JudicialReferralService.FIRST_POOL_PAGE);
 
-            verify(referralService).reclaimStaleClaims();
+            verify(referralService).unassignOverdue();
         }
 
         @Test
@@ -432,7 +432,7 @@ class JudicialReferralServiceTest {
             // this page is one the judge would open, and opening it calls touch -- so the expiry window would be
             // revived by the very list that should have stopped showing it.
             InOrder order = inOrder(referralService, referrals.repository());
-            order.verify(referralService).reclaimStaleClaims();
+            order.verify(referralService).unassignOverdue();
             order.verify(referrals.repository()).findOwnedBy(any(), any(), any(), any(), any());
         }
 
@@ -767,7 +767,7 @@ class JudicialReferralServiceTest {
             assertThatThrownBy(() -> service.claim(REFERRAL_ID.toString(), UNIDENTIFIED_JUDGE))
                 .isInstanceOf(UnauthorizedError.class);
 
-            verify(referralService, never()).reclaimStaleClaims();
+            verify(referralService, never()).unassignOverdue();
             verify(referralService, never()).claim(any(), any(), any());
             verifyNoInteractions(documents);
         }
@@ -783,7 +783,7 @@ class JudicialReferralServiceTest {
                 .isInstanceOf(ConflictError.class);
 
             InOrder order = inOrder(referralService, referrals.repository());
-            order.verify(referralService).reclaimStaleClaims();
+            order.verify(referralService).unassignOverdue();
             order.verify(referrals.repository()).findWithCaseById(REFERRAL_ID);
             order.verify(referralService).claim(CASE_ID, REFERRAL_ID.toString(), JUDGE);
         }
@@ -926,7 +926,7 @@ class JudicialReferralServiceTest {
             // sweep here would release it between their reading the papers and their answering. Their claim may
             // still lapse by another judge's pool load, and that is then the transition's 409 -- but not this
             // request's doing.
-            verify(referralService, never()).reclaimStaleClaims();
+            verify(referralService, never()).unassignOverdue();
         }
 
         @ParameterizedTest
@@ -1005,7 +1005,7 @@ class JudicialReferralServiceTest {
             verify(referralService).reviseDirection(CASE_ID, REFERRAL_ID.toString(), REFUSAL, JUDGE);
             assertThat(view.referral()).isSameAs(revised);
             // A decided referral has no claim, so nothing here may sweep or touch one.
-            verify(referralService, never()).reclaimStaleClaims();
+            verify(referralService, never()).unassignOverdue();
             verify(referralService, never()).touch(any(), any(), any());
         }
 
@@ -1074,7 +1074,7 @@ class JudicialReferralServiceTest {
 
             verify(referralService).withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
             assertThat(view.referral()).isSameAs(claimed);
-            verify(referralService, never()).reclaimStaleClaims();
+            verify(referralService, never()).unassignOverdue();
             verify(referralService, never()).touch(any(), any(), any());
         }
 

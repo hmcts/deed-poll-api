@@ -20,7 +20,7 @@ import java.util.UUID;
  * inactivity sweep is.</strong> {@link ReferralRepository}'s rule -- every finder names its parent, so
  * a cross-case read is not expressible -- is about reading and writing <em>a</em> case's rows, which a
  * caller names by case. Emptying an outbox is by definition about every case at once and there is no
- * case id to scope it to. It stays inside the spirit of the rule the way {@code findStaleClaims} does:
+ * case id to scope it to. It stays inside the spirit of the rule the way {@code findOverdueAssignments} does:
  * {@link #findClaimable} returns ids and no case data, and neither method is reachable from a request
  * path that names a case -- {@code NotificationOutbox} is the only caller of either.
  *
@@ -240,7 +240,7 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
     /**
      * The ids of the rows a drain could take right now, oldest due first.
      *
-     * <p>Ids rather than entities, for the reason {@code findStaleClaims} returns a projection: a
+     * <p>Ids rather than entities, for the reason {@code findOverdueAssignments} returns a projection: a
      * candidate is not yet this caller's to work on, and every one of these has to survive the
      * conditional {@link #claimNextDue} before anything is read off it. Loading entities here would
      * also load rows another replica is about to win.
@@ -248,7 +248,7 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
      * <p>The state is a parameter rather than baked into the JPQL so that the caller says out loud
      * which state it is draining, matching {@link #claimNextDue}'s hard-coded {@code 'Pending'}: the
      * two predicates have to agree, and a state named in one place and implied in the other is how they
-     * would come to disagree. {@code ReferralRepository.findStaleClaims} takes its state for the same
+     * would come to disagree. {@code ReferralRepository.findOverdueAssignments} takes its state for the same
      * reason.
      *
      * <p>Oldest due first so a row that has been waiting through several backoffs is not starved by

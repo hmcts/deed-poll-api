@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   <li><strong>The claim is exclusive.</strong> {@link NotificationRepository#claimNextDue} answers 1
  *       once and 0 for ever afterwards, which is the whole multi-replica argument -- and it is the
  *       reason a second drain does not send a second rejection letter. This is the same assertion
- *       {@code ReferralRepositoryTest} makes about {@code releaseStaleClaim}, and the consequence here
+ *       {@code ReferralRepositoryTest} makes about {@code releaseOverdueAssignment}, and the consequence here
  *       is worse, so it is made the same way: run the statement twice and read the second answer.</li>
  *   <li><strong>The unique index refuses a duplicate, and since V15 it refuses the other email of the
  *       same exclusion group too.</strong> Idempotency and mutual exclusion are both a constraint rather

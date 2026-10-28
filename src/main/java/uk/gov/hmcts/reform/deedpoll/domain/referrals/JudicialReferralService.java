@@ -175,7 +175,7 @@ public class JudicialReferralService {
     @Transactional
     public ReferralPool pool(CurrentUser caller, CasePaging paging) {
         caller.requireAnyRole(Role.JUDICIAL);
-        referralService.reclaimStaleClaims();
+        referralService.unassignOverdue();
         return ReferralPool.of(NO_POOL, paging, 0);
     }
 
@@ -220,7 +220,7 @@ public class JudicialReferralService {
         // mistake claim() refuses for the same reason.
         String owner = caller.requireUserId();
         // Before the query: a referral whose processing window has ended is not theirs any more.
-        referralService.reclaimStaleClaims();
+        referralService.unassignOverdue();
 
         // Unsorted: the order is the query's own, and a Sort here would be appended after it.
         Page<Referral> found = referrals.findOwnedBy(
@@ -315,7 +315,7 @@ public class JudicialReferralService {
         caller.requireUserId();
         // Before the resolve, for the reason the pool sweeps before it queries: a referral whose claim has just
         // lapsed belongs to the pool, and the visibility check has to be asked about the post-sweep row.
-        referralService.reclaimStaleClaims();
+        referralService.unassignOverdue();
 
         Referral referral = visible(referralId, caller);
         DeedPoll application = referral.getDeedPoll();
