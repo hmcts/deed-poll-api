@@ -271,4 +271,16 @@ class IdamAuthenticationConverterTest {
         assertThatThrownBy(() -> converter(true).convert(jwt())).isInstanceOf(InvalidBearerTokenException.class);
         RAS.verify(0, anyRequestedFor(anyUrl()));
     }
+
+    @Test
+    @DisplayName("the email is IDAM's, normalised, whether or not AM adds a role")
+    void emailSurvivesTheUnion() {
+        when(idam.claims(TOKEN, SUBJECT)).thenReturn(Map.of(
+            "sub", SUBJECT, "name", "Ada Caseworker", "email", " Ada@Example.COM",
+            "roles", List.of("caseworker-civil")));
+        rasAnswers("ctsc");
+
+        assertThat(convert(true).currentUser().email()).isEqualTo("ada@example.com");
+        assertThat(convert(false).currentUser().email()).isEqualTo("ada@example.com");
+    }
 }

@@ -181,9 +181,9 @@ session, and the next one builds over it, wiping the results.
 ## Implementation Steps
 
 ### Task 1: Caller email
-- [ ] Record the execution baseline (commit, highest migration, test counts) in the execution notes.
-- [ ] Add failing tests: userinfo `email` reaches `CurrentUser` trimmed and lower-cased; blank or malformed is null; it appears in no log line, audit row or response.
-- [ ] Implement, run the focused tests and all Validation Commands, and record the results.
+- [x] Record the execution baseline (commit, highest migration, test counts) in the execution notes.
+- [x] Add failing tests: userinfo `email` reaches `CurrentUser` trimmed and lower-cased; blank or malformed is null; it appears in no log line, audit row or response.
+- [x] Implement, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 2: Migration and settings
 - [ ] Add failing tests for the seed, the widened window rule (all three migration branches), the new bounds, the ordering rule, old-shape PUTs, history and audit.
@@ -202,3 +202,19 @@ session, and the next one builds over it, wiping the results.
 - [ ] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
 
 ## Execution notes
+
+**Baseline (Task 1, 2026-10-28):** commit `d11ec44` (plan docs only over `7286139`), highest migration
+`V41__referral_changes_to_standard_publication.sql`, so D1's migration is V42. `build` SUCCESSFUL, `test` 4,968
+tests, 0 failures, 1 skipped; `integration` 25 tests, 0 failures.
+
+**Task 1 (caller email):** `CurrentUser` gains a last component `email`, normalised in the four-argument
+`currentUser` factory (trimmed, lower-cased, null if blank or without an `@`); the old constructor and factory pass
+null. `IdamClaims.userFromClaims` reads userinfo's `email`, and `IdamAuthenticationConverter` keeps it through the AM
+union. `toString` reports only whether an email is present. Tests: `CurrentUserTest.Email`, two in `IdamClaimsTest`,
+one in `IdamAuthenticationConverterTest`, and `CallerEmailPrivacyTest` (full context, real Postgres: `/me`, case
+create, note, case view and a 403, with the address absent from every body, every root-logger line, the audit
+tables and the notes). Full build: `test` 4,976 tests, 1 failure, 1 skipped; `integration` 25, 0 failures. The one
+failure, `CorrespondenceReadTest.preSendFailureCommitsRetryWithoutNotifyOrRollbackPoisoning [tokenFailure=true]`
+(attempts 0, expected 1), is outside this change and passed alone (14/14); the machine was heavily loaded (the build
+took 20m 52s against the baseline's 4m 48s), so it is recorded as intermittent rather than a regression.
+`checkstyle.sh` OK.

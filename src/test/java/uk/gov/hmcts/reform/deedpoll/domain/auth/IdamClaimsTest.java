@@ -173,4 +173,21 @@ class IdamClaimsTest {
         assertThat(IdamClaims.roleNames(claims("roles", "a, b"))).containsExactly("a", "b");
         assertThat(IdamClaims.roleNames(claims())).isEmpty();
     }
+
+    @Test
+    @DisplayName("carries userinfo's email, trimmed and lower-cased")
+    void carriesTheEmail() {
+        // Not in the reference: the one reader is linking a Masters-list entry.
+        assertThat(IdamClaims.userFromClaims(claims("sub", "s", "email", " Judge@Example.COM ")).email())
+            .isEqualTo("judge@example.com");
+    }
+
+    @Test
+    @DisplayName("has no email when the claim is absent, blank, malformed or not a string")
+    void hasNoEmailWhenTheClaimIsUnusable() {
+        assertThat(IdamClaims.userFromClaims(claims("sub", "s")).email()).isNull();
+        assertThat(IdamClaims.userFromClaims(claims("sub", "s", "email", "  ")).email()).isNull();
+        assertThat(IdamClaims.userFromClaims(claims("sub", "s", "email", "judge.example.com")).email()).isNull();
+        assertThat(IdamClaims.userFromClaims(claims("sub", "s", "email", List.of("a@b.c"))).email()).isNull();
+    }
 }

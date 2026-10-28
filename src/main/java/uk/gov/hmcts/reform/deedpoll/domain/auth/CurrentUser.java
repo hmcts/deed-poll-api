@@ -7,6 +7,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.stream.Collectors;
 
 /**
@@ -52,8 +53,14 @@ import java.util.stream.Collectors;
  * belongs to an applicant, not to the caseworker who logged it. Saved queries do belong to a caseworker, and a
  * display name is not an identity: two caseworkers can share one, and one caseworker's changes over time.
  * {@link #name} would therefore be an owner key that reassigns queries when somebody marries.
+ *
+ * <p><strong>{@link #email} is the second component the reference does not have, and it authorises nothing.</strong>
+ * It is the address IDAM's userinfo gives, normalised, and its one reader links a Masters-list entry to the judge
+ * who signs in with that address (plan D1). It is personal data with no audit purpose, so it is never logged, never
+ * put in an audit {@code detail}, a note or an error message, and {@link #toString()} leaves it out, because a
+ * principal is the kind of object a debug line prints whole.
  */
-public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String userId) {
+public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String userId, String email) {
 
     /**
      * Fallback author for a write with no identified user.
@@ -73,11 +80,17 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
     public static final CurrentUser ANONYMOUS = currentUser(List.of(), null, null);
 
     /** The compatibility flag is always derived from roles; the supplied flag has no authority. */
-    public CurrentUser(List<Role> roles, boolean isAdmin, String name, String userId) {
+    public CurrentUser(List<Role> roles, boolean isAdmin, String name, String userId, String email) {
         this.roles = List.copyOf(roles);
         this.isAdmin = RoleCapabilities.forRoles(this.roles).contains(Capability.OVERRIDE_PRIVACY);
         this.name = name;
         this.userId = userId;
+        this.email = email;
+    }
+
+    /** A caller with no email address, which is every caller not built from IDAM's userinfo. */
+    public CurrentUser(List<Role> roles, boolean isAdmin, String name, String userId) {
+        this(roles, isAdmin, name, userId, null);
     }
 
     /**
@@ -93,14 +106,30 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
      * {@link #requireUserId()} is where that becomes a refusal.
      */
     public static CurrentUser currentUser(List<Role> roles, String name, String userId) {
+        return currentUser(roles, name, userId, null);
+    }
+
+    /**
+     * As {@link #currentUser(List, String, String)}, with the email address IDAM gives for the caller.
+     *
+     * <p>The address is trimmed and lower-cased, and is null if blank or without an {@code @}: like the subject, it
+     * gets no fallback, because a Masters-list entry linked on a placeholder would be linked to everybody.
+     */
+    public static CurrentUser currentUser(List<Role> roles, String name, String userId, String email) {
         String trimmed = name == null ? "" : name.trim();
         String subject = userId == null ? "" : userId.trim();
         return new CurrentUser(
             roles,
             false,
             trimmed.isEmpty() ? SERVICE_ACCOUNT_NAME : trimmed,
-            subject.isEmpty() ? null : subject
+            subject.isEmpty() ? null : subject,
+            normalisedEmail(email)
         );
+    }
+
+    private static String normalisedEmail(String email) {
+        String trimmed = email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
+        return trimmed.isEmpty() || trimmed.indexOf('@') < 0 ? null : trimmed;
     }
 
     /**
@@ -178,5 +207,14 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
      */
     public NoteAuthor noteAuthor() {
         return NoteAuthor.user(name, userId);
+    }
+
+    /**
+     * Every component but {@link #email}, which is never written to a log.
+     */
+    @Override
+    public String toString() {
+        return "CurrentUser[roles=" + roles + ", isAdmin=" + isAdmin + ", name=" + name + ", userId=" + userId
+            + ", email=" + (email == null ? "absent" : "present") + "]";
     }
 }

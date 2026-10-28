@@ -72,6 +72,43 @@ class CurrentUserTest {
      * caseworkers can share one and one caseworker's changes over time, so a name as the owner key would
      * reassign queries when somebody marries.
      */
+    /** Not in the reference: the address that links a Masters-list entry (plan D1), and authorises nothing. */
+    @Nested
+    @DisplayName("email")
+    class Email {
+
+        @Test
+        @DisplayName("is trimmed and lower-cased")
+        void isNormalised() {
+            assertThat(CurrentUser.currentUser(List.of(), "A", SUBJECT, "  Master.Sullivan@Example.GOV.uk ")
+                           .email()).isEqualTo("master.sullivan@example.gov.uk");
+        }
+
+        @Test
+        @DisplayName("is null when absent, blank or without an @")
+        void isNullWhenMalformed() {
+            assertThat(CurrentUser.currentUser(List.of(), "A", SUBJECT, null).email()).isNull();
+            assertThat(CurrentUser.currentUser(List.of(), "A", SUBJECT, "   ").email()).isNull();
+            assertThat(CurrentUser.currentUser(List.of(), "A", SUBJECT, "not-an-address").email()).isNull();
+        }
+
+        @Test
+        @DisplayName("is null for every caller not built with one")
+        void isNullWithoutOne() {
+            assertThat(CurrentUser.currentUser(List.of(), "A", SUBJECT).email()).isNull();
+            assertThat(new CurrentUser(List.of(), false, "A", SUBJECT).email()).isNull();
+            assertThat(CurrentUser.ANONYMOUS.email()).isNull();
+        }
+
+        @Test
+        @DisplayName("is left out of toString, which a debug line prints whole")
+        void isNotInToString() {
+            CurrentUser user = CurrentUser.currentUser(List.of(Role.JUDICIAL), "A Master", SUBJECT, "a@example.com");
+
+            assertThat(user.toString()).doesNotContain("a@example.com").contains("A Master", SUBJECT);
+        }
+    }
+
     @Nested
     @DisplayName("userId")
     class Identity {
