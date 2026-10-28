@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.EnumSet;
 import java.util.Set;
 import java.util.function.Predicate;
 
@@ -33,9 +34,10 @@ class ReferralWindowsTest {
         LocalDate.of(2026, 8, 31), LocalDate.of(2026, 12, 25), LocalDate.of(2026, 12, 28),
         LocalDate.of(2027, 1, 1));
 
+    private static final Set<DayOfWeek> WEEKEND = EnumSet.of(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY);
+
     private static final Predicate<LocalDate> WORKING_DAY = date ->
-        date.getDayOfWeek() != DayOfWeek.SATURDAY && date.getDayOfWeek() != DayOfWeek.SUNDAY
-            && !HOLIDAYS.contains(date);
+        !WEEKEND.contains(date.getDayOfWeek()) && !HOLIDAYS.contains(date);
 
     /** A London local time as the instant it is; every date used here is unambiguous. */
     private static Instant london(String localDateTime) {

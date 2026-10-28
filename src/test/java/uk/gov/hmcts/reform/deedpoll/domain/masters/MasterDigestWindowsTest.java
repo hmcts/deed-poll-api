@@ -11,6 +11,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZonedDateTime;
+import java.util.EnumSet;
+import java.util.Set;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,8 +27,10 @@ class MasterDigestWindowsTest {
 
     private static final LocalDate CHRISTMAS = LocalDate.of(2026, 12, 25);
 
-    private static final Predicate<LocalDate> WORKING_DAY = day -> day.getDayOfWeek() != DayOfWeek.SATURDAY
-        && day.getDayOfWeek() != DayOfWeek.SUNDAY && !day.equals(CHRISTMAS);
+    private static final Set<DayOfWeek> WEEKEND = EnumSet.of(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY);
+
+    private static final Predicate<LocalDate> WORKING_DAY = day -> !WEEKEND.contains(day.getDayOfWeek())
+        && !day.equals(CHRISTMAS);
 
     @Test
     @DisplayName("a window is taken a settling minute after its end time, and not at the end itself")

@@ -20,6 +20,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.BankHolidayRepository;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -33,6 +34,8 @@ import java.util.Set;
  */
 @Service
 public class BankHolidays {
+
+    private static final Set<DayOfWeek> WEEKEND = EnumSet.of(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY);
 
     public static final int MAX_NAME_LENGTH = 200;
 
@@ -59,8 +62,7 @@ public class BankHolidays {
     /** Monday to Friday, and not a listed bank holiday. No capability check: D2 and D3 ask it per decision. */
     @Transactional(readOnly = true)
     public boolean isWorkingDay(LocalDate date) {
-        DayOfWeek day = date.getDayOfWeek();
-        return day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY && !repository.listed(date);
+        return !WEEKEND.contains(date.getDayOfWeek()) && !repository.listed(date);
     }
 
     /** Every listed date, earliest first. */
