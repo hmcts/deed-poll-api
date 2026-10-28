@@ -190,4 +190,15 @@ class IdamClaimsTest {
         assertThat(IdamClaims.userFromClaims(claims("sub", "s", "email", "judge.example.com")).email()).isNull();
         assertThat(IdamClaims.userFromClaims(claims("sub", "s", "email", List.of("a@b.c"))).email()).isNull();
     }
+
+    @Test
+    @DisplayName("falls back to sub, as HMCTS IDAM's userinfo carries the address there and no email claim")
+    void fallsBackToTheSubject() {
+        assertThat(IdamClaims.userFromClaims(claims("sub", " Judge@Example.COM ", "name", "Judge")).email())
+            .isEqualTo("judge@example.com");
+        assertThat(IdamClaims.userFromClaims(claims("sub", "judge@example.com", "email", " ")).email())
+            .isEqualTo("judge@example.com");
+        assertThat(IdamClaims.userFromClaims(claims("sub", "other@example.com", "email", "judge@example.com")).email())
+            .isEqualTo("judge@example.com");
+    }
 }

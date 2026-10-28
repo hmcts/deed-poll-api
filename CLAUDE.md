@@ -539,7 +539,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   refer to a Master, so one who leaves is made unavailable. `config/MasterLinking`, a `HandlerInterceptor` on
   `/judicial/**` (not `JudicialReferralService.visible`, which the judicial lists and document routes do not share),
   calls `MasterService.linkIfListed` on every judicial request: a `Role.JUDICIAL` caller with a subject and an IDAM
-  email (`CurrentUser.email`, from userinfo) links an **unlinked** entry with that email by one conditional `UPDATE
+  email (`CurrentUser.email`, userinfo's `email`, else its `sub`, which is where HMCTS IDAM puts the address) links an **unlinked** entry with that email by one conditional `UPDATE
   … WHERE idam_subject IS NULL`, so racing pods link once, and records `MASTER_LINKED` with the system actor (adds and
   edits are `MASTER_ADDED`/`MASTER_CHANGED`, field names only, an unlinking email change naming `linked`). Linking
   never creates an entry, never relinks one held by another subject (a fixed WARN naming nobody), and is best effort:

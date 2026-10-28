@@ -11,15 +11,18 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -166,6 +169,21 @@ class MastersAndReferralProcessSettingsMigrationTest extends AbstractPostgresCon
         refused(() -> insertMaster("b@example.com", "subject-1"));
         insertMaster("c@example.com", null);
         insertMaster("d@example.com", null);
+    }
+
+    @Test
+    @DisplayName("linking re-checks the email, so an entry whose address changed since it was read stays unlinked")
+    void linkRechecksTheEmail() {
+        migrate();
+        insertMaster("old@example.com", null);
+        MasterRepository masters = new MasterRepository(jdbcTemplate);
+        UUID id = masters.linkingByEmail("old@example.com").orElseThrow().id();
+        jdbcTemplate.update("UPDATE deedpoll_master SET email = 'new@example.com' WHERE id = ?", id);
+
+        assertThat(masters.link(id, "old@example.com", "subject-old", LocalDateTime.now())).isFalse();
+        assertThat(masters.linkingByEmail("new@example.com").orElseThrow().subject()).isNull();
+        assertThat(masters.link(id, "NEW@example.com", "subject-new", LocalDateTime.now())).isTrue();
+        assertThat(masters.linkingByEmail("new@example.com").orElseThrow().subject()).isEqualTo("subject-new");
     }
 
     /** Refused, inside a savepoint, so the test's transaction survives the error. */

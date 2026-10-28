@@ -208,7 +208,7 @@ public class MasterService {
             return;
         }
         LocalDateTime now = AuditClock.now();
-        if (repository.link(entry.get().id(), subject, now)) {
+        if (repository.link(entry.get().id(), caller.email(), subject, now)) {
             audit.record(AuditEntry.of(AuditAction.MASTER_LINKED, AuditActor.system(), AuditEntities.MASTER,
                                        entry.get().id().toString(), null)
                              .withFields(List.of(LINKED)),

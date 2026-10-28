@@ -91,11 +91,14 @@ public class MasterRepository {
 
     /**
      * Links an unlinked entry, conditionally, so of two racing requests one writes and the other matches nothing.
+     * The email is checked again in the same statement, so an edit that changed the address since it was read leaves
+     * the entry unlinked rather than bound to the old address's account.
      *
      * @return whether this call linked it
      */
-    public boolean link(UUID id, String subject, LocalDateTime at) {
+    public boolean link(UUID id, String email, String subject, LocalDateTime at) {
         return jdbc.update("UPDATE deedpoll_master SET idam_subject = ?, linked_at = ? "
-                               + "WHERE id = ? AND idam_subject IS NULL", subject, at, id) == 1;
+                               + "WHERE id = ? AND idam_subject IS NULL AND lower(email) = lower(?)",
+                           subject, at, id, email) == 1;
     }
 }

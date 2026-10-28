@@ -354,7 +354,7 @@ class MasterServiceTest {
         @DisplayName("a judge whose email matches an unlinked entry links it, audited as the service")
         void links() {
             given(repository.linkingByEmail(ADDRESS)).willReturn(Optional.of(new MasterRepository.Linking(ID, null)));
-            given(repository.link(eq(ID), eq("judge-subject"), any())).willReturn(true);
+            given(repository.link(eq(ID), eq(ADDRESS), eq("judge-subject"), any())).willReturn(true);
 
             service.linkIfListed(JUDGE);
 
@@ -366,7 +366,7 @@ class MasterServiceTest {
         @DisplayName("losing the race to link records nothing")
         void lostTheRace() {
             given(repository.linkingByEmail(ADDRESS)).willReturn(Optional.of(new MasterRepository.Linking(ID, null)));
-            given(repository.link(eq(ID), eq("judge-subject"), any())).willReturn(false);
+            given(repository.link(eq(ID), eq(ADDRESS), eq("judge-subject"), any())).willReturn(false);
 
             service.linkIfListed(JUDGE);
 
@@ -381,7 +381,7 @@ class MasterServiceTest {
 
             service.linkIfListed(JUDGE);
 
-            verify(repository, never()).link(any(), anyString(), any());
+            verify(repository, never()).link(any(), anyString(), anyString(), any());
             verifyNoInteractions(audit);
             assertThat(logs.list).isEmpty();
         }
@@ -394,7 +394,7 @@ class MasterServiceTest {
 
             service.linkIfListed(JUDGE);
 
-            verify(repository, never()).link(any(), anyString(), any());
+            verify(repository, never()).link(any(), anyString(), anyString(), any());
             verifyNoInteractions(audit);
             assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
                 .containsExactly("A judicial caller's email matches a Master already linked to another account");
@@ -408,7 +408,7 @@ class MasterServiceTest {
 
             service.linkIfListed(JUDGE);
 
-            verify(repository, never()).link(any(), anyString(), any());
+            verify(repository, never()).link(any(), anyString(), anyString(), any());
             verifyNoInteractions(audit);
             assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
                 .containsExactly("A judicial caller already linked to one Master has the email of another");
@@ -421,7 +421,7 @@ class MasterServiceTest {
 
             service.linkIfListed(JUDGE);
 
-            verify(repository, never()).link(any(), anyString(), any());
+            verify(repository, never()).link(any(), anyString(), anyString(), any());
             verify(repository, never()).insert(any(), any(), any(), anyBoolean(), any(), any(), any());
         }
 
