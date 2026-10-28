@@ -175,8 +175,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement `MasterReminders`, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 5: Chart, docs and final verification
-- [ ] Chart values and version bump; `docs/MASTER-EMAILS.md`; `CLAUDE.md`.
-- [ ] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
+- [x] Chart values and version bump; `docs/MASTER-EMAILS.md`; `CLAUDE.md`.
+- [x] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
 
 ## Execution notes
 
@@ -281,3 +281,18 @@ referral in page order, not only the due one; refusal inside a transaction), `Ma
 default context). Focused run (`*Master*`, `*Referral*`, `NotificationSecurityTest`, `*Architecture*`): 897 tests,
 0 failures; the reminder classes again after the checkstyle fixes: 13, 0 failures. Compile of every source set OK;
 `checkstyle.sh` OK.
+
+**Task 5 (chart, docs and final verification):** `values.yaml` sets `NOTIFY_TEMPLATE_MASTER_REFERRAL_DIGEST` and
+`NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER` to a plain `DEED_POLL_PLACEHOLDER` (no environment has an id), and
+`ADMIN_BASE_URL` as step 7 gives it; `Chart.yaml` 0.0.28 to 0.0.29. **Host shape checked:** deed-poll-admin's
+`charts/deed-poll-admin/values.yaml` `ingressHost` is `deed-poll-admin.{{ .Values.global.environment }}.platform.hmcts.net`,
+and cnp-flux-config's `apps/deed-poll/deed-poll-admin/prod.yaml` overrides prod's to `deed-poll-admin.platform.hmcts.net`,
+so the two branches match. (AAT's Jenkins staging deploy is `deed-poll-admin-staging.aat…`; the link names the
+Flux-deployed host.) `DeploymentChartConformanceTest.prodInheritsNoNonProdNotifyIdentifier` required every `NOTIFY_`
+value to be prod-conditional, so it now also accepts the literal placeholder, which prod inherits safely.
+`docs/MASTER-EMAILS.md` (purpose, timing, personalisation with an example, suggested template text, provisioning,
+the ledger's states, investigating a `Failed` row); `CLAUDE.md` gains a paragraph and the layout line. The forced
+build first failed on `SdkMigrationOrderTest`, which pins the migration range at V1 to V43 and which no earlier focused
+run included; it now names V45. Forced `cleanTest cleanIntegration build`: SUCCESSFUL in 4m 37s, `test` 5,324 tests,
+0 failures, 1 skipped (baseline 5,250: +74, all D3's); `integration` 27, 0 failures (unchanged). `checkstyle.sh` OK.
+`git status` clean after this commit.

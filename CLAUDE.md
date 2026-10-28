@@ -48,7 +48,8 @@ domain/settings                   the Delivery Manager's process settings (V40, 
                                   window, reminder interval, per-Master cap and two referral windows, plus the
                                   England and Wales bank holidays (BankHolidays.isWorkingDay) — NOT a port
 domain/masters                    the Masters list (V42) a Delivery Manager keeps, linked to IDAM by email on a
-                                  judge's first judicial request (config/MasterLinking) — NOT a port
+                                  judge's first judicial request (config/MasterLinking), and the Masters' digest and
+                                  reminder emails with their ledger (V44) — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
 domain/documents/preview          transient PDF renditions for the admin viewer, DOCX via Docmosis — NOT a port;
                                   domain/documents must not depend on it (PreviewBoundaryTest)
@@ -586,6 +587,22 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   (409 on a listed date) and removes (404 on an unlisted one) under `MANAGE_PROCESS_CONFIG`, audited as
   `BANK_HOLIDAY_ADDED`/`_REMOVED` with field names only. Dates beyond 2028 must be added by a Delivery Manager or a
   later migration before the referral windows reach them.
+- **The Master emails have their own ledger, not the case outbox.** D3's window digest (`MasterDigests`, one email per
+  Master per closed window, windows closed in the last 24 hours only) and reminder (`MasterReminders`, working days
+  07:00 to before 18:00 `Europe/London`, one email per Master listing every undirected referral) write
+  `deedpoll_master_email` (V44, V45), because `deedpoll_notification` is case-scoped and a digest spans cases. It
+  copies the outbox's rules, not its tables: `unique (master_id, kind, period_key)` makes pods enqueue once; a
+  digest's `deedpoll_window_digest_run` row and a reminder's `"remindersSent"` claims commit **in the same transaction**
+  as their email rows; `MasterEmailTransactions` commits `Sending` with `send_started_at` before `MasterEmailSender`'s one
+  Notify call (the only Notify caller outside the case outbox and Gazette, kept in `notify/` by
+  `NotificationSecurityTest`); only a `TEMPORARY` refusal returns to `Pending`, eight attempts with the outbox's
+  backoff; an unknown outcome or an expired `Sending` lease is `Failed` and **never resent** (ADR-0007). An
+  assignment, reassignment or withdrawn direction resets `"remindersSent"` to 0; a new path that restarts the clock
+  must too. **Unprovisioned is a visible skip:** with `master-referral-digest`/`-reminder` on `DEED_POLL_PLACEHOLDER`
+  (the chart's value everywhere until the templates exist) runs and claims are recorded and rows written `Skipped`,
+  so provisioning later never sends a backlog. A provisioned template with no `ADMIN_BASE_URL` fails start-up. The
+  ledger holds the Master's id, never the address, which is read from the Masters list at send time and never logged.
+  The templates are not `EmailTemplate` members (`MasterEmailKind` carries their keys). See `docs/MASTER-EMAILS.md`.
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
   only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback

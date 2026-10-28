@@ -156,9 +156,11 @@ class DeploymentChartConformanceTest {
         Map<String, Object> notify = new TreeMap<>(environment());
         notify.keySet().removeIf(name -> !name.startsWith("NOTIFY_"));
 
+        // A plain DEED_POLL_PLACEHOLDER is a template no environment has yet (the Master emails), so prod's too.
         assertThat(notify).isNotEmpty().allSatisfy((name, value) -> assertThat(String.valueOf(value))
             .as("%s is a non-prod value; prod must render it as DEED_POLL_PLACEHOLDER or empty", name)
             .satisfiesAnyOf(
+                v -> assertThat(v).isEqualTo("DEED_POLL_PLACEHOLDER"),
                 v -> assertThat(v).startsWith("{{ if eq .Values.global.environment `prod` }}DEED_POLL_PLACEHOLDER"
                     + "{{ else }}"),
                 v -> assertThat(v).startsWith("{{ if ne .Values.global.environment `prod` }}")
