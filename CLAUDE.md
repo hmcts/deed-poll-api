@@ -498,7 +498,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `ReferralService.requireDirectedBy` **under the row lock**, which re-asks `visibleTo` so a close that commits
   first makes the judge's write a 404; any other visible referral is 409. Revise replaces the decision,
   `directionsText` and `changesToStandardPublication`, moves `decisionDate` and keeps `decidedBy`/`decidedById` as
-  first signed. Withdraw returns the referral to `Claimed` by the same judge with the direction columns cleared, and the judge
+  first signed. Withdraw returns the referral to `Claimed` with the direction columns cleared, owned by whoever its Master is linked to now (the same judge unless an email change unlinked them), and the judge
   directs again with `POST`. Both set V38's `directionChangedAt`, which is **never cleared** and is the caseworker's
   flag (with a case note from `ReferralNotes`), record `REFERRAL_DIRECTION_REVISED`/`_WITHDRAWN` with old and new
   values, and recompute both read-models. No email, and no Gazette code changes. **A withdrawn direction is a live

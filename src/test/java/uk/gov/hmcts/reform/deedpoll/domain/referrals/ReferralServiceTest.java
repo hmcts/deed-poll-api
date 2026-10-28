@@ -143,6 +143,7 @@ class ReferralServiceTest {
     private DeedPollRepository deedPolls;
     private ReferralRepository referrals;
     private NoteService notes;
+    private MasterRepository masters;
     private ReferralService service;
 
     /**
@@ -161,6 +162,7 @@ class ReferralServiceTest {
         deedPolls = mock(DeedPollRepository.class);
         referrals = mock(ReferralRepository.class);
         notes = mock(NoteService.class);
+        masters = mock(MasterRepository.class);
         service = serviceWithClaimExpiry(CLAIM_EXPIRY);
 
         // The repository hands back what it was given, as a real save does once the id is allocated -- and
@@ -211,7 +213,7 @@ class ReferralServiceTest {
         when(settings.processingWindow()).thenReturn(window);
         return new ReferralService(deedPolls, referrals, notes, settings,
                                    mock(EntityManager.class), mock(AuditTrail.class),
-                                   mock(MasterRepository.class), mock(BankHolidays.class));
+                                   masters, mock(BankHolidays.class));
     }
 
     /** The case exists, so the parent check passes. */
@@ -1859,6 +1861,42 @@ class ReferralServiceTest {
             assertThat(written.getWindowDate()).isEqualTo(LocalDate.of(2026, 10, 26));
             assertThat(written.getWindowSlot()).isEqualTo(WindowSlot.PM);
             assertThat(written.getAssignedMasterId()).isEqualTo(master);
+        }
+
+        @Test
+        @DisplayName("gives the live assignment to the account the Master is linked to now, not the caller")
+        void followsTheMastersCurrentLink() {
+            // The Delivery Manager changed the Master's email, which unlinked JUDGE, and another account linked.
+            // JUDGE still sees their own direction by decidedById, but withdrawing it must not hand them back a
+            // live assignment the unlinking took away.
+            Referral referral = storedDirection(JUDGE);
+            final UUID master = UUID.randomUUID();
+            referral.setAssignedMasterId(master);
+            when(masters.findAssigneeForUpdate(master))
+                .thenReturn(Optional.of(new MasterRepository.Assignee("Master Sullivan", true, "relinked-subject")));
+
+            service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            Referral written = saved();
+            assertThat(written.getState()).isEqualTo(ReferralState.Claimed);
+            assertThat(written.getClaimedById()).isEqualTo("relinked-subject");
+            InOrder locks = inOrder(referrals, masters);
+            locks.verify(referrals).findByIdAndDeedPollIdForUpdate(REFERRAL_ID, CASE_ID);
+            locks.verify(masters).findAssigneeForUpdate(master);
+        }
+
+        @Test
+        @DisplayName("leaves the assignment with nobody when the Master is not linked to any account now")
+        void unlinkedMasterOwnsNothing() {
+            Referral referral = storedDirection(JUDGE);
+            final UUID master = UUID.randomUUID();
+            referral.setAssignedMasterId(master);
+            when(masters.findAssigneeForUpdate(master))
+                .thenReturn(Optional.of(new MasterRepository.Assignee("Master Sullivan", true, null)));
+
+            service.withdrawDirection(CASE_ID, REFERRAL_ID.toString(), JUDGE);
+
+            assertThat(saved().getClaimedById()).isNull();
         }
 
         @Test

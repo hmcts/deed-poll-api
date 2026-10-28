@@ -869,7 +869,7 @@ public class ReferralService {
         caller.requireAnyRole(Role.JUDICIAL);
         Referral referral = requireDirectedBy(findReferralForUpdate(deedPollId, id), id, "withdrawn", caller);
 
-        LocalDateTime now = AuditClock.now();
+        final LocalDateTime now = AuditClock.now();
         final ReferralState fromState = referral.getState();
         final List<AuditValue> values = List.of(
             AuditValue.of("state", fromState, ReferralState.Claimed),
@@ -885,8 +885,15 @@ public class ReferralService {
         referral.setDecisionDate(null);
         referral.setDecidedBy(null);
         referral.setDecidedById(null);
-        // claimedById and claimedBy are left alone: visibleTo has established the direction is this caller's, and
-        // decide required the same subject to hold the claim it directed.
+        // The live assignment goes to whoever the Master is linked to now, not to the caller: an email change that
+        // unlinked them (MasterService.update) cut this subject off, and detachFromUnlinkedMaster could not take a
+        // Decided referral away from it. The Master's lock follows the referral's, as in assignLocked. A pre-V43
+        // claim has no Master and stays with the subject that claimed it; claimedBy is the Master's name either way.
+        if (referral.getAssignedMasterId() != null) {
+            referral.setClaimedById(masters.findAssigneeForUpdate(referral.getAssignedMasterId())
+                                        .map(MasterRepository.Assignee::subject)
+                                        .orElse(null));
+        }
         referral.setClaimedAt(now);
         // The processing window restarts (plan D2), but no fresh window is taken for the cap: windowDate and
         // windowSlot stay as the assignment set them, so the referral counts where it counted before.
