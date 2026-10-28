@@ -233,7 +233,7 @@ class ReferralServiceTest {
     }
 
     private static CreateReferralInput minimal() {
-        return input(Map.of("reasons", List.of("Minor")));
+        return input(Map.of("reasons", List.of("DomesticAbuse")));
     }
 
     /** A direction as the schema would have produced it, so a test cannot build a shape a judge could not send. */
@@ -421,7 +421,7 @@ class ReferralServiceTest {
             storedCase(CASE_ID);
 
             service.createReferral(CASE_ID, input(Map.of(
-                "reasons", List.of("Minor", "Other"),
+                "reasons", List.of("DomesticAbuse", "Other"),
                 "notes", "The applicant is nine",
                 "urgency", "Urgent",
                 "urgencyReason", "Hearing on Friday")), CASEWORKER);
@@ -433,7 +433,7 @@ class ReferralServiceTest {
             assertThat(written.getState()).isEqualTo(ReferralState.Open);
             // Names, not ordinals: the column is a JSON array of the enum's names, as a saved query's
             // conditions are.
-            assertThat(written.getReasons()).containsExactly("Minor", "Other");
+            assertThat(written.getReasons()).containsExactly("DomesticAbuse", "Other");
             assertThat(written.getNotes()).isEqualTo("The applicant is nine");
             assertThat(written.getUrgency()).isEqualTo(Urgency.Urgent);
             assertThat(written.getUrgencyReason()).isEqualTo("Hearing on Friday");
@@ -463,7 +463,7 @@ class ReferralServiceTest {
             storedCase(CASE_ID);
 
             service.createReferral(CASE_ID, input(Map.of(
-                "reasons", List.of("Minor"),
+                "reasons", List.of("DomesticAbuse"),
                 "urgency", "Urgent",
                 "urgencyReason", "Hearing on Friday")), CASEWORKER);
 
@@ -473,7 +473,8 @@ class ReferralServiceTest {
             // recorded as the machine's.
             assertThat(note.author().author()).isEqualTo("Ada Caseworker");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
-            assertThat(note.text()).contains("Referred to a Master", "Applicant is a minor", "Hearing on Friday");
+            assertThat(note.text())
+                .contains("Referred to a Master", "Domestic abuse considerations", "Hearing on Friday");
         }
 
         @Test
@@ -482,7 +483,7 @@ class ReferralServiceTest {
             storedCase(CASE_ID);
 
             service.createReferral(CASE_ID, input(Map.of(
-                "reasons", List.of("Minor", "Other"),
+                "reasons", List.of("DomesticAbuse", "Other"),
                 "notes", "x".repeat(ReferralSchemas.MAX_NOTES_LENGTH),
                 "urgency", "Urgent",
                 "urgencyReason", "y".repeat(ReferralSchemas.MAX_URGENCY_REASON_LENGTH))), CASEWORKER);

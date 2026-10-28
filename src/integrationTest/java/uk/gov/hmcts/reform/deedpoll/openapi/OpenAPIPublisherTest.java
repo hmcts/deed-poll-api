@@ -1177,9 +1177,12 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         // names in a public notice, so a document calling this a string would have clients sending "false" -- the
         // one value a truthy read gets wrong, and a disclosure that cannot be taken back.
         assertThat(typesOf(spec.at(direction + "changesToStandardPublication"))).contains("boolean");
-        // The pre-2026-10-27 name, inverted, for one release: published, and deprecated so nobody new sends it.
-        assertThat(typesOf(spec.at(direction + "publishToGazette"))).contains("boolean");
-        assertThat(spec.at(direction + "publishToGazette/deprecated").asBoolean()).isTrue();
+        // The pre-2026-10-27 name's one release is over: not on the body, nor on either referral response.
+        assertThat(spec.at(direction + "publishToGazette").isMissingNode()).isTrue();
+        assertThat(spec.at("/components/schemas/ReferralResponse/properties/publishToGazette").isMissingNode())
+            .isTrue();
+        assertThat(spec.at("/components/schemas/JudicialReferralDetail/properties/publishToGazette").isMissingNode())
+            .isTrue();
         assertThat(spec.at("/components/schemas/JudicialDirectionRequest/required").size()).isEqualTo(2);
         assertThat(StreamSupport
                        .stream(spec.at("/components/schemas/JudicialDirectionRequest/required").spliterator(),

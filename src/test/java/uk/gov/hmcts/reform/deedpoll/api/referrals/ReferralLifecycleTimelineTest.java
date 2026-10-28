@@ -102,12 +102,12 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
     private static final String ACTIONING_CASEWORKER = "Bo Caseworker";
 
     /** The only reason the referral is raised for, so the shared referral identity is short enough to read. */
-    private static final String REASON = "Minor";
+    private static final String REASON = "DomesticAbuse";
 
     /**
      * {@link #REASON} as the notes write it: in the screens' words (Steve, 2026-10-27).
      */
-    private static final String REASON_LABEL = "Applicant is a minor";
+    private static final String REASON_LABEL = "Domestic abuse considerations";
 
     /**
      * What the judge directs, long enough and distinctive enough to be found if it were ever copied.
