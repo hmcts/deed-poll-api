@@ -57,8 +57,8 @@ import java.util.stream.Collectors;
  * <p><strong>{@link #email} is the second component the reference does not have, and it authorises nothing.</strong>
  * It is the address IDAM's userinfo gives, normalised, and its one reader links a Masters-list entry to the judge
  * who signs in with that address (plan D1). It is personal data with no audit purpose, so it is never logged, never
- * put in an audit {@code detail}, a note or an error message, and {@link #toString()} leaves it out, because a
- * principal is the kind of object a debug line prints whole.
+ * put in an audit {@code detail}, a note or an error message, and {@link #toString()} leaves it out, along with a
+ * name or subject that holds an address, because a principal is the kind of object a debug line prints whole.
  */
 public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String userId, String email) {
 
@@ -206,10 +206,17 @@ public record CurrentUser(List<Role> roles, boolean isAdmin, String name, String
 
     /**
      * Every component but {@link #email}, which is never written to a log.
+     *
+     * <p>{@link #name} and {@link #userId} are redacted too when they hold an address, because HMCTS IDAM puts the
+     * address in {@code sub} and {@link IdamClaims} falls back to {@code sub} for both of them.
      */
     @Override
     public String toString() {
-        return "CurrentUser[roles=" + roles + ", isAdmin=" + isAdmin + ", name=" + name + ", userId=" + userId
-            + ", email=" + (email == null ? "absent" : "present") + "]";
+        return "CurrentUser[roles=" + roles + ", isAdmin=" + isAdmin + ", name=" + loggable(name)
+            + ", userId=" + loggable(userId) + ", email=" + (email == null ? "absent" : "present") + "]";
+    }
+
+    private static String loggable(String value) {
+        return value != null && value.indexOf('@') >= 0 ? "redacted" : value;
     }
 }

@@ -8,6 +8,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.WriteContext;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -98,6 +99,15 @@ class CurrentUserTest {
             CurrentUser user = CurrentUser.currentUser(List.of(Role.JUDICIAL), "A Master", SUBJECT, "a@example.com");
 
             assertThat(user.toString()).doesNotContain("a@example.com").contains("A Master", SUBJECT);
+        }
+
+        @Test
+        @DisplayName("is left out of toString when it is the subject, as HMCTS IDAM gives it")
+        void subjectAddressIsNotInToString() {
+            CurrentUser user = IdamClaims.userFromClaims(Map.of("sub", "Judge@Example.com"));
+
+            assertThat(user.email()).isEqualTo("judge@example.com");
+            assertThat(user.toString()).doesNotContainIgnoringCase("judge@example.com").contains("redacted");
         }
     }
 
