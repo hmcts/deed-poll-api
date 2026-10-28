@@ -28,6 +28,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQuerySchemas;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsTimes;
@@ -150,6 +151,7 @@ public class OpenAPIWriteBodies {
             describeGazetteBodies(openApi);
             describeProcessSettingsBody(openApi);
             describeMasterBodies(openApi);
+            describeBankHolidayBody(openApi);
         };
     }
 
@@ -252,6 +254,21 @@ public class OpenAPIWriteBodies {
             }
             body.setAdditionalProperties(false);
         }
+    }
+
+    private void describeBankHolidayBody(OpenAPI openApi) {
+        Schema<?> body = schema(openApi, "CreateBankHolidayRequest");
+        if (body == null) {
+            return;
+        }
+        body.setType("object");
+        body.setProperties(null);
+        body.addProperty(BankHolidays.DATE, new StringSchema().format("date")
+            .description("yyyy-MM-dd. A date already listed returns 409."));
+        body.addProperty(BankHolidays.NAME, new StringSchema().minLength(1).maxLength(BankHolidays.MAX_NAME_LENGTH)
+            .description("Trimmed first: the bounds hold for the trimmed value, so a blank is refused."));
+        body.setRequired(java.util.List.of(BankHolidays.DATE, BankHolidays.NAME));
+        body.setAdditionalProperties(false);
     }
 
     private static IntegerSchema wholeNumber(int minimum, int maximum, String description) {

@@ -332,6 +332,35 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    void documentsTheBankHolidaysAndTheirBody() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+        JsonNode list = spec.get("paths").get("/caseworker/process-settings/bank-holidays");
+        assertThat(list.fieldNames()).toIterable().containsExactlyInAnyOrder("get", "post");
+        assertThat(list.at("/get/operationId").asText()).isEqualTo("listBankHolidays");
+        assertThat(list.at("/post/operationId").asText()).isEqualTo("addBankHoliday");
+        assertThat(list.at("/post/responses/201").isMissingNode()).isFalse();
+        assertThat(list.at("/post/description").asText())
+            .contains("caseworker-deedpoll-delivery-manager", "MANAGE_PROCESS_CONFIG", "409");
+        JsonNode one = spec.get("paths").get("/caseworker/process-settings/bank-holidays/{date}");
+        assertThat(one.fieldNames()).toIterable().containsExactly("delete");
+        assertThat(one.at("/delete/operationId").asText()).isEqualTo("removeBankHoliday");
+        assertThat(one.at("/delete/responses/204").isMissingNode()).isFalse();
+        assertThat(one.at("/delete/description").asText()).contains("MANAGE_PROCESS_CONFIG", "404");
+        for (JsonNode operation : List.of(list.get("get"), list.get("post"), one.get("delete"))) {
+            assertThat(operation.at("/responses/403").isMissingNode()).isFalse();
+        }
+        assertThat(spec.at("/components/schemas/BankHolidayResponse/properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("date", "name");
+        JsonNode create = spec.at("/components/schemas/CreateBankHolidayRequest");
+        assertThat(create.get("required")).extracting(JsonNode::asText).containsExactlyInAnyOrder("date", "name");
+        assertThat(create.get("additionalProperties").asBoolean()).isFalse();
+        assertThat(create.at("/properties/date/format").asText()).isEqualTo("date");
+        assertThat(create.at("/properties/name/minLength").asInt()).isOne();
+        assertThat(create.at("/properties/name/maxLength").asInt()).isEqualTo(200);
+    }
+
+    @Test
     void documentsEveryGazetteGateAndNamedWorklistRefusal() throws Exception {
         JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
@@ -674,6 +703,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.add("/caseworker/process-settings");
         known.add("/caseworker/masters");
         known.add("/caseworker/masters/{id}");
+        known.add("/caseworker/process-settings/bank-holidays");
+        known.add("/caseworker/process-settings/bank-holidays/{date}");
         known.add("/caseworker/gazette-notice-previews");
         known.add("/caseworker/gazette-notice-requests");
         known.add("/caseworker/gazette-notices/{batchId}");

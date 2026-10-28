@@ -21,6 +21,7 @@ public final class AuditEntities {
     public static final String CCD_ATTEMPT = "CcdCreationAttempt";
     public static final String PROCESS_SETTINGS = "ProcessSettings";
     public static final String MASTER = "Master";
+    public static final String BANK_HOLIDAY = "BankHoliday";
 
     private AuditEntities() {
     }

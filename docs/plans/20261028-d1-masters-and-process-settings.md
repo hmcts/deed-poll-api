@@ -194,8 +194,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 4: Bank holidays
-- [ ] Add failing tests for the working-day rule and the three operations.
-- [ ] Implement, run the focused tests and all Validation Commands, and record the results.
+- [x] Add failing tests for the working-day rule and the three operations.
+- [x] Implement, run the focused tests and all Validation Commands, and record the results.
 
 ### Task 5: Documentation and final verification
 - [ ] Update `CLAUDE.md` (layout counts, staff permissions, a new paragraph for the Masters list and its linking rule, the process settings paragraph) and any doc that calls the window a claim window.
@@ -255,3 +255,19 @@ once; an entry linked elsewhere, or a judge already linked to another entry, log
 address, stale, unlink, unavailable listed, no subject in JSON, first/second/concurrent linking, linked-elsewhere
 WARN with the log captured, caseworker links nothing), plus an `OpenAPIPublisherTest` case. Full build SUCCESSFUL:
 `test` 5,088 tests, 0 failures, 1 skipped; `integration` 26 tests, 0 failures. `checkstyle.sh` OK.
+
+**Task 4 (bank holidays):** `domain/settings/BankHolidays` (`isWorkingDay`, `list`, `add`, `remove`) and
+`BankHoliday`; the JdbcTemplate `BankHolidayRepository` sits in `repository/` as `MasterRepository` does. V42 already
+holds the table and seed, so no migration. `isWorkingDay` has no capability check and no cache, and never reads the
+table for a Saturday or Sunday. `list` admits the four staff roles; `add`/`remove` need `MANAGE_PROCESS_CONFIG`.
+`add` takes a closed `{date, name}` body (strict ISO date, name trimmed 1-200) and inserts with `ON CONFLICT DO
+NOTHING`, so an existing date, raced or not, is a 409 naming `date`. `remove` of an unlisted or malformed date is 404.
+Audit actions `BANK_HOLIDAY_ADDED`/`BANK_HOLIDAY_REMOVED` on `AuditEntities.BANK_HOLIDAY`, entity id the ISO date,
+fields `date,name` only. HTTP: `GET`/`POST /caseworker/process-settings/bank-holidays` and `DELETE .../{date}` (204)
+in `CaseworkerBankHolidaysController`, with `CreateBankHolidayRequest` described in `OpenAPIWriteBodies`.
+`WriteEndpointAuditCoverageTest` now counts 34 writes, 30 audited. Tests: `BankHolidaysTest` (unit: weekday,
+weekend, listed, added and removed rule, role matrix, bounds, 409, 404, audit) and
+`CaseworkerBankHolidaysControllerTest` (full context, Postgres: 401, role matrix, the 24-date seed in order, add
+then not a working day, 409 and 400 changing nothing, removing a seeded date then 404, a substitute day), plus an
+`OpenAPIPublisherTest` case and its two known paths. Full build SUCCESSFUL: `test` 5,129 tests, 0 failures,
+1 skipped; `integration` 27 tests, 0 failures. `checkstyle.sh` OK.
