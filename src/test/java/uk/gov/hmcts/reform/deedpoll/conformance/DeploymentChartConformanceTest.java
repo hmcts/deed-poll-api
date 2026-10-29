@@ -175,6 +175,13 @@ class DeploymentChartConformanceTest {
     }
 
     @Test
+    @DisplayName("prod enforces the staff gate; every other environment stays on report")
+    void prodEnforcesTheStaffGate() throws IOException {
+        assertThat(environment()).containsEntry("STAFF_GATE_MODE",
+            "{{ if eq .Values.global.environment `prod` }}enforce{{ else }}report{{ end }}");
+    }
+
+    @Test
     @DisplayName("prod's Docmosis URL renders empty, so its placeholder key never configures the converter")
     void prodLeavesTheConverterUnconfigured() throws IOException {
         assertThat(environment()).containsEntry("DOCMOSIS_URL",
