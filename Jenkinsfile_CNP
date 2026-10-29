@@ -32,16 +32,17 @@ withPipeline(type, product, component) {
   // CCD definition import, through the library's "High Level Data Setup" stage as pcs-api imports its own.
   // See docs/plans/20261021-ccd-high-level-data-setup.md.
   //
-  // Master imports into AAT on every build, ahead of the AAT deploy. The second argument skips the prod stage
-  // (`skipHighLevelDataSetupProd`): prod's import waits for its IDAM importer user and CCD routing (P7), and then
-  // this flag is removed, so every later master build re-imports into AAT and then prod, as pcs-api's does.
+  // Master imports into AAT on every build, ahead of the AAT deploy, and then into prod, as pcs-api's does. Prod's
+  // import signs in as the CCD Definition Import user (hmcts/idam-access-config#1052). It runs before the build is
+  // promoted to its prod-* image tag, which Flux deploys to AAT and prod, so a failed prod import holds the release
+  // back from both.
   // An import of an unchanged definition only adds a definition version; existing cases are unaffected.
   onMaster {
     // Nothing else sets ENVIRONMENT before the AAT import; `before('Publish Helm chart')` below moves it on to
     // prod, which runs after the AAT deploy and before the prod stage. It names the spreadsheet create-xlsx.sh
     // writes and the importer reads.
     env.ENVIRONMENT = 'aat'
-    enableHighLevelDataSetup('', true)
+    enableHighLevelDataSetup()
   }
 
   onIthc {
@@ -55,7 +56,7 @@ withPipeline(type, product, component) {
     generateDefinitions(builder)
   }
 
-  // The chart is published between the AAT deploy and the prod stage, so the prod import (once enabled) builds
+  // The chart is published between the AAT deploy and the prod stage, so the prod import builds
   // CCD_Definition_DEEDPOLL_prod.xlsx rather than AAT's.
   before('Publish Helm chart') {
     onMaster {
