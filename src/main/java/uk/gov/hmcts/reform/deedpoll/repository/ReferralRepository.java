@@ -57,9 +57,9 @@ import java.util.UUID;
  *       {@code ReferralQueue}'s {@code ALLOCATE_REFERRALS} check, made before any of them is called;</li>
  *   <li>the batch send's lock -- {@link #findByIdInForSending}, by the ids a send's body names, behind the same
  *       check and called by nothing but {@code ReferralQueue};</li>
- *   <li>the Master emails' read -- {@link #findWithCaseByIdIn}. The ids are the ones a ledger row froze when its
- *       job enqueued it, never a request's, and the only caller is {@code MasterEmailTransactions}, which renders
- *       a reference, the reasons, the urgency and the day referred, and nothing about the applicant.</li>
+ *   <li>the Master emails' read -- {@link #findByIdInForMasterEmails}. The ids are the ones a ledger row froze when
+ *       its job enqueued it, never a request's, and the only caller is {@code MasterEmailTransactions}, which counts
+ *       those still waiting for the Master's direction and renders nothing about them.</li>
  * </ul>
  *
  * <p>This differs from {@link SavedQueryRepository}, which does read by id: a saved query's visibility
@@ -234,11 +234,11 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
     Optional<Referral> findWithCaseById(@Param("id") UUID id);
 
     /**
-     * The referrals a Master email lists, with their applications, in no particular order (plan D3). Ids that no
-     * longer exist, because their case was deleted, are simply absent.
+     * The referrals a Master email counts, in no particular order (plan D3, F1). Ids that no longer exist, because
+     * their case was deleted, are simply absent.
      */
-    @Query("select r from Referral r join fetch r.deedPoll where r.id in :ids")
-    List<Referral> findWithCaseByIdIn(@Param("ids") Collection<UUID> ids);
+    @Query("select r from Referral r where r.id in :ids")
+    List<Referral> findByIdInForMasterEmails(@Param("ids") Collection<UUID> ids);
 
     /**
      * Whether the case already holds a referral in one of the given states.
@@ -376,8 +376,9 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
     long countByWindowDateAndWindowSlot(LocalDate windowDate, WindowSlot windowSlot);
 
     /**
-     * Every Master's share of {@link #countByWindowDateAndWindowSlot}, in one grouped statement (plan F1). A Master
-     * with none has no row; a referral with no Master (a pre-V43 claim) is in no Master's row.
+     * Every Master's share of {@link #countByWindowDateAndWindowSlot}, in one grouped statement (plan F1), by the
+     * Master holding each referral now: a reassignment keeps the window, so the referral counts under its new Master.
+     * A Master with none has no row; a referral with no Master (a pre-V43 claim) is in no Master's row.
      */
     @Query("""
         select new uk.gov.hmcts.reform.deedpoll.repository.MasterWindowCount(r.assignedMasterId, count(r))

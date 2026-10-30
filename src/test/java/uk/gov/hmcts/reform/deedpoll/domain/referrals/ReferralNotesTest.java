@@ -507,6 +507,33 @@ class ReferralNotesTest {
     }
 
     @Test
+    @DisplayName("a sent note names the Master and says the office sent it, in the screens' words")
+    void sentNote() {
+        Referral referral = referral(List.of("DomesticAbuse"), LocalDateTime.parse("2026-10-27T09:30:00"));
+
+        assertThat(ReferralNotes.sent(referral, "Master Sullivan")).isEqualTo(
+            "Referral raised on 27 October 2026, reasons: Domestic abuse considerations, sent to Master Sullivan by "
+                + "the office.");
+    }
+
+    @Test
+    @DisplayName("a sent note is acceptable to the notes column however long the name, and reads with none")
+    void sentNoteIsBounded() {
+        // A note the validator refused would roll back the whole batch send, not just the note.
+        Referral referral = referral(EVERY_REASON, LocalDateTime.parse("2026-10-27T09:30:00"));
+
+        String text = ReferralNotes.sent(referral, "M".repeat(5000));
+
+        assertThat(NoteForm.validateNoteText(text)).isEmpty();
+        assertThat(text.length()).isLessThanOrEqualTo(NoteForm.MAX_NOTE_LENGTH);
+        for (String noName : Arrays.asList(null, "", "   ")) {
+            assertThat(ReferralNotes.sent(referral, noName))
+                .as("a Master named %s", noName == null ? "null" : "blank")
+                .endsWith("sent to an unnamed Master by the office.");
+        }
+    }
+
+    @Test
     @DisplayName("a reassignment note names both Masters, in the screens' words")
     void assignmentNotes() {
         Referral referral = referral(List.of("DomesticAbuse"), LocalDateTime.parse("2026-10-27T09:30:00"));

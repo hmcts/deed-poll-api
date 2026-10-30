@@ -14,12 +14,13 @@ and artifact identities. The admin and infrastructure companion plans own their 
 | DELETE_WITNESS | WitnessService.removeWitness, before parent-scoped lookup | Yes | Yes |
 | MANAGE_SHARED_QUERIES | SavedQueryPermissions editing and publishing | Yes | Yes |
 | REPAIR_CCD | CcdAttemptRepairs overview, reconciliation and retry | Yes | Yes |
+| ALLOCATE_REFERRALS | ReferralQueue list and batch send, ReferralService.assign (reassignment), before reads (plan F1) | Yes | Yes |
 | ACCESS_GAZETTE | All Gazette human entry points and named ready worklist/count | No | Yes |
 | MANAGE_PROCESS_CONFIG | Process settings read and update (`/caseworker/process-settings`) | No | Yes |
 
 The exact new claims are `caseworker-deedpoll-team-leader` and
 `caseworker-deedpoll-delivery-manager`. The deprecated `caseworker-deedpoll-admin` has only
-the five casework capabilities. Grants are an immutable union of recognised roles. Neither
+the six casework capabilities. Grants are an immutable union of recognised roles. Neither
 new claim implies `caseworker-deedpoll-judicial`, CCD system access or importer authority.
 A private saved query remains private; ownership and historical attribution retain the subject.
 An owner can still unpublish after losing shared-query management privileges.

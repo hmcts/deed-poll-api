@@ -11,23 +11,16 @@ import java.util.Optional;
 import java.util.function.Predicate;
 
 /**
- * Which referral window a moment counts towards (D-5 to D-7), as one pure function with no database and no clock.
- *
- * <p>Read in {@link ReferralWindowTimes#ZONE}. On a working day, a moment before the morning window ends is that
- * day's morning, so one raised before the window opens waits for it; a moment from the morning's end until the
- * afternoon's end is that day's afternoon, so one raised between the windows waits for the afternoon; and a moment
- * from the afternoon's end is the next working day's morning (D-6). A day that is not a working day goes to the
- * next working day's morning (D-7). The windows' ends are exclusive, to the minute and below.
+ * The referral windows (D-5 to D-7), as pure functions with no database and no clock: which is open at a moment, and
+ * which opens next (plan F1, which sends referrals only while one is). Read in {@link ReferralWindowTimes#ZONE}; a
+ * day that is not a working day has no window open, and its next is the next working day's morning (D-7).
  *
  * <p>A moment is an {@link Instant}, so the local time it reads as is never ambiguous, even in the hour the clocks go
  * back. A window time that is itself skipped or repeated by a clock change resolves by {@link ZonedDateTime#of}'s
  * rules in {@link #closesAt}: a skipped time moves forward by the length of the gap, and a repeated one takes the
  * earlier offset.
  *
- * <p>{@link #windowFor} answers "which window does this count towards", which is what the reminders and the
- * processing window still ask. Plan F1's queue asks a different question, "is a window open now, and which opens
- * next", because referrals can only be sent while one is: {@link #openAt} and {@link #nextToOpen}. A window is open
- * from its start, inclusive, to its end, exclusive.
+ * <p>A window is open from its start, inclusive, to its end, exclusive, to the minute and below.
  */
 public final class ReferralWindows {
 
@@ -38,23 +31,6 @@ public final class ReferralWindows {
     static final int SEARCH_DAYS = 366;
 
     private ReferralWindows() {
-    }
-
-    /** The window a moment counts towards. */
-    public static ReferralWindow windowFor(Instant at, ReferralWindowTimes times, Predicate<LocalDate> isWorkingDay) {
-        ZonedDateTime local = at.atZone(ReferralWindowTimes.ZONE);
-        LocalDate day = local.toLocalDate();
-        if (!isWorkingDay.test(day)) {
-            return new ReferralWindow(nextWorkingDay(day, isWorkingDay), WindowSlot.AM);
-        }
-        LocalTime time = local.toLocalTime();
-        if (time.isBefore(times.morningEnd())) {
-            return new ReferralWindow(day, WindowSlot.AM);
-        }
-        if (time.isBefore(times.afternoonEnd())) {
-            return new ReferralWindow(day, WindowSlot.PM);
-        }
-        return new ReferralWindow(nextWorkingDay(day, isWorkingDay), WindowSlot.AM);
     }
 
     /**

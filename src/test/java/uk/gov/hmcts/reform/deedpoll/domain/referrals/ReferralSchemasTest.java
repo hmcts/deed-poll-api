@@ -435,6 +435,14 @@ class ReferralSchemasTest {
         }
 
         @Test
+        @DisplayName("accepts exactly the maximum")
+        void atTheMaximum() {
+            List<Object> two = List.of(payload("referralId", ONE, "masterId", SULLIVAN),
+                                       payload("referralId", TWO, "masterId", SULLIVAN));
+            assertThat(ReferralSchemas.parseSend(payload("allocations", two), 2)).hasSize(2);
+        }
+
+        @Test
         @DisplayName("refuses more entries than the maximum")
         void tooMany() {
             List<Object> three = List.of(payload("referralId", ONE, "masterId", SULLIVAN),

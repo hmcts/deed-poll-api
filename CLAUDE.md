@@ -555,7 +555,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `GET /caseworker/referral-queue` (`ReferralQueue`) pages `state=Open` (urgent, oldest `createdOn`, `id`) or
   `state=Claimed` (oldest `coalesce("assignedAt", "claimedAt")`, `id`) across every case in the database, and its
   `window` envelope is `current` (`ReferralWindows.openAt`, start inclusive, end exclusive, never on a non-working
-  day), `next` (`nextToOpen`, strictly after), `cap`, `sent` and each **available** Master's `sentInWindow`. Rows carry
+  day), `next` (`nextToOpen`, strictly after), `cap`, `sent` and each **available** Master's `sentInWindow` (by current holder: a reassigned referral counts under its new Master). Rows carry
   no subject or email. **`POST /caseworker/referral-queue/sends`** (`@AuditedAs(REFERRAL_SENT)`) is one transaction in
   which any refusal writes nothing, in a fixed order: the shape (`allocations[i].…`, 1–100 entries, no referral twice),
   then 409 outside a window naming the next one in words, then `ReferralWindowLocks.lockForSending` (a

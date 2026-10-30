@@ -1,5 +1,16 @@
 # Resume state — where the next session picks up
 
+**Plan F1, the referral queue and batch send, 2026-10-30:** on `plan/f-referral-queue`, local commits only, not
+pushed. V46 renames the cap to `windowCap` (one total per window across every Master, no alias) and admits the
+`SENT` Master email kind. The new `ALLOCATE_REFERRALS` (Team leader and Delivery Manager) gates
+`GET /caseworker/referral-queue`, `POST /caseworker/referral-queue/sends` and reassignment, which now takes a
+`Claimed` referral only. Raising takes no Master. The `SENT` email replaces the window digest, and chart 0.0.30 adds
+`NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT`. A-1 (the reminder links to My referrals with a count) and A-2 (a withdrawal
+gives no place back in a window) await Steve's confirmation. Next: admin plan Fa1 deploys alongside, then create the
+sent and reminder Notify templates. Once a preview applies V46 to AAT's database, AAT's previous api cannot read the
+process settings, so merge promptly. See [the plan](plans/20261030-f1-referral-queue-and-batch-send.md) and
+[MASTER-EMAILS.md](MASTER-EMAILS.md).
+
 **Plan D3, the Master's referral digest and reminders, 2026-10-28:** on `feat/d-referral-assignment`, local commits
 only, not pushed. V44 adds the Master email ledger `deedpoll_master_email`, `deedpoll_window_digest_run` and
 `deedpoll_referral."remindersSent"`; V45 adds `next_attempt_at`. `MasterDigests` sends one digest per Master per

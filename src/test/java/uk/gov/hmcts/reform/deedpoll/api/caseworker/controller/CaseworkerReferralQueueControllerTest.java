@@ -18,6 +18,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -49,6 +50,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -106,7 +109,7 @@ class CaseworkerReferralQueueControllerTest extends AbstractPostgresContainerTes
     private JdbcTemplate jdbc;
     @Autowired
     private ProcessSettingsService settings;
-    @Autowired
+    @MockitoSpyBean
     private BankHolidays bankHolidays;
 
     private UUID sullivan;
@@ -339,8 +342,11 @@ class CaseworkerReferralQueueControllerTest extends AbstractPostgresContainerTes
     @Test
     @DisplayName("send: inside a window it is 200 with the sent rows and the window after, and again is a replay")
     void sends() throws Exception {
-        windows("00:00", "23:00", "23:15", "23:45");
-        assumeTrue(openNow(), "no window can be open at this moment");
+        // Every day a working day and the windows nearly end to end (V42 wants a gap, on the quarter hour), so the
+        // send runs whatever day the build does; only noon's gap and the last quarter hour are stepped over.
+        doReturn(true).when(bankHolidays).isWorkingDay(any());
+        windows("00:00", "12:00", "12:15", "23:45");
+        assumeTrue(openNow(), "the request could change window at this moment");
         String caseId = newCase();
         String referralId = raise(caseId);
 
@@ -420,10 +426,10 @@ class CaseworkerReferralQueueControllerTest extends AbstractPostgresContainerTes
             """, morningStart, morningEnd, afternoonStart, afternoonEnd);
     }
 
-    /** Whether a window is open now and for the next minute, so the request lands inside it. */
+    /** Whether the same window is open now and for the next minute, so the send and its replay land inside it. */
     private boolean openNow() {
         LocalDateTime now = AuditClock.now();
-        return openAt(now).isPresent() && openAt(now.plusMinutes(1)).isPresent();
+        return openAt(now).isPresent() && openAt(now).equals(openAt(now.plusMinutes(1)));
     }
 
     /** Whether no window is open now or for the next minute. */

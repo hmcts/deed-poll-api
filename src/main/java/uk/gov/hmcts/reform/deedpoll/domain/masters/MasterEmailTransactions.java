@@ -214,7 +214,7 @@ public class MasterEmailTransactions {
     public Optional<MasterEmailContent> content(MasterEmailClaim claim) {
         Master master = masters.find(claim.masterId())
             .orElseThrow(() -> new IllegalStateException("A Master email names no Masters-list entry"));
-        int waiting = (int) referrals.findWithCaseByIdIn(claim.referralIds()).stream()
+        int waiting = (int) referrals.findByIdInForMasterEmails(claim.referralIds()).stream()
             .filter(referral -> stillWaitingFor(referral, claim.masterId()))
             .count();
         if (waiting == 0) {

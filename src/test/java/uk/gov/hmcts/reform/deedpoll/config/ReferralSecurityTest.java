@@ -169,7 +169,7 @@ class ReferralSecurityTest {
      * The Master emails' read (plan D3), which names no parent case because one email spans cases. Admitted with two
      * rules: it takes nothing but the ids a ledger row froze, and nothing but {@code MasterEmailTransactions} calls it.
      */
-    private static final Set<String> MASTER_EMAILS = Set.of("findWithCaseByIdIn");
+    private static final Set<String> MASTER_EMAILS = Set.of("findByIdInForMasterEmails");
 
     /**
      * The referral queue's reads (plan F1), which name no parent case because the queue spans every case. Admitted with

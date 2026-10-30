@@ -114,7 +114,9 @@ class ReferralSendConcurrencyTest extends AbstractPostgresContainerTest {
 
     @Test
     @DisplayName("two sends naming the same referrals in opposite orders finish: one sends, the other is a 409")
-    void noDeadlock() throws Exception {
+    void sameReferralsInOppositeOrders() throws Exception {
+        // Both are in one window, so the window lock serialises them before either takes a row lock. This proves the
+        // outcome, not the id ordering of the row locks, which guards a send against a reassignment (no window lock).
         UUID sullivan = master("Master Sullivan");
         UUID okafor = master("Master Okafor");
         UUID one = openReferral();

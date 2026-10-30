@@ -26,8 +26,8 @@ public record ReferralQueueWindowResponse(
     @Schema(description = "How many referrals were sent in the open window, whatever has happened to them since, or "
         + "0 when none is open.")
     long sent,
-    @Schema(description = "Every available Master, by name, with how many referrals were sent to them in the open "
-        + "window.")
+    @Schema(description = "Every available Master, by name, with how many of the referrals sent in the open window "
+        + "they hold now: a referral reassigned since keeps its window and counts under its new Master.")
     List<MasterInWindow> masters) {
 
     /** The window open now, and when it closes. */
