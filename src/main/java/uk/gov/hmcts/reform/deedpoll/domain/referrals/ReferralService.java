@@ -302,8 +302,8 @@ public class ReferralService {
      * A Team leader or Delivery Manager moving a referral already sent to one Master to another (plan F1, decision
      * F-10).
      *
-     * <p><strong>{@link Capability#ALLOCATE_REFERRALS} first</strong>, before the body is read or anything is
-     * locked, so a caller without it is a 403 whatever they sent. The referral's row is locked first and then the
+     * <p><strong>{@link Capability#ALLOCATE_REFERRALS} first</strong>, before any field of the body is read or anything
+     * is locked, so a caller without it is a 403 whatever they sent. The referral's row is locked first and then the
      * Master's, in that order on every path that takes both.
      *
      * <p>In order: the Master must exist and be available (400 on {@code masterId}); the referral must be

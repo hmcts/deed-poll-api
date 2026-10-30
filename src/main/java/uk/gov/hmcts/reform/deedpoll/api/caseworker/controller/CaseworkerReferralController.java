@@ -240,7 +240,8 @@ public class CaseworkerReferralController {
 
     /**
      * Moves a referral already sent to a Master to another (plan F1, decision F-10): a Team leader or Delivery Manager
-     * ({@code ALLOCATE_REFERRALS}, 403 before the body is read), on a {@code Claimed} referral, at any time.
+     * ({@code ALLOCATE_REFERRALS}, 403 before any field of the body is read; only a body that is not JSON at all is
+     * the fixed 400 first), on a {@code Claimed} referral, at any time.
      *
      * <p>A {@code PUT} of a sub-resource, because the assignment is a fact the caller replaces: putting the Master
      * it already has is a no-op 200 that records nothing. 400 on {@code masterId} for an unknown or unavailable

@@ -43,6 +43,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -133,12 +134,13 @@ public class ReferralQueue {
      *
      * <p>In this order, each refusal before anything the next step reads:
      * <ol>
-     *   <li>{@link Capability#ALLOCATE_REFERRALS} (403), before the body is read;</li>
+     *   <li>{@link Capability#ALLOCATE_REFERRALS} (403), before any field of the body is read;</li>
      *   <li>the body's shape ({@link ReferralSchemas#parseSend}, 400 naming the entry);</li>
      *   <li>a window must be open now (409, naming when the next one opens);</li>
      *   <li>the window's lock ({@link ReferralWindowLocks}), then the referrals' rows in id order, then the Masters'
      *       in id order -- the one order every send takes, so two cannot deadlock, and the referral-before-Master
-     *       order of {@code ReferralService.assign};</li>
+     *       order of {@code ReferralService.assign}; once all of them are held the window must still be open
+     *       (the same 409), because a send can wait on any of them across the window's close;</li>
      *   <li>each referral must be {@code Open} (409 on {@code allocations[i].referralId}), except that one already
      *       {@code Claimed} by the same Master in this same window is a <strong>replay</strong>, skipped rather than
      *       refused, so a sender whose answer was lost can press Send again;</li>
@@ -160,7 +162,7 @@ public class ReferralQueue {
         caller.require(Capability.ALLOCATE_REFERRALS);
         List<ReferralAllocation> allocations =
             ReferralSchemas.parseSend(body, ProcessSettingsService.MAX_WINDOW_CAP);
-        return send(caller, allocations, AuditClock.now());
+        return send(caller, allocations, AuditClock::now);
     }
 
     /**
@@ -168,10 +170,18 @@ public class ReferralQueue {
      * so a test can say which window it falls in.
      */
     ReferralSend send(CurrentUser caller, List<ReferralAllocation> allocations, LocalDateTime now) {
-        Instant at = now.toInstant(ZoneOffset.UTC);
+        return send(caller, allocations, () -> now);
+    }
+
+    /**
+     * {@link #send} reading {@code clock} twice: once to know which window's lock to take, and again once that lock and
+     * every referral's and Master's row are held, because any of them can be waited on across the window's close. A
+     * send that has them all only after its window has closed is refused as any send outside a window is, and the
+     * second reading is the moment it is stamped with.
+     */
+    ReferralSend send(CurrentUser caller, List<ReferralAllocation> allocations, Supplier<LocalDateTime> clock) {
         ReferralWindowTimes times = settings.referralWindows();
-        ReferralWindow window = ReferralWindows.openAt(at, times, bankHolidays::isWorkingDay)
-            .orElseThrow(() -> new ConflictError(closed(at, times)));
+        ReferralWindow window = openWindow(clock.get(), times);
         windowLocks.lockForSending(window.date(), window.slot());
 
         Map<UUID, Referral> locked = referrals.findByIdInForSending(
@@ -188,9 +198,6 @@ public class ReferralQueue {
                 notWaiting.add(new FieldError(entry(i, ReferralSchemas.REFERRAL_ID), NO_LONGER_WAITING));
             }
         }
-        if (!notWaiting.isEmpty()) {
-            throw new ConflictError(NO_LONGER_WAITING, notWaiting);
-        }
 
         Map<UUID, MasterRepository.Assignee> assignees = new HashMap<>();
         fresh.stream()
@@ -201,6 +208,17 @@ public class ReferralQueue {
             .forEach(id -> masters.findAssigneeForUpdate(id)
                 .filter(MasterRepository.Assignee::available)
                 .ifPresent(assignee -> assignees.put(id, assignee)));
+
+        // Every lock this send waits on is held now, so the window is asked again only here, and this reading is
+        // the moment it is stamped with: a send that waited across the window's close is refused, not sent late.
+        LocalDateTime now = clock.get();
+        Instant at = now.toInstant(ZoneOffset.UTC);
+        if (!window.equals(openWindow(now, times))) {
+            throw new ConflictError(closed(at, times));
+        }
+        if (!notWaiting.isEmpty()) {
+            throw new ConflictError(NO_LONGER_WAITING, notWaiting);
+        }
         List<FieldError> unavailable = fresh.stream()
             .filter(i -> !assignees.containsKey(allocations.get(i).masterId()))
             .map(i -> new FieldError(entry(i, ReferralSchemas.MASTER_ID), ReferralSchemas.SELECT_A_MASTER))
@@ -230,6 +248,13 @@ public class ReferralQueue {
         // The controller maps each case's reference and names after this transaction has closed.
         named.forEach(referral -> Hibernate.initialize(referral.getDeedPoll()));
         return new ReferralSend(named, windowAt(at));
+    }
+
+    /** The window open at that moment, or the 409 naming when the next one opens. */
+    private ReferralWindow openWindow(LocalDateTime now, ReferralWindowTimes times) {
+        Instant at = now.toInstant(ZoneOffset.UTC);
+        return ReferralWindows.openAt(at, times, bankHolidays::isWorkingDay)
+            .orElseThrow(() -> new ConflictError(closed(at, times)));
     }
 
     /** Already sent to this Master in this window: the same send again, whose answer was lost. */

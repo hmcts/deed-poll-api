@@ -56,7 +56,8 @@ public class CaseworkerReferralQueueController {
 
     @Operation(operationId = "sendReferrals", summary = "Send referrals from the queue to Masters",
         description = "Requires caseworker-deedpoll-team-leader or caseworker-deedpoll-delivery-manager "
-            + "(ALLOCATE_REFERRALS); anyone else is 403 before the body is read. Sends each named referral, waiting "
+            + "(ALLOCATE_REFERRALS); anyone else is 403 before any field of the body is read (only a body that is not "
+            + "JSON at all is the fixed 400 first). Sends each named referral, waiting "
             + "in the queue, to the Master named beside it, together and all or nothing: any refusal sends none. "
             + "Only while a referral window is open (409 outside one, naming when the next opens). Each referral "
             + "must be Open (409 on allocations[i].referralId), and each Master available (400 on "

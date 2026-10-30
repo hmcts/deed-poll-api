@@ -24,6 +24,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -136,6 +137,53 @@ class ReferralSendConcurrencyTest extends AbstractPostgresContainerTest {
         assertThat(stored(two).getAssignedMasterId()).isEqualTo(okafor);
         assertThat(sentEvents(one)).isOne();
         assertThat(sentEvents(two)).isOne();
+    }
+
+    @Test
+    @DisplayName("a send that waits on the window's lock past the window's close is a 409, and sends nothing")
+    void windowClosesWhileWaiting() throws Exception {
+        UUID sullivan = master("Master Sullivan");
+        UUID okafor = master("Master Okafor");
+        List<UUID> first = List.of(openReferral());
+        List<UUID> second = List.of(openReferral());
+        // The waiting send reads the morning window before the lock, and its end (10:30, exclusive; GMT) after it.
+        Iterator<LocalDateTime> readings = List.of(AT, LocalDateTime.of(2026, 10, 28, 10, 30)).iterator();
+
+        List<Throwable> outcomes = race(
+            () -> queue.send(TIA, allocations(first, sullivan), AT),
+            () -> queue.send(DEE, allocations(second, okafor), readings::next));
+
+        assertThat(outcomes.get(0)).isNull();
+        assertThat(outcomes.get(1)).isInstanceOf(ConflictError.class)
+            .hasMessageStartingWith("Referrals can only be sent during a referral window.");
+        assertThat(readings.hasNext()).isFalse();
+        second.forEach(id -> {
+            assertThat(stored(id).getState()).isEqualTo(ReferralState.Open);
+            assertThat(sentEvents(id)).isZero();
+        });
+    }
+
+    @Test
+    @DisplayName("a send that waits on a Master's row past the window's close is a 409, and sends nothing")
+    void windowClosesWhileWaitingOnAMaster() throws Exception {
+        UUID sullivan = master("Master Sullivan");
+        List<UUID> referral = List.of(openReferral());
+        // Past the window's lock and the referral's row, the send reads its window again only with the Master held.
+        Iterator<LocalDateTime> readings = List.of(AT, LocalDateTime.of(2026, 10, 28, 10, 30)).iterator();
+
+        List<Throwable> outcomes = race(
+            () -> {
+                jdbc.queryForList("SELECT id FROM deedpoll_master WHERE id = ? FOR UPDATE", sullivan);
+                return null;
+            },
+            () -> queue.send(DEE, allocations(referral, sullivan), readings::next));
+
+        assertThat(outcomes.get(0)).isNull();
+        assertThat(outcomes.get(1)).isInstanceOf(ConflictError.class)
+            .hasMessageStartingWith("Referrals can only be sent during a referral window.");
+        assertThat(readings.hasNext()).isFalse();
+        assertThat(stored(referral.get(0)).getState()).isEqualTo(ReferralState.Open);
+        assertThat(sentEvents(referral.get(0))).isZero();
     }
 
     /**
