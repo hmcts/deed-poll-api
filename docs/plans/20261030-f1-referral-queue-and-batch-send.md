@@ -263,8 +263,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement, add the template key to `application.yaml` and the chart (with a `Chart.yaml` version bump), run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 6: Documentation and final verification
-- [ ] Update `CLAUDE.md` and rewrite `docs/MASTER-EMAILS.md` as steps 8 and 13 say; list A-1 and A-2 in the execution notes for review.
-- [ ] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
+- [x] Update `CLAUDE.md` and rewrite `docs/MASTER-EMAILS.md` as steps 8 and 13 say; list A-1 and A-2 in the execution notes for review.
+- [x] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
 
 ## Execution notes
 
@@ -413,3 +413,24 @@ tests) had 3 failures, the period key's length (2) and the reminder test's row c
 '*OpenAPIPublisher*'` green; compile of every source set OK; `checkstyle.sh` OK after two single-line javadocs and
 three long lines were fixed. `docs/MASTER-EMAILS.md` and `CLAUDE.md`'s emails paragraph still describe the digest and
 are Task 6's.
+
+**Task 6.** `CLAUDE.md`: the layout counts `/caseworker/referral-queue` (GET and `POST …/sends`) apart, as
+`OpenAPIPublisherTest` does (the caseworker surface stays 35 operations across 22 paths); `domain/settings` and
+`domain/masters` name the window cap and the sent email; the settings paragraph describes `windowCap` across every
+Master with no alias; the judicial paragraph states My referrals' order (`findOwnedBy`); D2's assignment paragraph is
+replaced by one on the queue, the batch send (its order of checks, the window lock before any row lock, the replay,
+the cap) and reassignment; the emails paragraph describes `SENT`, the reminder's three keys and the retired digest.
+`docs/MASTER-EMAILS.md` is rewritten for the sent email and the reminder (their period keys, the shared
+personalisation, suggested wording, provisioning with `NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT`, the digest's removal).
+
+**For review, choices Steve has not yet confirmed:**
+- **A-1:** the 48-hour reminder links to My referrals (`my_referrals_link`) with a count, instead of listing each
+  referral, so both emails carry the same three keys.
+- **A-2:** a window's `sent` count, and so the cap, is every referral sent in that window in any state: a withdrawal,
+  a direction or a reassignment gives no place back.
+
+Final validation, forced (`cleanTest cleanIntegration build`): the first run failed one test, a **Task 5 regression**
+(`NotifyConfigurationTest.committedDefaultsAreUnprovisioned` asked the retired `DIGEST` for its template key, which
+throws); it now skips retired kinds. Re-run: BUILD SUCCESSFUL in 4m 49s, `test` 5,415 tests, 0 failures, 1 skipped
+(baseline 5,336, 0, 1); `integration` 27, 0 failures (baseline 27). `checkstyle.sh` OK. `git status` clean after this
+commit.

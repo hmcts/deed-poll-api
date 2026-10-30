@@ -34,6 +34,8 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 35 operations 
                                   DELETE …/{date} need MANAGE_PROCESS_CONFIG; counted apart)
                                   and /caseworker/masters (any staff GET; POST and PATCH …/{id} need
                                   MANAGE_PROCESS_CONFIG; counted apart)
+                                  and /caseworker/referral-queue (ALLOCATE_REFERRALS GET, and POST …/sends;
+                                  counted apart)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
                                   plus GET …/documents/{documentId}/preview (counted apart as PREVIEW_PATHS)
 api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case,
@@ -45,10 +47,10 @@ domain/{deedpoll,notes,witnesses,documents}   the ported specification layer
 domain/savedqueries               saved and shared case-list queries — NOT a port, no reference to compare
 domain/referrals                  referrals to the judiciary and the applicant's confirmation — NOT a port
 domain/settings                   the Delivery Manager's process settings (V40, extended by V42): the processing
-                                  window, reminder interval, per-Master cap and two referral windows, plus the
+                                  window, reminder interval, window cap and two referral windows, plus the
                                   England and Wales bank holidays (BankHolidays.isWorkingDay) — NOT a port
 domain/masters                    the Masters list (V42) a Delivery Manager keeps, linked to IDAM by email on a
-                                  judge's first judicial request (config/MasterLinking), and the Masters' digest and
+                                  judge's first judicial request (config/MasterLinking), and the Masters' sent and
                                   reminder emails with their ledger (V44) — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
 domain/documents/preview          transient PDF renditions for the admin viewer, DOCX via Docmosis — NOT a port;
@@ -471,8 +473,10 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
 - **The judicial surface is scoped by visibility, not by the case.** A caseworker read names its parent
   (`/caseworker/cases/{id}/…`); a judicial URL carries a referral id and no case id at all, so
   `JudicialReferralService.visibleTo` stands where the parent id stands — this judge's own `Claimed`/`Decided`
-  referrals, by `claimedById`/`decidedById` — which `GET /judicial/referrals/mine` is the list of. **There is no
-  pool** (D2): an `Open` referral is waiting for the office to assign it and is visible to no judge, and an assigned
+  referrals, by `claimedById`/`decidedById` — which `GET /judicial/referrals/mine` is the list of, ordered by `findOwnedBy`: `Claimed` before
+  `Decided`, urgent first within `Claimed` only, then oldest `coalesce("assignedAt", "claimedAt", "createdOn")` (the
+  day it was sent or last reassigned, so a pre-V43 row still orders), then `id`. **There is no
+  pool** (D2): an `Open` referral is waiting in the office's queue to be sent and is visible to no judge, and an assigned
   referral whose Master is not yet linked is visible to nobody until linking. `GET /judicial/referrals` answers an
   empty page and it and `POST …/claim` are `deprecated` for one release, because today's admin still calls them; do
   not 404 them, a later contract step removes both. Anything else is **404**,
@@ -530,45 +534,57 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   and is untouched.
 - **The referral process settings are stored, and read on every decision.** V40's singleton, extended by V42, holds
   the processing window (`referralClaimExpiryMinutes` on the wire, a name kept for admin: how long a Master has to
-  give a direction, 1–30 days, seeded 7), the reminder interval (1–168 hours, 48), the per-Master cap per window
-  (1–100, 10) and the morning and afternoon windows (`HH:mm` on the quarter hour, `Europe/London`, 07:00–10:30 and
+  give a direction, 1–30 days, seeded 7), the reminder interval (1–168 hours, 48), the window cap (`windowCap`, V46's rename
+  of `masterWindowCap` with no alias: the most referrals sent in one window across every Master, 1–100, 10) and the morning and afternoon windows (`HH:mm` on the quarter hour, `Europe/London`, 07:00–10:30 and
   14:00–14:30, each start before its end and the morning end before the afternoon start). `ProcessSettingsService`
-  reads them through `processingWindow()`, `reminderInterval()`, `windowCap()` (V46's rename of `masterWindowCap`) and `referralWindows()` with no
+  reads them through `processingWindow()`, `reminderInterval()`, `windowCap()` and `referralWindows()` with no
   capability check and no cache; `ReferralService` asks `processingWindow()` once per `unassignOverdue`, so a
   Delivery Manager's `PUT` applies at once. Never cache them or reintroduce a property default, and a missing row
   fails the caller rather than guessing. The six V42 keys are **optional on the PUT for one release** so today's admin,
   which sends only the window and `revision`, keeps working; an absent key leaves its column alone. V42 re-seeded the
   window to 7 days only at revision 0, and raised a chosen value below a day to 1440 with a history row attributed to
   the service account. Values go in `deedpoll_process_settings_change`, one row per changed field, never in the audit
-  trail (no case owns them). D2's assignment reads the cap and the windows; D3's `MasterReminders` reads the reminder interval on every run.
-- **A referral is assigned to a Master by the office, and the processing window gives it back.** D2 (Master
-  Sullivan's item D, Steve, 2026-10-28) reuses the states rather than adding a Postgres enum member: `Open` is
-  *waiting for assignment*, `Claimed` is *assigned* (`claimedBy` the Master's name, `claimedById` their linked
-  subject, null until linked). `ReferralService.assign`, the one operation behind create with `masterId` and
-  `PUT /caseworker/cases/{id}/referrals/{referralId}/assignment` (`@AuditedAs(REFERRAL_ASSIGNED)`, any staff role),
-  **locks the referral row, then the Master's row** (`MasterRepository.findAssigneeForUpdate`) — keep that order
-  everywhere, or two assignments deadlock — so the cap holds under concurrency. Its checks run in a fixed order: the
-  Master exists and is available (400 on `masterId`), the referral is `Open` or `Claimed` (409), the same Master is a
-  no-op (no note, no audit), then the cap: V43's `assignedMasterId`/`windowDate`/`windowSlot` count `Claimed` rows for
-  that Master in the window `ReferralWindows.windowFor(now)` gives, and at `masterWindowCap()` it is a 409 naming the
-  window in words. The cap counts **current** assignments only, so a reassignment away or a release lowers it.
-  `ReferralWindows` is pure (`Europe/London`, working days from `BankHolidays.isWorkingDay`): inside or before the
-  morning window is that day's `AM`, inside or before the afternoon one is `PM`, after it or on a non-working day is
-  the next working day's `AM`. Without `masterId` a create is `Open`, which is what today's admin sends. Each
-  assignment writes one `ReferralNotes` note ("assigned to …" / "reassigned from … to …", never an email), one
-  `REFERRAL_ASSIGNED` event (state, `claimedBy`, `assignedAt`; never a subject) and recomputes both read-models.
-  Responses carry `assignedMaster` (`{id, name}` only), `assignedAt`, the window and `directionDueBy` (computed at read
-  time from the setting); `GET /caseworker/masters` answers `{masters, window, cap}` with each entry's
-  `assignedInWindow` from one grouped count. **`unassignOverdue`** (was `reclaimStaleClaims`) releases a `Claimed`
-  referral whose `coalesce("assignedAt", "claimedAt")` is older than `processingWindow()` by one conditional `UPDATE`
-  re-checking state and cutoff, clearing the claim and all four assignment columns (V43's checks require it), with
-  one "returned to the office for assignment" note; `touch` changes only `lastTouchedAt` and extends nothing. It runs
-  at the judicial request-time triggers and on `ReferralUnassignment`'s timer (`REFERRAL_UNASSIGN_ENABLED`, default
-  true; `REFERRAL_UNASSIGN_INTERVAL`, `PT15M`), which refuses a caller transaction and never throws (one WARN, the
-  exception class only). **Go-live needs no data rewrite:** a pre-V43 claim keeps its subject and no Master, stays
-  visible to its claimer, counts its window from `claimedAt`, and `MasterService.linkIfListed` attaches it
-  (`attachLegacyClaims`) and gives a newly linked Master the referrals assigned while unlinked
-  (`attachToLinkedMaster`), in the link's transaction. Emails are D3's, below. See `docs/plans/completed/20261028-d2-referral-assignment.md`.
+  trail (no case owns them). F1's queue and batch send read the cap and the windows; D3's `MasterReminders` reads the reminder interval on every run.
+- **A referral waits in a queue, and a Team leader or Delivery Manager sends it to a Master in a window.** F1
+  (Steve, 2026-10-29/30, replacing D2's choose-a-Master-on-create) reuses the states rather than adding a Postgres enum
+  member: `Open` is *waiting to be sent*, `Claimed` is *sent to a Master* (`claimedBy` the Master's name, `claimedById`
+  their linked subject, null until linked, `assignedAt` when sent or last reassigned, `windowDate`/`windowSlot` the
+  window it was sent in). **Raising takes no Master**: `CreateReferralInput` has no `masterId` (a body carrying one is
+  stripped as any unknown key is), every create is `Open`, and its note says it is waiting to be sent. The queue,
+  the send and reassignment all need `ALLOCATE_REFERRALS`, checked **before** the parameters or body are read.
+  `GET /caseworker/referral-queue` (`ReferralQueue`) pages `state=Open` (urgent, oldest `createdOn`, `id`) or
+  `state=Claimed` (oldest `coalesce("assignedAt", "claimedAt")`, `id`) across every case in the database, and its
+  `window` envelope is `current` (`ReferralWindows.openAt`, start inclusive, end exclusive, never on a non-working
+  day), `next` (`nextToOpen`, strictly after), `cap`, `sent` and each **available** Master's `sentInWindow`. Rows carry
+  no subject or email. **`POST /caseworker/referral-queue/sends`** (`@AuditedAs(REFERRAL_SENT)`) is one transaction in
+  which any refusal writes nothing, in a fixed order: the shape (`allocations[i].…`, 1–100 entries, no referral twice),
+  then 409 outside a window naming the next one in words, then `ReferralWindowLocks.lockForSending` (a
+  transaction-scoped advisory lock on the window, taken **before any row lock**, so a second sender counts what the
+  first committed), then the referrals `FOR UPDATE` in `id` order, then the new allocations' Masters
+  (`findAssigneeForUpdate`) in id order — keep that order everywhere, or two sends deadlock. Then 409 on each
+  `referralId` neither `Open` nor a **replay** (already `Claimed` by the same Master in this window, which is skipped,
+  so a lost answer can be sent again), 400 on each unknown or unavailable `masterId`, then the cap: `sent` in the
+  window plus the new ones must not pass `windowCap()`, else 409 with the room left and the excess in words. **A
+  window's count is every referral sent in it, in any state** (A-2: a withdrawal gives no place back), and a body of
+  replays only skips the cap. Each new one is stamped by `ReferralService.send` (`MANDATORY`: the columns,
+  `remindersSent` 0, one "sent to {Master} by the office" note, one `REFERRAL_SENT` event with `state`, `claimedBy`
+  and `assignedAt`, never a subject, and both read-models), and one `SENT` email row per Master with a new referral.
+  **Reassignment** (`PUT /caseworker/cases/{id}/referrals/{referralId}/assignment`, `@AuditedAs(REFERRAL_ASSIGNED)`)
+  takes a `Claimed` referral only (`Open` is 409 "Send this referral from the queue…"; others keep their 409), at any
+  time, with **no cap, no window lock and its window kept**; it locks the referral, then the Master, restarts
+  `assignedAt` and `remindersSent`, writes the "reassigned from … to …" note and a `SENT` row for the new Master only,
+  and the same Master is a no-op. Responses carry `assignedMaster` (`{id, name}` only), `assignedAt`, the window and
+  `directionDueBy` (computed at read time from the setting); `GET /caseworker/masters` answers `{masters}` only.
+  **`unassignOverdue`** (was `reclaimStaleClaims`) releases a `Claimed` referral whose `coalesce("assignedAt",
+  "claimedAt")` is older than `processingWindow()` by one conditional `UPDATE` re-checking state and cutoff, clearing
+  the claim and all four assignment columns (V43's checks require it), back to the queue with one "returned to the
+  queue to be sent again: no direction from {name} within 7 days" note; `touch` changes only `lastTouchedAt` and
+  extends nothing. It runs at the judicial request-time triggers and on `ReferralUnassignment`'s timer
+  (`REFERRAL_UNASSIGN_ENABLED`, default true; `REFERRAL_UNASSIGN_INTERVAL`, `PT15M`), which refuses a caller
+  transaction and never throws (one WARN, the exception class only). A pre-V43 claim keeps its subject and no Master,
+  stays visible to its claimer, and `MasterService.linkIfListed` attaches it (`attachLegacyClaims`) and gives a newly
+  linked Master the referrals sent while unlinked (`attachToLinkedMaster`), in the link's transaction. Prod starts on
+  F1, so nothing was migrated. See `docs/plans/20261030-f1-referral-queue-and-batch-send.md`.
 - **The Masters list is the Delivery Manager's, and a Master is linked by email, once.** `deedpoll_master` (V42)
   holds a name, a lower-cased unique email and an available flag; there is no delete, because referrals and history
   refer to a Master, so one who leaves is made unavailable. `config/MasterLinking`, a `HandlerInterceptor` on
@@ -588,27 +604,31 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   (409 on a listed date) and removes (404 on an unlisted one) under `MANAGE_PROCESS_CONFIG`, audited as
   `BANK_HOLIDAY_ADDED`/`_REMOVED` with field names only. Dates beyond 2028 must be added by a Delivery Manager or a
   later migration before the referral windows reach them.
-- **The Master emails have their own ledger, not the case outbox.** D3's window digest (`MasterDigests`, one email per
-  Master per closed window, windows closed in the last 24 hours only) and reminder (`MasterReminders`, working days
-  07:00 to before 18:00 `Europe/London`, one email per Master listing every undirected referral) write
-  `deedpoll_master_email` (V44, V45), because `deedpoll_notification` is case-scoped and a digest spans cases. It
-  copies the outbox's rules, not its tables: `unique (master_id, kind, period_key)` makes pods enqueue once; a
-  digest's `deedpoll_window_digest_run` row and a reminder's `"remindersSent"` claims commit **in the same transaction**
-  as their email rows; `MasterEmailTransactions` commits `Sending` with `send_started_at` before `MasterEmailSender`'s one
+- **The Master emails have their own ledger, not the case outbox.** F1's sent email (`SENT`, one per Master per
+  batch send, keyed `send:{uuid}` with one UUID per request, so a replay writes none and two sends are two emails; and
+  one to the new Master on a reassignment, keyed `{referralId}@{assignedAt}`) and D3's reminder (`MasterReminders`,
+  working days 07:00 to before 18:00 `Europe/London`, one email per Master counting every undirected referral) write
+  `deedpoll_master_email` (V44, V45, V46), because `deedpoll_notification` is case-scoped and these span cases. **V44's
+  `period_key` is `varchar(64)`**; `MasterEmailPeriodKeysTest` pins both keys under it. The ledger copies the outbox's
+  rules, not its tables: `unique (master_id, kind, period_key)` makes pods enqueue once; a `SENT` row commits in the
+  send's or reassignment's own transaction (`MasterEmailTransactions.enqueueSent`/`enqueueReassigned`, `MANDATORY`)
+  and a reminder's `"remindersSent"` claims in the same transaction as its rows; the drain timer sends them, never the
+  request. `MasterEmailTransactions` commits `Sending` with `send_started_at` before `MasterEmailSender`'s one
   Notify call (the only Notify caller outside the case outbox and Gazette, kept in `notify/` by
   `NotificationSecurityTest`); only a `TEMPORARY` refusal returns to `Pending`, eight attempts with the outbox's
-  backoff; an unknown outcome or an expired `Sending` lease is `Failed` and **never resent** (ADR-0007). An
-  assignment, reassignment or withdrawn direction resets `"remindersSent"` to 0; a new path that restarts the clock
-  must too. **Unprovisioned is a visible skip:** with `master-referral-digest`/`-reminder` on `DEED_POLL_PLACEHOLDER`
-  (the chart's value everywhere until the templates exist) runs and claims are recorded and rows written `Skipped`,
-  so provisioning later never sends a backlog. A provisioned template with no `ADMIN_BASE_URL` fails start-up. The
-  ledger holds the Master's id, never the address, which is read from the Masters list at send time and never logged.
-  The frozen referral list is re-read at send time too, keeping only those still `Claimed` by that Master with no
-  decision, so a backed-off row never names one since directed or reassigned. A digest takes its window
-  `MasterDigests.SETTLE` (one minute) after it closes, but a delay cannot bound an assignment's lock wait, so the
-  guarantee is a lock: `recordDigestRun` takes an exclusive advisory lock, `assign` shares it (`MasterRepository.digestTook`)
-  after the referral's lock and before the Master's (the digest's email rows key-share the Master's row, so after it deadlocks) and moves to the next window when the digest already took its own. Keep both halves.
-  The templates are not `EmailTemplate` members (`MasterEmailKind` carries their keys). See `docs/MASTER-EMAILS.md`.
+  backoff; an unknown outcome or an expired `Sending` lease is `Failed` and **never resent** (ADR-0007). A send, a
+  reassignment or a withdrawn direction resets `"remindersSent"` to 0; a new path that restarts the clock must too.
+  Both kinds' personalisation is `master_name`, `referral_count` and `my_referrals_link`
+  (`{ADMIN_BASE_URL}/judicial/referrals/mine`; A-1: no per-referral list). **The window digest is gone**:
+  `MasterEmailKind.DIGEST` stays only because AAT's ledger holds `DIGEST` rows; it is `retired()`, has no template key,
+  never reads as provisioned, and a leftover `Pending` one is settled `Skipped`. `deedpoll_window_digest_run` is left
+  as history. **Unprovisioned is a visible skip:** with `master-referral-sent`/`-reminder` on `DEED_POLL_PLACEHOLDER`
+  (the chart's value everywhere until the templates exist) rows are written `Skipped`, so provisioning later never
+  sends a backlog. A provisioned template with no `ADMIN_BASE_URL` fails start-up. The ledger holds the Master's id,
+  never the address, which is read from the Masters list at send time and never logged. The frozen referral list is
+  re-read at send time too, counting only those still `Claimed` by that Master with no decision; none left is
+  `Skipped`. The templates are not `EmailTemplate` members (`MasterEmailKind` carries their keys). See
+  `docs/MASTER-EMAILS.md`.
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
   only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback

@@ -1,43 +1,35 @@
-# The Master emails: the window digest and the reminder
+# The Master emails: the sent email and the reminder
 
-Plan D3 (Master Sullivan's feedback, item D). These are the only emails this service sends to anybody but an
-applicant. Both go to a Master on the Delivery Manager's Masters list, at the address the list holds **at send
-time**, and both list referrals by their application's display reference with a link into the admin app. Neither
-carries an applicant's name, address or email address.
+Plan D3 (Master Sullivan's feedback, item D), reshaped by plan F1 (Steve, 2026-10-29/30). These are the only emails
+this service sends to anybody but an applicant. Both go to a Master on the Delivery Manager's Masters list, at the
+address the list holds **at send time**, and both link to the Master's own list in the admin app, My referrals.
+Neither names an application, an applicant, an address or an email address.
 
 **Nothing is sent yet.** Neither Notify template exists, so both ship as `DEED_POLL_PLACEHOLDER` in every
 environment. An unprovisioned template is a visible skip, not a backlog (see below).
 
 ## The two emails
 
-### The digest (`master-referral-digest`)
+### The sent email (`master-referral-sent`)
 
-When a referral window closes (by default the morning window at 10:30 and the afternoon one at 14:30
-`Europe/London`, on working days only; both are the Delivery Manager's process settings), each Master with
-`Claimed` referrals counted towards that window gets **one** email listing them. A Master with none gets nothing.
+A Team leader or Delivery Manager sends queued referrals to Masters in a batch, during a referral window
+(`POST /caseworker/referral-queue/sends`). Each Master with **at least one new referral** in that send gets **one**
+email, however many referrals the send gave them. Two sends in one window are two emails.
 
-- `MasterDigests` runs every `MASTER_DIGEST_INTERVAL` (default `PT5M`) and looks at every window that closed in the
-  last 24 hours. A window older than that is never sent, so a long outage does not flood Masters with stale digests.
-  A window is first taken one minute after its end (`MasterDigests.SETTLE`), so most assignments that read the window
-  just before it closed have committed by then. The settle is not what guarantees it: the digest takes a transaction
-  advisory lock exclusively before it writes the run row, and every assignment shares it after the referral's lock and before the Master's (the digest's email rows
-  key-share-lock the Master's row, so the other order deadlocks), so the
-  digest waits for an assignment still stamping the window, and an assignment after the digest sees the run row and
-  counts towards the next window instead.
-- One `deedpoll_window_digest_run` row per window, written in the same transaction as that window's email rows:
-  whichever pod commits first enqueues the window; the others write nothing.
-- A referral reassigned before the window closed goes in its new Master's digest. A referral with no
-  `assignedMasterId` (claimed before V43) is left out and counted in the run's INFO line.
-- Either email's list is read again at send time, and keeps only referrals still `Claimed` by that Master with no
-  direction: a row that waited out a backoff never names one since directed, unassigned or reassigned. If nothing
-  is left, the row is `Skipped`.
-- A window's end time changed after its digest ran does not run it again.
+- The row is written in the send's own transaction (`MasterEmailTransactions.enqueueSent`), so a refused send writes
+  none. Its period key is `send:{uuid}`, one UUID per request, so `unique (master_id, kind, period_key)` holds per send
+  and Master. A replay (the same body sent again after a lost answer) applies nothing new and writes no row.
+- A **reassignment** (`PUT /caseworker/cases/{id}/referrals/{referralId}/assignment`) sends the same email to the new
+  Master only; the old one gets nothing. Its period key is `{referralId}@{assignedAt}` to the microsecond
+  (`enqueueReassigned`). The same Master again is a no-op and writes nothing.
+- Both keys fit V44's `varchar(64)` `period_key` (`MasterEmailPeriodKeysTest` pins them).
+- The rows are sent by the drain timer (below), never inside the request, so a send's answer never waits on Notify.
 
 ### The reminder (`master-referral-reminder`)
 
-Every reminder interval (the Delivery Manager's setting, default 48 hours) from a referral's assignment, its Master
-is due a reminder. The reminders due in one run go as **one email per Master**, listing **every** referral still
-waiting for that Master's direction, not only the ones that fell due.
+Every reminder interval (the Delivery Manager's setting, default 48 hours) from a referral's send or reassignment
+(`assignedAt`), its Master is due a reminder. The reminders due in one run go as **one email per Master**, counting
+**every** referral still waiting for that Master's direction, not only the ones that fell due.
 
 - `MasterReminders` runs every `MASTER_REMINDER_INTERVAL_CHECK` (default `PT15M`), and **only on working days from
   07:00 to before 18:00 `Europe/London`**. A reminder that falls due outside those hours waits for the next run inside
@@ -45,45 +37,52 @@ waiting for that Master's direction, not only the ones that fell due.
 - Reminder `k` is due when `floor((now - assignedAt) / interval) = k` and `k > remindersSent`. One conditional
   `UPDATE` raises `"remindersSent"` to `k`, so two pods remind once. A referral owed several reminders (after an
   outage or a weekend) gets one email, not one per missed interval.
-- Reminders stop when the Master directs the referral or it is unassigned. An assignment, a reassignment and a
-  withdrawn direction reset `remindersSent` to 0, because each restarts the clock.
-- A claim from before V43 that linking attached to a Master has no `assignedAt`, so it never falls due itself (the
-  plan counts reminders from assignment). It is still listed when another of that Master's referrals falls due.
+- Reminders stop when the Master directs the referral or it is unassigned. A send, a reassignment and a withdrawn
+  direction reset `remindersSent` to 0, because each restarts the clock.
+- A claim from before V43 that linking attached to a Master has no `assignedAt`, so it never falls due itself. It is
+  still counted when another of that Master's referrals falls due.
+
+### Either email at send time
+
+The referrals a row froze are read again when it is sent, and only those still `Claimed` by that Master with no
+direction are counted: a row that waited out a backoff never counts one since directed, unassigned or reassigned. If
+none is left, the row is `Skipped`.
+
+### The window digest is gone
+
+D3's digest at each window's close was removed by F1, because the sent email replaces it. `MasterEmailKind.DIGEST`
+remains only so the `DIGEST` rows AAT's ledger already holds still map: it has no template key, never reads as
+provisioned, and a `DIGEST` row somehow left `Pending` is settled `Skipped` by the drain, never sent.
+`MASTER_DIGEST_INTERVAL` and `NOTIFY_TEMPLATE_MASTER_REFERRAL_DIGEST` are gone; `deedpoll_window_digest_run` is kept
+as history and nothing writes it.
 
 ## Personalisation
 
-Every value is a plain string: Notify links a raw URL and renders no HTML.
+Every value is a plain string: Notify links a raw URL and renders no HTML. Both emails use the same three keys.
 
-| Key | Digest | Reminder |
-|---|---|---|
-| `master_name` | the Masters-list name | the same |
-| `referral_count` | how many referrals the list holds | the same |
-| `period` | `the morning of 28-10-26` / `the afternoon of 28-10-26` | `waiting for your direction` |
-| `referral_list` | one line per referral, urgent first, then oldest first | the same |
+| Key | Value |
+|---|---|
+| `master_name` | the Masters-list name |
+| `referral_count` | how many referrals the email counts (see "Either email at send time") |
+| `my_referrals_link` | `{ADMIN_BASE_URL}/judicial/referrals/mine`, for example `https://deed-poll-admin.aat.platform.hmcts.net/judicial/referrals/mine` |
 
-A `referral_list` line is
-`{display reference} – {reasons} – {Urgent|Standard} – referred {dd-mm-yy} – {ADMIN_BASE_URL}/judicial/referrals/{id}`,
-with the reasons worded as the referral's case notes word them. For example:
-
-```
-DP2026-000123 – Applicant is a minor: Have parental consent – Urgent – referred 27-10-26 – https://deed-poll-admin.aat.platform.hmcts.net/judicial/referrals/0b6c…
-DP2026-000140 – Other – Standard – referred 28-10-26 – https://deed-poll-admin.aat.platform.hmcts.net/judicial/referrals/7e21…
-```
+The reminder linking to My referrals rather than listing each referral is plan F1's choice (A-1), not yet confirmed
+by the business.
 
 ## Suggested Notify template text
 
 The wording is the business's to agree; this is a starting point that uses every key.
 
-**Digest.** Subject: `Deed poll referrals for ((period))`
+**Sent.** Subject: `Deed poll referrals sent to you`
 
 ```
 Dear ((master_name)),
 
-((referral_count)) deed poll referral(s) were assigned to you for ((period)):
+((referral_count)) deed poll referral(s) have been sent to you for your direction.
 
-((referral_list))
+Open My referrals to read each application and give your direction. You will need to sign in:
 
-Open each link to read the application and give your direction. You will need to sign in.
+((my_referrals_link))
 
 This is an automated email. Please do not reply to it.
 
@@ -95,11 +94,11 @@ HMCTS Deed Poll Office
 ```
 Dear ((master_name)),
 
-You have ((referral_count)) deed poll referral(s) ((period)):
+You have ((referral_count)) deed poll referral(s) waiting for your direction.
 
-((referral_list))
+Open My referrals to read each application and give your direction. You will need to sign in:
 
-Open each link to read the application and give your direction. You will need to sign in.
+((my_referrals_link))
 
 This is an automated email. Please do not reply to it.
 
@@ -112,8 +111,8 @@ Neither invites a reply, so neither needs `NOTIFY_EMAIL_REPLY_TO_ID`; neither ca
 ## Provisioning
 
 1. Create both templates in the deed poll Notify service for the environment (non-prod first), and read each back
-   through `GET /v2/template/{id}` to check the four placeholders match exactly.
-2. In `charts/deed-poll-api/values.yaml`, replace `DEED_POLL_PLACEHOLDER` in `NOTIFY_TEMPLATE_MASTER_REFERRAL_DIGEST`
+   through `GET /v2/template/{id}` to check the three placeholders match exactly.
+2. In `charts/deed-poll-api/values.yaml`, replace `DEED_POLL_PLACEHOLDER` in `NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT`
    and `NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER` with the ids, in the conditional form the case templates use, so
    prod keeps rendering the placeholder until its own ids exist (`DeploymentChartConformanceTest` holds this).
 3. Bump `Chart.yaml`'s version, or Flux never deploys the change.
@@ -121,16 +120,17 @@ Neither invites a reply, so neither needs `NOTIFY_EMAIL_REPLY_TO_ID`; neither ca
    `https://deed-poll-admin.platform.hmcts.net` in prod). **Start-up fails if either template is provisioned without
    it**, and whenever it is set but is not an absolute http(s) URL with a host and no query or fragment.
 
-Provisioning starts with the next window and the next due reminder. The rows written while the template was
-unprovisioned stay `Skipped` and are never sent, so nobody receives yesterday's digest.
+Provisioning starts with the next send, reassignment or due reminder. The rows written while the template was
+unprovisioned stay `Skipped` and are never sent, so nobody receives a backlog.
 
 The timers can be switched off with `MASTER_EMAILS_ENABLED=false` (default true); the drain then stops too.
 
 ## The ledger
 
-`deedpoll_master_email` (V44, V45) holds one row per email: the Master's id (never the address), the kind, the period
-key (a digest's window, `2026-10-28:AM`; a reminder's run minute plus a per-pod run id), the referral ids in the order
-the email lists them, and the delivery state. `unique (master_id, kind, period_key)` is what makes two pods enqueue
+`deedpoll_master_email` (V44, V45; V46 admits `SENT`) holds one row per email: the Master's id (never the address),
+the kind, the period key (a send's `send:{uuid}`, a reassignment's `{referralId}@{assignedAt}`, a reminder's run
+minute plus a per-pod run id; a retired digest's window, `2026-10-28:AM`), the referral ids the email counts, and the
+delivery state. `unique (master_id, kind, period_key)` is what makes two pods enqueue
 once. It is not the case outbox and writes no case notes and no audit events.
 
 | State | Meaning |
@@ -166,7 +166,7 @@ ORDER BY created_at DESC;
 - **`send_started_at` empty, `TEMPORARY`:** Notify rate-limited it eight times, or its content could not be read;
   nothing was sent. Check Notify's status and the database.
 - **`PERMANENT`:** usually a template id from another service, a missing placeholder or a bad address on the
-  Masters list. Fix the cause; the next window or reminder will send.
+  Masters list. Fix the cause; the next send or reminder will email.
 
 Never change a row's state to unstick it. A row back in `Pending` with `send_started_at` set would be sent twice.
-A missed digest is not re-sent: the Master's own page lists every referral assigned to them.
+A missed email is not re-sent: My referrals lists every referral sent to the Master.
