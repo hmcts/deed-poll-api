@@ -210,6 +210,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
 
     private void clearTables() {
         referrals.deleteAll();
+        jdbc.update("DELETE FROM deedpoll_master_email");
         jdbc.update("DELETE FROM deedpoll_master");
         notes.deleteAll();
         deedPolls.deleteAll();

@@ -166,7 +166,7 @@ class ReferralSecurityTest {
     private static final Set<String> PERSONAL_LIST = Set.of("findOwnedBy");
 
     /**
-     * The Master emails' read (plan D3), which names no parent case because a digest spans cases. Admitted with two
+     * The Master emails' read (plan D3), which names no parent case because one email spans cases. Admitted with two
      * rules: it takes nothing but the ids a ledger row froze, and nothing but {@code MasterEmailTransactions} calls it.
      */
     private static final Set<String> MASTER_EMAILS = Set.of("findWithCaseByIdIn");
@@ -234,7 +234,8 @@ class ReferralSecurityTest {
                                       claimWindow(Duration.ofHours(2)),
                                       mock(EntityManager.class),
                                       mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
-                                      mock(uk.gov.hmcts.reform.deedpoll.repository.MasterRepository.class));
+                                      mock(uk.gov.hmcts.reform.deedpoll.repository.MasterRepository.class),
+                                      mock(MasterEmailTransactions.class));
 
         when(referrals.save(any())).thenAnswer(call -> {
             // An id, as a real save allocates one: the audit event is keyed on it.

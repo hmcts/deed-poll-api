@@ -13,6 +13,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CasePaging;
 import uk.gov.hmcts.reform.deedpoll.domain.masters.Master;
+import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterEmailTransactions;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ReferralWindowTimes;
@@ -35,6 +36,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -82,15 +84,18 @@ public class ReferralQueue {
     private final BankHolidays bankHolidays;
     private final ReferralService referralService;
     private final ReferralWindowLocks windowLocks;
+    private final MasterEmailTransactions masterEmails;
 
     public ReferralQueue(ReferralRepository referrals, MasterRepository masters, ProcessSettingsService settings,
-                         BankHolidays bankHolidays, ReferralService referralService, ReferralWindowLocks windowLocks) {
+                         BankHolidays bankHolidays, ReferralService referralService, ReferralWindowLocks windowLocks,
+                         MasterEmailTransactions masterEmails) {
         this.referrals = referrals;
         this.masters = masters;
         this.settings = settings;
         this.bankHolidays = bankHolidays;
         this.referralService = referralService;
         this.windowLocks = windowLocks;
+        this.masterEmails = masterEmails;
     }
 
     /**
@@ -141,8 +146,10 @@ public class ReferralQueue {
      *   <li>the referrals already sent in the window (decision A-2: in any state since) plus the new ones must not
      *       exceed {@link ProcessSettingsService#windowCap()} (409, the room left and the excess in words).</li>
      * </ol>
-     * Then {@link ReferralService#send} applies each new one. The lock makes the cap hold under concurrency: a second
-     * send in the window waits for the first to commit, and counts what it sent.
+     * Then {@link ReferralService#send} applies each new one, and each Master given at least one is enqueued one
+     * {@code SENT} email for the send in this transaction ({@link MasterEmailTransactions#enqueueSent}), which the
+     * Master email drain sends after the commit. The lock makes the cap hold under concurrency: a second send in the
+     * window waits for the first to commit, and counts what it sent.
      *
      * @throws ForbiddenError    without {@link Capability#ALLOCATE_REFERRALS}, before anything else
      * @throws InvalidInputError for a body of the wrong shape, or a Master who is unknown or unavailable
@@ -210,11 +217,15 @@ public class ReferralQueue {
             }
         }
 
+        Map<UUID, List<UUID>> sentTo = new LinkedHashMap<>();
         for (int i : fresh) {
             ReferralAllocation allocation = allocations.get(i);
             referralService.send(locked.get(allocation.referralId()), allocation.masterId(),
                                  assignees.get(allocation.masterId()), window, caller, now);
+            sentTo.computeIfAbsent(allocation.masterId(), master -> new ArrayList<>()).add(allocation.referralId());
         }
+        // One email per Master for this send, however many referrals it gave them (F-6); none for a replay.
+        masterEmails.enqueueSent(UUID.randomUUID(), sentTo);
         List<Referral> named = allocations.stream().map(allocation -> locked.get(allocation.referralId())).toList();
         // The controller maps each case's reference and names after this transaction has closed.
         named.forEach(referral -> Hibernate.initialize(referral.getDeedPoll()));

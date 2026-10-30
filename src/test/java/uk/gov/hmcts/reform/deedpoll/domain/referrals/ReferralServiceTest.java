@@ -14,6 +14,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
+import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterEmailTransactions;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
@@ -212,7 +213,7 @@ class ReferralServiceTest {
         when(settings.processingWindow()).thenReturn(window);
         return new ReferralService(deedPolls, referrals, notes, settings,
                                    mock(EntityManager.class), mock(AuditTrail.class),
-                                   masters);
+                                   masters, mock(MasterEmailTransactions.class));
     }
 
     /** The case exists, so the parent check passes. */

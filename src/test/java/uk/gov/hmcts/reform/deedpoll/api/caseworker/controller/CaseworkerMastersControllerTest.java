@@ -90,6 +90,7 @@ class CaseworkerMastersControllerTest extends AbstractPostgresContainerTest {
     void setUp() {
         IDAM.stubDefaults();
         asStaff(Role.DELIVERY_MANAGER.claimValue());
+        jdbc.update("DELETE FROM deedpoll_master_email");
         jdbc.update("DELETE FROM deedpoll_master");
         logs.start();
         root.addAppender(logs);
@@ -99,6 +100,7 @@ class CaseworkerMastersControllerTest extends AbstractPostgresContainerTest {
     void tearDown() {
         root.detachAppender(logs);
         logs.stop();
+        jdbc.update("DELETE FROM deedpoll_master_email");
         jdbc.update("DELETE FROM deedpoll_master");
     }
 

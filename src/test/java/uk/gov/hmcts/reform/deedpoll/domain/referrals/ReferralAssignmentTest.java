@@ -20,6 +20,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditValue;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterEmailTransactions;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
@@ -88,6 +89,7 @@ class ReferralAssignmentTest {
     private ProcessSettingsService settings;
     private AuditTrail audit;
     private MasterRepository masters;
+    private MasterEmailTransactions masterEmails;
     private ReferralService service;
     private Referral referral;
 
@@ -99,11 +101,12 @@ class ReferralAssignmentTest {
         settings = mock(ProcessSettingsService.class);
         audit = mock(AuditTrail.class);
         masters = mock(MasterRepository.class);
+        masterEmails = mock(MasterEmailTransactions.class);
         when(settings.windowCap()).thenReturn(10);
         when(settings.referralWindows()).thenReturn(WINDOWS);
         when(settings.processingWindow()).thenReturn(Duration.ofDays(7));
         service = new ReferralService(deedPolls, referrals, notes, settings, mock(EntityManager.class), audit,
-                                      masters);
+                                      masters, masterEmails);
 
         when(referrals.save(any())).thenAnswer(call -> {
             Referral written = call.getArgument(0);
@@ -235,7 +238,6 @@ class ReferralAssignmentTest {
             // Neither the windows nor the cap is asked: a reassignment takes no place in any window.
             verify(settings, never()).windowCap();
             verify(settings, never()).referralWindows();
-            verify(masters, never()).digestTook(any(), any());
         }
 
         @Test
@@ -269,6 +271,18 @@ class ReferralAssignmentTest {
                 AuditValue.of("claimedBy", "Master Sullivan", "Master Okafor"),
                 AuditValue.of("assignedAt", SENT, now));
             assertThat(recordedValues().toString()).doesNotContain("sullivan-subject");
+        }
+
+        @Test
+        @DisplayName("enqueues one SENT email to the new Master only, keyed on the reassignment (F-10)")
+        void emailsTheNewMaster() {
+            LocalDateTime now = london(2026, 10, 31, 16, 0);
+
+            service.assign(CASE_ID, REFERRAL_ID.toString(), OKAFOR, LEADER, now);
+
+            verify(masterEmails).enqueueReassigned(OKAFOR, REFERRAL_ID, now);
+            verify(masterEmails, never()).enqueueReassigned(eq(SULLIVAN), any(), any());
+            verify(masterEmails, never()).enqueueSent(any(), any());
         }
 
         @Test
@@ -418,6 +432,7 @@ class ReferralAssignmentTest {
         verify(notes, never()).createNote(anyString(), any(), any());
         verifyNoInteractions(audit);
         verify(deedPolls, never()).writeCurrentReferralState(any(), any());
+        verifyNoInteractions(masterEmails);
     }
 
     private AuditEntry recordedEntry() {

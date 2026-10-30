@@ -81,6 +81,7 @@ class ReferralQueueTest extends AbstractPostgresContainerTest {
         notes.deleteAll();
         referrals.deleteAll();
         deedPolls.deleteAll();
+        jdbc.update("DELETE FROM deedpoll_master_email");
         jdbc.update("DELETE FROM deedpoll_master");
     }
 

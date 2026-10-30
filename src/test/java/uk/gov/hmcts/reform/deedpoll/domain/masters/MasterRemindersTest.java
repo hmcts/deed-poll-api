@@ -52,7 +52,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static uk.gov.hmcts.reform.deedpoll.domain.masters.MasterDigestWindowsTest.london;
+import static uk.gov.hmcts.reform.deedpoll.domain.masters.MasterReminderHoursTest.london;
 
 /**
  * {@link MasterReminders} against real Postgres and a WireMock Notify (plan D3, step 3): a reminder falls due every
@@ -138,11 +138,15 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
             assertThat(ids(row)).containsExactly(referral.getId());
         });
         JsonNode sent = sentTo("master.sullivan@example.test");
+        // Plan F1, decision A-1: the reminder links to My referrals rather than listing each referral.
+        List<String> keys = new ArrayList<>();
+        sent.fieldNames().forEachRemaining(keys::add);
+        assertThat(keys).containsExactlyInAnyOrder("master_name", "referral_count", "my_referrals_link");
         assertThat(sent.path("master_name").asText()).isEqualTo("Master Sullivan");
-        assertThat(sent.path("period").asText()).isEqualTo("waiting for your direction");
         assertThat(sent.path("referral_count").asText()).isEqualTo("1");
-        assertThat(sent.path("referral_list").asText()).startsWith("DP2026-000301 – ")
-            .endsWith(" – https://admin.example.test/judicial/referrals/" + referral.getId());
+        assertThat(sent.path("my_referrals_link").asText())
+            .isEqualTo("https://admin.example.test/judicial/referrals/mine");
+        assertThat(sent.toString()).doesNotContain("DP2026-000301", referral.getId().toString());
         assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage).noneMatch(line -> line.contains("@"));
 
         // The next run sends nothing more until the second interval ends.
@@ -209,7 +213,9 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
         assertThat(reminders.run(NOON)).isOne();
 
         assertThat(rows(sullivan)).isEmpty();
-        assertThat(rows(okafor)).singleElement()
+        // The reassignment's own SENT row (plan F1; Skipped, its template unprovisioned here), and the reminder.
+        assertThat(rows(okafor)).extracting(row -> row.get("kind")).containsExactlyInAnyOrder("SENT", "REMINDER");
+        assertThat(rows(okafor)).filteredOn(row -> "REMINDER".equals(row.get("kind"))).singleElement()
             .satisfies(row -> assertThat(ids(row)).containsExactly(referral.getId()));
         assertThat(STUB.emailRequests()).singleElement()
             .satisfies(request -> assertThat(request.getBodyAsString()).contains("m-to@example.test"));
@@ -266,7 +272,7 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("the email lists every referral waiting for the Master's direction, not only the one that fell due")
+    @DisplayName("the email counts every referral waiting for the Master's direction, not only the one that fell due")
     void listsAllOutstanding() throws IOException {
         UUID sullivan = master("m-all@example.test", "Master Sullivan");
         final Referral due = assigned("DP2026-000361", sullivan, NOON_UTC.minusHours(50));

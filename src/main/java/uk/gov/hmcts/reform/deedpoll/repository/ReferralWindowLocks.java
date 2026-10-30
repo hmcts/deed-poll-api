@@ -10,9 +10,6 @@ import java.time.LocalDate;
  * The batch send's window lock (plan F1): a transaction-scoped exclusive advisory lock on one referral window, so two
  * sends in a window serialise and the second counts what the first committed. The cap holds under concurrency by this
  * lock alone; it is taken before any row lock, so it cannot join a row-lock cycle.
- *
- * <p>Its own key, not {@code MasterEmailRepository}'s digest lock: a send takes only an open window, and the digest
- * only a closed one.
  */
 @Repository
 public class ReferralWindowLocks {

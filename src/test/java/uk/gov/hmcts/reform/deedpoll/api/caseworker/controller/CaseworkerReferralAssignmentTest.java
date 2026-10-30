@@ -124,6 +124,7 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
         notes.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
+        jdbc.update("DELETE FROM deedpoll_master_email");
         jdbc.update("DELETE FROM deedpoll_master");
     }
 
@@ -209,6 +210,15 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
         assertThat(assignedEvents(referralId)).isOne();
         assertThat(deedPolls.findById(caseId).orElseThrow().getCurrentReferralState())
             .isEqualTo(ReferralState.Claimed);
+        // One SENT email, to the new Master only (F-10), Skipped while the template is unprovisioned.
+        assertThat(jdbc.queryForList("""
+            SELECT master_id, kind, state, period_key, ? = ALL (referral_ids) AS only_this
+              FROM deedpoll_master_email
+            """, UUID.fromString(referralId))).singleElement().satisfies(row -> {
+                assertThat(row).containsEntry("master_id", okafor).containsEntry("kind", "SENT")
+                    .containsEntry("state", "Skipped").containsEntry("only_this", true);
+                assertThat((String) row.get("period_key")).startsWith(referralId + "@");
+            });
     }
 
     @Test
@@ -264,7 +274,7 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("PUT to the Master it already has is a 200 that writes no note and no audit")
+    @DisplayName("PUT to the Master it already has is a 200 that writes no note, no audit and no email")
     void sameMaster() throws Exception {
         String caseId = newCase();
         String referralId = sent(caseId, raise(caseId), sullivan);
@@ -277,6 +287,7 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
         assertThat(stored(referralId).getAssignedAt()).isEqualTo(SENT_AT);
         assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(1);
         assertThat(assignedEvents(referralId)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_master_email", Integer.class)).isZero();
     }
 
     @Test

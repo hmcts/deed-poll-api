@@ -259,8 +259,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 5: Emails
-- [ ] Add failing tests for the `SENT` email (one row per Master per send, replay writes none, reassignment's row, personalisation), the reminder's new personalisation, and the digest's removal.
-- [ ] Implement, add the template key to `application.yaml` and the chart (with a `Chart.yaml` version bump), run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Add failing tests for the `SENT` email (one row per Master per send, replay writes none, reassignment's row, personalisation), the reminder's new personalisation, and the digest's removal.
+- [x] Implement, add the template key to `application.yaml` and the chart (with a `Chart.yaml` version bump), run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 6: Documentation and final verification
 - [ ] Update `CLAUDE.md` and rewrite `docs/MASTER-EMAILS.md` as steps 8 and 13 say; list A-1 and A-2 in the execution notes for review.
@@ -377,3 +377,39 @@ owner, and a list that swept fixed August dates back to the queue), fixed; then 
 `*Namespace*`, `*CallerAccess*` 1,462 tests, 0 failures, 0 skipped; `integration --tests '*OpenAPIPublisher*'` green;
 compile of every source set OK; `checkstyle.sh` OK after three line-length and javadoc fixes. `CLAUDE.md`'s assignment
 paragraph still describes D2 and is Task 6's.
+
+**Task 5.** `MasterEmailKind` gains `SENT` (`master-referral-sent`); `DIGEST` stays for the rows AAT holds but is
+`retired()`: no template key (`templateKey()` throws), `MasterEmailLinks.isProvisioned` answers false whatever is
+configured, and the drain's claim settles a leftover `Pending` one `Skipped`, never sent. `MasterDigests`,
+`MasterDigestTimer`, `MasterEmailProperties.digestInterval` (`MASTER_DIGEST_INTERVAL`),
+`MasterEmailTransactions.enqueueDigests`, `MasterEmailRepository.recordDigestRun`/`claimedInWindow`/`WINDOW_LOCK*` and
+`MasterRepository.digestTook` are gone; `deedpoll_window_digest_run` is left in place, as step 1 says.
+`MasterEmailTransactions.enqueueSent(sendId, byMaster)` (`MANDATORY`) writes one row per Master with at least one
+new referral, keyed `send:{uuid}` (one UUID per request), from `ReferralQueue.send` after the referrals are applied, so
+a replay writes none and two sends are two emails. `enqueueReassigned` (`MANDATORY`) writes one for the new Master
+from `ReferralService.assign`, keyed `{referralId}@{assignedAt}` to the microsecond: **V44's `period_key` is
+`varchar(64)`**, which the first run found (a `reassigned:…` prefix made it 66+), so the key is fixed at 63
+characters and `MasterEmailPeriodKeysTest` pins both. Both kinds' personalisation (A-1) is now `master_name`,
+`referral_count` (the frozen referrals still `Claimed` by that Master with no decision, read at send time; none
+left is `Skipped`) and `my_referrals_link` (`{ADMIN_BASE_URL}/judicial/referrals/mine`, `MasterEmailLinks.myReferralsLink`
+replacing `referralLink`); `period`, `referral_list` and the per-referral line builder went. Rows are sent by the
+existing drain timer (`deedpoll.masters.drain-interval`, a minute), not inside the request, so a send's answer never
+waits on Notify. `application.yaml` and the chart's `values.yaml` replace `NOTIFY_TEMPLATE_MASTER_REFERRAL_DIGEST` with
+`NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT` (`DEED_POLL_PLACEHOLDER`); `Chart.yaml` 0.0.29 → 0.0.30; the preview values' and
+the bank holidays' wording no longer mention the digest. Tests: `MasterDigestsTest`, `MasterDigestsUnprovisionedTest`
+and `MasterDigestWindowsTest` deleted (`london` moved to `MasterReminderHoursTest`); `MasterEmailPersonalisationTest`
+rewritten; `MasterEmailConfigurationTest` (SENT's key, the digest retired with no job class, key, variable or interval,
+and never provisioned, the chart's variables, the My referrals link); `MasterEmailDeliveryTest` on `SENT` (the three
+keys and no case data, a leftover `DIGEST` row Skipped with a template configured, the content-failure case now by a
+delegating mock); `MasterRemindersTest` (the reminder's three keys; reassignment now also writes its `SENT` row);
+`ReferralSendTest` (one row per Master per send with its referrals, two sends two rows, replay none, replay beside new
+one, no row on a refusal); `ReferralAssignmentTest` (the new Master's row only, none on a no-op or refusal);
+`CaseworkerReferralAssignmentTest` (the row over HTTP, none for the same Master). Tests that delete
+`deedpoll_master` now delete `deedpoll_master_email` first (V44's foreign key). Results: first focused run (1,642
+tests) had 3 failures, the period key's length (2) and the reminder test's row count (1), fixed; re-run of `*Master*`,
+`*Referral*`, `*ProcessSettings*`, `*CallerEmailPrivacy*`, `*Confirmation*`, `*NotificationSecurity*`,
+`*Architecture*`, `*Namespace*`, `*DeploymentChart*`, `*BankHoliday*`, `*OpenAPI*`, `*SchemaConformance*`,
+`*Judicial*`, `*Audit*`, `*Security*`, `*Migration*`: 1,880 tests, 0 failures, 0 skipped; `integration --tests
+'*OpenAPIPublisher*'` green; compile of every source set OK; `checkstyle.sh` OK after two single-line javadocs and
+three long lines were fixed. `docs/MASTER-EMAILS.md` and `CLAUDE.md`'s emails paragraph still describe the digest and
+are Task 6's.

@@ -98,6 +98,7 @@ class ReferralSendTest extends AbstractPostgresContainerTest {
         notes.deleteAll();
         referrals.deleteAll();
         deedPolls.deleteAll();
+        jdbc.update("DELETE FROM deedpoll_master_email");
         jdbc.update("DELETE FROM deedpoll_master");
     }
 
@@ -196,6 +197,25 @@ class ReferralSendTest extends AbstractPostgresContainerTest {
                 .extracting(ReferralQueueWindow.SentToMaster::name, ReferralQueueWindow.SentToMaster::sentInWindow)
                 .containsExactly(tuple("Master Okafor", 1L),
                                  tuple("Master Sullivan", 2L));
+
+            // One SENT email per Master for the send, however many referrals (F-6), Skipped while unprovisioned.
+            List<Map<String, Object>> emails = emailRows();
+            assertThat(emails).extracting(row -> row.get("master_id"), row -> row.get("kind"), row -> row.get("state"))
+                .containsExactlyInAnyOrder(tuple(sullivan, "SENT", "Skipped"), tuple(okafor, "SENT", "Skipped"));
+            assertThat(emails).extracting(row -> row.get("period_key")).allSatisfy(key -> assertThat((String) key)
+                .startsWith("send:")).containsOnly(emails.getFirst().get("period_key"));
+            assertThat(referralIds(emails, sullivan)).containsExactly(first.getId(), third.getId());
+            assertThat(referralIds(emails, okafor)).containsExactly(second.getId());
+        }
+
+        @Test
+        @DisplayName("two sends in one window are two emails to a Master they both name")
+        void twoSends() {
+            send(List.of(new ReferralAllocation(openReferral(Urgency.Normal).getId(), sullivan)), MORNING);
+            send(List.of(new ReferralAllocation(openReferral(Urgency.Normal).getId(), sullivan)),
+                 MORNING.plusMinutes(5));
+
+            assertThat(emailRows()).hasSize(2).extracting(row -> row.get("period_key")).doesNotHaveDuplicates();
         }
 
         @Test
@@ -224,6 +244,7 @@ class ReferralSendTest extends AbstractPostgresContainerTest {
             assertThat(noteTexts(first)).hasSize(1);
             assertThat(sentEvents(first)).isOne();
             assertThat(again.window().sent()).isEqualTo(2);
+            assertThat(emailRows()).hasSize(2);
         }
 
         @Test
@@ -239,6 +260,9 @@ class ReferralSendTest extends AbstractPostgresContainerTest {
             assertThat(sentEvents(first)).isOne();
             assertThat(stored(second).getState()).isEqualTo(ReferralState.Claimed);
             assertThat(stored(second).getAssignedAt()).isEqualTo(MORNING.plusMinutes(5));
+            // The replayed referral's Master gets no second email; the new one's Master gets one.
+            assertThat(emailRows()).extracting(row -> row.get("master_id")).containsExactlyInAnyOrder(sullivan, okafor);
+            assertThat(referralIds(emailRows(), okafor)).containsExactly(second.getId());
         }
     }
 
@@ -429,6 +453,24 @@ class ReferralSendTest extends AbstractPostgresContainerTest {
         assertThat(now.getWindowDate()).isNull();
         assertThat(noteTexts(open)).isEmpty();
         assertThat(sentEvents(open)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_master_email WHERE ? = ANY (referral_ids)",
+                                       Integer.class, open.getId())).isZero();
+    }
+
+    private List<Map<String, Object>> emailRows() {
+        return jdbc.queryForList("SELECT master_id, kind, period_key, referral_ids, state FROM deedpoll_master_email");
+    }
+
+    private static List<UUID> referralIds(List<Map<String, Object>> emails, UUID master) {
+        return emails.stream().filter(row -> master.equals(row.get("master_id"))).findFirst()
+            .map(row -> {
+                try {
+                    return List.of((UUID[]) ((java.sql.Array) row.get("referral_ids")).getArray());
+                } catch (java.sql.SQLException unreadable) {
+                    throw new IllegalStateException(unreadable);
+                }
+            })
+            .orElseThrow();
     }
 
     private Referral stored(Referral referral) {

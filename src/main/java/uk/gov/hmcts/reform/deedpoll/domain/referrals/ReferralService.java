@@ -19,6 +19,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditValue;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterEmailTransactions;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
@@ -221,6 +222,7 @@ public class ReferralService {
     private final ProcessSettingsService settings;
     private final AuditTrail audit;
     private final MasterRepository masters;
+    private final MasterEmailTransactions masterEmails;
 
     /**
      * For one thing only: bringing a referral loaded earlier in the transaction up to the row the lock now
@@ -234,7 +236,8 @@ public class ReferralService {
                            ProcessSettingsService settings,
                            EntityManager entityManager,
                            AuditTrail audit,
-                           MasterRepository masters) {
+                           MasterRepository masters,
+                           MasterEmailTransactions masterEmails) {
         this.deedPolls = deedPolls;
         this.referrals = referrals;
         this.notes = notes;
@@ -242,6 +245,7 @@ public class ReferralService {
         this.entityManager = entityManager;
         this.audit = audit;
         this.masters = masters;
+        this.masterEmails = masterEmails;
     }
 
     /**
@@ -312,8 +316,9 @@ public class ReferralService {
      * with {@code remindersSent} 0, so the processing window and the reminders restart.
      *
      * <p>One case note naming both Masters, one {@link AuditAction#REFERRAL_ASSIGNED} event with old and new
-     * {@code state}, {@code claimedBy} and {@code assignedAt} -- never the subject -- and both read-models
-     * recomputed, all in this transaction.
+     * {@code state}, {@code claimedBy} and {@code assignedAt} -- never the subject -- both read-models recomputed,
+     * and one {@code SENT} email to the new Master only ({@link MasterEmailTransactions#enqueueReassigned}), all in
+     * this transaction.
      *
      * @param body the request's keyed body, read only once the capability is held
      * @throws ForbiddenError    without {@link Capability#ALLOCATE_REFERRALS}, before anything else
@@ -361,6 +366,8 @@ public class ReferralService {
             AuditValue.of("assignedAt", fromAssignedAt, saved.getAssignedAt())));
         notes.createNote(deedPollId, new CreateNoteInput(ReferralNotes.reassigned(saved, fromName, master.name())),
                          caller.noteAuthor());
+        // The new Master is told as a send would tell them; the old one is told nothing (F-10).
+        masterEmails.enqueueReassigned(masterId, saved.getId(), saved.getAssignedAt());
         refreshCurrentReferralState(deedPollId);
         refreshAwaitingConfirmation(deedPollId);
         return saved;
