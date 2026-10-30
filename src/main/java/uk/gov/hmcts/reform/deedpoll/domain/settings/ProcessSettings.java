@@ -11,7 +11,7 @@ import java.util.List;
  * <p>One component per live value, each its own typed column in V40 or V42, so a later value is a later migration
  * with its own check rather than a key in a bag.
  */
-public record ProcessSettings(Duration processingWindow, Duration reminderInterval, int masterWindowCap,
+public record ProcessSettings(Duration processingWindow, Duration reminderInterval, int windowCap,
                               LocalTime morningWindowStart, LocalTime morningWindowEnd,
                               LocalTime afternoonWindowStart, LocalTime afternoonWindowEnd,
                               int revision, LocalDateTime updatedAt, String updatedBy) {
@@ -24,7 +24,7 @@ public record ProcessSettings(Duration processingWindow, Duration reminderInterv
 
     public static final String REMINDER_INTERVAL_HOURS = "reminderIntervalHours";
 
-    public static final String MASTER_WINDOW_CAP = "masterWindowCap";
+    public static final String WINDOW_CAP = "windowCap";
 
     public static final String MORNING_WINDOW_START = "morningWindowStart";
 
@@ -36,7 +36,7 @@ public record ProcessSettings(Duration processingWindow, Duration reminderInterv
 
     /** Every setting's name, in the order a change lists them. */
     public static final List<String> FIELDS = List.of(REFERRAL_CLAIM_EXPIRY_MINUTES, REMINDER_INTERVAL_HOURS,
-        MASTER_WINDOW_CAP, MORNING_WINDOW_START, MORNING_WINDOW_END, AFTERNOON_WINDOW_START, AFTERNOON_WINDOW_END);
+        WINDOW_CAP, MORNING_WINDOW_START, MORNING_WINDOW_END, AFTERNOON_WINDOW_START, AFTERNOON_WINDOW_END);
 
     /** The four window times, without the zone they are read in. */
     public static final List<String> WINDOW_FIELDS =
@@ -54,7 +54,7 @@ public record ProcessSettings(Duration processingWindow, Duration reminderInterv
 
     /** These values under a new revision and attribution. */
     public ProcessSettings revised(int nextRevision, LocalDateTime at, String by) {
-        return new ProcessSettings(processingWindow, reminderInterval, masterWindowCap, morningWindowStart,
+        return new ProcessSettings(processingWindow, reminderInterval, windowCap, morningWindowStart,
                                    morningWindowEnd, afternoonWindowStart, afternoonWindowEnd, nextRevision, at, by);
     }
 
@@ -69,7 +69,7 @@ public record ProcessSettings(Duration processingWindow, Duration reminderInterv
         return switch (field) {
             case REFERRAL_CLAIM_EXPIRY_MINUTES -> String.valueOf(referralClaimExpiryMinutes());
             case REMINDER_INTERVAL_HOURS -> String.valueOf(reminderIntervalHours());
-            case MASTER_WINDOW_CAP -> String.valueOf(masterWindowCap);
+            case WINDOW_CAP -> String.valueOf(windowCap);
             case MORNING_WINDOW_START -> ProcessSettingsTimes.format(morningWindowStart);
             case MORNING_WINDOW_END -> ProcessSettingsTimes.format(morningWindowEnd);
             case AFTERNOON_WINDOW_START -> ProcessSettingsTimes.format(afternoonWindowStart);

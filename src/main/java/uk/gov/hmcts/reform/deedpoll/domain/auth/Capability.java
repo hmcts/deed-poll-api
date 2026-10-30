@@ -8,5 +8,7 @@ public enum Capability {
     MANAGE_SHARED_QUERIES,
     REPAIR_CCD,
     ACCESS_GAZETTE,
-    MANAGE_PROCESS_CONFIG
+    MANAGE_PROCESS_CONFIG,
+    /** The referral queue: seeing it, sending referrals to Masters in a window, and reassigning a sent one. */
+    ALLOCATE_REFERRALS
 }

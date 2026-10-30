@@ -172,8 +172,8 @@ public class Referral {
     private LocalDateTime assignedAt;
 
     /**
-     * The working day whose referral window this assignment counts towards for the per-Master cap, in
-     * {@code Europe/London}. Set with {@link #windowSlot}, never alone (V43's check).
+     * The working day whose referral window the referral was sent in, in {@code Europe/London}: what the window's
+     * cap counts (plan F1). A reassignment keeps it. Set with {@link #windowSlot}, never alone (V43's check).
      */
     @Column(name = "windowDate")
     private LocalDate windowDate;

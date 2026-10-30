@@ -62,10 +62,11 @@ class CallerAccessSecurityTest extends AbstractPostgresContainerTest {
     private static final String SKILL = "SKILL:DEEDPOLL:GAZETTE";
     private static final String ACTOR_PATH = "/am/role-assignments/actors/" + StubIdam.SUBJECT;
     private static final String TEAM_LEADER_SET =
-        "[\"OVERRIDE_PRIVACY\",\"DELETE_NOTE\",\"DELETE_WITNESS\",\"MANAGE_SHARED_QUERIES\",\"REPAIR_CCD\"]";
+        "[\"OVERRIDE_PRIVACY\",\"DELETE_NOTE\",\"DELETE_WITNESS\",\"MANAGE_SHARED_QUERIES\",\"REPAIR_CCD\","
+            + "\"ALLOCATE_REFERRALS\"]";
     private static final String DELIVERY_MANAGER_SET =
         "[\"OVERRIDE_PRIVACY\",\"DELETE_NOTE\",\"DELETE_WITNESS\",\"MANAGE_SHARED_QUERIES\",\"REPAIR_CCD\","
-            + "\"ACCESS_GAZETTE\",\"MANAGE_PROCESS_CONFIG\"]";
+            + "\"ACCESS_GAZETTE\",\"MANAGE_PROCESS_CONFIG\",\"ALLOCATE_REFERRALS\"]";
 
     private static final StubIdam IDAM = new StubIdam();
     private static final WireMockServer RAS = new WireMockServer(WireMockConfiguration.options().dynamicPort());

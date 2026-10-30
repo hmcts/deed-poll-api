@@ -98,6 +98,11 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         Comparator.comparing(UUID::getMostSignificantBits, Long::compareUnsigned)
             .thenComparing(UUID::getLeastSignificantBits, Long::compareUnsigned);
 
+    /**
+     * The day every {@link #ownedReferral} is raised before, by as many days as the day of the year it is sent.
+     */
+    private static final LocalDateTime RAISED_BEFORE_ALL = LocalDateTime.of(2026, 12, 31, 9, 0);
+
     @Autowired
     private ReferralRepository referrals;
 
@@ -158,20 +163,30 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * A referral on a case of its own, in the given state, owned by the given judge's subject and nobody else.
+     * A referral on a case of its own, in the given state, owned by the given judge's subject and nobody else, sent
+     * to them at {@code sentAt}.
      *
      * <p>Both owner columns, as a real claim and a real direction leave them: only the holder may direct, so a
      * {@code Decided} row carries the same subject in both. Every state gets them, not only the two that would
      * really carry them, because what the personal list's two arms have to exclude is exactly an {@code Open},
      * {@code Closed} or {@code Withdrawn} row that still names the judge who had it.
      *
+     * <p><strong>Raised in the opposite order to the one it was sent in</strong>, so an order by {@code createdOn}
+     * instead of {@code assignedAt} (decision F-9) reverses the expected sequence rather than happening to match it.
+     *
      * <p>A case each, because a case may hold only one live referral.
      */
-    private Referral ownedReferral(ReferralState state, String judge, Urgency urgency, LocalDateTime createdOn) {
-        Referral referral = persistedReferral(persistedCase(), state, createdOn);
+    private Referral ownedReferral(ReferralState state, String judge, Urgency urgency, LocalDateTime sentAt) {
+        Referral referral = persistedReferral(persistedCase(), state,
+                                              RAISED_BEFORE_ALL.minusDays(sentAt.getDayOfYear()));
         referral.setUrgency(urgency);
         referral.setClaimedBy(judge);
         referral.setClaimedById(subjectOf(judge));
+        referral.setClaimedAt(sentAt);
+        if (state != ReferralState.Open) {
+            // V43 allows no assignment on a referral waiting to be sent.
+            referral.setAssignedAt(sentAt);
+        }
         referral.setDecidedBy(judge);
         referral.setDecidedById(subjectOf(judge));
         return referral;
@@ -425,9 +440,9 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(reloaded.getAssignedAt()).isNull();
         assertThat(reloaded.getWindowDate()).isNull();
         assertThat(reloaded.getWindowSlot()).isNull();
-        // It no longer counts towards the Master's cap.
-        assertThat(referrals.countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot(
-            ReferralState.Claimed, master, CUTOFF.minusHours(1).toLocalDate(), WindowSlot.AM)).isZero();
+        // It no longer counts in the window it was sent in (decision A-2: only unassignment gives a place back).
+        assertThat(referrals.countByWindowDateAndWindowSlot(CUTOFF.minusHours(1).toLocalDate(), WindowSlot.AM))
+            .isZero();
     }
 
     @Test
@@ -637,6 +652,8 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
                                          Urgency.Normal, LocalDateTime.of(2026, 2, 4, 9, 0));
         noOwner.setClaimedById(null);
         noOwner.setDecidedById(null);
+        // V43 asks an assignment to belong to somebody, and this one predates both.
+        noOwner.setAssignedAt(null);
         entityManager.flush();
         entityManager.clear();
 
@@ -655,8 +672,9 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
 
     /**
      * Every combination of the three things the Master's page orders by: undirected or directed, urgent or not,
-     * older or newer -- plus a tie that differs only by id. Built so that no single key, and no plain {@code Sort},
-     * produces the expected sequence: urgency counts among the undirected and is ignored among the directed.
+     * sent earlier or later -- plus a tie that differs only by id. Built so that no single key, and no plain
+     * {@code Sort}, produces the expected sequence: urgency counts among the undirected and is ignored among the
+     * directed, and the day raised runs against the day sent.
      */
     private List<UUID> everyCombination(String judge) {
         LocalDateTime older = LocalDateTime.of(2026, 2, 1, 9, 0);
@@ -693,7 +711,8 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("orders the Master's page: undirected first, urgent first among them, then by day; directed by day")
+    @DisplayName("orders the Master's page: undirected first, urgent first among them, then by day sent; directed by "
+        + "day sent")
     void ordersAJudgesWorkForTheMastersPage() {
         String judge = "District Judge Bell";
         List<UUID> expected = everyCombination(judge);
@@ -715,6 +734,29 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
             slice.getContent().forEach(referral -> paged.add(referral.getId()));
         }
         assertThat(paged).containsExactlyElementsOf(expected);
+    }
+
+    @Test
+    @DisplayName("a claim with no assignedAt orders by claimedAt, and one with neither by the day raised")
+    void ordersALegacyClaimByWhatItHas() {
+        String judge = "District Judge Bell";
+        final Referral sentLater = ownedReferral(ReferralState.Claimed, judge, Urgency.Normal,
+                                           LocalDateTime.of(2026, 3, 1, 9, 0));
+        // Claimed before V43: no assignedAt, so its claim is the day it reached the judge.
+        Referral claimedBetween = ownedReferral(ReferralState.Claimed, judge, Urgency.Normal,
+                                                LocalDateTime.of(2026, 2, 15, 9, 0));
+        claimedBetween.setAssignedAt(null);
+        // Backfilled with neither: it falls back to the day raised.
+        Referral raisedFirst = ownedReferral(ReferralState.Claimed, judge, Urgency.Normal,
+                                             LocalDateTime.of(2026, 1, 20, 9, 0));
+        raisedFirst.setAssignedAt(null);
+        raisedFirst.setClaimedAt(null);
+        raisedFirst.setCreatedOn(LocalDateTime.of(2026, 2, 1, 9, 0));
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(personalList(judge, 0, 20).getContent()).extracting(Referral::getId)
+            .containsExactly(raisedFirst.getId(), claimedBetween.getId(), sentLater.getId());
     }
 
     @Test

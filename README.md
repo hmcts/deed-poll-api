@@ -36,6 +36,7 @@ own (below), three privileged CCD-attempt ones (see [Repairing attempts](#repair
 Delivery Manager-only Gazette operations (see [Gazette publication foundation](#gazette-publication-foundation)),
 two Delivery Manager-only process-settings operations, three Masters-list and three bank-holiday operations whose
 reads any staff role may call and whose writes need `MANAGE_PROCESS_CONFIG` (see [Process settings](#process-settings)),
+two referral-queue operations that need `ALLOCATE_REFERRALS` (see [The referral queue](#the-referral-queue)),
 and two document previews, one per surface (see [Document previews](#document-previews)), counted apart.
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
 `capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
@@ -73,9 +74,9 @@ documented paths outside the counted surfaces; `documentsNoUnlistedPath` allowli
 | PUT | `/caseworker/saved-queries/{id}/selection` | Add it to the caller's own list — 204, idempotent, no edit rights needed |
 | DELETE | `/caseworker/saved-queries/{id}/selection` | Remove it from the caller's own list — 204 whether or not it was in it |
 | GET | `/caseworker/cases/{id}/referrals` | A case's referrals to the judiciary, newest first — the history and the live one |
-| POST | `/caseworker/cases/{id}/referrals` | Raise one — at least one reason, and **409** if the case already has one that is not closed or withdrawn. An optional `masterId` assigns it at once (the assignment route's 400 and 409); without it the referral is `Open`, waiting for assignment |
+| POST | `/caseworker/cases/{id}/referrals` | Raise one — at least one reason, and **409** if the case already has one that is not closed or withdrawn. It is always `Open`, waiting in the [referral queue](#the-referral-queue) to be sent; a `masterId` is ignored as any unknown key is |
 | GET | `/caseworker/cases/{id}/referrals/{referralId}` | One referral, with `assignedMaster` (`{id, name}`), `assignedAt`, `windowDate`, `windowSlot` and `directionDueBy` |
-| PUT | `/caseworker/cases/{id}/referrals/{referralId}/assignment` | Assign or reassign an `Open` or `Claimed` referral to a Master (`masterId`). **400** on `masterId` if the Master is unknown or unavailable, **409** if the referral is not `Open`/`Claimed` or the Master is at the per-Master cap for the current window; the Master it already has is a no-op |
+| PUT | `/caseworker/cases/{id}/referrals/{referralId}/assignment` | Reassign a `Claimed` referral to another Master (`masterId`) — **`ALLOCATE_REFERRALS`**, 403 before any field of the body is read. At any time, with no cap, keeping its window; `assignedAt` and its reminders restart and the new Master gets a sent email. **400** on `masterId` if the Master is unknown or unavailable, **409** for an `Open` referral ("Send this referral from the queue…") or any other state; the Master it already has is a no-op |
 | POST | `/caseworker/cases/{id}/referrals/{referralId}/withdrawal` | Withdraw one — a transition to `Withdrawn`, and **409** if it is already terminal |
 | POST | `/caseworker/cases/{id}/referrals/{referralId}/closure` | Close one whose direction has been actioned — a transition to `Closed`, and **409** unless it is `Decided` |
 | POST | `/caseworker/cases/{id}/referrals/{referralId}/confirmation` | Record the applicant's answer to the *Request confirmation to proceed* email — `outcome` (`Confirmed` or `Withdrawn`) and an optional `note`. **409** if an answer is already stored (naming it and its date) and **409** if nobody asked this referral to confirm |
@@ -139,25 +140,25 @@ worth knowing before calling them:
   no longer offered for that referral and sending it is a **409**. Asking again would re-start a clock that
   nothing reads — the waiting list counts only referrals with no answer yet — so the applicant would have been
   chased with the case absent from the list of cases waiting, and the new reply could never be recorded.
-- **No role gate anywhere below these routes.** Any authenticated staff caller may raise, read, withdraw, close
+- **No role gate on raising, reading, withdrawing, closing or confirming.** Any authenticated staff caller may raise, read, withdraw, close
   and record a confirmation: in the process this replaces, anybody who works a case can email a Master and action
   the reply, and anybody can read the applicant's reply out of the shared inbox. The
   judicial role is the one that is different — `Role.JUDICIAL`, which IDAM does not issue and only the off-by-default AM role source can grant — and it gates
-  the two transitions that are not on this surface.
-- **Assigned by the office, capped per window.** A referral is `Open` until a caseworker assigns it to a Master
-  from the Masters list, on the create (`masterId`) or by `PUT …/assignment`; `Claimed` then means *assigned*.
-  Each Master takes at most `masterWindowCap` referrals per referral window (see [Process settings](#process-settings)):
-  a referral assigned inside or before the morning window counts towards that day's `AM`, inside or before the
-  afternoon one towards `PM`, and after it or on a weekend or bank holiday towards the next working day's `AM`. The
-  cap counts current assignments only, so a reassignment away or a release lowers it. Assignment locks the referral,
-  then the Master, so two assignments to one Master cannot both take the last place.
+  the two transitions that are not on this surface. Sending and reassigning are the exception: they need
+  `ALLOCATE_REFERRALS` (a Team leader or Delivery Manager).
+- **Sent from the queue, capped per window.** A referral is `Open` (waiting to be sent) until a Team leader or
+  Delivery Manager sends it to a Master from the [referral queue](#the-referral-queue); `Claimed` then means *sent*.
+  Sending happens only while a referral window is open, and at most `windowCap` referrals are sent in one window
+  across every Master (see [Process settings](#process-settings)). A window's count is every referral sent in it,
+  whatever has happened to it since, so a withdrawal or reassignment gives no place back. Reassignment moves a
+  `Claimed` referral to another Master at any time, with no cap, keeping its window.
 
 **Every successful referral transition writes exactly one case note**, attributed to whoever caused it, because
 there is no timeline concept in this domain beyond the notes grid and the referral has to appear where
-caseworkers already look: raise, withdraw, close, assign ("assigned to …") and reassign ("reassigned from … to
-…") to the caseworker, direction to the judge, and the processing-window sweep's ("returned to the office for
-assignment") to the service account, because a released assignment erases the fact it is about. A raise with
-`masterId` writes two, the raise and the assignment. Recording the
+caseworkers already look: raise, withdraw, close, send ("sent to … by the office", one per referral in a send) and
+reassign ("reassigned from … to …") to the caseworker, direction to the judge, and the processing-window sweep's
+("returned to the queue to be sent again: no direction from … within 7 days") to the service account, because a
+released assignment erases the fact it is about. Recording the
 applicant's confirmation writes one too, although it moves no state — the answer is an event, and the grid is
 the only place it would appear.
 
@@ -246,8 +247,8 @@ can put a case into the waiting list or take it out without an answer.
 on `ReferralService` — role-gated to `Role.JUDICIAL` — exposed on the judicial namespace below rather than bolted
 onto the caseworker one. An assigned referral with no direction within the processing window (seven days as V42
 seeds it; see [Process settings](#process-settings)), counted from `assignedAt` (or `claimedAt` for a claim made
-before V43), is returned to the office: its Master, `assignedAt` and window are cleared and it is `Open` again,
-waiting to be assigned. Opening it does not extend the window. `unassignOverdue` runs on loading either judicial
+before V43), is returned to the queue: its Master, `assignedAt` and window are cleared and it is `Open` again,
+waiting to be sent again. Opening it does not extend the window. `unassignOverdue` runs on loading either judicial
 list and on `ReferralUnassignment`'s timer:
 
 | Variable | Default | What it does |
@@ -255,25 +256,42 @@ list and on `ReferralUnassignment`'s timer:
 | `REFERRAL_UNASSIGN_ENABLED` | `true` | Runs the processing-window timer (tests switch it off) |
 | `REFERRAL_UNASSIGN_INTERVAL` | `PT15M` | Its fixed and initial delay, ISO-8601 |
 
+### The referral queue
+
+Referrals wait in a queue, across every case, until a Team leader or Delivery Manager sends them to Masters in a
+referral window (plan F1). Both operations need `ALLOCATE_REFERRALS` and answer 403 before reading the parameters or
+the body.
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/caseworker/referral-queue` (`listReferralQueue`) | `state=Open` (the default): the referrals waiting to be sent, urgent first, then the oldest raised, then id. `state=Claimed`: those sent and not yet directed, for reassigning, the oldest sent first. Any other state is a 400. `page` (1-based) and `size` (default 25, at most 100). `window` gives the window open now (`current`, null outside one), the one that opens `next`, the `cap`, how many were `sent` in the open window, and each available Master's `sentInWindow`: of those sent in the window, how many they hold now, so a reassigned referral counts under its new Master |
+| POST | `/caseworker/referral-queue/sends` (`sendReferrals`) | `{allocations: [{referralId, masterId}]}`, 1–100 entries, no referral twice. All or nothing. **409** outside a window (naming when the next opens), on each referral that is not `Open`, and when the window's sent count plus these would pass `windowCap` (saying how many more fit); **400** on each unknown or unavailable Master. A referral already sent to the same Master in the same window is skipped, so a body sent again after a lost answer is a 200 that changes nothing |
+
+Each referral sent is `Claimed` by its Master, starts the processing window, and gets a case note and a
+`REFERRAL_SENT` audit event; each Master with a new referral gets one sent email. A send takes a lock on the window
+before any row lock, so two senders cannot both take the last places. Windows are working days only (see
+[Process settings](#process-settings)).
+
 ### Master emails
 
-Two emails go to Masters rather than applicants: a **digest** when each referral window closes (working days only,
-windows closed in the last 24 hours, one email per Master listing their referrals in it) and a **reminder** every
-reminder interval from assignment (working days, 07:00 to before 18:00 `Europe/London`, one email per Master listing
-every referral still waiting for their direction). They have their own ledger, `deedpoll_master_email` (V44, V45),
-not the case outbox, and a row whose send may have started is never sent again. Both templates ship as
-`DEED_POLL_PLACEHOLDER`; while one is unprovisioned its runs are still recorded and its rows written `Skipped`, so
-provisioning it later sends no backlog.
+Two emails go to Masters rather than applicants: a **sent** email, one per Master per batch send (and one to the new
+Master on a reassignment), and a **reminder** every reminder interval from the send or reassignment (working days,
+07:00 to before 18:00 `Europe/London`, one email per Master counting every referral still waiting for their
+direction). Both carry `master_name`, `referral_count` and `my_referrals_link`
+(`{ADMIN_BASE_URL}/judicial/referrals/mine`), not a list of referrals. They have their own ledger,
+`deedpoll_master_email` (V44–V46), not the case outbox, and a row whose send may have started is never sent again.
+The window digest is gone: AAT's existing `DIGEST` rows still read, and a leftover `Pending` one is settled
+`Skipped`. Both templates ship as `DEED_POLL_PLACEHOLDER`; while one is unprovisioned its rows are written `Skipped`,
+so provisioning it later sends no backlog.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `MASTER_EMAILS_ENABLED` | `true` | Runs the digest, reminder and drain timers (tests switch it off) |
-| `MASTER_DIGEST_INTERVAL` | `PT5M` | How often the digest job looks for a closed window |
+| `MASTER_EMAILS_ENABLED` | `true` | Runs the reminder and drain timers (tests switch it off) |
 | `MASTER_REMINDER_INTERVAL_CHECK` | `PT15M` | How often the reminder job looks for reminders due |
 | `MASTER_EMAIL_DRAIN_INTERVAL` | `PT1M` | How often the ledger's pending rows are sent |
-| `NOTIFY_TEMPLATE_MASTER_REFERRAL_DIGEST` | `DEED_POLL_PLACEHOLDER` | The digest's Notify template id |
+| `NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT` | `DEED_POLL_PLACEHOLDER` | The sent email's Notify template id |
 | `NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER` | `DEED_POLL_PLACEHOLDER` | The reminder's Notify template id |
-| `ADMIN_BASE_URL` | empty | The admin host the emails' referral links point at |
+| `ADMIN_BASE_URL` | empty | The admin host the emails' My referrals link points at |
 
 Start-up fails if either template is provisioned without `ADMIN_BASE_URL`. See
 [docs/MASTER-EMAILS.md](docs/MASTER-EMAILS.md) for the wording, the ledger's states and investigating a `Failed` row.
@@ -287,12 +305,12 @@ cannot be reused for the judiciary by accident. An ArchUnit rule asserts the sep
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/judicial/referrals` | **Deprecated**, for one release because today's admin calls it: always an empty page, because referrals are assigned by the office |
-| GET | `/judicial/referrals/mine` | This judge's own work — the referrals assigned to them before their `Decided` ones, urgent first among the undirected, then longest-waiting, paged the same ten at a time, each with `assignedAt` and `directionDueBy` |
-| GET | `/judicial/referrals/{referralId}` | One referral, the wide `JudicialApplicationView` of its application (details, witnesses, readable documents; no case id, payment or refund data, or office processing record), and the case's notes. Opening it records `CASE_VIEWED` |
+| GET | `/judicial/referrals` | **Deprecated**, for one release because today's admin calls it: always an empty page, because referrals are sent by the office |
+| GET | `/judicial/referrals/mine` | This judge's own work — the referrals sent to them before their `Decided` ones, urgent first among the undirected, then the oldest sent (or last reassigned) first, paged the same ten at a time, each with `assignedAt` and `directionDueBy` |
+| GET | `/judicial/referrals/{referralId}` | One referral and the narrow `JudicialApplicationView` of its application (the display reference, new and old names, type, nationality, parents on a minor's application, and readable documents; no case id, payment or refund data, office processing record, witnesses or case notes). Opening it records `CASE_VIEWED` |
 | GET | `/judicial/referrals/{referralId}/documents/{documentId}/file` | Download one of the application's readable documents — the judge the referral is visible to may; nobody may for an `Open` one. Records `DOCUMENT_DOWNLOADED` and is served with the caseworker download's headers |
 | GET | `/judicial/referrals/{referralId}/documents/{documentId}/preview` | A read-only PDF rendition of it, to whoever may download it — counted apart; see [Document previews](#document-previews) |
-| POST | `/judicial/referrals/{referralId}/claim` | **Deprecated** for one release: there is no pool to claim from, because the office assigns referrals |
+| POST | `/judicial/referrals/{referralId}/claim` | **Deprecated** for one release: there is no pool to claim from, because the office sends referrals |
 | POST | `/judicial/referrals/{referralId}/direction` | Record a direction — `decision`, `changesToStandardPublication`, and `directionsText` (required when there are changes) |
 | PUT | `/judicial/referrals/{referralId}/direction` | Revise the judge's own direction (the `POST`'s body) while the referral is `Decided` and not yet closed |
 | POST | `/judicial/referrals/{referralId}/direction/withdraw` | Withdraw the judge's own direction, no body — the referral returns to `Claimed` by the same judge, who may direct again |
@@ -402,9 +420,9 @@ verified roles to explicit capabilities:
 
 | Role claim | Privileges |
 |---|---|
-| `caseworker-deedpoll-team-leader` | Privacy override, note/witness deletion, shared-query management, CCD repairs |
+| `caseworker-deedpoll-team-leader` | Privacy override, note/witness deletion, shared-query management, CCD repairs, the referral queue (sending to Masters and reassigning, `ALLOCATE_REFERRALS`) |
 | `caseworker-deedpoll-delivery-manager` | All Team leader privileges plus the entire Gazette facility and the process settings (`MANAGE_PROCESS_CONFIG`) |
-| `caseworker-deedpoll-admin` (deprecated) | Temporary Team leader compatibility; no Gazette access or process settings |
+| `caseworker-deedpoll-admin` (deprecated) | Temporary Team leader compatibility, the referral queue included; no Gazette access or process settings |
 
 Each new role works alone. Neither grants judicial or system access. Private saved queries remain
 owner-only; shared-query management does not bypass that rule. The privacy adapter derives its flag
@@ -1075,8 +1093,9 @@ See the active [parent plan](docs/plans/gazette-1-ready-list-and-batch-send.md),
 
 Values a Delivery Manager adjusts while the service runs, with no release. The processing window was V40's referral
 claim window, and is now how long a Master has to give a direction before the referral is returned to the office.
-V42 added the reminder interval, the per-Master cap and the two referral windows. Assignment reads the cap and the
-windows; the [Master emails](#master-emails) read the reminder interval and the windows' end times.
+V42 added the reminder interval, the cap and the two referral windows; V46 made the cap one total across every Master
+and renamed it `windowCap`. The [referral queue](#the-referral-queue) and its send read the cap and the windows; the
+[Master emails](#master-emails)' reminder reads the reminder interval.
 
 | Method | Path | Access and response |
 |---|---|---|
@@ -1085,7 +1104,7 @@ windows; the [Master emails](#master-emails) read the reminder interval and the 
 | GET | `/caseworker/process-settings/bank-holidays` (`listBankHolidays`) | Any staff role: `date` and `name`, ordered by date |
 | POST | `/caseworker/process-settings/bank-holidays` (`addBankHoliday`) | `MANAGE_PROCESS_CONFIG`; `{date, name}`, 409 on a listed date |
 | DELETE | `/caseworker/process-settings/bank-holidays/{date}` (`removeBankHoliday`) | `MANAGE_PROCESS_CONFIG`; 204, or 404 on an unlisted date |
-| GET | `/caseworker/masters` (`listMasters`) | Any staff role: `{masters, window, cap}` — each entry's `id`, `name`, `email`, `available`, `linked`, `revision` and `assignedInWindow`, ordered by name, with the current referral window and the per-Master cap |
+| GET | `/caseworker/masters` (`listMasters`) | Any staff role: `{masters}` — each entry's `id`, `name`, `email`, `available`, `linked` and `revision`, ordered by name. The window and its counts are the [referral queue](#the-referral-queue)'s |
 | POST | `/caseworker/masters` (`createMaster`) | `MANAGE_PROCESS_CONFIG`; `name`, `email` and optionally `available` |
 | PATCH | `/caseworker/masters/{id}` (`updateMaster`) | `MANAGE_PROCESS_CONFIG`; any of `name`, `email`, `available`, with `revision` |
 
@@ -1093,7 +1112,7 @@ windows; the [Master emails](#master-emails) read the reminder interval and the 
 |---|---|---|---|
 | Processing window | `referralClaimExpiryMinutes` (kept for admin) | 1,440–43,200 minutes (1–30 days) | 10,080 (7 days) |
 | Reminder interval | `reminderIntervalHours` | 1–168 hours | 48 |
-| Per-Master cap per window | `masterWindowCap` | 1–100 | 10 |
+| Cap per window, across every Master | `windowCap` | 1–100 | 10 |
 | Morning window | `morningWindowStart`, `morningWindowEnd` | `HH:mm` on the quarter hour, `Europe/London` | 07:00–10:30 |
 | Afternoon window | `afternoonWindowStart`, `afternoonWindowEnd` | the same | 14:00–14:30 |
 
@@ -1137,8 +1156,14 @@ settings page sends the wider range or the six new keys.
 V43 (referral assignment) rewrites no data. A referral `Claimed` before it stays with its claimer, counts its
 processing window from `claimedAt`, and is attached to that judge's Masters-list entry when they link. An existing
 `Open` referral leaves every judge's view until a caseworker assigns it, and an admin that still reads the pool sees
-it empty, so the office assigns through `PUT …/assignment` or a create with `masterId`. Admin's copied spec needs a
-refresh for `masterId`, the assignment route and the Masters list's new envelope.
+it empty, so the office sends it from the referral queue (V46, below).
+V46 (plan F1) renames the cap to `windowCap` with no alias, so a settings `PUT` still sending `masterWindowCap` is a
+400 for an unknown key; history rows already written keep the old field name. Raising takes no Master, and the
+Masters list loses its `window` and `cap`. Admin plan Fa1 deploys alongside, and AAT is briefly inconsistent between
+the two deploys; admin's copied spec needs a refresh. The rename is not backward compatible for the api either: a
+preview runs against AAT's database, so once a preview has applied V46, AAT's api on the previous version cannot
+read the process settings (the processing-window sweep, the reminders, referral assignment and the settings page)
+until this version reaches AAT. Merge and deploy promptly after the preview.
 
 ### The OpenAPI document
 

@@ -111,6 +111,7 @@ class CallerEmailPrivacyTest extends AbstractPostgresContainerTest {
         notes.deleteAll();
         deedPolls.deleteAll();
         referenceCounters.deleteAll();
+        jdbc.update("DELETE FROM deedpoll_master_email");
         jdbc.update("DELETE FROM deedpoll_master");
     }
 

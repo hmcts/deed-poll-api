@@ -2,8 +2,8 @@ package uk.gov.hmcts.reform.deedpoll.domain.masters;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralWindow;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
@@ -16,20 +16,16 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 /**
- * The Master email ledger's short database steps (plan D3), each its own transaction. Called through the Spring
+ * The Master email ledger's short database steps (plans D3 and F1), each its own transaction. Called through the Spring
  * proxy by {@link MasterEmailDelivery}, never around the Notify call.
  *
  * <p>The case outbox's rules, copied: a claim has an owner, a lease and a counted attempt; {@code Sending} is
@@ -40,6 +36,8 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class MasterEmailTransactions {
+
+    private static final DateTimeFormatter REASSIGNED_AT = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSSSSS");
 
     private final MasterEmailRepository emails;
     private final MasterRepository masters;
@@ -71,46 +69,47 @@ public class MasterEmailTransactions {
     }
 
     /**
-     * What one closed window's digest step did.
+     * One {@code SENT} row per Master in a batch send from the queue (plan F1, step 8), inside the send's own
+     * transaction, so the rows commit with the referrals they name or not at all. Every row of one send shares its
+     * {@code sendId}, which no other send has, so {@code unique (master_id, kind, period_key)} holds and two sends in
+     * one window are two emails. A replayed allocation sends nothing new and is not passed here, so a replay writes
+     * no row.
      *
-     * @param emails how many Masters were given a digest row
-     * @param state the state those rows were written in: {@code Pending}, or {@code Skipped} when the digest template
-     *     is unprovisioned
-     * @param unassigned referrals counted towards the window with no Masters-list entry (pre-V43 claims), not listed
+     * @param sendId generated once for the request
+     * @param byMaster each Master given at least one new referral, with those referrals in the body's order
      */
-    public record DigestEnqueued(int emails, MasterEmailState state, int unassigned) {
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void enqueueSent(UUID sendId, Map<UUID, List<UUID>> byMaster) {
+        for (Map.Entry<UUID, List<UUID>> master : byMaster.entrySet()) {
+            if (!enqueue(master.getKey(), MasterEmailKind.SENT, sendPeriod(sendId), master.getValue())) {
+                throw new IllegalStateException("A send's key was used twice");
+            }
+        }
     }
 
     /**
-     * A closed window's digests (plan D3, step 2), in one transaction: its {@code deedpoll_window_digest_run} row,
-     * then one {@code DIGEST} row per Master with referrals still {@code Claimed} in it, listing them in the Master's
-     * page order. The run row and the emails commit together, so a pod that fails part-way leaves the window for the
-     * next run, and a pod that finds the run row already written enqueues nothing.
-     *
-     * @return empty when another run already took this window
+     * The {@code SENT} row for a reassignment (plan F1, step 7), to the new Master only, inside the reassignment's
+     * transaction. Its period is the referral and the moment it was reassigned, so reassigning it again later is a
+     * new email and the same reassignment cannot write two.
      */
-    @Transactional
-    public Optional<DigestEnqueued> enqueueDigests(ReferralWindow window) {
-        if (!emails.recordDigestRun(window.date(), window.slot(), AuditClock.now())) {
-            return Optional.empty();
-        }
-        Map<UUID, List<UUID>> byMaster = new LinkedHashMap<>();
-        int unassigned = 0;
-        for (MasterEmailRepository.WindowReferral referral : emails.claimedInWindow(window.date(), window.slot())) {
-            if (referral.masterId() == null) {
-                unassigned++;
-            } else {
-                byMaster.computeIfAbsent(referral.masterId(), master -> new ArrayList<>()).add(referral.referralId());
-            }
-        }
-        String periodKey = MasterEmailPersonalisation.digestPeriod(window);
-        int written = 0;
-        for (Map.Entry<UUID, List<UUID>> master : byMaster.entrySet()) {
-            if (enqueue(master.getKey(), MasterEmailKind.DIGEST, periodKey, master.getValue())) {
-                written++;
-            }
-        }
-        return Optional.of(new DigestEnqueued(written, stateFor(MasterEmailKind.DIGEST), unassigned));
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void enqueueReassigned(UUID masterId, UUID referralId, LocalDateTime assignedAt) {
+        enqueue(masterId, MasterEmailKind.SENT, reassignmentPeriod(referralId, assignedAt), List.of(referralId));
+    }
+
+    /**
+     * A send's period key, {@code send:{uuid}}.
+     */
+    static String sendPeriod(UUID sendId) {
+        return "send:" + sendId;
+    }
+
+    /**
+     * A reassignment's period key, {@code {referral}@{assignedAt}} to the microsecond, as Postgres keeps it: 63
+     * characters, inside V44's 64.
+     */
+    static String reassignmentPeriod(UUID referralId, LocalDateTime assignedAt) {
+        return referralId + "@" + REASSIGNED_AT.format(assignedAt);
     }
 
     /**
@@ -185,7 +184,8 @@ public class MasterEmailTransactions {
         }
         if (!links.isProvisioned(row.kind())) {
             emails.fail(id, MasterEmailState.Skipped, null, now);
-            log.info("Master email {} skipped: template {} is not provisioned", id, row.kind().templateKey());
+            log.info("Master email {} skipped: {}", id, row.kind().retired()
+                ? row.kind() + " is no longer sent" : "template " + row.kind().templateKey() + " is not provisioned");
             return Optional.empty();
         }
         if (NotificationBackoff.exhausted(row.attempts())) {
@@ -203,33 +203,26 @@ public class MasterEmailTransactions {
     }
 
     /**
-     * The email, read now: the Masters list's current address and name, and the listed referrals as they are. A
-     * referral is listed only while it still waits for this Master's direction, so a row that waited out a backoff
-     * never names one since directed, unassigned or reassigned to somebody else.
+     * The email, read now: the Masters list's current address and name, and how many of the listed referrals still
+     * wait for this Master's direction, so a row that waited out a backoff never counts one since directed,
+     * unassigned or reassigned to somebody else.
      *
-     * @return empty when none of the referrals is left to list (directed, no longer this Master's, or deleted)
+     * @return empty when none of the referrals is left (directed, no longer this Master's, or deleted)
      * @throws IllegalStateException when the Master is missing, which V44's foreign key forbids
      */
     @Transactional(readOnly = true)
     public Optional<MasterEmailContent> content(MasterEmailClaim claim) {
         Master master = masters.find(claim.masterId())
             .orElseThrow(() -> new IllegalStateException("A Master email names no Masters-list entry"));
-        Map<UUID, Referral> found = referrals.findWithCaseByIdIn(claim.referralIds()).stream()
-            .collect(Collectors.toMap(Referral::getId, Function.identity()));
-        List<MasterEmailPersonalisation.Line> lines = claim.referralIds().stream()
-            .map(found::get)
-            .filter(Objects::nonNull)
+        int waiting = (int) referrals.findByIdInForMasterEmails(claim.referralIds()).stream()
             .filter(referral -> stillWaitingFor(referral, claim.masterId()))
-            .map(referral -> new MasterEmailPersonalisation.Line(
-                referral.getId(), referral.getDeedPoll().getDisplayReference(), referral.getReasons(),
-                referral.getUrgency(), referral.getCreatedOn()))
-            .toList();
-        if (lines.isEmpty()) {
+            .count();
+        if (waiting == 0) {
             return Optional.empty();
         }
         return Optional.of(new MasterEmailContent(
             links.templateId(claim.kind()), master.email(),
-            MasterEmailPersonalisation.of(master.name(), claim.kind(), claim.periodKey(), lines, links)));
+            MasterEmailPersonalisation.of(master.name(), waiting, links)));
     }
 
     private static boolean stillWaitingFor(Referral referral, UUID masterId) {

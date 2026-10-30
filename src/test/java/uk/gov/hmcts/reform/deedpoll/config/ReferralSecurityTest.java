@@ -28,6 +28,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.CreateReferralInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralQueue;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
@@ -165,21 +166,27 @@ class ReferralSecurityTest {
     private static final Set<String> PERSONAL_LIST = Set.of("findOwnedBy");
 
     /**
-     * The per-Master cap's two counts (plan D2), which name no parent case because a Master's window spans cases.
-     * Admitted on the sweep's terms: each answers a number per Master and never a referral.
-     */
-    private static final Set<String> CAP_COUNTS =
-        Set.of("countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot", "countByMasterInWindow");
-
-    /**
-     * The Master emails' read (plan D3), which names no parent case because a digest spans cases. Admitted with two
+     * The Master emails' read (plan D3), which names no parent case because one email spans cases. Admitted with two
      * rules: it takes nothing but the ids a ledger row froze, and nothing but {@code MasterEmailTransactions} calls it.
      */
-    private static final Set<String> MASTER_EMAILS = Set.of("findWithCaseByIdIn");
+    private static final Set<String> MASTER_EMAILS = Set.of("findByIdInForMasterEmails");
+
+    /**
+     * The referral queue's reads (plan F1), which name no parent case because the queue spans every case. Admitted with
+     * two rules: nothing but {@code ReferralQueue} calls them, and it checks {@code ALLOCATE_REFERRALS} first.
+     */
+    private static final Set<String> QUEUE = Set.of("findQueue", "findSent", "countByWindowDateAndWindowSlot",
+                                                    "countSentByMasterInWindow");
+
+    /**
+     * The batch send's lock (plan F1), by the referral ids a send's body names, across cases. Admitted on the queue's
+     * caller rule, and on {@link #MASTER_EMAILS}' shape: a collection of ids and nothing else.
+     */
+    private static final Set<String> SEND = Set.of("findByIdInForSending");
 
     /** Every finder that names no parent case, for the declaration rule that admits each one deliberately. */
     private static final Set<String> UNSCOPED = Stream.of(SWEEP, LINKING, MASTER_LOCKS, PERSONAL_LIST, JUDICIAL_READ,
-                                                              CAP_COUNTS, MASTER_EMAILS)
+                                                              MASTER_EMAILS, QUEUE, SEND)
         .flatMap(Set::stream)
         .collect(Collectors.toUnmodifiableSet());
 
@@ -228,7 +235,7 @@ class ReferralSecurityTest {
                                       mock(EntityManager.class),
                                       mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
                                       mock(uk.gov.hmcts.reform.deedpoll.repository.MasterRepository.class),
-                                      mock(uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays.class));
+                                      mock(MasterEmailTransactions.class));
 
         when(referrals.save(any())).thenAnswer(call -> {
             // An id, as a real save allocates one: the audit event is keyed on it.
@@ -417,6 +424,18 @@ class ReferralSecurityTest {
                 .should().callMethodWhere(DescribedPredicate.describe(
                     "a call to the Master emails' read",
                     (JavaMethodCall call) -> MASTER_EMAILS.contains(call.getName())
+                        && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
+                .check(mainClasses());
+        }
+
+        @Test
+        @DisplayName("only the referral queue reaches the queue's reads across every case")
+        void onlyTheQueueReachesTheQueueReads() {
+            noClasses()
+                .that().doNotHaveFullyQualifiedName(ReferralQueue.class.getName())
+                .should().callMethodWhere(DescribedPredicate.describe(
+                    "a call to one of the queue's cross-case reads or the send's lock",
+                    (JavaMethodCall call) -> (QUEUE.contains(call.getName()) || SEND.contains(call.getName()))
                         && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
                 .check(mainClasses());
         }
@@ -975,6 +994,12 @@ class ReferralSecurityTest {
                         .containsExactly(UUID.class);
                     continue;
                 }
+                if (SEND.contains(finder.getName())) {
+                    assertThat(finder.getParameterTypes())
+                        .as("%s takes a send's referral ids and nothing else", finder.getName())
+                        .containsExactly(Collection.class);
+                    continue;
+                }
                 if (MASTER_EMAILS.contains(finder.getName())) {
                     assertThat(finder.getParameterTypes())
                         .as("%s takes a ledger row's referral ids and nothing else", finder.getName())
@@ -1019,7 +1044,16 @@ class ReferralSecurityTest {
                         .isEqualTo(Page.class);
                     continue;
                 }
-                if (SWEEP.contains(finder.getName()) || CAP_COUNTS.contains(finder.getName())) {
+                if (QUEUE.contains(finder.getName())) {
+                    // The queue hands back referrals, so its promise is the question it can be asked: states, an
+                    // urgency, a window and a page, never a referral or a case id, so the answer is always "every
+                    // case's referrals in this state" and never "this referral".
+                    assertThat(finder.getParameterTypes())
+                        .as("%s takes no referral id", finder.getName())
+                        .doesNotContain(UUID.class, String.class);
+                    continue;
+                }
+                if (SWEEP.contains(finder.getName())) {
                     // What keeps the sweep inside the rule instead of beside it: neither statement hands back
                     // a referral. The candidate query returns a three-field projection and the release returns
                     // a row count, so an unscoped query cannot become an unscoped read of case data.

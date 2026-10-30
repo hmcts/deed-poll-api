@@ -30,14 +30,13 @@ import java.util.UUID;
  * A caller wanting one referral has to say which case it belongs to, so a cross-case read or write is
  * not expressible rather than merely discouraged.
  *
- * <p>The exceptions belong to the judicial surface, the sweep, the per-Master cap and linking, which are the
+ * <p>The exceptions belong to the judicial surface, the sweep, the referral queue and linking, which are the
  * things in this service that are about every case at once rather than about <em>a</em> case's referrals:
  *
  * <ul>
  *   <li>the processing-window sweep -- {@link #findOverdueAssignments} and {@link #releaseOverdueAssignment}. It
  *       stays inside the rule rather than beside it: the finder returns a projection instead of an entity, and
  *       neither is reachable from a request path that names a case;</li>
- *   <li>the cap's counts, which return numbers and never a referral;</li>
  *   <li>linking's two statements, {@link #attachToLinkedMaster} and {@link #attachLegacyClaims}, which return a
  *       count, write only an owner or Master column, and are keyed on a Masters-list entry and the subject
  *       {@code MasterService.linkIfListed} has just linked to it;</li>
@@ -52,9 +51,15 @@ import java.util.UUID;
  *       gone</strong> -- {@code JudicialReferralService.visibleTo} is what stands where the parent id stands on
  *       the caseworker surface -- and {@code ReferralSecurityTest} enforces that by asserting nothing but
  *       {@code JudicialReferralService} calls it.</li>
- *   <li>the Master emails' read -- {@link #findWithCaseByIdIn}. The ids are the ones a ledger row froze when its
- *       job enqueued it, never a request's, and the only caller is {@code MasterEmailTransactions}, which renders
- *       a reference, the reasons, the urgency and the day referred, and nothing about the applicant.</li>
+ *   <li>the referral queue (plan F1) -- {@link #findQueue}, {@link #findSent} and the window's two counts,
+ *       {@link #countByWindowDateAndWindowSlot} and {@link #countSentByMasterInWindow}. The queue is every case's
+ *       referrals waiting to be sent, so there is no case to scope it to; what stands where the parent id stands is
+ *       {@code ReferralQueue}'s {@code ALLOCATE_REFERRALS} check, made before any of them is called;</li>
+ *   <li>the batch send's lock -- {@link #findByIdInForSending}, by the ids a send's body names, behind the same
+ *       check and called by nothing but {@code ReferralQueue};</li>
+ *   <li>the Master emails' read -- {@link #findByIdInForMasterEmails}. The ids are the ones a ledger row froze when
+ *       its job enqueued it, never a request's, and the only caller is {@code MasterEmailTransactions}, which counts
+ *       those still waiting for the Master's direction and renders nothing about them.</li>
  * </ul>
  *
  * <p>This differs from {@link SavedQueryRepository}, which does read by id: a saved query's visibility
@@ -162,11 +167,13 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
      * judge's second page could omit work their first page's total had promised. The count query repeats this
      * predicate word for word, so the two cannot describe different result sets.
      *
-     * <p><strong>The order is the Master's page (Steve, 2026-10-28), and it is not a {@code Sort}</strong>, because
-     * urgency counts in one state and not the other: {@code Claimed} (undirected) before {@code Decided}; within
-     * {@code Claimed}, {@code urgent} first, then the oldest {@code createdOn}; within {@code Decided}, the oldest
-     * {@code createdOn} alone, because the page groups directed referrals by day; then the id, which is not shown
-     * and only makes the sequence stable from one page to the next. The caller passes an unsorted page, since a
+     * <p><strong>The order is the Master's page (Steve, 2026-10-28; plan F1, decision F-9), and it is not a
+     * {@code Sort}</strong>, because urgency counts in one state and not the other: {@code Claimed} (undirected)
+     * before {@code Decided}; within {@code Claimed}, {@code urgent} first, then the oldest day it was <em>sent</em>
+     * to the Master; within {@code Decided}, the oldest day sent alone, because the page groups directed referrals by
+     * that day; then the id, which is not shown and only makes the sequence stable from one page to the next. The day
+     * sent is {@code assignedAt} (the send, or the last reassignment), falling back to {@code claimedAt} and then
+     * {@code createdOn} so a claim made before V43 still has a place. The caller passes an unsorted page, since a
      * {@code Sort} would be appended after this one.
      *
      * <p>The states are parameters rather than literals in the JPQL for the reason {@link #findOverdueAssignments}'s
@@ -188,7 +195,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
             or (r.state = :decided and r.decidedById = :owner)
          order by case when r.state = :claimed then 0 else 1 end,
                   case when r.state = :claimed and r.urgency = :urgent then 0 else 1 end,
-                  r.createdOn,
+                  coalesce(r.assignedAt, r.claimedAt, r.createdOn),
                   r.id
         """,
         countQuery = """
@@ -227,11 +234,11 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
     Optional<Referral> findWithCaseById(@Param("id") UUID id);
 
     /**
-     * The referrals a Master email lists, with their applications, in no particular order (plan D3). Ids that no
-     * longer exist, because their case was deleted, are simply absent.
+     * The referrals a Master email counts, in no particular order (plan D3, F1). Ids that no longer exist, because
+     * their case was deleted, are simply absent.
      */
-    @Query("select r from Referral r join fetch r.deedPoll where r.id in :ids")
-    List<Referral> findWithCaseByIdIn(@Param("ids") Collection<UUID> ids);
+    @Query("select r from Referral r where r.id in :ids")
+    List<Referral> findByIdInForMasterEmails(@Param("ids") Collection<UUID> ids);
 
     /**
      * Whether the case already holds a referral in one of the given states.
@@ -297,34 +304,92 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
     List<LocalDateTime> findOutstandingConfirmationRequestsByDeedPollId(@Param("deedPollId") String deedPollId);
 
     /**
-     * How many referrals one Master holds in one referral window: the per-Master cap's count (D-5).
+     * One page of the referrals waiting to be sent to a Master, with their cases: the queue (plan F1).
      *
-     * <p><strong>Not scoped to a case</strong>, like {@link #findOverdueAssignments}, and safe for its reason: it
-     * returns a number, no case data, and only {@code ReferralService.assign} calls it, under the Master's row lock. It
-     * counts current assignments only, so a referral reassigned away, unassigned or directed no longer counts.
+     * <p><strong>The database filters, orders, pages and counts</strong>, for {@link #findOwnedBy}'s reason, and the
+     * count repeats the predicate. The order is the checker's (decision F-8): {@code urgent} first, then the oldest
+     * {@code createdOn}, then the id, which only makes the sequence stable from one page to the next. Not a
+     * {@code Sort}, because urgency first is a {@code CASE}; the caller passes an unsorted page.
      *
-     * @param claimed the state an assigned referral is in, {@link ReferralState#Claimed}
+     * <p>The case is join-fetched, as {@link #findWithCaseById}'s is, because the controller maps the case's
+     * reference and names after the transaction has closed.
+     *
+     * @param open the state a waiting referral is in, {@link ReferralState#Open}
+     * @param urgent the urgency that sorts first, {@link Urgency#Urgent}
      */
-    long countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot(ReferralState claimed, UUID assignedMasterId,
-                                                                   LocalDate windowDate, WindowSlot windowSlot);
+    @Query(value = """
+        select r from Referral r join fetch r.deedPoll
+         where r.state = :open
+         order by case when r.urgency = :urgent then 0 else 1 end,
+                  r.createdOn,
+                  r.id
+        """,
+        countQuery = """
+        select count(r) from Referral r
+         where r.state = :open
+        """)
+    Page<Referral> findQueue(@Param("open") ReferralState open,
+                             @Param("urgent") Urgency urgent,
+                             Pageable pageable);
 
     /**
-     * Every Master's count for one window, in one grouped statement, for the Masters list (D-5). A Master with
-     * none has no row. Unscoped and case-free for {@link #countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot}'s
-     * reason.
+     * One page of the referrals sent to a Master and not yet directed, with their cases, for reassigning (plan F1):
+     * the oldest {@code assignedAt} first, then the id. A claim made before V43 has no {@code assignedAt} and orders
+     * by its {@code claimedAt}, as the processing window counts it.
+     *
+     * @param claimed the state a sent referral is in, {@link ReferralState#Claimed}
+     */
+    @Query(value = """
+        select r from Referral r join fetch r.deedPoll
+         where r.state = :claimed
+         order by coalesce(r.assignedAt, r.claimedAt),
+                  r.id
+        """,
+        countQuery = """
+        select count(r) from Referral r
+         where r.state = :claimed
+        """)
+    Page<Referral> findSent(@Param("claimed") ReferralState claimed, Pageable pageable);
+
+    /**
+     * The referrals a batch send names, locked until the caller's transaction ends, in id order (plan F1). Ids that
+     * name nothing are simply absent, which the caller refuses in the same words as a referral no longer waiting.
+     *
+     * <p>In id order, and taken by every send after {@code ReferralWindowLocks}' window lock and before any
+     * Master's, so two sends naming the same referrals in different orders queue rather than deadlock. Not joined
+     * to the case: a {@code FOR UPDATE} over a join would lock the case rows too, ahead of the referral-first,
+     * case-last order every write here keeps.
+     *
+     * <p>The ids come from a request body rather than a path, and name no case: what stands where the parent id
+     * stands is {@code ReferralQueue}'s {@code ALLOCATE_REFERRALS} check, made before this is called, and nothing
+     * but {@code ReferralQueue} calls it.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select r from Referral r where r.id in :ids order by r.id")
+    List<Referral> findByIdInForSending(@Param("ids") Collection<UUID> ids);
+
+    /**
+     * How many referrals were sent in one referral window, across every Master and in any state (plan F1, F-3 and
+     * A-2): a referral since withdrawn, directed or reassigned still holds its place, because reassignment keeps the
+     * window and only the processing window's unassignment clears it. A number, no case data.
+     */
+    long countByWindowDateAndWindowSlot(LocalDate windowDate, WindowSlot windowSlot);
+
+    /**
+     * Every Master's share of {@link #countByWindowDateAndWindowSlot}, in one grouped statement (plan F1), by the
+     * Master holding each referral now: a reassignment keeps the window, so the referral counts under its new Master.
+     * A Master with none has no row; a referral with no Master (a pre-V43 claim) is in no Master's row.
      */
     @Query("""
         select new uk.gov.hmcts.reform.deedpoll.repository.MasterWindowCount(r.assignedMasterId, count(r))
           from Referral r
-         where r.state = :claimed
-           and r.windowDate = :windowDate
+         where r.windowDate = :windowDate
            and r.windowSlot = :windowSlot
            and r.assignedMasterId is not null
          group by r.assignedMasterId
         """)
-    List<MasterWindowCount> countByMasterInWindow(@Param("claimed") ReferralState claimed,
-                                                  @Param("windowDate") LocalDate windowDate,
-                                                  @Param("windowSlot") WindowSlot windowSlot);
+    List<MasterWindowCount> countSentByMasterInWindow(@Param("windowDate") LocalDate windowDate,
+                                                      @Param("windowSlot") WindowSlot windowSlot);
 
     /**
      * The assigned referrals whose processing window has ended without a direction -- the sweep's candidates.

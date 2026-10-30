@@ -35,6 +35,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocument;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollWitness;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
@@ -490,21 +491,25 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("orders undirected first, urgent first among them, then oldest; directed by age alone")
+        @DisplayName("orders undirected first, urgent first among them, then the day sent; directed by day sent alone")
         void ordersTheList() throws Exception {
-            // The Master's page (Steve, 2026-10-28). Backdated rather than trusting five inserts to land in different
-            // microseconds, and the ages run deliberately the wrong way round: the oldest referral of the five is a
-            // directed one, and it comes after every undirected one. Among the directed, urgency is ignored.
+            // The Master's page (Steve, 2026-10-28; plan F1, decision F-9). Dated rather than trusting five inserts to
+            // land in different microseconds, and the days run deliberately the wrong way round: the earliest sent of
+            // the five is a directed one, and it comes after every undirected one. Among the directed, urgency is
+            // ignored. Each was raised in the opposite order to the one it was sent in, so the day raised would
+            // reverse it. Hours ago rather than a fixed date, because the list sweeps first and a referral sent over
+            // seven days ago would be back in the queue.
+            LocalDateTime now = AuditClock.now();
             String claimedUrgent = claimedBy(JUDGE_NAME, Urgency.Urgent);
-            backdate(claimedUrgent, LocalDateTime.of(2026, 8, 5, 9, 0));
+            sentHoursAgo(claimedUrgent, now, 1);
             String claimedNormalOlder = claimedBy(JUDGE_NAME, Urgency.Normal);
-            backdate(claimedNormalOlder, LocalDateTime.of(2026, 8, 3, 9, 0));
+            sentHoursAgo(claimedNormalOlder, now, 3);
             String claimedNormalNewer = claimedBy(JUDGE_NAME, Urgency.Normal);
-            backdate(claimedNormalNewer, LocalDateTime.of(2026, 8, 4, 9, 0));
+            sentHoursAgo(claimedNormalNewer, now, 2);
             String decidedUrgent = directedBy(JUDGE_NAME, Urgency.Urgent);
-            backdate(decidedUrgent, LocalDateTime.of(2026, 8, 2, 9, 0));
+            sentHoursAgo(decidedUrgent, now, 4);
             String decidedNormal = directedBy(JUDGE_NAME, Urgency.Normal);
-            backdate(decidedNormal, LocalDateTime.of(2026, 8, 1, 9, 0));
+            sentHoursAgo(decidedNormal, now, 5);
 
             authorised(get(MINE))
                 .andExpect(status().isOk())
@@ -1899,6 +1904,17 @@ class JudicialReferralControllerTest extends AbstractPostgresContainerTest {
     }
 
     /** Backdates a referral, so an ordering assertion does not depend on the clock's resolution. */
+    /**
+     * Says a referral was sent to its judge {@code hours} before {@code now}, and raised on that many days into 2026,
+     * so the earlier it was sent, the later it was raised.
+     */
+    private void sentHoursAgo(String referralId, LocalDateTime now, int hours) {
+        Referral referral = stored(referralId);
+        referral.setAssignedAt(now.minusHours(hours));
+        referral.setCreatedOn(LocalDateTime.of(2026, 1, hours, 9, 0));
+        referrals.saveAndFlush(referral);
+    }
+
     private void backdate(String referralId, LocalDateTime createdOn) {
         Referral referral = stored(referralId);
         referral.setCreatedOn(createdOn);

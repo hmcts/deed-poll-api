@@ -291,7 +291,7 @@ class JudicialClaimWindowTest extends AbstractPostgresContainerTest {
 
     private long lapseNotes(String referralId) {
         return notes.findByDeedPollIdOrderByCreatedOnDesc(caseOf(referralId)).stream()
-            .filter(note -> note.getNote().contains(", returned to the office for assignment: no direction from "))
+            .filter(note -> note.getNote().contains(", returned to the queue to be sent again: no direction from "))
             .count();
     }
 

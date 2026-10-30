@@ -2,15 +2,16 @@ package uk.gov.hmcts.reform.deedpoll.domain.masters;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ReferralWindowTimes;
 
 import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZonedDateTime;
 import java.util.UUID;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static uk.gov.hmcts.reform.deedpoll.domain.masters.MasterDigestWindowsTest.london;
 
 /**
  * {@link MasterReminders}' pure parts (plan D3, step 3): the sending hours and the run's period key.
@@ -55,5 +56,9 @@ class MasterReminderHoursTest {
         assertThat(key).isEqualTo("2026-11-04T12:15:00Z:00000000-0000-0000-0000-000000000001");
         assertThat(key.length()).isLessThanOrEqualTo(64);
         assertThat(MasterReminders.periodKey(Instant.parse("2026-11-04T12:15:59Z"), run)).isEqualTo(key);
+    }
+
+    static Instant london(int year, int month, int day, int hour, int minute) {
+        return ZonedDateTime.of(year, month, day, hour, minute, 0, 0, ReferralWindowTimes.ZONE).toInstant();
     }
 }

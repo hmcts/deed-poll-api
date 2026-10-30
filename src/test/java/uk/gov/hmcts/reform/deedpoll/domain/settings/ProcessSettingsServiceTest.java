@@ -93,9 +93,9 @@ class ProcessSettingsServiceTest {
             Arguments.of(withMinutes("reminderIntervalHours", 169), "reminderIntervalHours"),
             Arguments.of(withMinutes("reminderIntervalHours", null), "reminderIntervalHours"),
             Arguments.of(withMinutes("reminderIntervalHours", 48L), "reminderIntervalHours"),
-            Arguments.of(withMinutes("masterWindowCap", 0), "masterWindowCap"),
-            Arguments.of(withMinutes("masterWindowCap", 101), "masterWindowCap"),
-            Arguments.of(withMinutes("masterWindowCap", "10"), "masterWindowCap"),
+            Arguments.of(withMinutes("windowCap", 0), "windowCap"),
+            Arguments.of(withMinutes("windowCap", 101), "windowCap"),
+            Arguments.of(withMinutes("windowCap", "10"), "windowCap"),
             Arguments.of(withMinutes("morningWindowStart", "07:05"), "morningWindowStart"),
             Arguments.of(withMinutes("morningWindowStart", "7:00"), "morningWindowStart"),
             Arguments.of(withMinutes("morningWindowEnd", "10:30:00"), "morningWindowEnd"),
@@ -133,7 +133,7 @@ class ProcessSettingsServiceTest {
             .hasMessageContaining("1440").hasMessageContaining("43200");
         assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, withMinutes("reminderIntervalHours", 169)))
             .hasMessageContaining("1 to 168");
-        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, withMinutes("masterWindowCap", 101)))
+        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, withMinutes("windowCap", 101)))
             .hasMessageContaining("1 to 100");
     }
 
@@ -209,7 +209,7 @@ class ProcessSettingsServiceTest {
 
         assertThat(service.processingWindow()).isEqualTo(Duration.ofDays(7));
         assertThat(service.reminderInterval()).isEqualTo(Duration.ofHours(48));
-        assertThat(service.masterWindowCap()).isEqualTo(10);
+        assertThat(service.windowCap()).isEqualTo(10);
         assertThat(service.referralWindows()).isEqualTo(new ReferralWindowTimes(
             LocalTime.of(7, 0), LocalTime.of(10, 30), LocalTime.of(14, 0), LocalTime.of(14, 30)));
         verify(repository, never()).read(true);
@@ -222,7 +222,7 @@ class ProcessSettingsServiceTest {
 
         assertThatThrownBy(service::processingWindow).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(service::reminderInterval).isInstanceOf(IllegalStateException.class);
-        assertThatThrownBy(service::masterWindowCap).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(service::windowCap).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(service::referralWindows).isInstanceOf(IllegalStateException.class);
     }
 
@@ -234,7 +234,7 @@ class ProcessSettingsServiceTest {
         ProcessSettings next = service.update(DELIVERY_MANAGER, valid(2880, 0));
 
         assertThat(next.reminderInterval()).isEqualTo(SEEDED.reminderInterval());
-        assertThat(next.masterWindowCap()).isEqualTo(10);
+        assertThat(next.windowCap()).isEqualTo(10);
         assertThat(next.referralWindows()).isEqualTo(SEEDED.referralWindows());
         verify(repository).change(SEEDED, next, "dm-subject", List.of("referralClaimExpiryMinutes"));
     }
@@ -245,16 +245,16 @@ class ProcessSettingsServiceTest {
         given(repository.read(true)).willReturn(Optional.of(SEEDED));
         Map<String, Object> fields = valid(10080, 0);
         fields.put("afternoonWindowEnd", "15:00");
-        fields.put("masterWindowCap", 12);
+        fields.put("windowCap", 12);
         fields.put("reminderIntervalHours", 48);
 
         ProcessSettings next = service.update(DELIVERY_MANAGER, fields);
 
         assertThat(next.afternoonWindowEnd()).isEqualTo(LocalTime.of(15, 0));
-        verify(repository).change(SEEDED, next, "dm-subject", List.of("masterWindowCap", "afternoonWindowEnd"));
+        verify(repository).change(SEEDED, next, "dm-subject", List.of("windowCap", "afternoonWindowEnd"));
         verify(audit).record(eq(AuditEntry.of(AuditAction.PROCESS_SETTINGS_CHANGED, AuditActor.of(DELIVERY_MANAGER),
                                               AuditEntities.PROCESS_SETTINGS, "1", null)
-                                      .withFields(List.of("masterWindowCap", "afternoonWindowEnd"))),
+                                      .withFields(List.of("windowCap", "afternoonWindowEnd"))),
                              eq(List.of()));
     }
 

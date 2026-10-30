@@ -19,7 +19,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 
 import java.util.List;
 
-/** The England and Wales bank holidays the referral windows and digests skip. */
+/** The England and Wales bank holidays the referral windows and Master reminders skip. */
 @RestController
 @RequestMapping("/caseworker/process-settings/bank-holidays")
 public class CaseworkerBankHolidaysController {
@@ -40,7 +40,7 @@ public class CaseworkerBankHolidaysController {
 
     @Operation(operationId = "addBankHoliday", summary = "Add a bank holiday",
         description = "Requires caseworker-deedpoll-delivery-manager (MANAGE_PROCESS_CONFIG). date (yyyy-MM-dd) and "
-            + "name are required. A date already listed is 409. The referral windows and digests skip it from "
+            + "name are required. A date already listed is 409. The referral windows and Master reminders skip it from "
             + "their next decision.")
     @AuditedAs(AuditAction.BANK_HOLIDAY_ADDED)
     @PostMapping

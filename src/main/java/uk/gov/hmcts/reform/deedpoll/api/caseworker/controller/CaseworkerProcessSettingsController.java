@@ -26,8 +26,8 @@ public class CaseworkerProcessSettingsController {
     @Operation(operationId = "getProcessSettings", summary = "Read the Delivery Manager's process settings",
         description = "Requires caseworker-deedpoll-delivery-manager (MANAGE_PROCESS_CONFIG). "
             + "Seeded with a processing window of 10080 minutes (7 days), a 48-hour reminder interval, a cap of 10 "
-            + "referrals per Master per window, and referral windows of 07:00-10:30 and 14:00-14:30 Europe/London, "
-            + "at revision 0 with null attribution.")
+            + "referrals sent per window across all Masters, and referral windows of 07:00-10:30 and 14:00-14:30 "
+            + "Europe/London, at revision 0 with null attribution.")
     @GetMapping
     public ProcessSettingsResponse get() {
         return ProcessSettingsResponse.from(service.get(CurrentUsers.required()));

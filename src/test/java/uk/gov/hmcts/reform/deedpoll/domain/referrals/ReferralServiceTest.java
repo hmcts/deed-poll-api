@@ -14,13 +14,13 @@ import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
+import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterEmailTransactions;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
-import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
@@ -213,7 +213,7 @@ class ReferralServiceTest {
         when(settings.processingWindow()).thenReturn(window);
         return new ReferralService(deedPolls, referrals, notes, settings,
                                    mock(EntityManager.class), mock(AuditTrail.class),
-                                   masters, mock(BankHolidays.class));
+                                   masters, mock(MasterEmailTransactions.class));
     }
 
     /** The case exists, so the parent check passes. */
@@ -487,7 +487,7 @@ class ReferralServiceTest {
             assertThat(note.author().author()).isEqualTo("Ada Caseworker");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text())
-                .contains("Referred to a Master", "Domestic abuse considerations", "Hearing on Friday");
+                .contains("waiting to be sent to a Master", "Domestic abuse considerations", "Hearing on Friday");
         }
 
         @Test
@@ -997,7 +997,7 @@ class ReferralServiceTest {
             // says the second judge has it, which is this call's own transition.
             assertThat(notesWritten()).hasSize(2);
             assertThat(notesWritten().get(0).text())
-                .contains("District Judge Okafor", "returned to the office for assignment");
+                .contains("District Judge Okafor", "returned to the queue to be sent again");
             assertThat(notesWritten().get(1).text()).contains("claimed by a Master");
         }
 
@@ -1068,7 +1068,7 @@ class ReferralServiceTest {
                 },
                 lapsed -> {
                     assertThat(lapsed.text())
-                        .contains("District Judge Okafor", "returned to the office for assignment");
+                        .contains("District Judge Okafor", "returned to the queue to be sent again");
                     // The service released it, not the judge whose claim call happened to notice, so the lapse
                     // stays the service account's note between two human-authored ones.
                     assertThat(lapsed.author()).isEqualTo(NoteAuthor.NONE);
@@ -1476,7 +1476,7 @@ class ReferralServiceTest {
             // The sweep's lapse note and nothing after it: the direction that arrived too late left no trace
             // suggesting it landed.
             assertThat(notesWritten()).singleElement()
-                .satisfies(note -> assertThat(note.text()).contains("returned to the office for assignment"));
+                .satisfies(note -> assertThat(note.text()).contains("returned to the queue to be sent again"));
         }
 
         @ParameterizedTest
@@ -1969,7 +1969,7 @@ class ReferralServiceTest {
         }
 
         @Test
-        @DisplayName("is returned to the office once its window ends, as any other assignment is")
+        @DisplayName("is returned to the queue once its window ends, as any other assignment is")
         void lapsesLikeAnyOtherClaim() {
             Referral referral = storedDirection(JUDGE);
             rowsInTheDatabase(referral);
@@ -2274,10 +2274,10 @@ class ReferralServiceTest {
 
             NoteWritten note = noteWritten();
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
-            assertThat(note.text()).isEqualTo(ReferralNotes.returnedForAssignment(
+            assertThat(note.text()).isEqualTo(ReferralNotes.returnedToQueue(
                 new OverdueAssignment(REFERRAL_ID, CASE_ID, "District Judge Okafor", lapsed.getCreatedOn(),
                                       lapsed.getReasons()), CLAIM_EXPIRY));
-            assertThat(note.text()).contains("returned to the office for assignment",
+            assertThat(note.text()).contains("returned to the queue to be sent again",
                                              "no direction from District Judge Okafor within 2 hours");
             // No person did this, so it is the service account rather than whoever's page load noticed.
             assertThat(note.author()).isEqualTo(NoteAuthor.NONE);

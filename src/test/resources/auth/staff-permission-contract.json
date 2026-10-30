@@ -11,7 +11,8 @@
         "DELETE_NOTE",
         "DELETE_WITNESS",
         "MANAGE_SHARED_QUERIES",
-        "REPAIR_CCD"
+        "REPAIR_CCD",
+        "ALLOCATE_REFERRALS"
       ],
       "judicial": false,
       "ccdReader": true,
@@ -29,7 +30,8 @@
         "MANAGE_SHARED_QUERIES",
         "REPAIR_CCD",
         "ACCESS_GAZETTE",
-        "MANAGE_PROCESS_CONFIG"
+        "MANAGE_PROCESS_CONFIG",
+        "ALLOCATE_REFERRALS"
       ],
       "judicial": false,
       "ccdReader": true,
@@ -45,7 +47,8 @@
         "DELETE_NOTE",
         "DELETE_WITNESS",
         "MANAGE_SHARED_QUERIES",
-        "REPAIR_CCD"
+        "REPAIR_CCD",
+        "ALLOCATE_REFERRALS"
       ],
       "judicial": false,
       "ccdReader": true,
@@ -100,7 +103,8 @@
         "DELETE_NOTE",
         "DELETE_WITNESS",
         "MANAGE_SHARED_QUERIES",
-        "REPAIR_CCD"
+        "REPAIR_CCD",
+        "ALLOCATE_REFERRALS"
       ],
       "judicial": true,
       "ccdReader": true,
@@ -119,7 +123,8 @@
         "MANAGE_SHARED_QUERIES",
         "REPAIR_CCD",
         "ACCESS_GAZETTE",
-        "MANAGE_PROCESS_CONFIG"
+        "MANAGE_PROCESS_CONFIG",
+        "ALLOCATE_REFERRALS"
       ],
       "judicial": true,
       "ccdReader": true,
@@ -136,7 +141,8 @@
         "DELETE_NOTE",
         "DELETE_WITNESS",
         "MANAGE_SHARED_QUERIES",
-        "REPAIR_CCD"
+        "REPAIR_CCD",
+        "ALLOCATE_REFERRALS"
       ],
       "judicial": true,
       "ccdReader": true,
@@ -153,7 +159,8 @@
         "DELETE_NOTE",
         "DELETE_WITNESS",
         "MANAGE_SHARED_QUERIES",
-        "REPAIR_CCD"
+        "REPAIR_CCD",
+        "ALLOCATE_REFERRALS"
       ],
       "judicial": false,
       "ccdReader": true,
@@ -173,7 +180,8 @@
         "MANAGE_SHARED_QUERIES",
         "REPAIR_CCD",
         "ACCESS_GAZETTE",
-        "MANAGE_PROCESS_CONFIG"
+        "MANAGE_PROCESS_CONFIG",
+        "ALLOCATE_REFERRALS"
       ],
       "judicial": false,
       "ccdReader": true,

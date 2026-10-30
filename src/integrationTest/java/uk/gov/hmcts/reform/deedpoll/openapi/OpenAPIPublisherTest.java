@@ -274,7 +274,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(path.at("/put/description").asText())
             .contains("409", "processing window", "optional for one release");
         assertThat(spec.at("/components/schemas/ProcessSettingsResponse/properties").fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "reminderIntervalHours", "masterWindowCap",
+            .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "reminderIntervalHours", "windowCap",
                 "morningWindowStart", "morningWindowEnd", "afternoonWindowStart", "afternoonWindowEnd", "revision",
                 "updatedAt", "updatedBy");
         JsonNode body = spec.at("/components/schemas/UpdateProcessSettingsRequest");
@@ -288,8 +288,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(minutes.get("format").asText()).isEqualTo("int32");
         assertThat(body.at("/properties/reminderIntervalHours/minimum").asInt()).isEqualTo(1);
         assertThat(body.at("/properties/reminderIntervalHours/maximum").asInt()).isEqualTo(168);
-        assertThat(body.at("/properties/masterWindowCap/minimum").asInt()).isEqualTo(1);
-        assertThat(body.at("/properties/masterWindowCap/maximum").asInt()).isEqualTo(100);
+        assertThat(body.at("/properties/windowCap/minimum").asInt()).isEqualTo(1);
+        assertThat(body.at("/properties/windowCap/maximum").asInt()).isEqualTo(100);
         for (String time : List.of("morningWindowStart", "morningWindowEnd", "afternoonWindowStart",
                                    "afternoonWindowEnd")) {
             assertThat(body.at("/properties/" + time + "/pattern").asText()).as(time)
@@ -581,8 +581,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      * <p>Asserted on the descriptions rather than only on the paths because {@code deed-poll-admin} writes its
      * screens from this document, and two of the rules are not visible in a schema: a revision keeps the first
      * signature, and <strong>withdrawing restarts the processing window</strong>, at whose end the referral is
-     * returned to the office (design decision 6, as plan D2 changed it). A judge who withdraws and walks away loses
-     * the referral, and the admin has to be able to say so.
+     * returned to the queue (design decision 6, as plans D2 and F1 changed it). A judge who withdraws and walks away
+     * loses the referral, and the admin has to be able to say so.
      */
     @DisplayName("Documents the Master's application view, its documents, and revising or withdrawing a direction")
     @Test
@@ -614,7 +614,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         JsonNode withdraw = spec.at(referral.replace("}", "}~1direction~1withdraw") + "/post");
         assertThat(withdraw.has("requestBody")).as("withdrawing takes no body").isFalse();
         assertThat(withdraw.at("/description").asText())
-            .contains("Claimed", "directionChangedAt", "restarts the processing window", "returned to the office");
+            .contains("Claimed", "directionChangedAt", "restarts the processing window", "returned to the queue");
 
         assertThat(spec.at("/components/schemas/JudicialDirectionRequest/description").asText())
             .contains("PUT");
@@ -710,6 +710,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.add("/caseworker/process-settings");
         known.add("/caseworker/masters");
         known.add("/caseworker/masters/{id}");
+        known.add("/caseworker/referral-queue");
+        known.add("/caseworker/referral-queue/sends");
         known.add("/caseworker/process-settings/bank-holidays");
         known.add("/caseworker/process-settings/bank-holidays/{date}");
         known.add("/caseworker/gazette-notice-previews");
