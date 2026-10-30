@@ -182,11 +182,11 @@ class DeploymentChartConformanceTest {
     }
 
     @Test
-    @DisplayName("prod's Docmosis URL renders empty, so its placeholder key never configures the converter")
-    void prodLeavesTheConverterUnconfigured() throws IOException {
+    @DisplayName("prod converts through docmosis.platform.hmcts.net; every other environment through its own host")
+    void eachEnvironmentConvertsThroughItsOwnDocmosisHost() throws IOException {
         assertThat(environment()).containsEntry("DOCMOSIS_URL",
-            "{{ if ne .Values.global.environment `prod` }}https://docmosis.{{ .Values.global.environment }}"
-                + ".platform.hmcts.net{{ end }}");
+            "{{ if eq .Values.global.environment `prod` }}https://docmosis.platform.hmcts.net{{ else }}"
+                + "https://docmosis.{{ .Values.global.environment }}.platform.hmcts.net{{ end }}");
         assertThat(aliasOf("deed-poll", "docmosis-access-key")).isEqualTo("DOCMOSIS_ACCESS_KEY");
     }
 

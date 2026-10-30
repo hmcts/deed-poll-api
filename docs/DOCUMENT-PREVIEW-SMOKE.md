@@ -47,9 +47,9 @@ the system user's.
 
 **Status, 2026-10-26.** Steps 1–3 are in progress; 4 and 5 are still to confirm with the Tornado owners.
 - **Key:** Steve chose to copy em-stitching's per-environment `docmosis-access-key`, as sptribs does. deed-poll-infra's
-  `docmosis.tf` copies it in aat and demo and writes an `ignore_changes` placeholder in prod. ITHC's was copied by hand.
-- **Chart:** 0.0.28 mounts the key and sets `DOCMOSIS_URL` to `https://docmosis.{env}.platform.hmcts.net`, empty in
-  prod, so prod stays on 503 until its real key and URL are set.
+  `docmosis.tf` copies it in aat, demo and (from 2026-10-30, for go-live) prod. ITHC's was copied by hand.
+- **Chart:** 0.0.28 mounts the key; 0.0.31 sets `DOCMOSIS_URL` to `https://docmosis.platform.hmcts.net` in prod and
+  `https://docmosis.{env}.platform.hmcts.net` elsewhere. Prod's DOCX previews need infra's prod apply first.
 - **Smoke:** a synthetic DOCX sent to `/rs/convert` with the AAT key, and with ITHC's copy, answered 200
   `application/pdf`.
 

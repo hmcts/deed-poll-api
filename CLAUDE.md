@@ -433,9 +433,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   close. `DocumentFileResponses.writePreview` writes the servlet response itself, because a `Resource` body lets
   Spring answer `Range` with a partial `206`. A preview client sends `Accept: application/pdf`, so **every handler
   that can answer a preview presets `application/json`** (the preview, 404, 401, 403 and upstream-failure handlers);
-  a new one that negotiates loses its body and becomes a 500. The chart (0.0.28) mounts `docmosis-access-key` and
-  sets `DOCMOSIS_URL` per environment, **empty in prod**, so prod's converter stays unconfigured behind infra's
-  placeholder key until prod previews are switched on; see `docs/DOCUMENT-PREVIEW-SMOKE.md`.
+  a new one that negotiates loses its body and becomes a 500. The chart mounts `docmosis-access-key` and sets
+  `DOCMOSIS_URL` per environment (prod's host, `docmosis.platform.hmcts.net`, has no environment segment, from 0.0.31),
+  so a prod DOCX preview needs infra's prod copy of the key first; see `docs/DOCUMENT-PREVIEW-SMOKE.md`.
 
 ## Conventions worth knowing before writing code
 
