@@ -44,7 +44,8 @@ import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * {@link ReferralQueue#send} against a real database (plan F1, step 6): the gate, the window, each refusal writing
- * nothing, the replay, the cap's boundary, urgent and withdrawn referrals counting (F-8, A-2), and what a send writes.
+ * nothing, the replay, the cap's boundary, urgent referrals counting and withdrawn ones not (F-8, A-2), and what a
+ * send writes.
  * Concurrency is {@code ReferralSendConcurrencyTest}'s; the HTTP answers are
  * {@code CaseworkerReferralQueueControllerTest}'s.
  *
@@ -381,9 +382,11 @@ class ReferralSendTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("urgent referrals count, and so does one sent and since withdrawn or directed (A-2)")
-        void everythingSentCounts() {
-            jdbc.update("UPDATE deedpoll_process_settings SET window_cap = 3");
+        @DisplayName("urgent referrals count, and so does one sent and since directed, but a withdrawn one gives its "
+            + "place back (A-2)")
+        void everythingSentButWithdrawnCounts() {
+            // With the withdrawn one counted there would be no room left at all.
+            jdbc.update("UPDATE deedpoll_process_settings SET window_cap = 2");
             sentReferral(ReferralState.Withdrawn, okafor, WEDNESDAY, WindowSlot.AM);
             sentReferral(ReferralState.Decided, okafor, WEDNESDAY, WindowSlot.AM);
             // Another window's referrals do not count towards this one.

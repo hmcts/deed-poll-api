@@ -369,27 +369,43 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
     List<Referral> findByIdInForSending(@Param("ids") Collection<UUID> ids);
 
     /**
-     * How many referrals were sent in one referral window, across every Master and in any state (plan F1, F-3 and
-     * A-2): a referral since withdrawn, directed or reassigned still holds its place, because reassignment keeps the
-     * window and only the processing window's unassignment clears it. A number, no case data.
+     * How many referrals were sent in one referral window and still hold their place, across every Master (plan F1,
+     * F-3 and A-2, Steve 2026-10-30): a referral since directed or reassigned keeps it, because reassignment keeps the
+     * window; one since **withdrawn gives it back**, as the processing window's unassignment does by clearing the
+     * window. A number, no case data.
+     *
+     * @param withdrawn the state that gives a place back, {@link ReferralState#Withdrawn}
      */
-    long countByWindowDateAndWindowSlot(LocalDate windowDate, WindowSlot windowSlot);
+    @Query("""
+        select count(r)
+          from Referral r
+         where r.windowDate = :windowDate
+           and r.windowSlot = :windowSlot
+           and r.state <> :withdrawn
+        """)
+    long countByWindowDateAndWindowSlot(@Param("windowDate") LocalDate windowDate,
+                                        @Param("windowSlot") WindowSlot windowSlot,
+                                        @Param("withdrawn") ReferralState withdrawn);
 
     /**
      * Every Master's share of {@link #countByWindowDateAndWindowSlot}, in one grouped statement (plan F1), by the
      * Master holding each referral now: a reassignment keeps the window, so the referral counts under its new Master.
      * A Master with none has no row; a referral with no Master (a pre-V43 claim) is in no Master's row.
+     *
+     * @param withdrawn the state that gives a place back, {@link ReferralState#Withdrawn}
      */
     @Query("""
         select new uk.gov.hmcts.reform.deedpoll.repository.MasterWindowCount(r.assignedMasterId, count(r))
           from Referral r
          where r.windowDate = :windowDate
            and r.windowSlot = :windowSlot
+           and r.state <> :withdrawn
            and r.assignedMasterId is not null
          group by r.assignedMasterId
         """)
     List<MasterWindowCount> countSentByMasterInWindow(@Param("windowDate") LocalDate windowDate,
-                                                      @Param("windowSlot") WindowSlot windowSlot);
+                                                      @Param("windowSlot") WindowSlot windowSlot,
+                                                      @Param("withdrawn") ReferralState withdrawn);
 
     /**
      * The assigned referrals whose processing window has ended without a direction -- the sweep's candidates.

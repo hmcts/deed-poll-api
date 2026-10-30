@@ -565,7 +565,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `referralId` neither `Open` nor a **replay** (already `Claimed` by the same Master in this window, which is skipped,
   so a lost answer can be sent again), 400 on each unknown or unavailable `masterId`, then the cap: `sent` in the
   window plus the new ones must not pass `windowCap()`, else 409 with the room left and the excess in words. **A
-  window's count is every referral sent in it, in any state** (A-2: a withdrawal gives no place back), and a body of
+  window's count is every referral sent in it except any since withdrawn** (A-2, changed by Steve 2026-10-30: a
+  withdrawal gives its place back; a direction or reassignment does not, and both counts bind `Withdrawn` as a
+  parameter, because a JPQL enum literal renders a cast to a type Postgres does not have), and a body of
   replays only skips the cap. Each new one is stamped by `ReferralService.send` (`MANDATORY`: the columns,
   `remindersSent` 0, one "sent to {Master} by the office" note, one `REFERRAL_SENT` event with `state`, `claimedBy`
   and `assignedAt`, never a subject, and both read-models), and one `SENT` email row per Master with a new referral.

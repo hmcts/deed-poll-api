@@ -145,8 +145,9 @@ public class ReferralQueue {
      *       {@code Claimed} by the same Master in this same window is a <strong>replay</strong>, skipped rather than
      *       refused, so a sender whose answer was lost can press Send again;</li>
      *   <li>each Master named for a new one must exist and be available (400 on {@code allocations[i].masterId});</li>
-     *   <li>the referrals already sent in the window (decision A-2: in any state since) plus the new ones must not
-     *       exceed {@link ProcessSettingsService#windowCap()} (409, the room left and the excess in words).</li>
+     *   <li>the referrals already sent in the window (decision A-2: in any state since but withdrawn) plus the new
+     *       ones must not exceed {@link ProcessSettingsService#windowCap()} (409, the room left and the excess in
+     *       words).</li>
      * </ol>
      * Then {@link ReferralService#send} applies each new one, and each Master given at least one is enqueued one
      * {@code SENT} email for the send in this transaction ({@link MasterEmailTransactions#enqueueSent}), which the
@@ -228,7 +229,7 @@ public class ReferralQueue {
         }
 
         if (!fresh.isEmpty()) {
-            long sent = referrals.countByWindowDateAndWindowSlot(window.date(), window.slot());
+            long sent = referrals.countByWindowDateAndWindowSlot(window.date(), window.slot(), ReferralState.Withdrawn);
             int cap = settings.windowCap();
             if (sent + fresh.size() > cap) {
                 throw new ConflictError(full(window, Math.max(0, cap - sent), fresh.size()));
@@ -321,8 +322,8 @@ public class ReferralQueue {
         Map<UUID, Long> byMaster = Map.of();
         if (current.isPresent()) {
             ReferralWindow open = current.get();
-            sent = referrals.countByWindowDateAndWindowSlot(open.date(), open.slot());
-            byMaster = referrals.countSentByMasterInWindow(open.date(), open.slot()).stream()
+            sent = referrals.countByWindowDateAndWindowSlot(open.date(), open.slot(), ReferralState.Withdrawn);
+            byMaster = referrals.countSentByMasterInWindow(open.date(), open.slot(), ReferralState.Withdrawn).stream()
                 .collect(Collectors.toUnmodifiableMap(MasterWindowCount::masterId, MasterWindowCount::assigned));
         }
         Map<UUID, Long> counts = byMaster;

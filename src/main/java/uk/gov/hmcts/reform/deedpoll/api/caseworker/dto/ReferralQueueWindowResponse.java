@@ -23,8 +23,8 @@ public record ReferralQueueWindowResponse(
     NextWindow next,
     @Schema(description = "The most referrals that can be sent to Masters in one window, across all Masters.")
     int cap,
-    @Schema(description = "How many referrals were sent in the open window, whatever has happened to them since, or "
-        + "0 when none is open.")
+    @Schema(description = "How many referrals were sent in the open window and still hold their place (one since "
+        + "withdrawn gives it back), or 0 when none is open.")
     long sent,
     @Schema(description = "Every available Master, by name, with how many of the referrals sent in the open window "
         + "they hold now: a referral reassigned since keeps its window and counts under its new Master.")

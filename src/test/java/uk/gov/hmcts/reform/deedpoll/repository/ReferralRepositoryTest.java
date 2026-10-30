@@ -18,6 +18,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -440,9 +441,27 @@ class ReferralRepositoryTest extends AbstractPostgresContainerTest {
         assertThat(reloaded.getAssignedAt()).isNull();
         assertThat(reloaded.getWindowDate()).isNull();
         assertThat(reloaded.getWindowSlot()).isNull();
-        // It no longer counts in the window it was sent in (decision A-2: only unassignment gives a place back).
-        assertThat(referrals.countByWindowDateAndWindowSlot(CUTOFF.minusHours(1).toLocalDate(), WindowSlot.AM))
+        // It no longer counts in the window it was sent in (decision A-2: unassignment gives a place back).
+        assertThat(referrals.countByWindowDateAndWindowSlot(CUTOFF.minusHours(1).toLocalDate(), WindowSlot.AM,
+                                                            ReferralState.Withdrawn))
             .isZero();
+    }
+
+    @Test
+    @DisplayName("a referral sent in a window and since withdrawn counts in neither of the window's counts (A-2)")
+    void withdrawnGivesItsPlaceBack() {
+        UUID master = persistedMaster();
+        Referral directed = assignedReferral(persistedCase(), master, CUTOFF.minusHours(1), CUTOFF.minusHours(1));
+        directed.setState(ReferralState.Decided);
+        Referral withdrawn = assignedReferral(persistedCase(), master, CUTOFF.minusHours(1), CUTOFF.minusHours(1));
+        withdrawn.setState(ReferralState.Withdrawn);
+        entityManager.flush();
+
+        LocalDate day = CUTOFF.minusHours(1).toLocalDate();
+        assertThat(referrals.countByWindowDateAndWindowSlot(day, WindowSlot.AM, ReferralState.Withdrawn)).isEqualTo(1);
+        assertThat(referrals.countSentByMasterInWindow(day, WindowSlot.AM, ReferralState.Withdrawn))
+            .extracting(MasterWindowCount::assigned)
+            .containsExactly(1L);
     }
 
     @Test

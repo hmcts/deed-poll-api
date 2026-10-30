@@ -149,8 +149,8 @@ worth knowing before calling them:
 - **Sent from the queue, capped per window.** A referral is `Open` (waiting to be sent) until a Team leader or
   Delivery Manager sends it to a Master from the [referral queue](#the-referral-queue); `Claimed` then means *sent*.
   Sending happens only while a referral window is open, and at most `windowCap` referrals are sent in one window
-  across every Master (see [Process settings](#process-settings)). A window's count is every referral sent in it,
-  whatever has happened to it since, so a withdrawal or reassignment gives no place back. Reassignment moves a
+  across every Master (see [Process settings](#process-settings)). A window's count is every referral sent in it
+  except any since withdrawn: a withdrawal gives its place back, a direction or a reassignment does not. Reassignment moves a
   `Claimed` referral to another Master at any time, with no cap, keeping its window.
 
 **Every successful referral transition writes exactly one case note**, attributed to whoever caused it, because

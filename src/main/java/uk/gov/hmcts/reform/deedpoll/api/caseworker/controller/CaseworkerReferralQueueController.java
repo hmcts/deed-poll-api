@@ -61,8 +61,8 @@ public class CaseworkerReferralQueueController {
             + "in the queue, to the Master named beside it, together and all or nothing: any refusal sends none. "
             + "Only while a referral window is open (409 outside one, naming when the next opens). Each referral "
             + "must be Open (409 on allocations[i].referralId), and each Master available (400 on "
-            + "allocations[i].masterId). The referrals already sent in the window, whatever has happened to them "
-            + "since, plus these must not exceed the cap across all Masters (409, saying how many more fit). A "
+            + "allocations[i].masterId). The referrals already sent in the window, except any since withdrawn, "
+            + "plus these must not exceed the cap across all Masters (409, saying how many more fit). A "
             + "referral already sent to the same Master in the same window is skipped rather than refused, so the "
             + "same body sent again is 200 and changes nothing. Each one sent is Claimed by its Master, starts the "
             + "processing window and gets a case note and an audit event.")
