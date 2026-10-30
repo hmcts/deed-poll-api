@@ -14,7 +14,8 @@ import java.util.UUID;
  * @param next the next window to open: {@code current}'s successor when one is open
  * @param opensAt when {@code next} opens
  * @param cap how many referrals may be sent in one window, across every Master ({@code windowCap()})
- * @param sent how many were sent in {@code current} (decision A-2: any state since), or 0 when none is open
+ * @param sent how many were sent in {@code current} (decision A-2: any state since but withdrawn), or 0 when none
+ *             is open
  * @param masters every available Master, in the list's order, with their share of {@code sent}
  */
 public record ReferralQueueWindow(ReferralWindow current, Instant closesAt, ReferralWindow next, Instant opensAt,

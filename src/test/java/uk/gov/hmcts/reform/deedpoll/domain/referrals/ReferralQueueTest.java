@@ -224,7 +224,7 @@ class ReferralQueueTest extends AbstractPostgresContainerTest {
 
         @Test
         @DisplayName("inside a window: it is current with its close, the next is its successor, and the counts are "
-            + "its, in any state, with each available Master's share by name")
+            + "its, in any state but withdrawn (A-2), with each available Master's share by name")
         void insideAWindow() {
             ReferralQueueWindow window = windowAt("2026-10-28T09:00");
 
@@ -233,12 +233,13 @@ class ReferralQueueTest extends AbstractPostgresContainerTest {
             assertThat(window.next()).isEqualTo(new ReferralWindow(WEDNESDAY, WindowSlot.PM));
             assertThat(window.opensAt()).isEqualTo(Instant.parse("2026-10-28T14:00:00Z"));
             assertThat(window.cap()).isEqualTo(10);
-            assertThat(window.sent()).isEqualTo(4);
+            // Sullivan's withdrawn referral gives its place back, so the window holds three, Sullivan's share one.
+            assertThat(window.sent()).isEqualTo(3);
             assertThat(window.masters())
                 .extracting(ReferralQueueWindow.SentToMaster::id, ReferralQueueWindow.SentToMaster::name,
                             ReferralQueueWindow.SentToMaster::sentInWindow)
                 .containsExactly(tuple(adams, "Master Adams", 0L), tuple(okafor, "Master Okafor", 1L),
-                                 tuple(sullivan, "Master Sullivan", 2L));
+                                 tuple(sullivan, "Master Sullivan", 1L));
         }
 
         @Test
