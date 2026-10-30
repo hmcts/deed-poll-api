@@ -113,7 +113,7 @@ public final class ReferralSchemas {
         List.of(ReferralReason.MinorParentalConsent, ReferralReason.MinorNoParentalConsent),
         List.of(ReferralReason.MinorStepparentConsent, ReferralReason.MinorNoStepparentConsent),
         List.of(ReferralReason.MinorAged16Or17Consented, ReferralReason.MinorAged16Or17NotConsented));
-    /** The Masters-list entry a referral is assigned to, on the create and on a reassignment (plan D2). */
+    /** The Masters-list entry a referral is assigned to on a reassignment (plan D2); the create takes none (F1). */
     public static final String MASTER_ID = "masterId";
 
     /**
@@ -164,10 +164,9 @@ public final class ReferralSchemas {
                 + " is " + Urgency.Urgent));
         }
         minorDetails(reasons, errors);
-        Optional<UUID> masterId = raw.get(MASTER_ID) == null ? Optional.empty() : masterId(raw, errors);
 
         refuseIfAny(INVALID_REFERRAL, errors);
-        return new CreateReferralInput(reasons, notes, urgency, urgencyReason, masterId);
+        return new CreateReferralInput(reasons, notes, urgency, urgencyReason);
     }
 
     /**

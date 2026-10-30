@@ -28,6 +28,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.CreateReferralInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.DirectionInput;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralQueue;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
@@ -177,9 +178,16 @@ class ReferralSecurityTest {
      */
     private static final Set<String> MASTER_EMAILS = Set.of("findWithCaseByIdIn");
 
+    /**
+     * The referral queue's reads (plan F1), which name no parent case because the queue spans every case. Admitted with
+     * two rules: nothing but {@code ReferralQueue} calls them, and it checks {@code ALLOCATE_REFERRALS} first.
+     */
+    private static final Set<String> QUEUE = Set.of("findQueue", "findSent", "countByWindowDateAndWindowSlot",
+                                                    "countSentByMasterInWindow");
+
     /** Every finder that names no parent case, for the declaration rule that admits each one deliberately. */
     private static final Set<String> UNSCOPED = Stream.of(SWEEP, LINKING, MASTER_LOCKS, PERSONAL_LIST, JUDICIAL_READ,
-                                                              CAP_COUNTS, MASTER_EMAILS)
+                                                              CAP_COUNTS, MASTER_EMAILS, QUEUE)
         .flatMap(Set::stream)
         .collect(Collectors.toUnmodifiableSet());
 
@@ -417,6 +425,18 @@ class ReferralSecurityTest {
                 .should().callMethodWhere(DescribedPredicate.describe(
                     "a call to the Master emails' read",
                     (JavaMethodCall call) -> MASTER_EMAILS.contains(call.getName())
+                        && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
+                .check(mainClasses());
+        }
+
+        @Test
+        @DisplayName("only the referral queue reaches the queue's reads across every case")
+        void onlyTheQueueReachesTheQueueReads() {
+            noClasses()
+                .that().doNotHaveFullyQualifiedName(ReferralQueue.class.getName())
+                .should().callMethodWhere(DescribedPredicate.describe(
+                    "a call to one of the queue's cross-case reads",
+                    (JavaMethodCall call) -> QUEUE.contains(call.getName())
                         && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
                 .check(mainClasses());
         }
@@ -1017,6 +1037,15 @@ class ReferralSecurityTest {
                     assertThat(finder.getReturnType())
                         .as("%s answers a page rather than one referral", finder.getName())
                         .isEqualTo(Page.class);
+                    continue;
+                }
+                if (QUEUE.contains(finder.getName())) {
+                    // The queue hands back referrals, so its promise is the question it can be asked: states, an
+                    // urgency, a window and a page, never a referral or a case id, so the answer is always "every
+                    // case's referrals in this state" and never "this referral".
+                    assertThat(finder.getParameterTypes())
+                        .as("%s takes no referral id", finder.getName())
+                        .doesNotContain(UUID.class, String.class);
                     continue;
                 }
                 if (SWEEP.contains(finder.getName()) || CAP_COUNTS.contains(finder.getName())) {

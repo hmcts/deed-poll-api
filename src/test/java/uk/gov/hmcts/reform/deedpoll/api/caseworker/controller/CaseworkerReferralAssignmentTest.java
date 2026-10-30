@@ -57,7 +57,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Assignment over HTTP (plan D2): {@code masterId} on the create, {@code PUT …/assignment}, the new response fields
+ * Assignment over HTTP (plan D2): {@code PUT …/assignment}, the create's ignoring {@code masterId} (F1), the new
+ * response fields
  * and the Masters list's window, against a real database and a stub IDAM. The rules themselves, their order and the
  * window arithmetic are {@code ReferralAssignmentTest}'s; this class shows the routes reach them, which status each
  * refusal becomes, that a refusal writes nothing, and that no response carries a subject or an email.
@@ -135,12 +136,41 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("a create with masterId is assigned: fields, note and audit, and no subject or email in the JSON")
-    void createAssigned() throws Exception {
-        String caseId = newCase();
+    @DisplayName("a create is Open whatever masterId it carries, which is stripped as any unknown key is (F1)")
+    void createIgnoresMasterId() throws Exception {
+        UUID away = master("Master Away", "away@judiciary.example", false, null);
 
-        String body = authorised(post(referralsOf(caseId)), withMaster(sullivan))
-            .andExpect(status().isCreated())
+        for (String masterId : new String[] {"\"" + sullivan + "\"", "\"" + away + "\"", "\"nope\"", "7"}) {
+            String caseId = newCase();
+            authorised(post(referralsOf(caseId)), "{\"reasons\":[\"DomesticAbuse\"],\"masterId\":" + masterId + "}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.state").value("Open"))
+                .andExpect(jsonPath("$.claimedBy").isEmpty())
+                .andExpect(jsonPath("$.assignedMaster").isEmpty())
+                .andExpect(jsonPath("$.assignedAt").isEmpty())
+                .andExpect(jsonPath("$.windowDate").isEmpty())
+                .andExpect(jsonPath("$.windowSlot").isEmpty())
+                .andExpect(jsonPath("$.directionDueBy").isEmpty());
+            assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).singleElement()
+                .satisfies(note -> assertThat(note.getNote())
+                    .startsWith("Referral raised, waiting to be sent to a Master."));
+            assertThat(deedPolls.findById(caseId).orElseThrow().getCurrentReferralState())
+                .isEqualTo(ReferralState.Open);
+        }
+        assertThat(referrals.findAll()).hasSize(4).allSatisfy(referral -> {
+            assertThat(referral.getAssignedMasterId()).isNull();
+            assertThat(assignedEvents(referral.getId().toString())).isZero();
+        });
+    }
+
+    @Test
+    @DisplayName("PUT assigns: fields, note and audit, and no subject or email in the JSON")
+    void assigned() throws Exception {
+        String caseId = newCase();
+        String referralId = raise(caseId, "{\"reasons\":[\"DomesticAbuse\"]}");
+
+        String body = authorised(put(assignmentOf(caseId, referralId)), withMaster(sullivan))
+            .andExpect(status().isOk())
             .andExpect(jsonPath("$.state").value("Claimed"))
             .andExpect(jsonPath("$.claimedBy").value("Master Sullivan"))
             .andExpect(jsonPath("$.assignedMaster.id").value(sullivan.toString()))
@@ -167,46 +197,35 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("a create without masterId is Open, waiting for assignment, with no assignment fields")
-    void createOpen() throws Exception {
-        authorised(post(referralsOf(newCase())), "{\"reasons\":[\"DomesticAbuse\"]}")
-            .andExpect(status().isCreated())
-            .andExpect(jsonPath("$.state").value("Open"))
-            .andExpect(jsonPath("$.assignedMaster").isEmpty())
-            .andExpect(jsonPath("$.assignedAt").isEmpty())
-            .andExpect(jsonPath("$.windowDate").isEmpty())
-            .andExpect(jsonPath("$.windowSlot").isEmpty())
-            .andExpect(jsonPath("$.directionDueBy").isEmpty());
-    }
-
-    @Test
     @DisplayName("an unknown, unavailable or malformed Master is a 400 on masterId, and nothing is written")
-    void createRefusedMaster() throws Exception {
+    void refusedMaster() throws Exception {
         String caseId = newCase();
+        String referralId = raise(caseId, "{\"reasons\":[\"DomesticAbuse\"]}");
         UUID away = master("Master Away", "away@judiciary.example", false, null);
 
         for (String masterId : new String[] {"\"" + UUID.randomUUID() + "\"", "\"" + away + "\"", "\"nope\"", "7"}) {
-            authorised(post(referralsOf(caseId)), "{\"reasons\":[\"DomesticAbuse\"],\"masterId\":" + masterId + "}")
+            authorised(put(assignmentOf(caseId, referralId)), "{\"masterId\":" + masterId + "}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors[0].field").value("masterId"))
                 .andExpect(jsonPath("$.errors[0].message").value("Select a Master who is available"));
         }
-        assertThat(referrals.count()).isZero();
-        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).isEmpty();
+        assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Open);
+        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(1);
     }
 
     @Test
-    @DisplayName("at the cap a create is a 409 on masterId naming the window, and nothing is written")
-    void createAtCap() throws Exception {
+    @DisplayName("at the cap a PUT is a 409 on masterId naming the window, and nothing is written")
+    void assignAtCap() throws Exception {
         jdbc.update("UPDATE deedpoll_process_settings SET window_cap = 1");
         ReferralWindow before = windowAt(AuditClock.now());
-        authorised(post(referralsOf(newCase())), withMaster(sullivan)).andExpect(status().isCreated());
+        raiseAssigned(newCase(), sullivan);
         String second = newCase();
+        String secondReferral = raise(second, "{\"reasons\":[\"DomesticAbuse\"]}");
 
-        ResultActions refused = authorised(post(referralsOf(second)), withMaster(sullivan));
-        // The two creates count towards the window of the moment each was made, so a boundary between them is no
+        ResultActions refused = authorised(put(assignmentOf(second, secondReferral)), withMaster(sullivan));
+        // The two assignments count towards the window of the moment each was made, so a boundary between them is no
         // test of the cap.
-        assumeTrue(before.equals(windowAt(AuditClock.now())), "a referral window boundary fell between the creates");
+        assumeTrue(before.equals(windowAt(AuditClock.now())), "a referral window boundary fell between the two");
         refused
             .andExpect(status().isConflict())
             .andExpect(jsonPath("$.errors[0].field").value("masterId"))
@@ -214,10 +233,10 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
                 "This Master already has 1 referral for the (morning|afternoon) of \\d{1,2} \\w+ \\d{4}\\. "
                     + "Choose another Master\\.")));
 
-        assertThat(referrals.count()).isOne();
-        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(second)).isEmpty();
+        assertThat(stored(secondReferral).getState()).isEqualTo(ReferralState.Open);
+        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(second)).hasSize(1);
         // Another Master is not full.
-        authorised(post(referralsOf(second)), withMaster(okafor)).andExpect(status().isCreated());
+        authorised(put(assignmentOf(second, secondReferral)), withMaster(okafor)).andExpect(status().isOk());
     }
 
     @Test
@@ -252,7 +271,7 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     @DisplayName("PUT to the Master it already has is a 200 that writes no note and no audit")
     void sameMaster() throws Exception {
         String caseId = newCase();
-        String referralId = raise(caseId, withMaster(sullivan));
+        String referralId = raiseAssigned(caseId, sullivan);
         LocalDateTime assignedAt = stored(referralId).getAssignedAt();
         int noteCount = notes.findByDeedPollIdOrderByCreatedOnDesc(caseId).size();
 
@@ -269,7 +288,7 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     @DisplayName("PUT on a Decided referral is a 409, and a body without masterId is a 400")
     void refusals() throws Exception {
         String caseId = newCase();
-        String referralId = raise(caseId, withMaster(sullivan));
+        String referralId = raiseAssigned(caseId, sullivan);
 
         authorised(put(assignmentOf(caseId, referralId)), "{}")
             .andExpect(status().isBadRequest())
@@ -298,7 +317,7 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("the Masters list carries the current window, the cap and each Master's count, and no subject")
     void mastersList() throws Exception {
-        raise(newCase(), withMaster(sullivan));
+        raiseAssigned(newCase(), sullivan);
         ReferralWindow before = windowAt(AuditClock.now());
 
         String body = authorised(get("/caseworker/masters"))
@@ -324,15 +343,15 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("the document publishes masterId, the assignment operation, both refusals and the list envelope")
+    @DisplayName("the document publishes the assignment operation, both refusals and the list envelope, and no create "
+        + "masterId")
     void openApi() throws Exception {
         JsonNode document = JSON.readTree(mockMvc.perform(get("/v3/api-docs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         JsonNode schemas = document.path("components").path("schemas");
 
-        assertThat(schemas.path("CreateReferralRequest").path("properties").path("masterId").path("format").asText())
-            .isEqualTo("uuid");
-        assertThat(schemas.path("CreateReferralRequest").path("required").toString()).doesNotContain("masterId");
+        assertThat(schemas.path("CreateReferralRequest").path("properties").has("masterId")).isFalse();
+        assertThat(schemas.path("CreateReferralRequest").path("description").asText()).contains("referral queue");
         assertThat(schemas.path("AssignReferralRequest").path("required").toString()).isEqualTo("[\"masterId\"]");
         JsonNode assign = document.path("paths").path("/caseworker/cases/{id}/referrals/{referralId}/assignment")
             .path("put");
@@ -340,8 +359,10 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
             .contains("Select a Master who is available");
         assertThat(assign.path("responses").path("409").path("description").asText())
             .contains("This Master already has");
-        assertThat(document.path("paths").path("/caseworker/cases/{id}/referrals").path("post").path("responses")
-            .path("409").path("description").asText()).contains("per-Master cap");
+        JsonNode create = document.path("paths").path("/caseworker/cases/{id}/referrals").path("post")
+            .path("responses");
+        assertThat(create.path("409").path("description").asText()).doesNotContain("cap");
+        assertThat(create.path("400").path("description").asText()).doesNotContain("masterId");
         assertThat(schemas.path("ReferralResponse").path("properties").fieldNames()).toIterable()
             .contains("assignedMaster", "assignedAt", "windowDate", "windowSlot", "directionDueBy");
         assertThat(schemas.path("AssignedMasterResponse").path("properties").fieldNames()).toIterable()
@@ -407,6 +428,15 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
         String created = authorised(post(referralsOf(caseId)), body)
             .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
         return JSON.readTree(created).get("id").asText();
+    }
+
+    /**
+     * A referral raised and then assigned by {@code PUT}, as the create no longer takes a Master.
+     */
+    private String raiseAssigned(String caseId, UUID master) throws Exception {
+        String referralId = raise(caseId, "{\"reasons\":[\"DomesticAbuse\"]}");
+        authorised(put(assignmentOf(caseId, referralId)), withMaster(master)).andExpect(status().isOk());
+        return referralId;
     }
 
     private Referral stored(String referralId) {

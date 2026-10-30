@@ -42,6 +42,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -216,7 +217,8 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
         String raisedOn = DAY.format(stored(referralId).getCreatedOn());
         assertThat(timeline(caseId)).satisfiesExactly(
             raised -> {
-                assertThat(raised.getNote()).isEqualTo("Referred to a Master. Reasons: " + REASON_LABEL + ".");
+                assertThat(raised.getNote())
+                    .isEqualTo("Referral raised, waiting to be sent to a Master. Reasons: " + REASON_LABEL + ".");
                 assertThat(raised.getCreatedBy()).isEqualTo(REFERRING_CASEWORKER);
             },
             assigned -> {
@@ -263,7 +265,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
         authorised(get("/caseworker/cases/" + caseId))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.notes.length()").value(4))
-            .andExpect(jsonPath("$.notes[0].note").value(containsString("Referred to a Master")))
+            .andExpect(jsonPath("$.notes[0].note").value(containsString("waiting to be sent to a Master")))
             .andExpect(jsonPath("$.notes[0].createdBy").value(REFERRING_CASEWORKER))
             .andExpect(jsonPath("$.notes[1].note").value(containsString("assigned to " + JUDGE)))
             .andExpect(jsonPath("$.notes[1].createdBy").value(REFERRING_CASEWORKER))
@@ -278,7 +280,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.length()").value(4))
             .andExpect(jsonPath("$[0].note").value(containsString("marked as actioned")))
-            .andExpect(jsonPath("$[3].note").value(containsString("Referred to a Master")));
+            .andExpect(jsonPath("$[3].note").value(containsString("waiting to be sent to a Master")));
 
         // Four notes: the reads above and the linking added nothing, because neither is a transition -- and a note
         // per read would bury the lifecycle in the grid it is written to.
@@ -300,12 +302,17 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
      */
     private String raise(String caseId, UUID master) throws Exception {
         String created = authorised(post("/caseworker/cases/" + caseId + "/referrals"),
-            "{\"reasons\":[\"" + REASON + "\"],\"masterId\":\"" + master + "\"}")
+            "{\"reasons\":[\"" + REASON + "\"]}")
             .andExpect(status().isCreated())
             .andReturn()
             .getResponse()
             .getContentAsString();
-        return JSON.readTree(created).get("id").asText();
+        String referralId = JSON.readTree(created).get("id").asText();
+        // The create takes no Master since plan F1, so it is assigned by the same caseworker straight after.
+        authorised(put("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/assignment"),
+            "{\"masterId\":\"" + master + "\"}")
+            .andExpect(status().isOk());
+        return referralId;
     }
 
     /**

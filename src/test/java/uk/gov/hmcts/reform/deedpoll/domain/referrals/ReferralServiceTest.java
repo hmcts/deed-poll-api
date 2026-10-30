@@ -487,7 +487,7 @@ class ReferralServiceTest {
             assertThat(note.author().author()).isEqualTo("Ada Caseworker");
             assertThat(note.deedPollId()).isEqualTo(CASE_ID);
             assertThat(note.text())
-                .contains("Referred to a Master", "Domestic abuse considerations", "Hearing on Friday");
+                .contains("waiting to be sent to a Master", "Domestic abuse considerations", "Hearing on Friday");
         }
 
         @Test

@@ -376,32 +376,21 @@ class ReferralSchemasTest {
     }
 
     @Nested
-    @DisplayName("masterId (plan D2)")
+    @DisplayName("masterId (plans D2 and F1)")
     class MasterId {
 
         private static final String SULLIVAN = "aaaaaaaa-0000-0000-0000-000000000001";
 
         @Test
-        @DisplayName("is optional on the create, and absent or null leaves the referral waiting for assignment")
-        void optional() {
-            assertThat(parse(payload("reasons", List.of("DomesticAbuse"))).masterId()).isEmpty();
-            assertThat(parse(payload("reasons", List.of("DomesticAbuse"), "masterId", null)).masterId()).isEmpty();
-        }
-
-        @Test
-        @DisplayName("is read as a UUID, trimmed")
-        void read() {
-            assertThat(parse(payload("reasons", List.of("DomesticAbuse"), "masterId", " " + SULLIVAN + " "))
-                .masterId()).contains(UUID.fromString(SULLIVAN));
-        }
-
-        @Test
-        @DisplayName("refuses a malformed or non-string id on masterId, beside the other fields' errors")
-        void malformed() {
-            assertThat(errorsFrom(() -> parse(payload("reasons", List.of("DomesticAbuse"), "masterId", "nope"))))
-                .containsExactly(new FieldError("masterId", "Select a Master who is available"));
-            assertThat(errorsFrom(() -> parse(payload("masterId", 7))))
-                .extracting(FieldError::field).containsExactlyInAnyOrder("reasons", "masterId");
+        @DisplayName("is stripped from the create, as any unknown key is: valid, malformed or not a string (plan F1)")
+        void strippedFromTheCreate() {
+            CreateReferralInput plain = parse(payload("reasons", List.of("DomesticAbuse")));
+            for (Object masterId : new Object[] {SULLIVAN, "nope", 7}) {
+                assertThat(parse(payload("reasons", List.of("DomesticAbuse"), "masterId", masterId)))
+                    .isEqualTo(plain);
+            }
+            assertThat(errorsFrom(() -> parse(payload("masterId", "nope"))))
+                .extracting(FieldError::field).containsExactly("reasons");
         }
 
         @Test

@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZonedDateTime;
+import java.util.Optional;
 import java.util.function.Predicate;
 
 /**
@@ -22,6 +23,11 @@ import java.util.function.Predicate;
  * back. A window time that is itself skipped or repeated by a clock change resolves by {@link ZonedDateTime#of}'s
  * rules in {@link #closesAt}: a skipped time moves forward by the length of the gap, and a repeated one takes the
  * earlier offset.
+ *
+ * <p>{@link #windowFor} answers "which window does this count towards", which is what the reminders and the
+ * processing window still ask. Plan F1's queue asks a different question, "is a window open now, and which opens
+ * next", because referrals can only be sent while one is: {@link #openAt} and {@link #nextToOpen}. A window is open
+ * from its start, inclusive, to its end, exclusive.
  */
 public final class ReferralWindows {
 
@@ -49,6 +55,53 @@ public final class ReferralWindows {
             return new ReferralWindow(day, WindowSlot.PM);
         }
         return new ReferralWindow(nextWorkingDay(day, isWorkingDay), WindowSlot.AM);
+    }
+
+    /**
+     * The window open at a moment, or empty when none is: between the windows, before the morning's or after the
+     * afternoon's, and all day on a day that is not a working day (plan F1, decision F-4).
+     */
+    public static Optional<ReferralWindow> openAt(Instant at, ReferralWindowTimes times,
+                                                  Predicate<LocalDate> isWorkingDay) {
+        ZonedDateTime local = at.atZone(ReferralWindowTimes.ZONE);
+        LocalDate day = local.toLocalDate();
+        if (!isWorkingDay.test(day)) {
+            return Optional.empty();
+        }
+        LocalTime time = local.toLocalTime();
+        if (!time.isBefore(times.morningStart()) && time.isBefore(times.morningEnd())) {
+            return Optional.of(new ReferralWindow(day, WindowSlot.AM));
+        }
+        if (!time.isBefore(times.afternoonStart()) && time.isBefore(times.afternoonEnd())) {
+            return Optional.of(new ReferralWindow(day, WindowSlot.PM));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * The first window to open after a moment, strictly: inside a window, its successor. Before the morning's start
+     * on a working day, that morning; from it until the afternoon's start, that afternoon; from then, or on a day
+     * that is not a working day, the next working day's morning.
+     */
+    public static ReferralWindow nextToOpen(Instant at, ReferralWindowTimes times, Predicate<LocalDate> isWorkingDay) {
+        ZonedDateTime local = at.atZone(ReferralWindowTimes.ZONE);
+        LocalDate day = local.toLocalDate();
+        if (isWorkingDay.test(day)) {
+            LocalTime time = local.toLocalTime();
+            if (time.isBefore(times.morningStart())) {
+                return new ReferralWindow(day, WindowSlot.AM);
+            }
+            if (time.isBefore(times.afternoonStart())) {
+                return new ReferralWindow(day, WindowSlot.PM);
+            }
+        }
+        return new ReferralWindow(nextWorkingDay(day, isWorkingDay), WindowSlot.AM);
+    }
+
+    /** The moment a window opens: its date at the morning's or the afternoon's start time, in the zone. */
+    public static Instant opensAt(ReferralWindow window, ReferralWindowTimes times) {
+        LocalTime start = window.slot() == WindowSlot.AM ? times.morningStart() : times.afternoonStart();
+        return ZonedDateTime.of(window.date(), start, ReferralWindowTimes.ZONE).toInstant();
     }
 
     /** The moment a window ends: its date at the morning's or the afternoon's end time, in the zone. */

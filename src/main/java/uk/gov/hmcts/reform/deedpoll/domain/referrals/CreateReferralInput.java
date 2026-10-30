@@ -4,7 +4,6 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 /**
  * Create payload for a referral to the judiciary, already validated.
@@ -24,10 +23,9 @@ import java.util.UUID;
  *       caller skip assignment entirely.</li>
  * </ul>
  *
- * <p>The Master is the exception that plan D2 made (decision D-1): {@code masterId} names a Masters-list entry, and
- * the referral is created assigned to it in the same transaction. It is an entry id and never a judge's identity;
- * absent, the referral is created {@code Open}, waiting for assignment, which is what the admin deployed before D2
- * sends.
+ * <p><strong>No Master either</strong> (plan F1, decision F-1). Plan D2 let the caseworker raising a referral name
+ * one; F1 takes that back, so every referral waits {@code Open} in the queue until a Team leader or Delivery Manager
+ * sends it, and a {@code masterId} in the body is stripped as any unknown key is.
  *
  * <p>Types, not wire strings, which is the one place this differs from {@code CreateSavedQueryInput}: a
  * saved query stores the strings it was sent, so its input carries them through unparsed, whereas a
@@ -40,23 +38,14 @@ import java.util.UUID;
  * @param urgency the referral's own urgency, defaulting to {@link Urgency#Normal}. Separate from the case's,
  *     and a primitive value rather than an {@link Optional} because the column has a default and no null
  * @param urgencyReason why it jumped the queue, required when {@code urgency} is {@link Urgency#Urgent}
- * @param masterId the Masters-list entry to assign the referral to, absent to leave it waiting for assignment
  */
 public record CreateReferralInput(
     List<ReferralReason> reasons,
     Optional<String> notes,
     Urgency urgency,
-    Optional<String> urgencyReason,
-    Optional<UUID> masterId) {
+    Optional<String> urgencyReason) {
 
     public CreateReferralInput {
         reasons = List.copyOf(reasons);
-    }
-
-    /** A referral raised with no Master, waiting for assignment. */
-    public CreateReferralInput(
-        List<ReferralReason> reasons, Optional<String> notes, Urgency urgency, Optional<String> urgencyReason) {
-
-        this(reasons, notes, urgency, urgencyReason, Optional.empty());
     }
 }

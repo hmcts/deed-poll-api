@@ -245,13 +245,11 @@ public class ReferralService {
     }
 
     /**
-     * Raises a referral on a case, assigned to the Master the caseworker chose or, with none, waiting for assignment.
+     * Raises a referral on a case, waiting in the queue to be sent to a Master (plan F1, decision F-1).
      *
      * <p><strong>The state is not the caller's to choose</strong> -- {@link CreateReferralInput} cannot carry
-     * one. With a {@code masterId} the referral is created and then assigned by {@link #assign}'s own rules in this
-     * transaction, so a refused assignment (an unknown or unavailable Master, or one at the cap) refuses the whole
-     * create and nothing is written; that writes the assignment's own note and audit event beside the create's.
-     * Without one it is {@code Open}, which is what the admin deployed before plan D2 sends.
+     * one, nor a Master: every new referral is {@code Open}, and a Team leader or Delivery Manager sends it from
+     * the queue.
      *
      * <p>A case note is written as the acting caseworker, so the referral appears on the timeline the case's
      * own workers read. Written after the referral is stored and inside the same transaction, so a refused
@@ -259,8 +257,7 @@ public class ReferralService {
      * never mentions.
      *
      * @throws NotFoundError if there is no such case
-     * @throws ConflictError if the case already holds a referral that is not terminal, or the Master is at the cap
-     * @throws InvalidInputError if {@code masterId} names no Master, or one who is not available
+     * @throws ConflictError if the case already holds a referral that is not terminal
      */
     @Transactional
     public Referral createReferral(String deedPollId, CreateReferralInput dto, CurrentUser caller) {
@@ -293,10 +290,6 @@ public class ReferralService {
             AuditValue.created("urgency", saved.getUrgency()),
             AuditValue.created("urgencyReason", saved.getUrgencyReason())));
         notes.createNote(deedPollId, new CreateNoteInput(ReferralNotes.raised(dto)), caller.noteAuthor());
-        if (dto.masterId().isPresent()) {
-            saved = assignLocked(deedPollId, saved, dto.masterId().get(), caller, AuditClock.now());
-            refreshAwaitingConfirmation(deedPollId);
-        }
         refreshCurrentReferralState(deedPollId);
         return saved;
     }
@@ -360,7 +353,7 @@ public class ReferralService {
     }
 
     /**
-     * The assignment itself, on a referral this transaction has already locked or has just created -- see
+     * The assignment itself, on a referral this transaction has already locked -- see
      * {@link #assign}. Writes the note and the audit event; the caller recomputes the read-models.
      */
     private Referral assignLocked(String deedPollId, Referral referral, UUID masterId, CurrentUser caller,

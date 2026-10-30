@@ -80,8 +80,8 @@ class ReferralNotesTest {
         String text = ReferralNotes.raised(input(Map.of(
             "reasons", List.of("Minor", "MinorTransgender", "DomesticAbuse", "MinorParentalConsent"))));
 
-        assertThat(text).isEqualTo("Referred to a Master. Reasons: Applicant is a minor: Transgender, Have parental"
-            + " consent; Domestic abuse considerations.");
+        assertThat(text).isEqualTo("Referral raised, waiting to be sent to a Master. Reasons: Applicant is a minor: "
+            + "Transgender, Have parental consent; Domestic abuse considerations.");
     }
 
     @Test
@@ -100,7 +100,8 @@ class ReferralNotesTest {
             "reasons", List.of("Minor", "MinorCourtOrder", "SeparatedOrEstranged"))));
 
         assertThat(text).isEqualTo(
-            "Referred to a Master. Reasons: Applicant is a minor: Court Order; Separated or estranged.");
+            "Referral raised, waiting to be sent to a Master. Reasons: Applicant is a minor: Court Order; Separated or "
+                + "estranged.");
     }
 
     @Test
@@ -114,7 +115,7 @@ class ReferralNotesTest {
 
         // Each piece of the caseworker's own text is on its own line, and no full stop is added after it: it
         // is prose they wrote, and one that already ended in a stop would read as "Friday..".
-        assertThat(text).isEqualTo("Referred to a Master. Reasons: Other."
+        assertThat(text).isEqualTo("Referral raised, waiting to be sent to a Master. Reasons: Other."
             + "\nMarked urgent: Hearing on Friday"
             + "\nNotes: The declarant is abroad until October");
     }

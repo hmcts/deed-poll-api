@@ -77,13 +77,14 @@ public final class ReferralNotes {
     }
 
     /**
-     * The note for a referral being raised: what it says, and why it is urgent if it is.
+     * The note for a referral being raised: that it waits in the queue to be sent to a Master (plan F1), what it
+     * says, and why it is urgent if it is.
      *
      * <p>The reasons are named rather than counted, because "referred for three reasons" is the one summary
      * that tells the next caseworker nothing they wanted.
      */
     public static String raised(CreateReferralInput dto) {
-        StringBuilder text = new StringBuilder("Referred to a Master. Reasons: ");
+        StringBuilder text = new StringBuilder("Referral raised, waiting to be sent to a Master. Reasons: ");
         text.append(names(dto));
         text.append('.');
         // Each piece of the caseworker's own text goes on its own line, rather than being run into the

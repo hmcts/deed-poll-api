@@ -247,8 +247,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement V46, the setting rename and the capability, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 2: Raising without a Master, and the queue read
-- [ ] Add failing tests for create (no `masterId`, always `Open`), the window-state function in `ReferralWindows`, and `GET /caseworker/referral-queue` (gate, both orders, paging, envelope, no subject or email).
-- [ ] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Add failing tests for create (no `masterId`, always `Open`), the window-state function in `ReferralWindows`, and `GET /caseworker/referral-queue` (gate, both orders, paging, envelope, no subject or email).
+- [x] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 3: The batch send
 - [ ] Add failing tests for every rule of the send in step 6, including the replay, the cap boundary, A-2 and the concurrency and deadlock cases.
@@ -286,3 +286,27 @@ test reads `window_cap`; the staff permission contract, `/me` sets, `RoleCapabil
 attribution), fixed and re-run green; `integration --tests '*OpenAPIPublisher*'` 24, 0 failures. Compile of every
 source set OK; `checkstyle.sh` OK (after wrapping one long line). `CLAUDE.md`'s staff permissions and settings lines
 name the capability and `windowCap()`.
+
+**Task 2.** `CreateReferralInput` has no `masterId` and `parseCreateReferral` reads none, so a body carrying one is
+stripped as any unknown key is (valid, malformed or not a string alike); the create is always `Open`, its note now
+reads "Referral raised, waiting to be sent to a Master. Reasons: …", and the create's OpenAPI drops the property and
+the assignment refusals. `ReferralWindows` gains `openAt` (start inclusive, end exclusive, never on a non-working day),
+`nextToOpen` (strictly after: inside a window, its successor) and `opensAt`; `windowFor` is unchanged. New
+`domain/referrals/ReferralQueue` (`ALLOCATE_REFERRALS` before the parameters are parsed, then `state` Open/Claimed or
+400 on `state`, then `CasePaging`), with `ReferralQueuePage`/`ReferralQueueWindow`; `ReferralRepository` gains
+`findQueue` (urgent, `createdOn`, id), `findSent` (`coalesce(assignedAt, claimedAt)`, id), both join-fetching the case
+with a count query, and the window's `countByWindowDateAndWindowSlot` and grouped `countSentByMasterInWindow`, both in
+any state (A-2). `GET /caseworker/referral-queue` (`CaseworkerReferralQueueController`) answers
+`ReferralQueueResponse` with `ReferralQueueItem` rows and `ReferralQueueWindowResponse` (`current {date, slot,
+closesAt}` or null, `next {date, slot, opensAt}`, `cap`, `sent`, available `masters {id, name, sentInWindow}`; times
+UTC as everywhere). `ReferralSecurityTest` admits the four reads as `QUEUE` and pins `ReferralQueue` as their only
+caller; `OpenAPIPublisherTest` lists the path. Tests: `ReferralWindowsTest.OpenAndNext` (each boundary, weekend, bank
+holiday, both DST changes), `ReferralQueueTest` (gate, both orders with ties, paging, envelope inside/between windows,
+weekend, bank holiday, cap), `CaseworkerReferralQueueControllerTest` (401, 403 before reads, 400 on state, both row
+shapes, envelope against the clock, no subject or email, OpenAPI); create-with-`masterId` tests in
+`CaseworkerReferralAssignmentTest`, `ReferralAssignmentTest`, `ReferralSchemasTest` and `ReferralLifecycleTimelineTest`
+rewritten to assign by `PUT` (which still behaves as D2 until Task 4). Results: the first focused run (644 tests) had 2
+failures in tests (the unscoped-declaration rule needed the `QUEUE` shape, and an audit count was not scoped to the
+test's referrals), fixed. A wider run (5,393 unit tests) found one regression **from Task 1**: `SdkMigrationOrderTest`
+still expected V1–V45; now V1–V46. Re-run focused unit tests and `integration --tests '*OpenAPIPublisher*'` (24) green,
+compile of every source set OK, `checkstyle.sh` OK.

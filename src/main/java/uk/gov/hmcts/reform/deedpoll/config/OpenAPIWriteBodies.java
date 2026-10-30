@@ -588,28 +588,26 @@ public class OpenAPIWriteBodies {
         create.addProperty("urgencyReason", new StringSchema()
             .maxLength(ReferralSchemas.MAX_URGENCY_REASON_LENGTH)
             .description("Why the referral jumped the queue. Required when urgency is " + Urgency.Urgent + "."));
-        create.addProperty(ReferralSchemas.MASTER_ID, masterId("The Masters-list entry to assign the referral to. "
-            + "Optional: without it the referral is created Open, waiting for a caseworker to assign it."));
         create.addRequiredItem(REASONS_FIELD);
         create.setAdditionalProperties(true);
-        create.setDescription("A referral of the case to a Master, assigned to the one masterId names or, without "
-            + "it, waiting for assignment. "
+        create.setDescription("A referral of the case to a Master. It is created Open, waiting in the referral queue "
+            + "until a Team leader or Delivery Manager sends it to a Master; a masterId is ignored, as any unknown key "
+            + "is. "
             + "reasons is the only field required outright; notes is required when " + ReferralReason.Other
             + " is among them, and urgencyReason when urgency is " + Urgency.Urgent + ". The case comes from "
-            + "the path and the state from the assignment, so state and migrated are ignored rather than refused, "
+            + "the path and the state is always Open, so state and migrated are ignored rather than refused, "
             + "as any unknown key is. A case may hold many referrals over its lifetime but only one that is not "
-            + "closed or withdrawn, so a second live referral is a 409 rather than a 400. A refused assignment "
-            + "refuses the whole create, and nothing is written.");
+            + "closed or withdrawn, so a second live referral is a 409 rather than a 400.");
     }
 
-    /** A Masters-list entry id, as the create and the reassignment both take it. */
+    /** A Masters-list entry id, as the reassignment takes it. */
     private static Schema<?> masterId(String description) {
         return new StringSchema().format("uuid").description(description + " An unknown or unavailable Master is "
             + "a 400 on masterId: \"" + ReferralSchemas.SELECT_A_MASTER + "\".");
     }
 
     /**
-     * The reassignment body, and the two refusals an assignment adds to the create and the reassignment (plan D2):
+     * The reassignment body, and the two refusals an assignment adds (plan D2):
      * the 400 on {@code masterId} and the 409 at the per-Master cap, beside the 409 for a referral that is not
      * waiting for a direction. springdoc publishes none of them, because {@code DomainErrorHandler} answers them.
      */
@@ -629,26 +627,36 @@ public class OpenAPIWriteBodies {
         if (openApi.getPaths() == null) {
             return;
         }
-        refusals(openApi.getPaths().get("/caseworker/cases/{id}/referrals"), false);
-        refusals(openApi.getPaths().get("/caseworker/cases/{id}/referrals/{referralId}/assignment"), true);
+        createRefusals(openApi.getPaths().get("/caseworker/cases/{id}/referrals"));
+        refusals(openApi.getPaths().get("/caseworker/cases/{id}/referrals/{referralId}/assignment"));
     }
 
-    private static void refusals(PathItem path, boolean reassignment) {
-        Operation operation = path == null ? null : reassignment ? path.getPut() : path.getPost();
+    private static void createRefusals(PathItem path) {
+        Operation operation = path == null ? null : path.getPost();
         if (operation == null) {
             return;
         }
         ApiResponses responses = operation.getResponses() == null ? new ApiResponses() : operation.getResponses();
-        responses.addApiResponse("400", new ApiResponse().description((reassignment ? "" : "The body is not valid, "
-            + "each field's error named; or ") + "masterId names no Master, or one who is not available: \""
-            + ReferralSchemas.SELECT_A_MASTER + "\"."));
-        responses.addApiResponse("409", new ApiResponse().description((reassignment
-            ? "The referral is not waiting for a direction (it is Decided, Closed or Withdrawn); or "
-            : "The case already has a referral that is not closed or withdrawn; or ")
-            + "the Master already holds the per-Master cap for the current referral window, with an error on "
-            + "masterId: \"This Master already has 10 referrals for the morning of 28 October 2026. Choose another "
-            + "Master.\" The window is the morning or afternoon of a working day in Europe/London; outside the "
-            + "windows a referral counts towards the next one."));
+        responses.addApiResponse("400", new ApiResponse().description("The body is not valid, each field's error "
+            + "named."));
+        responses.addApiResponse("409", new ApiResponse().description("The case already has a referral that is not "
+            + "closed or withdrawn."));
+        operation.setResponses(responses);
+    }
+
+    private static void refusals(PathItem path) {
+        Operation operation = path == null ? null : path.getPut();
+        if (operation == null) {
+            return;
+        }
+        ApiResponses responses = operation.getResponses() == null ? new ApiResponses() : operation.getResponses();
+        responses.addApiResponse("400", new ApiResponse().description("masterId names no Master, or one who is not "
+            + "available: \"" + ReferralSchemas.SELECT_A_MASTER + "\"."));
+        responses.addApiResponse("409", new ApiResponse().description("The referral is not waiting for a direction "
+            + "(it is Decided, Closed or Withdrawn); or the Master already holds the per-Master cap for the current "
+            + "referral window, with an error on masterId: \"This Master already has 10 referrals for the morning of "
+            + "28 October 2026. Choose another Master.\" The window is the morning or afternoon of a working day in "
+            + "Europe/London; outside the windows a referral counts towards the next one."));
         operation.setResponses(responses);
     }
 

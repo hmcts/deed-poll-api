@@ -53,13 +53,13 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link ReferralService#assign} and the create's {@code masterId} (plan D2), with no database: the rules, their
+ * {@link ReferralService#assign} (plan D2) and the create, which since plan F1 takes no Master, with no database: the
+ * rules, their
  * order, the window an assignment counts towards, the cap, the note and the audit event. The cap under concurrency
  * needs two committed transactions, so it is {@code ReferralAssignmentConcurrencyTest}'s, and the HTTP answers are
  * {@code CaseworkerReferralAssignmentTest}'s.
@@ -514,53 +514,25 @@ class ReferralAssignmentTest {
         }
 
         @Test
-        @DisplayName("with a masterId creates it assigned, with the create's note and the assignment's")
-        void withMaster() {
-            Referral saved = service.createReferral(CASE_ID, input(Optional.of(SULLIVAN)), CASEWORKER);
-
-            assertThat(saved.getState()).isEqualTo(ReferralState.Claimed);
-            assertThat(saved.getAssignedMasterId()).isEqualTo(SULLIVAN);
-            assertThat(saved.getWindowDate()).isNotNull();
-            ArgumentCaptor<CreateNoteInput> note = ArgumentCaptor.forClass(CreateNoteInput.class);
-            verify(notes, times(2)).createNote(eq(CASE_ID), note.capture(), any());
-            assertThat(note.getAllValues().get(0).note()).startsWith("Referred to a Master.");
-            assertThat(note.getAllValues().get(1).note()).endsWith("assigned to Master Sullivan.");
-            ArgumentCaptor<AuditEntry> entries = ArgumentCaptor.forClass(AuditEntry.class);
-            verify(audit, times(2)).record(entries.capture(), any());
-            assertThat(entries.getAllValues()).extracting(AuditEntry::action)
-                .containsExactly(AuditAction.REFERRAL_CREATED, AuditAction.REFERRAL_ASSIGNED);
-            verify(deedPolls).writeCurrentReferralState(CASE_ID, ReferralState.Claimed);
-            verify(deedPolls).lockForConfirmationRecompute(CASE_ID);
-        }
-
-        @Test
-        @DisplayName("without a masterId creates it Open, waiting for assignment, and touches no Master")
-        void withoutMaster() {
+        @DisplayName("creates it Open, waiting to be sent, with one note and one event, and touches no Master (F1)")
+        void alwaysOpen() {
             when(referrals.findStatesByDeedPollId(anyString())).thenReturn(List.of(ReferralState.Open));
 
-            Referral saved = service.createReferral(CASE_ID, input(Optional.empty()), CASEWORKER);
+            Referral saved = service.createReferral(CASE_ID, new CreateReferralInput(
+                List.of(ReferralReason.DomesticAbuse), Optional.empty(), Urgency.Normal, Optional.empty()), CASEWORKER);
 
             assertThat(saved.getState()).isEqualTo(ReferralState.Open);
             assertThat(saved.getAssignedMasterId()).isNull();
+            assertThat(saved.getAssignedAt()).isNull();
+            assertThat(saved.getWindowDate()).isNull();
+            ArgumentCaptor<CreateNoteInput> note = ArgumentCaptor.forClass(CreateNoteInput.class);
+            verify(notes).createNote(eq(CASE_ID), note.capture(), any());
+            assertThat(note.getValue().note()).startsWith("Referral raised, waiting to be sent to a Master.");
+            ArgumentCaptor<AuditEntry> entries = ArgumentCaptor.forClass(AuditEntry.class);
+            verify(audit).record(entries.capture(), any());
+            assertThat(entries.getValue().action()).isEqualTo(AuditAction.REFERRAL_CREATED);
+            verify(deedPolls).writeCurrentReferralState(CASE_ID, ReferralState.Open);
             verifyNoInteractions(masters);
-        }
-
-        @Test
-        @DisplayName("with an unavailable Master refuses the whole create")
-        void refusedAssignment() {
-            when(masters.findAssigneeForUpdate(SULLIVAN))
-                .thenReturn(Optional.of(new Assignee("Master Sullivan", false, null)));
-
-            assertThatThrownBy(() -> service.createReferral(CASE_ID, input(Optional.of(SULLIVAN)), CASEWORKER))
-                .isInstanceOf(InvalidInputError.class);
-            // The insert, the create's note and its audit are rolled back with the transaction the exception ends;
-            // what this test can show is that nothing after the refusal was written.
-            verify(deedPolls, never()).writeCurrentReferralState(any(), any());
-        }
-
-        private CreateReferralInput input(Optional<UUID> masterId) {
-            return new CreateReferralInput(List.of(ReferralReason.DomesticAbuse), Optional.empty(), Urgency.Normal,
-                                           Optional.empty(), masterId);
         }
     }
 

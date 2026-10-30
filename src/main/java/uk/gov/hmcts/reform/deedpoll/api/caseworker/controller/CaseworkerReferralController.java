@@ -109,15 +109,14 @@ public class CaseworkerReferralController {
     }
 
     /**
-     * Raises a referral on a case, assigned to the Master named by {@code masterId} or, with none, waiting for
-     * assignment.
+     * Raises a referral on a case, waiting in the queue to be sent to a Master (plan F1): always {@code Open}, and a
+     * {@code masterId} is stripped as any unknown key is.
      *
      * <p>201 with the created referral, as the note, witness and saved-query creates answer.
      *
      * <p><strong>409 if the case already holds a referral that is not terminal.</strong> Not a 400: nothing
      * about the payload is wrong, and the same request succeeds unchanged once the live referral is closed or
-     * withdrawn. A case whose referrals are all terminal may be referred again. With a {@code masterId}, the
-     * assignment's refusals refuse the create, and nothing is written: see {@link #assign}.
+     * withdrawn. A case whose referrals are all terminal may be referred again.
      */
     @AuditedAs(AuditAction.REFERRAL_CREATED)
     @PostMapping
