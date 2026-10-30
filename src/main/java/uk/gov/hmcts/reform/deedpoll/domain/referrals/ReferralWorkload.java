@@ -23,8 +23,8 @@ import java.util.List;
  * the referral, and a claim that lapses leaves it and returns to the shared pool -- so what this answers is "what
  * am I in the middle of", which is the question the business testing that asked for it was actually asking.
  *
- * @param referrals the referrals on this page, claimed work first and urgent-first within that, as the database
- *     ordered them -- see {@code JudicialReferralService.MINE_ORDER}
+ * @param referrals the referrals on this page, claimed work first and urgent-first within that, then by the
+ *     day sent, as the database ordered them -- see {@code ReferralRepository.findOwnedBy}
  * @param page which page these are, 1-based
  * @param size the page size that was applied, which is not necessarily the one that was requested -- see
  *     {@link CasePaging#MAX_SIZE}

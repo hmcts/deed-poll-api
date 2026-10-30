@@ -440,29 +440,29 @@ class ReferralNotesTest {
 
     @Test
     @DisplayName("an overdue assignment names the Master who had it and the window in words")
-    void returnedForAssignmentNamesTheMaster() {
+    void returnedToQueueNamesTheMaster() {
         // The Master is named because the release erases claimedBy: after the sweep, the note is the only
         // record on the case that this Master ever had it.
-        assertThat(ReferralNotes.returnedForAssignment(
+        assertThat(ReferralNotes.returnedToQueue(
             overdue("Master Sullivan", List.of("DomesticAbuse")), Duration.ofDays(7)))
             .isEqualTo("Referral raised on 27 October 2026, reasons: Domestic abuse considerations, returned to the"
-                + " office for assignment: no direction from Master Sullivan within 7 days.");
+                + " queue to be sent again: no direction from Master Sullivan within 7 days.");
     }
 
     @Test
     @DisplayName("an overdue assignment folds minor details into Minor, as every referral note does")
-    void returnedForAssignmentFoldsMinorDetails() {
-        assertThat(ReferralNotes.returnedForAssignment(
+    void returnedToQueueFoldsMinorDetails() {
+        assertThat(ReferralNotes.returnedToQueue(
             overdue("Master Sullivan", List.of("Minor", "MinorTransgender")), Duration.ofDays(7)))
             .startsWith("Referral raised on 27 October 2026, reasons: Applicant is a minor: Transgender, returned");
     }
 
     @Test
     @DisplayName("a backfilled referral with no reasons says so")
-    void returnedForAssignmentWithNoReasons() {
-        assertThat(ReferralNotes.returnedForAssignment(overdue("Master Sullivan", List.of()), Duration.ofDays(1)))
-            .isEqualTo("Referral raised on 27 October 2026, reasons: no reasons recorded, returned to the office for"
-                + " assignment: no direction from Master Sullivan within 1 day.");
+    void returnedToQueueWithNoReasons() {
+        assertThat(ReferralNotes.returnedToQueue(overdue("Master Sullivan", List.of()), Duration.ofDays(1)))
+            .isEqualTo("Referral raised on 27 October 2026, reasons: no reasons recorded, returned to the queue to be"
+                + " sent again: no direction from Master Sullivan within 1 day.");
     }
 
     @Test
@@ -478,11 +478,11 @@ class ReferralNotesTest {
 
     @Test
     @DisplayName("an overdue assignment with no name on it still reads as a return")
-    void returnedForAssignmentWithNoName() {
+    void returnedToQueueWithNoName() {
         // Not reachable through assign(), which always stamps a name -- but a row backfilled or repaired by
         // hand could hold an assignment with none, and the sweep must still be able to say what happened.
         for (String noName : Arrays.asList(null, "", "   ")) {
-            assertThat(ReferralNotes.returnedForAssignment(overdue(noName, List.of()), Duration.ofDays(7)))
+            assertThat(ReferralNotes.returnedToQueue(overdue(noName, List.of()), Duration.ofDays(7)))
                 .as("an assignment held under %s", noName == null ? "null" : "blank")
                 .endsWith("no direction from an unnamed Master within 7 days.");
         }
@@ -490,11 +490,11 @@ class ReferralNotesTest {
 
     @Test
     @DisplayName("an overdue-assignment note is acceptable to the notes column however long the name or reasons")
-    void returnedForAssignmentIsAcceptableHoweverLong() {
+    void returnedToQueueIsAcceptableHoweverLong() {
         // claimedBy is unbounded text, so the note it composes has to be bounded here -- a note the validator
         // refused would roll back the release rather than just the note, leaving the referral stuck on a Master.
         List<String> every = Arrays.stream(ReferralReason.values()).map(Enum::name).toList();
-        String text = ReferralNotes.returnedForAssignment(overdue("J".repeat(5000), every), Duration.ofMinutes(1441));
+        String text = ReferralNotes.returnedToQueue(overdue("J".repeat(5000), every), Duration.ofMinutes(1441));
 
         assertThat(NoteForm.validateNoteText(text)).isEmpty();
         assertThat(text.length()).isLessThanOrEqualTo(NoteForm.MAX_NOTE_LENGTH);
@@ -507,12 +507,10 @@ class ReferralNotesTest {
     }
 
     @Test
-    @DisplayName("an assignment note names the Master, and a reassignment both, in the screens' words")
+    @DisplayName("a reassignment note names both Masters, in the screens' words")
     void assignmentNotes() {
         Referral referral = referral(List.of("DomesticAbuse"), LocalDateTime.parse("2026-10-27T09:30:00"));
 
-        assertThat(ReferralNotes.assigned(referral, "Master Sullivan")).isEqualTo(
-            "Referral raised on 27 October 2026, reasons: Domestic abuse considerations, assigned to Master Sullivan.");
         assertThat(ReferralNotes.reassigned(referral, "Master Sullivan", "Master Okafor")).isEqualTo(
             "Referral raised on 27 October 2026, reasons: Domestic abuse considerations, reassigned from Master "
                 + "Sullivan to Master Okafor.");
@@ -526,6 +524,7 @@ class ReferralNotesTest {
         String text = ReferralNotes.reassigned(referral, "M".repeat(5000), "N".repeat(5000));
 
         assertThat(NoteForm.validateNoteText(text)).isEmpty();
-        assertThat(ReferralNotes.assigned(referral, null)).endsWith("assigned to an unnamed Master.");
+        assertThat(ReferralNotes.reassigned(referral, null, null))
+            .endsWith("reassigned from an unnamed Master to an unnamed Master.");
     }
 }

@@ -255,8 +255,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 4: Reassignment, My referrals and unassignment
-- [ ] Add failing tests for the reassignment rules in step 7, the new `MINE_ORDER`, unassignment's note and the Masters list's removed fields.
-- [ ] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Add failing tests for the reassignment rules in step 7, the new `MINE_ORDER`, unassignment's note and the Masters list's removed fields.
+- [x] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 5: Emails
 - [ ] Add failing tests for the `SENT` email (one row per Master per send, replay writes none, reassignment's row, personalisation), the reminder's new personalisation, and the digest's removal.
@@ -342,3 +342,38 @@ the audit-coverage count), fixed; re-run 278 tests, 0 failures, 0 skipped. Wider
 `*Security*`, `*Referral*`, `*CallerAccess*`, `*Architecture*`, `*Namespace*`) green; `integration --tests
 '*OpenAPIPublisher*'` failed once on the unknown path, added, green. Compile of every source set OK; `checkstyle.sh` OK
 after two single-line javadocs were expanded.
+
+**Task 4.** `ReferralService.assign(deedPollId, id, body, caller)` checks `ALLOCATE_REFERRALS` before
+`ReferralSchemas.parseAssignment` reads the body (the controller passes `request.fields()`; `AssignReferralRequest`
+lost `toMasterId`), then locks the referral, then the Master (400 on `masterId`), refuses `Open` with 409 "Send this
+referral from the queue: it has not been sent to a Master yet." (`ReferralService.SEND_FROM_THE_QUEUE`, also in the
+OpenAPI 409) and `Decided`/`Closed`/`Withdrawn` with the existing 409, and treats the same Master as a no-op. No window,
+no cap, no window lock and no `digestTook`: `stampAssignment` takes a null window to keep the one the referral was sent
+in (a pre-V43 claim keeps none), and restarts `claimedAt`/`assignedAt`/`lastTouchedAt` and `remindersSent`. The note is
+`ReferralNotes.reassigned` and the event `REFERRAL_ASSIGNED`, both as before; `ReferralNotes.assigned` is gone. With
+the per-Master cap gone, `currentWindowLoad`, `ReferralWindowLoad`, `ReferralWindowResponse`,
+`countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot`, `countByMasterInWindow` and `ReferralService`'s
+`BankHolidays` dependency went too; `GET /caseworker/masters` answers `{masters}` with no `window`, `cap` or
+`assignedInWindow`. `findOwnedBy` orders by `coalesce("assignedAt", "claimedAt", "createdOn")` in place of `createdOn`
+(the judicial `mine` javadoc and `ReferralWorkload` say so; there is no `MINE_ORDER` constant, the plan's name for that
+order). Unassignment's note is `ReferralNotes.returnedToQueue`: "…, returned to the queue to be sent again: no direction
+from {name} within 7 days."; the `directionDueBy` and withdraw-direction descriptions say "returned to the queue".
+**The digest's interplay with assignment is gone ahead of Task 5**: the three `MasterDigestsTest` cases that assigned
+through `assign` (reassigned before close, waiting for an assignment in flight, assigned after the digest) were deleted
+with the `digestTook` loop, and `ReferralAssignmentConcurrencyTest` (the per-Master cap under concurrency) was deleted
+with the cap. Tests: `ReferralAssignmentTest` rewritten (gate for every role, 403 before the body, shape, reassignment
+columns, window kept at any time with no window or cap read, linked/unlinked subject, note and audit, lock order,
+no-op, pre-V43 claim, `Open` 409, Master 400s, not-waiting 409); `CaseworkerReferralAssignmentTest` rewritten (a
+caseworker 403 whatever the body, Team leader reassignment, Delivery Manager past a full window, 400s, `Open` 409,
+no-op, Decided 409, wrong case 404, the narrowed Masters list, OpenAPI); `ReferralRepositoryTest`'s every-combination
+fixture now raises in the opposite order to the one it sends in, plus a pre-V43 ordering case;
+`JudicialReferralControllerTest`'s order test dates the sends hours ago (the list sweeps first); the queue's Claimed row,
+the lifecycle journey (sent through `ReferralService.send` as a Team leader, because an HTTP send depends on the clock)
+and `MasterRemindersTest`'s reassignment no longer assign an `Open` referral by `PUT`. Results: first run of the wide
+set (1,438 tests) had 4 failures, all in tests (fixtures that assigned `Open` referrals or set `assignedAt` without an
+owner, and a list that swept fixed August dates back to the queue), fixed; then `integration --tests
+'*OpenAPIPublisher*'` failed once on the withdraw description's old words, fixed. Final: `test` over `*Referral*`,
+`*Master*`, `*OpenAPI*`, `*Security*`, `*Judicial*`, `*Audit*`, `*Architecture*`, `*ProcessSettings*`, `*StaffAccess*`,
+`*Namespace*`, `*CallerAccess*` 1,462 tests, 0 failures, 0 skipped; `integration --tests '*OpenAPIPublisher*'` green;
+compile of every source set OK; `checkstyle.sh` OK after three line-length and javadoc fixes. `CLAUDE.md`'s assignment
+paragraph still describes D2 and is Task 6's.

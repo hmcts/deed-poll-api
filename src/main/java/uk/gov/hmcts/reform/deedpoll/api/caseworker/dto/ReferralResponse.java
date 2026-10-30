@@ -125,19 +125,20 @@ public record ReferralResponse(
     LocalDateTime confirmationReceivedAt,
     String confirmationRecordedBy,
     @Schema(nullable = true, description = "The Masters-list entry the referral is assigned to, as its id and the "
-        + "name it was assigned under, or null: an Open referral is waiting for assignment, and a referral claimed "
+        + "name it was assigned under, or null: an Open referral is waiting to be sent, and a referral claimed "
         + "before assignment existed has none until that Master is listed and signs in. Kept once directed.")
     AssignedMasterResponse assignedMaster,
-    @Schema(nullable = true, description = "When the referral was last assigned, which starts the Master's "
-        + "processing window; a reassignment restarts it. Null when it is not assigned.")
+    @Schema(nullable = true, description = "When the referral was sent or last reassigned, which starts the "
+        + "Master's processing window; a reassignment restarts it. Null when it is not assigned.")
     LocalDateTime assignedAt,
     @Schema(nullable = true, description = "The working day, in Europe/London, whose referral window the "
-        + "assignment counts towards for the per-Master cap. Null when it is not assigned.")
+        + "referral was sent in, which the window's cap counts; a reassignment keeps it. Null when it is not "
+        + "assigned.")
     LocalDate windowDate,
     @Schema(nullable = true, description = "The morning (AM) or afternoon (PM) of windowDate. Null when it is not "
         + "assigned.")
     WindowSlot windowSlot,
-    @Schema(nullable = true, description = "When the referral is unassigned and returned to the office if the "
+    @Schema(nullable = true, description = "When the referral is unassigned and returned to the queue if the "
         + "Master has given no direction: the start of the processing window plus its length as currently set. "
         + "Only while the referral is Claimed; null otherwise.")
     LocalDateTime directionDueBy,

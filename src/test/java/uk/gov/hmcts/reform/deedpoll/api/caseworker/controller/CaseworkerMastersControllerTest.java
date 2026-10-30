@@ -156,13 +156,12 @@ class CaseworkerMastersControllerTest extends AbstractPostgresContainerTest {
         JsonNode list = json.readTree(authorised(get(PATH)).andExpect(status().isOk()).andReturn().getResponse()
             .getContentAsString()).get("masters");
         assertThat(list).extracting(row -> row.get("id").asText()).containsExactly(brown, sullivan);
-        assertThat(list).extracting(row -> row.get("assignedInWindow").asInt()).containsExactly(0, 0);
         assertThat(list.get(1).get("email").asText()).isEqualTo(ADDRESS);
         assertThat(list.get(1).get("available").asBoolean()).isTrue();
         assertThat(list.get(1).get("linked").asBoolean()).isFalse();
         assertThat(list.get(1).get("revision").asInt()).isZero();
         assertThat(list.get(1).fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("id", "name", "email", "available", "linked", "revision", "assignedInWindow");
+            .containsExactlyInAnyOrder("id", "name", "email", "available", "linked", "revision");
         assertThat(jdbc.queryForObject("""
             SELECT array_to_string(fields, ',') FROM deedpoll_audit_event
             WHERE entity_type = 'Master' AND entity_id = ? AND action = 'MASTER_ADDED'

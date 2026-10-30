@@ -24,11 +24,6 @@ import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
-import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralWindow;
-import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralWindows;
-import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
-import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
-import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
@@ -40,16 +35,13 @@ import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -57,11 +49,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Assignment over HTTP (plan D2): {@code PUT …/assignment}, the create's ignoring {@code masterId} (F1), the new
- * response fields
- * and the Masters list's window, against a real database and a stub IDAM. The rules themselves, their order and the
- * window arithmetic are {@code ReferralAssignmentTest}'s; this class shows the routes reach them, which status each
- * refusal becomes, that a refusal writes nothing, and that no response carries a subject or an email.
+ * Reassignment over HTTP (plan F1, decision F-10): {@code PUT …/assignment}, now {@code ALLOCATE_REFERRALS} only and
+ * only of a referral already sent; the create's ignoring {@code masterId}; and the Masters list without the window,
+ * against a real database and a stub IDAM. The rules themselves and their order are {@code ReferralAssignmentTest}'s;
+ * this class shows the routes reach them, which status each refusal becomes, that a refusal writes nothing, and that
+ * no response carries a subject or an email.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -71,6 +63,10 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     private static final String RECEIVED = "2026-07-01T00:00:00.000Z";
     private static final String SUBJECT = "sullivan-idam-subject";
     private static final String SULLIVAN_EMAIL = "master.sullivan@judiciary.example";
+
+    /** When the fixture's referrals were sent: Monday 26 October 2026, 09:00 UTC, which is 09:00 in London. */
+    private static final LocalDateTime SENT_AT = LocalDateTime.of(2026, 10, 26, 9, 0);
+    private static final LocalDate SENT_DAY = LocalDate.of(2026, 10, 26);
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final StubIdam IDAM = new StubIdam();
@@ -104,10 +100,6 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     private ReferenceCounterRepository referenceCounters;
     @Autowired
     private JdbcTemplate jdbc;
-    @Autowired
-    private ProcessSettingsService settings;
-    @Autowired
-    private BankHolidays bankHolidays;
 
     private UUID sullivan;
     private UUID okafor;
@@ -116,7 +108,7 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     void setUp() {
         clearTables();
         IDAM.stubDefaults();
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Ada Caseworker", List.of("caseworker-deedpoll"));
+        asCaseworker();
         sullivan = master("Master Sullivan", SULLIVAN_EMAIL, true, SUBJECT);
         okafor = master("Master Okafor", "master.okafor@judiciary.example", true, null);
     }
@@ -164,44 +156,85 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("PUT assigns: fields, note and audit, and no subject or email in the JSON")
-    void assigned() throws Exception {
+    @DisplayName("a caseworker is a 403 before anything is read or written, whatever the body")
+    void caseworkerRefused() throws Exception {
         String caseId = newCase();
-        String referralId = raise(caseId, "{\"reasons\":[\"DomesticAbuse\"]}");
+        String referralId = sent(caseId, raise(caseId), sullivan);
 
-        String body = authorised(put(assignmentOf(caseId, referralId)), withMaster(sullivan))
+        for (String body : new String[] {withMaster(okafor), "{}", "{\"masterId\":\"nope\"}"}) {
+            authorised(put(assignmentOf(caseId, referralId)), body).andExpect(status().isForbidden());
+        }
+        // An unknown referral is the same 403, so the refusal says nothing about what exists.
+        authorised(put(assignmentOf(caseId, UUID.randomUUID().toString())), withMaster(okafor))
+            .andExpect(status().isForbidden());
+
+        assertThat(stored(referralId).getAssignedMasterId()).isEqualTo(sullivan);
+        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(1);
+        assertThat(assignedEvents(referralId)).isZero();
+    }
+
+    @Test
+    @DisplayName("a Team leader reassigns: the new Master, the clock and reminders restarted, the window kept")
+    void reassigned() throws Exception {
+        String caseId = newCase();
+        String referralId = sent(caseId, raise(caseId), sullivan);
+        asTeamLeader();
+
+        String body = authorised(put(assignmentOf(caseId, referralId)), withMaster(okafor))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.state").value("Claimed"))
-            .andExpect(jsonPath("$.claimedBy").value("Master Sullivan"))
-            .andExpect(jsonPath("$.assignedMaster.id").value(sullivan.toString()))
-            .andExpect(jsonPath("$.assignedMaster.name").value("Master Sullivan"))
+            .andExpect(jsonPath("$.claimedBy").value("Master Okafor"))
+            .andExpect(jsonPath("$.assignedMaster.id").value(okafor.toString()))
+            .andExpect(jsonPath("$.assignedMaster.name").value("Master Okafor"))
+            .andExpect(jsonPath("$.windowDate").value(SENT_DAY.toString()))
+            .andExpect(jsonPath("$.windowSlot").value("AM"))
             .andReturn().getResponse().getContentAsString();
 
-        assertThat(body).doesNotContain(SUBJECT).doesNotContain(SULLIVAN_EMAIL);
+        assertThat(body).doesNotContain(SUBJECT).doesNotContain(SULLIVAN_EMAIL).doesNotContain("okafor@");
         JsonNode json = JSON.readTree(body);
         assertThat(json.get("assignedMaster").size()).isEqualTo(2);
-        Referral stored = stored(json.get("id").asText());
-        assertThat(stored.getClaimedById()).isEqualTo(SUBJECT);
-        ReferralWindow window = windowAt(stored.getAssignedAt());
-        assertThat(json.get("windowDate").asText()).isEqualTo(window.date().toString());
-        assertThat(json.get("windowSlot").asText()).isEqualTo(window.slot().name());
+        Referral stored = stored(referralId);
+        assertThat(stored.getClaimedById()).isNull();
+        assertThat(stored.getRemindersSent()).isZero();
+        assertThat(stored.getAssignedAt()).isAfter(SENT_AT);
+        assertThat(stored.getWindowDate()).isEqualTo(SENT_DAY);
+        assertThat(stored.getWindowSlot()).isEqualTo(WindowSlot.AM);
         assertThat(LocalDateTime.parse(json.get("assignedAt").asText()))
             .isCloseTo(stored.getAssignedAt(), within(1, ChronoUnit.MILLIS));
         assertThat(LocalDateTime.parse(json.get("directionDueBy").asText()))
             .isCloseTo(stored.getAssignedAt().plus(Duration.ofDays(7)), within(1, ChronoUnit.MILLIS));
         assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(2)
-            .anySatisfy(note -> assertThat(note.getNote()).endsWith("assigned to Master Sullivan."));
-        assertThat(assignedEvents(stored.getId().toString())).isOne();
+            .anySatisfy(note -> assertThat(note.getNote())
+                .endsWith("reassigned from Master Sullivan to Master Okafor."));
+        assertThat(assignedEvents(referralId)).isOne();
         assertThat(deedPolls.findById(caseId).orElseThrow().getCurrentReferralState())
             .isEqualTo(ReferralState.Claimed);
+    }
+
+    @Test
+    @DisplayName("a Delivery Manager reassigns past a full window's cap: a reassignment takes no place")
+    void noCap() throws Exception {
+        jdbc.update("UPDATE deedpoll_process_settings SET window_cap = 1");
+        String first = newCase();
+        String firstReferral = sent(first, raise(first), sullivan);
+        String second = newCase();
+        sent(second, raise(second), sullivan);
+        asDeliveryManager();
+
+        authorised(put(assignmentOf(first, firstReferral)), withMaster(okafor))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.assignedMaster.id").value(okafor.toString()));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_referral WHERE \"windowDate\" = ?",
+                                       Integer.class, SENT_DAY)).isEqualTo(2);
     }
 
     @Test
     @DisplayName("an unknown, unavailable or malformed Master is a 400 on masterId, and nothing is written")
     void refusedMaster() throws Exception {
         String caseId = newCase();
-        String referralId = raise(caseId, "{\"reasons\":[\"DomesticAbuse\"]}");
+        String referralId = sent(caseId, raise(caseId), sullivan);
         UUID away = master("Master Away", "away@judiciary.example", false, null);
+        asTeamLeader();
 
         for (String masterId : new String[] {"\"" + UUID.randomUUID() + "\"", "\"" + away + "\"", "\"nope\"", "7"}) {
             authorised(put(assignmentOf(caseId, referralId)), "{\"masterId\":" + masterId + "}")
@@ -209,86 +242,49 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
                 .andExpect(jsonPath("$.errors[0].field").value("masterId"))
                 .andExpect(jsonPath("$.errors[0].message").value("Select a Master who is available"));
         }
-        assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Open);
+        assertThat(stored(referralId).getAssignedMasterId()).isEqualTo(sullivan);
         assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(1);
     }
 
     @Test
-    @DisplayName("at the cap a PUT is a 409 on masterId naming the window, and nothing is written")
-    void assignAtCap() throws Exception {
-        jdbc.update("UPDATE deedpoll_process_settings SET window_cap = 1");
-        ReferralWindow before = windowAt(AuditClock.now());
-        raiseAssigned(newCase(), sullivan);
-        String second = newCase();
-        String secondReferral = raise(second, "{\"reasons\":[\"DomesticAbuse\"]}");
-
-        ResultActions refused = authorised(put(assignmentOf(second, secondReferral)), withMaster(sullivan));
-        // The two assignments count towards the window of the moment each was made, so a boundary between them is no
-        // test of the cap.
-        assumeTrue(before.equals(windowAt(AuditClock.now())), "a referral window boundary fell between the two");
-        refused
-            .andExpect(status().isConflict())
-            .andExpect(jsonPath("$.errors[0].field").value("masterId"))
-            .andExpect(jsonPath("$.errors[0].message").value(Matchers.matchesPattern(
-                "This Master already has 1 referral for the (morning|afternoon) of \\d{1,2} \\w+ \\d{4}\\. "
-                    + "Choose another Master\\.")));
-
-        assertThat(stored(secondReferral).getState()).isEqualTo(ReferralState.Open);
-        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(second)).hasSize(1);
-        // Another Master is not full.
-        authorised(put(assignmentOf(second, secondReferral)), withMaster(okafor)).andExpect(status().isOk());
-    }
-
-    @Test
-    @DisplayName("PUT assignment assigns an Open referral and reassigns a Claimed one; the old Master's count falls")
-    void reassign() throws Exception {
+    @DisplayName("an Open referral is a 409: it is sent from the queue")
+    void openRefused() throws Exception {
         String caseId = newCase();
-        String referralId = raise(caseId, "{\"reasons\":[\"DomesticAbuse\"]}");
+        String referralId = raise(caseId);
+        asTeamLeader();
 
         authorised(put(assignmentOf(caseId, referralId)), withMaster(sullivan))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.state").value("Claimed"))
-            .andExpect(jsonPath("$.assignedMaster.id").value(sullivan.toString()));
-        assertThat(countFor(sullivan)).isOne();
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.error").value(
+                "Send this referral from the queue: it has not been sent to a Master yet."));
 
-        String body = authorised(put(assignmentOf(caseId, referralId)), withMaster(okafor))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.assignedMaster.id").value(okafor.toString()))
-            .andExpect(jsonPath("$.claimedBy").value("Master Okafor"))
-            .andReturn().getResponse().getContentAsString();
-
-        assertThat(body).doesNotContain(SUBJECT);
-        assertThat(stored(referralId).getClaimedById()).isNull();
-        assertThat(countFor(sullivan)).isZero();
-        assertThat(countFor(okafor)).isOne();
-        assertThat(assignedEvents(referralId)).isEqualTo(2);
-        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId))
-            .anySatisfy(note -> assertThat(note.getNote())
-                .endsWith("reassigned from Master Sullivan to Master Okafor."));
+        assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Open);
+        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(1);
+        assertThat(assignedEvents(referralId)).isZero();
     }
 
     @Test
     @DisplayName("PUT to the Master it already has is a 200 that writes no note and no audit")
     void sameMaster() throws Exception {
         String caseId = newCase();
-        String referralId = raiseAssigned(caseId, sullivan);
-        LocalDateTime assignedAt = stored(referralId).getAssignedAt();
-        int noteCount = notes.findByDeedPollIdOrderByCreatedOnDesc(caseId).size();
+        String referralId = sent(caseId, raise(caseId), sullivan);
+        asTeamLeader();
 
         authorised(put(assignmentOf(caseId, referralId)), withMaster(sullivan))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.assignedMaster.id").value(sullivan.toString()));
 
-        assertThat(stored(referralId).getAssignedAt()).isEqualTo(assignedAt);
-        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(noteCount);
-        assertThat(assignedEvents(referralId)).isOne();
+        assertThat(stored(referralId).getAssignedAt()).isEqualTo(SENT_AT);
+        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(1);
+        assertThat(assignedEvents(referralId)).isZero();
     }
 
     @Test
     @DisplayName("PUT on a Decided referral is a 409, and a body without masterId is a 400")
     void refusals() throws Exception {
         String caseId = newCase();
-        String referralId = raiseAssigned(caseId, sullivan);
+        String referralId = sent(caseId, raise(caseId), sullivan);
+        asTeamLeader();
 
         authorised(put(assignmentOf(caseId, referralId)), "{}")
             .andExpect(status().isBadRequest())
@@ -308,43 +304,36 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     @DisplayName("PUT through the wrong case is a 404")
     void wrongCase() throws Exception {
         String caseId = newCase();
-        String referralId = raise(caseId, "{\"reasons\":[\"DomesticAbuse\"]}");
+        String referralId = sent(caseId, raise(caseId), sullivan);
+        asTeamLeader();
 
-        authorised(put(assignmentOf(newCase(), referralId)), withMaster(sullivan)).andExpect(status().isNotFound());
-        assertThat(stored(referralId).getState()).isEqualTo(ReferralState.Open);
+        authorised(put(assignmentOf(newCase(), referralId)), withMaster(okafor)).andExpect(status().isNotFound());
+        assertThat(stored(referralId).getAssignedMasterId()).isEqualTo(sullivan);
     }
 
     @Test
-    @DisplayName("the Masters list carries the current window, the cap and each Master's count, and no subject")
+    @DisplayName("the Masters list carries no window, cap or per-Master count any more, and no subject")
     void mastersList() throws Exception {
-        raiseAssigned(newCase(), sullivan);
-        ReferralWindow before = windowAt(AuditClock.now());
+        String caseId = newCase();
+        sent(caseId, raise(caseId), sullivan);
 
         String body = authorised(get("/caseworker/masters"))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.cap").value(10))
+            .andExpect(jsonPath("$.window").doesNotExist())
+            .andExpect(jsonPath("$.cap").doesNotExist())
+            .andExpect(jsonPath("$.masters[0].assignedInWindow").doesNotExist())
             .andReturn().getResponse().getContentAsString();
-        ReferralWindow after = windowAt(AuditClock.now());
 
         assertThat(body).doesNotContain(SUBJECT);
         JsonNode json = JSON.readTree(body);
-        ReferralWindow published = new ReferralWindow(LocalDate.parse(json.get("window").get("date").asText()),
-            WindowSlot.valueOf(json.get("window").get("slot").asText()));
-        assertThat(published).isIn(before, after);
-        Map<String, Integer> counts = new HashMap<>();
-        json.get("masters").forEach(entry -> counts.put(entry.get("id").asText(),
-                                                        entry.get("assignedInWindow").asInt()));
-        // The assignment counted towards the window of the moment it was made, which is the published one unless a
-        // window boundary fell between the two.
-        if (published.equals(windowAt(stored(onlyReferral()).getAssignedAt()))) {
-            assertThat(counts).containsEntry(sullivan.toString(), 1);
-        }
-        assertThat(counts).containsEntry(okafor.toString(), 0);
+        assertThat(json.fieldNames()).toIterable().containsExactly("masters");
+        assertThat(json.get("masters")).hasSize(2);
+        json.get("masters").forEach(entry -> assertThat(entry.fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("id", "name", "email", "available", "linked", "revision"));
     }
 
     @Test
-    @DisplayName("the document publishes the assignment operation, both refusals and the list envelope, and no create "
-        + "masterId")
+    @DisplayName("the document publishes the reassignment, its refusals and the narrowed list, and no create masterId")
     void openApi() throws Exception {
         JsonNode document = JSON.readTree(mockMvc.perform(get("/v3/api-docs"))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
@@ -353,12 +342,16 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
         assertThat(schemas.path("CreateReferralRequest").path("properties").has("masterId")).isFalse();
         assertThat(schemas.path("CreateReferralRequest").path("description").asText()).contains("referral queue");
         assertThat(schemas.path("AssignReferralRequest").path("required").toString()).isEqualTo("[\"masterId\"]");
+        assertThat(schemas.path("AssignReferralRequest").path("description").asText())
+            .contains("ALLOCATE_REFERRALS", "no place in any window", "checks no cap");
         JsonNode assign = document.path("paths").path("/caseworker/cases/{id}/referrals/{referralId}/assignment")
             .path("put");
         assertThat(assign.path("responses").path("400").path("description").asText())
             .contains("Select a Master who is available");
+        assertThat(assign.path("responses").path("403").isMissingNode()).isFalse();
         assertThat(assign.path("responses").path("409").path("description").asText())
-            .contains("This Master already has");
+            .contains("Send this referral from the queue")
+            .doesNotContain("This Master already has");
         JsonNode create = document.path("paths").path("/caseworker/cases/{id}/referrals").path("post")
             .path("responses");
         assertThat(create.path("409").path("description").asText()).doesNotContain("cap");
@@ -368,28 +361,44 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
         assertThat(schemas.path("AssignedMasterResponse").path("properties").fieldNames()).toIterable()
             .containsExactlyInAnyOrder("id", "name");
         assertThat(schemas.path("MasterListResponse").path("properties").fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("masters", "window", "cap");
+            .containsExactly("masters");
         assertThat(schemas.path("MasterListEntryResponse").path("properties").fieldNames()).toIterable()
-            .contains("assignedInWindow");
+            .doesNotContain("assignedInWindow");
+        assertThat(schemas.has("ReferralWindowResponse")).isFalse();
     }
 
-    private String onlyReferral() {
-        return referrals.findAll().get(0).getId().toString();
+    private void asCaseworker() {
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Ada Caseworker", List.of("caseworker-deedpoll"));
     }
 
-    private ReferralWindow windowAt(LocalDateTime utc) {
-        return ReferralWindows.windowFor(utc.toInstant(ZoneOffset.UTC), settings.referralWindows(),
-                                         bankHolidays::isWorkingDay);
+    private void asTeamLeader() {
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Tia Leader", List.of("caseworker-deedpoll-team-leader"));
     }
 
-    private long countFor(UUID master) {
-        Referral referral = referrals.findAll().stream()
-            .filter(row -> master.equals(row.getAssignedMasterId())).findFirst().orElse(null);
-        if (referral == null) {
-            return 0;
-        }
-        return referrals.countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot(
-            ReferralState.Claimed, master, referral.getWindowDate(), referral.getWindowSlot());
+    private void asDeliveryManager() {
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Dee Manager", List.of("caseworker-deedpoll-delivery-manager"));
+    }
+
+    /**
+     * A referral sent to {@code master} in Monday 26 October's morning window, written directly: the send itself is
+     * {@code ReferralSendTest}'s, and over HTTP it depends on the clock being inside a window.
+     */
+    private String sent(String caseId, String referralId, UUID master) {
+        Referral referral = stored(referralId);
+        boolean linked = master.equals(sullivan);
+        referral.setState(ReferralState.Claimed);
+        referral.setClaimedBy(linked ? "Master Sullivan" : "Master Okafor");
+        referral.setClaimedById(linked ? SUBJECT : null);
+        referral.setClaimedAt(SENT_AT);
+        referral.setAssignedAt(SENT_AT);
+        referral.setLastTouchedAt(SENT_AT);
+        referral.setAssignedMasterId(master);
+        referral.setWindowDate(SENT_DAY);
+        referral.setWindowSlot(WindowSlot.AM);
+        referral.setRemindersSent(2);
+        referrals.saveAndFlush(referral);
+        jdbc.update("UPDATE deedpoll_deedpoll SET \"currentReferralState\" = 'Claimed' WHERE id = ?", caseId);
+        return referralId;
     }
 
     private int assignedEvents(String referralId) {
@@ -409,7 +418,7 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     }
 
     private static String withMaster(UUID master) {
-        return "{\"reasons\":[\"DomesticAbuse\"],\"masterId\":\"" + master + "\"}";
+        return "{\"masterId\":\"" + master + "\"}";
     }
 
     private static String referralsOf(String caseId) {
@@ -424,19 +433,11 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
         return deedPollService.createDeedPoll(DeedPollPatch.of(Map.of("dateReceived", RECEIVED))).deedPoll().getId();
     }
 
-    private String raise(String caseId, String body) throws Exception {
-        String created = authorised(post(referralsOf(caseId)), body)
+    /** A referral raised by the caseworker, waiting in the queue. */
+    private String raise(String caseId) throws Exception {
+        String created = authorised(post(referralsOf(caseId)), "{\"reasons\":[\"DomesticAbuse\"]}")
             .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
         return JSON.readTree(created).get("id").asText();
-    }
-
-    /**
-     * A referral raised and then assigned by {@code PUT}, as the create no longer takes a Master.
-     */
-    private String raiseAssigned(String caseId, UUID master) throws Exception {
-        String referralId = raise(caseId, "{\"reasons\":[\"DomesticAbuse\"]}");
-        authorised(put(assignmentOf(caseId, referralId)), withMaster(master)).andExpect(status().isOk());
-        return referralId;
     }
 
     private Referral stored(String referralId) {

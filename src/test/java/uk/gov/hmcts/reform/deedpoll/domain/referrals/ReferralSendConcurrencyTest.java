@@ -41,7 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * one lock order (window, referrals by id, Masters by id) lets two sends naming the same referrals in opposite orders
  * finish rather than deadlock.
  *
- * <p>On {@code ReferralAssignmentConcurrencyTest}'s pattern: the first transaction holds its locks until PostgreSQL
+ * <p>On {@code DirectionRevisionConcurrencyTest}'s pattern: the first transaction holds its locks until PostgreSQL
  * reports the second waiting on it, so the schedule is observed rather than guessed. Not {@code @Transactional}: the
  * point is what two committed transactions leave behind.
  */

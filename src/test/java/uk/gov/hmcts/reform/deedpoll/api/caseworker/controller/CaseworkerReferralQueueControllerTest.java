@@ -30,6 +30,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralWindows;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
+import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollNoteRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
@@ -49,7 +51,6 @@ import static org.hamcrest.Matchers.startsWith;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -221,8 +222,18 @@ class CaseworkerReferralQueueControllerTest extends AbstractPostgresContainerTes
     void claimedRow() throws Exception {
         String caseId = newCase();
         String referralId = raise(caseId);
-        authorised(put("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/assignment"),
-            "{\"masterId\":\"" + sullivan + "\"}").andExpect(status().isOk());
+        // Sent directly, in a window long closed: a send over HTTP needs the clock inside one.
+        Referral sent = referrals.findById(UUID.fromString(referralId)).orElseThrow();
+        LocalDateTime at = LocalDateTime.of(2026, 10, 26, 9, 0);
+        sent.setState(ReferralState.Claimed);
+        sent.setClaimedBy("Master Sullivan");
+        sent.setClaimedById(SUBJECT);
+        sent.setClaimedAt(at);
+        sent.setAssignedAt(at);
+        sent.setAssignedMasterId(sullivan);
+        sent.setWindowDate(at.toLocalDate());
+        sent.setWindowSlot(WindowSlot.AM);
+        referrals.saveAndFlush(sent);
 
         authorised(get(PATH)).andExpect(status().isOk()).andExpect(jsonPath("$.total").value(0));
         String body = authorised(get(PATH + "?state=Claimed"))
@@ -232,8 +243,8 @@ class CaseworkerReferralQueueControllerTest extends AbstractPostgresContainerTes
             .andExpect(jsonPath("$.referrals[0].assignedMaster.id").value(sullivan.toString()))
             .andExpect(jsonPath("$.referrals[0].assignedMaster.name").value("Master Sullivan"))
             .andExpect(jsonPath("$.referrals[0].assignedAt").isNotEmpty())
-            .andExpect(jsonPath("$.referrals[0].windowDate").isNotEmpty())
-            .andExpect(jsonPath("$.referrals[0].windowSlot").isNotEmpty())
+            .andExpect(jsonPath("$.referrals[0].windowDate").value("2026-10-26"))
+            .andExpect(jsonPath("$.referrals[0].windowSlot").value("AM"))
             .andExpect(jsonPath("$.referrals[0].directionDueBy").isNotEmpty())
             .andReturn().getResponse().getContentAsString();
 

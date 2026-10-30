@@ -581,8 +581,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      * <p>Asserted on the descriptions rather than only on the paths because {@code deed-poll-admin} writes its
      * screens from this document, and two of the rules are not visible in a schema: a revision keeps the first
      * signature, and <strong>withdrawing restarts the processing window</strong>, at whose end the referral is
-     * returned to the office (design decision 6, as plan D2 changed it). A judge who withdraws and walks away loses
-     * the referral, and the admin has to be able to say so.
+     * returned to the queue (design decision 6, as plans D2 and F1 changed it). A judge who withdraws and walks away
+     * loses the referral, and the admin has to be able to say so.
      */
     @DisplayName("Documents the Master's application view, its documents, and revising or withdrawing a direction")
     @Test
@@ -614,7 +614,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         JsonNode withdraw = spec.at(referral.replace("}", "}~1direction~1withdraw") + "/post");
         assertThat(withdraw.has("requestBody")).as("withdrawing takes no body").isFalse();
         assertThat(withdraw.at("/description").asText())
-            .contains("Claimed", "directionChangedAt", "restarts the processing window", "returned to the office");
+            .contains("Claimed", "directionChangedAt", "restarts the processing window", "returned to the queue");
 
         assertThat(spec.at("/components/schemas/JudicialDirectionRequest/description").asText())
             .contains("PUT");

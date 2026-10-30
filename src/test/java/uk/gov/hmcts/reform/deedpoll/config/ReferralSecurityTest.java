@@ -166,13 +166,6 @@ class ReferralSecurityTest {
     private static final Set<String> PERSONAL_LIST = Set.of("findOwnedBy");
 
     /**
-     * The per-Master cap's two counts (plan D2), which name no parent case because a Master's window spans cases.
-     * Admitted on the sweep's terms: each answers a number per Master and never a referral.
-     */
-    private static final Set<String> CAP_COUNTS =
-        Set.of("countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot", "countByMasterInWindow");
-
-    /**
      * The Master emails' read (plan D3), which names no parent case because a digest spans cases. Admitted with two
      * rules: it takes nothing but the ids a ledger row froze, and nothing but {@code MasterEmailTransactions} calls it.
      */
@@ -193,7 +186,7 @@ class ReferralSecurityTest {
 
     /** Every finder that names no parent case, for the declaration rule that admits each one deliberately. */
     private static final Set<String> UNSCOPED = Stream.of(SWEEP, LINKING, MASTER_LOCKS, PERSONAL_LIST, JUDICIAL_READ,
-                                                              CAP_COUNTS, MASTER_EMAILS, QUEUE, SEND)
+                                                              MASTER_EMAILS, QUEUE, SEND)
         .flatMap(Set::stream)
         .collect(Collectors.toUnmodifiableSet());
 
@@ -241,8 +234,7 @@ class ReferralSecurityTest {
                                       claimWindow(Duration.ofHours(2)),
                                       mock(EntityManager.class),
                                       mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
-                                      mock(uk.gov.hmcts.reform.deedpoll.repository.MasterRepository.class),
-                                      mock(uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays.class));
+                                      mock(uk.gov.hmcts.reform.deedpoll.repository.MasterRepository.class));
 
         when(referrals.save(any())).thenAnswer(call -> {
             // An id, as a real save allocates one: the audit event is keyed on it.
@@ -1060,7 +1052,7 @@ class ReferralSecurityTest {
                         .doesNotContain(UUID.class, String.class);
                     continue;
                 }
-                if (SWEEP.contains(finder.getName()) || CAP_COUNTS.contains(finder.getName())) {
+                if (SWEEP.contains(finder.getName())) {
                     // What keeps the sweep inside the rule instead of beside it: neither statement hands back
                     // a referral. The candidate query returns a three-field projection and the release returns
                     // a row count, so an unscoped query cannot become an unscoped read of case data.

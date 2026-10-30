@@ -6,8 +6,8 @@ import java.time.LocalDate;
 import java.util.Objects;
 
 /**
- * One referral window: a working day in {@code Europe/London} and its morning or afternoon. What an assignment
- * counts towards for the per-Master cap, and what {@code V43}'s {@code "windowDate"}/{@code "windowSlot"} store.
+ * One referral window: a working day in {@code Europe/London} and its morning or afternoon. What a send counts
+ * towards for the window's cap, and what {@code V43}'s {@code "windowDate"}/{@code "windowSlot"} store.
  */
 public record ReferralWindow(LocalDate date, WindowSlot slot) {
 

@@ -10,7 +10,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /**
  * The processing window on a timer (plan D2, decision D-3): {@link ReferralService#unassignOverdue()} every
  * {@code deedpoll.referrals.unassign-interval}, fifteen minutes by default, so an assignment nobody looks at is still
- * returned to the office.
+ * returned to the queue.
  *
  * <p>The request-time sweeps stay as well, and racing them is safe for the reason the sweep's class javadoc gives:
  * each release is one conditional statement, so the timer and a request release a referral once between them and

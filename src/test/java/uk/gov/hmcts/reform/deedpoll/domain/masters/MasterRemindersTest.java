@@ -20,6 +20,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
@@ -73,7 +74,8 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final StubNotify STUB = new StubNotify();
 
-    private static final CurrentUser CASEWORKER = CurrentUser.currentUser(List.of(), "Ada Caseworker", "caseworker-1");
+    private static final CurrentUser LEADER =
+        CurrentUser.currentUser(List.of(Role.TEAM_LEADER), "Tia Leader", "leader-1");
 
     @Autowired private MasterEmailTransactions transactions;
     @Autowired private ProcessSettingsService settings;
@@ -194,11 +196,11 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
     void reassignment() {
         UUID sullivan = master("m-from@example.test", "Master Sullivan");
         UUID okafor = master("m-to@example.test", "Master Okafor");
-        Referral referral = open("DP2026-000331");
-        referralService.assign(referral.getDeedPoll().getId(), referral.getId().toString(), sullivan, CASEWORKER);
+        Referral referral = assigned("DP2026-000331", sullivan, NOON_UTC.minusHours(49));
         jdbc.update("UPDATE \"deedpoll_referral\" SET \"remindersSent\" = 1 WHERE \"id\" = ?", referral.getId());
 
-        referralService.assign(referral.getDeedPoll().getId(), referral.getId().toString(), okafor, CASEWORKER);
+        referralService.assign(referral.getDeedPoll().getId(), referral.getId().toString(),
+                               Map.of("masterId", okafor.toString()), LEADER);
         assertThat(remindersSent(referral)).isZero();
         // As if the reassignment were 48 hours before noon.
         jdbc.update("UPDATE \"deedpoll_referral\" SET \"assignedAt\" = ? WHERE \"id\" = ?",

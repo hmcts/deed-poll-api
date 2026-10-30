@@ -48,8 +48,9 @@ public class MasterRepository {
     }
 
     /**
-     * The entry, locked until the caller's transaction ends, so two assignments to one Master serialise and the
-     * per-Master cap's count is read after the other has committed. Always taken after the referral's own lock.
+     * The entry, locked until the caller's transaction ends, so a send or reassignment sees it as it stands until
+     * then: one marked unavailable meanwhile is refused rather than sent to. Always taken after the referral's own
+     * lock.
      */
     public Optional<Assignee> findAssigneeForUpdate(UUID id) {
         return jdbc.query("SELECT name, available, idam_subject FROM deedpoll_master WHERE id = ? FOR UPDATE",

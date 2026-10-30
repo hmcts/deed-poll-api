@@ -152,8 +152,7 @@ class ConfirmationSecurityTest {
                                       claimWindow(Duration.ofHours(2)),
                                       mock(EntityManager.class),
                                       mock(uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail.class),
-                                      mock(uk.gov.hmcts.reform.deedpoll.repository.MasterRepository.class),
-                                      mock(uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays.class));
+                                      mock(uk.gov.hmcts.reform.deedpoll.repository.MasterRepository.class));
 
         when(referrals.save(any())).thenAnswer(call -> call.getArgument(0));
     }

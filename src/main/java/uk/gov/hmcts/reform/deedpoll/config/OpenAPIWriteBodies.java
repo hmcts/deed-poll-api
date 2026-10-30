@@ -28,6 +28,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralReason;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralSchemas;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.savedqueries.SavedQuerySchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings;
@@ -609,9 +610,9 @@ public class OpenAPIWriteBodies {
     }
 
     /**
-     * The reassignment body, and the two refusals an assignment adds (plan D2):
-     * the 400 on {@code masterId} and the 409 at the per-Master cap, beside the 409 for a referral that is not
-     * waiting for a direction. springdoc publishes none of them, because {@code DomainErrorHandler} answers them.
+     * The reassignment body, and its refusals (plan F1): the 400 on {@code masterId} and the 409 for a referral not
+     * yet sent or not waiting for a direction. springdoc publishes none of them, because {@code DomainErrorHandler}
+     * answers them.
      */
     private void describeAssignment(OpenAPI openApi) {
         Schema<?> body = schema(openApi, ASSIGN_REFERRAL);
@@ -621,10 +622,12 @@ public class OpenAPIWriteBodies {
             body.addProperty(ReferralSchemas.MASTER_ID, masterId("The Masters-list entry to assign the referral to."));
             body.setRequired(java.util.List.of(ReferralSchemas.MASTER_ID));
             body.setAdditionalProperties(true);
-            body.setDescription("Assigns the referral to a Master, or moves it to another. Any caseworker, while the "
-                + "referral is Open (waiting for assignment) or Claimed (waiting for a direction). The Master it "
-                + "already has is a no-op that records nothing. A reassignment restarts the Master's processing "
-                + "window, and the referral counts towards the new Master's cap in the current window.");
+            body.setDescription("Moves a referral already sent to a Master to another. Requires "
+                + "caseworker-deedpoll-team-leader or caseworker-deedpoll-delivery-manager (ALLOCATE_REFERRALS), "
+                + "while the referral is Claimed (sent, waiting for a direction), at any time, inside a referral "
+                + "window or not. It takes no place in any window and checks no cap: the referral keeps the window it "
+                + "was sent in. The Master it already has is a no-op that records nothing. Otherwise the referral's "
+                + "processing window and its reminders restart from now.");
         }
         if (openApi.getPaths() == null) {
             return;
@@ -695,11 +698,9 @@ public class OpenAPIWriteBodies {
         ApiResponses responses = operation.getResponses() == null ? new ApiResponses() : operation.getResponses();
         responses.addApiResponse("400", new ApiResponse().description("masterId names no Master, or one who is not "
             + "available: \"" + ReferralSchemas.SELECT_A_MASTER + "\"."));
-        responses.addApiResponse("409", new ApiResponse().description("The referral is not waiting for a direction "
-            + "(it is Decided, Closed or Withdrawn); or the Master already holds the per-Master cap for the current "
-            + "referral window, with an error on masterId: \"This Master already has 10 referrals for the morning of "
-            + "28 October 2026. Choose another Master.\" The window is the morning or afternoon of a working day in "
-            + "Europe/London; outside the windows a referral counts towards the next one."));
+        responses.addApiResponse("409", new ApiResponse().description("The referral has not been sent to a Master "
+            + "(it is Open): \"" + ReferralService.SEND_FROM_THE_QUEUE + "\" Or it is not waiting for a direction "
+            + "(it is Decided, Closed or Withdrawn)."));
         operation.setResponses(responses);
     }
 
