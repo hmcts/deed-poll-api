@@ -101,7 +101,7 @@ class ReferralAssignmentTest {
             LocalDate day = call.getArgument(0);
             return day.getDayOfWeek().getValue() <= DayOfWeek.FRIDAY.getValue() && !day.equals(BANK_HOLIDAY);
         });
-        when(settings.masterWindowCap()).thenReturn(10);
+        when(settings.windowCap()).thenReturn(10);
         when(settings.referralWindows()).thenReturn(WINDOWS);
         when(settings.processingWindow()).thenReturn(Duration.ofDays(7));
         service = new ReferralService(deedPolls, referrals, notes, settings, mock(EntityManager.class), audit,
@@ -321,7 +321,7 @@ class ReferralAssignmentTest {
         @Test
         @DisplayName("names the afternoon, and a lowered cap's count as it stands")
         void afternoon() {
-            when(settings.masterWindowCap()).thenReturn(1);
+            when(settings.windowCap()).thenReturn(1);
             when(referrals.countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot(any(), any(), any(), any()))
                 .thenReturn(1L);
 

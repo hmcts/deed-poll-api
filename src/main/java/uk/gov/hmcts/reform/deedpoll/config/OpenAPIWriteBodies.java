@@ -213,10 +213,10 @@ public class OpenAPIWriteBodies {
             ProcessSettingsService.MIN_REMINDER_INTERVAL_HOURS, ProcessSettingsService.MAX_REMINDER_INTERVAL_HOURS,
             "How often a Master is reminded of their undirected referrals, in whole hours, from 1 to 168. Optional"
                 + " for one release; absent leaves it unchanged, null is refused."));
-        settings.addProperty(ProcessSettings.MASTER_WINDOW_CAP, wholeNumber(
-            ProcessSettingsService.MIN_MASTER_WINDOW_CAP, ProcessSettingsService.MAX_MASTER_WINDOW_CAP,
-            "How many referrals one Master may be assigned per referral window, from 1 to 100. Optional for one"
-                + " release; absent leaves it unchanged, null is refused."));
+        settings.addProperty(ProcessSettings.WINDOW_CAP, wholeNumber(
+            ProcessSettingsService.MIN_WINDOW_CAP, ProcessSettingsService.MAX_WINDOW_CAP,
+            "The most referrals that can be sent to Masters in one referral window, across all Masters, from 1 to"
+                + " 100. Optional for one release; absent leaves it unchanged, null is refused."));
         for (String field : ProcessSettings.WINDOW_FIELDS) {
             settings.addProperty(field, new StringSchema().pattern(ProcessSettingsTimes.PATTERN)
                 .description("A referral window time, Europe/London, HH:mm on the quarter hour. Each window starts"

@@ -76,10 +76,11 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
 ## Staff permissions
 
 `caseworker-deedpoll-team-leader` grants OVERRIDE_PRIVACY, DELETE_NOTE, DELETE_WITNESS,
-MANAGE_SHARED_QUERIES and REPAIR_CCD. `caseworker-deedpoll-delivery-manager` inherits all five
+MANAGE_SHARED_QUERIES, REPAIR_CCD and ALLOCATE_REFERRALS (the referral queue, sending to Masters and reassigning;
+plan F1). `caseworker-deedpoll-delivery-manager` inherits all six
 and alone grants ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG (the process settings, the bank holidays and the
 Masters list's writes; any staff role reads the Masters list and the bank holidays). The deprecated
-`caseworker-deedpoll-admin` temporarily grants only the first five. Resolve capabilities from verified roles; the retained privacy boolean is derived.
+`caseworker-deedpoll-admin` temporarily grants only the Team leader's six. Resolve capabilities from verified roles; the retained privacy boolean is derived.
 Every Gazette operation and the named `readyForPublication` worklist/count (including saved-query
 links) requires ACCESS_GAZETTE, with 403 before reads or side effects. Ordinary field conditions
 and case visibility remain unchanged. Neither new role grants judicial or system authority.
@@ -532,7 +533,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   give a direction, 1–30 days, seeded 7), the reminder interval (1–168 hours, 48), the per-Master cap per window
   (1–100, 10) and the morning and afternoon windows (`HH:mm` on the quarter hour, `Europe/London`, 07:00–10:30 and
   14:00–14:30, each start before its end and the morning end before the afternoon start). `ProcessSettingsService`
-  reads them through `processingWindow()`, `reminderInterval()`, `masterWindowCap()` and `referralWindows()` with no
+  reads them through `processingWindow()`, `reminderInterval()`, `windowCap()` (V46's rename of `masterWindowCap`) and `referralWindows()` with no
   capability check and no cache; `ReferralService` asks `processingWindow()` once per `unassignOverdue`, so a
   Delivery Manager's `PUT` applies at once. Never cache them or reintroduce a property default, and a missing row
   fails the caller rather than guessing. The six V42 keys are **optional on the PUT for one release** so today's admin,

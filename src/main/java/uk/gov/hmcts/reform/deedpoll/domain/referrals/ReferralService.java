@@ -312,7 +312,7 @@ public class ReferralService {
      * <p>In order: the Master must exist and be available (400 on {@code masterId}); the referral must be
      * {@code Open} or {@code Claimed}, that is waiting for a direction (409); assigning it to the Master it already
      * has changes nothing and records nothing; and the Master must hold fewer than
-     * {@link ProcessSettingsService#masterWindowCap()} {@code Claimed} referrals in the window {@link ReferralWindows}
+     * {@link ProcessSettingsService#windowCap()} {@code Claimed} referrals in the window {@link ReferralWindows}
      * gives for now (409, naming the window). Then it is {@code Claimed} by that Master: {@code claimedBy} is the
      * list's name, {@code claimedById} the linked subject or null until the Master signs in, and
      * {@code claimedAt}, {@code assignedAt} and {@code lastTouchedAt} are now, so a reassignment restarts the
@@ -356,7 +356,7 @@ public class ReferralService {
         Map<UUID, Long> assigned = referrals.countByMasterInWindow(ReferralState.Claimed, window.date(), window.slot())
             .stream()
             .collect(Collectors.toUnmodifiableMap(MasterWindowCount::masterId, MasterWindowCount::assigned));
-        return new ReferralWindowLoad(window, settings.masterWindowCap(), assigned);
+        return new ReferralWindowLoad(window, settings.windowCap(), assigned);
     }
 
     /**
@@ -387,7 +387,7 @@ public class ReferralService {
 
         long held = referrals.countByStateAndAssignedMasterIdAndWindowDateAndWindowSlot(
             ReferralState.Claimed, masterId, window.date(), window.slot());
-        if (held >= settings.masterWindowCap()) {
+        if (held >= settings.windowCap()) {
             String full = "This Master already has " + held + (held == 1 ? " referral" : " referrals") + " for "
                 + inWords(window) + ". Choose another Master.";
             throw new ConflictError(full, List.of(new FieldError(ReferralSchemas.MASTER_ID, full)));

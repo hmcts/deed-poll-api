@@ -274,7 +274,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(path.at("/put/description").asText())
             .contains("409", "processing window", "optional for one release");
         assertThat(spec.at("/components/schemas/ProcessSettingsResponse/properties").fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "reminderIntervalHours", "masterWindowCap",
+            .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "reminderIntervalHours", "windowCap",
                 "morningWindowStart", "morningWindowEnd", "afternoonWindowStart", "afternoonWindowEnd", "revision",
                 "updatedAt", "updatedBy");
         JsonNode body = spec.at("/components/schemas/UpdateProcessSettingsRequest");
@@ -288,8 +288,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(minutes.get("format").asText()).isEqualTo("int32");
         assertThat(body.at("/properties/reminderIntervalHours/minimum").asInt()).isEqualTo(1);
         assertThat(body.at("/properties/reminderIntervalHours/maximum").asInt()).isEqualTo(168);
-        assertThat(body.at("/properties/masterWindowCap/minimum").asInt()).isEqualTo(1);
-        assertThat(body.at("/properties/masterWindowCap/maximum").asInt()).isEqualTo(100);
+        assertThat(body.at("/properties/windowCap/minimum").asInt()).isEqualTo(1);
+        assertThat(body.at("/properties/windowCap/maximum").asInt()).isEqualTo(100);
         for (String time : List.of("morningWindowStart", "morningWindowEnd", "afternoonWindowStart",
                                    "afternoonWindowEnd")) {
             assertThat(body.at("/properties/" + time + "/pattern").asText()).as(time)

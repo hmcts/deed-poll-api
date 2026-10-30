@@ -109,7 +109,7 @@ class MasterEmailMigrationTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("refuses a kind other than DIGEST or REMINDER")
+    @DisplayName("refuses a kind other than DIGEST, REMINDER or SENT (V46)")
     void refusesAnUnknownKind() {
         UUID masterId = master();
 

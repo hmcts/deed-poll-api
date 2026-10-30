@@ -123,7 +123,7 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     @AfterEach
     void tearDown() {
         clearTables();
-        jdbc.update("UPDATE deedpoll_process_settings SET master_window_cap = 10");
+        jdbc.update("UPDATE deedpoll_process_settings SET window_cap = 10");
     }
 
     private void clearTables() {
@@ -198,7 +198,7 @@ class CaseworkerReferralAssignmentTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("at the cap a create is a 409 on masterId naming the window, and nothing is written")
     void createAtCap() throws Exception {
-        jdbc.update("UPDATE deedpoll_process_settings SET master_window_cap = 1");
+        jdbc.update("UPDATE deedpoll_process_settings SET window_cap = 1");
         ReferralWindow before = windowAt(AuditClock.now());
         authorised(post(referralsOf(newCase())), withMaster(sullivan)).andExpect(status().isCreated());
         String second = newCase();

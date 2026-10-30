@@ -26,7 +26,7 @@ import java.util.Set;
 
 import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.AFTERNOON_WINDOW_END;
 import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.AFTERNOON_WINDOW_START;
-import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.MASTER_WINDOW_CAP;
+import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.WINDOW_CAP;
 import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.MORNING_WINDOW_END;
 import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.MORNING_WINDOW_START;
 import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES;
@@ -55,9 +55,9 @@ public class ProcessSettingsService {
     /** One week. V42's check states it too. */
     public static final int MAX_REMINDER_INTERVAL_HOURS = 168;
 
-    public static final int MIN_MASTER_WINDOW_CAP = 1;
+    public static final int MIN_WINDOW_CAP = 1;
 
-    public static final int MAX_MASTER_WINDOW_CAP = 100;
+    public static final int MAX_WINDOW_CAP = 100;
 
     private static final String REVISION = "revision";
 
@@ -108,9 +108,9 @@ public class ProcessSettingsService {
         final Optional<Integer> hours = optionalWhole(fields, REMINDER_INTERVAL_HOURS, MIN_REMINDER_INTERVAL_HOURS,
             MAX_REMINDER_INTERVAL_HOURS, "Enter a reminder interval from " + MIN_REMINDER_INTERVAL_HOURS + " to "
                 + MAX_REMINDER_INTERVAL_HOURS + " hours, in whole hours.");
-        final Optional<Integer> cap = optionalWhole(fields, MASTER_WINDOW_CAP, MIN_MASTER_WINDOW_CAP,
-            MAX_MASTER_WINDOW_CAP, "Enter a cap from " + MIN_MASTER_WINDOW_CAP + " to " + MAX_MASTER_WINDOW_CAP
-                + " referrals per Master per window.");
+        final Optional<Integer> cap = optionalWhole(fields, WINDOW_CAP, MIN_WINDOW_CAP,
+            MAX_WINDOW_CAP, "Enter a cap from " + MIN_WINDOW_CAP + " to " + MAX_WINDOW_CAP
+                + " referrals per window, across all Masters.");
         Map<String, LocalTime> times = new HashMap<>();
         for (String field : ProcessSettings.WINDOW_FIELDS) {
             if (fields.containsKey(field)) {
@@ -129,7 +129,7 @@ public class ProcessSettingsService {
         ProcessSettings candidate = new ProcessSettings(
             Duration.ofMinutes(minutes),
             hours.map(Duration::ofHours).orElse(previous.reminderInterval()),
-            cap.orElse(previous.masterWindowCap()),
+            cap.orElse(previous.windowCap()),
             times.getOrDefault(MORNING_WINDOW_START, previous.morningWindowStart()),
             times.getOrDefault(MORNING_WINDOW_END, previous.morningWindowEnd()),
             times.getOrDefault(AFTERNOON_WINDOW_START, previous.afternoonWindowStart()),
@@ -166,9 +166,12 @@ public class ProcessSettingsService {
         return read(false).reminderInterval();
     }
 
-    /** How many referrals one Master may be assigned per referral window. No capability check, no cache. */
-    public int masterWindowCap() {
-        return read(false).masterWindowCap();
+    /**
+     * The most referrals that can be sent to Masters in one referral window, across all Masters. No capability check,
+     * no cache.
+     */
+    public int windowCap() {
+        return read(false).windowCap();
     }
 
     /**

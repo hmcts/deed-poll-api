@@ -242,9 +242,9 @@ session, and the next one builds over it, wiping the results.
 ## Implementation Steps
 
 ### Task 1: Migration, the setting and the capability
-- [ ] Record the execution baseline (commit, highest migration, test counts) in the execution notes.
-- [ ] Add failing tests for V46's mapping, the window cap's rename end to end, and `ALLOCATE_REFERRALS`'s grants and its place in `/me` and the OpenAPI enum.
-- [ ] Implement V46, the setting rename and the capability, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Record the execution baseline (commit, highest migration, test counts) in the execution notes.
+- [x] Add failing tests for V46's mapping, the window cap's rename end to end, and `ALLOCATE_REFERRALS`'s grants and its place in `/me` and the OpenAPI enum.
+- [x] Implement V46, the setting rename and the capability, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 2: Raising without a Master, and the queue read
 - [ ] Add failing tests for create (no `masterId`, always `Open`), the window-state function in `ReferralWindows`, and `GET /caseworker/referral-queue` (gate, both orders, paging, envelope, no subject or email).
@@ -267,3 +267,22 @@ session, and the next one builds over it, wiping the results.
 - [ ] Run the final validation **forced**: `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then `checkstyle.sh`. Record the counts against the baseline. Confirm `git status` is clean apart from the task commits.
 
 ## Execution notes
+
+**Baseline:** commit `803736b` (the plan's commit on `dec42d1`, #157), highest migration V45. Full `build`: SUCCESSFUL
+in 5m 07s, `test` 5,336 tests, 0 failures, 1 skipped; `integration` 27 tests, 0 failures. `checkstyle.sh` OK.
+
+**Task 1.** `V46__referral_queue.sql` renames `master_window_cap` to `window_cap` and its check to
+`deedpoll_process_settings_window_cap_check` (value, default and bounds kept; history rows keep `masterWindowCap`), and
+replaces `deedpoll_master_email_kind_check` with one admitting `DIGEST`, `REMINDER` and `SENT`. The setting is
+`windowCap`/`WINDOW_CAP`/`windowCap()` everywhere (`MIN_WINDOW_CAP`/`MAX_WINDOW_CAP`), its descriptions and refusal say
+it is across all Masters, with no alias. `Capability.ALLOCATE_REFERRALS` follows `MANAGE_PROCESS_CONFIG` and is in the
+Team leader set (so the legacy admin and the Delivery Manager hold it). `ReferralService`'s D2 per-Master check still
+reads `windowCap()` until Task 3 replaces it. New `ReferralQueueMigrationTest` (upgrade of a chosen cap in a scratch
+schema, fresh seed, both check bounds, `SENT` admitted); `MastersAndReferralProcessSettingsMigrationTest`'s fresh-seed
+test reads `window_cap`; the staff permission contract, `/me` sets, `RoleCapabilitiesTest` and
+`CallerAccessOpenApiTest` name the new capability. Focused run (`*RoleCapabilities*`, `*CallerAccess*`, `*AmRoles*`,
+`*ProcessSettings*`, `*MigrationTest`, `*SchemaConformance*`, `*ReferralAssignment*`, `*StaffAccessRules*`): 605 tests,
+2 failures, both in the tests (an alphabetical expectation the rename reordered, and the new fixture lacking V42's
+attribution), fixed and re-run green; `integration --tests '*OpenAPIPublisher*'` 24, 0 failures. Compile of every
+source set OK; `checkstyle.sh` OK (after wrapping one long line). `CLAUDE.md`'s staff permissions and settings lines
+name the capability and `windowCap()`.

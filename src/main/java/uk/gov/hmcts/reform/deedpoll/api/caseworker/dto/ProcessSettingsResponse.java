@@ -13,8 +13,9 @@ public record ProcessSettingsResponse(
         minimum = "1440", maximum = "43200", format = "int32") int referralClaimExpiryMinutes,
     @Schema(description = "How often a Master is reminded of their undirected referrals, in hours.",
         minimum = "1", maximum = "168", format = "int32") int reminderIntervalHours,
-    @Schema(description = "How many referrals one Master may be assigned per referral window.",
-        minimum = "1", maximum = "100", format = "int32") int masterWindowCap,
+    @Schema(description = "The most referrals that can be sent to Masters in one referral window, across"
+        + " all Masters.",
+        minimum = "1", maximum = "100", format = "int32") int windowCap,
     @Schema(description = "The morning referral window's start, Europe/London, HH:mm.",
         pattern = ProcessSettingsTimes.PATTERN) String morningWindowStart,
     @Schema(description = "The morning referral window's end, Europe/London, HH:mm.",
@@ -29,7 +30,7 @@ public record ProcessSettingsResponse(
 
     public static ProcessSettingsResponse from(ProcessSettings settings) {
         return new ProcessSettingsResponse(settings.referralClaimExpiryMinutes(), settings.reminderIntervalHours(),
-            settings.masterWindowCap(), ProcessSettingsTimes.format(settings.morningWindowStart()),
+            settings.windowCap(), ProcessSettingsTimes.format(settings.morningWindowStart()),
             ProcessSettingsTimes.format(settings.morningWindowEnd()),
             ProcessSettingsTimes.format(settings.afternoonWindowStart()),
             ProcessSettingsTimes.format(settings.afternoonWindowEnd()), settings.revision(), settings.updatedAt(),

@@ -73,13 +73,13 @@ class ReferralAssignmentConcurrencyTest extends AbstractPostgresContainerTest {
     @BeforeEach
     void capAtOne() {
         clearTables();
-        jdbc.update("UPDATE deedpoll_process_settings SET master_window_cap = 1");
+        jdbc.update("UPDATE deedpoll_process_settings SET window_cap = 1");
     }
 
     @AfterEach
     void restore() {
         clearTables();
-        jdbc.update("UPDATE deedpoll_process_settings SET master_window_cap = 10");
+        jdbc.update("UPDATE deedpoll_process_settings SET window_cap = 10");
     }
 
     private void clearTables() {

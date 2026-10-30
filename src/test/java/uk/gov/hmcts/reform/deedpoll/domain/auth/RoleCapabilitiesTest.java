@@ -71,6 +71,17 @@ class RoleCapabilitiesTest {
     }
 
     @Test
+    void teamLeadersDeliveryManagersAndTheLegacyAdminAllocateReferralsAndNobodyElseDoes() {
+        for (Role role : Role.values()) {
+            assertThat(RoleCapabilities.forRoles(List.of(role)).contains(Capability.ALLOCATE_REFERRALS))
+                .as(role.name())
+                .isEqualTo(role == Role.TEAM_LEADER || role == Role.DELIVERY_MANAGER || role == Role.DEEDPOLL_ADMIN);
+        }
+        assertThat(Capability.values()[Capability.values().length - 1]).isEqualTo(Capability.ALLOCATE_REFERRALS);
+        assertThat(Capability.ALLOCATE_REFERRALS.ordinal()).isEqualTo(Capability.MANAGE_PROCESS_CONFIG.ordinal() + 1);
+    }
+
+    @Test
     void rolesAndCapabilitiesCannotBeMutatedOrIndependentlyAsserted() {
         List<Role> roles = new ArrayList<>(List.of(Role.CASEWORKER));
         CurrentUser user = new CurrentUser(roles, true, "Audit name", "stable-subject", null);

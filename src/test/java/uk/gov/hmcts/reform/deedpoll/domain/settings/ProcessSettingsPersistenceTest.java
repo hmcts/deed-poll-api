@@ -71,7 +71,7 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
         jdbc.update("""
             INSERT INTO deedpoll_process_settings (id, referral_claim_expiry_minutes, revision) VALUES (1, 10080, 0)
             ON CONFLICT (id) DO UPDATE SET referral_claim_expiry_minutes = 10080, reminder_interval_hours = 48,
-                master_window_cap = 10, morning_window_start = '07:00', morning_window_end = '10:30',
+                window_cap = 10, morning_window_start = '07:00', morning_window_end = '10:30',
                 afternoon_window_start = '14:00', afternoon_window_end = '14:30', revision = 0, updated_at = NULL,
                 updated_by_id = NULL, updated_by_name = NULL
             """);
@@ -87,7 +87,7 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
             LocalTime.of(7, 0), LocalTime.of(10, 30), LocalTime.of(14, 0), LocalTime.of(14, 30), 0, null, null));
         assertThat(service.processingWindow()).isEqualTo(Duration.ofMinutes(10080));
         assertThat(service.reminderInterval()).isEqualTo(Duration.ofHours(48));
-        assertThat(service.masterWindowCap()).isEqualTo(10);
+        assertThat(service.windowCap()).isEqualTo(10);
         assertThat(service.referralWindows()).isEqualTo(settings.referralWindows());
     }
 
@@ -97,7 +97,7 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
         for (String assignment : List.of("referral_claim_expiry_minutes = 1439",
                                          "referral_claim_expiry_minutes = 43201",
                                          "reminder_interval_hours = 0", "reminder_interval_hours = 169",
-                                         "master_window_cap = 0", "master_window_cap = 101",
+                                         "window_cap = 0", "window_cap = 101",
                                          "morning_window_start = '07:10'", "afternoon_window_end = '14:30:30'",
                                          "morning_window_end = '07:00'", "morning_window_end = '14:00'",
                                          "afternoon_window_end = '14:00'")) {
@@ -105,7 +105,7 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
                 + " WHERE id = 1")).as(assignment).isInstanceOf(DataIntegrityViolationException.class);
         }
         assertThat(jdbc.update("UPDATE deedpoll_process_settings SET referral_claim_expiry_minutes = 43200, "
-            + "reminder_interval_hours = 1, master_window_cap = 100, morning_window_end = '13:45' WHERE id = 1"))
+            + "reminder_interval_hours = 1, window_cap = 100, morning_window_end = '13:45' WHERE id = 1"))
             .isOne();
         assertThatThrownBy(() -> jdbc.update("UPDATE deedpoll_process_settings SET revision = 1 WHERE id = 1"))
             .isInstanceOf(DataIntegrityViolationException.class);
