@@ -141,6 +141,19 @@ public final class ReferralNotes {
     }
 
     /**
+     * The note for a referral sent from the queue to a Master (plan F1), one per referral in a send.
+     *
+     * <p>"Referral raised on …, reasons: …, sent to {name} by the office."
+     *
+     * <p>Names the Master, bounded as {@link #returnedForAssignment}'s name is; never an email address or a subject.
+     * "By the office" because the note's author is the Team leader or Delivery Manager who sent it, and the
+     * caseworker reading the timeline did not.
+     */
+    public static String sent(Referral referral, String master) {
+        return "Referral " + identifies(referral) + ", sent to " + named(master) + " by the office.";
+    }
+
+    /**
      * The note for a referral moved from one Master to another (D-8).
      *
      * <p>"Referral raised on …, reasons: …, reassigned from {old} to {new}."

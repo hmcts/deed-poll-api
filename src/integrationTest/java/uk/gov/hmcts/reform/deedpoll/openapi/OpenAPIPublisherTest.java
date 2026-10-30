@@ -711,6 +711,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.add("/caseworker/masters");
         known.add("/caseworker/masters/{id}");
         known.add("/caseworker/referral-queue");
+        known.add("/caseworker/referral-queue/sends");
         known.add("/caseworker/process-settings/bank-holidays");
         known.add("/caseworker/process-settings/bank-holidays/{date}");
         known.add("/caseworker/gazette-notice-previews");

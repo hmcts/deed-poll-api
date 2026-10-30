@@ -185,9 +185,15 @@ class ReferralSecurityTest {
     private static final Set<String> QUEUE = Set.of("findQueue", "findSent", "countByWindowDateAndWindowSlot",
                                                     "countSentByMasterInWindow");
 
+    /**
+     * The batch send's lock (plan F1), by the referral ids a send's body names, across cases. Admitted on the queue's
+     * caller rule, and on {@link #MASTER_EMAILS}' shape: a collection of ids and nothing else.
+     */
+    private static final Set<String> SEND = Set.of("findByIdInForSending");
+
     /** Every finder that names no parent case, for the declaration rule that admits each one deliberately. */
     private static final Set<String> UNSCOPED = Stream.of(SWEEP, LINKING, MASTER_LOCKS, PERSONAL_LIST, JUDICIAL_READ,
-                                                              CAP_COUNTS, MASTER_EMAILS, QUEUE)
+                                                              CAP_COUNTS, MASTER_EMAILS, QUEUE, SEND)
         .flatMap(Set::stream)
         .collect(Collectors.toUnmodifiableSet());
 
@@ -435,8 +441,8 @@ class ReferralSecurityTest {
             noClasses()
                 .that().doNotHaveFullyQualifiedName(ReferralQueue.class.getName())
                 .should().callMethodWhere(DescribedPredicate.describe(
-                    "a call to one of the queue's cross-case reads",
-                    (JavaMethodCall call) -> QUEUE.contains(call.getName())
+                    "a call to one of the queue's cross-case reads or the send's lock",
+                    (JavaMethodCall call) -> (QUEUE.contains(call.getName()) || SEND.contains(call.getName()))
                         && call.getTargetOwner().isAssignableTo(ReferralRepository.class)))
                 .check(mainClasses());
         }
@@ -993,6 +999,12 @@ class ReferralSecurityTest {
                     assertThat(finder.getParameterTypes())
                         .as("%s takes a referral id and nothing else", finder.getName())
                         .containsExactly(UUID.class);
+                    continue;
+                }
+                if (SEND.contains(finder.getName())) {
+                    assertThat(finder.getParameterTypes())
+                        .as("%s takes a send's referral ids and nothing else", finder.getName())
+                        .containsExactly(Collection.class);
                     continue;
                 }
                 if (MASTER_EMAILS.contains(finder.getName())) {

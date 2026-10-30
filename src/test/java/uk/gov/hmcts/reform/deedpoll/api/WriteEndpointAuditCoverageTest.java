@@ -61,12 +61,12 @@ class WriteEndpointAuditCoverageTest {
     }
 
     @Test
-    @DisplayName("all 35 current write mappings are classified, 31 audited and 4 exempt")
+    @DisplayName("all 36 current write mappings are classified, 32 audited and 4 exempt")
     void theCurrentMappingsAreCounted() {
         Map<String, Write> writes = staffWrites();
 
-        assertThat(writes).hasSize(35);
-        assertThat(writes.values()).filteredOn(write -> write.action() != null).hasSize(31);
+        assertThat(writes).hasSize(36);
+        assertThat(writes.values()).filteredOn(write -> write.action() != null).hasSize(32);
         assertThat(writes.keySet()).containsAll(EXEMPT);
     }
 

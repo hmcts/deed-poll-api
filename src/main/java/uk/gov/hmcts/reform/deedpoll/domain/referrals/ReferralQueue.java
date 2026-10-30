@@ -1,9 +1,11 @@
 package uk.gov.hmcts.reform.deedpoll.domain.referrals;
 
+import org.hibernate.Hibernate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
@@ -18,16 +20,27 @@ import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.MasterWindowCount;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.ReferralWindowLocks;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -51,17 +64,33 @@ public class ReferralQueue {
 
     static final String INVALID_STATE = "Referral queue state is not valid";
 
+    /**
+     * Every 409 on an {@code allocations[i].referralId}, whatever the referral is instead.
+     */
+    static final String NO_LONGER_WAITING = "This referral is no longer waiting to be sent";
+
+    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm", Locale.UK);
+
+    /**
+     * {@code ReferralService}'s day format, with the weekday: the next window can be days away.
+     */
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("EEEE d MMMM yyyy", Locale.UK);
+
     private final ReferralRepository referrals;
     private final MasterRepository masters;
     private final ProcessSettingsService settings;
     private final BankHolidays bankHolidays;
+    private final ReferralService referralService;
+    private final ReferralWindowLocks windowLocks;
 
     public ReferralQueue(ReferralRepository referrals, MasterRepository masters, ProcessSettingsService settings,
-                         BankHolidays bankHolidays) {
+                         BankHolidays bankHolidays, ReferralService referralService, ReferralWindowLocks windowLocks) {
         this.referrals = referrals;
         this.masters = masters;
         this.settings = settings;
         this.bankHolidays = bankHolidays;
+        this.referralService = referralService;
+        this.windowLocks = windowLocks;
     }
 
     /**
@@ -91,6 +120,156 @@ public class ReferralQueue {
             ? referrals.findQueue(ReferralState.Open, Urgency.Urgent, request)
             : referrals.findSent(ReferralState.Claimed, request);
         return ReferralQueuePage.of(found.getContent(), paging, found.getTotalElements(), windowAt(now));
+    }
+
+    /**
+     * A batch send (plan F1, decisions F-3 to F-5): each named referral, waiting in the queue, sent to the Master
+     * named beside it, in the window open now. One transaction, and <strong>any refusal writes nothing</strong>.
+     *
+     * <p>In this order, each refusal before anything the next step reads:
+     * <ol>
+     *   <li>{@link Capability#ALLOCATE_REFERRALS} (403), before the body is read;</li>
+     *   <li>the body's shape ({@link ReferralSchemas#parseSend}, 400 naming the entry);</li>
+     *   <li>a window must be open now (409, naming when the next one opens);</li>
+     *   <li>the window's lock ({@link ReferralWindowLocks}), then the referrals' rows in id order, then the Masters'
+     *       in id order -- the one order every send takes, so two cannot deadlock, and the referral-before-Master
+     *       order of {@code ReferralService.assign};</li>
+     *   <li>each referral must be {@code Open} (409 on {@code allocations[i].referralId}), except that one already
+     *       {@code Claimed} by the same Master in this same window is a <strong>replay</strong>, skipped rather than
+     *       refused, so a sender whose answer was lost can press Send again;</li>
+     *   <li>each Master named for a new one must exist and be available (400 on {@code allocations[i].masterId});</li>
+     *   <li>the referrals already sent in the window (decision A-2: in any state since) plus the new ones must not
+     *       exceed {@link ProcessSettingsService#windowCap()} (409, the room left and the excess in words).</li>
+     * </ol>
+     * Then {@link ReferralService#send} applies each new one. The lock makes the cap hold under concurrency: a second
+     * send in the window waits for the first to commit, and counts what it sent.
+     *
+     * @throws ForbiddenError    without {@link Capability#ALLOCATE_REFERRALS}, before anything else
+     * @throws InvalidInputError for a body of the wrong shape, or a Master who is unknown or unavailable
+     * @throws ConflictError     outside a window, for a referral not waiting to be sent, or past the cap
+     */
+    @Transactional
+    public ReferralSend send(CurrentUser caller, Map<String, Object> body) {
+        caller.require(Capability.ALLOCATE_REFERRALS);
+        List<ReferralAllocation> allocations =
+            ReferralSchemas.parseSend(body, ProcessSettingsService.MAX_WINDOW_CAP);
+        return send(caller, allocations, AuditClock.now());
+    }
+
+    /**
+     * {@link #send} at a given moment (UTC wall time, as {@code AuditClock} gives it), past the gate and the shape,
+     * so a test can say which window it falls in.
+     */
+    ReferralSend send(CurrentUser caller, List<ReferralAllocation> allocations, LocalDateTime now) {
+        Instant at = now.toInstant(ZoneOffset.UTC);
+        ReferralWindowTimes times = settings.referralWindows();
+        ReferralWindow window = ReferralWindows.openAt(at, times, bankHolidays::isWorkingDay)
+            .orElseThrow(() -> new ConflictError(closed(at, times)));
+        windowLocks.lockForSending(window.date(), window.slot());
+
+        Map<UUID, Referral> locked = referrals.findByIdInForSending(
+                allocations.stream().map(ReferralAllocation::referralId).toList()).stream()
+            .collect(Collectors.toMap(Referral::getId, Function.identity()));
+        List<Integer> fresh = new ArrayList<>();
+        List<FieldError> notWaiting = new ArrayList<>();
+        for (int i = 0; i < allocations.size(); i++) {
+            ReferralAllocation allocation = allocations.get(i);
+            Referral referral = locked.get(allocation.referralId());
+            if (referral != null && referral.getState() == ReferralState.Open) {
+                fresh.add(i);
+            } else if (referral == null || !isReplay(referral, allocation, window)) {
+                notWaiting.add(new FieldError(entry(i, ReferralSchemas.REFERRAL_ID), NO_LONGER_WAITING));
+            }
+        }
+        if (!notWaiting.isEmpty()) {
+            throw new ConflictError(NO_LONGER_WAITING, notWaiting);
+        }
+
+        Map<UUID, MasterRepository.Assignee> assignees = new HashMap<>();
+        fresh.stream()
+            .map(i -> allocations.get(i).masterId())
+            .distinct()
+            // As PostgreSQL orders a uuid, so the order is the same whichever side states it.
+            .sorted(Comparator.comparing(UUID::toString))
+            .forEach(id -> masters.findAssigneeForUpdate(id)
+                .filter(MasterRepository.Assignee::available)
+                .ifPresent(assignee -> assignees.put(id, assignee)));
+        List<FieldError> unavailable = fresh.stream()
+            .filter(i -> !assignees.containsKey(allocations.get(i).masterId()))
+            .map(i -> new FieldError(entry(i, ReferralSchemas.MASTER_ID), ReferralSchemas.SELECT_A_MASTER))
+            .toList();
+        if (!unavailable.isEmpty()) {
+            throw new InvalidInputError(ReferralSchemas.SELECT_A_MASTER, unavailable);
+        }
+
+        if (!fresh.isEmpty()) {
+            long sent = referrals.countByWindowDateAndWindowSlot(window.date(), window.slot());
+            int cap = settings.windowCap();
+            if (sent + fresh.size() > cap) {
+                throw new ConflictError(full(window, Math.max(0, cap - sent), fresh.size()));
+            }
+        }
+
+        for (int i : fresh) {
+            ReferralAllocation allocation = allocations.get(i);
+            referralService.send(locked.get(allocation.referralId()), allocation.masterId(),
+                                 assignees.get(allocation.masterId()), window, caller, now);
+        }
+        List<Referral> named = allocations.stream().map(allocation -> locked.get(allocation.referralId())).toList();
+        // The controller maps each case's reference and names after this transaction has closed.
+        named.forEach(referral -> Hibernate.initialize(referral.getDeedPoll()));
+        return new ReferralSend(named, windowAt(at));
+    }
+
+    /** Already sent to this Master in this window: the same send again, whose answer was lost. */
+    private static boolean isReplay(Referral referral, ReferralAllocation allocation, ReferralWindow window) {
+        return referral.getState() == ReferralState.Claimed
+            && allocation.masterId().equals(referral.getAssignedMasterId())
+            && window.date().equals(referral.getWindowDate())
+            && window.slot() == referral.getWindowSlot();
+    }
+
+    private static String entry(int index, String field) {
+        return ReferralSchemas.ALLOCATIONS + "[" + index + "]." + field;
+    }
+
+    /** "Referrals can only be sent during a referral window. The next one opens at 14:00 today." */
+    private String closed(Instant at, ReferralWindowTimes times) {
+        ReferralWindow next = ReferralWindows.nextToOpen(at, times, bankHolidays::isWorkingDay);
+        return closed(at, next, ReferralWindows.opensAt(next, times));
+    }
+
+    /**
+     * The window-closed refusal, naming when {@code next} opens, in {@code Europe/London}: "today", "tomorrow" or the
+     * weekday and date.
+     */
+    static String closed(Instant at, ReferralWindow next, Instant opensAt) {
+        LocalDate today = at.atZone(ReferralWindowTimes.ZONE).toLocalDate();
+        ZonedDateTime opens = opensAt.atZone(ReferralWindowTimes.ZONE);
+        String day;
+        if (next.date().equals(today)) {
+            day = "today";
+        } else if (next.date().equals(today.plusDays(1))) {
+            day = "tomorrow";
+        } else {
+            day = "on " + DAY.format(next.date());
+        }
+        return "Referrals can only be sent during a referral window. The next one opens at " + TIME.format(opens)
+            + " " + day + ".";
+    }
+
+    /**
+     * "Only 3 more referrals can be sent this morning. Remove 2 and try again.", or with no room at all, "No more
+     * referrals can be sent this morning."
+     */
+    static String full(ReferralWindow window, long room, int requested) {
+        String when = window.slot() == WindowSlot.AM ? "this morning" : "this afternoon";
+        if (room == 0) {
+            return "No more referrals can be sent " + when + ".";
+        }
+        long excess = requested - room;
+        return "Only " + room + " more " + (room == 1 ? "referral" : "referrals") + " can be sent " + when
+            + ". Remove " + excess + " and try again.";
     }
 
     /**

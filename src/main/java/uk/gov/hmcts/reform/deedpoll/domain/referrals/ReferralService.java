@@ -2,6 +2,7 @@ package uk.gov.hmcts.reform.deedpoll.domain.referrals;
 
 import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
@@ -388,6 +389,61 @@ public class ReferralService {
 
         final String fromName = fromState == ReferralState.Claimed ? referral.getClaimedBy() : null;
         final LocalDateTime fromAssignedAt = referral.getAssignedAt();
+        stampAssignment(referral, masterId, master, window, caller, now);
+
+        Referral saved = referrals.save(referral);
+        audit(AuditAction.REFERRAL_ASSIGNED, caller, deedPollId, saved, fromState, List.of(
+            AuditValue.of("state", fromState, saved.getState()),
+            AuditValue.of("claimedBy", fromName, saved.getClaimedBy()),
+            AuditValue.of("assignedAt", fromAssignedAt, saved.getAssignedAt())));
+        String note = fromName == null
+            ? ReferralNotes.assigned(saved, master.name())
+            : ReferralNotes.reassigned(saved, fromName, master.name());
+        notes.createNote(deedPollId, new CreateNoteInput(note), caller.noteAuthor());
+        return saved;
+    }
+
+    /**
+     * Sends one referral from the queue to a Master (plan F1), inside {@code ReferralQueue.send}'s transaction, which
+     * has already taken the window lock, locked this referral and then the Master, checked the referral is
+     * {@code Open}, the Master available and the cap, and chosen the window open now.
+     *
+     * <p>{@code Claimed} by the Master as {@link #assign} would leave it -- {@code claimedBy} the list's name,
+     * {@code claimedById} the linked subject or null until linking, {@code claimedAt}, {@code assignedAt} and
+     * {@code lastTouchedAt} now, the window it was sent in and {@code remindersSent} 0 -- with one
+     * {@link ReferralNotes#sent} note, one {@link AuditAction#REFERRAL_SENT} event with old and new {@code state},
+     * {@code claimedBy} and {@code assignedAt} (never the subject), and both read-models recomputed for its case. A
+     * case holds at most one live referral, so that is once per case.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Referral send(Referral locked, UUID masterId, MasterRepository.Assignee master, ReferralWindow window,
+                         CurrentUser caller, LocalDateTime now) {
+        if (locked.getState() != ReferralState.Open) {
+            throw new IllegalStateException("Only an Open referral is sent");
+        }
+        final String deedPollId = locked.getDeedPoll().getId();
+        final String fromName = locked.getClaimedBy();
+        final LocalDateTime fromAssignedAt = locked.getAssignedAt();
+        stampAssignment(locked, masterId, master, window, caller, now);
+
+        Referral saved = referrals.save(locked);
+        audit(AuditAction.REFERRAL_SENT, caller, deedPollId, saved, ReferralState.Open, List.of(
+            AuditValue.of("state", ReferralState.Open, saved.getState()),
+            AuditValue.of("claimedBy", fromName, saved.getClaimedBy()),
+            AuditValue.of("assignedAt", fromAssignedAt, saved.getAssignedAt())));
+        notes.createNote(deedPollId, new CreateNoteInput(ReferralNotes.sent(saved, master.name())),
+                         caller.noteAuthor());
+        refreshCurrentReferralState(deedPollId);
+        refreshAwaitingConfirmation(deedPollId);
+        return saved;
+    }
+
+    /**
+     * The columns an assignment or a send sets: {@code Claimed} by the Master, the clock and the reminders
+     * restarted, and the window it counts in.
+     */
+    private static void stampAssignment(Referral referral, UUID masterId, MasterRepository.Assignee master,
+                                        ReferralWindow window, CurrentUser caller, LocalDateTime now) {
         referral.setState(ReferralState.Claimed);
         referral.setClaimedBy(master.name());
         // Null until the Master first signs in and linking fills it in; nobody can see the referral until then.
@@ -402,17 +458,6 @@ public class ReferralService {
         referral.setRemindersSent(0);
         referral.setModifiedBy(caller.name());
         referral.setModifiedOn(now);
-
-        Referral saved = referrals.save(referral);
-        audit(AuditAction.REFERRAL_ASSIGNED, caller, deedPollId, saved, fromState, List.of(
-            AuditValue.of("state", fromState, saved.getState()),
-            AuditValue.of("claimedBy", fromName, saved.getClaimedBy()),
-            AuditValue.of("assignedAt", fromAssignedAt, saved.getAssignedAt())));
-        String note = fromName == null
-            ? ReferralNotes.assigned(saved, master.name())
-            : ReferralNotes.reassigned(saved, fromName, master.name());
-        notes.createNote(deedPollId, new CreateNoteInput(note), caller.noteAuthor());
-        return saved;
     }
 
     /** The referral window a moment counts towards, from the stored window times and the bank holidays. */

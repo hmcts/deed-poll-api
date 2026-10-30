@@ -45,6 +45,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.startsWith;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -63,6 +65,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class CaseworkerReferralQueueControllerTest extends AbstractPostgresContainerTest {
 
     private static final String PATH = "/caseworker/referral-queue";
+    private static final String SENDS = PATH + "/sends";
     private static final String RECEIVED = "2026-07-01T00:00:00.000Z";
     private static final String SUBJECT = "sullivan-idam-subject";
     private static final String SULLIVAN_EMAIL = "master.sullivan@judiciary.example";
@@ -120,6 +123,7 @@ class CaseworkerReferralQueueControllerTest extends AbstractPostgresContainerTes
     @AfterEach
     void tearDown() {
         clearTables();
+        windows("07:00", "10:30", "14:00", "14:30");
     }
 
     private void clearTables() {
@@ -294,6 +298,126 @@ class CaseworkerReferralQueueControllerTest extends AbstractPostgresContainerTes
             .containsExactlyInAnyOrder("current", "next", "cap", "sent", "masters");
         assertThat(schemas.path("MasterInWindow").path("properties").fieldNames()).toIterable()
             .containsExactlyInAnyOrder("id", "name", "sentInWindow");
+    }
+
+    @Test
+    @DisplayName("send: a caller without ALLOCATE_REFERRALS is 403 before the body is read, and nothing is sent")
+    void sendRefused() throws Exception {
+        String caseId = newCase();
+        String referralId = raise(caseId);
+        asStaff("caseworker-deedpoll");
+
+        authorised(post(SENDS), "{\"allocations\":\"nonsense\"}").andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.errors").doesNotExist());
+        authorised(post(SENDS), sendBody(referralId)).andExpect(status().isForbidden());
+        assertThat(referrals.findById(UUID.fromString(referralId)).orElseThrow().getAssignedMasterId()).isNull();
+    }
+
+    @Test
+    @DisplayName("send: a body of the wrong shape is 400, naming the entry")
+    void sendShape() throws Exception {
+        authorised(post(SENDS), "{\"allocations\":[]}")
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errors[0].field").value("allocations"));
+        authorised(post(SENDS), "{\"allocations\":[{\"referralId\":\"nope\",\"masterId\":\"" + sullivan + "\"}]}")
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errors[0].field").value("allocations[0].referralId"));
+    }
+
+    @Test
+    @DisplayName("send: inside a window it is 200 with the sent rows and the window after, and again is a replay")
+    void sends() throws Exception {
+        windows("00:00", "23:00", "23:15", "23:45");
+        assumeTrue(openNow(), "no window can be open at this moment");
+        String caseId = newCase();
+        String referralId = raise(caseId);
+
+        String body = authorised(post(SENDS), sendBody(referralId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.referrals[0].id").value(referralId))
+            .andExpect(jsonPath("$.referrals[0].state").value("Claimed"))
+            .andExpect(jsonPath("$.referrals[0].caseId").value(caseId))
+            .andExpect(jsonPath("$.referrals[0].assignedMaster.name").value("Master Sullivan"))
+            .andExpect(jsonPath("$.window.sent").value(1))
+            .andExpect(jsonPath("$.window.masters[0].sentInWindow").value(1))
+            .andReturn().getResponse().getContentAsString();
+        assertThat(JSON.readTree(body).fieldNames()).toIterable().containsExactlyInAnyOrder("referrals", "window");
+        assertThat(body).doesNotContain(SUBJECT).doesNotContain(SULLIVAN_EMAIL);
+        assertThat(jdbc.queryForObject(
+            "SELECT count(*) FROM deedpoll_audit_event WHERE action = 'REFERRAL_SENT' AND entity_id = ?",
+            Integer.class, referralId)).isOne();
+
+        authorised(post(SENDS), sendBody(referralId))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.referrals[0].id").value(referralId))
+            .andExpect(jsonPath("$.window.sent").value(1));
+        assertThat(jdbc.queryForObject(
+            "SELECT count(*) FROM deedpoll_audit_event WHERE action = 'REFERRAL_SENT' AND entity_id = ?",
+            Integer.class, referralId)).isOne();
+        assertThat(notes.findByDeedPollIdOrderByCreatedOnDesc(caseId)).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("send: outside a window it is 409, saying when the next opens, and nothing is sent")
+    void sendOutsideAWindow() throws Exception {
+        windows("00:00", "00:15", "00:30", "00:45");
+        assumeTrue(closedNow(), "a window is open at this moment");
+        String referralId = raise(newCase());
+
+        authorised(post(SENDS), sendBody(referralId))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.error").value(startsWith(
+                "Referrals can only be sent during a referral window. The next one opens at 00:00 ")));
+        assertThat(referrals.findById(UUID.fromString(referralId)).orElseThrow().getState().name())
+            .isEqualTo("Open");
+    }
+
+    @Test
+    @DisplayName("send: the document publishes the operation, its body, the 403, 400 and 409")
+    void sendOpenApi() throws Exception {
+        JsonNode document = JSON.readTree(mockMvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+
+        JsonNode path = document.path("paths").path(SENDS);
+        assertThat(path.fieldNames()).toIterable().containsExactly("post");
+        JsonNode operation = path.path("post");
+        assertThat(operation.path("operationId").asText()).isEqualTo("sendReferrals");
+        assertThat(operation.path("description").asText()).contains("ALLOCATE_REFERRALS", "403", "cap");
+        assertThat(operation.path("responses").fieldNames()).toIterable().contains("200", "400", "403", "409");
+        assertThat(operation.path("responses").path("409").path("description").asText())
+            .contains("Only 3 more referrals can be sent this morning.");
+        JsonNode schemas = document.path("components").path("schemas");
+        JsonNode request = schemas.path("SendReferralsRequest");
+        assertThat(request.path("required").get(0).asText()).isEqualTo("allocations");
+        assertThat(request.path("properties").path("allocations").path("maxItems").asInt()).isEqualTo(100);
+        assertThat(request.path("properties").path("allocations").path("items").path("required"))
+            .extracting(JsonNode::asText).containsExactlyInAnyOrder("referralId", "masterId");
+        assertThat(schemas.path("ReferralSendResponse").path("properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("referrals", "window");
+    }
+
+    private String sendBody(String referralId) {
+        return "{\"allocations\":[{\"referralId\":\"" + referralId + "\",\"masterId\":\"" + sullivan + "\"}]}";
+    }
+
+    private void windows(String morningStart, String morningEnd, String afternoonStart, String afternoonEnd) {
+        jdbc.update("""
+            UPDATE deedpoll_process_settings SET morning_window_start = CAST(? AS time),
+                morning_window_end = CAST(? AS time), afternoon_window_start = CAST(? AS time),
+                afternoon_window_end = CAST(? AS time)
+            """, morningStart, morningEnd, afternoonStart, afternoonEnd);
+    }
+
+    /** Whether a window is open now and for the next minute, so the request lands inside it. */
+    private boolean openNow() {
+        LocalDateTime now = AuditClock.now();
+        return openAt(now).isPresent() && openAt(now.plusMinutes(1)).isPresent();
+    }
+
+    /** Whether no window is open now or for the next minute. */
+    private boolean closedNow() {
+        LocalDateTime now = AuditClock.now();
+        return openAt(now).isEmpty() && openAt(now.plusMinutes(1)).isEmpty();
     }
 
     private ReferralWindow nextAt(LocalDateTime utc) {

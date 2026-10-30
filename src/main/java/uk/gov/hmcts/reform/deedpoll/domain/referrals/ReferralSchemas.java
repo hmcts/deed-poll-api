@@ -9,10 +9,12 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -121,6 +123,23 @@ public final class ReferralSchemas {
      */
     public static final String SELECT_A_MASTER = "Select a Master who is available";
 
+    /** The batch send's one key (plan F1): the referral-to-Master pairs. */
+    public static final String ALLOCATIONS = "allocations";
+
+    /** An allocation's referral. */
+    public static final String REFERRAL_ID = "referralId";
+
+    /** The summary every refusal of a send's shape carries. */
+    static final String INVALID_SEND = "Referrals to send are not valid";
+
+    static final String CHOOSE_REFERRALS = "Choose at least one referral to send";
+
+    static final String SELECT_A_REFERRAL = "Select a referral to send";
+
+    static final String SENT_TWICE = "This referral is in the send more than once";
+
+    static final String ALLOCATION_SHAPE = "Each entry names a referralId and a masterId";
+
     private static final String NOTES = "notes";
     private static final String URGENCY = "urgency";
     private static final String URGENCY_REASON = "urgencyReason";
@@ -178,6 +197,54 @@ public final class ReferralSchemas {
         Optional<UUID> masterId = masterId(raw, errors);
         refuseIfAny(SELECT_A_MASTER, errors);
         return masterId.orElseThrow();
+    }
+
+    /**
+     * Validates the body of a batch send (plan F1): {@code allocations}, an array of 1 to {@code max} entries, each
+     * {@code {referralId, masterId}}, with no {@code referralId} twice. Each refusal names its entry
+     * ({@code allocations[2].masterId}), and a later copy of a referral is the one refused. Whether each referral is
+     * waiting and each Master available is the service's question; unknown keys are ignored, as everywhere here.
+     *
+     * @param max the most entries one send may carry: the cap's published maximum
+     */
+    public static List<ReferralAllocation> parseSend(Map<String, Object> raw, int max) {
+        List<FieldError> errors = new ArrayList<>();
+        if (!(raw.get(ALLOCATIONS) instanceof List<?> entries) || entries.isEmpty()) {
+            errors.add(new FieldError(ALLOCATIONS, CHOOSE_REFERRALS));
+            refuseIfAny(INVALID_SEND, errors);
+            return List.of();
+        }
+        if (entries.size() > max) {
+            errors.add(new FieldError(ALLOCATIONS, "Send at most " + max + " referrals at once"));
+            refuseIfAny(INVALID_SEND, errors);
+        }
+
+        List<ReferralAllocation> allocations = new ArrayList<>();
+        Set<UUID> seen = new HashSet<>();
+        for (int i = 0; i < entries.size(); i++) {
+            String path = ALLOCATIONS + "[" + i + "]";
+            if (!(entries.get(i) instanceof Map<?, ?> entry)) {
+                errors.add(new FieldError(path, ALLOCATION_SHAPE));
+                continue;
+            }
+            Optional<UUID> referralId = entry.get(REFERRAL_ID) instanceof String text
+                ? uuid(text.trim()) : Optional.empty();
+            Optional<UUID> masterId = entry.get(MASTER_ID) instanceof String text
+                ? uuid(text.trim()) : Optional.empty();
+            if (referralId.isEmpty()) {
+                errors.add(new FieldError(path + "." + REFERRAL_ID, SELECT_A_REFERRAL));
+            } else if (!seen.add(referralId.get())) {
+                errors.add(new FieldError(path + "." + REFERRAL_ID, SENT_TWICE));
+            }
+            if (masterId.isEmpty()) {
+                errors.add(new FieldError(path + "." + MASTER_ID, SELECT_A_MASTER));
+            }
+            if (referralId.isPresent() && masterId.isPresent()) {
+                allocations.add(new ReferralAllocation(referralId.get(), masterId.get()));
+            }
+        }
+        refuseIfAny(INVALID_SEND, errors);
+        return List.copyOf(allocations);
     }
 
     /**

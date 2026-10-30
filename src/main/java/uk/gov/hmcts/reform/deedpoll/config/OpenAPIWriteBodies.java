@@ -90,6 +90,7 @@ public class OpenAPIWriteBodies {
     /** The referral create body. There is no update sibling: amending a referral is raising another. */
     private static final String CREATE_REFERRAL = "CreateReferralRequest";
     private static final String ASSIGN_REFERRAL = "AssignReferralRequest";
+    private static final String SEND_REFERRALS = "SendReferralsRequest";
 
     /**
      * The confirmation body -- the applicant's answer to the email that asks whether to proceed.
@@ -146,6 +147,7 @@ public class OpenAPIWriteBodies {
             describeSavedQueryBodies(openApi);
             describeReferralBody(openApi);
             describeAssignment(openApi);
+            describeSend(openApi);
             describeConfirmationBody(openApi);
             describeDirectionBody(openApi);
             describeEmailBodies(openApi);
@@ -629,6 +631,47 @@ public class OpenAPIWriteBodies {
         }
         createRefusals(openApi.getPaths().get("/caseworker/cases/{id}/referrals"));
         refusals(openApi.getPaths().get("/caseworker/cases/{id}/referrals/{referralId}/assignment"));
+    }
+
+    /**
+     * The batch send's body and its refusals (plan F1). The bounds are {@code ReferralSchemas.parseSend}'s: 1 to the
+     * cap's maximum entries, each a referral id and a Master id, no referral twice. springdoc publishes none of the
+     * refusals, because {@code DomainErrorHandler} answers them.
+     */
+    private void describeSend(OpenAPI openApi) {
+        Schema<?> body = schema(openApi, SEND_REFERRALS);
+        if (body != null) {
+            Schema<?> allocation = new ObjectSchema()
+                .addProperty(ReferralSchemas.REFERRAL_ID, new StringSchema().format("uuid")
+                    .description("A referral waiting in the queue (Open)."))
+                .addProperty(ReferralSchemas.MASTER_ID, masterId("The Masters-list entry to send it to."));
+            allocation.setRequired(java.util.List.of(ReferralSchemas.REFERRAL_ID, ReferralSchemas.MASTER_ID));
+            body.setType("object");
+            body.setProperties(null);
+            body.addProperty(ReferralSchemas.ALLOCATIONS, new ArraySchema().items(allocation).minItems(1)
+                .maxItems(ProcessSettingsService.MAX_WINDOW_CAP)
+                .description("The referrals to send together, each with its Master; no referralId twice."));
+            body.setRequired(java.util.List.of(ReferralSchemas.ALLOCATIONS));
+            body.setAdditionalProperties(true);
+        }
+        if (openApi.getPaths() == null) {
+            return;
+        }
+        PathItem path = openApi.getPaths().get("/caseworker/referral-queue/sends");
+        Operation operation = path == null ? null : path.getPost();
+        if (operation == null) {
+            return;
+        }
+        ApiResponses responses = operation.getResponses() == null ? new ApiResponses() : operation.getResponses();
+        responses.addApiResponse("400", new ApiResponse().description("The body is not valid, each entry's error "
+            + "named (allocations[2].masterId); or a Master is unknown or not available, on "
+            + "allocations[i].masterId: \"" + ReferralSchemas.SELECT_A_MASTER + "\". Nothing is sent."));
+        responses.addApiResponse("409", new ApiResponse().description("Nothing is sent. No referral window is open: "
+            + "\"Referrals can only be sent during a referral window. The next one opens at 14:00 today.\"; or a "
+            + "referral is not waiting to be sent, on allocations[i].referralId: \"This referral is no longer "
+            + "waiting to be sent\"; or the send would take the window past the cap across all Masters: \"Only 3 "
+            + "more referrals can be sent this morning. Remove 2 and try again.\""));
+        operation.setResponses(responses);
     }
 
     private static void createRefusals(PathItem path) {

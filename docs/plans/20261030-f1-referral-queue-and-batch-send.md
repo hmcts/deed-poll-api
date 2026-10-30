@@ -251,8 +251,8 @@ session, and the next one builds over it, wiping the results.
 - [x] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 3: The batch send
-- [ ] Add failing tests for every rule of the send in step 6, including the replay, the cap boundary, A-2 and the concurrency and deadlock cases.
-- [ ] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
+- [x] Add failing tests for every rule of the send in step 6, including the replay, the cap boundary, A-2 and the concurrency and deadlock cases.
+- [x] Implement, run the focused tests, the compile and `checkstyle.sh`, and record the results.
 
 ### Task 4: Reassignment, My referrals and unassignment
 - [ ] Add failing tests for the reassignment rules in step 7, the new `MINE_ORDER`, unassignment's note and the Masters list's removed fields.
@@ -310,3 +310,35 @@ failures in tests (the unscoped-declaration rule needed the `QUEUE` shape, and a
 test's referrals), fixed. A wider run (5,393 unit tests) found one regression **from Task 1**: `SdkMigrationOrderTest`
 still expected V1–V45; now V1–V46. Re-run focused unit tests and `integration --tests '*OpenAPIPublisher*'` (24) green,
 compile of every source set OK, `checkstyle.sh` OK.
+
+**Task 3.** `POST /caseworker/referral-queue/sends` (`sendReferrals`, `@AuditedAs(REFERRAL_SENT)`, a new `AuditAction`)
+takes `SendReferralsRequest` (keyed) and answers `ReferralSendResponse` (`referrals` as `ReferralQueueItem`s in the
+body's order, replays included, and `window` after the send). `ReferralQueue.send` checks `ALLOCATE_REFERRALS` before
+reading the body, then `ReferralSchemas.parseSend` (1–`MAX_WINDOW_CAP` entries, `allocations[i].referralId`/`.masterId`,
+a later duplicate refused as `SENT_TWICE`), then `openAt` (409 "… The next one opens at 14:00 today." / "tomorrow" /
+"on Monday 2 November 2026"), then `ReferralWindowLocks.lockForSending` (a new repository: a transaction-scoped
+advisory lock keyed on the window, its own key, not the digest's), then `ReferralRepository.findByIdInForSending`
+(`FOR UPDATE`, `order by id`, not joined to the case), then each new allocation's Master via `findAssigneeForUpdate`
+in uuid text order. Refusals in the plan's order: 409 on each `referralId` not `Open` and not a replay (same Master,
+same window, `Claimed`), 400 on each unknown/unavailable `masterId`, then the cap over `countByWindowDateAndWindowSlot`
+(any state, A-2), 409 "Only 3 more referrals can be sent this morning. Remove 2 and try again." / "No more referrals can
+be sent this morning." with no field; a body of replays only skips the cap. `ReferralService.send` (`MANDATORY`) applies
+one: the columns via `stampAssignment` (now shared with `assignLocked`), the `ReferralNotes.sent` note ("…, sent to
+{Master} by the office."), one `REFERRAL_SENT` event (`state`, `claimedBy`, `assignedAt`) and both read-models.
+`ReferralSecurityTest` admits `findByIdInForSending` as `SEND` (a `Collection` only, called only by `ReferralQueue`);
+`OpenAPIWriteBodies.describeSend` publishes the body (items require both ids, `maxItems` 100) and the 400/409;
+`WriteEndpointAuditCoverageTest` is now 36 writes, 32 audited; `OpenAPIPublisherTest` knows the path.
+**Step 6.8's `SENT` email row is left to Task 5**, which adds the kind, its template key and its tests; the digest's
+`digestTook` loop in `assignLocked` likewise goes with the digest in Task 5 (a send takes only an open window and the
+digest only a closed one, so they do not meet). Tests: `ReferralSendTest` (gate before body, shape, columns/notes/audit/
+read-models, afternoon, replay, replay beside new, six closed moments and the words, not waiting ×3, not-a-replay ×4,
+unavailable/unknown Master, cap boundary, urgent and withdrawn/directed count, a replay at the cap),
+`ReferralSendConcurrencyTest` (cap 2, two sends of 2: one 200, one 409 after observed waiting; opposite orders over
+shared referrals finish, one 409), `ReferralSchemasTest.Send`, and five HTTP cases in
+`CaseworkerReferralQueueControllerTest` (403 before body, 400 naming the entry, 200 and a replay with the windows set
+to cover now, 409 with them set to miss now — each `assume`d on the clock — and the document). Results: first focused
+run, 12 failures, all in tests (the package-private send needs a transaction, an order-sensitive `required` check and
+the audit-coverage count), fixed; re-run 278 tests, 0 failures, 0 skipped. Wider run (`*OpenAPI*`, `*Audit*`,
+`*Security*`, `*Referral*`, `*CallerAccess*`, `*Architecture*`, `*Namespace*`) green; `integration --tests
+'*OpenAPIPublisher*'` failed once on the unknown path, added, green. Compile of every source set OK; `checkstyle.sh` OK
+after two single-line javadocs were expanded.

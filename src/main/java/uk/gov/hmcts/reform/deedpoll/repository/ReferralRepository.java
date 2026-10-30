@@ -56,6 +56,8 @@ import java.util.UUID;
  *       {@link #countByWindowDateAndWindowSlot} and {@link #countSentByMasterInWindow}. The queue is every case's
  *       referrals waiting to be sent, so there is no case to scope it to; what stands where the parent id stands is
  *       {@code ReferralQueue}'s {@code ALLOCATE_REFERRALS} check, made before any of them is called;</li>
+ *   <li>the batch send's lock -- {@link #findByIdInForSending}, by the ids a send's body names, behind the same
+ *       check and called by nothing but {@code ReferralQueue};</li>
  *   <li>the Master emails' read -- {@link #findWithCaseByIdIn}. The ids are the ones a ledger row froze when its
  *       job enqueued it, never a request's, and the only caller is {@code MasterEmailTransactions}, which renders
  *       a reference, the reasons, the urgency and the day referred, and nothing about the applicant.</li>
@@ -377,6 +379,23 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
          where r.state = :claimed
         """)
     Page<Referral> findSent(@Param("claimed") ReferralState claimed, Pageable pageable);
+
+    /**
+     * The referrals a batch send names, locked until the caller's transaction ends, in id order (plan F1). Ids that
+     * name nothing are simply absent, which the caller refuses in the same words as a referral no longer waiting.
+     *
+     * <p>In id order, and taken by every send after {@code ReferralWindowLocks}' window lock and before any
+     * Master's, so two sends naming the same referrals in different orders queue rather than deadlock. Not joined
+     * to the case: a {@code FOR UPDATE} over a join would lock the case rows too, ahead of the referral-first,
+     * case-last order every write here keeps.
+     *
+     * <p>The ids come from a request body rather than a path, and name no case: what stands where the parent id
+     * stands is {@code ReferralQueue}'s {@code ALLOCATE_REFERRALS} check, made before this is called, and nothing
+     * but {@code ReferralQueue} calls it.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select r from Referral r where r.id in :ids order by r.id")
+    List<Referral> findByIdInForSending(@Param("ids") Collection<UUID> ids);
 
     /**
      * How many referrals were sent in one referral window, across every Master and in any state (plan F1, F-3 and

@@ -2,20 +2,27 @@ package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.ReferralQueueResponse;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.ReferralSendResponse;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.SendReferralsRequest;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralQueue;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 
 /**
  * The referral queue (plan F1): referrals waiting to be sent to a Master, and those sent and not yet directed, for a
- * Team leader or Delivery Manager ({@code ALLOCATE_REFERRALS}).
+ * Team leader or Delivery Manager ({@code ALLOCATE_REFERRALS}), and the batch send that moves the first into the
+ * second.
  *
  * <p>{@code page} and {@code size} bind as single strings and are read by {@code CasePaging}, after the capability
- * check, so a caller without it is a 403 whatever they sent.
+ * check, so a caller without it is a 403 whatever they sent; the send's body is read there too, for the same reason.
  */
 @RestController
 @RequestMapping("/caseworker/referral-queue")
@@ -45,5 +52,23 @@ public class CaseworkerReferralQueueController {
                                       @RequestParam(name = "size", required = false) String size) {
         return ReferralQueueResponse.of(queue.list(CurrentUsers.required(), state, page, size),
                                         settings.processingWindow());
+    }
+
+    @Operation(operationId = "sendReferrals", summary = "Send referrals from the queue to Masters",
+        description = "Requires caseworker-deedpoll-team-leader or caseworker-deedpoll-delivery-manager "
+            + "(ALLOCATE_REFERRALS); anyone else is 403 before the body is read. Sends each named referral, waiting "
+            + "in the queue, to the Master named beside it, together and all or nothing: any refusal sends none. "
+            + "Only while a referral window is open (409 outside one, naming when the next opens). Each referral "
+            + "must be Open (409 on allocations[i].referralId), and each Master available (400 on "
+            + "allocations[i].masterId). The referrals already sent in the window, whatever has happened to them "
+            + "since, plus these must not exceed the cap across all Masters (409, saying how many more fit). A "
+            + "referral already sent to the same Master in the same window is skipped rather than refused, so the "
+            + "same body sent again is 200 and changes nothing. Each one sent is Claimed by its Master, starts the "
+            + "processing window and gets a case note and an audit event.")
+    @AuditedAs(AuditAction.REFERRAL_SENT)
+    @PostMapping("/sends")
+    public ReferralSendResponse send(@RequestBody SendReferralsRequest request) {
+        return ReferralSendResponse.of(queue.send(CurrentUsers.required(), request.fields()),
+                                       settings.processingWindow());
     }
 }
