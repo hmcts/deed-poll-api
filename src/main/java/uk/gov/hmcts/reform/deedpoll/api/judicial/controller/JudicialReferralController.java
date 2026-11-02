@@ -338,7 +338,7 @@ public class JudicialReferralController {
      *
      * <p>No body: the referral goes back to {@code Claimed}, held by the same judge, with no direction on it, and
      * {@code directionChangedAt} is set. <strong>Withdrawing restarts the processing window</strong>, so if the judge
-     * does not direct it again within the window it is returned to the office for assignment, like any other.
+     * does not direct it again within the window it is returned to the queue to be sent again, like any other.
      *
      * <p>The same answers as revising: 403 without the judicial role, 404 for a referral this judge may not see --
      * including one the office closed -- and 409 for one they can see that is not a direction of theirs.
@@ -350,7 +350,7 @@ public class JudicialReferralController {
             + "judge, with the decision, directionsText, changesToStandardPublication, decisionDate and decidedBy "
             + "cleared, and directionChangedAt set. The judge directs again with POST .../direction. Withdrawing "
             + "restarts the processing window: assignedAt becomes now, and directionDueBy moves with it. If the judge "
-            + "does not direct it within the window, it is returned to the office for assignment like any other.")
+            + "does not direct it within the window, it is returned to the queue to be sent again like any other.")
     @PostMapping("/{referralId}/direction/withdraw")
     public JudicialReferralDetail withdrawDirection(@PathVariable("referralId") String referralId) {
         return JudicialReferralDetail.of(judicial.withdraw(referralId, CurrentUsers.required()),

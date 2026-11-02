@@ -376,32 +376,21 @@ class ReferralSchemasTest {
     }
 
     @Nested
-    @DisplayName("masterId (plan D2)")
+    @DisplayName("masterId (plans D2 and F1)")
     class MasterId {
 
         private static final String SULLIVAN = "aaaaaaaa-0000-0000-0000-000000000001";
 
         @Test
-        @DisplayName("is optional on the create, and absent or null leaves the referral waiting for assignment")
-        void optional() {
-            assertThat(parse(payload("reasons", List.of("DomesticAbuse"))).masterId()).isEmpty();
-            assertThat(parse(payload("reasons", List.of("DomesticAbuse"), "masterId", null)).masterId()).isEmpty();
-        }
-
-        @Test
-        @DisplayName("is read as a UUID, trimmed")
-        void read() {
-            assertThat(parse(payload("reasons", List.of("DomesticAbuse"), "masterId", " " + SULLIVAN + " "))
-                .masterId()).contains(UUID.fromString(SULLIVAN));
-        }
-
-        @Test
-        @DisplayName("refuses a malformed or non-string id on masterId, beside the other fields' errors")
-        void malformed() {
-            assertThat(errorsFrom(() -> parse(payload("reasons", List.of("DomesticAbuse"), "masterId", "nope"))))
-                .containsExactly(new FieldError("masterId", "Select a Master who is available"));
-            assertThat(errorsFrom(() -> parse(payload("masterId", 7))))
-                .extracting(FieldError::field).containsExactlyInAnyOrder("reasons", "masterId");
+        @DisplayName("is stripped from the create, as any unknown key is: valid, malformed or not a string (plan F1)")
+        void strippedFromTheCreate() {
+            CreateReferralInput plain = parse(payload("reasons", List.of("DomesticAbuse")));
+            for (Object masterId : new Object[] {SULLIVAN, "nope", 7}) {
+                assertThat(parse(payload("reasons", List.of("DomesticAbuse"), "masterId", masterId)))
+                    .isEqualTo(plain);
+            }
+            assertThat(errorsFrom(() -> parse(payload("masterId", "nope"))))
+                .extracting(FieldError::field).containsExactly("reasons");
         }
 
         @Test
@@ -413,6 +402,73 @@ class ReferralSchemasTest {
                 assertThat(errorsFrom(() -> ReferralSchemas.parseAssignment(raw)))
                     .containsExactly(new FieldError("masterId", "Select a Master who is available"));
             }
+        }
+    }
+
+    @Nested
+    @DisplayName("the batch send (plan F1)")
+    class Send {
+
+        private static final String ONE = "bbbbbbbb-0000-0000-0000-000000000001";
+        private static final String TWO = "bbbbbbbb-0000-0000-0000-000000000002";
+        private static final String SULLIVAN = "aaaaaaaa-0000-0000-0000-000000000001";
+
+        @Test
+        @DisplayName("reads each entry in order, ignoring unknown keys")
+        void reads() {
+            assertThat(ReferralSchemas.parseSend(payload("allocations", List.of(
+                payload("referralId", ONE, "masterId", SULLIVAN, "note", "ignored"),
+                payload("referralId", " " + TWO + " ", "masterId", SULLIVAN)), "other", 1), 100))
+                .containsExactly(new ReferralAllocation(UUID.fromString(ONE), UUID.fromString(SULLIVAN)),
+                                 new ReferralAllocation(UUID.fromString(TWO), UUID.fromString(SULLIVAN)));
+        }
+
+        @Test
+        @DisplayName("refuses no allocations, an empty array or not an array, on allocations")
+        void empty() {
+            for (Map<String, Object> raw : List.of(payload(), payload("allocations", null),
+                                                   payload("allocations", List.of()),
+                                                   payload("allocations", "nope"))) {
+                assertThat(errorsFrom(() -> ReferralSchemas.parseSend(raw, 100)))
+                    .containsExactly(new FieldError("allocations", ReferralSchemas.CHOOSE_REFERRALS));
+            }
+        }
+
+        @Test
+        @DisplayName("accepts exactly the maximum")
+        void atTheMaximum() {
+            List<Object> two = List.of(payload("referralId", ONE, "masterId", SULLIVAN),
+                                       payload("referralId", TWO, "masterId", SULLIVAN));
+            assertThat(ReferralSchemas.parseSend(payload("allocations", two), 2)).hasSize(2);
+        }
+
+        @Test
+        @DisplayName("refuses more entries than the maximum")
+        void tooMany() {
+            List<Object> three = List.of(payload("referralId", ONE, "masterId", SULLIVAN),
+                                         payload("referralId", TWO, "masterId", SULLIVAN),
+                                         payload("referralId", SULLIVAN, "masterId", SULLIVAN));
+            assertThat(errorsFrom(() -> ReferralSchemas.parseSend(payload("allocations", three), 2)))
+                .containsExactly(new FieldError("allocations", "Send at most 2 referrals at once"));
+        }
+
+        @Test
+        @DisplayName("names each bad entry's field, and a referral named twice on its later copy")
+        void entries() {
+            List<Object> entries = Arrays.asList(
+                payload("referralId", ONE, "masterId", SULLIVAN),
+                payload("referralId", "nope", "masterId", 7),
+                "not an object",
+                payload("masterId", SULLIVAN),
+                payload("referralId", ONE, "masterId", SULLIVAN));
+
+            assertThat(errorsFrom(() -> ReferralSchemas.parseSend(payload("allocations", entries), 100)))
+                .containsExactly(
+                    new FieldError("allocations[1].referralId", ReferralSchemas.SELECT_A_REFERRAL),
+                    new FieldError("allocations[1].masterId", ReferralSchemas.SELECT_A_MASTER),
+                    new FieldError("allocations[2]", ReferralSchemas.ALLOCATION_SHAPE),
+                    new FieldError("allocations[3].referralId", ReferralSchemas.SELECT_A_REFERRAL),
+                    new FieldError("allocations[4].referralId", ReferralSchemas.SENT_TWICE));
         }
     }
 

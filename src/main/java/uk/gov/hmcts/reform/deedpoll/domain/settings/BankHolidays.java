@@ -26,7 +26,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * England and Wales bank holidays (plan D1, decision D-7): the referral windows and digests run on working days only.
+ * England and Wales bank holidays (plan D1, decision D-7): the referral windows and Master reminders run on working
+ * days only.
  *
  * <p>V42 seeds GOV.UK's dates for 2026 to 2028, and a Delivery Manager ({@link Capability#MANAGE_PROCESS_CONFIG})
  * adds or removes one; nothing calls the internet. Any staff caller may read the list. Nothing is cached, so D2 and

@@ -41,7 +41,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -49,11 +51,11 @@ import static org.mockito.Mockito.when;
 /**
  * {@link MasterEmailDelivery} against real Postgres and a WireMock Notify (plan D3, step 4): the claim, {@code Sending}
  * committed before the one call, settlement, the retries a known temporary refusal gets, the unknown outcome that is
- * never resent, and the unprovisioned template that sends nothing. The digest template is provisioned here and the
- * reminder template is not.
+ * never resent, and the unprovisioned template that sends nothing. The {@code SENT} template is provisioned here and
+ * the reminder template is not.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE, properties = {
-    "notify.templates.master-referral-digest=" + StubNotify.TEMPLATE_ID,
+    "notify.templates.master-referral-sent=" + StubNotify.TEMPLATE_ID,
     "deedpoll.admin.base-url=https://admin.example.test/"
 })
 class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
@@ -96,12 +98,12 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("sends a pending digest once, to the Master's address, listing its referrals in order with links")
+    @DisplayName("sends a pending email once, to the Master's address, with its count and the My referrals link")
     void sends() throws Exception {
         UUID master = master("master.sullivan@example.test");
         Referral second = referral("DP2026-000002", Urgency.Normal, List.of("Other"));
         Referral first = referral("DP2026-000001", Urgency.Urgent, List.of("NonPublication"));
-        UUID row = enqueue(master, MasterEmailKind.DIGEST, List.of(first.getId(), second.getId()));
+        UUID row = enqueue(master, MasterEmailKind.SENT, List.of(first.getId(), second.getId()));
 
         assertThat(delivery.drain()).isOne();
 
@@ -113,16 +115,14 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
         assertThat(body.has("email_reply_to_id")).isFalse();
         JsonNode personalisation = body.path("personalisation");
         assertThat(fieldNames(personalisation))
-            .containsExactlyInAnyOrder("master_name", "referral_count", "period", "referral_list");
+            .containsExactlyInAnyOrder("master_name", "referral_count", "my_referrals_link");
         assertThat(personalisation.path("master_name").asText()).isEqualTo("Master Sullivan");
         assertThat(personalisation.path("referral_count").asText()).isEqualTo("2");
-        assertThat(personalisation.path("period").asText()).isEqualTo("the morning of 28-10-26");
-        String[] lines = personalisation.path("referral_list").asText().split("\n");
-        assertThat(lines).hasSize(2);
-        assertThat(lines[0]).startsWith("DP2026-000001 – ").contains(" – Urgent – ")
-            .endsWith(" – https://admin.example.test/judicial/referrals/" + first.getId());
-        assertThat(lines[1]).startsWith("DP2026-000002 – ").contains(" – Standard – ")
-            .endsWith("/judicial/referrals/" + second.getId());
+        assertThat(personalisation.path("my_referrals_link").asText())
+            .isEqualTo("https://admin.example.test/judicial/referrals/mine");
+        // Nothing about a case: the Master signs in to see them.
+        assertThat(personalisation.toString()).doesNotContain("DP2026-000001", "DP2026-000002",
+                                                              first.getId().toString());
 
         Map<String, Object> stored = stored(row);
         assertThat(stored).containsEntry("state", "Sent").containsEntry("attempts", 1)
@@ -139,7 +139,7 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @DisplayName("Sending is committed before the call, and a call that throws is Failed and never resent")
     void sendingBeforeTheCall() {
         UUID master = master("m1@example.test");
-        UUID row = enqueue(master, MasterEmailKind.DIGEST, List.of(referral("DP2026-000003").getId()));
+        UUID row = enqueue(master, MasterEmailKind.SENT, List.of(referral("DP2026-000003").getId()));
         MasterEmailSender sender = mock(MasterEmailSender.class);
         AtomicReference<Map<String, Object>> seen = new AtomicReference<>();
         when(sender.send(any(), any(), any(), any())).thenAnswer(call -> {
@@ -163,7 +163,7 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @DisplayName("an ambiguous answer from Notify is Failed, keeps its evidence and is not sent again")
     void unknownOutcome() {
         STUB.stubSendStatus(500);
-        UUID row = enqueue(master("m2@example.test"), MasterEmailKind.DIGEST,
+        UUID row = enqueue(master("m2@example.test"), MasterEmailKind.SENT,
                            List.of(referral("DP2026-000004").getId()));
 
         assertThat(delivery.drain()).isZero();
@@ -179,7 +179,7 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @DisplayName("a permanent refusal fails the row at once")
     void permanentRefusal() {
         STUB.stubSendStatus(400);
-        UUID row = enqueue(master("m3@example.test"), MasterEmailKind.DIGEST,
+        UUID row = enqueue(master("m3@example.test"), MasterEmailKind.SENT,
                            List.of(referral("DP2026-000005").getId()));
 
         assertThat(delivery.drain()).isZero();
@@ -193,7 +193,7 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @DisplayName("a known temporary refusal backs off and is tried again, eight attempts in all, then fails")
     void temporaryRefusalRetries() {
         STUB.stubSendStatus(429);
-        UUID row = enqueue(master("m4@example.test"), MasterEmailKind.DIGEST,
+        UUID row = enqueue(master("m4@example.test"), MasterEmailKind.SENT,
                            List.of(referral("DP2026-000006").getId()));
 
         assertThat(delivery.drain()).isZero();
@@ -222,7 +222,7 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @DisplayName("a temporary refusal that ends in success is Sent with its failure cleared")
     void temporaryThenSent() {
         STUB.stubSendStatus(429);
-        UUID row = enqueue(master("m5@example.test"), MasterEmailKind.DIGEST,
+        UUID row = enqueue(master("m5@example.test"), MasterEmailKind.SENT,
                            List.of(referral("DP2026-000007").getId()));
         delivery.drain();
         STUB.stubDefaults();
@@ -236,7 +236,7 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("a Sending row whose worker never reported back is Failed once its lease ends, and nothing is sent")
     void abandonedSend() {
-        UUID row = enqueue(master("m6@example.test"), MasterEmailKind.DIGEST,
+        UUID row = enqueue(master("m6@example.test"), MasterEmailKind.SENT,
                            List.of(referral("DP2026-000008").getId()));
         jdbc.update("""
             UPDATE deedpoll_master_email SET state = 'Sending', owner = ?, lease_until = ?, attempts = 1,
@@ -252,11 +252,11 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("a held claim is left alone, and expired claims use up the attempts without a send")
     void claims() {
-        UUID held = enqueue(master("m7@example.test"), MasterEmailKind.DIGEST,
+        UUID held = enqueue(master("m7@example.test"), MasterEmailKind.SENT,
                             List.of(referral("DP2026-000009").getId()));
         jdbc.update("UPDATE deedpoll_master_email SET owner = ?, lease_until = ?, attempts = 1 WHERE id = ?",
                     UUID.randomUUID(), LocalDateTime.now().plusMinutes(4), held);
-        UUID exhausted = enqueue(master("m8@example.test"), MasterEmailKind.DIGEST,
+        UUID exhausted = enqueue(master("m8@example.test"), MasterEmailKind.SENT,
                                  List.of(referral("DP2026-000010").getId()));
         jdbc.update("UPDATE deedpoll_master_email SET owner = ?, lease_until = ?, attempts = 8 WHERE id = ?",
                     UUID.randomUUID(), LocalDateTime.now().minusMinutes(1), exhausted);
@@ -272,7 +272,7 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("two drains at once send one email")
     void concurrentDrains() throws Exception {
-        enqueue(master("m9@example.test"), MasterEmailKind.DIGEST, List.of(referral("DP2026-000011").getId()));
+        enqueue(master("m9@example.test"), MasterEmailKind.SENT, List.of(referral("DP2026-000011").getId()));
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
@@ -321,9 +321,26 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("a leftover Pending digest row is Skipped and never sent, even with a template configured (plan F1)")
+    void retiredDigest() {
+        UUID master = master("m17@example.test");
+        UUID digest = UUID.randomUUID();
+        jdbc.update("""
+            INSERT INTO deedpoll_master_email (id, master_id, kind, period_key, referral_ids, state, created_at)
+            VALUES (?, ?, 'DIGEST', '2026-10-28:AM', ?, 'Pending', ?)
+            """, digest, master, new UUID[] {referral("DP2026-000021").getId()}, LocalDateTime.now());
+
+        assertThat(delivery.drain()).isZero();
+
+        assertThat(stored(digest)).containsEntry("state", "Skipped").containsEntry("attempts", 0)
+            .containsEntry("send_started_at", null);
+        assertThat(STUB.emailRequests()).isEmpty();
+    }
+
+    @Test
     @DisplayName("an email none of whose referrals is left is Skipped, not sent empty")
     void nothingLeftToList() {
-        UUID row = enqueue(master("m11@example.test"), MasterEmailKind.DIGEST, List.of(UUID.randomUUID()));
+        UUID row = enqueue(master("m11@example.test"), MasterEmailKind.SENT, List.of(UUID.randomUUID()));
 
         assertThat(delivery.drain()).isZero();
 
@@ -332,16 +349,16 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("lists only what still waits for this Master's direction when it is sent, and skips an empty list")
+    @DisplayName("counts only what still waits for this Master's direction when it is sent, and skips none left")
     void listedAsAtSendTime() throws Exception {
         UUID master = master("m13@example.test");
         UUID other = master("m14@example.test");
         Referral waiting = referral("DP2026-000017");
         Referral reassigned = referral("DP2026-000018");
         Referral directed = referral("DP2026-000019");
-        final UUID row = enqueue(master, MasterEmailKind.DIGEST,
+        final UUID row = enqueue(master, MasterEmailKind.SENT,
                                  List.of(waiting.getId(), reassigned.getId(), directed.getId()));
-        final UUID emptied = enqueue(master, MasterEmailKind.DIGEST, "2026-10-28:PM", List.of(reassigned.getId()));
+        final UUID emptied = enqueue(master, MasterEmailKind.SENT, "2026-10-28:PM", List.of(reassigned.getId()));
         jdbc.update("UPDATE \"deedpoll_referral\" SET \"assignedMasterId\" = ? WHERE \"id\" = ?", other,
                     reassigned.getId());
         jdbc.update("UPDATE \"deedpoll_referral\" SET \"state\" = 'Decided' WHERE \"id\" = ?", directed.getId());
@@ -352,8 +369,6 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
         JsonNode personalisation = JSON.readTree(STUB.emailRequests().getFirst().getBodyAsString())
             .path("personalisation");
         assertThat(personalisation.path("referral_count").asText()).isEqualTo("1");
-        assertThat(personalisation.path("referral_list").asText()).startsWith("DP2026-000017 – ")
-            .doesNotContain("DP2026-000018").doesNotContain("DP2026-000019");
         assertThat(stored(row)).containsEntry("state", "Sent");
         assertThat(stored(emptied)).containsEntry("state", "Skipped");
     }
@@ -361,8 +376,10 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("an email that cannot be read is a temporary failure before Sending, retried, then Failed")
     void contentFailure() {
-        // A digest's period that names no window cannot be put into words, so reading the email throws.
-        UUID row = enqueue(master("m15@example.test"), MasterEmailKind.DIGEST, "no-window",
+        MasterEmailTransactions failing = mock(MasterEmailTransactions.class, delegatesTo(transactions));
+        doThrow(new IllegalStateException("unreadable")).when(failing).content(any());
+        delivery = new MasterEmailDelivery(failing, new MasterEmailSender(STUB.client()));
+        UUID row = enqueue(master("m15@example.test"), MasterEmailKind.SENT,
                            List.of(referral("DP2026-000020").getId()));
 
         assertThat(delivery.drain()).isZero();
@@ -383,7 +400,7 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("a claim whose lease ran out, or that another worker took over, gets no send authority")
     void staleClaimSendsNothing() {
-        UUID row = enqueue(master("m16@example.test"), MasterEmailKind.DIGEST,
+        UUID row = enqueue(master("m16@example.test"), MasterEmailKind.SENT,
                            List.of(referral("DP2026-000021").getId()));
         MasterEmailClaim expired = transactions.claim(row).orElseThrow();
         jdbc.update("UPDATE deedpoll_master_email SET lease_until = ? WHERE id = ?",
@@ -403,7 +420,7 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @DisplayName("goes to the address the Masters list holds at send time, and to an unavailable Master too")
     void addressAtSendTime() throws Exception {
         UUID master = master("old.address@example.test");
-        enqueue(master, MasterEmailKind.DIGEST, List.of(referral("DP2026-000013").getId()));
+        enqueue(master, MasterEmailKind.SENT, List.of(referral("DP2026-000013").getId()));
         jdbc.update("UPDATE deedpoll_master SET email = 'new.address@example.test', available = false WHERE id = ?",
                     master);
 
@@ -425,18 +442,18 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
             int day = 1;
             for (int status : new int[] {429, 400, 500}) {
                 STUB.stubSendStatus(status);
-                enqueue(master, MasterEmailKind.DIGEST, "2026-11-0" + day++ + ":AM",
+                enqueue(master, MasterEmailKind.SENT, "2026-11-0" + day++ + ":AM",
                         List.of(referral("DP2026-1" + status).getId()));
                 delivery.drain();
             }
             STUB.stubDefaults();
-            enqueue(master, MasterEmailKind.DIGEST, "2026-11-05:AM", List.of(referral("DP2026-000014").getId()));
+            enqueue(master, MasterEmailKind.SENT, "2026-11-05:AM", List.of(referral("DP2026-000014").getId()));
             jdbc.update("UPDATE deedpoll_master_email SET next_attempt_at = NULL");
             delivery.drain();
             MasterEmailSender throwing = mock(MasterEmailSender.class);
             when(throwing.send(any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("private.judge@example.test"));
-            enqueue(master, MasterEmailKind.DIGEST, "2026-11-06:AM", List.of(referral("DP2026-000015").getId()));
+            enqueue(master, MasterEmailKind.SENT, "2026-11-06:AM", List.of(referral("DP2026-000015").getId()));
             new MasterEmailDelivery(transactions, throwing).drain();
         } finally {
             root.detachAppender(logs);
@@ -454,7 +471,7 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("refuses to drain inside a transaction, before anything is claimed")
     void refusesATransaction() {
-        UUID row = enqueue(master("m12@example.test"), MasterEmailKind.DIGEST,
+        UUID row = enqueue(master("m12@example.test"), MasterEmailKind.SENT,
                            List.of(referral("DP2026-000016").getId()));
         MasterEmailSender sender = mock(MasterEmailSender.class);
         MasterEmailDelivery inside = new MasterEmailDelivery(transactions, sender);

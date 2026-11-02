@@ -10,7 +10,7 @@ public final class RoleCapabilities {
 
     private static final Set<Capability> TEAM_LEADER = Set.of(
         Capability.OVERRIDE_PRIVACY, Capability.DELETE_NOTE, Capability.DELETE_WITNESS,
-        Capability.MANAGE_SHARED_QUERIES, Capability.REPAIR_CCD);
+        Capability.MANAGE_SHARED_QUERIES, Capability.REPAIR_CCD, Capability.ALLOCATE_REFERRALS);
 
     private static final Map<Role, Set<Capability>> GRANTS = Map.of(
         Role.TEAM_LEADER, TEAM_LEADER,

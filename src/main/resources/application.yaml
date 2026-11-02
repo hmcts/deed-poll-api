@@ -253,10 +253,11 @@ notify:
     # also needs document-retention-weeks -- three things, and isProvisioned asks for all three.
     forms-for-completion-adult: ${NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_ADULT:DEED_POLL_PLACEHOLDER}
     forms-for-completion-minor: ${NOTIFY_TEMPLATE_FORMS_FOR_COMPLETION_MINOR:DEED_POLL_PLACEHOLDER}
-    # The Master emails (plan D3), which go to a Master rather than an applicant and so are not EmailTemplate
+    # The Master emails (plans D3 and F1), which go to a Master rather than an applicant and so are not EmailTemplate
     # members: MasterEmailKind carries these two keys. Nobody has created either template yet. They need no reply-to
-    # and carry no document, but a provisioned one needs deedpoll.admin.base-url, or start-up fails.
-    master-referral-digest: ${NOTIFY_TEMPLATE_MASTER_REFERRAL_DIGEST:DEED_POLL_PLACEHOLDER}
+    # and carry no document, but a provisioned one needs deedpoll.admin.base-url, or start-up fails. The window
+    # digest is retired and has no key.
+    master-referral-sent: ${NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT:DEED_POLL_PLACEHOLDER}
     master-referral-reminder: ${NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER:DEED_POLL_PLACEHOLDER}
 
 core_case_data:
@@ -330,15 +331,14 @@ deedpoll:
     unassign-enabled: ${REFERRAL_UNASSIGN_ENABLED:true}
     unassign-interval: ${REFERRAL_UNASSIGN_INTERVAL:PT15M}
   masters:
-    # The Master emails (plan D3): the window digest and the reminders, with their own ledger and drain. The timers;
-    # switched off only by tests, which run the jobs explicitly. Nothing is sent while the two templates below are
-    # unprovisioned: the jobs record their runs and write their rows Skipped. See docs/MASTER-EMAILS.md.
+    # The Master emails (plans D3 and F1): one for each send from the referral queue, and the reminders, with their
+    # own ledger and drain. The timers; switched off only by tests, which run the jobs explicitly. Nothing is sent
+    # while the two templates above are unprovisioned: their rows are written Skipped. See docs/MASTER-EMAILS.md.
     emails-enabled: ${MASTER_EMAILS_ENABLED:true}
-    digest-interval: ${MASTER_DIGEST_INTERVAL:PT5M}
     reminder-interval-check: ${MASTER_REMINDER_INTERVAL_CHECK:PT15M}
     drain-interval: ${MASTER_EMAIL_DRAIN_INTERVAL:PT1M}
   admin:
-    # The admin app's base URL, which the Master emails link a referral under (/judicial/referrals/{id}). No default:
+    # The admin app's base URL, which the Master emails link My referrals under (/judicial/referrals/mine). No default:
     # start-up fails if either Master template is provisioned without it, rather than email a judge a guessed host.
     # A value that is set must be an absolute http(s) URL. Tests that send set a local one.
     base-url: ${ADMIN_BASE_URL:}

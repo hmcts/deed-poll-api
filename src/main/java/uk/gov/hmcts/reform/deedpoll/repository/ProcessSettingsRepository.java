@@ -19,7 +19,7 @@ public class ProcessSettingsRepository {
 
     // Compile-time constants, one per variant, so no statement is assembled at runtime.
     private static final String READ = "SELECT referral_claim_expiry_minutes, reminder_interval_hours, "
-        + "master_window_cap, morning_window_start, morning_window_end, afternoon_window_start, afternoon_window_end, "
+        + "window_cap, morning_window_start, morning_window_end, afternoon_window_start, afternoon_window_end, "
         + "revision, updated_at, updated_by_name FROM deedpoll_process_settings WHERE id = 1";
     private static final String READ_FOR_UPDATE = READ + " FOR UPDATE";
 
@@ -33,7 +33,7 @@ public class ProcessSettingsRepository {
     public Optional<ProcessSettings> read(boolean lock) {
         List<ProcessSettings> rows = jdbc.query(lock ? READ_FOR_UPDATE : READ,
             (row, index) -> new ProcessSettings(Duration.ofMinutes(row.getInt("referral_claim_expiry_minutes")),
-                Duration.ofHours(row.getInt("reminder_interval_hours")), row.getInt("master_window_cap"),
+                Duration.ofHours(row.getInt("reminder_interval_hours")), row.getInt("window_cap"),
                 row.getObject("morning_window_start", LocalTime.class),
                 row.getObject("morning_window_end", LocalTime.class),
                 row.getObject("afternoon_window_start", LocalTime.class),
@@ -58,10 +58,10 @@ public class ProcessSettingsRepository {
         }
         jdbc.update("""
             UPDATE deedpoll_process_settings SET referral_claim_expiry_minutes = ?, reminder_interval_hours = ?,
-                master_window_cap = ?, morning_window_start = ?, morning_window_end = ?, afternoon_window_start = ?,
+                window_cap = ?, morning_window_start = ?, morning_window_end = ?, afternoon_window_start = ?,
                 afternoon_window_end = ?, revision = ?, updated_at = ?, updated_by_id = ?, updated_by_name = ?
             WHERE id = 1
-            """, next.referralClaimExpiryMinutes(), next.reminderIntervalHours(), next.masterWindowCap(),
+            """, next.referralClaimExpiryMinutes(), next.reminderIntervalHours(), next.windowCap(),
             next.morningWindowStart(), next.morningWindowEnd(), next.afternoonWindowStart(),
             next.afternoonWindowEnd(), next.revision(), next.updatedAt(), subject, next.updatedBy());
     }

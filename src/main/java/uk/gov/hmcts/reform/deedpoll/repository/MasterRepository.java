@@ -4,9 +4,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 import uk.gov.hmcts.reform.deedpoll.domain.masters.Master;
-import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -48,29 +46,15 @@ public class MasterRepository {
     }
 
     /**
-     * The entry, locked until the caller's transaction ends, so two assignments to one Master serialise and the
-     * per-Master cap's count is read after the other has committed. Always taken after the referral's own lock.
+     * The entry, locked until the caller's transaction ends, so a send or reassignment sees it as it stands until
+     * then: one marked unavailable meanwhile is refused rather than sent to. Always taken after the referral's own
+     * lock.
      */
     public Optional<Assignee> findAssigneeForUpdate(UUID id) {
         return jdbc.query("SELECT name, available, idam_subject FROM deedpoll_master WHERE id = ? FOR UPDATE",
                           (row, index) -> new Assignee(row.getString("name"), row.getBoolean("available"),
                                                        row.getString("idam_subject")),
                           id).stream().findFirst();
-    }
-
-    /**
-     * Whether the digest has already taken a window, asked by an assignment about to count towards it (plan D3).
-     * Shares {@link MasterEmailRepository#WINDOW_LOCK} until the caller's transaction ends, so a digest taking the
-     * window either waits for this assignment to commit, and lists it, or has committed its run row, which this then
-     * reads. Taken after the referral's lock and <strong>before</strong> the Master's: the digest takes no
-     * referral lock, but its email rows' foreign key key-share-locks the Master's row while it holds the exclusive
-     * lock, so an assignment holding the Master's row {@code FOR UPDATE} first would deadlock with it.
-     */
-    public boolean digestTook(LocalDate windowDate, WindowSlot windowSlot) {
-        jdbc.execute(MasterEmailRepository.WINDOW_LOCK_SHARED);
-        return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM deedpoll_window_digest_run WHERE window_date = ? AND window_slot = ?)",
-            Boolean.class, windowDate, windowSlot.name()));
     }
 
     /** The entry, unlocked: whom a Master email goes to, at send time. */

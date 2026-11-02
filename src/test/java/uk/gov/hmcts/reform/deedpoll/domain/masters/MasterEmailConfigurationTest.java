@@ -14,17 +14,20 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The Master emails' configuration (plan D3): the two template keys, the admin app's base URL, the start-up rule
- * that joins them, and the job settings. Container-free, as {@code NotifyConfigurationTest} is.
+ * The Master emails' configuration (plans D3 and F1): the two template keys, the digest's retirement, the admin
+ * app's base URL, the start-up rule that joins them, and the job settings. Container-free, as
+ * {@code NotifyConfigurationTest} is.
  */
 class MasterEmailConfigurationTest {
 
     private static final Path CONFIGURATION = Path.of("src/main/resources/application.yaml");
+
+    private static final Path CHART_VALUES = Path.of("charts/deed-poll-api/values.yaml");
 
     private static final String TEMPLATE_ID = "6f1c2b0e-3d4a-4e5f-8a9b-0c1d2e3f4a5b";
 
@@ -32,7 +35,7 @@ class MasterEmailConfigurationTest {
         .withUserConfiguration(NotifyConfiguration.class, MasterEmailConfiguration.class);
 
     @ParameterizedTest
-    @EnumSource(MasterEmailKind.class)
+    @EnumSource(value = MasterEmailKind.class, names = "DIGEST", mode = EnumSource.Mode.EXCLUDE)
     @DisplayName("each template key is declared under notify.templates with its NOTIFY_TEMPLATE_ variable")
     void templateKeysAreDeclared(MasterEmailKind kind) {
         String variable = "NOTIFY_TEMPLATE_" + kind.templateKey().toUpperCase().replace('-', '_');
@@ -42,10 +45,41 @@ class MasterEmailConfigurationTest {
     }
 
     @Test
-    @DisplayName("the two kinds use the plan's template keys")
+    @DisplayName("the two kinds still sent use the plan's template keys")
     void templateKeys() {
-        assertThat(MasterEmailKind.DIGEST.templateKey()).isEqualTo("master-referral-digest");
+        assertThat(MasterEmailKind.SENT.templateKey()).isEqualTo("master-referral-sent");
         assertThat(MasterEmailKind.REMINDER.templateKey()).isEqualTo("master-referral-reminder");
+        assertThat(MasterEmailKind.SENT.retired()).isFalse();
+        assertThat(MasterEmailKind.REMINDER.retired()).isFalse();
+    }
+
+    @Test
+    @DisplayName("the digest is retired: no job, no key, no variable, no interval, and never provisioned (plan F1)")
+    void digestIsGone() {
+        assertThat(MasterEmailKind.DIGEST.retired()).isTrue();
+        for (String job : new String[] {"MasterDigests", "MasterDigestTimer"}) {
+            assertThatThrownBy(() -> Class.forName(MasterEmailKind.class.getPackageName() + "." + job))
+                .isInstanceOf(ClassNotFoundException.class);
+        }
+        assertThatThrownBy(MasterEmailKind.DIGEST::templateKey).isInstanceOf(IllegalStateException.class);
+        assertThat(configuration()).doesNotContain("master-referral-digest", "MASTER_REFERRAL_DIGEST",
+                                                   "digest-interval", "MASTER_DIGEST_INTERVAL");
+        contextRunner
+            .withPropertyValues("notify.templates.master-referral-digest=" + TEMPLATE_ID,
+                                "deedpoll.admin.base-url=https://deed-poll-admin.aat.platform.hmcts.net")
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context.getBean(MasterEmailLinks.class).isProvisioned(MasterEmailKind.DIGEST)).isFalse();
+            });
+    }
+
+    @Test
+    @DisplayName("the chart sets the SENT template and no longer the digest's")
+    void chart() throws IOException {
+        String values = Files.readString(CHART_VALUES);
+        assertThat(values).contains("NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT: DEED_POLL_PLACEHOLDER",
+                                    "NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER: DEED_POLL_PLACEHOLDER");
+        assertThat(values).doesNotContain("MASTER_REFERRAL_DIGEST", "MASTER_DIGEST_INTERVAL");
     }
 
     @Test
@@ -62,19 +96,18 @@ class MasterEmailConfigurationTest {
             .run(context -> {
                 assertThat(context).hasNotFailed();
                 MasterEmailLinks links = context.getBean(MasterEmailLinks.class);
-                assertThat(links.isProvisioned(MasterEmailKind.DIGEST)).isFalse();
+                assertThat(links.isProvisioned(MasterEmailKind.SENT)).isFalse();
                 assertThat(links.isProvisioned(MasterEmailKind.REMINDER)).isFalse();
 
                 MasterEmailProperties properties = context.getBean(MasterEmailProperties.class);
                 assertThat(properties.emailsEnabled()).isTrue();
-                assertThat(properties.digestInterval()).isEqualTo(Duration.ofMinutes(5));
                 assertThat(properties.reminderIntervalCheck()).isEqualTo(Duration.ofMinutes(15));
                 assertThat(properties.drainInterval()).isEqualTo(Duration.ofMinutes(1));
             });
     }
 
     @ParameterizedTest
-    @EnumSource(MasterEmailKind.class)
+    @EnumSource(value = MasterEmailKind.class, names = "DIGEST", mode = EnumSource.Mode.EXCLUDE)
     @DisplayName("refuses to start with a provisioned template and no base URL, in fixed words")
     void refusesAProvisionedTemplateWithNoBaseUrl(MasterEmailKind kind) {
         contextRunner
@@ -103,20 +136,19 @@ class MasterEmailConfigurationTest {
     }
 
     @Test
-    @DisplayName("starts with a provisioned template and a base URL, and links to the judicial referral")
-    void linksToTheReferral() {
-        UUID referral = UUID.fromString("33333333-3333-3333-3333-333333333333");
+    @DisplayName("starts with a provisioned template and a base URL, and links to My referrals")
+    void linksToMyReferrals() {
         contextRunner
-            .withPropertyValues("notify.templates.master-referral-digest=" + TEMPLATE_ID,
+            .withPropertyValues("notify.templates.master-referral-sent=" + TEMPLATE_ID,
                                 "deedpoll.admin.base-url=  https://deed-poll-admin.aat.platform.hmcts.net/ ")
             .run(context -> {
                 assertThat(context).hasNotFailed();
                 MasterEmailLinks links = context.getBean(MasterEmailLinks.class);
-                assertThat(links.isProvisioned(MasterEmailKind.DIGEST)).isTrue();
+                assertThat(links.isProvisioned(MasterEmailKind.SENT)).isTrue();
                 assertThat(links.isProvisioned(MasterEmailKind.REMINDER)).isFalse();
-                assertThat(links.templateId(MasterEmailKind.DIGEST)).isEqualTo(TEMPLATE_ID);
-                assertThat(links.referralLink(referral)).isEqualTo(
-                    "https://deed-poll-admin.aat.platform.hmcts.net/judicial/referrals/" + referral);
+                assertThat(links.templateId(MasterEmailKind.SENT)).isEqualTo(TEMPLATE_ID);
+                assertThat(links.myReferralsLink()).isEqualTo(
+                    "https://deed-poll-admin.aat.platform.hmcts.net/judicial/referrals/mine");
             });
     }
 
