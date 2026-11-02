@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
@@ -224,10 +225,12 @@ public class MasterEmailTransactions {
         if (waiting == 0) {
             return Optional.empty();
         }
+        // One read, so both values come from the same revision even if a Delivery Manager saves meanwhile.
+        ProcessSettings current = settings.current();
         return Optional.of(new MasterEmailContent(
             links.templateId(claim.kind()), master.email(),
-            MasterEmailPersonalisation.of(master.name(), waiting, links, settings.processingWindow(),
-                                          settings.reminderInterval())));
+            MasterEmailPersonalisation.of(master.name(), waiting, links, current.processingWindow(),
+                                          current.reminderInterval())));
     }
 
     private static boolean stillWaitingFor(Referral referral, UUID masterId) {
