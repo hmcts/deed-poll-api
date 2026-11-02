@@ -74,11 +74,14 @@ class MasterEmailConfigurationTest {
     }
 
     @Test
-    @DisplayName("the chart sets the SENT template and no longer the digest's")
+    @DisplayName("the chart sets both templates' non-prod ids, keeps prod on the placeholder, and has no digest")
     void chart() throws IOException {
         String values = Files.readString(CHART_VALUES);
-        assertThat(values).contains("NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT: DEED_POLL_PLACEHOLDER",
-                                    "NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER: DEED_POLL_PLACEHOLDER");
+        assertThat(values).contains(
+            "NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT: '{{ if eq .Values.global.environment `prod` }}DEED_POLL_PLACEHOLDER"
+                + "{{ else }}65aefcb8-a6e1-463b-a520-87e686cb423f{{ end }}'",
+            "NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER: '{{ if eq .Values.global.environment `prod` }}"
+                + "DEED_POLL_PLACEHOLDER{{ else }}784396ee-1184-49d5-9910-b135ef289bda{{ end }}'");
         assertThat(values).doesNotContain("MASTER_REFERRAL_DIGEST", "MASTER_DIGEST_INTERVAL");
     }
 
