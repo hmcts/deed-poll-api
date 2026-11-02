@@ -115,8 +115,12 @@ class MasterEmailDeliveryTest extends AbstractPostgresContainerTest {
         assertThat(body.has("email_reply_to_id")).isFalse();
         JsonNode personalisation = body.path("personalisation");
         assertThat(fieldNames(personalisation))
-            .containsExactlyInAnyOrder("master_name", "referral_count", "my_referrals_link");
+            .containsExactlyInAnyOrder("master_name", "referral_count", "my_referrals_link", "processing_window",
+                                       "reminder_interval");
         assertThat(personalisation.path("master_name").asText()).isEqualTo("Master Sullivan");
+        // The Delivery Manager's settings at send time, here V42's seed.
+        assertThat(personalisation.path("processing_window").asText()).isEqualTo("7 days");
+        assertThat(personalisation.path("reminder_interval").asText()).isEqualTo("48 hours");
         assertThat(personalisation.path("referral_count").asText()).isEqualTo("2");
         assertThat(personalisation.path("my_referrals_link").asText())
             .isEqualTo("https://admin.example.test/judicial/referrals/mine");
