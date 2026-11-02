@@ -4,6 +4,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
@@ -43,13 +45,16 @@ public class MasterEmailTransactions {
     private final MasterRepository masters;
     private final ReferralRepository referrals;
     private final MasterEmailLinks links;
+    private final ProcessSettingsService settings;
 
     public MasterEmailTransactions(MasterEmailRepository emails, MasterRepository masters,
-                                   ReferralRepository referrals, MasterEmailLinks links) {
+                                   ReferralRepository referrals, MasterEmailLinks links,
+                                   ProcessSettingsService settings) {
         this.emails = emails;
         this.masters = masters;
         this.referrals = referrals;
         this.links = links;
+        this.settings = settings;
     }
 
     /**
@@ -203,9 +208,9 @@ public class MasterEmailTransactions {
     }
 
     /**
-     * The email, read now: the Masters list's current address and name, and how many of the listed referrals still
-     * wait for this Master's direction, so a row that waited out a backoff never counts one since directed,
-     * unassigned or reassigned to somebody else.
+     * The email, read now: the Masters list's current address and name, the Delivery Manager's current processing
+     * window and reminder interval, and how many of the listed referrals still wait for this Master's direction, so
+     * a row that waited out a backoff never counts one since directed, unassigned or reassigned to somebody else.
      *
      * @return empty when none of the referrals is left (directed, no longer this Master's, or deleted)
      * @throws IllegalStateException when the Master is missing, which V44's foreign key forbids
@@ -220,9 +225,12 @@ public class MasterEmailTransactions {
         if (waiting == 0) {
             return Optional.empty();
         }
+        // One read, so both values come from the same revision even if a Delivery Manager saves meanwhile.
+        ProcessSettings current = settings.current();
         return Optional.of(new MasterEmailContent(
             links.templateId(claim.kind()), master.email(),
-            MasterEmailPersonalisation.of(master.name(), waiting, links)));
+            MasterEmailPersonalisation.of(master.name(), waiting, links, current.processingWindow(),
+                                          current.reminderInterval())));
     }
 
     private static boolean stillWaitingFor(Referral referral, UUID masterId) {

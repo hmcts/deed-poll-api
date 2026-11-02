@@ -620,8 +620,10 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `NotificationSecurityTest`); only a `TEMPORARY` refusal returns to `Pending`, eight attempts with the outbox's
   backoff; an unknown outcome or an expired `Sending` lease is `Failed` and **never resent** (ADR-0007). A send, a
   reassignment or a withdrawn direction resets `"remindersSent"` to 0; a new path that restarts the clock must too.
-  Both kinds' personalisation is `master_name`, `referral_count` and `my_referrals_link`
-  (`{ADMIN_BASE_URL}/judicial/referrals/mine`; A-1: no per-referral list). **The window digest is gone**:
+  Both kinds' personalisation is `master_name`, `referral_count`, `my_referrals_link`
+  (`{ADMIN_BASE_URL}/judicial/referrals/mine`; A-1: no per-referral list), and the Delivery Manager's
+  `processing_window` and `reminder_interval` in words, read at send time (Steve, 2026-11-02: a template must not state
+  a setting as fixed text, and must use only these five names). **The window digest is gone**:
   `MasterEmailKind.DIGEST` stays only because AAT's ledger holds `DIGEST` rows; it is `retired()`, has no template key,
   never reads as provisioned, and a leftover `Pending` one is settled `Skipped`. `deedpoll_window_digest_run` is left
   as history. **Unprovisioned is a visible skip:** with `master-referral-sent`/`-reminder` on `DEED_POLL_PLACEHOLDER`

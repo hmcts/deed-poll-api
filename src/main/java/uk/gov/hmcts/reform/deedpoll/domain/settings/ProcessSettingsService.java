@@ -152,6 +152,16 @@ public class ProcessSettingsService {
     }
 
     /**
+     * The whole row as it stands, read once, for a caller that needs several values from one revision (a Master's
+     * email states both the processing window and the reminder interval). No capability check, no cache, unlocked.
+     *
+     * @throws IllegalStateException if the seeded row is missing; there is no default to fall back to
+     */
+    public ProcessSettings current() {
+        return read(false);
+    }
+
+    /**
      * How long a Master has to give a direction before the referral is unassigned. No capability check: the
      * referral sweeps run for whoever's request triggers them. Unlocked, and joins the caller's transaction.
      *
