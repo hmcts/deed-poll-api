@@ -134,14 +134,15 @@ class MastersAndReferralProcessSettingsMigrationTest extends AbstractPostgresCon
     @Test
     @DisplayName("a fresh database is seeded with the defaults and the 2026 to 2028 bank holidays")
     void freshDatabaseSeed() {
+        // V46 has renamed the cap's column by now.
         jdbcTemplate.execute("SET LOCAL search_path TO \"public\"");
 
         assertThat(jdbcTemplate.queryForMap("""
-            SELECT reminder_interval_hours, master_window_cap, morning_window_start::text AS ms,
+            SELECT reminder_interval_hours, window_cap, morning_window_start::text AS ms,
                    morning_window_end::text AS me, afternoon_window_start::text AS afs,
                    afternoon_window_end::text AS afe
             FROM deedpoll_process_settings WHERE id = 1
-            """)).containsEntry("reminder_interval_hours", 48).containsEntry("master_window_cap", 10)
+            """)).containsEntry("reminder_interval_hours", 48).containsEntry("window_cap", 10)
             .containsEntry("ms", "07:00:00").containsEntry("me", "10:30:00")
             .containsEntry("afs", "14:00:00").containsEntry("afe", "14:30:00");
         List<LocalDate> dates = jdbcTemplate.queryForList(

@@ -18,20 +18,29 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralWindow;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollNote;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollNoteRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
@@ -46,9 +55,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * One referral through its whole life over HTTP -- raised and assigned to a Master, linked by that Master's first
+ * One referral through its whole life -- raised, sent to a Master from the queue, linked by that Master's first
  * judicial request, directed, actioned -- and the case timeline the four notes leave behind, read back through the
- * caseworker surface, the one that publishes it. Plan D2 replaced the claim from a shared pool with the assignment.
+ * caseworker surface, the one that publishes it. Plan D2 replaced the claim from a shared pool with the assignment,
+ * and plan F1 the caseworker's assignment with the office's send.
+ *
+ * <p><strong>Every step is a request except the send</strong>, which goes through {@code ReferralService.send}, the
+ * call {@code POST /caseworker/referral-queue/sends} makes, as the Team leader: over HTTP it is refused outside a
+ * referral window, so the journey would depend on the time of day it ran at. The send's route is
+ * {@code CaseworkerReferralQueueControllerTest}'s.
  *
  * <p><strong>Why a class of its own.</strong> The lifecycle crosses the two surfaces: raising and closing are
  * caseworker routes and directing is a judicial one, so neither
@@ -96,6 +111,10 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
 
     /** The caseworker who refers the case to the judiciary. */
     private static final String REFERRING_CASEWORKER = "Ada Caseworker";
+
+    /** The Team leader who checks the referral in the queue and sends it to the Master. */
+    private static final CurrentUser SENDER =
+        CurrentUser.currentUser(List.of(Role.TEAM_LEADER), "Tia Leader", "leader-1");
 
     /** The Master the referral is assigned to, who directs it: the Masters-list name and the IDAM name agree. */
     private static final String JUDGE = "District Judge Bell";
@@ -169,6 +188,15 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
     @Autowired
     private JdbcTemplate jdbc;
 
+    @Autowired
+    private ReferralService referralService;
+
+    @Autowired
+    private MasterRepository masters;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
     @BeforeEach
     void setUp() {
         clearTables();
@@ -182,6 +210,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
 
     private void clearTables() {
         referrals.deleteAll();
+        jdbc.update("DELETE FROM deedpoll_master_email");
         jdbc.update("DELETE FROM deedpoll_master");
         notes.deleteAll();
         deedPolls.deleteAll();
@@ -216,13 +245,14 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
         String raisedOn = DAY.format(stored(referralId).getCreatedOn());
         assertThat(timeline(caseId)).satisfiesExactly(
             raised -> {
-                assertThat(raised.getNote()).isEqualTo("Referred to a Master. Reasons: " + REASON_LABEL + ".");
+                assertThat(raised.getNote())
+                    .isEqualTo("Referral raised, waiting to be sent to a Master. Reasons: " + REASON_LABEL + ".");
                 assertThat(raised.getCreatedBy()).isEqualTo(REFERRING_CASEWORKER);
             },
-            assigned -> {
-                assertThat(assigned.getNote()).isEqualTo("Referral raised on " + raisedOn + ", reasons: "
-                    + REASON_LABEL + ", assigned to " + JUDGE + ".");
-                assertThat(assigned.getCreatedBy()).isEqualTo(REFERRING_CASEWORKER);
+            sent -> {
+                assertThat(sent.getNote()).isEqualTo("Referral raised on " + raisedOn + ", reasons: "
+                    + REASON_LABEL + ", sent to " + JUDGE + " by the office.");
+                assertThat(sent.getCreatedBy()).isEqualTo(SENDER.name());
             },
             directed -> {
                 assertThat(directed.getNote()).isEqualTo("Master’s direction recorded for referral raised on "
@@ -263,10 +293,10 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
         authorised(get("/caseworker/cases/" + caseId))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.notes.length()").value(4))
-            .andExpect(jsonPath("$.notes[0].note").value(containsString("Referred to a Master")))
+            .andExpect(jsonPath("$.notes[0].note").value(containsString("waiting to be sent to a Master")))
             .andExpect(jsonPath("$.notes[0].createdBy").value(REFERRING_CASEWORKER))
-            .andExpect(jsonPath("$.notes[1].note").value(containsString("assigned to " + JUDGE)))
-            .andExpect(jsonPath("$.notes[1].createdBy").value(REFERRING_CASEWORKER))
+            .andExpect(jsonPath("$.notes[1].note").value(containsString("sent to " + JUDGE)))
+            .andExpect(jsonPath("$.notes[1].createdBy").value(SENDER.name()))
             .andExpect(jsonPath("$.notes[2].note").value(containsString("Master’s direction recorded")))
             .andExpect(jsonPath("$.notes[2].createdBy").value(JUDGE))
             .andExpect(jsonPath("$.notes[3].note").value(containsString("marked as actioned")))
@@ -278,7 +308,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.length()").value(4))
             .andExpect(jsonPath("$[0].note").value(containsString("marked as actioned")))
-            .andExpect(jsonPath("$[3].note").value(containsString("Referred to a Master")));
+            .andExpect(jsonPath("$[3].note").value(containsString("waiting to be sent to a Master")));
 
         // Four notes: the reads above and the linking added nothing, because neither is a transition -- and a note
         // per read would bury the lifecycle in the grid it is written to.
@@ -293,19 +323,28 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
     }
 
     /**
-     * The referral, raised over the caseworker route, which is the only way one is raised.
+     * The referral, raised over the caseworker route, which is the only way one is raised, and then sent.
      *
      * <p>Over HTTP like every other step of the journey, rather than through the service: the whole claim of this
      * class is that the four notes appear when the four <em>requests</em> are made by four real tokens.
      */
     private String raise(String caseId, UUID master) throws Exception {
         String created = authorised(post("/caseworker/cases/" + caseId + "/referrals"),
-            "{\"reasons\":[\"" + REASON + "\"],\"masterId\":\"" + master + "\"}")
+            "{\"reasons\":[\"" + REASON + "\"]}")
             .andExpect(status().isCreated())
             .andReturn()
             .getResponse()
             .getContentAsString();
-        return JSON.readTree(created).get("id").asText();
+        String referralId = JSON.readTree(created).get("id").asText();
+        // The create takes no Master since plan F1, so the Team leader sends it from the queue straight after.
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            Referral waiting = referrals.findByIdAndDeedPollIdForUpdate(UUID.fromString(referralId), caseId)
+                .orElseThrow();
+            LocalDateTime now = AuditClock.now();
+            referralService.send(waiting, master, masters.findAssigneeForUpdate(master).orElseThrow(),
+                                 new ReferralWindow(now.toLocalDate(), WindowSlot.AM), SENDER, now);
+        });
+        return referralId;
     }
 
     /**

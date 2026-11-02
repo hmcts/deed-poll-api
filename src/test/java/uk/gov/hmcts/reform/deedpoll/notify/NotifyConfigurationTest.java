@@ -78,9 +78,12 @@ class NotifyConfigurationTest {
                 // nobody reads. One grep for the literal lists both.
                 var expected = Arrays.stream(EmailTemplate.values()).collect(Collectors.toMap(
                     EmailTemplate::key, template -> "DEED_POLL_PLACEHOLDER"));
-                // The Master emails (plan D3) are not EmailTemplate members, because they are not a case's.
+                // The Master emails (plan D3) are not EmailTemplate members, because they are not a case's. The
+                // retired digest (plan F1) has no template at all.
                 for (MasterEmailKind kind : MasterEmailKind.values()) {
-                    expected.put(kind.templateKey(), "DEED_POLL_PLACEHOLDER");
+                    if (!kind.retired()) {
+                        expected.put(kind.templateKey(), "DEED_POLL_PLACEHOLDER");
+                    }
                 }
                 for (String key : java.util.List.of("gazette-adult", "gazette-minor", "gazette-mixed")) {
                     expected.put(key, "DEED_POLL_PLACEHOLDER");

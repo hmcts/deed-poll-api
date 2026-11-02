@@ -19,35 +19,29 @@ import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.masters.Master;
 import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterService;
-import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 
 import java.util.List;
 
-/** The Delivery Manager's Masters list, which every caseworker reads to choose a Master. */
+/** The Delivery Manager's Masters list, which every caseworker reads and a sender chooses from. */
 @RestController
 @RequestMapping("/caseworker/masters")
 public class CaseworkerMastersController {
 
     private final MasterService service;
-    private final ReferralService referrals;
 
-    public CaseworkerMastersController(MasterService service, ReferralService referrals) {
+    public CaseworkerMastersController(MasterService service) {
         this.service = service;
-        this.referrals = referrals;
     }
 
     @Operation(operationId = "listMasters", summary = "List the Masters",
         description = "Any deed poll staff role. Every Master, available or not, ordered by name and then id. "
             + "linked says whether the Master has signed in and been linked to their IDAM account; the account "
-            + "itself is never published. window is the referral window a referral assigned now counts towards "
-            + "(Europe/London: today's morning or afternoon, or the next working day's morning outside the windows), "
-            + "cap is how many referrals one Master may be assigned per window, and each Master's assignedInWindow "
-            + "is their count in that window.")
+            + "itself is never published. The current window, the cap and each Master's count in it are the "
+            + "referral queue's (GET /caseworker/referral-queue).")
     @GetMapping
     public MasterListResponse list() {
-        // The role check first, so a refused caller reads no counts.
         List<Master> masters = service.list(CurrentUsers.required());
-        return MasterListResponse.from(masters, referrals.currentWindowLoad());
+        return MasterListResponse.from(masters);
     }
 
     @Operation(operationId = "createMaster", summary = "Add a Master to the list",

@@ -14,6 +14,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.EnumSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
 
@@ -49,85 +50,8 @@ class ReferralWindowsTest {
     }
 
     @Nested
-    @DisplayName("on a working day (Wednesday 28 October 2026)")
-    class WorkingDay {
-
-        @ParameterizedTest(name = "{0} counts towards {1} {2}")
-        @CsvSource({
-            "2026-10-28T00:00,      2026-10-28, AM",
-            "2026-10-28T06:59,      2026-10-28, AM",
-            "2026-10-28T07:00,      2026-10-28, AM",
-            "2026-10-28T10:29,      2026-10-28, AM",
-            "2026-10-28T10:29:59.999, 2026-10-28, AM",
-            "2026-10-28T10:30,      2026-10-28, PM",
-            "2026-10-28T10:31,      2026-10-28, PM",
-            "2026-10-28T13:59,      2026-10-28, PM",
-            "2026-10-28T14:00,      2026-10-28, PM",
-            "2026-10-28T14:29,      2026-10-28, PM",
-            "2026-10-28T14:29:59.999, 2026-10-28, PM",
-            "2026-10-28T14:30,      2026-10-29, AM",
-            "2026-10-28T14:31,      2026-10-29, AM",
-            "2026-10-28T23:59,      2026-10-29, AM",
-        })
-        void eachBoundaryToTheMinute(String at, String date, WindowSlot slot) {
-            assertThat(ReferralWindows.windowFor(london(at), SEEDED, WORKING_DAY)).isEqualTo(window(date, slot));
-        }
-    }
-
-    @Nested
-    @DisplayName("around days that are not working days")
-    class NonWorkingDays {
-
-        @ParameterizedTest(name = "{0} counts towards {1} {2}")
-        @CsvSource({
-            // A Friday afternoon after its window goes to Monday's morning.
-            "2026-10-30T14:30, 2026-11-02, AM",
-            "2026-10-30T14:29, 2026-10-30, PM",
-            // A Saturday and a Sunday, at any time, go to Monday's morning.
-            "2026-10-31T00:00, 2026-11-02, AM",
-            "2026-10-31T09:00, 2026-11-02, AM",
-            "2026-11-01T14:15, 2026-11-02, AM",
-            "2026-11-01T23:59, 2026-11-02, AM",
-            // A bank holiday (the summer one, a Monday) goes to the next working day, inside its windows too.
-            "2026-08-31T09:00, 2026-09-01, AM",
-            "2026-08-31T14:15, 2026-09-01, AM",
-            // The Friday before it goes past the weekend and the holiday.
-            "2026-08-28T14:30, 2026-09-01, AM",
-            // Christmas to the second of January: the 25th (a Friday) and the 28th (Boxing Day's substitute) are
-            // holidays, so Christmas Eve's afternoon and Christmas Day itself go to Tuesday the 29th.
-            "2026-12-24T14:30, 2026-12-29, AM",
-            "2026-12-25T10:00, 2026-12-29, AM",
-            "2026-12-26T10:00, 2026-12-29, AM",
-            "2026-12-28T10:00, 2026-12-29, AM",
-            // New Year's Day (a Friday) and the weekend after it go to Monday the 4th.
-            "2026-12-31T14:30, 2027-01-04, AM",
-            "2027-01-01T08:00, 2027-01-04, AM",
-            "2027-01-02T08:00, 2027-01-04, AM",
-        })
-        void goToTheNextWorkingDaysMorning(String at, String date, WindowSlot slot) {
-            assertThat(ReferralWindows.windowFor(london(at), SEEDED, WORKING_DAY)).isEqualTo(window(date, slot));
-        }
-
-        @Test
-        @DisplayName("refuses, rather than searching for ever, when no day in a year is a working day")
-        void boundedSearch() {
-            assertThatThrownBy(() -> ReferralWindows.windowFor(london("2026-10-31T09:00"), SEEDED, date -> false))
-                .isInstanceOf(IllegalStateException.class);
-        }
-    }
-
-    @Nested
     @DisplayName("in Europe/London, not UTC")
     class Zone {
-
-        @Test
-        @DisplayName("reads a summer moment in BST: 09:29 UTC is 10:29 in London, the morning; 09:30 UTC the afternoon")
-        void summerTime() {
-            assertThat(ReferralWindows.windowFor(Instant.parse("2026-09-01T09:29:00Z"), SEEDED, WORKING_DAY))
-                .isEqualTo(window("2026-09-01", WindowSlot.AM));
-            assertThat(ReferralWindows.windowFor(Instant.parse("2026-09-01T09:30:00Z"), SEEDED, WORKING_DAY))
-                .isEqualTo(window("2026-09-01", WindowSlot.PM));
-        }
 
         @Test
         @DisplayName("a window closes at its end time in London, BST or GMT")
@@ -163,11 +87,11 @@ class ReferralWindowsTest {
         void springForward() {
             assertThat(ReferralWindows.closesAt(window("2026-03-29", WindowSlot.AM), SMALL_HOURS))
                 .isEqualTo(Instant.parse("2026-03-29T01:30:00Z"));
-            // 00:59 GMT is before the morning's end; one minute later the clocks read 02:00 BST, the afternoon.
-            assertThat(ReferralWindows.windowFor(Instant.parse("2026-03-29T00:59:00Z"), SMALL_HOURS, EVERY_DAY))
-                .isEqualTo(window("2026-03-29", WindowSlot.AM));
-            assertThat(ReferralWindows.windowFor(Instant.parse("2026-03-29T01:00:00Z"), SMALL_HOURS, EVERY_DAY))
-                .isEqualTo(window("2026-03-29", WindowSlot.PM));
+            // 00:59 GMT is inside the morning; one minute later the clocks read 02:00 BST, the afternoon.
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-03-29T00:59:00Z"), SMALL_HOURS, EVERY_DAY))
+                .contains(window("2026-03-29", WindowSlot.AM));
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-03-29T01:00:00Z"), SMALL_HOURS, EVERY_DAY))
+                .contains(window("2026-03-29", WindowSlot.PM));
         }
 
         @Test
@@ -176,13 +100,116 @@ class ReferralWindowsTest {
             assertThat(ReferralWindows.closesAt(window("2026-10-25", WindowSlot.AM), SMALL_HOURS))
                 .isEqualTo(Instant.parse("2026-10-25T00:30:00Z"));
             // 01:15 BST and, an hour later, 01:15 GMT both read as before the morning's end, so both are the morning.
-            assertThat(ReferralWindows.windowFor(Instant.parse("2026-10-25T00:15:00Z"), SMALL_HOURS, EVERY_DAY))
-                .isEqualTo(window("2026-10-25", WindowSlot.AM));
-            assertThat(ReferralWindows.windowFor(Instant.parse("2026-10-25T01:15:00Z"), SMALL_HOURS, EVERY_DAY))
-                .isEqualTo(window("2026-10-25", WindowSlot.AM));
-            // 01:30 GMT is the morning's end the second time round, so the afternoon.
-            assertThat(ReferralWindows.windowFor(Instant.parse("2026-10-25T01:30:00Z"), SMALL_HOURS, EVERY_DAY))
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-10-25T00:15:00Z"), SMALL_HOURS, EVERY_DAY))
+                .contains(window("2026-10-25", WindowSlot.AM));
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-10-25T01:15:00Z"), SMALL_HOURS, EVERY_DAY))
+                .contains(window("2026-10-25", WindowSlot.AM));
+            // 01:30 GMT is the morning's end the second time round, so no window until the afternoon's 02:00.
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-10-25T01:30:00Z"), SMALL_HOURS, EVERY_DAY)).isEmpty();
+            assertThat(ReferralWindows.nextToOpen(Instant.parse("2026-10-25T01:30:00Z"), SMALL_HOURS, EVERY_DAY))
                 .isEqualTo(window("2026-10-25", WindowSlot.PM));
+        }
+    }
+
+    /**
+     * Plan F1's question: is a window open now, and which opens next. Each boundary minute, a weekend, a bank holiday
+     * and both 2026 clock changes, on the seeded windows.
+     */
+    @Nested
+    @DisplayName("which window is open, and which opens next (plan F1)")
+    class OpenAndNext {
+
+        @ParameterizedTest(name = "at {0} the open window is [{1} {2}] and the next {3} {4}")
+        @CsvSource({
+            // Wednesday 28 October 2026, every boundary to the minute and below.
+            "2026-10-28T00:00,          ,           ,   2026-10-28, AM",
+            "2026-10-28T06:59,          ,           ,   2026-10-28, AM",
+            "2026-10-28T06:59:59.999,   ,           ,   2026-10-28, AM",
+            "2026-10-28T07:00,          2026-10-28, AM, 2026-10-28, PM",
+            "2026-10-28T07:01,          2026-10-28, AM, 2026-10-28, PM",
+            "2026-10-28T10:29,          2026-10-28, AM, 2026-10-28, PM",
+            "2026-10-28T10:29:59.999,   2026-10-28, AM, 2026-10-28, PM",
+            "2026-10-28T10:30,          ,           ,   2026-10-28, PM",
+            "2026-10-28T13:59,          ,           ,   2026-10-28, PM",
+            "2026-10-28T14:00,          2026-10-28, PM, 2026-10-29, AM",
+            "2026-10-28T14:29,          2026-10-28, PM, 2026-10-29, AM",
+            "2026-10-28T14:29:59.999,   2026-10-28, PM, 2026-10-29, AM",
+            "2026-10-28T14:30,          ,           ,   2026-10-29, AM",
+            "2026-10-28T23:59,          ,           ,   2026-10-29, AM",
+            // Friday: inside its afternoon and after it, the next is Monday's morning.
+            "2026-10-30T14:15,          2026-10-30, PM, 2026-11-02, AM",
+            "2026-10-30T14:30,          ,           ,   2026-11-02, AM",
+            // A weekend is never open, even at a window's times.
+            "2026-10-31T07:00,          ,           ,   2026-11-02, AM",
+            "2026-11-01T14:15,          ,           ,   2026-11-02, AM",
+            // A bank holiday (Monday 31 August) is never open either; the next is Tuesday's morning.
+            "2026-08-31T09:00,          ,           ,   2026-09-01, AM",
+            "2026-08-31T14:15,          ,           ,   2026-09-01, AM",
+            "2026-08-31T06:00,          ,           ,   2026-09-01, AM",
+            // Christmas Eve's afternoon is followed by Tuesday the 29th's morning.
+            "2026-12-24T14:15,          2026-12-24, PM, 2026-12-29, AM",
+        })
+        void eachBoundary(String at, String openDate, WindowSlot openSlot, String nextDate, WindowSlot nextSlot) {
+            assertThat(ReferralWindows.openAt(london(at), SEEDED, WORKING_DAY))
+                .isEqualTo(openDate == null ? Optional.empty()
+                    : Optional.of(window(openDate, openSlot)));
+            assertThat(ReferralWindows.nextToOpen(london(at), SEEDED, WORKING_DAY))
+                .isEqualTo(window(nextDate, nextSlot));
+        }
+
+        @Test
+        @DisplayName("a window opens at its start time in London, BST or GMT")
+        void opensAt() {
+            assertThat(ReferralWindows.opensAt(window("2026-10-28", WindowSlot.AM), SEEDED))
+                .isEqualTo(Instant.parse("2026-10-28T07:00:00Z"));
+            assertThat(ReferralWindows.opensAt(window("2026-10-28", WindowSlot.PM), SEEDED))
+                .isEqualTo(Instant.parse("2026-10-28T14:00:00Z"));
+            assertThat(ReferralWindows.opensAt(window("2026-09-01", WindowSlot.AM), SEEDED))
+                .isEqualTo(Instant.parse("2026-09-01T06:00:00Z"));
+            assertThat(ReferralWindows.opensAt(window("2026-09-01", WindowSlot.PM), SEEDED))
+                .isEqualTo(Instant.parse("2026-09-01T13:00:00Z"));
+        }
+
+        @Test
+        @DisplayName("spring (29 March 2026): the Friday before reads GMT and the Monday after BST")
+        void springForward() {
+            // Friday 27 March: 07:00 GMT is 07:00Z.
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-03-27T06:59:00Z"), SEEDED, WORKING_DAY)).isEmpty();
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-03-27T07:00:00Z"), SEEDED, WORKING_DAY))
+                .contains(window("2026-03-27", WindowSlot.AM));
+            // After Friday's afternoon the next is Monday 30 March's morning, which opens at 07:00 BST, 06:00Z.
+            ReferralWindow next =
+                ReferralWindows.nextToOpen(Instant.parse("2026-03-27T14:30:00Z"), SEEDED, WORKING_DAY);
+            assertThat(next).isEqualTo(window("2026-03-30", WindowSlot.AM));
+            assertThat(ReferralWindows.opensAt(next, SEEDED)).isEqualTo(Instant.parse("2026-03-30T06:00:00Z"));
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-03-30T06:00:00Z"), SEEDED, WORKING_DAY))
+                .contains(window("2026-03-30", WindowSlot.AM));
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-03-30T05:59:00Z"), SEEDED, WORKING_DAY)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("autumn (25 October 2026): the Friday before reads BST and the Monday after GMT")
+        void fallBack() {
+            // Friday 23 October: 07:00 BST is 06:00Z, and the afternoon ends at 14:30 BST, 13:30Z.
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-10-23T06:00:00Z"), SEEDED, WORKING_DAY))
+                .contains(window("2026-10-23", WindowSlot.AM));
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-10-23T13:30:00Z"), SEEDED, WORKING_DAY)).isEmpty();
+            ReferralWindow next =
+                ReferralWindows.nextToOpen(Instant.parse("2026-10-23T13:30:00Z"), SEEDED, WORKING_DAY);
+            assertThat(next).isEqualTo(window("2026-10-26", WindowSlot.AM));
+            assertThat(ReferralWindows.opensAt(next, SEEDED)).isEqualTo(Instant.parse("2026-10-26T07:00:00Z"));
+            // Monday 26 October: 06:30Z is 06:30 GMT, before the morning.
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-10-26T06:30:00Z"), SEEDED, WORKING_DAY)).isEmpty();
+            assertThat(ReferralWindows.openAt(Instant.parse("2026-10-26T07:00:00Z"), SEEDED, WORKING_DAY))
+                .contains(window("2026-10-26", WindowSlot.AM));
+        }
+
+        @Test
+        @DisplayName("refuses, rather than searching for ever, when no day in a year is a working day")
+        void boundedSearch() {
+            assertThatThrownBy(() -> ReferralWindows.nextToOpen(london("2026-10-31T09:00"), SEEDED, date -> false))
+                .isInstanceOf(IllegalStateException.class);
+            assertThat(ReferralWindows.openAt(london("2026-10-28T09:00"), SEEDED, date -> false)).isEmpty();
         }
     }
 }

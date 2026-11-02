@@ -32,7 +32,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static uk.gov.hmcts.reform.deedpoll.domain.masters.MasterDigestWindowsTest.london;
+import static uk.gov.hmcts.reform.deedpoll.domain.masters.MasterReminderHoursTest.london;
 
 /**
  * {@link MasterReminders} with the reminder template unprovisioned, as it ships (plan D3, step 6): the reminder is

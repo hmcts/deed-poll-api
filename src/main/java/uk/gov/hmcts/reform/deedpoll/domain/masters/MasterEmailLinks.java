@@ -5,10 +5,9 @@ import uk.gov.hmcts.reform.deedpoll.notify.NotifyProperties;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Locale;
-import java.util.UUID;
 
 /**
- * Which Master email templates this environment can send, and where their links point (plan D3).
+ * Which Master email templates this environment can send, and where their link points (plans D3 and F1).
  *
  * <p><strong>Start-up fails on a provisioned template with no admin base URL</strong>, because the alternative is
  * an email whose every link is relative, or names a host somebody guessed, sent to a judge. The messages are fixed
@@ -43,9 +42,12 @@ public final class MasterEmailLinks {
 
     /**
      * Whether {@code kind}'s template has an id. No reply-to and no document, so the id is the only question, and a
-     * blank one answers no as the placeholder does.
+     * blank one answers no as the placeholder does. A {@link MasterEmailKind#retired} kind never is.
      */
     public boolean isProvisioned(MasterEmailKind kind) {
+        if (kind.retired()) {
+            return false;
+        }
         String id = templateId(kind);
         return !id.isBlank() && !NotifyProperties.UNPROVISIONED_TEMPLATE_ID.equals(id);
     }
@@ -57,12 +59,12 @@ public final class MasterEmailLinks {
         return notify.templateId(kind.templateKey()).trim();
     }
 
-    /** The admin app's page for one referral, as a judge opens it. */
-    public String referralLink(UUID referralId) {
+    /** The admin app's My referrals page, where a Master finds every referral sent to them. */
+    public String myReferralsLink() {
         if (baseUrl.isEmpty()) {
             throw new IllegalStateException(MISSING_BASE_URL);
         }
-        return baseUrl + "/judicial/referrals/" + referralId;
+        return baseUrl + "/judicial/referrals/mine";
     }
 
     private static String checked(String configured) {

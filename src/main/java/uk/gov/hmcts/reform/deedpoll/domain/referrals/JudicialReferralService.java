@@ -199,8 +199,9 @@ public class JudicialReferralService {
      * sweep may take a row out of this very response; its note is the record of that.
      *
      * <p><strong>The database filters, orders, pages and counts</strong> -- {@code ReferralRepository.findOwnedBy},
-     * whose {@code ORDER BY} is the Master's page order (Steve, 2026-10-28): undirected first, urgent first among
-     * them, then the day referred; the directed ones by the day referred alone; then the id. A Java filter over a
+     * whose {@code ORDER BY} is the Master's page order (Steve, 2026-10-28; plan F1, decision F-9): undirected
+     * first, urgent first among them, then the day it was sent to the Master ({@code assignedAt}); the directed ones
+     * by the day sent alone; then the id. A Java filter over a
      * wider read would page an arbitrary slice and would have to count separately, and the total is the answer to
      * "how much am I in the middle of".
      *

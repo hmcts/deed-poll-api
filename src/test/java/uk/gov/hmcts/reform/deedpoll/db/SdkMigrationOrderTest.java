@@ -73,14 +73,14 @@ class SdkMigrationOrderTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("public's history is ours alone -- V1 to V45, each successful, checksums matching the files")
+    @DisplayName("public's history is ours alone -- V1 to V46, each successful, checksums matching the files")
     void publicHistoryIsUnchanged() {
         List<String> versions = jdbc.queryForList(
             "select version from public.flyway_schema_history where version is not null order by installed_rank",
             String.class);
 
         assertThat(versions).containsExactlyElementsOf(
-            IntStream.rangeClosed(1, 45).mapToObj(String::valueOf).toList());
+            IntStream.rangeClosed(1, 46).mapToObj(String::valueOf).toList());
         assertThat(jdbc.queryForObject(
             "select count(*) from public.flyway_schema_history where not success", Integer.class)).isZero();
         // Fails on any checksum that differs from the migration file on the classpath.

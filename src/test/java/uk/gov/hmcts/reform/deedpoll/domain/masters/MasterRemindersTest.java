@@ -20,6 +20,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.BankHolidays;
 import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
@@ -51,7 +52,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static uk.gov.hmcts.reform.deedpoll.domain.masters.MasterDigestWindowsTest.london;
+import static uk.gov.hmcts.reform.deedpoll.domain.masters.MasterReminderHoursTest.london;
 
 /**
  * {@link MasterReminders} against real Postgres and a WireMock Notify (plan D3, step 3): a reminder falls due every
@@ -73,7 +74,8 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final StubNotify STUB = new StubNotify();
 
-    private static final CurrentUser CASEWORKER = CurrentUser.currentUser(List.of(), "Ada Caseworker", "caseworker-1");
+    private static final CurrentUser LEADER =
+        CurrentUser.currentUser(List.of(Role.TEAM_LEADER), "Tia Leader", "leader-1");
 
     @Autowired private MasterEmailTransactions transactions;
     @Autowired private ProcessSettingsService settings;
@@ -136,11 +138,15 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
             assertThat(ids(row)).containsExactly(referral.getId());
         });
         JsonNode sent = sentTo("master.sullivan@example.test");
+        // Plan F1, decision A-1: the reminder links to My referrals rather than listing each referral.
+        List<String> keys = new ArrayList<>();
+        sent.fieldNames().forEachRemaining(keys::add);
+        assertThat(keys).containsExactlyInAnyOrder("master_name", "referral_count", "my_referrals_link");
         assertThat(sent.path("master_name").asText()).isEqualTo("Master Sullivan");
-        assertThat(sent.path("period").asText()).isEqualTo("waiting for your direction");
         assertThat(sent.path("referral_count").asText()).isEqualTo("1");
-        assertThat(sent.path("referral_list").asText()).startsWith("DP2026-000301 – ")
-            .endsWith(" – https://admin.example.test/judicial/referrals/" + referral.getId());
+        assertThat(sent.path("my_referrals_link").asText())
+            .isEqualTo("https://admin.example.test/judicial/referrals/mine");
+        assertThat(sent.toString()).doesNotContain("DP2026-000301", referral.getId().toString());
         assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage).noneMatch(line -> line.contains("@"));
 
         // The next run sends nothing more until the second interval ends.
@@ -194,11 +200,11 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
     void reassignment() {
         UUID sullivan = master("m-from@example.test", "Master Sullivan");
         UUID okafor = master("m-to@example.test", "Master Okafor");
-        Referral referral = open("DP2026-000331");
-        referralService.assign(referral.getDeedPoll().getId(), referral.getId().toString(), sullivan, CASEWORKER);
+        Referral referral = assigned("DP2026-000331", sullivan, NOON_UTC.minusHours(49));
         jdbc.update("UPDATE \"deedpoll_referral\" SET \"remindersSent\" = 1 WHERE \"id\" = ?", referral.getId());
 
-        referralService.assign(referral.getDeedPoll().getId(), referral.getId().toString(), okafor, CASEWORKER);
+        referralService.assign(referral.getDeedPoll().getId(), referral.getId().toString(),
+                               Map.of("masterId", okafor.toString()), LEADER);
         assertThat(remindersSent(referral)).isZero();
         // As if the reassignment were 48 hours before noon.
         jdbc.update("UPDATE \"deedpoll_referral\" SET \"assignedAt\" = ? WHERE \"id\" = ?",
@@ -207,7 +213,9 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
         assertThat(reminders.run(NOON)).isOne();
 
         assertThat(rows(sullivan)).isEmpty();
-        assertThat(rows(okafor)).singleElement()
+        // The reassignment's own SENT row (plan F1; Skipped, its template unprovisioned here), and the reminder.
+        assertThat(rows(okafor)).extracting(row -> row.get("kind")).containsExactlyInAnyOrder("SENT", "REMINDER");
+        assertThat(rows(okafor)).filteredOn(row -> "REMINDER".equals(row.get("kind"))).singleElement()
             .satisfies(row -> assertThat(ids(row)).containsExactly(referral.getId()));
         assertThat(STUB.emailRequests()).singleElement()
             .satisfies(request -> assertThat(request.getBodyAsString()).contains("m-to@example.test"));
@@ -264,7 +272,7 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("the email lists every referral waiting for the Master's direction, not only the one that fell due")
+    @DisplayName("the email counts every referral waiting for the Master's direction, not only the one that fell due")
     void listsAllOutstanding() throws IOException {
         UUID sullivan = master("m-all@example.test", "Master Sullivan");
         final Referral due = assigned("DP2026-000361", sullivan, NOON_UTC.minusHours(50));

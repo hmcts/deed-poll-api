@@ -17,7 +17,7 @@ import java.util.stream.Collectors;
 
 /**
  * The text of the case notes a referral writes as it moves through its lifecycle: raised, claimed, directed,
- * actioned, withdrawn, returned to the office when the processing window ends without a direction, and -- where the
+ * actioned, withdrawn, returned to the queue when the processing window ends without a direction, and -- where the
  * office asked the applicant whether to proceed after a refused non-publication request -- the answer that came back.
  *
  * <p><strong>Why a referral writes a note at all.</strong> There is no timeline concept in this domain --
@@ -77,13 +77,14 @@ public final class ReferralNotes {
     }
 
     /**
-     * The note for a referral being raised: what it says, and why it is urgent if it is.
+     * The note for a referral being raised: that it waits in the queue to be sent to a Master (plan F1), what it
+     * says, and why it is urgent if it is.
      *
      * <p>The reasons are named rather than counted, because "referred for three reasons" is the one summary
      * that tells the next caseworker nothing they wanted.
      */
     public static String raised(CreateReferralInput dto) {
-        StringBuilder text = new StringBuilder("Referred to a Master. Reasons: ");
+        StringBuilder text = new StringBuilder("Referral raised, waiting to be sent to a Master. Reasons: ");
         text.append(names(dto));
         text.append('.');
         // Each piece of the caseworker's own text goes on its own line, rather than being run into the
@@ -97,10 +98,10 @@ public final class ReferralNotes {
     }
 
     /**
-     * The note for an assignment the processing window returned to the office (plan D2, decision D-3), naming the
-     * Master who gave no direction and the window in words.
+     * The note for a sent referral the processing window returned to the queue (plan D2, decision D-3; plan F1,
+     * decision F-11), naming the Master who gave no direction and the window in words.
      *
-     * <p>"Referral raised on …, reasons: …, returned to the office for assignment: no direction from {name} within
+     * <p>"Referral raised on …, reasons: …, returned to the queue to be sent again: no direction from {name} within
      * 7 days."
      *
      * <p><strong>The only event on the timeline that no column records.</strong> The release <em>erases</em> the
@@ -108,8 +109,8 @@ public final class ReferralNotes {
      * with nothing to say it was ever with a Master. It is authored by the service account rather than by a
      * caseworker, because no person did it.
      *
-     * <p><strong>Naming the Master is deliberate</strong>: the caseworker who assigns it again can ask them where they
-     * had got to rather than starting again. The note reaches no judge since the judicial detail carries no case notes
+     * <p><strong>Naming the Master is deliberate</strong>: whoever sends it again can ask them where they had got to
+     * rather than starting again. The note reaches no judge since the judicial detail carries no case notes
      * (2026-10-27). Never an email address or a subject.
      *
      * <p>The Master's name is bounded here rather than trusted. The column holding it is unbounded {@code text} and
@@ -119,28 +120,27 @@ public final class ReferralNotes {
      * @param overdue the released referral, as the sweep read it before the release cleared the Master's name
      * @param window  the processing window the referral exceeded, as the setting gave it to that sweep
      */
-    public static String returnedForAssignment(OverdueAssignment overdue, Duration window) {
+    public static String returnedToQueue(OverdueAssignment overdue, Duration window) {
         return "Referral " + identifies(overdue.createdOn(), overdue.reasons())
-            + ", returned to the office for assignment: no direction from " + named(overdue.claimedBy())
+            + ", returned to the queue to be sent again: no direction from " + named(overdue.claimedBy())
             + " within " + inWords(window) + ".";
     }
 
     /**
-     * The note for a caseworker assigning a referral to a Master (plan D2), on the create or on a later assignment
-     * of one that was waiting.
+     * The note for a referral sent from the queue to a Master (plan F1), one per referral in a send.
      *
-     * <p>"Referral raised on …, reasons: …, assigned to {name}."
+     * <p>"Referral raised on …, reasons: …, sent to {name} by the office."
      *
-     * <p>Names the Master, because the note's author is the caseworker and the Master is who has the papers now.
-     * The name is the Masters list's, bounded as {@link #returnedForAssignment}'s is; never an email address or a
-     * subject.
+     * <p>Names the Master, bounded as {@link #returnedToQueue}'s name is; never an email address or a subject.
+     * "By the office" because the note's author is the Team leader or Delivery Manager who sent it, and the
+     * caseworker reading the timeline did not.
      */
-    public static String assigned(Referral referral, String master) {
-        return "Referral " + identifies(referral) + ", assigned to " + named(master) + ".";
+    public static String sent(Referral referral, String master) {
+        return "Referral " + identifies(referral) + ", sent to " + named(master) + " by the office.";
     }
 
     /**
-     * The note for a referral moved from one Master to another (D-8).
+     * The note for a referral moved from one Master to another (plan F1, decision F-10).
      *
      * <p>"Referral raised on …, reasons: …, reassigned from {old} to {new}."
      */
@@ -270,7 +270,7 @@ public final class ReferralNotes {
      * case's timeline, and {@code JudicialReferralDetail} returns that timeline to any judge who may see a
      * referral on the case -- which, for the referral this note is about, is the judge who refused the
      * non-publication request. So the outcome and the free text below are legible to them, exactly as
-     * {@link #returnedForAssignment}'s name is. That is the same decision rather than an oversight: the judge refused
+     * {@link #returnedToQueue}'s name is. That is the same decision rather than an oversight: the judge refused
      * publication on the applicant's stated wishes, so whether the applicant then went ahead, withdrew or asked
      * for a refund is the result of their own direction, and a judge who directed a case is entitled to read what
      * became of it. The confirmation <em>columns</em> are a different matter and are not published on that surface

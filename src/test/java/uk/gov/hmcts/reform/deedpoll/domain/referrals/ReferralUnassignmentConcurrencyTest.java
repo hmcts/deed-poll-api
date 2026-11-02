@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * is released once, with one note, because the second release waits on the first's row lock and then finds the row
  * no longer {@code Claimed}.
  *
- * <p>On {@code ReferralAssignmentConcurrencyTest}'s pattern: the request's transaction holds its release until
+ * <p>On {@code DirectionRevisionConcurrencyTest}'s pattern: the request's transaction holds its release until
  * PostgreSQL reports the timer's statement waiting on it, so the schedule is observed rather than guessed. The timer
  * is the real {@link ReferralUnassignment}, constructed here because the Postgres-backed tests switch its bean off.
  * Not {@code @Transactional}: the point is what two committed transactions leave behind.
@@ -48,7 +48,7 @@ class ReferralUnassignmentConcurrencyTest extends AbstractPostgresContainerTest 
 
     private static final int TIMEOUT_SECONDS = 60;
 
-    private static final String RETURNED = ", returned to the office for assignment: no direction from ";
+    private static final String RETURNED = ", returned to the queue to be sent again: no direction from ";
 
     @Autowired
     private ReferralService service;
@@ -74,6 +74,7 @@ class ReferralUnassignmentConcurrencyTest extends AbstractPostgresContainerTest 
         notes.deleteAll();
         referrals.deleteAll();
         deedPolls.deleteAll();
+        jdbc.update("DELETE FROM deedpoll_master_email");
         jdbc.update("DELETE FROM deedpoll_master");
         jdbc.update("UPDATE deedpoll_process_settings SET referral_claim_expiry_minutes = 10080");
     }
