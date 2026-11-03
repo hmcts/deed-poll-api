@@ -36,6 +36,8 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 35 operations 
                                   MANAGE_PROCESS_CONFIG; counted apart)
                                   and /caseworker/referral-queue (ALLOCATE_REFERRALS GET, and POST …/sends;
                                   counted apart)
+                                  and /caseworker/management-information (4 aggregate GETs,
+                                  VIEW_MANAGEMENT_INFORMATION; counted apart as MI_PATHS)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
                                   plus GET …/documents/{documentId}/preview (counted apart as PREVIEW_PATHS)
 api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case,
@@ -52,6 +54,8 @@ domain/settings                   the Delivery Manager's process settings (V40, 
 domain/masters                    the Masters list (V42) a Delivery Manager keeps, linked to IDAM by email on a
                                   judge's first judicial request (config/MasterLinking), and the Masters' sent and
                                   reminder emails with their ledger (V44) — NOT a port
+domain/mi                         the management information figures (K1 to K4) from the case's dates, read
+                                  by repository/ManagementInformationRepository's constant SQL — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
 domain/documents/preview          transient PDF renditions for the admin viewer, DOCX via Docmosis — NOT a port;
                                   domain/documents must not depend on it (PreviewBoundaryTest)

@@ -281,9 +281,9 @@ before Task 1; if it is empty, stop and report.**
 
 ### Task 5: Documentation and final verification
 
-- [ ] Add the four operations to the api docs that list the caseworker surface, with the KPI
+- [x] Add the four operations to the api docs that list the caseworker surface, with the KPI
       definitions and their limits (edited dates, no further-docs duration, no referral withdrawals).
-- [ ] Final validation run **forced**:
+- [x] Final validation run **forced**:
       `./gradlew cleanTest cleanIntegration build -I <no-checkstyle.gradle> --console=plain`, then
       `checkstyle.sh`. Record which tasks ran and the counts against the baseline. Confirm
       `git status` is clean apart from the task commits.
@@ -371,3 +371,13 @@ are of real work. Each KPI, a 2-year monthly request (2181-01-01 to 2182-12-31) 
 22 ms, referral-outcomes 4 ms, completion 3 ms. All far under 2 s, so no `EXPLAIN ANALYZE` and no migration (D9);
 highest migration still V46. Validation: `build` SUCCESSFUL (5m 5s); `checkstyle.sh` OK; `test` 5,433 / 0 failed /
 1 skipped (unchanged), `integration` 30 / 0 (+2).
+
+**Task 5 (2026-11-03).** README: "The API surface" counts the four reads, and a new "Management information"
+section lists them with the shared parameters, each KPI's definition, and what they cannot tell you (the dates as
+edited now, no Awaiting further documents duration, no staff referral withdrawals, recent cohorts looking fast,
+the deferred SLA/escalation/re-submission KPIs). CLAUDE.md's layout names `/caseworker/management-information`
+(counted apart as `MI_PATHS`) and `domain/mi`; `docs/RESUME.md` has the plan's entry. Forced validation:
+`cleanTest cleanIntegration build` SUCCESSFUL (5m 3s; `test` and `integration` executed, compilation up to date,
+checkstyle tasks skipped by the helper); `checkstyle.sh` OK; `test` 5,433 / 0 failed / 0 errors / 1 skipped
+(+41 on the 5,392 baseline), `integration` 30 / 0 (+3 on 27). No new migration (highest V46). `git status`
+clean apart from the task commits.
