@@ -250,7 +250,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   (not `/`, `/me`, `security: []` overrides or an operation's own 403); admin's copied spec needs a refresh after it changes. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, default `observe` in yaml and the
   chart) switches **only** the V37 budgets. **Three limits enforce from day one, whatever the mode:** the per-pod
   in-flight upload `Semaphore` (429, `Retry-After: 5`, released in `finally`), the per-case, per-template daily
-  email cap in `CaseEmailService`, and the case list's transaction-local statement timeout. (The preview conversion
+  email cap in `CaseEmailService`, and the case list's transaction-local statement timeout. (Management information's
+  own transaction-local statement timeout, `MiStatementTimeout`, `MI_STATEMENT_TIMEOUT`, default 10 s, is the same
+  kind of limit and also always on.) (The preview conversion
   permit and the preview workspace slot are a fourth always-enforced 429, `PREVIEW_BUSY`, outside `RateLimitBucket`
   and published by `OpenAPIDocumentPreviews`; previews have no V37 budget.) The email cap answers
   409 rather than 429, and **the replay check comes before the cap**. At the cap, `replayOrRefuse` asks for this
@@ -640,7 +642,11 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
 - **Management information is aggregate-only, and its periods are computed twice.** `ManagementInformationService.admit`
   checks `VIEW_MANAGEMENT_INFORMATION` before `MiParameters.parse`, so a 403 never depends on the parameters. The SQL in
   `repository/ManagementInformationRepository` is constant, binding `MiGranularity.field()` as `date_trunc`'s field,
-  and each operation reads in one read-only repeatable-read transaction. `MiGranularity.start`/`next` repeat that
+  and each operation reads in one read-only repeatable-read transaction, bounded first by `MiStatementTimeout`
+  (transaction-local, as the case list's; there is no rate limit on these reads, so never remove it). K2's decision is
+  the latest decided referral **on or after `dateReferred`**, falling back to `masterDateOfDecision` only when the case
+  has no decided referral at all: a re-referred case keeps its earlier decision, and pairing that with the new
+  `dateReferred` would report a pending referral as a negative interval. `MiGranularity.start`/`next` repeat that
   truncation in Java so empty periods are still reported, and the service joins the database's rows to the Java
   periods by start date: **if the two disagree, every period reads as zeros and nothing fails**, so change both
   together with a period-edge test. No response may name a case or referral; the controller test refuses schema

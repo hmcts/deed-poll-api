@@ -138,6 +138,35 @@ class ManagementInformationStageDurationsTest extends AbstractPostgresContainerT
         assertFigures(quarters.periods().get(1).intervals().get(RECEIVED_TO_READY_FOR_MASTER), 1, 12, 12);
     }
 
+    @Test
+    void reReferralAwaitingItsDecisionHasNoIntervalRatherThanANegativeOne() {
+        MiFixtures fixtures = new MiFixtures(jdbc);
+        // Decided on 10 January, then referred again on 1 February and not yet decided. The old decision belongs to
+        // the earlier referral; pairing it with the new dateReferred would be -22 days. Its own masterDateOfDecision
+        // still says 10 January, and is not a fallback, because the case has a decided referral.
+        String reReferred = fixtures.newCase().referred(at(2188, 2, 1)).masterDateOfDecision(at(2188, 1, 10))
+            .insert();
+        fixtures.referral(reReferred, MasterDecision.Approved, at(2188, 1, 10), Urgency.Normal, null, null);
+        fixtures.referral(reReferred, null, null, Urgency.Normal, null, null);
+        // Re-referred on 1 February and decided again on 9 February: 8 days, from the decision since the referral.
+        String reDecided = fixtures.newCase().referred(at(2188, 2, 1)).insert();
+        fixtures.referral(reDecided, MasterDecision.Rejected, at(2188, 1, 10), Urgency.Normal, null, null);
+        fixtures.referral(reDecided, MasterDecision.Approved, at(2188, 2, 9, 16, 0), Urgency.Normal, null, null);
+        // Decided the same day it was referred, earlier in the day: 0 days, not excluded (plan D4).
+        String sameDay = fixtures.newCase().referred(at(2188, 2, 3, 15, 0)).insert();
+        fixtures.referral(sameDay, MasterDecision.Approved, at(2188, 2, 3, 9, 0), Urgency.Normal, null, null);
+        // No referral row, and a masterDateOfDecision before dateReferred: nothing explains it, so it is negative.
+        fixtures.newCase().referred(at(2188, 2, 10)).masterDateOfDecision(at(2188, 2, 2)).insert();
+
+        StageDurationsReport report = service.stageDurations(MiParameters.of(LocalDate.of(2188, 1, 1),
+            LocalDate.of(2188, 2, 29), MiGranularity.MONTH, true));
+
+        assertThat(report.periods().get(0).intervals().get(REFERRED_TO_DECISION)).isEqualTo(DurationFigures.NONE);
+        // {0, 8}: 4, and 0 + 0.95 × 8.
+        assertFigures(report.periods().get(1).intervals().get(REFERRED_TO_DECISION), 2, 4, 7.6);
+        assertThat(report.excluded().negativeInterval()).isEqualTo(counts(0, 0, 1, 0, 0));
+    }
+
     private static MiParameters request(boolean includeMigrated) {
         return MiParameters.of(LocalDate.of(2190, 1, 1), LocalDate.of(2190, 3, 31), MiGranularity.MONTH,
             includeMigrated);

@@ -924,7 +924,7 @@ upload and the Gazette routes. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, def
 those budgets. Three limits enforce whatever the mode (as does the conversion permit under Document previews,
 above): the per-pod in-flight upload cap (`RATE_LIMIT_UPLOAD_IN_FLIGHT`), the daily per-case, per-template
 email cap (`EMAIL_MAX_PER_CASE_PER_TEMPLATE_PER_DAY`, default 3; a fourth distinct-key send is a `409`, a replayed key is still `200`) and the case list statement
-timeout (`LIST_STATEMENT_TIMEOUT`). See [docs/RATE-LIMITS.md](docs/RATE-LIMITS.md).
+timeout (`LIST_STATEMENT_TIMEOUT`), and management information's (`MI_STATEMENT_TIMEOUT`, 10 s). See [docs/RATE-LIMITS.md](docs/RATE-LIMITS.md).
 
 ### The audit trail
 

@@ -41,9 +41,11 @@ import java.util.stream.Collectors;
 public class ManagementInformationService {
 
     private final ManagementInformationRepository repository;
+    private final MiStatementTimeout timeout;
 
-    public ManagementInformationService(ManagementInformationRepository repository) {
+    public ManagementInformationService(ManagementInformationRepository repository, MiStatementTimeout timeout) {
         this.repository = repository;
+        this.timeout = timeout;
     }
 
     /**
@@ -63,6 +65,7 @@ public class ManagementInformationService {
     /** K1. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public VolumeReport volume(MiParameters request) {
+        timeout.apply();
         List<MiPeriod> periods = request.periods();
         Map<LocalDate, Map<DeedPollType, Long>> received = new HashMap<>();
         for (ReceivedRow row : repository.received(request)) {
@@ -90,6 +93,7 @@ public class ManagementInformationService {
     /** K2. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public StageDurationsReport stageDurations(MiParameters request) {
+        timeout.apply();
         Map<LocalDate, Map<StageInterval, DurationFigures>> byPeriod = new HashMap<>();
         Map<StageInterval, Long> negative = zeroByInterval();
         Map<StageInterval, Long> migrated = zeroByInterval();
@@ -114,6 +118,7 @@ public class ManagementInformationService {
     /** K3. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public ReferralOutcomesReport referralOutcomes(MiParameters request) {
+        timeout.apply();
         Map<LocalDate, DecisionRow> decisions = byStart(repository.decisions(request), DecisionRow::periodStart);
         Map<LocalDate, ConfirmationRow> confirmations =
             byStart(repository.confirmations(request), ConfirmationRow::periodStart);
@@ -142,6 +147,7 @@ public class ManagementInformationService {
     /** K4. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public CompletionReport completion(MiParameters request) {
+        timeout.apply();
         Map<LocalDate, CompletionRow> cohorts = byStart(repository.completion(request), CompletionRow::periodStart);
         CasesExcludedRow cases = repository.casesExcluded(request);
 

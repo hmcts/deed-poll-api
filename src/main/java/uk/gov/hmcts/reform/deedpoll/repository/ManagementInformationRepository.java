@@ -73,24 +73,30 @@ public class ManagementInformationRepository {
           FROM deedpoll_deedpoll d CROSS JOIN p
         """;
 
-    // A case's decision is its latest decided referral's, else its own masterDateOfDecision (plan K2).
+    // A case's decision (plan K2) is its latest decided referral's decisionDate on or after its dateReferred. A case
+    // re-referred to a Master keeps the earlier referral's decision, which predates the new dateReferred: that is a
+    // referral not yet decided, so the case has no interval, rather than a negative one counted as a data problem.
+    // Only a case with no decided referral at all falls back to its own masterDateOfDecision, which may still be
+    // negative: then nothing explains it, and it is reported.
     private static final String STAGE_DURATIONS = PARAMETERS + """
-        , decided AS (
-            SELECT DISTINCT ON (r."deedPollId") r."deedPollId", r."decisionDate"
-              FROM deedpoll_referral r
-             WHERE r."decisionDate" IS NOT NULL
-             ORDER BY r."deedPollId", r."decisionDate" DESC
-        ), spans AS (
+        , spans AS (
             SELECT v.name, date_trunc(p.field, v.end_at)::date AS period_start,
                    (p.include_migrated OR NOT d."migratedRecord") AS included,
                    v.end_at::date - v.start_at::date AS days
               FROM deedpoll_deedpoll d
              CROSS JOIN p
-              LEFT JOIN decided x ON x."deedPollId" = d.id
+              LEFT JOIN LATERAL (
+                  SELECT bool_or(true) AS any_decided,
+                         max(r."decisionDate") FILTER (WHERE r."decisionDate"::date >= d."dateReferred"::date)
+                             AS decided_since_referral
+                    FROM deedpoll_referral r
+                   WHERE r."deedPollId" = d.id AND r."decisionDate" IS NOT NULL
+              ) x ON true
              CROSS JOIN LATERAL (VALUES
                  ('RECEIVED_TO_READY_FOR_MASTER', d."dateReceived", d."dateReadyForMaster"),
                  ('READY_TO_REFERRED', d."dateReadyForMaster", d."dateReferred"),
-                 ('REFERRED_TO_DECISION', d."dateReferred", coalesce(x."decisionDate", d."masterDateOfDecision")),
+                 ('REFERRED_TO_DECISION', d."dateReferred",
+                  CASE WHEN x.any_decided THEN x.decided_since_referral ELSE d."masterDateOfDecision" END),
                  ('SIGNATURE_REQUESTED_TO_RECEIVED', d."signatureRequestedDate", d."signaturerecieveddate"),
                  ('SIGNATURE_RECEIVED_TO_ENROLED', d."signaturerecieveddate", d."dateEnroled")
              ) AS v(name, start_at, end_at)
