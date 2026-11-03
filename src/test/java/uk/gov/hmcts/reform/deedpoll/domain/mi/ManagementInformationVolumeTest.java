@@ -103,9 +103,9 @@ class ManagementInformationVolumeTest extends AbstractPostgresContainerTest {
         assertThat(report.periods().get(1).receivedByType()).isEqualTo(byType(2, 1, 1, 0, 0, 1));
         // F, the migrated case, is open through January and February.
         assertThat(openAddedTo(monthlyBaselineWithoutMigrated, report)).containsExactly(1L, 4L, 3L, 4L, 5L);
-        // H alone: I is migrated, and so left out as migrated without a date to be counted by.
+        // H and I: I is migrated, but with no date it is in no range, so it is counted here and not as migrated.
         assertThat(report.excluded().noDateReceived() - monthlyBaselineWithoutMigrated.excluded().noDateReceived())
-            .isEqualTo(1);
+            .isEqualTo(2);
         assertThat(report.excluded().migrated()).isEqualTo(1);
     }
 

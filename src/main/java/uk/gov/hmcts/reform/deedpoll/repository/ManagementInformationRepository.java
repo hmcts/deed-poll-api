@@ -54,9 +54,10 @@ public class ManagementInformationRepository {
          GROUP BY e.period_end
         """;
 
+    // A case with no dateReceived is counted here whether or not it is migrated: migrated counts only cases inside
+    // the range, and a case with no date is inside none, so filtering it here would leave it counted nowhere.
     private static final String CASES_EXCLUDED = PARAMETERS + """
-        SELECT count(*) FILTER (WHERE d."dateReceived" IS NULL
-                                  AND (p.include_migrated OR NOT d."migratedRecord")) AS no_date_received,
+        SELECT count(*) FILTER (WHERE d."dateReceived" IS NULL) AS no_date_received,
                count(*) FILTER (WHERE NOT p.include_migrated AND d."migratedRecord"
                                   AND d."dateReceived" >= p.from_day AND d."dateReceived" < p.end_day) AS migrated
           FROM deedpoll_deedpoll d CROSS JOIN p

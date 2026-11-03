@@ -55,7 +55,7 @@ public class CaseworkerManagementInformationController {
         description = COMMON + "received counts cases whose dateReceived falls in the period, split by type (a case "
             + "with no type counts as Unknown). openAtEnd counts cases received on or before the period's end with "
             + "neither dateEnroled nor dateReturned on or before it. Not counted: a case with no dateReceived, in "
-            + "any period (excluded.noDateReceived, over all time).")
+            + "any period (excluded.noDateReceived, over all time, migrated or not).")
     @GetMapping("/volume")
     public MiVolumeResponse volume(
         @Parameter(name = MiParameters.FROM, required = true, description = FROM_DOC,
@@ -139,10 +139,10 @@ public class CaseworkerManagementInformationController {
             + "daysToCompletion, calendar days from dateReceived to the completion date (count, medianDays, p95Days "
             + "as stage-durations publishes them). A recent cohort looks fast because its slow cases are still open, "
             + "so show stillOpen beside the percentiles. Not counted: a case with no dateReceived "
-            + "(excluded.noDateReceived, over all time); a case with both dateEnroled and dateReturned, a "
-            + "contradiction counted in none of completed, enroled, returned or stillOpen (excluded.contradiction); "
-            + "and, in daysToCompletion only, a completion dated before receipt (excluded.negativeInterval), which "
-            + "still counts as completed.")
+            + "(excluded.noDateReceived, over all time, migrated or not); a case with both dateEnroled and "
+            + "dateReturned, a contradiction counted in none of completed, enroled, returned or stillOpen "
+            + "(excluded.contradiction); and, in daysToCompletion only, a completion dated before receipt "
+            + "(excluded.negativeInterval), which still counts as completed.")
     @GetMapping("/completion")
     public MiCompletionResponse completion(
         @Parameter(name = MiParameters.FROM, required = true, description = FROM_DOC,

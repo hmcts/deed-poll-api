@@ -26,7 +26,7 @@ public record CompletionReport(MiParameters parameters, List<Cohort> cohorts, Ex
     /**
      * What was left out, and why.
      *
-     * @param noDateReceived   cases with no {@code dateReceived}, which no cohort can hold
+     * @param noDateReceived   cases with no {@code dateReceived}, which no cohort can hold, migrated or not
      * @param contradiction    cases received in the range with both {@code dateEnroled} and {@code dateReturned}
      * @param negativeInterval completed cases whose completion date is before their {@code dateReceived}, counted as
      *                         completed but not in {@code daysToCompletion}

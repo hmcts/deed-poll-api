@@ -27,7 +27,7 @@ public record VolumeReport(MiParameters parameters, List<Period> periods, Exclud
     /**
      * What was left out, and why.
      *
-     * @param noDateReceived cases with no {@code dateReceived}, which no period can hold
+     * @param noDateReceived cases with no {@code dateReceived}, which no period can hold, migrated or not
      * @param migrated       migrated cases received in the range, left out because {@code includeMigrated} is false
      */
     public record Excluded(long noDateReceived, long migrated) {
