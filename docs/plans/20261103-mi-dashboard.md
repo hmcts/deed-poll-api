@@ -246,11 +246,11 @@ before Task 1; if it is empty, stop and report.**
 
 ### Task 1: The capability
 
-- [ ] Record the execution baseline (commit, highest migration, test counts) in the execution notes.
-- [ ] Failing tests: Team leader and Delivery Manager hold `VIEW_MANAGEMENT_INFORMATION`; caseworker,
+- [x] Record the execution baseline (commit, highest migration, test counts) in the execution notes.
+- [x] Failing tests: Team leader and Delivery Manager hold `VIEW_MANAGEMENT_INFORMATION`; caseworker,
       legacy admin and judicial roles don't; `/me` publishes it.
-- [ ] Add it to `Capability` and the `TEAM_LEADER` set; update `CallerAccessOpenApiTest` expectations.
-- [ ] Run the focused tests and all Validation Commands; record the results.
+- [x] Add it to `Capability` and the `TEAM_LEADER` set; update `CallerAccessOpenApiTest` expectations.
+- [x] Run the focused tests and all Validation Commands; record the results.
 
 ### Task 2: The query layer (K1 to K4)
 
@@ -304,4 +304,15 @@ before Task 1; if it is empty, stop and report.**
 
 ## Execution notes
 
-(empty)
+**Task 1 (2026-11-03).** Execution baseline: branch `feat/mi-dashboard` at `31e1cd0` (this plan) on
+`origin/master` `74804bd`, which has not moved, so the recorded baseline stands (highest migration V46;
+`test` 5,392 / 0 failed / 1 skipped, `integration` 27 / 0). `VIEW_MANAGEMENT_INFORMATION` is the last
+`Capability` member. `RoleCapabilities` now keeps the legacy admin on its own set (the Team leader's
+six as they stood), because the plan denies it to `caseworker-deedpoll-admin`; the Team leader set is
+those six plus the new one, and the Delivery Manager inherits it. Tests: the staff-permission contract
+JSON, `RoleCapabilitiesTest` (new per-role test, ordinal pinned after `ALLOCATE_REFERRALS`),
+`CallerAccessResponseTest` and `CallerAccessSecurityTest` (`/me` publishes it for Team leader and
+Delivery Manager, not legacy admin), `CallerAccessOpenApiTest` (enum ends with it). CLAUDE.md, README
+and `docs/STAFF-ROLE-RELEASE.md` updated. Validation: `build` SUCCESSFUL (5m 26s); `checkstyle.sh` OK
+after wrapping one long test line; `test` 5,393 / 0 failed / 1 skipped (+1, the new test), `integration`
+27 / 0.

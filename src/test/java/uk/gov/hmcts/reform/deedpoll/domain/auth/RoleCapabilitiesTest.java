@@ -66,7 +66,10 @@ class RoleCapabilitiesTest {
         assertThat(manager.stream().filter(capability -> !leader.contains(capability)))
             .containsExactlyInAnyOrder(Capability.ACCESS_GAZETTE, Capability.MANAGE_PROCESS_CONFIG);
         assertThat(leader).doesNotContain(Capability.MANAGE_PROCESS_CONFIG);
-        assertThat(RoleCapabilities.forRoles(List.of(Role.DEEDPOLL_ADMIN))).isEqualTo(leader);
+        Set<Capability> legacy = RoleCapabilities.forRoles(List.of(Role.DEEDPOLL_ADMIN));
+        assertThat(leader.stream().filter(capability -> !legacy.contains(capability)))
+            .containsExactly(Capability.VIEW_MANAGEMENT_INFORMATION);
+        assertThat(leader).containsAll(legacy);
         assertThat(Role.fromClaimValue("caseworker-deedpoll-admin")).contains(Role.DEEDPOLL_ADMIN);
     }
 
@@ -77,8 +80,20 @@ class RoleCapabilitiesTest {
                 .as(role.name())
                 .isEqualTo(role == Role.TEAM_LEADER || role == Role.DELIVERY_MANAGER || role == Role.DEEDPOLL_ADMIN);
         }
-        assertThat(Capability.values()[Capability.values().length - 1]).isEqualTo(Capability.ALLOCATE_REFERRALS);
         assertThat(Capability.ALLOCATE_REFERRALS.ordinal()).isEqualTo(Capability.MANAGE_PROCESS_CONFIG.ordinal() + 1);
+    }
+
+    @Test
+    void teamLeadersAndDeliveryManagersViewManagementInformationAndNobodyElseDoes() {
+        for (Role role : Role.values()) {
+            assertThat(RoleCapabilities.forRoles(List.of(role)).contains(Capability.VIEW_MANAGEMENT_INFORMATION))
+                .as(role.name())
+                .isEqualTo(role == Role.TEAM_LEADER || role == Role.DELIVERY_MANAGER);
+        }
+        assertThat(Capability.values()[Capability.values().length - 1])
+            .isEqualTo(Capability.VIEW_MANAGEMENT_INFORMATION);
+        assertThat(Capability.VIEW_MANAGEMENT_INFORMATION.ordinal())
+            .isEqualTo(Capability.ALLOCATE_REFERRALS.ordinal() + 1);
     }
 
     @Test

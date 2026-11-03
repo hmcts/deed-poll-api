@@ -17,10 +17,11 @@ and artifact identities. The admin and infrastructure companion plans own their 
 | ALLOCATE_REFERRALS | ReferralQueue list and batch send, ReferralService.assign (reassignment), before reads (plan F1) | Yes | Yes |
 | ACCESS_GAZETTE | All Gazette human entry points and named ready worklist/count | No | Yes |
 | MANAGE_PROCESS_CONFIG | Process settings read and update (`/caseworker/process-settings`) | No | Yes |
+| VIEW_MANAGEMENT_INFORMATION | The aggregate MI reads (`/caseworker/management-information`, plan 20261103-mi-dashboard) | Team leader yes; legacy admin no | Yes |
 
 The exact new claims are `caseworker-deedpoll-team-leader` and
 `caseworker-deedpoll-delivery-manager`. The deprecated `caseworker-deedpoll-admin` has only
-the six casework capabilities. Grants are an immutable union of recognised roles. Neither
+the six casework capabilities, never VIEW_MANAGEMENT_INFORMATION. Grants are an immutable union of recognised roles. Neither
 new claim implies `caseworker-deedpoll-judicial`, CCD system access or importer authority.
 A private saved query remains private; ownership and historical attribution retain the subject.
 An owner can still unpublish after losing shared-query management privileges.

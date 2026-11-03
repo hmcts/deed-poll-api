@@ -8,16 +8,25 @@ import java.util.Set;
 /** Explicit application grants, independent of role ordering and IDAM role inheritance. */
 public final class RoleCapabilities {
 
-    private static final Set<Capability> TEAM_LEADER = Set.of(
+    /** The deprecated admin role keeps the Team leader's grants as they stood before management information. */
+    private static final Set<Capability> LEGACY_ADMIN = Set.of(
         Capability.OVERRIDE_PRIVACY, Capability.DELETE_NOTE, Capability.DELETE_WITNESS,
         Capability.MANAGE_SHARED_QUERIES, Capability.REPAIR_CCD, Capability.ALLOCATE_REFERRALS);
 
+    private static final Set<Capability> TEAM_LEADER = teamLeader();
+
     private static final Map<Role, Set<Capability>> GRANTS = Map.of(
         Role.TEAM_LEADER, TEAM_LEADER,
-        Role.DEEDPOLL_ADMIN, TEAM_LEADER,
+        Role.DEEDPOLL_ADMIN, LEGACY_ADMIN,
         Role.DELIVERY_MANAGER, deliveryManager());
 
     private RoleCapabilities() {
+    }
+
+    private static Set<Capability> teamLeader() {
+        EnumSet<Capability> inherited = EnumSet.copyOf(LEGACY_ADMIN);
+        inherited.add(Capability.VIEW_MANAGEMENT_INFORMATION);
+        return Set.copyOf(inherited);
     }
 
     private static Set<Capability> deliveryManager() {

@@ -420,9 +420,9 @@ verified roles to explicit capabilities:
 
 | Role claim | Privileges |
 |---|---|
-| `caseworker-deedpoll-team-leader` | Privacy override, note/witness deletion, shared-query management, CCD repairs, the referral queue (sending to Masters and reassigning, `ALLOCATE_REFERRALS`) |
+| `caseworker-deedpoll-team-leader` | Privacy override, note/witness deletion, shared-query management, CCD repairs, the referral queue (sending to Masters and reassigning, `ALLOCATE_REFERRALS`), management information (`VIEW_MANAGEMENT_INFORMATION`) |
 | `caseworker-deedpoll-delivery-manager` | All Team leader privileges plus the entire Gazette facility and the process settings (`MANAGE_PROCESS_CONFIG`) |
-| `caseworker-deedpoll-admin` (deprecated) | Temporary Team leader compatibility, the referral queue included; no Gazette access or process settings |
+| `caseworker-deedpoll-admin` (deprecated) | Temporary Team leader compatibility, the referral queue included; no Gazette access, process settings or management information |
 
 Each new role works alone. Neither grants judicial or system access. Private saved queries remain
 owner-only; shared-query management does not bypass that rule. The privacy adapter derives its flag
