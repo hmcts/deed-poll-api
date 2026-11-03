@@ -133,11 +133,6 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     );
 
     /**
-     * The privileged view of the CCD creation attempts and its two repairs (plan 02b, task 4), counted apart from
-     * {@link #CASEWORKER_PATHS} for the reason the judicial routes are: the caseworker count is a number the README
-     * and the resume notes state, and these three operations require {@code REPAIR_CCD}.
-     */
-    /**
      * The management-information figures (plan 20261103-mi-dashboard), counted apart from {@link #CASEWORKER_PATHS}
      * for the reason the CCD attempts are: they are a Team leader's and Delivery Manager's aggregate reads, not
      * casework, and each is one {@code GET}.
@@ -148,6 +143,11 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         "/caseworker/management-information/referral-outcomes",
         "/caseworker/management-information/completion");
 
+    /**
+     * The privileged view of the CCD creation attempts and its two repairs (plan 02b, task 4), counted apart from
+     * {@link #CASEWORKER_PATHS} for the reason the judicial routes are: the caseworker count is a number the README
+     * and the resume notes state, and these three operations require {@code REPAIR_CCD}.
+     */
     private static final List<String> CCD_ATTEMPT_PATHS = List.of(
         "/caseworker/ccd-attempts",
         "/caseworker/ccd-attempts/{attemptId}/reconciliation",

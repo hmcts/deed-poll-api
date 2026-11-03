@@ -1,5 +1,7 @@
 # Plan: Management information, api half (four KPIs from the case dates)
 
+Status: Tasks 1 to 5 done on `feat/mi-dashboard` (2026-11-03); the After merge steps remain.
+
 Reviewed with Steve on 2026-11-03 (Wren). It replaces an earlier workspace-local draft (Scout,
 2026-10-16) that built its KPIs on states and audit actions this api does not have. The admin half
 is `deed-poll-admin` `docs/plans/20261103-mi-dashboard-page.md`. It needs this plan merged and

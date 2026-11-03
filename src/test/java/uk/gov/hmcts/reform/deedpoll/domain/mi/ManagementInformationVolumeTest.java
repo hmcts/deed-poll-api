@@ -134,6 +134,29 @@ class ManagementInformationVolumeTest extends AbstractPostgresContainerTest {
         assertThat(report.periods()).extracting(VolumeReport.Period::received).containsExactly(1L, 7L, 1L);
     }
 
+    @Test
+    void countsTheWholeOfTheLastDayAndTheCaseloadAsOfAMidPeriodTo() {
+        MiParameters toMidFebruary =
+            MiParameters.of(LocalDate.of(2190, 2, 1), LocalDate.of(2190, 2, 14), MiGranularity.MONTH, true);
+        VolumeReport before = service.volume(toMidFebruary);
+
+        MiFixtures fixtures = new MiFixtures(jdbc);
+        // The last minute of the range: received, and open at its end.
+        fixtures.newCase().received(at(2190, 2, 14, 23, 59)).insert();
+        // The first minute after it: neither.
+        fixtures.newCase().received(at(2190, 2, 15)).insert();
+        // Enroled after the range but inside the month: open at the range's end, not the month's.
+        fixtures.newCase().received(at(2190, 2, 2)).enroled(at(2190, 2, 20)).insert();
+        // Enroled during the last day: no longer open at its end.
+        fixtures.newCase().received(at(2190, 2, 2)).enroled(at(2190, 2, 14, 15, 0)).insert();
+        VolumeReport after = service.volume(toMidFebruary);
+
+        assertThat(after.periods()).extracting(VolumeReport.Period::period)
+            .containsExactly(new MiPeriod(LocalDate.of(2190, 2, 1), LocalDate.of(2190, 2, 14)));
+        assertThat(after.periods().get(0).received() - before.periods().get(0).received()).isEqualTo(3);
+        assertThat(openAddedTo(before, after)).containsExactly(2L);
+    }
+
     private static MiParameters monthly(boolean includeMigrated) {
         return MiParameters.of(DEC_1, APR_30, MiGranularity.MONTH, includeMigrated);
     }

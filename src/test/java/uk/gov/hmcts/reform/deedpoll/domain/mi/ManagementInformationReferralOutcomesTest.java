@@ -27,8 +27,6 @@ import static uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency.Urgent;
 @Transactional
 class ManagementInformationReferralOutcomesTest extends AbstractPostgresContainerTest {
 
-    private static final Decisions NO_DECISIONS = new Decisions(new DecisionCount(0, 0), new DecisionCount(0, 0));
-
     @Autowired
     private ManagementInformationService service;
 
@@ -47,6 +45,9 @@ class ManagementInformationReferralOutcomesTest extends AbstractPostgresContaine
         // A decision date with no decision, and a confirmation date with no outcome.
         fixtures.referral(live, null, at(2190, 3, 3), Normal, null, null);
         fixtures.referral(live, Approved, at(2189, 12, 31), Normal, null, at(2190, 3, 4));
+        // The last minute of the range is counted; the first minute after it is not.
+        fixtures.referral(live, Approved, at(2190, 3, 31, 23, 59), Normal, Confirmed, at(2190, 3, 31, 23, 59));
+        fixtures.referral(live, Approved, at(2190, 4, 1), Normal, Confirmed, at(2190, 4, 1));
         // Before the range, and undecided.
         fixtures.referral(live, Approved, at(2189, 12, 30), Urgent, null, null);
         fixtures.referral(live, null, null, Normal, null, null);
@@ -59,9 +60,9 @@ class ManagementInformationReferralOutcomesTest extends AbstractPostgresContaine
         assertThat(report.periods()).extracting(ReferralOutcomesReport.Period::decisions).containsExactly(
             new Decisions(new DecisionCount(2, 1), new DecisionCount(0, 0)),
             new Decisions(new DecisionCount(0, 0), new DecisionCount(2, 1)),
-            NO_DECISIONS);
+            new Decisions(new DecisionCount(1, 0), new DecisionCount(0, 0)));
         assertThat(report.periods()).extracting(ReferralOutcomesReport.Period::confirmations).containsExactly(
-            new Confirmations(0, 0), new Confirmations(1, 1), new Confirmations(1, 0));
+            new Confirmations(0, 0), new Confirmations(1, 1), new Confirmations(2, 0));
         assertThat(report.excluded()).isEqualTo(new ReferralOutcomesReport.Excluded(0, 0, 1, 1));
     }
 
@@ -71,7 +72,7 @@ class ManagementInformationReferralOutcomesTest extends AbstractPostgresContaine
 
         assertThat(report.periods().get(1).decisions())
             .isEqualTo(new Decisions(new DecisionCount(0, 0), new DecisionCount(1, 1)));
-        assertThat(report.periods().get(2).confirmations()).isEqualTo(new Confirmations(0, 0));
+        assertThat(report.periods().get(2).confirmations()).isEqualTo(new Confirmations(1, 0));
         assertThat(report.excluded()).isEqualTo(new ReferralOutcomesReport.Excluded(1, 1, 1, 1));
     }
 

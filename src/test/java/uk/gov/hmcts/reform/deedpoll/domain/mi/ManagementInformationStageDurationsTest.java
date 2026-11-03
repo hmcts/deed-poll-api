@@ -63,6 +63,11 @@ class ManagementInformationStageDurationsTest extends AbstractPostgresContainerT
         // Migrated: 3 days to signature, then 6 to enrolment (Mar).
         fixtures.newCase().migrated().signatureRequested(at(2190, 3, 1)).signatureReceived(at(2190, 3, 4))
             .enroled(at(2190, 3, 10)).insert();
+        // Migrated and negative: left out as migrated only, never also as negative.
+        fixtures.newCase().migrated().signatureRequested(at(2190, 3, 20)).signatureReceived(at(2190, 3, 15)).insert();
+        // Ends in the last minute of the range: 10 days (Mar). Ends in the first minute after it: not counted.
+        fixtures.newCase().received(at(2190, 3, 21)).ready(at(2190, 3, 31, 23, 59)).insert();
+        fixtures.newCase().received(at(2190, 3, 25)).ready(at(2190, 4, 1)).insert();
         // Ends before the range: not counted.
         fixtures.newCase().received(at(2189, 12, 1)).ready(at(2189, 12, 20)).insert();
         // One end only: not an interval, and not excluded either.
@@ -88,11 +93,12 @@ class ManagementInformationStageDurationsTest extends AbstractPostgresContainerT
         assertFigures(february.get(REFERRED_TO_DECISION), 2, 6.5, 9.65);
 
         Map<StageInterval, DurationFigures> march = report.periods().get(2).intervals();
+        assertFigures(march.get(RECEIVED_TO_READY_FOR_MASTER), 1, 10, 10);
         assertFigures(march.get(SIGNATURE_REQUESTED_TO_RECEIVED), 1, 3, 3);
         // {6, 20}: 13, and 6 + 0.95 × 14.
         assertFigures(march.get(SIGNATURE_RECEIVED_TO_ENROLED), 2, 13, 19.3);
 
-        assertThat(report.excluded().negativeInterval()).isEqualTo(counts(0, 0, 0, 1, 0));
+        assertThat(report.excluded().negativeInterval()).isEqualTo(counts(0, 0, 0, 2, 0));
         assertThat(report.excluded().migrated()).isEqualTo(counts(0, 0, 0, 0, 0));
     }
 
@@ -103,7 +109,7 @@ class ManagementInformationStageDurationsTest extends AbstractPostgresContainerT
         Map<StageInterval, DurationFigures> march = report.periods().get(2).intervals();
         assertThat(march.get(SIGNATURE_REQUESTED_TO_RECEIVED)).isEqualTo(DurationFigures.NONE);
         assertFigures(march.get(SIGNATURE_RECEIVED_TO_ENROLED), 1, 20, 20);
-        assertThat(report.excluded().migrated()).isEqualTo(counts(0, 0, 0, 1, 1));
+        assertThat(report.excluded().migrated()).isEqualTo(counts(0, 0, 0, 2, 1));
         assertThat(report.excluded().negativeInterval()).isEqualTo(counts(0, 0, 0, 1, 0));
     }
 

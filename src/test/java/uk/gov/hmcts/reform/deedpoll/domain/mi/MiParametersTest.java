@@ -15,15 +15,24 @@ class MiParametersTest {
 
     @Test
     void includesMigratedCasesUnlessToldNotTo() {
-        assertThat(MiParameters.of(FROM, FROM, MiGranularity.MONTH, null).includeMigrated()).isTrue();
-        assertThat(MiParameters.of(FROM, FROM, MiGranularity.MONTH, false).includeMigrated()).isFalse();
+        assertThat(MiParameters.parse("2190-01-01", "2190-01-01", "MONTH", null).includeMigrated()).isTrue();
+        assertThat(MiParameters.parse("2190-01-01", "2190-01-01", "MONTH", "true").includeMigrated()).isTrue();
+        assertThat(MiParameters.parse("2190-01-01", "2190-01-01", "MONTH", "false").includeMigrated()).isFalse();
     }
 
     @Test
     void namesEveryMissingField() {
-        assertThatThrownBy(() -> MiParameters.of(null, null, null, null))
+        assertThatThrownBy(() -> MiParameters.parse(null, "", null, null))
             .isInstanceOfSatisfying(InvalidInputError.class, error -> assertThat(error.errors())
                 .extracting(FieldError::field).containsExactly("from", "to", "granularity"));
+    }
+
+    @Test
+    void refusesSignedAndFiveDigitYearsAsMalformedRatherThanFailingLater() {
+        assertThatThrownBy(() -> MiParameters.parse("+999999999-12-30", "+6000000-01-01", "WEEK", null))
+            .isInstanceOfSatisfying(InvalidInputError.class, error -> assertThat(error.errors())
+                .extracting(FieldError::field).containsExactly("from", "to"));
+        assertThat(MiParameters.parse("9998-01-01", "9999-12-31", "WEEK", null).periods()).isNotEmpty();
     }
 
     @Test
@@ -68,7 +77,7 @@ class MiParametersTest {
     }
 
     @Test
-    void javaAndPostgresTruncateAlike() {
+    void namesPostgresWeekFieldAndTruncatesQuartersToTheirFirstDay() {
         assertThat(MiGranularity.WEEK.field()).isEqualTo("week");
         assertThat(MiGranularity.QUARTER.start(LocalDate.of(2190, 12, 31))).isEqualTo(LocalDate.of(2190, 10, 1));
     }

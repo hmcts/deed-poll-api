@@ -23,6 +23,9 @@ public record MiParameters(LocalDate from, LocalDate to, MiGranularity granulari
     public static final String GRANULARITY = "granularity";
     public static final String INCLUDE_MIGRATED = "includeMigrated";
 
+    private static final int MIN_YEAR = 1;
+    private static final int MAX_YEAR = 9999;
+
     private static final String NO_FROM = "Enter the first day of the range.";
     private static final String NO_TO = "Enter the last day of the range.";
     private static final String CHOOSE_GRANULARITY = "Choose WEEK, MONTH or QUARTER.";
@@ -49,18 +52,13 @@ public record MiParameters(LocalDate from, LocalDate to, MiGranularity granulari
                 errors.add(new FieldError(GRANULARITY, CHOOSE_GRANULARITY));
             }
         }
-        Boolean migrated = null;
-        if ("true".equals(includeMigrated)) {
-            migrated = true;
-        } else if ("false".equals(includeMigrated)) {
-            migrated = false;
-        } else if (includeMigrated != null) {
+        if (includeMigrated != null && !"true".equals(includeMigrated) && !"false".equals(includeMigrated)) {
             errors.add(new FieldError(INCLUDE_MIGRATED, "includeMigrated is true or false."));
         }
         if (!errors.isEmpty()) {
             throw new InvalidInputError(errors.get(0).message(), errors);
         }
-        return of(first, last, bucket, migrated);
+        return of(first, last, bucket, !"false".equals(includeMigrated));
     }
 
     private static LocalDate date(String text, String field, String missing, String malformed,
@@ -70,41 +68,37 @@ public record MiParameters(LocalDate from, LocalDate to, MiGranularity granulari
             return null;
         }
         try {
-            return LocalDate.parse(text);
+            LocalDate date = LocalDate.parse(text);
+            // ISO also parses signed years such as +999999999; near LocalDate.MAX the span check overflows, and past
+            // Postgres's date range the query fails, so a 500 either way. Four-digit years only.
+            if (date.getYear() >= MIN_YEAR && date.getYear() <= MAX_YEAR) {
+                return date;
+            }
         } catch (DateTimeParseException unparsable) {
-            errors.add(new FieldError(field, malformed));
-            return null;
+            // refused below, without echoing the text
         }
+        errors.add(new FieldError(field, malformed));
+        return null;
     }
 
     /**
-     * Validates a request's raw values.
+     * Applies the range checks to well-formed values: {@code to} not before {@code from}, and at most
+     * {@link #MAX_SPAN_YEARS} years apart. Missing and unparsable values are {@link #parse}'s to refuse.
      *
-     * @param includeMigrated null for the default, true
-     * @throws InvalidInputError naming every field at fault
+     * @throws InvalidInputError on {@code to}
      */
-    public static MiParameters of(LocalDate from, LocalDate to, MiGranularity granularity, Boolean includeMigrated) {
-        List<FieldError> errors = new ArrayList<>();
-        if (from == null) {
-            errors.add(new FieldError(FROM, NO_FROM));
+    public static MiParameters of(LocalDate from, LocalDate to, MiGranularity granularity, boolean includeMigrated) {
+        if (to.isBefore(from)) {
+            throw refusedTo("The last day of the range cannot be before the first.");
         }
-        if (to == null) {
-            errors.add(new FieldError(TO, NO_TO));
+        if (to.isAfter(from.plusYears(MAX_SPAN_YEARS))) {
+            throw refusedTo("The range cannot be longer than " + MAX_SPAN_YEARS + " years.");
         }
-        if (granularity == null) {
-            errors.add(new FieldError(GRANULARITY, CHOOSE_GRANULARITY));
-        }
-        if (from != null && to != null) {
-            if (to.isBefore(from)) {
-                errors.add(new FieldError(TO, "The last day of the range cannot be before the first."));
-            } else if (to.isAfter(from.plusYears(MAX_SPAN_YEARS))) {
-                errors.add(new FieldError(TO, "The range cannot be longer than " + MAX_SPAN_YEARS + " years."));
-            }
-        }
-        if (!errors.isEmpty()) {
-            throw new InvalidInputError(errors.get(0).message(), errors);
-        }
-        return new MiParameters(from, to, granularity, includeMigrated == null || includeMigrated);
+        return new MiParameters(from, to, granularity, includeMigrated);
+    }
+
+    private static InvalidInputError refusedTo(String message) {
+        return new InvalidInputError(message, List.of(new FieldError(TO, message)));
     }
 
     /**

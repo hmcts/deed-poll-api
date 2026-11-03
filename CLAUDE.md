@@ -590,7 +590,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   transaction and never throws (one WARN, the exception class only). A pre-V43 claim keeps its subject and no Master,
   stays visible to its claimer, and `MasterService.linkIfListed` attaches it (`attachLegacyClaims`) and gives a newly
   linked Master the referrals sent while unlinked (`attachToLinkedMaster`), in the link's transaction. Prod starts on
-  F1, so nothing was migrated. See `docs/plans/20261030-f1-referral-queue-and-batch-send.md`.
+  F1, so nothing was migrated. See `docs/plans/completed/20261030-f1-referral-queue-and-batch-send.md`.
 - **The Masters list is the Delivery Manager's, and a Master is linked by email, once.** `deedpoll_master` (V42)
   holds a name, a lower-cased unique email and an available flag; there is no delete, because referrals and history
   refer to a Master, so one who leaves is made unavailable. `config/MasterLinking`, a `HandlerInterceptor` on
@@ -637,6 +637,14 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   re-read at send time too, counting only those still `Claimed` by that Master with no decision; none left is
   `Skipped`. The templates are not `EmailTemplate` members (`MasterEmailKind` carries their keys). See
   `docs/MASTER-EMAILS.md`.
+- **Management information is aggregate-only, and its periods are computed twice.** `ManagementInformationService.admit`
+  checks `VIEW_MANAGEMENT_INFORMATION` before `MiParameters.parse`, so a 403 never depends on the parameters. The SQL in
+  `repository/ManagementInformationRepository` is constant, binding `MiGranularity.field()` as `date_trunc`'s field,
+  and each operation reads in one read-only repeatable-read transaction. `MiGranularity.start`/`next` repeat that
+  truncation in Java so empty periods are still reported, and the service joins the database's rows to the Java
+  periods by start date: **if the two disagree, every period reads as zeros and nothing fails**, so change both
+  together with a period-edge test. No response may name a case or referral; the controller test refuses schema
+  properties that look like ids, references, names or text, which is why there is no read audit (plan D5).
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
   only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback
