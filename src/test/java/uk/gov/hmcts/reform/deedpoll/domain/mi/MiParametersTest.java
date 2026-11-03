@@ -72,4 +72,29 @@ class MiParametersTest {
         assertThat(MiGranularity.WEEK.field()).isEqualTo("week");
         assertThat(MiGranularity.QUARTER.start(LocalDate.of(2190, 12, 31))).isEqualTo(LocalDate.of(2190, 10, 1));
     }
+
+    @Test
+    void parsesTheQueryParametersAsSent() {
+        assertThat(MiParameters.parse("2190-01-01", "2190-03-31", "QUARTER", null))
+            .isEqualTo(new MiParameters(FROM, LocalDate.of(2190, 3, 31), MiGranularity.QUARTER, true));
+        assertThat(MiParameters.parse("2190-01-01", "2190-01-01", "WEEK", "false").includeMigrated()).isFalse();
+    }
+
+    @Test
+    void refusesUnparsableTextOnItsOwnFieldWithoutEchoingIt() {
+        assertThatThrownBy(() -> MiParameters.parse("01/01/2190", " ", "month", "yes"))
+            .isInstanceOfSatisfying(InvalidInputError.class, error -> {
+                assertThat(error.errors()).extracting(FieldError::field)
+                    .containsExactly("from", "to", "granularity", "includeMigrated");
+                assertThat(error.errors()).extracting(FieldError::message)
+                    .noneMatch(message -> message.contains("01/01/2190") || message.contains("yes"));
+            });
+    }
+
+    @Test
+    void appliesTheRangeChecksOnlyToWellFormedValues() {
+        assertThatThrownBy(() -> MiParameters.parse("2190-01-02", "2190-01-01", "MONTH", "true"))
+            .isInstanceOfSatisfying(InvalidInputError.class, error -> assertThat(error.errors())
+                .extracting(FieldError::field).containsExactly("to"));
+    }
 }

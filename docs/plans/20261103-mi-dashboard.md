@@ -263,14 +263,14 @@ before Task 1; if it is empty, stop and report.**
 
 ### Task 3: The HTTP operations
 
-- [ ] Failing full-context MockMvc tests: every role (200 vs 403); 400 for a missing `from`/`to`,
+- [x] Failing full-context MockMvc tests: every role (200 vs 403); 400 for a missing `from`/`to`,
       `to < from`, a span over 2 years, and an unknown `granularity`; the response shape matches the
       OpenAPI schema; no response field holds a case identifier (assert on the schema's property names).
-- [ ] `api/caseworker/controller/CaseworkerManagementInformationController.java` under
+- [x] `api/caseworker/controller/CaseworkerManagementInformationController.java` under
       `/caseworker/management-information`, gated on `VIEW_MANAGEMENT_INFORMATION`, with OpenAPI
       operation ids `getMiVolume`, `getMiStageDurations`, `getMiReferralOutcomes`, `getMiCompletion`
       and descriptions carrying the definitions above, including what each KPI does **not** count.
-- [ ] Run the focused tests and all Validation Commands; record the results.
+- [x] Run the focused tests and all Validation Commands; record the results.
 
 ### Task 4: Performance check
 
@@ -335,3 +335,27 @@ by hand. Fixtures are dated 2189/2190 because the container is shared with class
 all-time figures (open caseload, no `dateReceived`) are asserted as a delta from a baseline taken in the same
 transaction. Validation: `build` SUCCESSFUL (5m 25s); `checkstyle.sh` OK after making 12 Javadoc comments with
 inline tags multi-line; `test` 5,410 / 0 failed / 1 skipped (+17), `integration` 27 / 0.
+
+**Task 3 (2026-11-03).** `CaseworkerManagementInformationController` under `/caseworker/management-information`:
+`GET volume`, `stage-durations`, `referral-outcomes`, `completion` (`getMiVolume`, `getMiStageDurations`,
+`getMiReferralOutcomes`, `getMiCompletion`). The four parameters bind as strings, and
+`ManagementInformationService.admit` checks `VIEW_MANAGEMENT_INFORMATION` (403) before
+`MiParameters.parse` reads them (400, attributed to the parameter, value not echoed). So the
+caller with the wrong role is 403 whatever they sent, as on the referral queue. A malformed date, an unknown or
+lower-case `granularity`, and an `includeMigrated` other than `true`/`false` are 400s alongside the plan's four. The
+`@Parameter` annotations publish `from`/`to` as required `format: date`, `granularity` as the required enum
+and `includeMigrated` as an optional boolean defaulting to true. Each description carries the shared rules (range, clipping, edited
+dates, aggregates only), the KPI's definition, and a "Not counted" sentence that includes Task 2's choices.
+Responses are `Mi*Response` DTOs; enum-keyed maps are published as ordered lists (`receivedByType`
+`[{type, count}]`, `intervals` `[{interval, count, medianDays, p95Days}]`, `excluded.negativeInterval`/`migrated`
+`[{interval, count}]`) so the schema names every member; nested records carry `Mi…` schema names, because
+`Period`/`Excluded` collided as components (the shape test caught it). Tests: `CaseworkerManagementInformationControllerTest`
+(full context, real Postgres, `@Transactional`, one fixture in 2191). It covers 401 without a token; 200 for Team leader and
+Delivery Manager on all four; 403 for caseworker, legacy admin, judicial and a foreign role, including with bad
+parameters; nine 400 cases on all four; exactly two years admitted; the figures on the wire, with an empty period as zeros
+and nulls; each body matched recursively against its published schema (exact property set, all required,
+types, enums, nullability); and no property name in any response schema ending in `id` or containing reference/name/
+subject/email/note/text/case. `MiParametersTest` +3 for `parse`. `OpenAPIPublisherTest` lists the four as
+`MI_PATHS` (counted apart) and documents them. `MiFixtures` is public for the HTTP test. Validation: `build`
+SUCCESSFUL (5m 4s); `checkstyle.sh` OK after marking two locals in `parse` final; `test` 5,433 / 0 failed / 1
+skipped (+23), `integration` 28 / 0 (+1). `WriteEndpointAuditCoverageTest` unchanged and passing.

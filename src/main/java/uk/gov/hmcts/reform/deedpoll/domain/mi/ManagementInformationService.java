@@ -3,6 +3,9 @@ package uk.gov.hmcts.reform.deedpoll.domain.mi;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.repository.ManagementInformationRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ManagementInformationRepository.CasesExcludedRow;
@@ -41,6 +44,20 @@ public class ManagementInformationService {
 
     public ManagementInformationService(ManagementInformationRepository repository) {
         this.repository = repository;
+    }
+
+    /**
+     * The gate every HTTP operation passes first: {@link Capability#VIEW_MANAGEMENT_INFORMATION} (403), and only then
+     * the query parameters ({@link MiParameters#parse}, 400), so a caller without the capability learns nothing from
+     * how their parameters are refused. Reads nothing.
+     *
+     * @throws uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError without the capability, before anything else
+     * @throws InvalidInputError                                  naming every parameter at fault
+     */
+    public MiParameters admit(CurrentUser caller, String from, String to, String granularity,
+                              String includeMigrated) {
+        caller.require(Capability.VIEW_MANAGEMENT_INFORMATION);
+        return MiParameters.parse(from, to, granularity, includeMigrated);
     }
 
     /** K1. */

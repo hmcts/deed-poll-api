@@ -137,6 +137,17 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      * {@link #CASEWORKER_PATHS} for the reason the judicial routes are: the caseworker count is a number the README
      * and the resume notes state, and these three operations require {@code REPAIR_CCD}.
      */
+    /**
+     * The management-information figures (plan 20261103-mi-dashboard), counted apart from {@link #CASEWORKER_PATHS}
+     * for the reason the CCD attempts are: they are a Team leader's and Delivery Manager's aggregate reads, not
+     * casework, and each is one {@code GET}.
+     */
+    private static final List<String> MI_PATHS = List.of(
+        "/caseworker/management-information/volume",
+        "/caseworker/management-information/stage-durations",
+        "/caseworker/management-information/referral-outcomes",
+        "/caseworker/management-information/completion");
+
     private static final List<String> CCD_ATTEMPT_PATHS = List.of(
         "/caseworker/ccd-attempts",
         "/caseworker/ccd-attempts/{attemptId}/reconciliation",
@@ -256,6 +267,27 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(body.get("required").toString()).contains("recipientEmail", "revision");
         assertThat(body.get("additionalProperties").asBoolean()).isFalse();
         assertThat(body.at("/properties/recipientEmail/maxLength").asInt()).isEqualTo(254);
+    }
+
+    @Test
+    void documentsManagementInformationAsFourGatedReads() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray());
+        List<String> ids = new ArrayList<>();
+        for (String route : MI_PATHS) {
+            JsonNode path = spec.get("paths").get(route);
+            assertThat(path.fieldNames()).toIterable().as(route).containsExactly("get");
+            ids.add(path.at("/get/operationId").asText());
+            assertThat(path.at("/get/description").asText()).as(route)
+                .contains("caseworker-deedpoll-team-leader", "VIEW_MANAGEMENT_INFORMATION", "Not counted");
+            assertThat(path.at("/get/responses/403").isMissingNode()).as(route).isFalse();
+        }
+        assertThat(ids).containsExactly("getMiVolume", "getMiStageDurations", "getMiReferralOutcomes",
+                                        "getMiCompletion");
+        assertThat(spec.at("/paths/~1caseworker~1management-information~1stage-durations/get/description").asText())
+            .contains("Awaiting further documents", "masterDateOfDecision");
+        assertThat(spec.at("/paths/~1caseworker~1management-information~1referral-outcomes/get/description")
+                       .asText()).contains("staff withdrawing a referral");
     }
 
     @Test
@@ -705,6 +737,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.addAll(JUDICIAL_PATHS);
         known.addAll(CCD_ATTEMPT_PATHS);
         known.addAll(PREVIEW_PATHS);
+        known.addAll(MI_PATHS);
         known.add(GAZETTE_HISTORY_PATH);
         known.add("/caseworker/gazette-settings");
         known.add("/caseworker/process-settings");
