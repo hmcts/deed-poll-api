@@ -54,6 +54,16 @@ public class ManagementInformationRepository {
          GROUP BY e.period_end
         """;
 
+    // The migrated cases includeMigrated=false takes out of openAtEnd but CASES_EXCLUDED does not count, because they
+    // were received before the range: those still open at the first period's end. A case open at a later end is open
+    // at the first one too, since a closing date is the same at every end, so the first end alone decides.
+    private static final String MIGRATED_CARRIED_IN = """
+        SELECT count(*) FROM deedpoll_deedpoll d
+         WHERE d."migratedRecord" AND d."dateReceived" < CAST(? AS date)
+           AND (d."dateEnroled" IS NULL OR d."dateEnroled" >= CAST(? AS date) + 1)
+           AND (d."dateReturned" IS NULL OR d."dateReturned" >= CAST(? AS date) + 1)
+        """;
+
     // A case with no dateReceived is counted here whether or not it is migrated: migrated counts only cases inside
     // the range, and a case with no date is inside none, so filtering it here would leave it counted nowhere.
     private static final String CASES_EXCLUDED = PARAMETERS + """
@@ -210,6 +220,15 @@ public class ManagementInformationRepository {
     public CasesExcludedRow casesExcluded(MiParameters request) {
         return jdbc.queryForObject(CASES_EXCLUDED, (row, index) -> new CasesExcludedRow(
             row.getLong("no_date_received"), row.getLong("migrated")), parameters(request));
+    }
+
+    /**
+     * Migrated cases received before {@code from} and still open at {@code firstPeriodEnd}: the open caseload that
+     * {@code includeMigrated=false} leaves out of K1 beyond what {@link #casesExcluded} counts.
+     */
+    public long migratedCarriedIn(LocalDate from, LocalDate firstPeriodEnd) {
+        Long count = jdbc.queryForObject(MIGRATED_CARRIED_IN, Long.class, from, firstPeriodEnd, firstPeriodEnd);
+        return count == null ? 0 : count;
     }
 
     public List<StageRow> stageDurations(MiParameters request) {

@@ -110,6 +110,29 @@ class ManagementInformationVolumeTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    void countsTheMigratedCaseloadCarriedIntoTheRangeThatOpenAtEndLeavesOut() {
+        VolumeReport withBefore = service.volume(monthly(true));
+        VolumeReport withoutBefore = service.volume(monthly(false));
+
+        MiFixtures fixtures = new MiFixtures(jdbc);
+        // P: migrated, received before the range and still open: left out of every openAtEnd.
+        fixtures.newCase().migrated().received(at(2189, 11, 15)).insert();
+        // R: migrated, received before the range, enroled in January: left out of December's openAtEnd.
+        fixtures.newCase().migrated().received(at(2189, 11, 15)).enroled(at(2190, 1, 10)).insert();
+        // Q: migrated, received before the range, enroled in December: in no openAtEnd either way.
+        fixtures.newCase().migrated().received(at(2189, 11, 15)).enroled(at(2189, 12, 10)).insert();
+        // T: received before the range and still open, but not migrated: never left out.
+        fixtures.newCase().received(at(2189, 11, 15)).insert();
+        VolumeReport with = service.volume(monthly(true));
+        VolumeReport without = service.volume(monthly(false));
+
+        assertThat(openAddedTo(withBefore, with)).containsExactly(3L, 2L, 2L, 2L, 2L);
+        assertThat(openAddedTo(withoutBefore, without)).containsExactly(1L, 1L, 1L, 1L, 1L);
+        assertThat(without.excluded().migrated() - withoutBefore.excluded().migrated()).isEqualTo(2);
+        assertThat(with.excluded().migrated()).isZero();
+    }
+
+    @Test
     void weeksTurnBetweenSundayAndMondayAndTheFirstIsClippedToTheRange() {
         VolumeReport report = service.volume(weekly());
 

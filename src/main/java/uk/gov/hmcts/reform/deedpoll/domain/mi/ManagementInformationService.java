@@ -73,6 +73,9 @@ public class ManagementInformationService {
                 periods.stream().map(MiPeriod::end).toList()).stream()
             .collect(Collectors.toMap(OpenRow::periodEnd, OpenRow::openAtEnd));
         CasesExcludedRow excluded = repository.casesExcluded(request);
+        // openAtEnd also leaves out migrated cases received before the range, which casesExcluded does not count.
+        long migrated = excluded.migrated() + (request.includeMigrated() ? 0
+            : repository.migratedCarriedIn(request.from(), periods.get(0).end()));
 
         List<VolumeReport.Period> figures = periods.stream().map(period -> {
             Map<DeedPollType, Long> byType = received.getOrDefault(startOf(request, period), zeroByType());
@@ -81,7 +84,7 @@ public class ManagementInformationService {
                 open.getOrDefault(period.end(), 0L));
         }).toList();
         return new VolumeReport(request, figures,
-            new VolumeReport.Excluded(excluded.noDateReceived(), excluded.migrated()));
+            new VolumeReport.Excluded(excluded.noDateReceived(), migrated));
     }
 
     /** K2. */

@@ -57,8 +57,9 @@ public record MiVolumeResponse(
             description = "Cases with no dateReceived, which no period can hold, whatever their dates.")
         long noDateReceived,
         @Schema(requiredMode = Schema.RequiredMode.REQUIRED,
-            description = "Migrated cases received in the range, left out because includeMigrated is false; 0 "
-                + "otherwise.")
+            description = "Migrated cases left out because includeMigrated is false: those received in the range, "
+                + "and those received before it and still open at the end of its first period, which openAtEnd "
+                + "would otherwise have counted; 0 otherwise.")
         long migrated) {
     }
 
