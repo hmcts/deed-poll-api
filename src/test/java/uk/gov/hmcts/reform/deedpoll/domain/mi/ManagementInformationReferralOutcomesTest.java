@@ -76,6 +76,46 @@ class ManagementInformationReferralOutcomesTest extends AbstractPostgresContaine
         assertThat(report.excluded()).isEqualTo(new ReferralOutcomesReport.Excluded(1, 1, 1, 1));
     }
 
+    @Test
+    void bucketsByWeekAndQuarterOnThePeriodEdges() {
+        MiFixtures fixtures = new MiFixtures(jdbc);
+        String live = fixtures.newCase().insert();
+        // Wednesday 1 July 2189 to Sunday 12 July: a clipped first week, then Monday 6 July's.
+        fixtures.referral(live, Approved, at(2189, 7, 5, 23, 59), Urgent, Confirmed, at(2189, 7, 5, 23, 59));
+        fixtures.referral(live, Rejected, at(2189, 7, 6), Normal, Withdrawn, at(2189, 7, 6));
+        // 15 March to 30 June: a clipped first quarter, then the second.
+        fixtures.referral(live, Rejected, at(2189, 3, 31, 23, 59), Urgent, Withdrawn, at(2189, 3, 31, 23, 59));
+        fixtures.referral(live, Approved, at(2189, 4, 1), Normal, Confirmed, at(2189, 4, 1));
+
+        ReferralOutcomesReport weeks = service.referralOutcomes(MiParameters.of(LocalDate.of(2189, 7, 1),
+            LocalDate.of(2189, 7, 12), MiGranularity.WEEK, true));
+        assertThat(weeks.periods()).extracting(ReferralOutcomesReport.Period::decisions).containsExactly(
+            new Decisions(new DecisionCount(1, 1), new DecisionCount(0, 0)),
+            new Decisions(new DecisionCount(0, 0), new DecisionCount(1, 0)));
+        assertThat(weeks.periods()).extracting(ReferralOutcomesReport.Period::confirmations)
+            .containsExactly(new Confirmations(1, 0), new Confirmations(0, 1));
+
+        ReferralOutcomesReport quarters = service.referralOutcomes(MiParameters.of(LocalDate.of(2189, 3, 15),
+            LocalDate.of(2189, 6, 30), MiGranularity.QUARTER, true));
+        assertThat(quarters.periods()).extracting(ReferralOutcomesReport.Period::decisions).containsExactly(
+            new Decisions(new DecisionCount(0, 0), new DecisionCount(1, 1)),
+            new Decisions(new DecisionCount(1, 0), new DecisionCount(0, 0)));
+        assertThat(quarters.periods()).extracting(ReferralOutcomesReport.Period::confirmations)
+            .containsExactly(new Confirmations(0, 1), new Confirmations(1, 0));
+    }
+
+    @Test
+    void countsAMigratedReferralWithNoOutcomeAsMigratedOnly() {
+        MiFixtures fixtures = new MiFixtures(jdbc);
+        String migrated = fixtures.newCase().migrated().insert();
+        fixtures.referral(migrated, null, at(2189, 7, 2), Normal, null, at(2189, 7, 3));
+
+        ReferralOutcomesReport report = service.referralOutcomes(MiParameters.of(LocalDate.of(2189, 7, 1),
+            LocalDate.of(2189, 7, 12), MiGranularity.WEEK, false));
+
+        assertThat(report.excluded()).isEqualTo(new ReferralOutcomesReport.Excluded(1, 1, 0, 0));
+    }
+
     private static MiParameters request(boolean includeMigrated) {
         return MiParameters.of(LocalDate.of(2190, 1, 1), LocalDate.of(2190, 3, 31), MiGranularity.MONTH,
             includeMigrated);

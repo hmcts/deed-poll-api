@@ -644,7 +644,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   truncation in Java so empty periods are still reported, and the service joins the database's rows to the Java
   periods by start date: **if the two disagree, every period reads as zeros and nothing fails**, so change both
   together with a period-edge test. No response may name a case or referral; the controller test refuses schema
-  properties that look like ids, references, names or text, which is why there is no read audit (plan D5).
+  properties that look like ids, references, names or text, which is why there is no read audit (decision D5 of
+  `docs/plans/completed/20261103-mi-dashboard.md`).
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
   only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback

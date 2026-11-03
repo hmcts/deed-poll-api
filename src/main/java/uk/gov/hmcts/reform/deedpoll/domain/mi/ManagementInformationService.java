@@ -151,8 +151,7 @@ public class ManagementInformationService {
         }).toList();
         return new CompletionReport(request, figures, new CompletionReport.Excluded(cases.noDateReceived(),
             cohorts.values().stream().mapToLong(CompletionRow::contradiction).sum(),
-            cohorts.values().stream().mapToLong(CompletionRow::negative).sum(),
-            cohorts.values().stream().mapToLong(CompletionRow::migrated).sum()));
+            cohorts.values().stream().mapToLong(CompletionRow::negative).sum(), cases.migrated()));
     }
 
     // The database buckets by the unclipped calendar period, so a clipped first period is found by its own start.

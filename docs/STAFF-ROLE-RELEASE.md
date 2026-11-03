@@ -80,7 +80,9 @@ associate them with the final task commit before deployment.
    Redis or rotate client/session secrets for this change.
 6. Run agreed per-environment smoke checks with each role alone and mixed judicial roles:
    privileged casework and document reads for both new roles, all Gazette operations and the
-   named count refused to legacy/Team leader/ordinary/judicial callers, and judicial operations
+   named count refused to legacy/Team leader/ordinary/judicial callers, the four
+   `/caseworker/management-information` reads answered for Team leader and Delivery Manager and
+   refused to legacy admin/ordinary/judicial callers, and judicial operations
    refused without JUDICIAL. Any publication smoke needs an approved non-production fixture
    and recipient. Local tests do not replace these live checks.
 

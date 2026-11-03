@@ -278,7 +278,7 @@ before any row lock, so two senders cannot both take the last places. Windows ar
 
 Four read-only, aggregate-only reports for Team leaders and Delivery Managers (`VIEW_MANAGEMENT_INFORMATION`; anyone
 else is 403 before a parameter is read), built from the case's own milestone dates so migrated cases count as new
-ones do (plan [20261103-mi-dashboard](docs/plans/20261103-mi-dashboard.md)). No response identifies a case or a
+ones do (plan [20261103-mi-dashboard](docs/plans/completed/20261103-mi-dashboard.md)). No response identifies a case or a
 referral; percentages are left to the reader.
 
 Every operation takes `from` and `to` (`yyyy-MM-dd`, both inclusive and required, `to` no earlier than `from` and

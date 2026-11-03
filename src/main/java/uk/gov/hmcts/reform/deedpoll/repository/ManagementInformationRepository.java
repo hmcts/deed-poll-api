@@ -151,8 +151,7 @@ public class ManagementInformationRepository {
                percentile_cont(0.5) WITHIN GROUP (ORDER BY days)
                    FILTER (WHERE included AND enroled <> returned AND days >= 0) AS median_days,
                percentile_cont(0.95) WITHIN GROUP (ORDER BY days)
-                   FILTER (WHERE included AND enroled <> returned AND days >= 0) AS p95_days,
-               count(*) FILTER (WHERE NOT included) AS migrated
+                   FILTER (WHERE included AND enroled <> returned AND days >= 0) AS p95_days
           FROM received
          GROUP BY period_start
         """;
@@ -194,7 +193,7 @@ public class ManagementInformationRepository {
 
     /** One cohort's completion. */
     public record CompletionRow(LocalDate periodStart, long received, long enroled, long returned, long stillOpen,
-                                long contradiction, long negative, DurationFigures figures, long migrated) {
+                                long contradiction, long negative, DurationFigures figures) {
     }
 
     public List<ReceivedRow> received(MiParameters request) {
@@ -234,7 +233,7 @@ public class ManagementInformationRepository {
     public List<CompletionRow> completion(MiParameters request) {
         return jdbc.query(COMPLETION, (row, index) -> new CompletionRow(row.getObject("period_start", LocalDate.class),
             row.getLong("received"), row.getLong("enroled"), row.getLong("returned"), row.getLong("still_open"),
-            row.getLong("contradiction"), row.getLong("negative"), figures(row), row.getLong("migrated")),
+            row.getLong("contradiction"), row.getLong("negative"), figures(row)),
             parameters(request));
     }
 

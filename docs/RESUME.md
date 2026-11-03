@@ -6,7 +6,7 @@ aggregate reads under `/caseworker/management-information` (`volume`, `stage-dur
 `completion`), computed from the case's milestone dates and the referrals in `domain/mi`. No migration. Next: merge
 and deploy to AAT, then the admin half (`deed-poll-admin` `docs/plans/20261103-mi-dashboard-page.md`) refreshes its
 spec; after the Dataverse migration, repeat the pre-flight check in prod. See
-[the plan](plans/20261103-mi-dashboard.md).
+[the plan](plans/completed/20261103-mi-dashboard.md).
 
 **Plan F1, the referral queue and batch send, 2026-10-30:** on `plan/f-referral-queue`, local commits only, not
 pushed. V46 renames the cap to `windowCap` (one total per window across every Master, no alias) and admits the

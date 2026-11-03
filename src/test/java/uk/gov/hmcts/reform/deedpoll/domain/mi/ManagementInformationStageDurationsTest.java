@@ -113,6 +113,31 @@ class ManagementInformationStageDurationsTest extends AbstractPostgresContainerT
         assertThat(report.excluded().negativeInterval()).isEqualTo(counts(0, 0, 0, 1, 0));
     }
 
+    @Test
+    void bucketsByWeekAndQuarterOnThePeriodEdges() {
+        MiFixtures fixtures = new MiFixtures(jdbc);
+        // Wednesday 1 July 2189 to Sunday 12 July: a clipped first week, then Monday 6 July's.
+        fixtures.newCase().received(at(2189, 7, 1)).ready(at(2189, 7, 5, 23, 59)).insert();
+        fixtures.newCase().received(at(2189, 7, 1)).ready(at(2189, 7, 6)).insert();
+        // 15 March to 30 June: a clipped first quarter, then the second.
+        fixtures.newCase().received(at(2189, 3, 15)).ready(at(2189, 3, 31, 23, 59)).insert();
+        fixtures.newCase().received(at(2189, 3, 20)).ready(at(2189, 4, 1)).insert();
+
+        StageDurationsReport weeks = service.stageDurations(MiParameters.of(LocalDate.of(2189, 7, 1),
+            LocalDate.of(2189, 7, 12), MiGranularity.WEEK, true));
+        assertThat(weeks.periods()).extracting(StageDurationsReport.Period::period).containsExactly(
+            new MiPeriod(LocalDate.of(2189, 7, 1), LocalDate.of(2189, 7, 5)),
+            new MiPeriod(LocalDate.of(2189, 7, 6), LocalDate.of(2189, 7, 12)));
+        assertFigures(weeks.periods().get(0).intervals().get(RECEIVED_TO_READY_FOR_MASTER), 1, 4, 4);
+        assertFigures(weeks.periods().get(1).intervals().get(RECEIVED_TO_READY_FOR_MASTER), 1, 5, 5);
+
+        StageDurationsReport quarters = service.stageDurations(MiParameters.of(LocalDate.of(2189, 3, 15),
+            LocalDate.of(2189, 6, 30), MiGranularity.QUARTER, true));
+        assertThat(quarters.periods()).hasSize(2);
+        assertFigures(quarters.periods().get(0).intervals().get(RECEIVED_TO_READY_FOR_MASTER), 1, 16, 16);
+        assertFigures(quarters.periods().get(1).intervals().get(RECEIVED_TO_READY_FOR_MASTER), 1, 12, 12);
+    }
+
     private static MiParameters request(boolean includeMigrated) {
         return MiParameters.of(LocalDate.of(2190, 1, 1), LocalDate.of(2190, 3, 31), MiGranularity.MONTH,
             includeMigrated);

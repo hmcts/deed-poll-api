@@ -88,6 +88,48 @@ class ManagementInformationCompletionTest extends AbstractPostgresContainerTest 
         assertThat(report.excluded().migrated()).isEqualTo(2);
     }
 
+    @Test
+    void bucketsCohortsByWeekAndQuarterOnThePeriodEdges() {
+        MiFixtures fixtures = new MiFixtures(jdbc);
+        // Wednesday 1 July 2189 to Sunday 12 July: a clipped first week, then Monday 6 July's.
+        fixtures.newCase().received(at(2189, 7, 5, 23, 59)).enroled(at(2189, 7, 8)).insert();
+        fixtures.newCase().received(at(2189, 7, 6)).returned(at(2189, 7, 7)).insert();
+        fixtures.newCase().received(at(2189, 6, 30)).insert();
+        // 15 March to 30 June: a clipped first quarter, then the second.
+        fixtures.newCase().received(at(2189, 3, 31, 23, 59)).insert();
+        fixtures.newCase().received(at(2189, 4, 1)).enroled(at(2189, 4, 11)).insert();
+
+        CompletionReport weeks = service.completion(MiParameters.of(LocalDate.of(2189, 7, 1),
+            LocalDate.of(2189, 7, 12), MiGranularity.WEEK, true));
+        assertThat(weeks.cohorts()).extracting(Cohort::cohort).containsExactly(
+            new MiPeriod(LocalDate.of(2189, 7, 1), LocalDate.of(2189, 7, 5)),
+            new MiPeriod(LocalDate.of(2189, 7, 6), LocalDate.of(2189, 7, 12)));
+        assertCohort(weeks.cohorts().get(0), 1, 1, 1, 0, 0);
+        assertFigures(weeks.cohorts().get(0).daysToCompletion(), 1, 3, 3);
+        assertCohort(weeks.cohorts().get(1), 1, 1, 0, 1, 0);
+        assertFigures(weeks.cohorts().get(1).daysToCompletion(), 1, 1, 1);
+
+        CompletionReport quarters = service.completion(MiParameters.of(LocalDate.of(2189, 3, 15),
+            LocalDate.of(2189, 6, 30), MiGranularity.QUARTER, true));
+        assertThat(quarters.cohorts()).hasSize(2);
+        assertCohort(quarters.cohorts().get(0), 1, 0, 0, 0, 1);
+        // The week test's 30 June case is the second quarter's last day, still open.
+        assertCohort(quarters.cohorts().get(1), 2, 1, 1, 0, 1);
+        assertFigures(quarters.cohorts().get(1).daysToCompletion(), 1, 10, 10);
+    }
+
+    @Test
+    void countsAMigratedContradictionAsMigratedOnly() {
+        new MiFixtures(jdbc).newCase().migrated().received(at(2189, 7, 2)).enroled(at(2189, 7, 3))
+            .returned(at(2189, 7, 4)).insert();
+
+        CompletionReport report = service.completion(MiParameters.of(LocalDate.of(2189, 7, 1),
+            LocalDate.of(2189, 7, 12), MiGranularity.WEEK, false));
+
+        assertThat(report.excluded().contradiction()).isZero();
+        assertThat(report.excluded().migrated()).isEqualTo(1);
+    }
+
     private static MiParameters request(boolean includeMigrated) {
         return MiParameters.of(LocalDate.of(2190, 1, 1), LocalDate.of(2190, 4, 30), MiGranularity.MONTH,
             includeMigrated);
