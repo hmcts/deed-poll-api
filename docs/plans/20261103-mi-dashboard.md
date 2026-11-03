@@ -274,9 +274,9 @@ before Task 1; if it is empty, stop and report.**
 
 ### Task 4: Performance check
 
-- [ ] An integration test seeding **10× prod volume** (the "Task 4 volume" in "Pre-flight results") and asserting each operation
+- [x] An integration test seeding **10× prod volume** (the "Task 4 volume" in "Pre-flight results") and asserting each operation
       answers a 2-year monthly request in under 2 s on the Testcontainers Postgres. Record the timings.
-- [ ] Only if one fails: `EXPLAIN ANALYZE` it, add the narrowest index as the next free migration,
+- [x] Only if one fails: `EXPLAIN ANALYZE` it, add the narrowest index as the next free migration,
       and re-measure. Otherwise no migration (D9).
 
 ### Task 5: Documentation and final verification
@@ -359,3 +359,15 @@ subject/email/note/text/case. `MiParametersTest` +3 for `parse`. `OpenAPIPublish
 `MI_PATHS` (counted apart) and documents them. `MiFixtures` is public for the HTTP test. Validation: `build`
 SUCCESSFUL (5m 4s); `checkstyle.sh` OK after marking two locals in `parse` final; `test` 5,433 / 0 failed / 1
 skipped (+23), `integration` 28 / 0 (+1). `WriteEndpointAuditCoverageTest` unchanged and passing.
+
+**Task 4 (2026-11-03).** `src/integrationTest/.../domain/mi/ManagementInformationPerformanceTest` (`@Transactional`,
+rolled back) seeds 10,000 cases (the "Task 4 volume") by one `generate_series` insert over 2180 to 2182: every
+`type`, 10% migrated, 1 in 500 with no `dateReceived`, every milestone at varying gaps, `masterDateOfDecision` on
+some, contradictions, and about 7,000 referrals (a second on 1 case in 50) with decisions, urgency and both
+confirmation outcomes; then `ANALYZE`s both tables. A second test proves the seed reaches every figure (24 periods
+received, all five intervals counted, decisions/urgent/confirmations, completion and contradictions), so the timings
+are of real work. Each KPI, a 2-year monthly request (2181-01-01 to 2182-12-31) through
+`ManagementInformationService`, warmed once and timed as the slowest of three runs: volume 35 ms, stage-durations
+22 ms, referral-outcomes 4 ms, completion 3 ms. All far under 2 s, so no `EXPLAIN ANALYZE` and no migration (D9);
+highest migration still V46. Validation: `build` SUCCESSFUL (5m 5s); `checkstyle.sh` OK; `test` 5,433 / 0 failed /
+1 skipped (unchanged), `integration` 30 / 0 (+2).
