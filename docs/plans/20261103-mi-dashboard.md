@@ -254,12 +254,12 @@ before Task 1; if it is empty, stop and report.**
 
 ### Task 2: The query layer (K1 to K4)
 
-- [ ] Failing real-Postgres tests for every definition and edge listed in the Development Approach,
+- [x] Failing real-Postgres tests for every definition and edge listed in the Development Approach,
       one test class per KPI, with expected figures written by hand.
-- [ ] `repository/ManagementInformationRepository.java` (JdbcTemplate) and
+- [x] `repository/ManagementInformationRepository.java` (JdbcTemplate) and
       `domain/mi/ManagementInformationService.java` (parameter validation, the empty-bucket rule (D6), the
       `excluded` block). The service returns domain records, not DTOs.
-- [ ] Run the focused tests and all Validation Commands; record the results.
+- [x] Run the focused tests and all Validation Commands; record the results.
 
 ### Task 3: The HTTP operations
 
@@ -316,3 +316,22 @@ Delivery Manager, not legacy admin), `CallerAccessOpenApiTest` (enum ends with i
 and `docs/STAFF-ROLE-RELEASE.md` updated. Validation: `build` SUCCESSFUL (5m 26s); `checkstyle.sh` OK
 after wrapping one long test line; `test` 5,393 / 0 failed / 1 skipped (+1, the new test), `integration`
 27 / 0.
+
+**Task 2 (2026-11-03).** `domain/mi`: `MiParameters.of` validates (each missing field named, `to < from`,
+`to` after `from` + 2 years; `includeMigrated` null means true) and generates every period, the first and last
+clipped to the range, so an open caseload is measured at the clipped end. `MiGranularity` binds the `date_trunc`
+field and repeats the truncation in Java so empty periods are still reported. `DurationFigures.NONE` is D6's empty
+bucket. `ManagementInformationService` runs each KPI's reads in one read-only repeatable-read transaction and
+returns `VolumeReport`, `StageDurationsReport`, `ReferralOutcomesReport` and `CompletionReport`.
+`repository/ManagementInformationRepository` holds seven constant statements, binding every value once in a
+one-row `p` CTE; ranges compare the uncast column against `from` and `to + 1`, and durations subtract `::date`
+values (D4). Choices the plan left open, so Task 3 can state them: a case with no `type` counts as `Unknown`;
+`excluded.migrated` counts what `includeMigrated=false` left out (per interval for K2, decisions and confirmations
+separately for K3); K3 also counts a `decisionDate` with no `decision` and a `confirmationReceivedAt` with no outcome;
+K4 counts a completion before receipt as completed but leaves it out of the percentiles (`excluded.negativeInterval`),
+and a contradiction in none of completed/enroled/returned/stillOpen. Tests: `MiParametersTest` (7, no database)
+and one real-Postgres class per KPI (Volume 4, StageDurations 2, ReferralOutcomes 2, Completion 2), all figures
+by hand. Fixtures are dated 2189/2190 because the container is shared with classes that commit; the
+all-time figures (open caseload, no `dateReceived`) are asserted as a delta from a baseline taken in the same
+transaction. Validation: `build` SUCCESSFUL (5m 25s); `checkstyle.sh` OK after making 12 Javadoc comments with
+inline tags multi-line; `test` 5,410 / 0 failed / 1 skipped (+17), `integration` 27 / 0.
