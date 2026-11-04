@@ -138,6 +138,8 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
         registry.add("idam.client.secret", () -> "not-a-real-secret");
         registry.add("idam.client.redirect_uri", () -> "http://localhost/oauth2/callback");
         registry.add("idam.system-user.username", () -> SYSTEM_USERNAME);
+        // Each scenario stubs its own IDAM answer, a refusal included, so none may reuse an earlier one's token.
+        registry.add("idam.system-user.token-max-age", () -> "PT0S");
         registry.add("idam.system-user.password", () -> "not-a-real-password");
         registry.add("core_case_data.api.url", DATA_STORE::baseUrl);
         registry.add("deedpoll.ccd.system-role", () -> SYSTEM_ROLE);

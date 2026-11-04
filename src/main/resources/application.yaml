@@ -178,6 +178,10 @@ idam:
   system-user:
     username: ${DEED_POLL_SYSTEM_USERNAME:}
     password: ${DEED_POLL_SYSTEM_PASSWORD:}
+    # SystemUserTokens reuses the system user's token until a minute before IDAM says it expires, and never for longer
+    # than this, which bounds how long a revoked token keeps being sent. PT0S turns the cache off. Every password grant
+    # costs the IDAM service all HMCTS services share (hmcts/idam-access-config#1056).
+    token-max-age: ${DEED_POLL_SYSTEM_TOKEN_MAX_AGE:PT30M}
   s2s-auth:
     # Outbound service-to-service tokens, which the linking operation sends to CCD data-store. The secret has no
     # default, so a deployed environment that has not been given one cannot mint a token that would be refused
