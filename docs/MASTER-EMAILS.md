@@ -58,51 +58,54 @@ as history and nothing writes it.
 
 ## Personalisation
 
-Every value is a plain string: Notify links a raw URL and renders no HTML. Both emails use the same three keys.
+Every value is a plain string: Notify links a raw URL and renders no HTML. Both emails are sent the same five keys;
+a template may use any of them, and Notify ignores a key the template does not use. **A placeholder the api does not
+send makes Notify refuse every send**, so a template must use only these names, spelled exactly.
 
 | Key | Value |
 |---|---|
 | `master_name` | the Masters-list name |
 | `referral_count` | how many referrals the email counts (see "Either email at send time") |
 | `my_referrals_link` | `{ADMIN_BASE_URL}/judicial/referrals/mine`, for example `https://deed-poll-admin.aat.platform.hmcts.net/judicial/referrals/mine` |
+| `processing_window` | the Delivery Manager's processing window **at send time**, in words: `7 days`, `1 day` (in hours, then minutes, only if api's own PUT stored one that is not whole days) |
+| `reminder_interval` | the Delivery Manager's reminder interval at send time, always in hours: `48 hours`, `1 hour` |
 
-The reminder linking to My referrals rather than listing each referral is plan F1's choice (A-1), not yet confirmed
-by the business.
+The two settings are placeholders rather than words in the template (Steve, 2026-11-02), so an email never states a
+period the Delivery Manager has since changed. Linking to My referrals rather than listing each referral is plan F1's
+decision A-1, confirmed by Steve on 2026-10-30.
 
-## Suggested Notify template text
+## Notify template text
 
-The wording is the business's to agree; this is a starting point that uses every key.
+The business's wording (Steve, 2026-11-02). The paste-ready drafts, with the portal steps and the record of what was
+authored, are in admin's `.business_context/notify-templates/master-referral-sent.md` and
+`master-referral-reminder.md`.
 
-**Sent.** Subject: `Deed poll referrals sent to you`
+**Sent** (`master-referral-sent`). Subject: `Deed Poll referrals allocated to you`
 
 ```
-Dear ((master_name)),
+Dear Judge,
 
-((referral_count)) deed poll referral(s) have been sent to you for your direction.
-
-Open My referrals to read each application and give your direction. You will need to sign in:
+Please follow the link below to access the Deed Poll referrals allocated to you for consideration:
 
 ((my_referrals_link))
 
-This is an automated email. Please do not reply to it.
+Referrals will remain allocated to you for a period of ((processing_window)) from the date of assignment. To assist with timely processing, automated reminder notifications will be issued every ((reminder_interval)) in respect of any outstanding referrals that remain pending.
 
-HMCTS Deed Poll Office
+Kind Regards,
+Deed Poll Team
 ```
 
-**Reminder.** Subject: `Reminder: deed poll referrals waiting for your direction`
+**Reminder** (`master-referral-reminder`). Subject: `Reminder: Deed Poll referrals awaiting your consideration`
 
 ```
-Dear ((master_name)),
+Dear Judge,
 
-You have ((referral_count)) deed poll referral(s) waiting for your direction.
-
-Open My referrals to read each application and give your direction. You will need to sign in:
+This is a courtesy notification to advise that you have Deed Poll referrals allocated to you that are awaiting your consideration:
 
 ((my_referrals_link))
 
-This is an automated email. Please do not reply to it.
-
-HMCTS Deed Poll Office
+Kind Regards,
+Deed Poll Team
 ```
 
 Neither invites a reply, so neither needs `NOTIFY_EMAIL_REPLY_TO_ID`; neither carries a document, so neither needs

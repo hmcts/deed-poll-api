@@ -54,17 +54,16 @@ java:
           alias: DEED_POLL_SYSTEM_PASSWORD
         - name: api-s2s-secret
           alias: DEED_POLL_API_S2S_SECRET
-        # The Docmosis Tornado access key DOCX previews convert with: copied from em-stitching-{env} in aat and demo
-        # (deed-poll-infra docmosis.tf), by hand in ithc, and a placeholder in prod, where DOCMOSIS_URL below is empty.
+        # The Docmosis Tornado access key DOCX previews convert with: copied from em-stitching-{env} in aat, demo and
+        # prod (deed-poll-infra docmosis.tf), and by hand in ithc.
         - name: docmosis-access-key
           alias: DOCMOSIS_ACCESS_KEY
   environment:
     ENVIRONMENT_NAME: "{{ .Values.global.environment }}"
     # The shared Docmosis Tornado service DOCX previews convert through (the base: /rs/convert is appended), the
-    # in-cluster address em-stitching-api uses. **Empty in prod**, so prod's converter is unconfigured whatever the
-    # vault's placeholder key holds, and a DOCX preview there answers 503 while its download works. Prod's would be
-    # https://docmosis.platform.hmcts.net, with its real key written over the placeholder, when prod previews go on.
-    DOCMOSIS_URL: '{{ if ne .Values.global.environment `prod` }}https://docmosis.{{ .Values.global.environment }}.platform.hmcts.net{{ end }}'
+    # address em-stitching-api uses. Prod's host has no environment segment, as em-stitching's and pcs-api's prod
+    # Flux patches show; it needs the copied key above, so deed-poll-infra's prod apply must come first.
+    DOCMOSIS_URL: '{{ if eq .Values.global.environment `prod` }}https://docmosis.platform.hmcts.net{{ else }}https://docmosis.{{ .Values.global.environment }}.platform.hmcts.net{{ end }}'
     # Off until CCD/CDAM onboarding, staff read permissions and the 03b/03c rollout prerequisites are complete in an
     # environment. The CCD identifiers and CDAM URL below being real is not that onboarding.
     #
@@ -174,12 +173,13 @@ java:
     NOTIFY_TEMPLATE_GAZETTE_MINOR: '{{ if eq .Values.global.environment `prod` }}DEED_POLL_PLACEHOLDER{{ else }}823518db-0064-4df8-8ddd-2f52bd52e997{{ end }}'
     NOTIFY_TEMPLATE_GAZETTE_MIXED: '{{ if eq .Values.global.environment `prod` }}DEED_POLL_PLACEHOLDER{{ else }}d956464f-8fe1-4eb2-9f02-4a309a14636e{{ end }}'
     # The Master emails (plans D3 and F1): one for each send from the referral queue, and the reminder, sent to a
-    # Master rather than an applicant. **Nobody has created either template yet**, so every environment is
-    # unprovisioned, which reads as a visible skip: each send and reminder writes its email row `Skipped`, sending
-    # nothing and building no backlog. When a template exists, put its id here per environment (prod in a `prod`
-    # branch, as above) and bump the chart. Suggested template text: docs/MASTER-EMAILS.md.
-    NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT: DEED_POLL_PLACEHOLDER
-    NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER: DEED_POLL_PLACEHOLDER
+    # Master rather than an applicant. Authored on the non-prod Notify service on 2026-11-02 and read back (wording:
+    # docs/MASTER-EMAILS.md; drafts in admin's .business_context/notify-templates/). The sent template uses
+    # ((processing_window)) and ((reminder_interval)), which api#163 sends. Prod has no Notify service yet, so it
+    # stays on the placeholder, which reads as a visible skip: rows are written `Skipped`, nothing is sent and no
+    # backlog builds.
+    NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT: '{{ if eq .Values.global.environment `prod` }}DEED_POLL_PLACEHOLDER{{ else }}65aefcb8-a6e1-463b-a520-87e686cb423f{{ end }}'
+    NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER: '{{ if eq .Values.global.environment `prod` }}DEED_POLL_PLACEHOLDER{{ else }}784396ee-1184-49d5-9910-b135ef289bda{{ end }}'
     # The admin app's public host, which the Master emails link My referrals under (`/judicial/referrals/mine`). The
     # same shape as deed-poll-admin's `ingressHost` (`deed-poll-admin.{env}.platform.hmcts.net`, and
     # `deed-poll-admin.platform.hmcts.net` in prod through cnp-flux-config). Start-up refuses a provisioned Master

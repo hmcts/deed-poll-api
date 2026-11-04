@@ -37,6 +37,8 @@ Delivery Manager-only Gazette operations (see [Gazette publication foundation](#
 two Delivery Manager-only process-settings operations, three Masters-list and three bank-holiday operations whose
 reads any staff role may call and whose writes need `MANAGE_PROCESS_CONFIG` (see [Process settings](#process-settings)),
 two referral-queue operations that need `ALLOCATE_REFERRALS` (see [The referral queue](#the-referral-queue)),
+four management-information reads that need `VIEW_MANAGEMENT_INFORMATION` (see
+[Management information](#management-information)),
 and two document previews, one per surface (see [Document previews](#document-previews)), counted apart.
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
 `capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
@@ -272,6 +274,42 @@ Each referral sent is `Claimed` by its Master, starts the processing window, and
 before any row lock, so two senders cannot both take the last places. Windows are working days only (see
 [Process settings](#process-settings)).
 
+### Management information
+
+Four read-only, aggregate-only reports for Team leaders and Delivery Managers (`VIEW_MANAGEMENT_INFORMATION`; anyone
+else is 403 before a parameter is read), built from the case's own milestone dates so migrated cases count as new
+ones do (plan [20261103-mi-dashboard](docs/plans/completed/20261103-mi-dashboard.md)). No response identifies a case or a
+referral; percentages are left to the reader.
+
+Every operation takes `from` and `to` (`yyyy-MM-dd`, both inclusive and required, `to` no earlier than `from` and
+at most 2 years after it), `granularity` (`WEEK`, an ISO week from Monday; `MONTH`; `QUARTER`) and `includeMigrated`
+(default `true`; `false` leaves migrated cases out and counts them under `excluded`). A bad or missing parameter is a
+400 naming it. Every period of the range is reported in order, empty ones included, the first and last clipped to
+the range. Days are calendar days, each date cast to a day before subtracting (23:00 to 09:00 the next day is 1).
+Percentiles are Postgres `percentile_cont`, published however small `count` is, and null when it is 0. Each response
+echoes the resolved `parameters` and an `excluded` block, so nothing is left out silently.
+
+| Method | Path | What it counts |
+|---|---|---|
+| GET | `/caseworker/management-information/volume` (`getMiVolume`) | `received`: cases whose `dateReceived` falls in the period, by `type` (none counts as `Unknown`). `openAtEnd`: cases received by the period's end with neither `dateEnroled` nor `dateReturned` by then. `excluded.noDateReceived` (all time) |
+| GET | `/caseworker/management-information/stage-durations` (`getMiStageDurations`) | `count`, `medianDays`, `p95Days` per interval, bucketed by the period its **end** falls in: received → ready for Master, ready → referred, referred → decision (the latest non-null `decisionDate` of the case's referrals, else the case's `masterDateOfDecision`), signature requested → received, signature received → enroled. An interval missing either end is not one; one ending before it starts is `excluded.negativeInterval` |
+| GET | `/caseworker/management-information/referral-outcomes` (`getMiReferralOutcomes`) | `decisions`: referrals by `decisionDate`, Approved and Rejected, each with its urgent sub-count. `confirmations`: by `confirmationReceivedAt`, Confirmed and Withdrawn (the applicant's answer to the directions). A date with no decision or outcome is excluded and counted |
+| GET | `/caseworker/management-information/completion` (`getMiCompletion`) | Per intake cohort (the period `dateReceived` falls in): `received`, `completed` (split `enroled`/`returned`), `stillOpen`, and `daysToCompletion` to the completion date. A case with both completion dates is `excluded.contradiction` and counted nowhere else; a completion before receipt counts as completed but not in the percentiles |
+
+What they cannot tell you:
+
+- **The dates as they stand now.** Staff can edit every milestone date, so a figure reflects today's values, not a
+  history of when someone entered them. The audit trail cannot stand in: no action records a state change, and it
+  holds nothing before V36 or for the Dataverse records.
+- **No duration for Awaiting further documents.** `awaitingFurtherDocsInfo` says when documents were asked for, and
+  nothing records when they arrived.
+- **No referral withdrawals by staff.** No column dates one, and the decision (O4) was not to add one.
+- **A recent cohort looks fast**, because its slow cases are still open; show `stillOpen` beside the percentiles.
+- SLA compliance, escalations and re-submissions are not reported: nobody has defined them yet.
+
+At ten times prod's expected volume (10,000 cases) each 2-year monthly request answers in under 40 ms on the test
+Postgres, so the reports add no index.
+
 ### Master emails
 
 Two emails go to Masters rather than applicants: a **sent** email, one per Master per batch send (and one to the new
@@ -420,9 +458,9 @@ verified roles to explicit capabilities:
 
 | Role claim | Privileges |
 |---|---|
-| `caseworker-deedpoll-team-leader` | Privacy override, note/witness deletion, shared-query management, CCD repairs, the referral queue (sending to Masters and reassigning, `ALLOCATE_REFERRALS`) |
+| `caseworker-deedpoll-team-leader` | Privacy override, note/witness deletion, shared-query management, CCD repairs, the referral queue (sending to Masters and reassigning, `ALLOCATE_REFERRALS`), management information (`VIEW_MANAGEMENT_INFORMATION`) |
 | `caseworker-deedpoll-delivery-manager` | All Team leader privileges plus the entire Gazette facility and the process settings (`MANAGE_PROCESS_CONFIG`) |
-| `caseworker-deedpoll-admin` (deprecated) | Temporary Team leader compatibility, the referral queue included; no Gazette access or process settings |
+| `caseworker-deedpoll-admin` (deprecated) | Temporary Team leader compatibility, the referral queue included; no Gazette access, process settings or management information |
 
 Each new role works alone. Neither grants judicial or system access. Private saved queries remain
 owner-only; shared-query management does not bypass that rule. The privacy adapter derives its flag
@@ -886,7 +924,7 @@ upload and the Gazette routes. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, def
 those budgets. Three limits enforce whatever the mode (as does the conversion permit under Document previews,
 above): the per-pod in-flight upload cap (`RATE_LIMIT_UPLOAD_IN_FLIGHT`), the daily per-case, per-template
 email cap (`EMAIL_MAX_PER_CASE_PER_TEMPLATE_PER_DAY`, default 3; a fourth distinct-key send is a `409`, a replayed key is still `200`) and the case list statement
-timeout (`LIST_STATEMENT_TIMEOUT`). See [docs/RATE-LIMITS.md](docs/RATE-LIMITS.md).
+timeout (`LIST_STATEMENT_TIMEOUT`), and management information's (`MI_STATEMENT_TIMEOUT`, 10 s). See [docs/RATE-LIMITS.md](docs/RATE-LIMITS.md).
 
 ### The audit trail
 

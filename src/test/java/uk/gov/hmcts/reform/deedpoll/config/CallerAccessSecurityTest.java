@@ -61,12 +61,15 @@ class CallerAccessSecurityTest extends AbstractPostgresContainerTest {
 
     private static final String SKILL = "SKILL:DEEDPOLL:GAZETTE";
     private static final String ACTOR_PATH = "/am/role-assignments/actors/" + StubIdam.SUBJECT;
-    private static final String TEAM_LEADER_SET =
+    private static final String LEGACY_ADMIN_SET =
         "[\"OVERRIDE_PRIVACY\",\"DELETE_NOTE\",\"DELETE_WITNESS\",\"MANAGE_SHARED_QUERIES\",\"REPAIR_CCD\","
             + "\"ALLOCATE_REFERRALS\"]";
+    private static final String TEAM_LEADER_SET =
+        "[\"OVERRIDE_PRIVACY\",\"DELETE_NOTE\",\"DELETE_WITNESS\",\"MANAGE_SHARED_QUERIES\",\"REPAIR_CCD\","
+            + "\"ALLOCATE_REFERRALS\",\"VIEW_MANAGEMENT_INFORMATION\"]";
     private static final String DELIVERY_MANAGER_SET =
         "[\"OVERRIDE_PRIVACY\",\"DELETE_NOTE\",\"DELETE_WITNESS\",\"MANAGE_SHARED_QUERIES\",\"REPAIR_CCD\","
-            + "\"ACCESS_GAZETTE\",\"MANAGE_PROCESS_CONFIG\",\"ALLOCATE_REFERRALS\"]";
+            + "\"ACCESS_GAZETTE\",\"MANAGE_PROCESS_CONFIG\",\"ALLOCATE_REFERRALS\",\"VIEW_MANAGEMENT_INFORMATION\"]";
 
     private static final StubIdam IDAM = new StubIdam();
     private static final WireMockServer RAS = new WireMockServer(WireMockConfiguration.options().dynamicPort());
@@ -121,7 +124,7 @@ class CallerAccessSecurityTest extends AbstractPostgresContainerTest {
             Arguments.of(List.of(Role.DELIVERY_MANAGER.claimValue()),
                 "{\"staff\":true,\"judicial\":false,\"capabilities\":" + DELIVERY_MANAGER_SET + "}"),
             Arguments.of(List.of("caseworker-deedpoll-admin"),
-                "{\"staff\":true,\"judicial\":false,\"capabilities\":" + TEAM_LEADER_SET + "}"),
+                "{\"staff\":true,\"judicial\":false,\"capabilities\":" + LEGACY_ADMIN_SET + "}"),
             Arguments.of(List.of(Role.JUDICIAL.claimValue()),
                 "{\"staff\":false,\"judicial\":true,\"capabilities\":[]}"),
             Arguments.of(List.of("caseworker-civil"),

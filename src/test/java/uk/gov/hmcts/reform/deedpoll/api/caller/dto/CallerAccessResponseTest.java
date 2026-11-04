@@ -18,14 +18,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SuppressWarnings("deprecation")
 class CallerAccessResponseTest {
 
-    private static final List<Capability> TEAM_LEADER = List.of(
+    private static final List<Capability> LEGACY_ADMIN = List.of(
         Capability.OVERRIDE_PRIVACY, Capability.DELETE_NOTE, Capability.DELETE_WITNESS,
         Capability.MANAGE_SHARED_QUERIES, Capability.REPAIR_CCD, Capability.ALLOCATE_REFERRALS);
+
+    private static final List<Capability> TEAM_LEADER = List.of(
+        Capability.OVERRIDE_PRIVACY, Capability.DELETE_NOTE, Capability.DELETE_WITNESS,
+        Capability.MANAGE_SHARED_QUERIES, Capability.REPAIR_CCD, Capability.ALLOCATE_REFERRALS,
+        Capability.VIEW_MANAGEMENT_INFORMATION);
 
     private static final List<Capability> DELIVERY_MANAGER = List.of(
         Capability.OVERRIDE_PRIVACY, Capability.DELETE_NOTE, Capability.DELETE_WITNESS,
         Capability.MANAGE_SHARED_QUERIES, Capability.REPAIR_CCD, Capability.ACCESS_GAZETTE,
-        Capability.MANAGE_PROCESS_CONFIG, Capability.ALLOCATE_REFERRALS);
+        Capability.MANAGE_PROCESS_CONFIG, Capability.ALLOCATE_REFERRALS, Capability.VIEW_MANAGEMENT_INFORMATION);
 
     @Test
     @DisplayName("a caseworker is staff with no capabilities")
@@ -47,9 +52,10 @@ class CallerAccessResponseTest {
     }
 
     @Test
-    @DisplayName("the legacy admin is staff with the Team leader set, never ACCESS_GAZETTE or MANAGE_PROCESS_CONFIG")
+    @DisplayName("the legacy admin is staff with the Team leader set before management information, and never "
+        + "ACCESS_GAZETTE, MANAGE_PROCESS_CONFIG or VIEW_MANAGEMENT_INFORMATION")
     void legacyAdmin() {
-        assertThat(accessFor(Role.DEEDPOLL_ADMIN)).isEqualTo(new CallerAccessResponse(true, false, TEAM_LEADER));
+        assertThat(accessFor(Role.DEEDPOLL_ADMIN)).isEqualTo(new CallerAccessResponse(true, false, LEGACY_ADMIN));
     }
 
     @Test

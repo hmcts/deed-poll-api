@@ -141,7 +141,10 @@ class MasterRemindersTest extends AbstractPostgresContainerTest {
         // Plan F1, decision A-1: the reminder links to My referrals rather than listing each referral.
         List<String> keys = new ArrayList<>();
         sent.fieldNames().forEachRemaining(keys::add);
-        assertThat(keys).containsExactlyInAnyOrder("master_name", "referral_count", "my_referrals_link");
+        assertThat(keys).containsExactlyInAnyOrder("master_name", "referral_count", "my_referrals_link",
+                                                   "processing_window", "reminder_interval");
+        assertThat(sent.path("processing_window").asText()).isEqualTo("7 days");
+        assertThat(sent.path("reminder_interval").asText()).isEqualTo("48 hours");
         assertThat(sent.path("master_name").asText()).isEqualTo("Master Sullivan");
         assertThat(sent.path("referral_count").asText()).isEqualTo("1");
         assertThat(sent.path("my_referrals_link").asText())
