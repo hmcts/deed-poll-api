@@ -26,7 +26,8 @@ to `observe`.
 - `observe` counts every limited request and logs a line for each one `enforce` would refuse, but refuses nothing.
 - `enforce` answers those same requests with 429.
 
-The mode switches only the budgets. The in-flight upload cap, the daily email cap and the statement timeout ignore it,
+The mode switches only the budgets. The in-flight upload cap, the daily email cap and the two statement timeouts (the
+case list's and management information's) ignore it,
 because they protect the heap, the applicant and the database rather than anybody's throughput.
 
 ### Switching mode in one environment
@@ -48,7 +49,7 @@ about 3× the observed per-subject p99, then switch to `enforce` in AAT before a
 or window for one environment, use the same file: `RATE_LIMIT_<BUCKET>_LIMIT` and `RATE_LIMIT_<BUCKET>_WINDOW`, where
 `<BUCKET>` is `SEARCH`, `EMAIL_PREVIEW`, `EMAIL_SEND` or `UPLOAD` (for example `RATE_LIMIT_SEARCH_WINDOW: 1m`). The
 other three settings are `RATE_LIMIT_UPLOAD_IN_FLIGHT`, `EMAIL_MAX_PER_CASE_PER_TEMPLATE_PER_DAY` and
-`LIST_STATEMENT_TIMEOUT`. A value the properties refuse stops the pod at start-up, so a bad override shows as a failed
+`LIST_STATEMENT_TIMEOUT`, plus `MI_STATEMENT_TIMEOUT` (default `10s`) for the four management information reports. A value the properties refuse stops the pod at start-up, so a bad override shows as a failed
 rollout and never as a silently unlimited service.
 
 A mode change applies when the pod restarts. Counts survive the restart, because they live in Postgres, so a caller
@@ -103,7 +104,8 @@ string removed (the agent masks it), so traces cannot tell a search from an unfi
 
 The daily email cap logs `Case <id> has reached the daily cap for <template>, so nothing was enqueued` at INFO. A
 statement timeout appears as a failed `GET /caseworker/cases` request with a `QueryTimeoutException` or
-`canceling statement due to statement timeout` exception.
+`canceling statement due to statement timeout` exception. A management information timeout looks the same on a
+`GET /caseworker/management-information/…` request.
 
 ## Admin's next spec refresh
 

@@ -36,6 +36,8 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 35 operations 
                                   MANAGE_PROCESS_CONFIG; counted apart)
                                   and /caseworker/referral-queue (ALLOCATE_REFERRALS GET, and POST …/sends;
                                   counted apart)
+                                  and /caseworker/management-information (4 aggregate GETs,
+                                  VIEW_MANAGEMENT_INFORMATION; counted apart as MI_PATHS)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
                                   plus GET …/documents/{documentId}/preview (counted apart as PREVIEW_PATHS)
 api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case,
@@ -52,6 +54,8 @@ domain/settings                   the Delivery Manager's process settings (V40, 
 domain/masters                    the Masters list (V42) a Delivery Manager keeps, linked to IDAM by email on a
                                   judge's first judicial request (config/MasterLinking), and the Masters' sent and
                                   reminder emails with their ledger (V44) — NOT a port
+domain/mi                         the management information figures (K1 to K4) from the case's dates, read
+                                  by repository/ManagementInformationRepository's constant SQL — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
 domain/documents/preview          transient PDF renditions for the admin viewer, DOCX via Docmosis — NOT a port;
                                   domain/documents must not depend on it (PreviewBoundaryTest)
@@ -79,10 +83,10 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
 
 `caseworker-deedpoll-team-leader` grants OVERRIDE_PRIVACY, DELETE_NOTE, DELETE_WITNESS,
 MANAGE_SHARED_QUERIES, REPAIR_CCD and ALLOCATE_REFERRALS (the referral queue, sending to Masters and reassigning;
-plan F1). `caseworker-deedpoll-delivery-manager` inherits all six
-and alone grants ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG (the process settings, the bank holidays and the
+plan F1) and VIEW_MANAGEMENT_INFORMATION (the aggregate MI figures; plan 20261103-mi-dashboard).
+`caseworker-deedpoll-delivery-manager` inherits all seven and alone grants ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG (the process settings, the bank holidays and the
 Masters list's writes; any staff role reads the Masters list and the bank holidays). The deprecated
-`caseworker-deedpoll-admin` temporarily grants only the Team leader's six. Resolve capabilities from verified roles; the retained privacy boolean is derived.
+`caseworker-deedpoll-admin` temporarily grants only the Team leader's first six: never VIEW_MANAGEMENT_INFORMATION. Resolve capabilities from verified roles; the retained privacy boolean is derived.
 Every Gazette operation and the named `readyForPublication` worklist/count (including saved-query
 links) requires ACCESS_GAZETTE, with 403 before reads or side effects. Ordinary field conditions
 and case visibility remain unchanged. Neither new role grants judicial or system authority.
@@ -246,7 +250,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   (not `/`, `/me`, `security: []` overrides or an operation's own 403); admin's copied spec needs a refresh after it changes. `RATE_LIMIT_MODE` (`off`/`observe`/`enforce`, default `observe` in yaml and the
   chart) switches **only** the V37 budgets. **Three limits enforce from day one, whatever the mode:** the per-pod
   in-flight upload `Semaphore` (429, `Retry-After: 5`, released in `finally`), the per-case, per-template daily
-  email cap in `CaseEmailService`, and the case list's transaction-local statement timeout. (The preview conversion
+  email cap in `CaseEmailService`, and the case list's transaction-local statement timeout. (Management information's
+  own transaction-local statement timeout, `MiStatementTimeout`, `MI_STATEMENT_TIMEOUT`, default 10 s, is the same
+  kind of limit and also always on.) (The preview conversion
   permit and the preview workspace slot are a fourth always-enforced 429, `PREVIEW_BUSY`, outside `RateLimitBucket`
   and published by `OpenAPIDocumentPreviews`; previews have no V37 budget.) The email cap answers
   409 rather than 429, and **the replay check comes before the cap**. At the cap, `replayOrRefuse` asks for this
@@ -586,7 +592,7 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   transaction and never throws (one WARN, the exception class only). A pre-V43 claim keeps its subject and no Master,
   stays visible to its claimer, and `MasterService.linkIfListed` attaches it (`attachLegacyClaims`) and gives a newly
   linked Master the referrals sent while unlinked (`attachToLinkedMaster`), in the link's transaction. Prod starts on
-  F1, so nothing was migrated. See `docs/plans/20261030-f1-referral-queue-and-batch-send.md`.
+  F1, so nothing was migrated. See `docs/plans/completed/20261030-f1-referral-queue-and-batch-send.md`.
 - **The Masters list is the Delivery Manager's, and a Master is linked by email, once.** `deedpoll_master` (V42)
   holds a name, a lower-cased unique email and an available flag; there is no delete, because referrals and history
   refer to a Master, so one who leaves is made unavailable. `config/MasterLinking`, a `HandlerInterceptor` on
@@ -633,6 +639,19 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   re-read at send time too, counting only those still `Claimed` by that Master with no decision; none left is
   `Skipped`. The templates are not `EmailTemplate` members (`MasterEmailKind` carries their keys). See
   `docs/MASTER-EMAILS.md`.
+- **Management information is aggregate-only, and its periods are computed twice.** `ManagementInformationService.admit`
+  checks `VIEW_MANAGEMENT_INFORMATION` before `MiParameters.parse`, so a 403 never depends on the parameters. The SQL in
+  `repository/ManagementInformationRepository` is constant, binding `MiGranularity.field()` as `date_trunc`'s field,
+  and each operation reads in one read-only repeatable-read transaction, bounded first by `MiStatementTimeout`
+  (transaction-local, as the case list's; there is no rate limit on these reads, so never remove it). K2's decision is
+  the latest decided referral **on or after `dateReferred`**, falling back to `masterDateOfDecision` only when the case
+  has no decided referral at all: a re-referred case keeps its earlier decision, and pairing that with the new
+  `dateReferred` would report a pending referral as a negative interval. `MiGranularity.start`/`next` repeat that
+  truncation in Java so empty periods are still reported, and the service joins the database's rows to the Java
+  periods by start date: **if the two disagree, every period reads as zeros and nothing fails**, so change both
+  together with a period-edge test. No response may name a case or referral; the controller test refuses schema
+  properties that look like ids, references, names or text, which is why there is no read audit (decision D5 of
+  `docs/plans/completed/20261103-mi-dashboard.md`).
 - **Ownership is the token's IDAM subject, never a display name.** `claimedById`/`decidedById` (V14) are what
   `claim`, `requireHeldBy`, `visibleTo` and the personal list compare; `claimedBy`/`decidedBy` are attribution
   only, and neither id is published in a DTO, a note or a log. A null owner id belongs to nobody — no fallback
