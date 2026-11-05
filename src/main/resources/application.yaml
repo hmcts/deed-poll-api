@@ -323,6 +323,12 @@ deedpoll:
     # Uploads one pod admits at once, each up to 25 MB in memory. Refused with 429 and Retry-After: 5 in every mode,
     # `off` included, because it protects the heap rather than throughput.
     upload-in-flight: ${RATE_LIMIT_UPLOAD_IN_FLIGHT:4}
+  cases:
+    # Whether POST /caseworker/cases may create a case and allocate its reference (DeedPollService). Off in prod
+    # until the later migration phases (the chart sets CASE_CREATION_ENABLED): migrated cases keep their Power App
+    # references while the Power App goes on allocating from its own sequence, so a reference allocated here would
+    # very likely duplicate a real Power App case not yet migrated. Off answers 409 and writes nothing.
+    creation-enabled: ${CASE_CREATION_ENABLED:true}
   list:
     # The longest one statement of the case list read may run (CaseListStatementTimeout, abuse-limits plan). Set
     # transaction-locally, so no other query on the connection inherits it. Over it, the read fails as any failed

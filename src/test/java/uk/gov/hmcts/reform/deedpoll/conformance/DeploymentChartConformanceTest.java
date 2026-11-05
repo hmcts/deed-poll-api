@@ -182,6 +182,13 @@ class DeploymentChartConformanceTest {
     }
 
     @Test
+    @DisplayName("prod creates no cases until the later migration phases; every other environment still can")
+    void prodCreatesNoCases() throws IOException {
+        assertThat(environment()).containsEntry("CASE_CREATION_ENABLED",
+            "{{ if eq .Values.global.environment `prod` }}false{{ else }}true{{ end }}");
+    }
+
+    @Test
     @DisplayName("prod converts through docmosis.platform.hmcts.net; every other environment through its own host")
     void eachEnvironmentConvertsThroughItsOwnDocmosisHost() throws IOException {
         assertThat(environment()).containsEntry("DOCMOSIS_URL",

@@ -71,7 +71,7 @@ class GazettePermissionsTest {
         DeedPollRepository cases = mock(DeedPollRepository.class);
         ReferenceNumberService references = mock(ReferenceNumberService.class);
         DeedPollService service = new DeedPollService(cases, references, mock(AuditTrail.class),
-            mock(CaseListStatementTimeout.class));
+            mock(CaseListStatementTimeout.class), true);
         ListFilters.ListFilter filter = ListFilters.filterFor("readyForPublication");
         CaseQuery query = CaseQuery.parse(List.of("type:is:Adult"));
 

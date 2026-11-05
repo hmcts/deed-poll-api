@@ -519,6 +519,7 @@ does not link. [`docs/CCD-SMOKE.md`](docs/CCD-SMOKE.md) is the procedure for the
 | `IDAM_API_URL` | `http://localhost:5000` | IDAM's API, for the system user's password grant |
 | `IDAM_CLIENT_ID`, `IDAM_CLIENT_SECRET`, `IDAM_CLIENT_REDIRECT_URI` | empty | the OAuth client for that grant |
 | `DEED_POLL_SYSTEM_USERNAME`, `DEED_POLL_SYSTEM_PASSWORD` | empty | the system user; an empty one is refused |
+| `CASE_CREATION_ENABLED` | `true` (the chart sets `false` in prod) | whether `POST /caseworker/cases` creates a case and allocates its reference; off answers 409 and writes nothing, until migrated Power App references and this service's sequence can no longer collide |
 | `DEED_POLL_SYSTEM_TOKEN_MAX_AGE` | `PT30M` | the longest the system user's token is reused (it is refreshed a minute before IDAM's `expires_in` anyway); `PT0S` asks IDAM on every call |
 | `IDAM_S2S_AUTH_URL`, `DEED_POLL_API_S2S_SECRET`, `S2S_SERVICE_NAME` | `http://localhost:4502`, empty, `deed_poll_api` | outbound S2S, for calls to data-store |
 | `CCD_LINKING_LEASE`, `CCD_LINKING_SETTLE_AFTER`, `CCD_LINKING_MAX_ATTEMPTS`, `CCD_LINKING_RETRY_AFTER` | `PT5M`, `PT10M`, `3`, `PT5M` | how long a claim is held, how long an unknown outcome is waited on, how many refused tries, how long a refused try waits (times the tries so far) |

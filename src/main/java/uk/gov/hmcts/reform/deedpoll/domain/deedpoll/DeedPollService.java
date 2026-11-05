@@ -1,6 +1,8 @@
 package uk.gov.hmcts.reform.deedpoll.domain.deedpoll;
 
 import org.hibernate.Hibernate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -97,17 +99,33 @@ public class DeedPollService {
      */
     private static final Sort NEWEST_FIRST = order(CaseSort.NEWEST_FIRST);
 
+    /** The 409's sentence when case creation is switched off. Names the setting, never a case or a reference. */
+    public static final String CREATION_DISABLED =
+        "New cases cannot be created in this service yet. Create the case in the existing system.";
+
     private final DeedPollRepository deedPolls;
     private final ReferenceNumberService referenceNumbers;
     private final AuditTrail audit;
     private final CaseListStatementTimeout listTimeout;
+    private final boolean creationEnabled;
 
+    /**
+     * {@code creationEnabled} is {@code deedpoll.cases.creation-enabled} ({@code CASE_CREATION_ENABLED}): the chart
+     * turns it off in prod until the later migration phases. Cases migrated from the Power App keep their Power App
+     * references, and the Power App goes on allocating from its own sequence, so a reference this service allocated
+     * there would very likely duplicate a real Power App case that has not been migrated yet. The unique index
+     * protects only against rows already in this database, and raising the counter cannot help while the other
+     * sequence keeps moving. Steve's decision, 2026-11-05.
+     */
+    @Autowired
     public DeedPollService(DeedPollRepository deedPolls, ReferenceNumberService referenceNumbers,
-                           AuditTrail audit, CaseListStatementTimeout listTimeout) {
+                           AuditTrail audit, CaseListStatementTimeout listTimeout,
+                           @Value("${deedpoll.cases.creation-enabled:true}") boolean creationEnabled) {
         this.deedPolls = deedPolls;
         this.referenceNumbers = referenceNumbers;
         this.audit = audit;
         this.listTimeout = listTimeout;
+        this.creationEnabled = creationEnabled;
     }
 
     /** Creates a case as the service account, non-admin. */
@@ -122,6 +140,7 @@ public class DeedPollService {
      * <p>Per-type required fields are NOT enforced here: a case may be logged incrementally, so they are
      * surfaced through {@link #getCaseFieldRules} and {@link #validateCaseForSubmit} for the submit flow.
      *
+     * @throws ConflictError if case creation is switched off ({@code deedpoll.cases.creation-enabled})
      * @throws InvalidInputError if the dates contradict each other, or if there is no Date Received to
      *     derive the reference year from
      */
@@ -131,6 +150,11 @@ public class DeedPollService {
     }
 
     private DeedPollWithComputed create(DeedPollPatch dto, WriteContext ctx, AuditActor actor) {
+        // First, before the payload is read: a refused create allocates no reference, writes no row and records
+        // nothing, whatever it carried. See the constructor for why prod refuses.
+        if (!creationEnabled) {
+            throw new ConflictError(CREATION_DISABLED);
+        }
         DeedPollPatch data = dto.copy().coerceDates();
 
         // Create-time defaults ported from the workflows (minor gives marital status Single;
