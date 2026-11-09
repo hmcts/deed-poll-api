@@ -161,6 +161,18 @@ Task 4 notes (2026-11-09, build exit 0 with the no-checkstyle init script, `chec
   Decision 5 that Task 1's notes list, and Task 3's three plan records (`20261014-am-role-source.md`,
   `20261014-me-caller-access.md` and `gazette-release-review.md`). Nothing else is in it.
 
+Addendum (c5, after the run, 2026-11-09): the review-fix commits after Task 4 changed six more files, so the branch
+changes 31, not the 25 counted above. They are:
+- `CLAUDE.md`, `README.md` and `docs/RESUME.md`: wording that still said non-prod reports, or the default is report;
+- `CallerAccessResponse.java`: **Javadoc only**, the report-mode sentence reworded as a rollback; no code change;
+- `src/cftlibTest/.../DocumentCdamCftlibTest.java` and `DocumentPreviewCftlibTest.java`: the gate now refuses the
+  unmapped user and the judge on `/caseworker/**` routes.
+
+The external-only rerun's review found the second change dropped the only test of CCD's own read-permission refusal
+for a non-staff user (the persistence gate behind the staff gate). `anUnmappedUserIsRefusedByTheStaffGateWithoutCallingTheStore`
+now also calls CDAM directly with that user's token and asserts the old 502, with metadata read and no binary served,
+so that refusal stays proven. `cftlibTest` is local only (not in `build` or Jenkins); see the PR for its run.
+
 ## Deliberately not in this plan
 
 - Deleting report mode (plan 01 Task 12, about two weeks after this is live in AAT with no rollback).

@@ -224,6 +224,18 @@ class DocumentCdamCftlibTest extends CftlibTest {
         assertThat(denied.statusCode()).as(denied.body()).isEqualTo(403);
         assertThat(denied.body()).contains(StaffArea.CASEWORKER.refusal());
         assertThat(DM.server().getAllServeEvents()).isEmpty();
+
+        // The staff gate is not the only refusal, and this keeps the one behind it proven: asked directly with the
+        // same user's token, CDAM still refuses through CCD's read-permission check. The persistence gate returns
+        // 403, data-store wraps that as 500, and CDAM returns 502, having read the metadata but never the binary.
+        HttpResponse<String> direct = http.send(HttpRequest.newBuilder(
+            URI.create("http://localhost:4455/cases/documents/" + remoteId + "/binary"))
+            .header("Authorization", idam.getAccessToken(CftlibConfig.UNMAPPED_USER, "password"))
+            .header("ServiceAuthorization", serviceTokens.generate()).GET().build(),
+            HttpResponse.BodyHandlers.ofString());
+        assertThat(direct.statusCode()).as(direct.body()).isEqualTo(502);
+        DM.server().verify(getRequestedFor(urlPathEqualTo("/documents/" + remoteId)));
+        DM.server().verify(0, getRequestedFor(urlPathEqualTo("/documents/" + remoteId + "/binary")));
     }
 
     @Test
