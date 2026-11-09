@@ -118,14 +118,23 @@ Task 1 notes, tests fixed under Decision 5 (full build exit 0, checkstyle.sh OK)
 
 ### Task 3: Say so in the release notes
 
-- [ ] `docs/STAFF-ROLE-RELEASE.md`: after the paragraph ending "Gazette capability enforcement does not depend on
+- [x] `docs/STAFF-ROLE-RELEASE.md`: after the paragraph ending "Gazette capability enforcement does not depend on
       that mode.", add one or two sentences: since 2026-11-09 the gate enforces by default in every environment
       (chart 0.0.34); `STAFF_GATE_MODE=report` is a rollback setting only, set by a flux PR, and plan 01 Task 12
       removes it.
-- [ ] `git grep -n "STAFF_GATE_MODE\|staff-gate" -- ':!build'` and read every hit: none may still say that a non-prod
+- [x] `git grep -n "STAFF_GATE_MODE\|staff-gate" -- ':!build'` and read every hit: none may still say that a non-prod
       environment reports, or that report is the default. Fix any that does, in the same words as above.
-- [ ] Run the validation commands **in the foreground**.
-- [ ] Mark completed
+- [x] Run the validation commands **in the foreground**.
+- [x] Mark completed
+
+Task 3 notes (build exit 0, up to date since only docs changed; checkstyle.sh OK):
+
+- Three dated plan records still said report was the default, and each now says it was then, in the words above:
+  `docs/plans/20261014-am-role-source.md`, `docs/plans/20261014-me-caller-access.md` and
+  `docs/plans/gazette-release-review.md`. Task 4's diff therefore also names these three.
+- Left as they are: `docs/plans/completed/` (archived records), the `SecurityConfiguration` javadoc ("reports before
+  it enforces", Decision 4 forbids touching it, and it names no default), and README's "configured mode" sentence,
+  which is true in either mode.
 
 ### Task 4: Full validation, counted
 

@@ -199,7 +199,8 @@ is needed; tests alongside the converter's existing tests, or a new `IdamAuthent
 - the WARN names the first 12 hex digits of the subject's SHA-256 and RAS's status (or `none`), never the cause,
   because a client exception's message carries the request URL and the URL carries the subject
 - S2S is minted through an `ObjectProvider`, so the lazy generator is never created while the switch is off
-- the HTTP test sets `deedpoll.security.staff-gate=enforce`, because the default is `report`
+- the HTTP test sets `deedpoll.security.staff-gate=enforce`, because the default was then `report` (since 2026-11-09 the gate enforces by default in every environment,
+  chart 0.0.34; `STAFF_GATE_MODE=report` is a rollback setting only, set by a flux PR, and plan 01 Task 12 removes it)
 - first selector (with `*AmRoles*` added): 117 tests, 0 failures
 - second selector: 585 tests, 0 failures
 - `./gradlew build` with the Checkstyle tasks excluded: 4,149 unit and 19 integration tests, 0 failures, 0 skipped

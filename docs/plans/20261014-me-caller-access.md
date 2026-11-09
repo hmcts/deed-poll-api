@@ -155,7 +155,9 @@ controller test).
   - no token gets 401
   - the response has exactly the keys `staff`, `judicial` and `capabilities`
   - `Cache-Control` contains `no-store`
-- [x] With `deedpoll.security.staff-gate=report` (the default): a roleless caller gets `staff: false` from `/me`, and
+- [x] With `deedpoll.security.staff-gate=report` (then the default; since 2026-11-09 the gate
+      enforces by default in every environment, chart 0.0.34, and `report` is a rollback setting only, set by a flux
+      PR, which plan 01 Task 12 removes): a roleless caller gets `staff: false` from `/me`, and
       the same caller's `GET /caseworker/no-such-route` is 404, so the gate admitted them. Assert both, so decision 3
       is pinned.
 - [x] With `deedpoll.roles.am.enabled=true`, an IDAM-only `caseworker-deedpoll` caller and WireMock RAS:

@@ -103,7 +103,9 @@ pins it end to end, so a change to either side is a decision, not a drift.
 **F2, by design, temporary: the staff gate's report mode logs the subject.**
 `StaffGate` logs `subject=` for a caller outside the staff roles, before the Gazette capability check
 refuses them with 403. This is OWASP plan 01 Task 4's deliberate one-release report mode
-(`STAFF_GATE_MODE`, default `report`). Task 5 switches to `enforce` and Task 12 removes it. It is
+(`STAFF_GATE_MODE`, then default `report`). Task 5 switched to `enforce`: since 2026-11-09 the gate enforces by
+default in every environment (chart 0.0.34); `STAFF_GATE_MODE=report` is a rollback setting only, set by a flux PR,
+and plan 01 Task 12 removes it. It is
 not Gazette-specific, but **Gazette must not be enabled anywhere the gate is still in report mode.**
 
 F1 added one test and no production code. Final, 14 October 2026, rebased on `22f3d7f` (master with

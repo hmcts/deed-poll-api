@@ -39,7 +39,9 @@ reservation, idempotency, send and audit evidence. Ordinary field queries remain
 The staff-gate feature merged to master has been integrated before PR publication. Both new
 roles are admitted independently to CASEWORKER in report and enforce modes; neither gains
 judicial membership. The configured report/enforce mode is preserved, and Gazette capability
-enforcement does not depend on that mode.
+enforcement does not depend on that mode. Since 2026-11-09 the gate enforces by default in every
+environment (chart 0.0.34); `STAFF_GATE_MODE=report` is a rollback setting only, set by a flux PR,
+and plan 01 Task 12 removes it.
 
 ## Release inputs and provenance
 
