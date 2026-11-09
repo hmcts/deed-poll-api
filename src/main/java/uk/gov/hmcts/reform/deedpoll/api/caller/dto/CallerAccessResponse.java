@@ -21,9 +21,9 @@ import java.util.Set;
  * drift: the flags are {@link StaffArea#admits}, which {@code StaffGate} and the judicial rule use, and the
  * capabilities are {@link RoleCapabilities#forRoles}, which {@link CurrentUser#can} uses.
  *
- * <p><strong>The flags reflect roles, not the gate's mode.</strong> In {@code report} mode a caller with no
- * deed-poll role still reaches {@code /caseworker/**}, and this still says {@code staff: false}. An app that
- * rendered from the mode would be wrong the day {@code enforce} arrives; this way it errs on the strict side.
+ * <p><strong>The flags reflect roles, not the gate's mode.</strong> Under a {@code report} rollback a caller
+ * with no deed-poll role still reaches {@code /caseworker/**}, and this still says {@code staff: false}. An app
+ * that rendered from the mode would be wrong whenever the mode changed; this way it errs on the strict side.
  *
  * <p><strong>No identity, on purpose.</strong> No subject, name, raw role names or AM assignments, and nothing
  * about whether a role came from IDAM or AM. The admin app has identity from IDAM already, and a second route

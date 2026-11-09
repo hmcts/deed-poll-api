@@ -464,9 +464,11 @@ verified roles to explicit capabilities:
 
 Each new role works alone. Neither grants judicial or system access. Private saved queries remain
 owner-only; shared-query management does not bypass that rule. The privacy adapter derives its flag
-from OVERRIDE_PRIVACY. The transport on this baseline uses `anyRequest().authenticated()`; domain
-capability gates enforce independently. The separate staff-gate integration must admit both new roles
-to casework while preserving its configured mode and judicial boundary.
+from OVERRIDE_PRIVACY. `/caseworker/**` requires one of the five staff roles: `StaffGate` answers 403 to any
+other authenticated caller, a judge included, before any capability check. `STAFF_GATE_MODE` defaults to
+`enforce` in every environment (chart 0.0.34), and the chart must not set it; `report`, which logs
+`staff-gate report` and lets the caller through, is a rollback setting only, set per environment by a flux PR.
+Domain capability gates then enforce independently.
 
 All eight Gazette HTTP operations and `GET /caseworker/cases?filter=readyForPublication`, including
 its count and saved-query links, require `caseworker-deedpoll-delivery-manager`. Other authenticated

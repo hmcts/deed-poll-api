@@ -36,7 +36,7 @@ Nothing about who may do what changes here. `Capability`, `RoleCapabilities`, `R
 - `config/SecurityConfiguration.securityFilterChain`:
   - `PUBLIC_PATHS` are `permitAll`
   - `/judicial/**` is `hasAnyAuthority`
-  - `/caseworker/**` goes through `StaffGate` (default mode `report`)
+  - `/caseworker/**` goes through `StaffGate` (default mode then `report`; since 2026-11-09 it enforces by default, chart 0.0.34)
   - then `anyRequest().authenticated()`
 - `config/StaffAccessRulesTest.everyRouteIsInAStaffArea` fails for any mapped route outside a staff area apart from
   `/`, with the message "add it to StaffArea or the allowlist". That's the OWASP H1 hardening. `/me` must go through

@@ -24,6 +24,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -80,7 +81,8 @@ class StaffGateDefaultModeTest {
     void enforcesByDefault() throws Exception {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Someone Else", List.of("caseworker-divorce"));
 
-        mockMvc.perform(get("/caseworker/no-such-route").headers(bearer())).andExpect(status().isForbidden());
+        mockMvc.perform(get("/caseworker/no-such-route").headers(bearer())).andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.error").value(StaffArea.CASEWORKER.refusal()));
 
         assertThat(logs.list).isEmpty();
     }

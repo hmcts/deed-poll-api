@@ -28,6 +28,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdCreationAttempts;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingSweep;
 import uk.gov.hmcts.reform.deedpoll.ccd.SystemUserTokens;
+import uk.gov.hmcts.reform.deedpoll.config.StaffArea;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
 import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
@@ -224,13 +225,14 @@ class DocumentPreviewCftlibTest extends CftlibTest {
             .isEqualTo(404);
         assertThat(DM.server().getAllServeEvents()).isEmpty();
 
-        // As for the download: our persistence gate's 403 reaches the caller as CDAM's 502, never a preview error.
+        // As for the download: the staff gate refuses a caller with no deed poll role before any read or audit.
         HttpResponse<byte[]> unmapped = preview(caseworkerPreview(recordId, docx), CftlibConfig.UNMAPPED_USER);
-        assertThat(unmapped.statusCode()).isEqualTo(502);
-        assertThat(new String(unmapped.body(), StandardCharsets.UTF_8)).doesNotContain("PREVIEW_");
-        DM.server().verify(0, getRequestedFor(urlPathEqualTo(binaryPath(docx))));
+        assertThat(unmapped.statusCode()).isEqualTo(403);
+        assertThat(new String(unmapped.body(), StandardCharsets.UTF_8))
+            .contains(StaffArea.CASEWORKER.refusal()).doesNotContain("PREVIEW_");
+        assertThat(DM.server().getAllServeEvents()).isEmpty();
         assertThat(CONVERTER.getAllServeEvents()).isEmpty();
-        assertThat(previewsRecorded(docx)).isEqualTo(recorded + 1);
+        assertThat(previewsRecorded(docx)).isEqualTo(recorded);
     }
 
     @Test
