@@ -4,7 +4,7 @@
 `STAFF_GATE_MODE` defaults to `enforce` and the chart no longer sets it (0.0.34), so every environment refuses a
 caller with no staff role on `/caseworker/**` with 403. Rollback is a flux PR setting `STAFF_GATE_MODE: report`.
 Next: deploy, watch AAT, then plan 01 Task 12 deletes report mode. See
-[the plan](plans/20261109-h1-staff-gate-enforce-default.md).
+[the plan](plans/completed/20261109-h1-staff-gate-enforce-default.md).
 
 **Plan 20261103-mi-dashboard, management information, 2026-11-03:** on `feat/mi-dashboard`, local commits only,
 not pushed. `VIEW_MANAGEMENT_INFORMATION` (Team leader and Delivery Manager, never the legacy admin) gates four
