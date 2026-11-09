@@ -69,12 +69,12 @@ public final class StubIdam {
         server.stop();
     }
 
-    /** Discovery, the key set and a userinfo response for a caseworker who is not an admin. */
+    /** Discovery, the key set and a userinfo response for a deed poll caseworker who is not an admin. */
     public void stubDefaults() {
         server.resetAll();
         stubDiscovery(issuerUrl());
         server.stubFor(get(urlPathEqualTo("/o/jwks")).willReturn(okJson(jwks())));
-        stubUserInfo(SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+        stubUserInfo(SUBJECT, "A Caseworker", List.of("caseworker-deedpoll"));
     }
 
     public void stubDiscovery(String advertisedIssuer) {

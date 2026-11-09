@@ -92,6 +92,8 @@ class CallerAccessSecurityTest extends AbstractPostgresContainerTest {
         registry.add("deedpoll.roles.am.enabled", () -> "true");
         registry.add("deedpoll.roles.am.url", RAS::baseUrl);
         registry.add("deedpoll.roles.am.gazette-skill", () -> SKILL);
+        // Pinned, because report is no longer the default: flagsIgnoreTheReportMode needs the gate admitting.
+        registry.add("deedpoll.security.staff-gate", () -> "report");
     }
 
     @Autowired

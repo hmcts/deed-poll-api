@@ -13,6 +13,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -21,6 +22,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.config.StaffArea;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
@@ -423,7 +425,7 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
         void amendsTheText() throws Exception {
             String caseId = newCase();
             String noteId = addNote(caseId, "Called the applicant");
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(patch("/caseworker/cases/" + caseId + "/notes/" + noteId), "{\"note\":\"Called twice\"}")
                 .andExpect(status().isOk())
@@ -486,7 +488,7 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
         void acceptsAnEmptyPatch() throws Exception {
             String caseId = newCase();
             String noteId = addNote(caseId, "Called the applicant");
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(patch("/caseworker/cases/" + caseId + "/notes/" + noteId), "{}")
                 .andExpect(status().isOk())
@@ -628,7 +630,7 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
                 // remove it. Disguising the refusal as an absence would send them to look for a note they can
                 // see on the page.
                 .andExpect(jsonPath("$.error")
-                    .value("Requires capability: DELETE_NOTE"))
+                    .value(refusalFor(role)))
                 // The shape the published 403 declares: JSON, the error sentence and nothing else -- no trace,
                 // no exception class, no message from inside the framework.
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
@@ -661,7 +663,7 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
             // Paired with notFoundForAMissingNote: the same URL is a 404 for an Administrator and a 403 for
             // everybody else. Refusing second would make the status code an existence oracle over notes the
             // caller may not touch.
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(delete("/caseworker/cases/" + newCase() + "/notes/" + UNKNOWN_ID))
                 .andExpect(status().isForbidden());
@@ -675,7 +677,7 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
             // than trusted to the PATCH group where nothing says the caller is not an admin.
             String caseId = newCase();
             String noteId = addNote(caseId, "Called the applicant");
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(patch("/caseworker/cases/" + caseId + "/notes/" + noteId), "{\"note\":\"Called twice\"}")
                 .andExpect(status().isOk());
@@ -743,5 +745,15 @@ class CaseworkerNoteControllerTest extends AbstractPostgresContainerTest {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(IDAM.accessToken());
         return mockMvc.perform(request.headers(headers).contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    /**
+     * A judge is outside the caseworker staff area, so the {@code /caseworker/**} gate refuses them before the
+     * capability check is reached; a caseworker reaches it and is refused the capability.
+     */
+    private static String refusalFor(Role role) {
+        return StaffArea.CASEWORKER.admits(List.of(new SimpleGrantedAuthority(role.claimValue())))
+            ? "Requires capability: DELETE_NOTE"
+            : StaffArea.CASEWORKER.refusal();
     }
 }

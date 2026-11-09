@@ -16,6 +16,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -24,6 +25,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.config.StaffArea;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
@@ -773,7 +775,7 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
                 // remove it. Disguising the refusal as an absence would send them to look for a witness they
                 // can see on the page.
                 .andExpect(jsonPath("$.error")
-                    .value("Requires capability: DELETE_WITNESS"));
+                    .value(refusalFor(role)));
 
             // The half that matters: the 403 alone would also pass against a handler that refused after
             // deleting, and that is the failure nothing downstream could report or undo.
@@ -787,7 +789,7 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
             // the two lines in removeWitness and nothing complains. Paired with the 404 below: the same URL is
             // a 404 for an Administrator and a 403 for everybody else, so the status code is not an existence
             // oracle over witnesses the caller may not touch.
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(delete("/caseworker/cases/" + newCase() + "/witnesses/" + UNKNOWN_ID))
                 .andExpect(status().isForbidden());
@@ -837,9 +839,9 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
     class NotGated {
 
         @Test
-        @DisplayName("a caseworker with no deed-poll role at all may add a witness")
+        @DisplayName("a plain caseworker, with no capability beyond membership, may add a witness")
         void basicUserMayCreate() throws Exception {
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(post("/caseworker/cases/" + newCase() + "/witnesses"), VALID_BODY)
                 .andExpect(status().isCreated());
@@ -848,11 +850,11 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("a caseworker with no deed-poll role at all may amend one")
+        @DisplayName("a plain caseworker, with no capability beyond membership, may amend one")
         void basicUserMayAmend() throws Exception {
             String caseId = newCase();
             String witnessId = addWitness(caseId, "Wilma Witness");
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(patch("/caseworker/cases/" + caseId + "/witnesses/" + witnessId),
                 "{\"witnessName\":\"Walter Witness\"}")
@@ -920,5 +922,15 @@ class CaseworkerWitnessControllerTest extends AbstractPostgresContainerTest {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(IDAM.accessToken());
         return mockMvc.perform(request.headers(headers).contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    /**
+     * A judge is outside the caseworker staff area, so the {@code /caseworker/**} gate refuses them before the
+     * capability check is reached; a caseworker reaches it and is refused the capability.
+     */
+    private static String refusalFor(Role role) {
+        return StaffArea.CASEWORKER.admits(List.of(new SimpleGrantedAuthority(role.claimValue())))
+            ? "Requires capability: DELETE_WITNESS"
+            : StaffArea.CASEWORKER.refusal();
     }
 }

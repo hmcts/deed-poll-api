@@ -387,7 +387,7 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
         @DisplayName("applies the fields it mentions and re-stamps the author")
         void appliesTheFieldsItMentions() throws Exception {
             DeedPoll record = newCase(Map.of("newForename", "Ada", "oldForename", "Alan"));
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(patch("/caseworker/cases/" + record.getId()), json(Map.of(
                 "newForename", quoted("Bea"))))
@@ -535,7 +535,7 @@ class CaseworkerCaseControllerTest extends AbstractPostgresContainerTest {
         @DisplayName("accepts an empty patch, which re-stamps the author rather than doing nothing")
         void acceptsAnEmptyPatch() throws Exception {
             DeedPoll record = newCase(Map.of("newForename", "Ada"));
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(patch("/caseworker/cases/" + record.getId()), "{}")
                 .andExpect(status().isOk())

@@ -65,20 +65,44 @@ export TESTCONTAINERS_RYUK_DISABLED=true JAVA_TOOL_OPTIONS=-XX:UseSVE=0
 
 ### Task 1: Make `enforce` the default, test first
 
-- [ ] Failing test first: in `src/test/java/uk/gov/hmcts/reform/deedpoll/config/StaffGateReportModeTest.java`, pin
+- [x] Failing test first: in `src/test/java/uk/gov/hmcts/reform/deedpoll/config/StaffGateReportModeTest.java`, pin
       report mode explicitly (`@SpringBootTest(properties = "deedpoll.security.staff-gate=report")`, or the
       class's existing property mechanism), and rename `reportsByDefault` to say it reports **when configured to**.
       Its assertions stay as they are.
-- [ ] Failing test first: a new container-free test, `StaffGateDefaultModeTest` in the same package, built like
+- [x] Failing test first: a new container-free test, `StaffGateDefaultModeTest` in the same package, built like
       `StaffGateReportModeTest` (StubIdam, MockMvc) but with **no** `staff-gate` property: a role-less token
       (`caseworker-divorce`) on `GET /caseworker/no-such-route` gets **403**, and `StaffGate` logs nothing. A staff
       token (`caseworker-deedpoll`) on the same path gets 404. Run it and see it fail on master's default.
-- [ ] `application.yaml`: `staff-gate: ${STAFF_GATE_MODE:enforce}`. Rewrite the comment above it: `enforce` is the
+- [x] `application.yaml`: `staff-gate: ${STAFF_GATE_MODE:enforce}`. Rewrite the comment above it: `enforce` is the
       default in every environment (OWASP plan 01 Task 5, 2026-11-09); `report` is a rollback setting only; Task 12
       removes it. Keep the existing first two comment lines' meaning.
-- [ ] Run the validation commands **in the foreground**. Fix any test failing because a role-less token now gets 403,
+- [x] Run the validation commands **in the foreground**. Fix any test failing because a role-less token now gets 403,
       under Decision 5 only. List each one you fixed, and how, in this task's notes.
-- [ ] Mark completed
+- [x] Mark completed
+
+Task 1 notes, tests fixed under Decision 5 (full build exit 0, checkstyle.sh OK):
+
+- `auth/StubIdam.stubDefaults`: the shared default userinfo held `caseworker-civil`, which is not staff, so about
+  370 caseworker-surface tests got 403. It now holds `caseworker-deedpoll` (a plain caseworker, as its javadoc said).
+- `caseworker-civil` meaning "an ordinary caseworker" became `caseworker-deedpoll`: `CaseworkerCaseControllerTest`
+  (2 PATCH tests), `CaseworkerNoteControllerTest` (PATCH tests, `refusesBeforeResolving`, `doesNotGateTheAmend`),
+  `CaseworkerWitnessControllerTest` (`refusesBeforeResolving`, both `NotGated` tests, renamed "a plain caseworker,
+  with no capability beyond membership"), `CaseworkerReferralControllerTest` (withdrawal and 2 closure tests),
+  `CaseworkerSavedQueryControllerTest` (`OWNER`/`OTHER`, one display name), `CaseworkerCcdAttemptControllerTest`
+  (`caseworkerRefused`), `ReadAuditTest` (2), `JudicialDocumentDownloadTest.asCaseworker`,
+  `ReferralLifecycleTimelineTest.asCaseworker`. The two `refusesBeforeResolving` tests still passed with 403, but
+  only because the gate refused them, so they no longer pinned the capability check's ordering. Fixed for intent.
+- A judge or outsider now meets the gate's 403 before the capability's, so the asserted sentence is the gate's
+  (`StaffArea.CASEWORKER.refusal()`): `CaseworkerNoteControllerTest`/`CaseworkerWitnessControllerTest`
+  `refusesACaseworkerWithoutTheRole[JUDICIAL]` (a `refusalFor(role)` helper), `CaseworkerCcdAttemptControllerTest.judgeRefused`,
+  and `CaseworkerGazetteControllerTest.refusesAuthenticatedNonDeliveryManagers`, split into the staff case
+  (`ACCESS_GAZETTE`) and `refusesAuthenticatedNonStaff` (civil, judicial).
+- `GazettePreviewApiTest.savedReadyQueryCannotBypass…`: runs over `refusedStaffClaims()`, the refused claims the
+  staff area admits. Non-staff claims cannot read the saved query or the case list at all.
+- `CcdLinkingScenariosTest`: its one userinfo serves the system user and the case-list caller, so it adds
+  `caseworker-deedpoll`.
+- `CallerAccessSecurityTest`: `flagsIgnoreTheReportMode` is about report mode, so the class pins
+  `deedpoll.security.staff-gate=report`.
 
 ### Task 2: Remove the chart's per-environment mode, and pin that
 

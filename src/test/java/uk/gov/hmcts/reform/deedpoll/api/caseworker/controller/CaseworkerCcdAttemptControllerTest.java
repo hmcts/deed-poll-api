@@ -22,6 +22,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdCreationAttempts;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.config.StaffArea;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
@@ -145,9 +146,9 @@ class CaseworkerCcdAttemptControllerTest extends AbstractPostgresContainerTest {
         @DisplayName("a plain caseworker is refused all three with a 403 naming the role, and nothing moves")
         void caseworkerRefused() throws Exception {
             String id = needingRepair(false).getId().toString();
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "Ada Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Ada Caseworker", List.of("caseworker-deedpoll"));
 
-            refusedAllThree(id);
+            refusedAllThree(id, "REPAIR_CCD");
         }
 
         @Test
@@ -156,13 +157,14 @@ class CaseworkerCcdAttemptControllerTest extends AbstractPostgresContainerTest {
             String id = needingRepair(false).getId().toString();
             IDAM.stubUserInfo(StubIdam.SUBJECT, "District Judge Bell", List.of(Role.JUDICIAL.claimValue()));
 
-            refusedAllThree(id);
+            // Outside the caseworker staff area, so the /caseworker/** gate refuses before REPAIR_CCD is asked.
+            refusedAllThree(id, StaffArea.CASEWORKER.refusal());
         }
 
-        private void refusedAllThree(String id) throws Exception {
+        private void refusedAllThree(String id, String refusal) throws Exception {
             authorised(get(ATTEMPTS))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error").value(containsString("REPAIR_CCD")));
+                .andExpect(jsonPath("$.error").value(containsString(refusal)));
             authorised(post(ATTEMPTS + "/" + id + "/reconciliation")).andExpect(status().isForbidden());
             authorised(post(ATTEMPTS + "/" + id + "/retry")).andExpect(status().isForbidden());
 

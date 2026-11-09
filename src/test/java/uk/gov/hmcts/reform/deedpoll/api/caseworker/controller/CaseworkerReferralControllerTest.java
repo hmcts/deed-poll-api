@@ -559,7 +559,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
         void withdrawsTheReferral() throws Exception {
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/withdrawal"))
                 // 200 with the row rather than 204: it survives the transition, and its new state is the answer a
@@ -759,7 +759,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
             decide(caseId, referralId, MasterDecision.Approved, "Approved. Publish in the Gazette.", false);
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
                 // 200 with the row rather than 204, as withdrawal answers: it survives the transition, and the
@@ -893,7 +893,7 @@ class CaseworkerReferralControllerTest extends AbstractPostgresContainerTest {
             String caseId = newCase();
             String referralId = raise(caseId, ONE_REASON);
             decide(caseId, referralId, MasterDecision.Approved, "Approved. Publish in the Gazette.", false);
-            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-civil"));
+            IDAM.stubUserInfo(StubIdam.SUBJECT, "Another Caseworker", List.of("caseworker-deedpoll"));
 
             authorised(post("/caseworker/cases/" + caseId + "/referrals/" + referralId + "/closure"))
                 .andExpect(status().isOk());

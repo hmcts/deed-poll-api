@@ -81,8 +81,8 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
     /** An id of the right shape that nothing was ever stored under. */
     private static final String UNKNOWN_ID = "11111111-1111-1111-1111-111111111111";
 
-    private static final Caller OWNER = new Caller("owner-1", "Olive Owner", List.of("caseworker-civil"));
-    private static final Caller OTHER = new Caller("other-2", "Otto Other", List.of("caseworker-civil"));
+    private static final Caller OWNER = new Caller("owner-1", "Olive Owner", List.of("caseworker-deedpoll"));
+    private static final Caller OTHER = new Caller("other-2", "Otto Other", List.of("caseworker-deedpoll"));
     private static final Caller ADMIN =
         new Caller("admin-3", "An Admin", List.of(Role.DEEDPOLL_ADMIN.claimValue()));
 
@@ -422,7 +422,7 @@ class CaseworkerSavedQueryControllerTest extends AbstractPostgresContainerTest {
         }
 
         @Test
-        @DisplayName("a caseworker with no deed-poll role may save one")
+        @DisplayName("a plain caseworker, with no capability beyond membership, may save one")
         void anyCaseworkerMaySaveOne() throws Exception {
             // Not role-gated, and asserted with the roles stated in so many words: gating this because the
             // note delete is gated would remove a capability every caseworker is meant to have.

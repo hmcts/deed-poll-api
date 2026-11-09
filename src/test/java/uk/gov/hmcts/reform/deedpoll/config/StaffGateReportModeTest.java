@@ -27,13 +27,14 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The shipped default, with no override: the caseworker gate reports and lets through, the judicial rule refuses.
+ * Report mode, configured explicitly: the caseworker gate reports and lets through, the judicial rule refuses.
  *
  * <p>Separate from {@link StaffAccessRulesTest} because the mode is bound once, when the chain is built, so the two
- * settings need two contexts. This class is what proves {@code application.yaml}'s default is still {@code report};
- * the plan's Task 5 changes that default, and this class with it.
+ * settings need two contexts. {@code report} is no longer the default (OWASP plan 01 Task 5, 2026-11-09; see
+ * {@link StaffGateDefaultModeTest}); it is a rollback setting only, until plan 01 Task 12 removes it, and this class
+ * with it.
  */
-@SpringBootTest
+@SpringBootTest(properties = "deedpoll.security.staff-gate=report")
 @AutoConfigureMockMvc
 @ActiveProfiles({"config-gen", "test"})
 class StaffGateReportModeTest {
@@ -76,8 +77,8 @@ class StaffGateReportModeTest {
     }
 
     @Test
-    @DisplayName("lets a role-less caller onto the caseworker surface by default, and logs who they are")
-    void reportsByDefault() throws Exception {
+    @DisplayName("lets a role-less caller onto the caseworker surface when configured to report, and logs who they are")
+    void reportsWhenConfiguredTo() throws Exception {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Someone Else", List.of("caseworker-divorce"));
 
         mockMvc.perform(get("/caseworker/no-such-route").headers(bearer())).andExpect(status().isNotFound());

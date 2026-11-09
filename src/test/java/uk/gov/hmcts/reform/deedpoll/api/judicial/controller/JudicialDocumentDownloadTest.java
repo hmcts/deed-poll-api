@@ -512,7 +512,7 @@ class JudicialDocumentDownloadTest extends AbstractPostgresContainerTest {
 
     private static void asCaseworker() {
         tokenSubject = StubIdam.SUBJECT;
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Ada Caseworker", List.of("caseworker-civil"));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Ada Caseworker", List.of("caseworker-deedpoll"));
     }
 
     private ResultActions authorised(MockHttpServletRequestBuilder request) throws Exception {

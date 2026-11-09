@@ -176,6 +176,8 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
 
     private void stubs() {
         IDAM.stubDefaults();
+        // One userinfo serves the system user's callbacks and the staff caller whose case list request runs the
+        // sweep, so it holds caseworker-deedpoll too: the /caseworker/** gate enforces by default.
         IDAM.stubUserInfoBody("""
             {
               "sub": "%s",
@@ -183,7 +185,7 @@ class CcdLinkingScenariosTest extends AbstractPostgresContainerTest {
               "name": "Deed Poll System",
               "given_name": "Deed Poll",
               "family_name": "System",
-              "roles": ["caseworker", "%s"]
+              "roles": ["caseworker", "caseworker-deedpoll", "%s"]
             }
             """.formatted(StubIdam.SUBJECT, SYSTEM_ROLE));
         IDAM.stubPasswordGrant();

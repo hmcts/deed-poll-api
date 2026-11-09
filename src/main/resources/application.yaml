@@ -284,9 +284,9 @@ deedpoll:
     # The /caseworker/** membership gate (SecurityConfiguration, StaffGate).
     # - `report` logs "staff-gate report subject=..." for a caller outside StaffArea.CASEWORKER's roles
     #   and lets them through. Any other value, or none, refuses them with a 403.
-    # - `report` is the default for one release only, while the role is registered and assigned (OWASP plan 01,
-    #   Task 4). Task 5 changes it to `enforce`, and Task 12 removes report mode.
-    staff-gate: ${STAFF_GATE_MODE:report}
+    # - `enforce` is the default in every environment (OWASP plan 01 Task 5, 2026-11-09), and the chart sets
+    #   nothing. `report` is a rollback setting only, set per environment by a flux PR; Task 12 removes it.
+    staff-gate: ${STAFF_GATE_MODE:enforce}
   roles:
     # A second source of the caller's roles: their organisational role assignments in AM (RoleAssignmentProperties).
     # Off until CRD/JRD profiles exist and RAS admits deed_poll_api's S2S name. A RAS failure falls back to the IDAM
