@@ -106,15 +106,15 @@ Task 1 notes, tests fixed under Decision 5 (full build exit 0, checkstyle.sh OK)
 
 ### Task 2: Remove the chart's per-environment mode, and pin that
 
-- [ ] Failing test first: in `src/test/java/uk/gov/hmcts/reform/deedpoll/conformance/DeploymentChartConformanceTest.java`,
+- [x] Failing test first: in `src/test/java/uk/gov/hmcts/reform/deedpoll/conformance/DeploymentChartConformanceTest.java`,
       replace `prodEnforcesTheStaffGate` with a test that **no** values file sets `STAFF_GATE_MODE`: `values.yaml`,
       `values.aat.template.yaml` and `values.preview.template.yaml` (use the class's existing readers). Its
       `@DisplayName` says why: the application's `enforce` default applies everywhere, and setting it in a chart file
       would let one environment drift back to `report`.
-- [ ] Delete the `STAFF_GATE_MODE` line and its three-line comment from `charts/deed-poll-api/values.yaml`.
-- [ ] `charts/deed-poll-api/Chart.yaml`: `version: 0.0.34`.
-- [ ] Run the validation commands **in the foreground**.
-- [ ] Mark completed
+- [x] Delete the `STAFF_GATE_MODE` line and its three-line comment from `charts/deed-poll-api/values.yaml`.
+- [x] `charts/deed-poll-api/Chart.yaml`: `version: 0.0.34`.
+- [x] Run the validation commands **in the foreground**.
+- [x] Mark completed
 
 ### Task 3: Say so in the release notes
 
