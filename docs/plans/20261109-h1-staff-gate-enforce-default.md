@@ -138,15 +138,28 @@ Task 3 notes (build exit 0, up to date since only docs changed; checkstyle.sh OK
 
 ### Task 4: Full validation, counted
 
-- [ ] Run the validation commands once more **in the foreground**, then count from the XML, not Gradle's summary:
+- [x] Run the validation commands once more **in the foreground**, then count from the XML, not Gradle's summary:
       `build/test-results/test` and `build/test-results/integration` suites, tests, failures, errors and skipped.
       Failures and errors must be 0. Record the counts here beside the baseline below; the `test` count goes up by
       exactly the new tests, and nothing else changes.
-- [ ] `git diff --stat origin/master` names only: `application.yaml`, `values.yaml`, `Chart.yaml`,
+- [x] `git diff --stat origin/master` names only: `application.yaml`, `values.yaml`, `Chart.yaml`,
       `StaffGateReportModeTest.java`, `StaffGateDefaultModeTest.java`, `DeploymentChartConformanceTest.java`,
       `STAFF-ROLE-RELEASE.md`, this plan, and any test fixed under Decision 5 (listed in Task 1).
-- [ ] Baseline (untouched master `4c41025`): `test` 5,465 tests across 589 suites (0 failures, 0 errors, 1 skipped); `integration` 30 across 5 (0/0/0). Gradle build exit 0 with the no-checkstyle init script; `checkstyle.sh` OK.
-- [ ] Mark completed
+- [x] Baseline (untouched master `4c41025`): `test` 5,465 tests across 589 suites (0 failures, 0 errors, 1 skipped); `integration` 30 across 5 (0/0/0). Gradle build exit 0 with the no-checkstyle init script; `checkstyle.sh` OK.
+- [x] Mark completed
+
+Task 4 notes (2026-11-09, build exit 0 with the no-checkstyle init script, `checkstyle.sh` OK; counted from the XML):
+
+- `test`: 5,466 tests across 590 suites (0 failures, 0 errors, 1 skipped), against the baseline's 5,465 across 589.
+  The one new suite is `StaffGateDefaultModeTest`, which adds 2 tests. Three changes to existing tests account for
+  the rest: `DeploymentChartConformanceTest` replaces 1 test with a 3-file parameterised one (+2);
+  `CaseworkerGazetteControllerTest` splits 3 parameters into 1 test plus 2 parameters (net 0); and
+  `GazettePreviewApiTest.savedReadyQuery…`'s `refusedStaffClaims()` keeps the 4 of `refusedClaims()`'s 7 claim sets
+  that the staff area admits (-3). Net +1, and nothing else changed.
+- `integration`: 30 across 5 (0/0/0), unchanged.
+- `git diff --stat origin/master`: 25 files. They are the seven named above and this plan, the 14 tests fixed under
+  Decision 5 that Task 1's notes list, and Task 3's three plan records (`20261014-am-role-source.md`,
+  `20261014-me-caller-access.md` and `gazette-release-review.md`). Nothing else is in it.
 
 ## Deliberately not in this plan
 
