@@ -15,6 +15,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -24,6 +25,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.config.StaffArea;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
@@ -145,6 +147,15 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
             List.of(Role.TEAM_LEADER.claimValue(), Role.JUDICIAL.claimValue()));
     }
 
+    /**
+     * The refused claims the caseworker staff area admits. The others cannot read a saved query or the case list
+     * at all, because the {@code /caseworker/**} gate refuses them first.
+     */
+    static java.util.stream.Stream<List<String>> refusedStaffClaims() {
+        return refusedClaims().filter(claims -> StaffArea.CASEWORKER.admits(
+            claims.stream().map(SimpleGrantedAuthority::new).toList()));
+    }
+
     @ParameterizedTest
     @MethodSource("refusedClaims")
     void everyOperationRefusesValidRequestsWithoutReadingOrChangingEvidence(List<String> claims) throws Exception {
@@ -199,7 +210,7 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     }
 
     @ParameterizedTest
-    @MethodSource("refusedClaims")
+    @MethodSource("refusedStaffClaims")
     void savedReadyQueryCannotBypassTheGateButOrdinaryCaseQueriesRemainAvailable(List<String> claims)
         throws Exception {
         String id = ready("Adult");

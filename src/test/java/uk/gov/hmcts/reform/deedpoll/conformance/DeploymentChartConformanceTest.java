@@ -2,6 +2,8 @@ package uk.gov.hmcts.reform.deedpoll.conformance;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
@@ -174,11 +176,15 @@ class DeploymentChartConformanceTest {
             "{{ if eq .Values.global.environment `prod` }}cdam{{ else }}filesystem{{ end }}");
     }
 
-    @Test
-    @DisplayName("prod enforces the staff gate; every other environment stays on report")
-    void prodEnforcesTheStaffGate() throws IOException {
-        assertThat(environment()).containsEntry("STAFF_GATE_MODE",
-            "{{ if eq .Values.global.environment `prod` }}enforce{{ else }}report{{ end }}");
+    @ParameterizedTest
+    @ValueSource(strings = {"values.yaml", "values.aat.template.yaml", "values.preview.template.yaml"})
+    @DisplayName("no values file sets STAFF_GATE_MODE: the application's enforce default applies everywhere, and "
+        + "setting it in a chart file would let one environment drift back to report")
+    void noValuesFileSetsTheStaffGateMode(String file) throws IOException {
+        assertThat(read(CHART_DIR.resolve(file)))
+            .as("%s must leave the staff gate to application.yaml's enforce default; report is a rollback "
+                + "setting for a flux PR only", file)
+            .doesNotContain("STAFF_GATE_MODE");
     }
 
     @Test

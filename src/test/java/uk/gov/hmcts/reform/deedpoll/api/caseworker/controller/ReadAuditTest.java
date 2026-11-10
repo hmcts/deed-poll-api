@@ -190,7 +190,7 @@ class ReadAuditTest extends AbstractPostgresContainerTest {
     @Test
     @DisplayName("a case view whose audit fails still answers the case, and logs audit.write.failed")
     void caseViewFailsOpen() throws Exception {
-        IDAM.stubUserInfo(UNRECORDABLE, "A Caseworker", List.of("caseworker-civil"));
+        IDAM.stubUserInfo(UNRECORDABLE, "A Caseworker", List.of("caseworker-deedpoll"));
 
         as(UNRECORDABLE, get("/caseworker/cases/" + caseId))
             .andExpect(status().isOk())
@@ -220,7 +220,7 @@ class ReadAuditTest extends AbstractPostgresContainerTest {
     @DisplayName("a download whose audit fails is refused, and the file is never opened")
     void downloadFailsClosed() {
         String documentId = uploaded();
-        IDAM.stubUserInfo(UNRECORDABLE, "A Caseworker", List.of("caseworker-civil"));
+        IDAM.stubUserInfo(UNRECORDABLE, "A Caseworker", List.of("caseworker-deedpoll"));
 
         // Nothing maps a database failure, so MockMvc surfaces it rather than a rendered 500.
         assertThatThrownBy(() -> as(UNRECORDABLE, get(fileUrl(documentId))))

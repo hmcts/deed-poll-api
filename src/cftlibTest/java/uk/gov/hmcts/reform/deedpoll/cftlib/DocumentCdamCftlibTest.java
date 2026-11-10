@@ -23,6 +23,7 @@ import uk.gov.hmcts.reform.ccd.client.model.Event;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdCreationAttempts;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingSweep;
 import uk.gov.hmcts.reform.deedpoll.ccd.SystemUserTokens;
+import uk.gov.hmcts.reform.deedpoll.config.StaffArea;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
@@ -155,8 +156,14 @@ class DocumentCdamCftlibTest extends CftlibTest {
             CftlibConfig.TEAM_LEADER_USER, CftlibConfig.DELIVERY_MANAGER_USER)) {
             String token = idam.getAccessToken(user, "password");
             HttpResponse<String> download = send(filePath(recordId), "GET", "", "application/json", user);
-            assertThat(download.statusCode()).as(user + ": " + download.body()).isEqualTo(200);
-            assertThat(download.body()).isEqualTo(CONTENT);
+            if (user.equals(CftlibConfig.JUDICIAL_USER)) {
+                // A judge reads documents through a visible referral; the staff gate refuses the caseworker route.
+                assertThat(download.statusCode()).as(user + ": " + download.body()).isEqualTo(403);
+                assertThat(download.body()).contains(StaffArea.CASEWORKER.refusal());
+            } else {
+                assertThat(download.statusCode()).as(user + ": " + download.body()).isEqualTo(200);
+                assertThat(download.body()).isEqualTo(CONTENT);
+            }
             String service = serviceTokens.generate();
             assertThatThrownBy(() -> {
                 var start = ccd.startCase(token, service, "DEED_POLL_PLACEHOLDER", "linkDeedPoll");
@@ -208,13 +215,25 @@ class DocumentCdamCftlibTest extends CftlibTest {
 
     @Test
     @Order(4)
-    void anUnmappedUserIsDeniedButTheUpstreamStackReportsBadGateway() throws Exception {
+    void anUnmappedUserIsRefusedByTheStaffGateWithoutCallingTheStore() throws Exception {
         DM.server().resetRequests();
         HttpResponse<String> denied = send(filePath(recordId), "GET", "", "application/json",
             CftlibConfig.UNMAPPED_USER);
-        // The persistence gate returns 403, data-store wraps that as 500, and CDAM returns 502. Pin this finding
-        // separately; accepting 502 in the preceding test would not prove CCD's read-permission check.
-        assertThat(denied.statusCode()).as(denied.body()).isEqualTo(502);
+        // The staff gate enforces by default (H1), so a caller with no deed poll role never reaches CDAM. Under the
+        // old report default this request reached the persistence gate and came back as CDAM's 502.
+        assertThat(denied.statusCode()).as(denied.body()).isEqualTo(403);
+        assertThat(denied.body()).contains(StaffArea.CASEWORKER.refusal());
+        assertThat(DM.server().getAllServeEvents()).isEmpty();
+
+        // The staff gate is not the only refusal, and this keeps the one behind it proven: asked directly with the
+        // same user's token, CDAM still refuses through CCD's read-permission check. The persistence gate returns
+        // 403, data-store wraps that as 500, and CDAM returns 502, having read the metadata but never the binary.
+        HttpResponse<String> direct = http.send(HttpRequest.newBuilder(
+            URI.create("http://localhost:4455/cases/documents/" + remoteId + "/binary"))
+            .header("Authorization", idam.getAccessToken(CftlibConfig.UNMAPPED_USER, "password"))
+            .header("ServiceAuthorization", serviceTokens.generate()).GET().build(),
+            HttpResponse.BodyHandlers.ofString());
+        assertThat(direct.statusCode()).as(direct.body()).isEqualTo(502);
         DM.server().verify(getRequestedFor(urlPathEqualTo("/documents/" + remoteId)));
         DM.server().verify(0, getRequestedFor(urlPathEqualTo("/documents/" + remoteId + "/binary")));
     }

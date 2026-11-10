@@ -21,6 +21,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.config.StaffArea;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.GazetteNoticeBatch;
@@ -91,14 +92,24 @@ class CaseworkerGazetteControllerTest extends AbstractPostgresContainerTest {
         mvc.perform(get(HISTORY)).andExpect(status().isUnauthorized());
     }
 
+    @Test
+    void refusesAuthenticatedNonDeliveryManagers() throws Exception {
+        batch(SENT_AT, "Historical Sender", "2026/PRIVATE");
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Historical Sender", List.of("caseworker-deedpoll"));
+        authorised(get(HISTORY))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.error").value(containsString("ACCESS_GAZETTE")));
+    }
+
+    /** Outside the caseworker staff area, so the /caseworker/** gate refuses before ACCESS_GAZETTE is asked. */
     @ParameterizedTest
-    @ValueSource(strings = {"caseworker-civil", "caseworker-deedpoll", "caseworker-deedpoll-judicial"})
-    void refusesAuthenticatedNonDeliveryManagers(String role) throws Exception {
+    @ValueSource(strings = {"caseworker-civil", "caseworker-deedpoll-judicial"})
+    void refusesAuthenticatedNonStaff(String role) throws Exception {
         batch(SENT_AT, "Historical Sender", "2026/PRIVATE");
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Historical Sender", List.of(role));
         authorised(get(HISTORY))
             .andExpect(status().isForbidden())
-            .andExpect(jsonPath("$.error").value(containsString("ACCESS_GAZETTE")));
+            .andExpect(jsonPath("$.error").value(StaffArea.CASEWORKER.refusal()));
     }
 
     @Test

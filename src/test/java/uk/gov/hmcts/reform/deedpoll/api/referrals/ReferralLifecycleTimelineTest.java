@@ -364,7 +364,7 @@ class ReferralLifecycleTimelineTest extends AbstractPostgresContainerTest {
 
     /** The token the next requests carry is a caseworker's, holding no role this service asks about. */
     private static void asCaseworker(String name) {
-        IDAM.stubUserInfo(StubIdam.SUBJECT, name, List.of("caseworker-civil"));
+        IDAM.stubUserInfo(StubIdam.SUBJECT, name, List.of("caseworker-deedpoll"));
     }
 
     /** The token the next requests carry is a judge's, with the email linking matches on the Masters list. */

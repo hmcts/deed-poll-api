@@ -36,7 +36,7 @@ Nothing about who may do what changes here. `Capability`, `RoleCapabilities`, `R
 - `config/SecurityConfiguration.securityFilterChain`:
   - `PUBLIC_PATHS` are `permitAll`
   - `/judicial/**` is `hasAnyAuthority`
-  - `/caseworker/**` goes through `StaffGate` (default mode `report`)
+  - `/caseworker/**` goes through `StaffGate` (default mode then `report`; since 2026-11-09 it enforces by default, chart 0.0.34)
   - then `anyRequest().authenticated()`
 - `config/StaffAccessRulesTest.everyRouteIsInAStaffArea` fails for any mapped route outside a staff area apart from
   `/`, with the message "add it to StaffArea or the allowlist". That's the OWASP H1 hardening. `/me` must go through
@@ -155,7 +155,9 @@ controller test).
   - no token gets 401
   - the response has exactly the keys `staff`, `judicial` and `capabilities`
   - `Cache-Control` contains `no-store`
-- [x] With `deedpoll.security.staff-gate=report` (the default): a roleless caller gets `staff: false` from `/me`, and
+- [x] With `deedpoll.security.staff-gate=report` (then the default; since 2026-11-09 the gate
+      enforces by default in every environment, chart 0.0.34, and `report` is a rollback setting only, set by a flux
+      PR, which plan 01 Task 12 removes): a roleless caller gets `staff: false` from `/me`, and
       the same caller's `GET /caseworker/no-such-route` is 404, so the gate admitted them. Assert both, so decision 3
       is pinned.
 - [x] With `deedpoll.roles.am.enabled=true`, an IDAM-only `caseworker-deedpoll` caller and WireMock RAS:

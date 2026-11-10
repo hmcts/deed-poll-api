@@ -100,8 +100,11 @@ uses durable admitted authority; never rewrite historical attribution. See the
 `anyRequest()`, and `StaffAccessRulesTest` asserts both that set and that every other route sits in a `StaffArea`.
 Adding a path there is a reviewed change, not a way round the H1 check. `/me` is not public: no token is 401.
 - **The flags reflect roles, never the StaffGate mode.** `staff` and `judicial` are `StaffArea.admits` over the
-  authenticated authorities, so in `report` mode a roleless caller still reaches `/caseworker/**` while `/me` says
-  `staff: false`. That is deliberate: the admin app is right for the day `enforce` arrives.
+  authenticated authorities, so under a `report` rollback a roleless caller still reaches `/caseworker/**` while `/me` says
+  `staff: false`. That is deliberate: the flags never follow the mode.
+- **The staff gate enforces by default** (`STAFF_GATE_MODE`, default `enforce`, chart 0.0.34), and no chart values
+  file may set it (`DeploymentChartConformanceTest`). `report` is a rollback by flux PR only, and plan 01 Task 12
+  removes it.
 - **No identity.** No subject, name, raw role names, AM assignments or role source, and `Cache-Control: no-store`.
   Admin has identity from IDAM; a second route publishing the subject is the leak the Gazette review found.
 - Capabilities are `RoleCapabilities.forRoles` in `Capability` declaration order, so a new `Capability` reaches
