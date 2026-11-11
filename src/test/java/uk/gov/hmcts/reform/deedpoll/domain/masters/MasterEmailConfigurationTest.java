@@ -74,14 +74,15 @@ class MasterEmailConfigurationTest {
     }
 
     @Test
-    @DisplayName("the chart sets both templates' non-prod ids, keeps prod on the placeholder, and has no digest")
+    @DisplayName("the chart sets both templates' prod and non-prod ids, and has no digest")
     void chart() throws IOException {
         String values = Files.readString(CHART_VALUES);
+        // Prod's own Notify service's ids (Steve, 2026-11-11), then the non-prod ones.
         assertThat(values).contains(
-            "NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT: '{{ if eq .Values.global.environment `prod` }}DEED_POLL_PLACEHOLDER"
-                + "{{ else }}65aefcb8-a6e1-463b-a520-87e686cb423f{{ end }}'",
+            "NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT: '{{ if eq .Values.global.environment `prod` }}"
+                + "2aa10ade-b082-48a4-946b-96a6039c563d{{ else }}65aefcb8-a6e1-463b-a520-87e686cb423f{{ end }}'",
             "NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER: '{{ if eq .Values.global.environment `prod` }}"
-                + "DEED_POLL_PLACEHOLDER{{ else }}784396ee-1184-49d5-9910-b135ef289bda{{ end }}'");
+                + "af3c43a4-70b6-448a-87e9-6a98edf1afe1{{ else }}784396ee-1184-49d5-9910-b135ef289bda{{ end }}'");
         assertThat(values).doesNotContain("MASTER_REFERRAL_DIGEST", "MASTER_DIGEST_INTERVAL");
     }
 
