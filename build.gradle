@@ -329,13 +329,13 @@ ext['httpcore5.version'] = '5.4.3'
   Security patch overrides on the lines Boot 3.5.16 already manages. 3.5.16 is the newest 3.5.x, so these
   are the only way to take the fixes; remove each one once a Boot release manages that version or later.
   Every version here had no OSV advisory on 2026-10-09, and each replaces a suppression in
-  config/owasp/suppressions.xml.
+  config/owasp/suppressions.xml. OpenTelemetry 1.67.0 (2026-11-16): GHSA-ccrj-gw8r-854m, tracestate parsing.
 */
 ext['tomcat.version'] = '10.1.60'
 ext['postgresql.version'] = '42.7.14'
 ext['jackson-bom.version'] = '2.21.7'
 ext['commons-lang3.version'] = '3.21.0'
-ext['opentelemetry.version'] = '1.66.0'
+ext['opentelemetry.version'] = '1.67.0'
 
 /*
   Jackson 2 only, for this application's own classpaths.
@@ -347,7 +347,9 @@ ext['opentelemetry.version'] = '1.66.0'
 
   cftlib's configurations are left as cftlib resolves them.
 
-  bcprov arrives through spring-cloud-starter, which Boot does not manage.
+  bcprov arrives through spring-cloud-starter, which Boot does not manage. Nor does it manage Guava (from the CCD
+  SDK) or org.json (from the Notify client, whose newest release still pins 20231013); both were raised to their
+  first fixed release on 2026-11-16 (GHSA-xxph-c9ww-hj94, GHSA-ghc9-756g-vrcv).
 */
 configurations.matching { !it.name.startsWith('cftlib') }.configureEach {
   resolutionStrategy.eachDependency { details ->
@@ -358,6 +360,14 @@ configurations.matching { !it.name.startsWith('cftlib') }.configureEach {
     if (details.requested.group == 'org.bouncycastle' && details.requested.name == 'bcprov-jdk18on') {
       details.useVersion '1.86'
       details.because 'Security fixes; 1.80.2 has Critical and High advisories'
+    }
+    if (details.requested.group == 'com.google.guava' && details.requested.name == 'guava') {
+      details.useVersion '33.7.2-jre'
+      details.because 'GHSA-xxph-c9ww-hj94: unbounded allocation on deserialisation, fixed in 33.7.2'
+    }
+    if (details.requested.group == 'org.json' && details.requested.name == 'json') {
+      details.useVersion '20260719'
+      details.because 'GHSA-ghc9-756g-vrcv: unbounded number parsing, fixed in 20260719'
     }
   }
 }

@@ -36,12 +36,15 @@
   </suppress>
   <!--
     Assessed suppressions, 2026-10-09. They replace the blanket "pipeline unblock" blocks of 2026-09-15 and
-    2026-09-28.
+    2026-09-28. Re-assessed 2026-11-16, CVE by CVE, against master e4d8033 and NVD's current records; expiry
+    extended to 2027-01-18.
 
     Everything with a fixed release on the line Boot 3.5.16 already uses was upgraded instead; see the
     overrides in build.gradle. What is left is fixed only in Spring Framework 7 / Spring Security 7 /
     Spring Data 4, which means Spring Boot 4. 3.5.16 is the newest 3.5.x, so these blocks cannot be cleared
-    by a patch.
+    by a patch. NVD does list fixes on these lines (Framework 6.2.20, Security 6.5.12, Data JPA 3.5.14, Cloud
+    Commons 4.3.4), but they are Broadcom enterprise-support releases and are not on Maven Central (checked
+    2026-11-16). Boot 4 also brings Jackson 3, which this service must not take; see build.gradle.
 
     Each CVE below was checked against how this service uses the library. This service is a stateless JSON
     REST API on Spring MVC. It uses JWT bearer authentication, with CSRF, form login and remember-me
@@ -53,7 +56,7 @@
     - Never extend the expiry without re-assessing each CVE.
     - Remove the block when the Boot 4 upgrade lands.
   -->
-  <suppress until="2026-11-16">
+  <suppress until="2027-01-18">
     <notes>Spring Framework 6.2.19, fixed only in 7.0.9 (Boot 4). Not exploitable here. Each CVE needs a feature
       this service does not use:
       47883 UrlHandlerFilter (not configured).
@@ -72,7 +75,7 @@
       59282 data binding of user-supplied property paths (JSON bodies through Jackson only; no
       ModelAttribute, DataBinder or InitBinder).
       59314 Content-Disposition from untrusted input (filenames are reduced to [A-Za-z0-9._ -] by
-      CaseworkerDocumentController.safeFilename, so CR/LF cannot reach the header).</notes>
+      DocumentFileResponses.safeFilename, so CR/LF cannot reach the header).</notes>
     <packageUrl regex="true">^pkg:maven/org\.springframework/spring\-.*@6\.2\.19$</packageUrl>
     <cve>CVE-2026-47883</cve>
     <cve>CVE-2026-47884</cve>
@@ -92,15 +95,16 @@
     <cve>CVE-2026-59313</cve>
     <cve>CVE-2026-59314</cve>
   </suppress>
-  <suppress until="2026-11-16">
+  <suppress until="2027-01-18">
     <notes>Spring Security 6.5.11, fixed only in 7.x (Boot 4). Not exploitable here:
       41707 DPoP (not used).
       47841 WebAuthn (absent).
       47842 AesBytesEncryptor (no Encryptors use).
       59270 embedded UnboundID LDAP (absent).
-      59276 non-constant-time comparisons in token-handling components. Access tokens are verified by JWT
-      signature (Nimbus), and CSRF, remember-me and one-time tokens are disabled or absent. Lower confidence
-      than the others; re-check against the advisory's component list at the next review.</notes>
+      59276 non-constant-time comparisons. The advisory names four components: DigestAuthenticationFilter,
+      KeyBasedPersistenceTokenService, the Password4j password encoders and InMemoryOAuth2AuthorizationService.
+      None is used: no HTTP Digest, no persistent tokens, no password encoding, and this service is an OAuth2
+      resource server, not an authorization server (checked 2026-11-16).</notes>
     <packageUrl regex="true">^pkg:maven/org\.springframework\.security/spring\-security\-.*@6\.5\.11$</packageUrl>
     <cve>CVE-2026-41707</cve>
     <cve>CVE-2026-47841</cve>
@@ -108,21 +112,21 @@
     <cve>CVE-2026-59270</cve>
     <cve>CVE-2026-59276</cve>
   </suppress>
-  <suppress until="2026-11-16">
+  <suppress until="2027-01-18">
     <notes>Spring Data JPA 3.5.13, fixed only in 4.x (Boot 4). Sort validation bypass with untrusted sort
       parameters. Not exploitable here: every Sort is built from a CaseSort name, an allowlist of published
       columns, or from constants. The caller's string never reaches Sort.</notes>
     <packageUrl>pkg:maven/org.springframework.data/spring-data-jpa@3.5.13</packageUrl>
     <cve>CVE-2026-47834</cve>
   </suppress>
-  <suppress until="2026-11-16">
+  <suppress until="2027-01-18">
     <notes>Spring Cloud Commons 4.3.3, fixed only in the 5.x train (Boot 4). Applies only when the writable
       /actuator/env endpoint is exposed. Not exploitable here: management.endpoints.web.exposure.include is
       health, info and prometheus.</notes>
     <packageUrl regex="true">^pkg:maven/org\.springframework\.cloud/spring\-cloud\-.*@4\.3\.3$</packageUrl>
     <cve>CVE-2026-59284</cve>
   </suppress>
-  <suppress until="2026-11-16">
+  <suppress until="2027-01-18">
     <notes>Kotlin stdlib 1.9.25, brought in by the CCD SDK. Neither CVE affects this runtime:
       CVE-2020-29582 was fixed in 1.4.21, so this is a CPE false positive.
       CVE-2026-53914 is in the Kotlin compiler's build cache metadata, not the stdlib.</notes>
