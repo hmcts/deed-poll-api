@@ -25,12 +25,23 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdCreationAttempts;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdLinkingSweep;
 import uk.gov.hmcts.reform.deedpoll.ccd.SystemUserTokens;
 import uk.gov.hmcts.reform.deedpoll.config.StaffArea;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralWindow;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPollSupportingDocumentType;
+import uk.gov.hmcts.reform.deedpoll.entity.Referral;
+import uk.gov.hmcts.reform.deedpoll.entity.enums.WindowSlot;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.MasterRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.ReferralRepository;
 import uk.gov.hmcts.reform.deedpoll.storage.CorrespondenceDocumentReader;
 import uk.gov.hmcts.reform.deedpoll.support.StubDmStore;
 import uk.gov.hmcts.reform.idam.client.IdamClient;
@@ -50,10 +61,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageWriter;
@@ -89,6 +103,9 @@ class DocumentPreviewCftlibTest extends CftlibTest {
     private static final WireMockServer CONVERTER = new WireMockServer(options().dynamicPort());
     private static final String CONVERT = "/rs/convert";
     private static final String ACCESS_KEY = "synthetic-cftlib-preview-key";
+    /** The Team leader who sends the queued referral to the judge's Master. */
+    private static final CurrentUser SENDER =
+        CurrentUser.currentUser(List.of(Role.TEAM_LEADER), "Cftlib Team Leader", "cftlib-team-leader");
     private static final Color[] FRAMES = {new Color(200, 30, 30), new Color(30, 160, 30), new Color(30, 30, 200)};
     private static final byte[] CONVERTED = pdf(3);
 
@@ -118,6 +135,10 @@ class DocumentPreviewCftlibTest extends CftlibTest {
     @Autowired private CorrespondenceDocumentReader correspondence;
     @Autowired private ApplicationContext context;
     @Autowired private JdbcTemplate jdbc;
+    @Autowired private ReferralService referralService;
+    @Autowired private ReferralRepository referrals;
+    @Autowired private MasterRepository masters;
+    @Autowired private PlatformTransactionManager transactionManager;
 
     private ApplicationContext firstContext;
     private String recordId;
@@ -235,31 +256,49 @@ class DocumentPreviewCftlibTest extends CftlibTest {
         assertThat(previewsRecorded(docx)).isEqualTo(recorded);
     }
 
+    /**
+     * A judge previews only through a referral sent to their own Master (plan F1): there is no pool, so the other
+     * judge never sees it, and a withdrawal hides it from its Master too. The send goes through
+     * {@code ReferralService.send}, the call {@code POST /caseworker/referral-queue/sends} makes, because over HTTP
+     * the send is refused outside a referral window and the test would depend on the time of day it ran at
+     * ({@code ReferralLifecycleTimelineTest} does the same). The Master is linked the real way: the judge's first
+     * judicial request matches their IDAM email to the Masters-list entry ({@code MasterLinking}).
+     */
     @Test
     @Order(4)
-    void aJudgePreviewsThroughAVisibleReferralAndAClaimHidesItFromAnotherJudge() throws Exception {
+    void judgePreviewsOnlyThroughAReferralSentToTheirMasterAndAnotherJudgeNeverSeesIt() throws Exception {
         HttpResponse<String> raised = sendJson("/caseworker/cases/" + recordId + "/referrals", "POST",
-            "{\"reasons\":[\"Minor\"],\"notes\":\"Synthetic referral\"}", CftlibConfig.DOCUMENT_READER);
+            "{\"reasons\":[\"DomesticAbuse\"],\"notes\":\"Synthetic referral\"}", CftlibConfig.DOCUMENT_READER);
         assertThat(raised.statusCode()).as(raised.body()).isEqualTo(201);
         String referralId = json.readTree(raised.body()).path("id").asText();
         Original tiff = originals.get("three-frames.tiff");
-        Original docx = originals.get("letter.docx");
 
+        // Open, waiting in the office's queue: no judge sees it, the judge it is about to go to included.
+        DM.server().resetRequests();
         for (String judge : List.of(CftlibConfig.JUDICIAL_USER, CftlibConfig.OTHER_JUDICIAL_USER)) {
-            DM.server().resetRequests();
-            assertPreview(preview(judicialPreview(referralId, tiff), judge), tiff.pages());
-            assertReadAsCaller(tiff, judge);
+            assertThat(preview(judicialPreview(referralId, tiff), judge).statusCode()).isEqualTo(404);
         }
-        assertThat(preview(judicialPreview(referralId, tiff), CftlibConfig.DOCUMENT_READER).statusCode())
-            .isEqualTo(403);
+        assertThat(DM.server().getAllServeEvents()).isEmpty();
 
-        HttpResponse<String> claimed = sendJson("/judicial/referrals/" + referralId + "/claim", "POST", "",
-            CftlibConfig.JUDICIAL_USER);
-        assertThat(claimed.statusCode()).as(claimed.body()).isEqualTo(200);
+        sendToMaster(referralId, judgeMaster());
+
+        // The judge's own Master now holds it: their first judicial request links the Master, and they preview.
+        DM.server().resetRequests();
+        assertPreview(preview(judicialPreview(referralId, tiff), CftlibConfig.JUDICIAL_USER), tiff.pages());
+        assertReadAsCaller(tiff, CftlibConfig.JUDICIAL_USER);
+        HttpResponse<String> mine = send("/judicial/referrals/mine", CftlibConfig.JUDICIAL_USER);
+        assertThat(mine.statusCode()).as(mine.body()).isEqualTo(200);
+        assertThat(mine.body()).contains(referralId);
+
+        Original docx = originals.get("letter.docx");
+        // Anyone else is refused before any store or converter call: the other judge with the same 404 an unknown
+        // referral gets, a caseworker by the judicial area's role rule.
         CONVERTER.resetRequests();
         DM.server().resetRequests();
         assertThat(preview(judicialPreview(referralId, docx), CftlibConfig.OTHER_JUDICIAL_USER).statusCode())
             .isEqualTo(404);
+        assertThat(preview(judicialPreview(referralId, tiff), CftlibConfig.DOCUMENT_READER).statusCode())
+            .isEqualTo(403);
         assertThat(DM.server().getAllServeEvents()).isEmpty();
         assertThat(CONVERTER.getAllServeEvents()).isEmpty();
         assertPreview(preview(judicialPreview(referralId, docx), CftlibConfig.JUDICIAL_USER), docx.pages());
@@ -337,6 +376,36 @@ class DocumentPreviewCftlibTest extends CftlibTest {
         DM.server().verify(1, getRequestedFor(urlPathEqualTo(binaryPath(pdf)))
             .withHeader("user-id", equalTo(idam.getUserInfo(systemUser.accessToken()).getUid())));
         assertThat(DM.server().findAllUnmatchedRequests()).isEmpty();
+    }
+
+    /**
+     * The judge's Masters-list entry, added unlinked if this database has none yet. The cftlib database outlives a
+     * run and the list's email is unique, so a second run finds the entry the first added (linked by then, which
+     * changes nothing here: the send then attaches the referral at once rather than at linking).
+     */
+    private UUID judgeMaster() {
+        List<UUID> listed = jdbc.queryForList("SELECT id FROM deedpoll_master WHERE email = ?", UUID.class,
+            CftlibConfig.JUDICIAL_USER.toLowerCase(Locale.ROOT));
+        if (!listed.isEmpty()) {
+            return listed.get(0);
+        }
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+            INSERT INTO deedpoll_master (id, name, email, available, created_at, created_by_id, created_by_name)
+            VALUES (?, 'Master Cftlib', ?, true, now(), 'cftlib-dm', 'Cftlib Delivery Manager')
+            """, id, CftlibConfig.JUDICIAL_USER.toLowerCase(Locale.ROOT));
+        return id;
+    }
+
+    /** The office's send of one queued referral to a Master, as a Team leader, in the current morning window. */
+    private void sendToMaster(String referralId, UUID master) {
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            Referral waiting = referrals.findByIdAndDeedPollIdForUpdate(UUID.fromString(referralId), recordId)
+                .orElseThrow();
+            LocalDateTime now = AuditClock.now();
+            referralService.send(waiting, master, masters.findAssigneeForUpdate(master).orElseThrow(),
+                new ReferralWindow(now.toLocalDate(), WindowSlot.AM), SENDER, now);
+        });
     }
 
     private void assertPreview(HttpResponse<byte[]> preview, int pages) throws IOException {
