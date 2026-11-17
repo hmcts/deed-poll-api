@@ -262,7 +262,7 @@ class DocumentPreviewCftlibTest extends CftlibTest {
      * {@code ReferralService.send}, the call {@code POST /caseworker/referral-queue/sends} makes, because over HTTP
      * the send is refused outside a referral window and the test would depend on the time of day it ran at
      * ({@code ReferralLifecycleTimelineTest} does the same). The Master is linked the real way: the judge's first
-     * judicial request matches their IDAM email to the Masters-list entry ({@code MasterLinking}).
+     * judicial request after the send matches their IDAM email to the Masters-list entry ({@code MasterLinking}).
      */
     @Test
     @Order(4)
@@ -282,7 +282,7 @@ class DocumentPreviewCftlibTest extends CftlibTest {
 
         sendToMaster(referralId, judgeMaster());
 
-        // The judge's own Master now holds it: their first judicial request links the Master, and they preview.
+        // The judge's own Master now holds it: their first judicial request since the send links the Master.
         DM.server().resetRequests();
         assertPreview(preview(judicialPreview(referralId, tiff), CftlibConfig.JUDICIAL_USER), tiff.pages());
         assertReadAsCaller(tiff, CftlibConfig.JUDICIAL_USER);
