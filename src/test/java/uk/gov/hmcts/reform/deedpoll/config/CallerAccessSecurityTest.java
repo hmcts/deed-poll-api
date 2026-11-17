@@ -92,8 +92,6 @@ class CallerAccessSecurityTest extends AbstractPostgresContainerTest {
         registry.add("deedpoll.roles.am.enabled", () -> "true");
         registry.add("deedpoll.roles.am.url", RAS::baseUrl);
         registry.add("deedpoll.roles.am.gazette-skill", () -> SKILL);
-        // Pinned, because report is no longer the default: flagsIgnoreTheReportMode needs the gate admitting.
-        registry.add("deedpoll.security.staff-gate", () -> "report");
     }
 
     @Autowired
@@ -166,14 +164,14 @@ class CallerAccessSecurityTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("in report mode, says staff false for a roleless caller the gate nonetheless admits")
-    void flagsIgnoreTheReportMode() throws Exception {
+    @DisplayName("says staff false for a roleless caller, whom the caseworker surface refuses")
+    void flagsAgreeWithTheCaseworkerRule() throws Exception {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Someone Else", List.of("caseworker-divorce"));
 
         me().andExpect(status().isOk()).andExpect(content().json("{\"staff\":false}"));
         mvc.perform(get("/caseworker/no-such-route")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + IDAM.accessToken()))
-            .andExpect(status().isNotFound());
+            .andExpect(status().isForbidden());
     }
 
     @Test

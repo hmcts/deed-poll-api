@@ -18,12 +18,10 @@ import java.util.Set;
  *
  * <p>The admin app renders from this rather than from IDAM claims, because once AM is a role source the claims no
  * longer say what the api enforces. Each answer is computed by the same rule that enforces it, so the two cannot
- * drift: the flags are {@link StaffArea#admits}, which {@code StaffGate} and the judicial rule use, and the
- * capabilities are {@link RoleCapabilities#forRoles}, which {@link CurrentUser#can} uses.
- *
- * <p><strong>The flags reflect roles, not the gate's mode.</strong> Under a {@code report} rollback a caller
- * with no deed-poll role still reaches {@code /caseworker/**}, and this still says {@code staff: false}. An app
- * that rendered from the mode would be wrong whenever the mode changed; this way it errs on the strict side.
+ * drift: the flags are {@link StaffArea#admits}, over the same authorities as the caseworker and judicial chain
+ * rules, and the capabilities are {@link RoleCapabilities#forRoles}, which {@link CurrentUser#can} uses. A caller
+ * {@code staff: false} is refused on {@code /caseworker/**}; there is no longer a mode in which they are not (OWASP
+ * plan 01 Task 12, 2026-11-17).
  *
  * <p><strong>No identity, on purpose.</strong> No subject, name, raw role names or AM assignments, and nothing
  * about whether a role came from IDAM or AM. The admin app has identity from IDAM already, and a second route

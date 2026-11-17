@@ -65,7 +65,6 @@ class RateLimitSecurityTest extends AbstractPostgresContainerTest {
         registry.add("idam.api.audiences", () -> StubIdam.AUDIENCE);
         registry.add("deedpoll.rate-limit.mode", () -> "enforce");
         registry.add("deedpoll.rate-limit.buckets.upload.limit", () -> "1");
-        registry.add("deedpoll.security.staff-gate", () -> "enforce");
     }
 
     @LocalServerPort
