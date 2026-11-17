@@ -70,8 +70,6 @@ class RoleAssignmentSecurityTest extends AbstractPostgresContainerTest {
     static void properties(DynamicPropertyRegistry registry) {
         registry.add("idam.api.issuer-url", IDAM::issuerUrl);
         registry.add("idam.api.audiences", () -> StubIdam.AUDIENCE);
-        // Enforced, not the default report mode, so a refusal at the gate is a refusal rather than a log line.
-        registry.add("deedpoll.security.staff-gate", () -> "enforce");
         registry.add("deedpoll.roles.am.enabled", () -> "true");
         registry.add("deedpoll.roles.am.url", RAS::baseUrl);
         registry.add("deedpoll.roles.am.gazette-skill", () -> SKILL);

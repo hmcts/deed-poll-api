@@ -464,10 +464,9 @@ verified roles to explicit capabilities:
 
 Each new role works alone. Neither grants judicial or system access. Private saved queries remain
 owner-only; shared-query management does not bypass that rule. The privacy adapter derives its flag
-from OVERRIDE_PRIVACY. `/caseworker/**` requires one of the five staff roles: `StaffGate` answers 403 to any
-other authenticated caller, a judge included, before any capability check. `STAFF_GATE_MODE` defaults to
-`enforce` in every environment (chart 0.0.34), and the chart must not set it; `report`, which logs
-`staff-gate report` and lets the caller through, is a rollback setting only, set per environment by a flux PR.
+from OVERRIDE_PRIVACY. `/caseworker/**` requires one of the caseworker area's staff roles: the chain answers 403
+to any other authenticated caller, a judge included, before any capability check. The rule has no mode or setting
+since OWASP plan 01 Task 12 (2026-11-17), which removed report mode and `STAFF_GATE_MODE`.
 Domain capability gates then enforce independently.
 
 All eight Gazette HTTP operations and `GET /caseworker/cases?filter=readyForPublication`, including

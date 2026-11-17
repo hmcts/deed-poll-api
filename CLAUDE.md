@@ -99,12 +99,13 @@ uses durable admitted authority; never rewrite historical attribution. See the
 `SecurityConfiguration.ANY_AUTHENTICATED_PATHS` is exactly `{"/me"}`, matched `.authenticated()` ahead of
 `anyRequest()`, and `StaffAccessRulesTest` asserts both that set and that every other route sits in a `StaffArea`.
 Adding a path there is a reviewed change, not a way round the H1 check. `/me` is not public: no token is 401.
-- **The flags reflect roles, never the StaffGate mode.** `staff` and `judicial` are `StaffArea.admits` over the
-  authenticated authorities, so under a `report` rollback a roleless caller still reaches `/caseworker/**` while `/me` says
-  `staff: false`. That is deliberate: the flags never follow the mode.
-- **The staff gate enforces by default** (`STAFF_GATE_MODE`, default `enforce`, chart 0.0.34), and no chart values
-  file may set it (`DeploymentChartConformanceTest`). `report` is a rollback by flux PR only, and plan 01 Task 12
-  removes it.
+- **The flags are the chain's own rule.** `staff` and `judicial` are `StaffArea.admits` over the authenticated
+  authorities, the same authorities the `/caseworker/**` and `/judicial/**` rules check, so `staff: false` means a 403
+  on `/caseworker/**`.
+- **The caseworker rule has no mode.** It is `hasAnyAuthority(StaffArea.CASEWORKER.authorities())`, as the judicial
+  rule is. OWASP plan 01 Task 12 (2026-11-17) removed report mode, `StaffGate` and `STAFF_GATE_MODE`;
+  `CaseworkerStaffRuleIgnoresReportTest` pins that a leftover setting opens nothing, and no chart values file may set it
+  (`DeploymentChartConformanceTest`). Rollback is a revert.
 - **No identity.** No subject, name, raw role names, AM assignments or role source, and `Cache-Control: no-store`.
   Admin has identity from IDAM; a second route publishing the subject is the leak the Gazette review found.
 - Capabilities are `RoleCapabilities.forRoles` in `Capability` declaration order, so a new `Capability` reaches

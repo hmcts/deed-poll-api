@@ -107,6 +107,7 @@ refuses them with 403. This is OWASP plan 01 Task 4's deliberate one-release rep
 default in every environment (chart 0.0.34); `STAFF_GATE_MODE=report` is a rollback setting only, set by a flux PR,
 and plan 01 Task 12 removes it. It is
 not Gazette-specific, but **Gazette must not be enabled anywhere the gate is still in report mode.**
+**Closed 2026-11-17:** plan 01 Task 12 removed report mode and its log line, so no environment can be in it.
 
 F1 added one test and no production code. Final, 14 October 2026, rebased on `22f3d7f` (master with
 api#102 and #103), with the validation commands above: 4,151 test / 19 integration, no failures, errors

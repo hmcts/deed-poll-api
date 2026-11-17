@@ -39,7 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * handler maps answers 404 once the chain admits the caller, so 404 is "let in" and 403 is "refused by the
  * chain", without needing a case to exist.
  */
-@SpringBootTest(properties = "deedpoll.security.staff-gate=enforce")
+@SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles({"config-gen", "test"})
 class StaffAccessRulesTest {

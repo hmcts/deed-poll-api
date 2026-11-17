@@ -1,14 +1,9 @@
 package uk.gov.hmcts.reform.deedpoll.config;
 
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -22,22 +17,21 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 
 import java.util.List;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Report mode, configured explicitly: the caseworker gate reports and lets through, the judicial rule refuses.
+ * The retired report setting opens nothing (OWASP plan 01 Task 12, 2026-11-17).
  *
- * <p>Separate from {@link StaffAccessRulesTest} because the mode is bound once, when the chain is built, so the two
- * settings need two contexts. {@code report} is no longer the default (OWASP plan 01 Task 5, 2026-11-09; see
- * {@link StaffGateDefaultModeTest}); it is a rollback setting only, until plan 01 Task 12 removes it, and this class
- * with it.
+ * <p>{@code deedpoll.security.staff-gate=report} ({@code STAFF_GATE_MODE}) used to let a caller with no staff role onto
+ * the caseworker surface and log them. Task 12 removed the mode and the setting, so a flux overlay or environment that
+ * still sets it must change nothing. Its own context, because a property is bound when the context starts.
  */
 @SpringBootTest(properties = "deedpoll.security.staff-gate=report")
 @AutoConfigureMockMvc
 @ActiveProfiles({"config-gen", "test"})
-class StaffGateReportModeTest {
+class CaseworkerStaffRuleIgnoresReportTest {
 
     private static final StubIdam IDAM = new StubIdam();
 
@@ -59,37 +53,23 @@ class StaffGateReportModeTest {
     @Autowired
     private MockMvc mockMvc;
 
-    private ListAppender<ILoggingEvent> logs;
-    private Logger logger;
-
     @BeforeEach
     void setUp() {
         IDAM.stubDefaults();
-        logs = new ListAppender<>();
-        logs.start();
-        logger = (Logger) LoggerFactory.getLogger(StaffGate.class);
-        logger.addAppender(logs);
-    }
-
-    @AfterEach
-    void releaseLogs() {
-        logger.detachAppender(logs);
     }
 
     @Test
-    @DisplayName("lets a role-less caller onto the caseworker surface when configured to report, and logs who they are")
-    void reportsWhenConfiguredTo() throws Exception {
+    @DisplayName("still refuses a role-less caller on the caseworker surface while the retired report setting is set")
+    void refusesARolelessCallerWhateverTheSetting() throws Exception {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "Someone Else", List.of("caseworker-divorce"));
 
-        mockMvc.perform(get("/caseworker/no-such-route").headers(bearer())).andExpect(status().isNotFound());
-
-        assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
-            .containsExactly("staff-gate report subject=" + StubIdam.SUBJECT
-                + " method=GET path=/caseworker/no-such-route");
+        mockMvc.perform(get("/caseworker/no-such-route").headers(bearer()))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.error").value(StaffArea.CASEWORKER.refusal()));
     }
 
     @Test
-    @DisplayName("enforces the judicial rule regardless, because it changes no outcome the services did not already")
+    @DisplayName("enforces the judicial rule regardless, as it always did")
     void enforcesTheJudicialRuleRegardless() throws Exception {
         IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of(Role.CASEWORKER.claimValue()));
 
