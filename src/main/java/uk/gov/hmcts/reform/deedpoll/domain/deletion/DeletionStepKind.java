@@ -10,10 +10,6 @@ public enum DeletionStepKind {
     /** A supporting document held in CDAM; the locator is its CDAM document id. CCD's disposer removes it. */
     CDAM_DOCUMENT,
     /**
-     * A {@code deedpoll_stagedpayload} row; the locator is its id.
-     */
-    STAGED_PAYLOAD,
-    /**
      * A {@code deedpoll_ownedstage} row owned by the case; the locator is its id.
      */
     OWNED_STAGE,

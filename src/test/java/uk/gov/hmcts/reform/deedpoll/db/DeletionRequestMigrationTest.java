@@ -246,7 +246,7 @@ class DeletionRequestMigrationTest extends AbstractPostgresContainerTest {
             values (?, ?, 'EVERYTHING', 'x', 'Pending')
             """, UUID.randomUUID(), admitted.id())).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> requests.insertStep(UUID.randomUUID(), UUID.randomUUID(),
-                                                     DeletionStepKind.STAGED_PAYLOAD, "p", "p"))
+                                                     DeletionStepKind.OWNED_STAGE, "p", "p"))
             .as("a step needs its request").isInstanceOf(DataIntegrityViolationException.class);
 
         assertThatThrownBy(() -> jdbc.update(

@@ -80,7 +80,7 @@ CREATE TABLE deedpoll_deletion_step (
     -- Cascades from the request, never from the case.
     request_id uuid NOT NULL REFERENCES deedpoll_deletion_request (id) ON DELETE CASCADE,
     kind varchar(32) NOT NULL
-        CHECK (kind IN ('LOCAL_DOCUMENT', 'CDAM_DOCUMENT', 'STAGED_PAYLOAD', 'OWNED_STAGE', 'CCD_DISPOSAL')),
+        CHECK (kind IN ('LOCAL_DOCUMENT', 'CDAM_DOCUMENT', 'OWNED_STAGE', 'CCD_DISPOSAL')),
     -- The local row it came from (a supporting document's id, a payload's id), if any.
     item_id text,
     locator varchar(1024),
