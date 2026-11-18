@@ -479,12 +479,23 @@ public class DeedPollService {
      * Gazette audit membership also prevents deletion permanently. Otherwise the database cascades to the children.
      * V30 also guards retained preparation ownership in the database, including deletion outside this service.
      *
-     * @throws ConflictError if the case owns retained preparation or staging bytes, or Gazette audit membership
+     * <p><strong>Not the Delivery Manager's deletion, and no production code calls it.</strong> It names no caller,
+     * audits as the service account and removes no binary, CCD case or SDK snapshot, so it is not a way to delete an
+     * application: that is {@code ApplicationDeletionService}, whose request fences the case until its own verified
+     * cleanup finalises it. A case with such a request is therefore refused here, so this cannot pre-empt the cleanup
+     * or erase the case the request still has to account for. {@code RemoveDeedPollCallersTest} holds that nothing in
+     * the main source set calls this.
+     *
+     * @throws ConflictError if the case owns retained preparation or staging bytes, Gazette audit membership, or a
+     *     deletion request
      * @throws NotFoundError if there is no such case
      */
     @Transactional
     public void removeDeedPoll(String id) {
         deedPolls.lockForDeletion(id).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+        if (deedPolls.hasDeletionRequest(id)) {
+            throw new ConflictError("This case has a deletion request, and only that request can delete it.");
+        }
         if (deedPolls.hasRetainedDeedPayload(id)) {
             throw new ConflictError("This case has retained deed preparation bytes. "
                 + "Resolve its document storage outcome before deleting the case.");

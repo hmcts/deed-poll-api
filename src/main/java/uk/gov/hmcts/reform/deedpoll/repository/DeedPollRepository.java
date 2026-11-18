@@ -78,6 +78,13 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
         nativeQuery = true)
     boolean hasGazetteRequestEvidence(@Param("id") String id);
 
+    /**
+     * Whether a Delivery Manager's deletion request (V48) names the case. Once one does, only that request's own
+     * finalisation may delete it, so {@code DeedPollService.removeDeedPoll} refuses.
+     */
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM deedpoll_deletion_request WHERE case_id = :id)", nativeQuery = true)
+    boolean hasDeletionRequest(@Param("id") String id);
+
     /** Every case, newest first. */
     List<DeedPoll> findAllByOrderByCreatedOnDesc();
 

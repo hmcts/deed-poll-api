@@ -208,12 +208,12 @@ the current migrations and the pinned platform contract fixtures.
 **Files:** new `domain/deletion/ApplicationDeletionService.java` and tests; `DeedPollRepository.java`,
 `domain/audit/AuditTrail.java`, and the existing deletion tests named in Context.
 
-- [ ] Implement authorised, locked admission with immutable actor/reason, inventory, fence and transactional
+- [x] Implement authorised, locked admission with immutable actor/reason, inventory, fence and transactional
   request audit. Keep Gazette and unresolved-storage guards; add permanent-retention, stale-confirmation and
   unresolved-work refusals. Include the original confirmation timestamp in the idempotency fingerprint.
-- [ ] Implement the replay rules above, including replay after physical deletion, conflicting bodies/keys and
+- [x] Implement the replay rules above, including replay after physical deletion, conflicting bodies/keys and
   simultaneous requests. Close any unguarded production call path to the old short-form deletion method.
-- [ ] Prove audit failure rolls back admission, no denied request changes data, guards leave the case intact,
+- [x] Prove audit failure rolls back admission, no denied request changes data, guards leave the case intact,
   unknown IDs 404 for holders, and another application's ID/duplicate reason never deletes the retained case.
 
 ### Task 4: Fence casework, reads, background sends and resurrection paths
@@ -341,6 +341,24 @@ both tables. Focused suites: `DeletionRequestMigrationTest` 7, `DeletionNoteTest
 `RoleCapabilitiesTest` 18, plus updated `AmRolesTest`, `CallerAccess*`, `DeedPollSchemaHealthTest`, `SdkMigrationOrderTest`
 (V1–V48). Gates: `./gradlew build` (init script) exit 0 in 5m41s; `test` 5,514 across 593 suites (0 failures, 1 skipped);
 `integration` 30 across 5 (0 failures); `checkstyle.sh` OK; `git diff --check` clean.
+
+Task 3 (2026-11-18): `domain/deletion/ApplicationDeletionService` admits under the case's `FOR UPDATE` lock in one
+transaction (request, immutable inventory, value-free `CASE_DELETION_REQUESTED` with reason, note and request id), in a
+fixed order: capability, subject, body (field errors), existing request (replay, also after physical deletion), lock,
+existing request again, 404, refusals. Refusals are `DeletionConflictError` with a typed `DeletionRefusal` code
+(`STALE_CONFIRMATION`, `RETAINED_PERMANENTLY`, `GAZETTE_EVIDENCE`, `RETAINED_DEED_PAYLOAD`, `RETAINED_STAGED_UPLOADS`,
+`DOCUMENT_STORAGE_UNRESOLVED`, `CCD_CREATION_UNRESOLVED`, `EMAIL_SEND_UNRESOLVED`, `KEY_REUSED`,
+`CONFLICTING_REASON`); the guard reads are `repository/DeletionAdmissionRepository`. `read` is the capability-first
+status lookup for Task 7. `DeedPollService.removeDeedPoll` now refuses a case with a request
+(`DeedPollRepository.hasDeletionRequest`), and `RemoveDeedPollCallersTest` (ArchUnit, local import) holds that no
+production class calls it. **Task 4 must note:** a `Pending` email with `sendStartedAt` set blocks admission until it is
+settled, so fencing the drain must still let it settle; an `UploadUncertain` document with both sends used is treated
+as settled. Focused suites: `ApplicationDeletionServiceTest` 13 (Postgres: inventory and audit, every non-DM role 403
+before lookup or validation, field errors, 404s, each refusal writes nothing, settled work admitted, stale
+confirmation, audit-failure rollback by trigger, replays including after deletion, duplicate leaves the kept case
+alone, short form refused, two simultaneous admissions held on the lock), `RemoveDeedPollCallersTest` 1. Gates:
+`./gradlew build` (init script) exit 0 in 5m20s; `test` 5,528 across 595 suites (0 failures, 1 skipped); `integration`
+30 across 5 (0 failures); `checkstyle.sh` OK; `git diff --check` clean.
 
 ## Post-Completion
 

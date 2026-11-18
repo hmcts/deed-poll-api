@@ -168,6 +168,33 @@ row's `storageState` says which store holds it.
    inside the SDK's transaction, so the `ccd.case_data` delete and the completion commit or fail together. An unlinked
    case is finalised by this service's own worker after step 3.
 
+## Admission (Task 3)
+
+`domain/deletion/ApplicationDeletionService.request` is step 1. Its order is fixed: `DELETE_APPLICATION` (403 before
+anything is read), the caller's subject (401), the body (400 per field: `Idempotency-Key`, `reason`, `note`,
+`expectedModifiedOn`), the case's existing request (a replay, answered even once the case is gone), the case lock
+(`DeletionAdmissionRepository.lock`, `FOR UPDATE`) and the existing request again under it, then 404, then the
+refusals. Each refusal is a `DeletionConflictError` carrying a `DeletionRefusal` code, and writes nothing:
+
+| Code | When |
+|---|---|
+| `STALE_CONFIRMATION` | the case's `modifiedOn`, to the millisecond, is not the one the Delivery Manager reviewed |
+| `RETAINED_PERMANENTLY` | `retainPermanently` is set |
+| `GAZETTE_EVIDENCE` | Gazette notice batch membership or request evidence |
+| `RETAINED_DEED_PAYLOAD`, `RETAINED_STAGED_UPLOADS` | the existing retained-bytes guards |
+| `DOCUMENT_STORAGE_UNRESOLVED` | a document `UploadPending`, `Uploaded`, `AttachUncertain`, or `UploadUncertain` with a send left |
+| `CCD_CREATION_UNRESOLVED` | an unlinked case's attempt is `Claimed`/`AwaitingConfirmation`, or may have reached CCD without proof nothing was created |
+| `EMAIL_SEND_UNRESOLVED` | a `Pending` email with its send started, or under a live claim |
+| `KEY_REUSED`, `CONFLICTING_REASON` | a replay: the same key with another body, or another key with the other reason |
+
+An uncertain upload that has used both sends is settled (nothing resends it, and an unattached copy expires on CDAM's
+upload TTL), as are `Local`, `Attached` and `Failed`. Admission then writes the request, its inventory
+(`LOCAL_DOCUMENT` per filesystem document with its storage key, `CDAM_DOCUMENT` per attached document, `OWNED_STAGE`
+per owned stage naming the case, `CCD_DISPOSAL` with the linked reference) and `CASE_DELETION_REQUESTED` under the
+caller with the reason, note and request id and no values, in one transaction. A second key for the same reason
+answers the first request with its first Delivery Manager and note. `DeedPollService.removeDeedPoll` refuses a case
+with a request, and `RemoveDeedPollCallersTest` holds that no production class calls it.
+
 ## Definition change (designed here, built in Task 5)
 
 Add to `DeedPollCaseType`, following the SDK's own e2e `SimpleCaseConfiguration` and its `retain-and-dispose.md`:

@@ -28,7 +28,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
  * Neither has a consumer in {@code deed-poll-admin}'s data-access layer, and the eleven operations this plan
  * builds are the ones something actually calls; the sibling API built every route an imagined consumer might
  * want, which is the habit being broken. The domain methods exist and are tested
- * ({@code removeDeedPoll}, {@code validateCaseForSubmit}), so exposing either later is a route, not a design.
+ * ({@code removeDeedPoll}, {@code validateCaseForSubmit}). {@code removeDeedPoll} is not to be exposed: the
+ * Delivery Manager's permanent deletion is {@code ApplicationDeletionService}'s request, never a {@code DELETE}.
  *
  * <p>Both handlers do the same three things: validate the body against the ported schema, call the domain with
  * the caller's write context, and map the result. Every refusal is thrown rather than returned --
