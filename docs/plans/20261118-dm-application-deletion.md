@@ -1,0 +1,285 @@
+# Plan: Delivery Manager permanent application deletion — API
+
+## Overview
+
+Status: planned, 2026-11-18. Planning only; no implementation or environment deletion authorised by this file.
+
+Steve's requirement, confirmed 2026-11-18: a Delivery Manager can **permanently delete an application created in
+error or duplicated**, with an audit entry stating why. This is not a void, archive or withdrawal. It supersedes
+the September planning restriction that reserved manual hard deletion for data-protection erasure requests.
+It does not introduce routine retention disposal or change the unpaid-online seven-day policy.
+
+This is the API half. The consumer plan is `deed-poll-admin:docs/plans/20261118-dm-application-deletion.md`.
+Run each plan from its own repository in a separate worktree. API owns permissions, eligibility, deletion and audit;
+Admin owns the confirmation and progress pages. Merge and deploy API before exposing the Admin control.
+
+Success means the application and its owned operational data are permanently removed from this service's active
+stores, including documents and CCD/SDK data, and cannot be recreated by queued work. An append-only audit event
+retains the application identifier, actor, time and reason. An accepted request is not completed deletion.
+
+## Context
+
+Planning baseline: API `origin/master` `35bf235`; Admin `origin/master` `17b28c7`. Fetch and record execution SHAs
+before implementation; do not reset another worker's checkout. Read `CLAUDE.md` in full and applicable local rules.
+
+Read these existing files before introducing a second mechanism:
+
+- `src/main/java/uk/gov/hmcts/reform/deedpoll/domain/deedpoll/DeedPollService.java`: `removeDeedPoll` already locks
+  and deletes, refusing retained deed/staging payloads and any Gazette request/batch membership. It has no caller
+  permission and audits as the system account. It does not coordinate remote or SDK cleanup.
+- `api/caseworker/controller/CaseworkerCaseController.java` under the same Java root: deliberately no delete route.
+  `domain/auth/{CurrentUser,Capability,RoleCapabilities}.java`: capabilities come from verified roles.
+- `domain/audit/{AuditAction,AuditEntry,AuditActor,AuditTrail}.java`, migrations `V36__audit_trail.sql`,
+  `api/WriteEndpointAuditCoverageTest.java`, `domain/audit/RemainingWriteAuditTest.java` under test sources.
+  Audit event detail currently has an identifier-only allowlist; before/after values survive ordinary case deletion.
+- `repository/DeedPollRepository.java`; migrations V3, V6, V11, V22, V26, V30, V31, V34, V36 and V44. Database
+  cascades remove local child rows, not stored files, CCD records or SDK snapshots. Gazette evidence restricts deletion.
+- `domain/documents/{DocumentService,DocumentStore,RemoteDocumentUploads}.java`,
+  `storage/{CdamDocumentStore,LocalFilesystemDocumentStore,StagedPayloads}.java`, `domain/staging/OwnedStaging.java`.
+  Ordinary document removal is best effort after commit and CDAM soft deletion: neither is this feature's completion contract.
+- `ccd/{CcdLinkingService,CcdCreationAttempts,CcdAttemptRepairs,CcdLinkingSweep,LinkDeedPollHandler}.java`,
+  `notify/NotificationDeliveryTransactions.java`, `domain/masters/{MasterEmailTransactions,MasterEmailDrain}.java`.
+  Trace the actual SDK persistence, linking, send and recovery paths, not just foreign keys.
+- `docs/plans/retain-and-dispose.md`, `docs/CDAM-SEQUENCE.md`,
+  `docs/plans/completed/gazette-1c-request-ledger-and-guards.md`,
+  `docs/plans/completed/20261015-audit-trail.md` and the existing OpenAPI publisher test.
+
+Except where a full path is given, Java paths above are relative to
+`src/main/java/uk/gov/hmcts/reform/deedpoll/`; test paths mirror that package under `src/test/java/`.
+
+## Development Approach
+
+### Confirmed requirements and implementation defaults
+
+Implement the permanent-delete outcome and reason audit; do not substitute a retained voided application.
+The following are design defaults for this plan, not additional business decisions attributed to Steve:
+
+1. Add `DELETE_APPLICATION`, granted only to `Role.DELIVERY_MANAGER`. Team leader, legacy admin, caseworker and
+   judicial roles do not gain it. Check it inside the admission service and every status read before looking up data.
+2. Require a structured reason: `CREATED_IN_ERROR` or `DUPLICATE`. The audit code and its documented wording state
+   why. No arbitrary free text, applicant name, email, copied case content or mandatory duplicate target is needed.
+3. Preserve the existing Gazette-evidence and unresolved-storage guards. Also refuse `retainPermanently` rather
+   than silently overriding it. A completed/paid/migrated case is not automatically ineligible just because of that
+   label; its actual obligations and external records must be covered by the inventory and deletion contract.
+   Do not invent retention periods, refund money or delete financial records governed separately.
+4. Use durable asynchronous deletion because local/CCD/CDAM work cannot be one transaction. While a request is
+   pending, the case may temporarily remain stored but must be fenced against use. This is recovery machinery,
+   not a new business state or soft-delete outcome. No `DeedPollState` member is added.
+5. Keep reference allocation monotonic. Do not decrement counters, recycle an application ID/reference or delete
+   the surviving application when deleting a duplicate. A migrated application's source mapping must prevent reimport.
+
+### Proposed HTTP contract
+
+Implement and publish in API before Admin consumes it. Do not hand-edit Admin's vendored spec.
+
+| Operation | Contract |
+|---|---|
+| `POST /caseworker/cases/{id}/deletion-requests` | `DELETE_APPLICATION`; required UUID `Idempotency-Key`; closed JSON body with `reason` (`CREATED_IN_ERROR` or `DUPLICATE`) and `expectedModifiedOn` (the timestamp read for confirmation); 202 with `{ requestId, status }` and a Location naming the status resource |
+| `GET /caseworker/application-deletions/{requestId}` | Same capability; 200 with request ID, case ID, reason, status, requested/completed timestamps and optional allowlisted failure code; no applicant content or storage locators |
+
+Statuses: `Pending`, `InProgress`, `NeedsAttention`, `Completed`. An incomplete/uncertain outcome remains visible;
+no response calls it deleted. Polling never starts work. There is no browser-triggered retry with a new key.
+Document 400 (invalid body/key), 401, 403, 404 and 409 (guard, concurrent admission or key/body mismatch), and normal
+availability errors. Capability checks precede existence and payload validation so forged requests disclose nothing.
+
+Idempotency scope is the operation, case and key. Persist a unique request per case, including its completion
+tombstone, without a cascading FK. A repeat of the same key/body returns that request even after the case is gone;
+the same key for different content returns 409. A second key must not overwrite the original reason/actor or create
+another deletion: return the existing request for the same case/reason, or 409 for a conflicting reason. Authorise
+all replays and status reads. Check the durable admission record before treating the missing case as 404.
+For first admission only, compare `expectedModifiedOn` under the case lock with the current authoritative
+timestamp. A mismatch is 409 with no request/fence/audit write: require a fresh review. A replay of an already
+admitted request uses its original fingerprint and never fails merely because cleanup changed or removed the case.
+
+### Deletion and audit invariants
+
+- Admission takes the same case lock as other mutations. In one short transaction validate eligibility, create the
+  request/fence, save an immutable inventory of required cleanup identifiers and record `CASE_DELETION_REQUESTED`
+  with the verified actor, reason code and request ID. Audit failure rolls all of this back. Store no access tokens.
+- Before irreversible work, all writers and background consumers must honour the fence. Cover case/child writes,
+  Gazette admission, document uploads/promotions, CCD creation/repair/callbacks, notification claims/delivery and
+  Master digests/reminders. Reads, downloads, judicial views, searches, counts and MI must not expose a pending
+  application's content. The deletion status resource remains available to authorised staff.
+- Resolve in-flight/unknown CCD creation, storage or external sends before accepting, or report a typed 409.
+  A worker that copied a payload before the fence is a real race: a row disappearing later does not revoke its
+  send authority. Test lock/lease ordering at the last irreversible boundary. Never hold a DB transaction open
+  across remote calls. Stop new sends; do not claim to recall email already delivered by Notify.
+- A bounded worker uses durable steps, owner/lease and retry policy, retaining identifiers until their cleanup is
+  verified. No best-effort log-and-forget cleanup. Missing rows/files count as success only under a proven ownership
+  and deletion contract. Auth failures, outages and ambiguous remote results never count as absence.
+- Inventory and remove local application/children/outboxes, owned binaries/staging, CCD pointer and service-owned
+  SDK case/event snapshots and projections, and applicant-bearing audit value rows via the controlled disposal
+  function. Handle shared Master email ledgers without deleting other cases' work. Preserve audit event rows.
+- Permanent CDAM deletion needs a deletion-specific operation; do not change ordinary document deletion's default.
+  Verify ordering/authority for CCD disposal, document references and permanent CDAM removal against pinned platform
+  code/contracts. Do not invent a CCD DELETE endpoint or bypass its database. Local filesystem cleanup is tested too.
+- On finalisation, in one local transaction remove remaining approved local data, dispose case audit values, record
+  `CASE_DELETED` with the **original Delivery Manager**, reason and request ID, and set `Completed`. Failure of any
+  local step rolls back finalisation; external completed steps remain recorded for safe resumption. Exactly one
+  completion event, also after lost responses, expired leases and multiple workers.
+- Extend audit detail with typed, validated `deletionReason` and `deletionRequestId`; do not turn the allowlist into
+  arbitrary JSON or add applicant content. Completion records no before/after applicant values. Audit/status can
+  identify the deleted application by its internal ID; do not retain a snapshot merely to decorate the UI.
+- The completion tombstone retains identifiers, actor, reason, timestamps and step outcome codes only; erase
+  document locators and temporary inventory once no longer needed. Preserve it long enough to prevent replay or
+  reimport under an explicit documented retention rule consistent with the existing seven-year event policy.
+  Do not claim existing backups, third-party delivered messages or the source Power App have been erased by this
+  operation. Document their separate ownership and restoration/reimport protections.
+
+### Platform prerequisite
+
+Task 1 must establish a supported, verifiable permanent-cleanup path for linked CCD/CDAM applications and all
+deployed storage modes. Local code can be implemented/tested against pinned contracts, but a guessed endpoint,
+CDAM soft delete or a single inaccessible GET cannot satisfy it. If a required platform operation is unavailable,
+record the specific gap and stop dependent destructive implementation; do not silently ship local-only deletion,
+change this to voiding, or mark an unmet prerequisite complete. No further business question is needed to write
+this plan; an external capability gap is an execution finding.
+
+## Validation Commands
+
+Run commands from this repository root, in the foreground. Record a baseline before changes.
+
+```bash
+./gradlew test --tests '*ApplicationDeletion*' --no-watch-fs
+./gradlew compileJava compileTestJava compileIntegrationTestJava checkstyleMain checkstyleTest --no-watch-fs
+git diff --check
+```
+
+The named focused suite starts with Task 2; do not run an empty test selector as a baseline gate. Each task also
+runs the existing focused suites for its touched services. Use Testcontainers/Postgres for migrations, audit and
+concurrency, and WireMock for external contracts. The baseline and final gate are `./gradlew build --no-watch-fs`,
+with tests forced in the final run and test/integration counts recorded. If this host needs `JAVA_TOOL_OPTIONS=-XX:UseSVE=0`,
+use it; if Checkstyle's worker still crashes, use the existing workspace no-checkstyle/direct-Checkstyle procedure
+and record the exact commands and result. Never disable a check without running its equivalent. Do not copy an
+old plan's nonexistent `/tmp` helper or historic test counts. Generate the OpenAPI artifact using the publisher
+test and `OPENAPI_OUTPUT_PATH`, as the Admin provenance file documents, after the final contract is tested.
+
+## Implementation Steps
+
+### Task 1: Verify deletion ownership, external contracts and execution baseline
+
+**Read:** all Context sources, `storage/`, `ccd/`, `notify/`, `domain/masters/`, SDK persistence configuration,
+the current migrations and the pinned platform contract fixtures.
+
+- [ ] Record current source SHAs and baseline build/check results. Inventory every owned application record/blob,
+  shared ledger, SDK snapshot, migration mapping and pending/in-flight job, including deployed mode selection.
+- [ ] Write `docs/APPLICATION-DELETION.md` with the cleanup ordering, permanent CDAM and CCD authority/completion
+  evidence, audit-value disposal permissions, separately retained data and supported external contract citations.
+- [ ] Establish a runnable stubbed contract proof and record any platform registration/provisioning prerequisite.
+  A missing supported deletion mechanism blocks dependent work; do not tick this item based on a proposal alone.
+
+### Task 2: Add durable request storage, reason types and Delivery Manager capability
+
+**Files:** new `domain/deletion/` types/repository, next free Flyway migration, `health/DeedPollSchema.java`,
+`domain/auth/{Capability,RoleCapabilities}.java`, `domain/audit/{AuditEntry,AuditAction}.java` and matching tests.
+
+- [ ] Add reason/status types, durable request/step inventory and claim fields; enforce case/key uniqueness and
+  retain the request across case deletion. No applicant snapshots or cascading request FK.
+- [ ] Grant `DELETE_APPLICATION` only to Delivery Managers and add typed audit metadata plus request action.
+- [ ] Test migration constraints, role unions/negative roles, invalid reason/detail rejection and persistence
+  across a parent deletion. Check schema/migration-order health tests as well as the task's focused suite.
+
+### Task 3: Admit, deduplicate and audit deletion requests
+
+**Files:** new `domain/deletion/ApplicationDeletionService.java` and tests; `DeedPollRepository.java`,
+`domain/audit/AuditTrail.java`, and the existing deletion tests named in Context.
+
+- [ ] Implement authorised, locked admission with immutable actor/reason, inventory, fence and transactional
+  request audit. Keep Gazette and unresolved-storage guards; add permanent-retention, stale-confirmation and
+  unresolved-work refusals. Include the original confirmation timestamp in the idempotency fingerprint.
+- [ ] Implement the replay rules above, including replay after physical deletion, conflicting bodies/keys and
+  simultaneous requests. Close any unguarded production call path to the old short-form deletion method.
+- [ ] Prove audit failure rolls back admission, no denied request changes data, guards leave the case intact,
+  unknown IDs 404 for holders, and another application's ID/duplicate reason never deletes the retained case.
+
+### Task 4: Fence casework, reads, background sends and resurrection paths
+
+**Files:** read/write services under `domain/`, list/query/MI repositories, `ccd/`, `notify/`,
+`domain/masters/`, `domain/staging/`, document services and their focused tests.
+
+- [ ] Apply the request fence consistently to case/child writes, reads/downloads, worklists/counts/MI, judicial
+  reads and mutations, Gazette admission, document promotion and CCD linking/repair/callback paths.
+- [ ] Quiesce pending jobs and coordinate the in-flight claim/delivery boundary; account for Master emails
+  spanning deleted and surviving cases. Preserve the service's unknown-send handling and do not resend.
+- [ ] Add deterministic concurrency tests for admission versus update/upload/Gazette/send/link, workers holding
+  copied data, and a callback/reimport after completion. Prove no new external work escapes the fence.
+
+### Task 5: Implement permanent external and binary cleanup with recovery
+
+**Files:** `domain/deletion/` worker/steps, `storage/`, CCD integration, document stores, scheduler properties,
+`src/main/resources/application.yaml`, chart values/Chart.yaml if changed, and stubbed external tests.
+
+- [ ] Implement Task 1's verified CCD, SDK and permanent document cleanup steps in the required order; distinguish
+  local filesystem from remote storage. Capture identifiers before cascades remove the only lookup paths.
+- [ ] Add bounded multi-pod claiming/recovery and persisted outcomes. Keep transient and uncertain failures
+  incomplete, expose allowlisted status codes, and retain enough information to resume without guessing.
+- [ ] Test partial remote completion, timeout before/after remote success, 401/403/404/5xx, lease loss and restart
+  at each step, two workers, missing binaries and already-completed operations. Ordinary document removal stays soft.
+- [ ] If worker config changes chart values, bump the chart version and cover chart selection. Keep activation
+  disabled until Task 9's evidence is recorded; disabling the worker must leave pending cases fenced and recoverable.
+
+### Task 6: Finalise local deletion and retain the reason audit
+
+**Files:** `domain/deletion/` finalisation, `DeedPollService.java`, audit disposal adapter, local/SDK repositories,
+new migration only if required for permissions, and Postgres integration tests.
+
+- [ ] Implement atomic local finalisation only after verified external steps. Remove applicant-bearing values
+  through the existing controlled function, preserve event history and record one correctly attributed completion.
+- [ ] Retain the minimal idempotency/reimport tombstone and remove no-longer-needed cleanup inventory; leave
+  sequence counters unchanged. Shared records for other applications survive.
+- [ ] Test complete populated applications, unlinked/linked/migrated cases, retained audit rows/reason/actor,
+  deleted audit values, binary and SDK absence, audit failure rollback and safe retry after external completion.
+
+### Task 7: Expose and publish the deletion contract
+
+**Files:** new caseworker controller/DTOs, `api/DomainErrorHandler.java` only as required, OpenAPI/security tests,
+`api/WriteEndpointAuditCoverageTest.java`, `auth/` capability response tests and publisher test.
+
+- [ ] Add the proposed admission and status routes with capability-first checks, closed reason body, required
+  idempotency header, typed statuses/errors, Location and no-store responses. Classify request writes with `@AuditedAs`.
+- [ ] Test real HTTP validation/authentication, every non-DM role, header/body mismatch, 202 replay after deletion,
+  status visibility across authorised Delivery Managers, and no content/locators in responses or logs.
+- [ ] Generate/publish the complete OpenAPI artifact and record source SHA/hash/full delta for Admin. Run the
+  existing write-body, forbidden-response and endpoint-audit conformance tests.
+
+### Task 8: Complete regression proof and implementation documentation
+
+**Files:** all changed production/test files, `README.md`, `CLAUDE.md`, `docs/APPLICATION-DELETION.md`, this plan.
+
+- [ ] Run the forced full build, integration and Checkstyle gates; record commands/counts, changed-code coverage
+  and meaningful race/failure evidence. Do not weaken coverage/audit guards or mark failed checks passed.
+- [ ] Document the role, two reasons, status meanings, permanent outcome, existing refusal rules, audit retention,
+  no reference reuse, non-recallable delivered email and failure/recovery procedure. Amend stale current guidance
+  that says no delete consumer exists; preserve the superseded September decision as history.
+- [ ] Record API commit/spec provenance and the Admin handoff. Leave deployment evidence separate from local
+  completion; do not run Ralphex in the Admin checkout or move the plan to completed before review finishes.
+
+### Task 9: Prepare the concrete rollout and recovery evidence
+
+**Files:** `docs/APPLICATION-DELETION.md`, chart configuration/tests if required, execution notes below.
+
+- [ ] Produce a non-production rehearsal script/checklist using disposable fixtures for linked/unlinked cases,
+  documents, failure/restart and audit verification; use no real applicant data and include restoration safeguards.
+- [ ] Produce the API-before-Admin rollout order, worker activation prerequisites, pause/resume procedure,
+  incomplete-request monitoring and owner handoff. No cancellation/unfencing after irreversible cleanup begins.
+- [ ] Record which external checks remain outstanding; automated tests must keep completion/activation impossible
+  without the required configuration. This task prepares reviewable artifacts, not live deletion or deployment.
+
+## Success criteria
+
+Only a Delivery Manager can request deletion, and every accepted request carries one of the two explicit reasons.
+Completed means all in-scope operational copies are removed, the reference is never reused, no queued writer can
+recreate the case, and a durable audit event states who deleted which application, when and why. Partial or unknown
+cleanup never appears completed. Existing Gazette evidence and unresolved obligations are preserved through refusals.
+No application is merely voided, and no audit event or unrelated application is lost.
+
+## Execution notes
+
+Not started. No validation run, external contract proof, rollout or live deletion has been performed for this plan.
+Record execution SHAs, Task 1 inventory/contract proof, per-task tests, spec artifact and review findings here.
+
+## Post-Completion
+
+API deployed and compatible on every replica before Admin activation. Rehearsal/activation results are operator
+evidence, recorded separately; never tick a missing external proof as a successful rehearsal. This feature does not
+complete `retain-and-dispose.md` or erase copies in backups, delivered correspondence or the legacy source system.
