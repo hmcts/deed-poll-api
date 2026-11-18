@@ -49,6 +49,13 @@ public class CaseLastChanged {
      * The case's last change, or empty when there is no such case. Read it <em>before</em> the case it describes, so a
      * write landing between the two reads makes the value older than what was shown, which refuses a deletion rather
      * than admitting one over a change nobody saw.
+     *
+     * <p><strong>It is a time, not a version.</strong> {@code modifiedOn} and {@code occurred_at} are stamped from the
+     * pod's clock while the write runs, not when it commits, and child writes do not lock the case. So a write that
+     * stamps T1, then commits after another write stamped T2 &gt; T1 was already shown, does not move the value, and a
+     * deletion reviewed at T2 is admitted over it; pods whose clocks disagree do the same. The window is one child
+     * write's transaction (or the clock skew). Closing it needs a value that every commit moves, such as a count of
+     * audited writes, or child writes that lock the case; neither is done (docs/APPLICATION-DELETION.md).
      */
     public Optional<LocalDateTime> of(String caseId) {
         return jdbc.query(SQL, (row, index) -> row.getTimestamp("last_changed").toLocalDateTime(), caseId)

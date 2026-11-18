@@ -214,7 +214,7 @@ refusals. Each refusal is a `DeletionConflictError` carrying a `DeletionRefusal`
 
 | Code | When |
 |---|---|
-| `STALE_CONFIRMATION` | the case's `lastChangedOn`, to the millisecond, is not the one the Delivery Manager reviewed: the later of its `modifiedOn` and its newest audited write (a note, witness, document, referral or email; reads excluded), read in its own statement after the case lock (`repository/CaseLastChanged`). A child write that commits after that read and before admission commits is not seen, because child writes do not lock the case |
+| `STALE_CONFIRMATION` | the case's `lastChangedOn`, to the millisecond, is not the one the Delivery Manager reviewed: the later of its `modifiedOn` and its newest audited write (a note, witness, document, referral or email; reads excluded), read in its own statement after the case lock (`repository/CaseLastChanged`). A child write that commits after that read and before admission commits is not seen, because child writes do not lock the case. Nor is one in flight when the case was reviewed: its time is stamped before it commits, so if a newer write was already shown the maximum does not move (pods' clock skew does the same). Both windows are one child write's transaction; closing them needs a value every commit moves (a count of audited writes) or child writes that lock the case, and neither is done |
 | `RETAINED_PERMANENTLY` | `retainPermanently` is set |
 | `GAZETTE_EVIDENCE` | Gazette notice batch membership or request evidence |
 | `RETAINED_DEED_PAYLOAD`, `RETAINED_STAGED_UPLOADS` | the existing retained-bytes guards |
