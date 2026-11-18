@@ -25,6 +25,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.Admission;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.DeletionCommand;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
+import uk.gov.hmcts.reform.deedpoll.repository.CaseLastChanged;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionRequestRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionWorkRepository;
 import uk.gov.hmcts.reform.deedpoll.storage.LocalFilesystemDocumentStore;
@@ -58,6 +59,9 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
     private static final LocalDateTime MODIFIED = LocalDateTime.of(2026, 11, 18, 9, 30, 15, 250_000_000);
     private static final String NOTE = "Duplicate of an application keyed in the same morning";
     private static final Duration POLL = Duration.ofHours(1);
+
+    @Autowired
+    private CaseLastChanged lastChanged;
 
     @Autowired
     private ApplicationDeletionService deletions;
@@ -394,11 +398,11 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
         String id = populated(false);
         UUID key = UUID.randomUUID();
         DeletionRequest request = deletions.request(DELIVERY_MANAGER, id,
-            new DeletionCommand(key, "CREATED_IN_ERROR", NOTE, MODIFIED)).request();
+            new DeletionCommand(key, "CREATED_IN_ERROR", NOTE, reviewed(id))).request();
         assertThat(process()).isPresent();
 
         Admission replay = deletions.request(DELIVERY_MANAGER, id,
-            new DeletionCommand(key, "CREATED_IN_ERROR", NOTE, MODIFIED));
+            new DeletionCommand(key, "CREATED_IN_ERROR", NOTE, request.expectedLastChangedOn()));
 
         assertThat(replay.admitted()).isFalse();
         assertThat(replay.request().id()).isEqualTo(request.id());
@@ -418,9 +422,14 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
                          caseId)).isZero();
     }
 
+    /** What the case detail would publish as lastChangedOn: the fixture's own audited write is newer than MODIFIED. */
+    private LocalDateTime reviewed(String caseId) {
+        return lastChanged.of(caseId).orElseThrow();
+    }
+
     private DeletionRequest admit(String caseId, String reason) {
         return deletions.request(DELIVERY_MANAGER, caseId,
-                                 new DeletionCommand(UUID.randomUUID(), reason, NOTE, MODIFIED)).request();
+                                 new DeletionCommand(UUID.randomUUID(), reason, NOTE, reviewed(caseId))).request();
     }
 
     private DeletionRequest reread(DeletionRequest request) {

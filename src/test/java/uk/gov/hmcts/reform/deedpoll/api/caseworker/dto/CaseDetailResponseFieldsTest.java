@@ -9,6 +9,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollFields;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollWithComputed;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 
+import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -46,6 +47,7 @@ class CaseDetailResponseFieldsTest {
     void publishesExactlyTheReadableFields() {
         Set<String> expected = new LinkedHashSet<>(DeedPollFields.readAll(new DeedPoll()).keySet());
         expected.addAll(CaseResponseFields.DERIVED);
+        expected.addAll(CaseResponseFields.DETAIL_ONLY);
         expected.addAll(CaseResponseFields.CHILDREN);
 
         assertThat(CaseResponseFields.componentNames(CaseDetailResponse.class))
@@ -95,14 +97,16 @@ class CaseDetailResponseFieldsTest {
         CaseResponseFields.Populated populated =
             CaseResponseFields.populate(CaseDetailResponse.class, first, second, third, fourth);
 
+        LocalDateTime lastChanged = LocalDateTime.of(2031, 7, 9, 8, 7, 6);
         CaseDetailResponse published = CaseDetailResponse.from(
-            new DeedPollWithComputed(populated.record(), new ComputedFields(11, 22)));
+            new DeedPollWithComputed(populated.record(), new ComputedFields(11, 22)), lastChanged);
 
         CaseResponseFields.assertCarriesItsOwnValue(
             CaseDetailResponse.class, published, populated.expected());
 
         assertThat(published.daysReceivedToEnroled()).isEqualTo(11);
         assertThat(published.daysReceivedToReturned()).isEqualTo(22);
+        assertThat(published.lastChangedOn()).isEqualTo(lastChanged);
         assertThat(published.notes()).isEmpty();
         assertThat(published.witnesses()).isEmpty();
         assertThat(published.documents()).isEmpty();

@@ -758,7 +758,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
 
         JsonNode body = spec.at("/components/schemas/CreateDeletionRequest");
         assertThat(body.get("properties").fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("reason", "note", "expectedModifiedOn");
+            .containsExactlyInAnyOrder("reason", "note", "expectedLastChangedOn");
         assertThat(body.get("required")).hasSize(3);
         assertThat(body.get("additionalProperties").asBoolean()).isFalse();
         assertThat(body.at("/properties/note/minLength").asInt()).isEqualTo(10);

@@ -19,6 +19,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.Admission;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.DeletionCommand;
+import uk.gov.hmcts.reform.deedpoll.repository.CaseLastChanged;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionRequestRepository;
 
 import java.sql.Timestamp;
@@ -53,6 +54,9 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
     private static final LocalDateTime MODIFIED = LocalDateTime.of(2026, 11, 18, 9, 30, 15, 250_000_000);
     private static final String NOTE = "Logged twice from the same postal application";
     private static final int TIMEOUT_SECONDS = 20;
+
+    @Autowired
+    private CaseLastChanged lastChanged;
 
     @Autowired
     private ApplicationDeletionService deletions;
@@ -185,7 +189,7 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
         assertThat(request.requestedBySubject()).isEqualTo(SUBJECT);
         assertThat(request.requestedByName()).isEqualTo("Dee Manager");
         assertThat(request.ccdCaseReference()).isEqualTo(ccd);
-        assertThat(request.expectedModifiedOn()).isEqualTo(MODIFIED);
+        assertThat(request.expectedLastChangedOn()).isEqualTo(MODIFIED);
         assertThat(request.fingerprint())
             .isEqualTo(DeletionFingerprint.of(DeletionReason.DUPLICATE, DeletionNote.parse(NOTE), MODIFIED));
         assertThat(requests.stepsOf(request.id())).extracting(DeletionStep::kind).containsExactlyInAnyOrder(
@@ -248,7 +252,7 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
                                                    new DeletionCommand(null, "created_in_error", "short", null)))
             .isInstanceOfSatisfying(InvalidInputError.class, error -> {
                 assertThat(error.errors()).extracting(FieldError::field).containsExactly(
-                    "Idempotency-Key", "reason", "note", "expectedModifiedOn");
+                    "Idempotency-Key", "reason", "note", "expectedLastChangedOn");
                 assertThat(error.getMessage()).doesNotContain(id).doesNotContain("short");
             });
         assertNothingWritten(id, before);
@@ -330,6 +334,43 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
         String expiredClaim = fixture();
         notification(expiredClaim, LocalDateTime.now(ZoneOffset.UTC).minusMinutes(5), false);
         assertThat(admit(expiredClaim, UUID.randomUUID()).admitted()).isTrue();
+    }
+
+    @Test
+    @DisplayName("a note, witness, document or referral written after the review makes it stale; a read does not")
+    void childWriteSinceTheReviewIsStale() {
+        String id = fixture();
+        auditEvent(id, "NOTE_CREATED", MODIFIED.plusMinutes(5));
+        auditEvent(id, "CASE_VIEWED", MODIFIED.plusMinutes(9));
+        String before = caseRow(id);
+
+        // The case row's own modifiedOn has not moved, which is all the check used to compare.
+        assertThatThrownBy(() -> deletions.request(DELIVERY_MANAGER, id, command(UUID.randomUUID())))
+            .isInstanceOfSatisfying(DeletionConflictError.class,
+                                    error -> assertThat(error.refusal()).isEqualTo(DeletionRefusal.STALE_CONFIRMATION));
+        assertNothingWritten(id, before);
+
+        assertThat(lastChanged.of(id)).as("the newest write, not the later view").contains(MODIFIED.plusMinutes(5));
+        DeletionCommand reviewed = new DeletionCommand(UUID.randomUUID(), "DUPLICATE", NOTE, MODIFIED.plusMinutes(5));
+        assertThat(deletions.request(DELIVERY_MANAGER, id, reviewed).admitted()).isTrue();
+    }
+
+    @Test
+    @DisplayName("a case with no audited write last changed at its own modifiedOn")
+    void lastChangedFallsBackToModifiedOn() {
+        String id = fixture();
+        auditEvent(id, "DOCUMENT_DOWNLOADED", MODIFIED.plusDays(1));
+
+        assertThat(lastChanged.of(id)).contains(MODIFIED);
+        assertThat(lastChanged.of(UUID.randomUUID().toString())).isEmpty();
+    }
+
+    private void auditEvent(String caseId, String action, LocalDateTime at) {
+        jdbc.update("""
+            INSERT INTO deedpoll_audit_event
+                (occurred_at, actor_id, actor_name, action, entity_type, entity_id, case_id)
+            VALUES (?, ?, 'A Caseworker', ?, 'DeedPoll', ?, ?)
+            """, Timestamp.valueOf(at), SUBJECT, action, caseId, caseId);
     }
 
     @Test

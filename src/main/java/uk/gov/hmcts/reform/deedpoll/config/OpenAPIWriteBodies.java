@@ -302,13 +302,15 @@ public class OpenAPIWriteBodies {
                 + " to " + DeletionNote.MAX_LENGTH + " characters, with no control characters but ordinary spaces."
                 + " Kept in the audit trail for its seven-year retention after the application is gone, so it must"
                 + " say why and must not include the applicant's personal details."));
-        body.addProperty(ApplicationDeletionService.EXPECTED_MODIFIED_ON_FIELD, new StringSchema()
+        body.addProperty(ApplicationDeletionService.EXPECTED_LAST_CHANGED_ON_FIELD, new StringSchema()
             .format("date-time")
-            .description("The application's modifiedOn exactly as the case detail published it when the Delivery"
-                + " Manager reviewed it (ISO-8601 local date-time, compared to the millisecond). A different value is"
-                + " 409 STALE_CONFIRMATION on a first request; a replay is never compared with the case."));
+            .description("The application's lastChangedOn exactly as the case detail published it when the Delivery"
+                + " Manager reviewed it: the later of the case's modifiedOn and its newest audited write to a note,"
+                + " witness, document, referral or email (ISO-8601 local date-time, compared to the millisecond)."
+                + " A different value is 409 STALE_CONFIRMATION on a first request; a replay is never compared"
+                + " with the case."));
         body.setRequired(java.util.List.of(ApplicationDeletionService.REASON_FIELD, DeletionNote.FIELD,
-                                           ApplicationDeletionService.EXPECTED_MODIFIED_ON_FIELD));
+                                           ApplicationDeletionService.EXPECTED_LAST_CHANGED_ON_FIELD));
         body.setAdditionalProperties(false);
         body.setDescription("A permanent deletion of the application in the path. No other key is accepted.");
         PathItem path = openApi.getPaths() == null ? null

@@ -62,7 +62,7 @@ class DeletionRequestMigrationTest extends AbstractPostgresContainerTest {
     private int insertRaw(String caseId, String reason, String note, String status) {
         return jdbc.update("""
             insert into deedpoll_deletion_request (id, case_id, idempotency_key, reason, note, fingerprint,
-                expected_modified_on, requested_by_subject, requested_by_name, requested_at, status)
+                expected_last_changed_on, requested_by_subject, requested_by_name, requested_at, status)
             values (?, ?, ?, ?, ?, ?, ?, 'dm-subject', 'Dee Manager', ?, ?)
             """, UUID.randomUUID(), caseId, UUID.randomUUID(), reason, note, "0".repeat(64), NOW, NOW, status);
     }
@@ -79,7 +79,7 @@ class DeletionRequestMigrationTest extends AbstractPostgresContainerTest {
         assertThat(stored.reason()).isEqualTo(DeletionReason.DUPLICATE);
         assertThat(stored.note()).isEqualTo(NOTE);
         assertThat(stored.fingerprint()).isEqualTo(admitted.fingerprint());
-        assertThat(stored.expectedModifiedOn()).isEqualTo(NOW);
+        assertThat(stored.expectedLastChangedOn()).isEqualTo(NOW);
         assertThat(stored.requestedBySubject()).isEqualTo("dm-subject");
         assertThat(stored.requestedByName()).isEqualTo("Dee Manager");
         assertThat(stored.ccdCaseReference()).isEqualTo("1234567890123456");
@@ -176,7 +176,7 @@ class DeletionRequestMigrationTest extends AbstractPostgresContainerTest {
 
         for (String change : new String[] {"case_id = 'other'", "idempotency_key = gen_random_uuid()",
             "reason = 'CREATED_IN_ERROR'", "note = 'A different reason entirely'", "fingerprint = repeat('1', 64)",
-            "expected_modified_on = now()", "requested_by_subject = 'someone-else'",
+            "expected_last_changed_on = now()", "requested_by_subject = 'someone-else'",
             "requested_by_name = 'Someone Else'", "requested_at = now()", "ccd_case_reference = null"}) {
             assertThatThrownBy(() -> jdbc.update("update deedpoll_deletion_request set " + change + " where id = ?",
                                                  id))

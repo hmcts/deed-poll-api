@@ -17,11 +17,11 @@ CREATE TABLE deedpoll_deletion_request (
     -- Trimmed, 10 to 500 characters, and no control character at all (tab, newline and C1 included), as
     -- DeletionNote.parse states it. Never logged.
     note varchar(500) NOT NULL,
-    -- SHA-256 of the admitted body (reason, note, expectedModifiedOn), lower-case hex: a replay with the same key
+    -- SHA-256 of the admitted body (reason, note, expectedLastChangedOn), lower-case hex: a replay with the same key
     -- and a different body is a 409, decided by comparing this and nothing else.
     fingerprint varchar(64) NOT NULL CHECK (fingerprint ~ '^[0-9a-f]{64}$'),
     -- The case's "modifiedOn" the Delivery Manager confirmed against, as admitted.
-    expected_modified_on timestamp(3) NOT NULL,
+    expected_last_changed_on timestamp(3) NOT NULL,
     -- The original Delivery Manager: CASE_DELETED is recorded under these, whichever worker finishes the job.
     requested_by_subject varchar(255) NOT NULL CHECK (btrim(requested_by_subject) <> ''),
     requested_by_name varchar(255) NOT NULL,
@@ -59,9 +59,9 @@ CREATE INDEX deedpoll_deletion_request_due_idx ON deedpoll_deletion_request (nex
 -- and its outcome, and nothing else.
 CREATE FUNCTION deedpoll_preserve_deletion_request() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF (NEW.id, NEW.case_id, NEW.idempotency_key, NEW.reason, NEW.note, NEW.fingerprint, NEW.expected_modified_on,
+    IF (NEW.id, NEW.case_id, NEW.idempotency_key, NEW.reason, NEW.note, NEW.fingerprint, NEW.expected_last_changed_on,
         NEW.requested_by_subject, NEW.requested_by_name, NEW.requested_at, NEW.ccd_case_reference) IS DISTINCT FROM
-       (OLD.id, OLD.case_id, OLD.idempotency_key, OLD.reason, OLD.note, OLD.fingerprint, OLD.expected_modified_on,
+       (OLD.id, OLD.case_id, OLD.idempotency_key, OLD.reason, OLD.note, OLD.fingerprint, OLD.expected_last_changed_on,
         OLD.requested_by_subject, OLD.requested_by_name, OLD.requested_at, OLD.ccd_case_reference)
        OR (OLD.status = 'Completed' AND NEW IS DISTINCT FROM OLD) THEN
         RAISE EXCEPTION 'A deletion request cannot be rewritten';

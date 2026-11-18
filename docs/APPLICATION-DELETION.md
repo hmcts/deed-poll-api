@@ -27,8 +27,8 @@ environment.
   `NeedsAttention` (stopped with an allowlisted `failure` code; see *Failure and recovery*) and `Completed` (every
   in-scope copy removed and `CASE_DELETED` recorded). Only `Completed` means deleted; a 202 does not.
 - **What refuses.** Gazette evidence, `retainPermanently`, retained deed or staged bytes, unresolved document storage,
-  an unresolved CCD creation, an email send in flight, a stale confirmation (`expectedModifiedOn` not the case's
-  current `modifiedOn`), and replays that disagree (`KEY_REUSED`, `CONFLICTING_REASON`). Each is a typed 409 that writes
+  an unresolved CCD creation, an email send in flight, a stale confirmation (`expectedLastChangedOn` not the case's
+  current `lastChangedOn`), and replays that disagree (`KEY_REUSED`, `CONFLICTING_REASON`). Each is a typed 409 that writes
   nothing (table under *Admission*).
 - **What it does not do.** The reference counter is never decremented, and no application id or reference is reused.
   Email GOV.UK Notify already accepted is not recalled (new sends stop at the fence). Backups, Log and Audit's own
@@ -208,13 +208,13 @@ row's `storageState` says which store holds it.
 
 `domain/deletion/ApplicationDeletionService.request` is step 1. Its order is fixed: `DELETE_APPLICATION` (403 before
 anything is read), the caller's subject (401), the body (400 per field: `Idempotency-Key`, `reason`, `note`,
-`expectedModifiedOn`), the case's existing request (a replay, answered even once the case is gone), the case lock
+`expectedLastChangedOn`), the case's existing request (a replay, answered even once the case is gone), the case lock
 (`DeletionAdmissionRepository.lock`, `FOR UPDATE`) and the existing request again under it, then 404, then the
 refusals. Each refusal is a `DeletionConflictError` carrying a `DeletionRefusal` code, and writes nothing:
 
 | Code | When |
 |---|---|
-| `STALE_CONFIRMATION` | the case's `modifiedOn`, to the millisecond, is not the one the Delivery Manager reviewed |
+| `STALE_CONFIRMATION` | the case's `lastChangedOn`, to the millisecond, is not the one the Delivery Manager reviewed: the later of its `modifiedOn` and its newest audited write (a note, witness, document, referral or email; reads excluded), read in its own statement after the case lock (`repository/CaseLastChanged`). A child write that commits after that read and before admission commits is not seen, because child writes do not lock the case |
 | `RETAINED_PERMANENTLY` | `retainPermanently` is set |
 | `GAZETTE_EVIDENCE` | Gazette notice batch membership or request evidence |
 | `RETAINED_DEED_PAYLOAD`, `RETAINED_STAGED_UPLOADS` | the existing retained-bytes guards |
@@ -458,7 +458,7 @@ the status id are bound as text for that reason. Every success and every typed 4
 | GET | `/caseworker/application-deletions/{requestId}` | 200 `{requestId, caseId, reason, status, requestedAt, completedAt, failure}`, for any Delivery Manager, whether or not the case still exists |
 
 - **Body**: closed, exactly `reason` (`CREATED_IN_ERROR` or `DUPLICATE`), `note` (10–500 after trimming, no control
-  characters) and `expectedModifiedOn` (the case detail's `modifiedOn` as published, ISO-8601 local date-time, to the
+  characters) and `expectedLastChangedOn` (the case detail's `lastChangedOn` as published, ISO-8601 local date-time, to the
   millisecond). Any other key is a 400 that does not echo it (`DeletionBodies`); a value of the wrong JSON type is
   refused as missing, with the field named. No body is three field errors.
 - **`Idempotency-Key`**: required canonical UUID; missing or malformed is a 400 on that header. The same key and body
@@ -476,7 +476,7 @@ the status id are bound as text for that reason. Every success and every typed 4
 
 **Proof.** `CaseworkerApplicationDeletionControllerTest` (full context, Postgres, 13): 401 on both routes; each of
 five non-DM roles 403 on both routes with valid, forged, keyless and malformed input, before lookup; 202 with
-`Location`, `no-store` and exactly two fields, round-tripping `modifiedOn` from the case detail; the status field set,
+`Location`, `no-store` and exactly two fields, round-tripping `lastChangedOn` from the case detail; the status field set,
 with no note, subject or key; every 400; the 404s; the typed stale 409; replays, `KEY_REUSED`, `CONFLICTING_REASON`
 and a 202 replay after the case row is deleted; a second Delivery Manager reading the first's request; and the note in
 no log output. `OpenAPIPublisherTest.documentsTheApplicationDeletion` pins the published contract.
@@ -586,8 +586,8 @@ Safeguards, before anything else:
 
 | Step | Do | Expect and record |
 |---|---|---|
-| R1 fixtures | Create: **U** unlinked with two filesystem documents; **D1/D2** a duplicate pair; **K** with `retainPermanently` set; **L** linked (linking sweep as `docs/CCD-SMOKE.md`) with one document | Case ids, `modifiedOn`, U's two `storageKey`s and L's CCD reference |
-| R2 refusals | POST for U as each non-DM role; as DM with a stale `expectedModifiedOn`; as DM for K | 403 ×N with nothing written; 409 `STALE_CONFIRMATION`; 409 `RETAINED_PERMANENTLY`; no `deedpoll_deletion_request` row for U or K |
+| R1 fixtures | Create: **U** unlinked with two filesystem documents; **D1/D2** a duplicate pair; **K** with `retainPermanently` set; **L** linked (linking sweep as `docs/CCD-SMOKE.md`) with one document | Case ids, `lastChangedOn`, U's two `storageKey`s and L's CCD reference |
+| R2 refusals | POST for U as each non-DM role; as DM with a stale `expectedLastChangedOn`; as DM for K | 403 ×N with nothing written; 409 `STALE_CONFIRMATION`; 409 `RETAINED_PERMANENTLY`; no `deedpoll_deletion_request` row for U or K |
 | R3 admission, worker off | POST for U and D2 (`DUPLICATE`) as DM; repeat U's POST with the same key; same key with a different note; GET both statuses | 202 with Location; replay 202 with the same `requestId`; 409 `KEY_REUSED`; both `Pending` after more than one worker interval; U and D2 404 on the case routes and absent from the list and MI; D1 untouched |
 | R4 unlinked completion | flux: `APPLICATION_DELETION_WORKER_ENABLED=true` for AAT; wait one interval | U and D2 `Completed`; U's two files absent on the volume; queries below show the case gone, two events with the DM's subject, zero value rows; D1 still served |
 | R5 pause and restart | Admit a fresh unlinked fixture with the worker off; switch on and `kubectl rollout restart` the deployment during its first interval | One `Completed`, exactly one `CASE_DELETED` (a lapsed lease is taken over, never doubled). Requeue (`docs/deletion/requeue.sql`) is rehearsed live only if a request genuinely reaches a requeueable `NeedsAttention`; it is not induced on shared AAT storage. Its proof otherwise is `DeletionCleanupTest.requeue`, recorded as local-only |
@@ -674,7 +674,7 @@ delta against `49239c1` adds the two routes and the schemas `CreateDeletionReque
 `DeletionError` and `DeletionRequestResponse`, and changes or removes nothing. Admin's plan
 (`deed-poll-admin:docs/plans/20261118-dm-application-deletion.md`) refreshes its vendored copy by its own
 `SPEC-PROVENANCE.md` recipe from the merged API commit, in its own worktree; this repository never edits Admin's copy.
-What Admin has to honour: send `expectedModifiedOn` exactly as the case detail published it, mint one
+What Admin has to honour: send `expectedLastChangedOn` exactly as the case detail published it, mint one
 `Idempotency-Key` per confirmation journey and reuse it for every retry of it, show `Completed` as deleted and nothing
 else, show `NeedsAttention` with its code and no retry button, and tell the user the note is kept and must not hold the
 applicant's details. API merges and deploys on every replica before Admin shows the control.

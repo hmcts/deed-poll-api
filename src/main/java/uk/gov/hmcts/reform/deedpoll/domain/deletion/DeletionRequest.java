@@ -15,7 +15,7 @@ import java.util.UUID;
  * @param failure an allowlisted failure code when {@link DeletionStatus#NeedsAttention}, else null
  */
 public record DeletionRequest(UUID id, String caseId, UUID idempotencyKey, DeletionReason reason, DeletionNote note,
-                              String fingerprint, LocalDateTime expectedModifiedOn, String requestedBySubject,
+                              String fingerprint, LocalDateTime expectedLastChangedOn, String requestedBySubject,
                               String requestedByName, LocalDateTime requestedAt, String ccdCaseReference,
                               DeletionStatus status, String failure, int attempts, UUID owner,
                               LocalDateTime leaseUntil, LocalDateTime nextAttemptAt, LocalDateTime completedAt) {

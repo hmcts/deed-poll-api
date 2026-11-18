@@ -21,9 +21,9 @@ public final class DeletionBodies {
 
     /** The only keys a deletion request takes. */
     public static final Set<String> FIELDS = Set.of(ApplicationDeletionService.REASON_FIELD, DeletionNote.FIELD,
-                                                    ApplicationDeletionService.EXPECTED_MODIFIED_ON_FIELD);
+                                                    ApplicationDeletionService.EXPECTED_LAST_CHANGED_ON_FIELD);
 
-    static final String UNKNOWN_FIELDS = "A deletion request takes only reason, note and expectedModifiedOn";
+    static final String UNKNOWN_FIELDS = "A deletion request takes only reason, note and expectedLastChangedOn";
 
     private DeletionBodies() {
     }
@@ -41,7 +41,7 @@ public final class DeletionBodies {
         }
         return new DeletionCommand(key(header), text(fields.get(ApplicationDeletionService.REASON_FIELD)),
                                    text(fields.get(DeletionNote.FIELD)),
-                                   timestamp(fields.get(ApplicationDeletionService.EXPECTED_MODIFIED_ON_FIELD)));
+                                   timestamp(fields.get(ApplicationDeletionService.EXPECTED_LAST_CHANGED_ON_FIELD)));
     }
 
     /** A canonical UUID, or null: a near-miss spelling is not a key, nor a request id. */
@@ -62,7 +62,7 @@ public final class DeletionBodies {
     }
 
     /**
-     * ISO-8601 local date-time, as the case detail publishes {@code modifiedOn}; anything else is null.
+     * ISO-8601 local date-time, as the case detail publishes {@code lastChangedOn}; anything else is null.
      */
     private static LocalDateTime timestamp(Object value) {
         if (!(value instanceof String string)) {

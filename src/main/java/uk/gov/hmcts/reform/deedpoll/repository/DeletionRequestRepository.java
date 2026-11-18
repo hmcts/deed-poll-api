@@ -28,7 +28,7 @@ import java.util.UUID;
 public class DeletionRequestRepository {
 
     private static final String COLUMNS = """
-        id, case_id, idempotency_key, reason, note, fingerprint, expected_modified_on, requested_by_subject,
+        id, case_id, idempotency_key, reason, note, fingerprint, expected_last_changed_on, requested_by_subject,
         requested_by_name, requested_at, ccd_case_reference, status, failure, attempts, owner, lease_until,
         next_attempt_at, completed_at
         """;
@@ -40,7 +40,7 @@ public class DeletionRequestRepository {
         DeletionReason.valueOf(row.getString("reason")),
         DeletionNote.parse(row.getString("note")),
         row.getString("fingerprint"),
-        local(row.getTimestamp("expected_modified_on")),
+        local(row.getTimestamp("expected_last_changed_on")),
         row.getString("requested_by_subject"),
         row.getString("requested_by_name"),
         local(row.getTimestamp("requested_at")),
@@ -72,7 +72,7 @@ public class DeletionRequestRepository {
 
     /** What admission writes: the fixed half of a request. */
     public record NewDeletionRequest(UUID id, String caseId, UUID idempotencyKey, DeletionReason reason,
-                                     DeletionNote note, String fingerprint, LocalDateTime expectedModifiedOn,
+                                     DeletionNote note, String fingerprint, LocalDateTime expectedLastChangedOn,
                                      String requestedBySubject, String requestedByName, LocalDateTime requestedAt,
                                      String ccdCaseReference) {
 
@@ -93,12 +93,12 @@ public class DeletionRequestRepository {
     public boolean insert(NewDeletionRequest request) {
         return jdbc.update("""
             insert into deedpoll_deletion_request (id, case_id, idempotency_key, reason, note, fingerprint,
-                expected_modified_on, requested_by_subject, requested_by_name, requested_at, ccd_case_reference,
+                expected_last_changed_on, requested_by_subject, requested_by_name, requested_at, ccd_case_reference,
                 status, next_attempt_at)
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)
             on conflict (case_id) do nothing
             """, request.id(), request.caseId(), request.idempotencyKey(), request.reason().name(),
-            request.note().value(), request.fingerprint(), timestamp(request.expectedModifiedOn()),
+            request.note().value(), request.fingerprint(), timestamp(request.expectedLastChangedOn()),
             request.requestedBySubject(), request.requestedByName(), timestamp(request.requestedAt()),
             request.ccdCaseReference(), timestamp(request.requestedAt())) == 1;
     }

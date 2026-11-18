@@ -111,7 +111,7 @@ public class CaseworkerApplicationDeletionController {
             schema = @Schema(type = "string")),
         content = @Content(schema = @Schema(implementation = DeletionAdmissionResponse.class)))
     @ApiResponse(responseCode = "400", description = "The Idempotency-Key is missing or not a UUID, the body has a "
-        + "key other than reason, note and expectedModifiedOn, or a field is refused, each field's error named. "
+        + "key other than reason, note and expectedLastChangedOn, or a field is refused, each field's error named. "
         + "Nothing is written.", content = @Content(schema = @Schema(implementation = ApiError.class)))
     @ApiResponse(responseCode = "404", description = "There is no such application and no request for it.",
         content = @Content(schema = @Schema(implementation = ApiError.class)))

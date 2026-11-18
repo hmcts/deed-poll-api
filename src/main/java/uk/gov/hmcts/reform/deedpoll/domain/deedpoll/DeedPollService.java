@@ -25,13 +25,16 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
+import uk.gov.hmcts.reform.deedpoll.repository.CaseLastChanged;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -104,6 +107,7 @@ public class DeedPollService {
         "New cases cannot be created in this service yet. Create the case in the existing system.";
 
     private final DeedPollRepository deedPolls;
+    private final CaseLastChanged lastChanged;
     private final ReferenceNumberService referenceNumbers;
     private final AuditTrail audit;
     private final CaseListStatementTimeout listTimeout;
@@ -115,8 +119,9 @@ public class DeedPollService {
      */
     @Autowired
     public DeedPollService(DeedPollRepository deedPolls, ReferenceNumberService referenceNumbers,
-                           AuditTrail audit, CaseListStatementTimeout listTimeout,
+                           AuditTrail audit, CaseListStatementTimeout listTimeout, CaseLastChanged lastChanged,
                            @Value("${deedpoll.cases.creation-enabled:true}") boolean creationEnabled) {
+        this.lastChanged = lastChanged;
         this.deedPolls = deedPolls;
         this.referenceNumbers = referenceNumbers;
         this.audit = audit;
@@ -362,6 +367,32 @@ public class DeedPollService {
      */
     @Transactional(readOnly = true)
     public DeedPollWithComputed findDeedPoll(String id) {
+        return load(id);
+    }
+
+    /**
+     * One case for its detail page, with when anything about it last changed ({@link CaseLastChanged}).
+     *
+     * <p>The last change is read first, in its own statement, so a write landing between the two reads makes it
+     * older than what the page shows: a deletion confirmed from that page is then refused as stale, never admitted
+     * over a change the Delivery Manager did not see.
+     *
+     * @throws NotFoundError if there is no such case
+     */
+    @Transactional(readOnly = true)
+    public CaseForReview findDeedPollForReview(String id) {
+        Optional<LocalDateTime> changed = lastChanged.of(id);
+        DeedPollWithComputed found = load(id);
+        return new CaseForReview(found, changed.orElse(found.deedPoll().getModifiedOn()));
+    }
+
+    /**
+     * A case and its {@link CaseLastChanged} value, read in that order.
+     */
+    public record CaseForReview(DeedPollWithComputed found, LocalDateTime lastChangedOn) {
+    }
+
+    private DeedPollWithComputed load(String id) {
         DeedPoll record = deedPolls.findWithDocumentsById(id)
             .orElseThrow(() -> new NotFoundError("DeedPoll " + id + " not found"));
         Hibernate.initialize(record.getNotes());

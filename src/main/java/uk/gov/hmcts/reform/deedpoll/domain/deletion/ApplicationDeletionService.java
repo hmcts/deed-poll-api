@@ -13,6 +13,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
+import uk.gov.hmcts.reform.deedpoll.repository.CaseLastChanged;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionAdmissionRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionAdmissionRepository.DocumentLocation;
@@ -54,19 +55,21 @@ public class ApplicationDeletionService {
     /** The name a refusal gives the Idempotency-Key header. */
     public static final String KEY_FIELD = "Idempotency-Key";
     public static final String REASON_FIELD = "reason";
-    public static final String EXPECTED_MODIFIED_ON_FIELD = "expectedModifiedOn";
+    public static final String EXPECTED_LAST_CHANGED_ON_FIELD = "expectedLastChangedOn";
 
     private final DeletionRequestRepository requests;
     private final DeletionAdmissionRepository admission;
     private final DeedPollRepository deedPolls;
     private final AuditTrail audit;
+    private final CaseLastChanged lastChanged;
 
     public ApplicationDeletionService(DeletionRequestRepository requests, DeletionAdmissionRepository admission,
-                                      DeedPollRepository deedPolls, AuditTrail audit) {
+                                      DeedPollRepository deedPolls, AuditTrail audit, CaseLastChanged lastChanged) {
         this.requests = requests;
         this.admission = admission;
         this.deedPolls = deedPolls;
         this.audit = audit;
+        this.lastChanged = lastChanged;
     }
 
     /**
@@ -74,9 +77,10 @@ public class ApplicationDeletionService {
      *
      * @param reason the reason's name, {@code CREATED_IN_ERROR} or {@code DUPLICATE}
      * @param note the Delivery Manager's own words, which must say why and must not name the applicant
-     * @param expectedModifiedOn the case's {@code modifiedOn} the Delivery Manager reviewed
+     * @param expectedLastChangedOn the case detail's {@code lastChangedOn} the Delivery Manager reviewed
      */
-    public record DeletionCommand(UUID idempotencyKey, String reason, String note, LocalDateTime expectedModifiedOn) {
+    public record DeletionCommand(UUID idempotencyKey, String reason, String note,
+                                  LocalDateTime expectedLastChangedOn) {
 
         /** Never the note. */
         @Override
@@ -124,7 +128,7 @@ public class ApplicationDeletionService {
         LocalDateTime now = AuditClock.now();
         NewDeletionRequest row = new NewDeletionRequest(
             UUID.randomUUID(), caseId, body.key(), body.reason(), body.note(), body.fingerprint(),
-            DeletionFingerprint.truncate(body.expectedModifiedOn()), subject, caller.name(), now,
+            DeletionFingerprint.truncate(body.expectedLastChangedOn()), subject, caller.name(), now,
             target.ccdCaseReference());
         if (!requests.insert(row)) {
             // Unreachable while the lock is held, since every admission takes it; answered rather than assumed.
@@ -151,7 +155,7 @@ public class ApplicationDeletionService {
         return requests.findById(requestId).orElseThrow(() -> new NotFoundError("Deletion request not found"));
     }
 
-    private record Body(UUID key, DeletionReason reason, DeletionNote note, LocalDateTime expectedModifiedOn,
+    private record Body(UUID key, DeletionReason reason, DeletionNote note, LocalDateTime expectedLastChangedOn,
                         String fingerprint) {
 
         @Override
@@ -175,15 +179,15 @@ public class ApplicationDeletionService {
         } catch (InvalidInputError refused) {
             errors.addAll(refused.errors());
         }
-        if (command.expectedModifiedOn() == null) {
-            errors.add(new FieldError(EXPECTED_MODIFIED_ON_FIELD,
+        if (command.expectedLastChangedOn() == null) {
+            errors.add(new FieldError(EXPECTED_LAST_CHANGED_ON_FIELD,
                                       "Send the time the application was last modified, as you reviewed it"));
         }
         if (!errors.isEmpty()) {
             throw new InvalidInputError("The deletion request is not valid", errors);
         }
-        return new Body(command.idempotencyKey(), reason.get(), note, command.expectedModifiedOn(),
-                        DeletionFingerprint.of(reason.get(), note, command.expectedModifiedOn()));
+        return new Body(command.idempotencyKey(), reason.get(), note, command.expectedLastChangedOn(),
+                        DeletionFingerprint.of(reason.get(), note, command.expectedLastChangedOn()));
     }
 
     private static Admission replay(DeletionRequest existing, Body body) {
@@ -202,8 +206,11 @@ public class ApplicationDeletionService {
     /** Each refusal reads; none writes, so a refused request leaves the case and its children as they were. */
     private void refuseIfIneligible(LockedCase target, Body body) {
         String id = target.id();
-        if (!DeletionFingerprint.truncate(target.modifiedOn())
-            .equals(DeletionFingerprint.truncate(body.expectedModifiedOn()))) {
+        // Its own statement after the lock, so a change committed while admission waited is counted. A child write
+        // that commits after this read and before admission commits is the one race left: it does not lock the case.
+        LocalDateTime changed = lastChanged.of(id).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+        if (!DeletionFingerprint.truncate(changed)
+            .equals(DeletionFingerprint.truncate(body.expectedLastChangedOn()))) {
             throw new DeletionConflictError(DeletionRefusal.STALE_CONFIRMATION);
         }
         if (target.retainPermanently()) {

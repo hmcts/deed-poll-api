@@ -16,6 +16,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ReferenceNumberService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
+import uk.gov.hmcts.reform.deedpoll.repository.CaseLastChanged;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.GazetteNoticeBatchCaseRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.GazetteNoticeBatchRepository;
@@ -71,7 +72,8 @@ class GazettePermissionsTest {
         DeedPollRepository cases = mock(DeedPollRepository.class);
         ReferenceNumberService references = mock(ReferenceNumberService.class);
         DeedPollService service = new DeedPollService(cases, references, mock(AuditTrail.class),
-            mock(CaseListStatementTimeout.class), true);
+            mock(CaseListStatementTimeout.class),
+            mock(CaseLastChanged.class), true);
         ListFilters.ListFilter filter = ListFilters.filterFor("readyForPublication");
         CaseQuery query = CaseQuery.parse(List.of("type:is:Adult"));
 

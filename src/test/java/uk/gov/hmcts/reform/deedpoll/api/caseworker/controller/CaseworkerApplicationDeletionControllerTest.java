@@ -191,10 +191,11 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
             .andExpect(jsonPath("$.errors[0].field").value("Idempotency-Key"));
         keyed(post(admissionPath(id)), "not-a-uuid", valid).andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.errors[0].field").value("Idempotency-Key"));
-        String forged = "{\"reason\":\"DUPLICATE\",\"note\":\"" + NOTE + "\",\"expectedModifiedOn\":\"" + MODIFIED
+        String forged = "{\"reason\":\"DUPLICATE\",\"note\":\"" + NOTE + "\",\"expectedLastChangedOn\":\"" + MODIFIED
             + "\",\"permanent\":false}";
         keyed(post(admissionPath(id)), UUID.randomUUID().toString(), forged).andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.error").value("A deletion request takes only reason, note and expectedModifiedOn"));
+            .andExpect(jsonPath("$.error")
+                           .value("A deletion request takes only reason, note and expectedLastChangedOn"));
         keyed(post(admissionPath(id)), UUID.randomUUID().toString(), body("VOID", NOTE, MODIFIED.toString()))
             .andExpect(status().isBadRequest()).andExpect(jsonPath("$.errors[0].field").value("reason"));
         keyed(post(admissionPath(id)), UUID.randomUUID().toString(),
@@ -202,9 +203,9 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
             .andExpect(status().isBadRequest()).andExpect(jsonPath("$.errors[0].field").value("note"));
         keyed(post(admissionPath(id)), UUID.randomUUID().toString(), body("DUPLICATE", NOTE, "yesterday"))
             .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.errors[0].field").value("expectedModifiedOn"));
+            .andExpect(jsonPath("$.errors[0].field").value("expectedLastChangedOn"));
         keyed(post(admissionPath(id)), UUID.randomUUID().toString(),
-              "{\"reason\":1,\"note\":[],\"expectedModifiedOn\":5}")
+              "{\"reason\":1,\"note\":[],\"expectedLastChangedOn\":5}")
             .andExpect(status().isBadRequest()).andExpect(jsonPath("$.errors.length()").value(3));
         keyed(post(admissionPath(id)), UUID.randomUUID().toString(), null).andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.errors.length()").value(3));
@@ -345,9 +346,9 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
                                  .andExpect(status().isAccepted()).andReturn().getResponse().getContentAsString());
     }
 
-    private String body(String reason, String note, String expectedModifiedOn) throws Exception {
+    private String body(String reason, String note, String expectedLastChangedOn) throws Exception {
         return json.writeValueAsString(java.util.Map.of(
-            "reason", reason, "note", note, "expectedModifiedOn", expectedModifiedOn));
+            "reason", reason, "note", note, "expectedLastChangedOn", expectedLastChangedOn));
     }
 
     private int requestCount(String caseId) {
