@@ -110,12 +110,8 @@ public class DeedPollService {
     private final boolean creationEnabled;
 
     /**
-     * {@code creationEnabled} is {@code deedpoll.cases.creation-enabled} ({@code CASE_CREATION_ENABLED}): the chart
-     * turns it off in prod until the later migration phases. Cases migrated from the Power App keep their Power App
-     * references, and the Power App goes on allocating from its own sequence, so a reference this service allocated
-     * there would very likely duplicate a real Power App case that has not been migrated yet. The unique index
-     * protects only against rows already in this database, and raising the counter cannot help while the other
-     * sequence keeps moving. Steve's decision, 2026-11-05.
+     * {@code creationEnabled} is {@code deedpoll.cases.creation-enabled} ({@code CASE_CREATION_ENABLED}).
+     * Enabled in every environment; the switch remains available to refuse creation without allocating a reference.
      */
     @Autowired
     public DeedPollService(DeedPollRepository deedPolls, ReferenceNumberService referenceNumbers,

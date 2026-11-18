@@ -188,10 +188,9 @@ class DeploymentChartConformanceTest {
     }
 
     @Test
-    @DisplayName("prod creates no cases until the later migration phases; every other environment still can")
-    void prodCreatesNoCases() throws IOException {
-        assertThat(environment()).containsEntry("CASE_CREATION_ENABLED",
-            "{{ if eq .Values.global.environment `prod` }}false{{ else }}true{{ end }}");
+    @DisplayName("case creation is enabled in every environment, including prod")
+    void everyEnvironmentCreatesCases() throws IOException {
+        assertThat(environment()).containsEntry("CASE_CREATION_ENABLED", "true");
     }
 
     @Test

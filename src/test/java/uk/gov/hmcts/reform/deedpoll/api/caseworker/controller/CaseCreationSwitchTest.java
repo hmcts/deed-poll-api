@@ -27,12 +27,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * {@code deedpoll.cases.creation-enabled=false}, as prod runs until the later migration phases: a create is a 409 that
+ * {@code deedpoll.cases.creation-enabled=false}: a create is a 409 that
  * allocates no reference and writes no row, whatever it carries. The default ({@code true}) is
  * {@code CaseworkerCaseControllerTest}'s, which creates.
  *
  * <p>Reads the stored state rather than the response, for {@code CaseworkerCaseControllerTest}'s reason: the point is
- * that the counter never moved, because a reference allocated in prod would very likely duplicate a Power App case.
+ * that a disabled create never moves the reference counter.
  */
 @SpringBootTest(properties = "deedpoll.cases.creation-enabled=false")
 @AutoConfigureMockMvc
