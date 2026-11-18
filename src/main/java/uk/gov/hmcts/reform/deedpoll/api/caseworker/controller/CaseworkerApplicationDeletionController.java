@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -8,14 +9,19 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.InvalidMediaTypeException;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import uk.gov.hmcts.reform.deedpoll.api.ApiError;
 import uk.gov.hmcts.reform.deedpoll.api.AuditedAs;
 import uk.gov.hmcts.reform.deedpoll.api.DeletionError;
@@ -32,7 +38,12 @@ import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.A
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionBodies;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRequest;
 
+import jakarta.servlet.http.HttpServletRequest;
+
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -43,7 +54,11 @@ import java.util.UUID;
  * <p><strong>Capability first, on both routes.</strong> {@code DELETE_APPLICATION} is checked before the path id,
  * the header or the body is read, so a caller without it is a 403 whatever they sent and learns nothing about the
  * case or the request. That is why the header and the status id are bound as text and parsed here rather than by
- * Spring, which would answer a malformed one 400 before the check could run.
+ * Spring, which would answer a malformed one 400 before the check could run. The body is not bound at all for the
+ * same reason: a {@code @RequestBody} would be read and deserialised before the method is entered, so unparseable
+ * JSON or an unsupported media type would answer 400 or 415 to a caller who is owed 403, and a caller without the
+ * capability could make the pod buffer a body of any size first. After the check the body is read here, at most
+ * {@link #MAX_BODY_BYTES} of it (413 beyond), and only as {@code application/json} (415 otherwise).
  *
  * <p><strong>202, always, and never "deleted".</strong> Admission writes the request, its fence and its audit event,
  * and nothing is removed until the worker's verified cleanup finalises it; a replay of the same key and body answers
@@ -63,10 +78,19 @@ public class CaseworkerApplicationDeletionController {
      */
     public static final String STATUS_PATH = "/caseworker/application-deletions/";
 
-    private final ApplicationDeletionService deletions;
+    /**
+     * The most of an admission body that is ever read. A note is at most {@link
+     * uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionNote#MAX_LENGTH} code points, which even fully escaped as
+     * JSON surrogate pairs is about 6 KB; the rest of the body is a reason and a timestamp.
+     */
+    static final int MAX_BODY_BYTES = 16 * 1024;
 
-    public CaseworkerApplicationDeletionController(ApplicationDeletionService deletions) {
+    private final ApplicationDeletionService deletions;
+    private final ObjectMapper json;
+
+    public CaseworkerApplicationDeletionController(ApplicationDeletionService deletions, ObjectMapper json) {
         this.deletions = deletions;
+        this.json = json;
     }
 
     @Operation(operationId = "requestApplicationDeletion", summary = "Request permanent deletion of an application",
@@ -78,7 +102,9 @@ public class CaseworkerApplicationDeletionController {
             + "and reuse it, with the same body, on every retry: the same key and body answers the same request with "
             + "202, even after the application is gone; the same key with a different body is 409 KEY_REUSED. A "
             + "second key for the same reason answers the existing request; for the other reason it is 409 "
-            + "CONFLICTING_REASON. Never retry with a new key to get past a refusal.")
+            + "CONFLICTING_REASON. Never retry with a new key to get past a refusal.",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(
+            mediaType = "application/json", schema = @Schema(implementation = CreateDeletionRequest.class))))
     @ApiResponse(responseCode = "202", description = "Admitted, or the same request replayed. Not deleted yet.",
         headers = @Header(name = "Location", description = "The request's status resource.",
             schema = @Schema(type = "string")),
@@ -88,6 +114,8 @@ public class CaseworkerApplicationDeletionController {
         + "Nothing is written.", content = @Content(schema = @Schema(implementation = ApiError.class)))
     @ApiResponse(responseCode = "404", description = "There is no such application and no request for it.",
         content = @Content(schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "413", description = "The body is over 16 KB. Nothing is written.")
+    @ApiResponse(responseCode = "415", description = "The body is not application/json. Nothing is written.")
     @ApiResponse(responseCode = "409", description = "Refused, with a code and fixed words, and nothing written: "
         + "STALE_CONFIRMATION (review the application again), RETAINED_PERMANENTLY, GAZETTE_EVIDENCE, "
         + "RETAINED_DEED_PAYLOAD, RETAINED_STAGED_UPLOADS, DOCUMENT_STORAGE_UNRESOLVED, CCD_CREATION_UNRESOLVED, "
@@ -102,9 +130,10 @@ public class CaseworkerApplicationDeletionController {
             description = "One UUID per confirmation journey, reused with the same body on every retry of it. "
                 + "Missing or not a UUID is a 400 naming the header. The same key with a different body is 409.")
         @RequestHeader(value = IDEMPOTENCY_KEY, required = false) String key,
-        @RequestBody(required = false) CreateDeletionRequest body) {
+        HttpServletRequest http) throws HttpMediaTypeNotSupportedException {
 
         CurrentUser caller = deletionCaller();
+        CreateDeletionRequest body = decode(http);
         Map<String, Object> fields = body == null ? Map.of() : body.fields();
         Admission admission = deletions.request(caller, id, DeletionBodies.command(key, fields));
         DeletionRequest request = admission.request();
@@ -131,6 +160,54 @@ public class CaseworkerApplicationDeletionController {
         CurrentUser caller = deletionCaller();
         DeletionRequest request = deletions.read(caller, requestId(requestId));
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(DeletionRequestResponse.from(request));
+    }
+
+    /**
+     * The body, read and decoded only once the caller is known to hold {@code DELETE_APPLICATION}: no more than
+     * {@link #MAX_BODY_BYTES} of it is ever held, and only JSON is decoded. An absent body is null, which the
+     * service refuses field by field. Unparseable JSON is the service's ordinary unreadable-body 400, which names
+     * nothing the caller sent.
+     */
+    private CreateDeletionRequest decode(HttpServletRequest http) throws HttpMediaTypeNotSupportedException {
+        byte[] raw;
+        try (InputStream in = http.getInputStream()) {
+            raw = in.readNBytes(MAX_BODY_BYTES + 1);
+        } catch (IOException unreadable) {
+            throw new HttpMessageNotReadableException("The deletion request body could not be read", unreadable, null);
+        }
+        if (raw.length == 0) {
+            return null;
+        }
+        if (raw.length > MAX_BODY_BYTES) {
+            throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE);
+        }
+        requireJson(http.getHeader(HttpHeaders.CONTENT_TYPE));
+        try {
+            return json.readValue(raw, CreateDeletionRequest.class);
+        } catch (IOException unreadable) {
+            throw new HttpMessageNotReadableException("The deletion request body is not valid JSON", unreadable, null);
+        }
+    }
+
+    /**
+     * Refuses 415 unless the body is {@code application/json} or an {@code application/*+json}.
+     */
+    private static void requireJson(String header) throws HttpMediaTypeNotSupportedException {
+        List<MediaType> supported = List.of(MediaType.APPLICATION_JSON);
+        if (header == null || header.isBlank()) {
+            throw new HttpMediaTypeNotSupportedException((MediaType) null, supported);
+        }
+        MediaType type;
+        try {
+            type = MediaType.parseMediaType(header);
+        } catch (InvalidMediaTypeException unparseable) {
+            throw new HttpMediaTypeNotSupportedException((MediaType) null, supported);
+        }
+        boolean isJson = "application".equals(type.getType())
+            && ("json".equals(type.getSubtype()) || type.getSubtype().endsWith("+json"));
+        if (!isJson) {
+            throw new HttpMediaTypeNotSupportedException(type, supported);
+        }
     }
 
     private static CurrentUser deletionCaller() {

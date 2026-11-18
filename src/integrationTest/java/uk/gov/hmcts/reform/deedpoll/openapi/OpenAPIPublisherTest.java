@@ -744,7 +744,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(key.at("/schema/format").asText()).isEqualTo("uuid");
         assertThat(admission.at("/requestBody/required").asBoolean()).isTrue();
         assertThat(admission.at("/responses").fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("202", "400", "403", "404", "409");
+            .containsExactlyInAnyOrder("202", "400", "403", "404", "409", "413", "415");
         assertThat(admission.at("/responses/202/headers/Location").isMissingNode()).isFalse();
         JsonNode accepted = resolve(spec, admission.at("/responses/202/content/*~1*/schema"));
         assertThat(accepted.get("properties").fieldNames()).toIterable()

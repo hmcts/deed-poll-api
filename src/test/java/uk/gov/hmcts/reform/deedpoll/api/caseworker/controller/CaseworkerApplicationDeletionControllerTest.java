@@ -113,7 +113,7 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
     @ParameterizedTest
     @ValueSource(strings = {"caseworker-deedpoll", "caseworker-deedpoll-team-leader", "caseworker-deedpoll-admin",
         "caseworker-deedpoll-judicial", "caseworker-civil"})
-    @DisplayName("every role but Delivery Manager is 403 on both routes, before the id, header or body is read")
+    @DisplayName("every role but Delivery Manager is 403 on both routes, before the id, header or body is parsed")
     void refusedBeforeAnythingIsRead(String role) throws Exception {
         String id = fixture();
         final String admitted = admit(id, UUID.randomUUID(), body("DUPLICATE", NOTE, MODIFIED.toString()))
@@ -125,6 +125,15 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
         keyed(post(admissionPath(UUID.randomUUID().toString())), null, "{\"forged\":true}")
             .andExpect(status().isForbidden());
         keyed(post(admissionPath(id)), "not-a-uuid", null).andExpect(status().isForbidden());
+        keyed(post(admissionPath(id)), UUID.randomUUID().toString(), "{not json").andExpect(status().isForbidden());
+        keyed(post(admissionPath(id)), UUID.randomUUID().toString(), "[]").andExpect(status().isForbidden());
+        authorised(post(admissionPath(id)).header(CaseworkerApplicationDeletionController.IDEMPOTENCY_KEY,
+                                                  UUID.randomUUID().toString())
+                       .contentType("text/plain").content("not json"))
+            .andExpect(status().isForbidden());
+        keyed(post(admissionPath(id)), UUID.randomUUID().toString(),
+              "x".repeat(CaseworkerApplicationDeletionController.MAX_BODY_BYTES * 4))
+            .andExpect(status().isForbidden());
         authorised(get(statusPath(admitted))).andExpect(status().isForbidden());
         authorised(get(statusPath("not-a-uuid"))).andExpect(status().isForbidden());
         authorised(get(statusPath(UUID.randomUUID().toString()))).andExpect(status().isForbidden());
@@ -198,6 +207,21 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
             .andExpect(status().isBadRequest()).andExpect(jsonPath("$.errors.length()").value(3));
         keyed(post(admissionPath(id)), UUID.randomUUID().toString(), null).andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.errors.length()").value(3));
+        keyed(post(admissionPath(id)), UUID.randomUUID().toString(), "{not json").andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error").value("Request body is missing or is not valid JSON"));
+        keyed(post(admissionPath(id)), UUID.randomUUID().toString(), "[]").andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error").value("Request body is missing or is not valid JSON"));
+        authorised(post(admissionPath(id)).header(CaseworkerApplicationDeletionController.IDEMPOTENCY_KEY,
+                                                  UUID.randomUUID().toString())
+                       .contentType("text/plain").content(body("DUPLICATE", NOTE, MODIFIED.toString())))
+            .andExpect(status().isUnsupportedMediaType());
+        authorised(post(admissionPath(id)).header(CaseworkerApplicationDeletionController.IDEMPOTENCY_KEY,
+                                                  UUID.randomUUID().toString())
+                       .content(body("DUPLICATE", NOTE, MODIFIED.toString())))
+            .andExpect(status().isUnsupportedMediaType());
+        keyed(post(admissionPath(id)), UUID.randomUUID().toString(),
+              "{\"note\":\"" + "x".repeat(CaseworkerApplicationDeletionController.MAX_BODY_BYTES) + "\"}")
+            .andExpect(status().isPayloadTooLarge());
 
         assertThat(requestCount(id)).isZero();
     }
