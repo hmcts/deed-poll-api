@@ -44,6 +44,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -169,6 +170,7 @@ public class CaseworkerApplicationDeletionController {
      * nothing the caller sent.
      */
     private CreateDeletionRequest decode(HttpServletRequest http) throws HttpMediaTypeNotSupportedException {
+        refuseForm(http.getHeader(HttpHeaders.CONTENT_TYPE));
         byte[] raw;
         try (InputStream in = http.getInputStream()) {
             raw = in.readNBytes(MAX_BODY_BYTES + 1);
@@ -186,6 +188,21 @@ public class CaseworkerApplicationDeletionController {
             return json.readValue(raw, CreateDeletionRequest.class);
         } catch (IOException unreadable) {
             throw new HttpMessageNotReadableException("The deletion request body is not valid JSON", unreadable, null);
+        }
+    }
+
+    /**
+     * Refuses 415 for a form body before the stream is read. The dispatcher has already parsed a multipart body into
+     * parts, so its stream reads as empty and would otherwise reach the service's field-by-field 400s; a urlencoded
+     * body is refused alike, so neither form is ever answered as though it were a missing JSON body.
+     */
+    private static void refuseForm(String header) throws HttpMediaTypeNotSupportedException {
+        if (header == null) {
+            return;
+        }
+        String type = header.trim().toLowerCase(Locale.ROOT);
+        if (type.startsWith("multipart/") || type.startsWith("application/x-www-form-urlencoded")) {
+            throw new HttpMediaTypeNotSupportedException((MediaType) null, List.of(MediaType.APPLICATION_JSON));
         }
     }
 

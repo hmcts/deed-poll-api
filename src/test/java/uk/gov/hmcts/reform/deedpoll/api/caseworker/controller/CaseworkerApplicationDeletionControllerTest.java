@@ -37,6 +37,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -218,6 +219,13 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
         authorised(post(admissionPath(id)).header(CaseworkerApplicationDeletionController.IDEMPOTENCY_KEY,
                                                   UUID.randomUUID().toString())
                        .content(body("DUPLICATE", NOTE, MODIFIED.toString())))
+            .andExpect(status().isUnsupportedMediaType());
+        authorised(multipart(admissionPath(id)).param("reason", "DUPLICATE").param("note", NOTE)
+                       .header(CaseworkerApplicationDeletionController.IDEMPOTENCY_KEY, UUID.randomUUID().toString()))
+            .andExpect(status().isUnsupportedMediaType());
+        authorised(post(admissionPath(id)).header(CaseworkerApplicationDeletionController.IDEMPOTENCY_KEY,
+                                                  UUID.randomUUID().toString())
+                       .contentType("application/x-www-form-urlencoded").content("reason=DUPLICATE"))
             .andExpect(status().isUnsupportedMediaType());
         keyed(post(admissionPath(id)), UUID.randomUUID().toString(),
               "{\"note\":\"" + "x".repeat(CaseworkerApplicationDeletionController.MAX_BODY_BYTES) + "\"}")
