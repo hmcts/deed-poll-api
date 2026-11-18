@@ -86,7 +86,9 @@ documented paths outside the counted surfaces; `documentsNoUnlistedPath` allowli
 | POST | `/caseworker/cases/{id}/emails/{template}/preview` | What Notify would render for this case and these slots — writes nothing |
 | POST | `/caseworker/cases/{id}/emails/{template}` | Enqueue one — an outbox row and a case note in one local transaction after any CDAM deed preparation. Requires an **`Idempotency-Key`** UUID header; a repeat of one key answers **200** with `enqueued: false`, the same key used for different content is a **409**, and so is the email of the group that contradicts one already asked for |
 
-There are deliberately **no** case deletes, no document-type *endpoint* and no `validate` endpoint. The one
+There are deliberately **no** case `DELETE` route, no document-type *endpoint* and no `validate` endpoint. A case
+is removed only by a Delivery Manager's deletion request (see *Deleting an application*), never by a short-form
+delete; `DeedPollService.removeDeedPoll` has no production caller. The one
 writer of document types is `DeedDocumentService`, which creates the LOC020 and LOC022 rows the first time each
 deed is generated because no migration seeds them — so `GET /caseworker/document-types` can grow by two without
 anybody calling the API. The domain
@@ -459,7 +461,7 @@ verified roles to explicit capabilities:
 | Role claim | Privileges |
 |---|---|
 | `caseworker-deedpoll-team-leader` | Privacy override, note/witness deletion, shared-query management, CCD repairs, the referral queue (sending to Masters and reassigning, `ALLOCATE_REFERRALS`), management information (`VIEW_MANAGEMENT_INFORMATION`) |
-| `caseworker-deedpoll-delivery-manager` | All Team leader privileges plus the entire Gazette facility and the process settings (`MANAGE_PROCESS_CONFIG`) |
+| `caseworker-deedpoll-delivery-manager` | All Team leader privileges plus the entire Gazette facility, the process settings (`MANAGE_PROCESS_CONFIG`) and permanent application deletion (`DELETE_APPLICATION`) |
 | `caseworker-deedpoll-admin` (deprecated) | Temporary Team leader compatibility, the referral queue included; no Gazette access, process settings or management information |
 
 Each new role works alone. Neither grants judicial or system access. Private saved queries remain
@@ -550,7 +552,12 @@ An unknown id is a 404, and an attempt that is not `NeedsRepair` a 409.
 Two Delivery Manager-only (`DELETE_APPLICATION`) operations, counted apart from the caseworker surface as
 `DELETION_PATHS`: `POST /caseworker/cases/{id}/deletion-requests` (required UUID `Idempotency-Key`; closed body
 `reason`, `note`, `expectedModifiedOn`; 202 with a `Location`) and `GET /caseworker/application-deletions/{requestId}`.
-202 is not deletion: only the status `Completed` is. See `docs/APPLICATION-DELETION.md`.
+202 is not deletion: only the status `Completed` is. The reason is `CREATED_IN_ERROR` or `DUPLICATE`, and the
+mandatory `note` (10–500 characters) says why without the applicant's details: it is kept with the audit event for
+seven years after the case is gone. The outcome is permanent: there is no void, undo or unfencing, the application's
+reference is never reused, and email Notify already accepted is not recalled. The worker and the SDK's Retain and
+Dispose task both ship off; until they are enabled after onboarding, a request stays `Pending`, fenced and
+recoverable. Statuses, refusals and the recovery procedure are in `docs/APPLICATION-DELETION.md`.
 
 ## Documents and uploads
 

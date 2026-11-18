@@ -272,12 +272,12 @@ new migration only if required for permissions, and Postgres integration tests.
 
 **Files:** all changed production/test files, `README.md`, `CLAUDE.md`, `docs/APPLICATION-DELETION.md`, this plan.
 
-- [ ] Run the forced full build, integration and Checkstyle gates; record commands/counts, changed-code coverage
+- [x] Run the forced full build, integration and Checkstyle gates; record commands/counts, changed-code coverage
   and meaningful race/failure evidence. Do not weaken coverage/audit guards or mark failed checks passed.
-- [ ] Document the role, two reasons, status meanings, permanent outcome, existing refusal rules, audit retention,
+- [x] Document the role, two reasons, status meanings, permanent outcome, existing refusal rules, audit retention,
   no reference reuse, non-recallable delivered email and failure/recovery procedure. Amend stale current guidance
   that says no delete consumer exists; preserve the superseded September decision as history.
-- [ ] Record API commit/spec provenance and the Admin handoff. Leave deployment evidence separate from local
+- [x] Record API commit/spec provenance and the Admin handoff. Leave deployment evidence separate from local
   completion; do not run Ralphex in the Admin checkout or move the plan to completed before review finishes.
 
 ### Task 9: Prepare the concrete rollout and recovery evidence
@@ -464,6 +464,28 @@ Full delta: paths 53 → 55, operations 72 → 74, schemas 98 → 102; added pat
 changed or removed. Admin refreshes its vendored copy by its own `SPEC-PROVENANCE.md` recipe; this repo does not edit it.
 Gates: `./gradlew build` (init script) exit 0 in 6m25s; `test` 5,599 across 602 suites (0 failures, 1 skipped);
 `integration` 31 across 5 (0 failures); `checkstyle.sh` OK; `git diff --check` clean. No cftlib test touched.
+
+Task 8 (2026-11-18, on `0c67924`): forced gate `./gradlew build -I <no-checkstyle.gradle> test --rerun integration
+--rerun jacocoTestReport` exit 0 in 5m41s: `test` 5,599 across 602 suites (0 failures, 1 skipped), `integration` 31
+across 5 (0 failures). Changed-code coverage (JaCoCo over test plus integration, the 64 main files changed since
+`7fc5671` that the report covers): lines 2,591 covered / 114 missed (95.8%), branches 903 / 147 (86.0%). The one
+uncovered file, `DeletionCleanupTimer` (0%, off by default), now has `DeletionCleanupTimerTest` (3: absent by default
+and when off, present when on and runs only the worker). Lowest remaining: `CcdCreationAttempt` 22% (existing entity
+accessors), the two DTOs' unused accessors, `LocalFilesystemDocumentStore` 79% (pre-existing I/O error branches).
+Race and failure evidence is the Postgres suites named under Tasks 3 to 7: admission versus patch, note, CCD claim and
+send start on the case lock (`DeletionFenceTest`); two workers, lapsed lease, restart after an unrecorded removal
+(`DeletionCleanupTest`); lost mark answers before and after data-store's commit, 401/403/5xx/timeout keeping
+everything (`RetainAndDisposeDeletionTest`); audit failure rolled back and retried to exactly one `CASE_DELETED`
+(`DeletionFinalisationTest`); plus Task 5's deliberate mutation caught by `DeletionCleanupTest.linkedFileStuck`. No
+coverage, audit or conformance guard was weakened in Task 8. Docs: `docs/APPLICATION-DELETION.md` gains "At a glance"
+(role, reasons, statuses, permanent outcome, refusals, audit retention, no reference reuse, non-recallable email, the
+superseded September restriction kept as history), "Failure and recovery" (per status and code, requeue rules,
+pause/resume) and "Provenance of the published contract, and the Admin handoff". Stale guidance amended: README's
+"no case deletes" sentence and its role table, and CLAUDE.md's Delivery Manager grant. Spec regenerated from the Task 8
+tree by the Task 7 command: SHA-256 `4bf5ae7cbb1d2aaf0cfe814d272da40cb0d8d19de50c81e71c7caa503485e91f`, identical to
+Task 7's, so Admin's handoff is the Task 7 artifact. No deployment evidence exists; the plan stays in `docs/plans/`
+until review. Gates after the change: `./gradlew build` (init script) exit 0 in 5m47s; `test` 5,602 across 603 suites
+(0 failures, 1 skipped); `integration` 31 across 5 (0 failures); `checkstyle.sh` OK; `git diff --check` clean.
 
 ## Post-Completion
 

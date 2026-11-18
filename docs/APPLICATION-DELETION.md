@@ -1,9 +1,41 @@
 # Application deletion — ownership, contracts and cleanup order
 
-Status: Tasks 1 to 7 of [the plan](plans/20261118-dm-application-deletion.md), 2026-11-18. This records what an
+Status: Tasks 1 to 8 of [the plan](plans/20261118-dm-application-deletion.md), 2026-11-18. This records what an
 application owns, what the platform deletes for us and how it signals it, and the order cleanup must take, and
 describes admission, the fence, the external and binary cleanup, local finalisation and the HTTP routes as built. The
 rollout is a later task; nothing here authorises deletion in any environment.
+
+## At a glance
+
+- **Who.** Only a Delivery Manager: `DELETE_APPLICATION`, granted to `Role.DELIVERY_MANAGER` alone, whether from
+  IDAM (`caseworker-deedpoll-delivery-manager`) or from AM (`ctsc-team-leader` with the Gazette skill). Team leader,
+  legacy admin, caseworker and judicial roles are refused with 403 before anything is read.
+- **Why.** Every request names one of two reasons, `CREATED_IN_ERROR` or `DUPLICATE`, and a mandatory free-text
+  `note` (10–500 characters after trimming, no control characters). The note is stored on the request and on the
+  `CASE_DELETION_REQUESTED` audit event and outlives the case for the audit trail's seven years, so it must say *why*
+  and must not hold the applicant's personal details. It is never logged and never published by the status route. A
+  duplicate needs no target, and deleting one never touches the application it duplicated.
+- **What happens.** The outcome is **permanent deletion**, not a void, archive or withdrawal: the application, its
+  children and outboxes, its filesystem binaries and owned staging, its CCD case and CDAM documents (through CCD
+  Retain and Dispose for a linked case), the SDK's copy, and its audit *values* (through
+  `deedpoll_audit_dispose_case_values`). The audit *events* stay, with `CASE_DELETED` recorded under the requesting
+  Delivery Manager. There is no undo, no cancellation and no unfencing once a request is admitted.
+- **Statuses.** `Pending` (admitted and fenced; nothing removed yet), `InProgress` (the worker holds or has held it:
+  files being removed, or a linked case being offered to Retain and Dispose, or finalisation due), `AwaitingDisposal`
+  (CCD has the case in `PendingDisposal` with its TTL set; CCD's disposer, nightly at 22:00, has not yet removed it),
+  `NeedsAttention` (stopped with an allowlisted `failure` code; see *Failure and recovery*) and `Completed` (every
+  in-scope copy removed and `CASE_DELETED` recorded). Only `Completed` means deleted; a 202 does not.
+- **What refuses.** Gazette evidence, `retainPermanently`, retained deed or staged bytes, unresolved document storage,
+  an unresolved CCD creation, an email send in flight, a stale confirmation (`expectedModifiedOn` not the case's
+  current `modifiedOn`), and replays that disagree (`KEY_REUSED`, `CONFLICTING_REASON`). Each is a typed 409 that writes
+  nothing (table under *Admission*).
+- **What it does not do.** The reference counter is never decremented, and no application id or reference is reused.
+  Email GOV.UK Notify already accepted is not recalled (new sends stop at the fence). Backups, Log and Audit's own
+  record, the legacy Power App source and CDAM documents a caseworker had already soft-deleted are outside it (see
+  *Separately retained data*). Financial records governed separately are not touched; the case's refusal rules decide.
+- **History.** This supersedes the September 2026 planning restriction that reserved manual hard deletion for
+  data-protection erasure requests (Steve, 2026-11-18); that decision is kept as history in the plans that record it.
+  It introduces no routine retention disposal and does not change the unpaid-online seven-day policy.
 
 ## Provenance
 
@@ -447,6 +479,48 @@ five non-DM roles 403 on both routes with valid, forged, keyless and malformed i
 with no note, subject or key; every 400; the 404s; the typed stale 409; replays, `KEY_REUSED`, `CONFLICTING_REASON`
 and a 202 replay after the case row is deleted; a second Delivery Manager reading the first's request; and the note in
 no log output. `OpenAPIPublisherTest.documentsTheApplicationDeletion` pins the published contract.
+
+## Failure and recovery
+
+Nothing in this service turns an incomplete request into a completed one, and nothing deletes on a guess: an outage,
+an auth failure or an ambiguous answer is never read as absence. What an operator sees, and does:
+
+| Situation | Meaning | Operator action |
+|---|---|---|
+| `Pending` for longer than one worker interval | The worker is off (`APPLICATION_DELETION_WORKER_ENABLED`, default false) or failing to claim | Check the switch and the worker's WARN lines; the case stays fenced meanwhile |
+| `InProgress` on a linked case for more than a day | The SDK's task is off (`CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_MODE`), its mark or confirm failed, or its circuit breaker tripped (it only logs) | Read the SDK task's log for the reference's run; fix the cause; the next run retries from the database's state |
+| `AwaitingDisposal` for more than two nights | DEEDPOLL not in the disposer's `DELETE_CASE_TYPES`, the disposer failed, or CCD still answers the case | Check the disposer's run and its type lists (onboarding step 3); never complete the request by hand |
+| `NeedsAttention` `LOCAL_STORE_UNAVAILABLE`, `LOCAL_DOCUMENT_UNREMOVED` | The filesystem store is absent from this deployment or the file would not go after `max-attempts` tries | Restore the volume or remove the file, then requeue (below) |
+| `NeedsAttention` `LOCAL_DOCUMENT_INVALID_KEY` | A stored key escapes the store's root; nothing was touched | Investigate the row; this is a data fault, not something to requeue blindly |
+| `NeedsAttention` `CCD_CASE_MISSING`, `CDAM_WITHOUT_CCD_CASE`, `CCD_COPY_PRESENT` | The SDK's copy and the request's inventory disagree | Establish from data-store whether the CCD case exists; escalate before any action |
+| `NeedsAttention` `RETAINED_PAYLOAD`, `UNLISTED_OWNED_STAGE`, `LOCAL_FINALISATION_REFUSED`, `CLEANUP_STEP_FAILED` | Finalisation was refused and rolled back, external steps kept `Done` | Resolve the named obstacle, then requeue; finalisation resumes without repeating a removal |
+
+**Requeueing** is a reviewed operator statement, not an endpoint: there is deliberately no browser retry. It moves one
+`NeedsAttention` request back to `InProgress` with `failure` null and `next_attempt_at` now, and (for a document that
+used its tries) the affected `Pending` step's `attempts` back to 0; a `Failed` step goes back to `Pending` only once its
+cause is understood. V48's trigger refuses any change to the admission half (case, key, reason, note, actor,
+fingerprint, confirmation) and any change to a `Completed` request, so a requeue cannot rewrite who asked or why, or
+reopen a completed deletion. The exact statements are rehearsed and recorded with the rollout (plan Task 9). Pausing is
+switching the worker and the SDK task off: every admitted request stays fenced, stored and resumable, and a lapsed claim
+is taken over when the worker is on again.
+
+## Provenance of the published contract, and the Admin handoff
+
+The API's contract is fixed at commit `0c67924` (Task 7) and unchanged by Task 8, which touched documentation and one
+test only. The spec generated by `OPENAPI_OUTPUT_PATH=<file> ./gradlew integration --tests '*OpenAPIPublisherTest'
+--rerun` has raw SHA-256 `4bf5ae7cbb1d2aaf0cfe814d272da40cb0d8d19de50c81e71c7caa503485e91f` from both trees; the
+delta against `49239c1` adds the two routes and the schemas `CreateDeletionRequest`, `DeletionAdmissionResponse`,
+`DeletionError` and `DeletionRequestResponse`, and changes or removes nothing. Admin's plan
+(`deed-poll-admin:docs/plans/20261118-dm-application-deletion.md`) refreshes its vendored copy by its own
+`SPEC-PROVENANCE.md` recipe from the merged API commit, in its own worktree; this repository never edits Admin's copy.
+What Admin has to honour: send `expectedModifiedOn` exactly as the case detail published it, mint one
+`Idempotency-Key` per confirmation journey and reuse it for every retry of it, show `Completed` as deleted and nothing
+else, show `NeedsAttention` with its code and no retry button, and tell the user the note is kept and must not hold the
+applicant's details. API merges and deploys on every replica before Admin shows the control.
+
+**Local completion is not deployment evidence.** The gates in the plan's execution notes prove the code locally against
+Postgres and WireMock; no environment has run a deletion, and none can complete one until the onboarding below and the
+rollout (plan Task 9) are done.
 
 ## Audit-value disposal permissions
 
