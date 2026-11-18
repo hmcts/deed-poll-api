@@ -181,14 +181,14 @@ documents, after the final contract is tested.
 **Read:** all Context sources, `storage/`, `ccd/`, `notify/`, `domain/masters/`, SDK persistence configuration,
 the current migrations and the pinned platform contract fixtures.
 
-- [ ] Record current source SHAs and baseline build/check results. Inventory every owned application record/blob,
+- [x] Record current source SHAs and baseline build/check results. Inventory every owned application record/blob,
   shared ledger, SDK snapshot, migration mapping and pending/in-flight job, including deployed mode selection.
-- [ ] Write `docs/APPLICATION-DELETION.md`: the cleanup ordering; the Retain and Dispose contract as the disposer's
+- [x] Write `docs/APPLICATION-DELETION.md`: the cleanup ordering; the Retain and Dispose contract as the disposer's
   pinned code implements it (what it deletes by case reference, the "case gone" signal, the nightly schedule);
   audit-value disposal permissions; separately retained data; and the **external onboarding checklist** (LAU PET
   ticket, `SIMULATED_CASE_TYPES` then `DELETE_CASE_TYPES`, TTL definition import) with owners. Confirm from the
   upload code that an unlinked case can hold no CDAM document.
-- [ ] Design the definition change: the platform `TTL` field on the case type and a system event that sets
+- [x] Design the definition change: the platform `TTL` field on the case type and a system event that sets
   `SystemTTL`, granted to `DEED_POLL_SYSTEM` only, with `DeedPollDefinitionTest`'s pinned JSON updated deliberately.
   Establish a runnable stubbed contract proof (WireMock data-store: event submit, then 404 for the reference).
 
@@ -305,6 +305,25 @@ build` (Checkstyle disabled by the init script) exit 0; `checkstyle.sh` OK; `git
 `test` 5,453 across 589 suites (0 failures, 1 skipped); `integration` 30 across 5 (0 failures). No implementation,
 external contract proof, rollout or live deletion has been performed yet.
 Record execution SHAs, Task 1 inventory/contract proof, per-task tests, spec artifact and review findings here.
+
+Task 1 (2026-11-18, branch `feat/dm-application-deletion` at `18aaf0d` on `origin/master` `7fc5671`): source SHAs,
+inventory, Retain and Dispose contract, cleanup order, background-work switches, retained data, onboarding checklist
+and the definition design are in `docs/APPLICATION-DELETION.md`. **Finding that changes Task 5's shape:** the pinned
+SDK (decentralised-runtime 7.1.0) already ships decentralised Retain and Dispose (`RetainAndDisposePolicy`,
+`RetainAndDisposeTask`, events `MarkForDisposal`/`ConfirmDisposal` with `TTLIncrement` 0, state `PendingDisposal`, off
+by default). It marks and confirms a policy's candidates, reads CCD as the system user, and on a 404 runs
+`policy.dispose` in the same transaction that deletes `ccd.case_data`. Recommended: implement a policy rather than a
+second worker for the CCD step, with finalisation in `dispose`; Task 5's own worker keeps unlinked cases and local
+binaries. Other findings: the disposer's `resolvedTtl < CURRENT_DATE` makes a `SystemTTL` of today eligible the next
+night; its document sweep marks only dm-store documents with `case_id` and `deleted = false`, so CDAM documents a
+caseworker already soft-deleted are **not** covered (open question for Steve in the document); an unlinked case can
+hold no CDAM document (`DocumentStorageRule.requireCaseReady`), but a linked non-prod case can hold filesystem files,
+so binary cleanup follows the store, not linkage. Contract proof:
+`src/test/java/uk/gov/hmcts/ccd/sdk/retention/RetainAndDisposeContractTest.java`, 13 tests, drives the SDK's own client
+over a real Feign `CoreCaseDataApi` against WireMock (both events land in `PendingDisposal`; any other state refused;
+404 is gone; 400/401/403/409/500/502/503 and a dropped connection are failures). Gates after Task 1: `./gradlew build`
+(init script) exit 0 in 5m23s; `test` 5,466 across 590 suites (0 failures, 1 skipped); `integration` 30 across 5 (0
+failures); `checkstyle.sh` OK; `git diff --check` clean. The definition change is designed, not built; Task 5 builds it.
 
 ## Post-Completion
 
