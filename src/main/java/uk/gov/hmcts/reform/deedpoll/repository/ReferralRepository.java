@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import uk.gov.hmcts.reform.deedpoll.entity.DeletionFenceSql;
 import uk.gov.hmcts.reform.deedpoll.entity.Referral;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Urgency;
@@ -497,6 +498,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
          WHERE "id" = :id
            AND "state" = 'Claimed'
            AND coalesce("assignedAt", "claimedAt") < :cutoff
+           AND\s""" + DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID + """
         """)
     int releaseOverdueAssignment(@Param("id") UUID id,
                                  @Param("cutoff") LocalDateTime cutoff,
@@ -523,6 +525,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
          WHERE "assignedMasterId" = :masterId
            AND "claimedById" IS NULL
            AND "state" IN ('Claimed', 'Decided')
+           AND\s""" + DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID + """
         """)
     int attachToLinkedMaster(@Param("masterId") UUID masterId, @Param("subject") String subject);
 
@@ -543,6 +546,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
          WHERE "claimedById" = :subject
            AND "assignedMasterId" IS NULL
            AND "state" = 'Claimed'
+           AND\s""" + DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID + """
         """)
     int attachLegacyClaims(@Param("masterId") UUID masterId, @Param("subject") String subject);
 
@@ -560,6 +564,8 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
         SELECT "id" FROM "deedpoll_referral"
          WHERE ("assignedMasterId" = :masterId OR "claimedById" = :subject)
            AND "state" IN ('Claimed', 'Decided')
+           AND\s""" + DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID + """
+
          ORDER BY "id"
            FOR UPDATE
         """)
@@ -576,6 +582,8 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
         SELECT "id" FROM "deedpoll_referral"
          WHERE "assignedMasterId" = :masterId
            AND "state" = 'Claimed'
+           AND\s""" + DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID + """
+
          ORDER BY "id"
            FOR UPDATE
         """)
@@ -598,6 +606,7 @@ public interface ReferralRepository extends JpaRepository<Referral, UUID> {
          WHERE "assignedMasterId" = :masterId
            AND "claimedById" IS NOT NULL
            AND "state" = 'Claimed'
+           AND\s""" + DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID + """
         """)
     int detachFromUnlinkedMaster(@Param("masterId") UUID masterId);
 

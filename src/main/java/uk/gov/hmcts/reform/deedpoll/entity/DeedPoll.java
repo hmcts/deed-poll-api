@@ -16,6 +16,7 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.SQLRestriction;
 import org.hibernate.type.SqlTypes;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
@@ -60,6 +61,8 @@ import java.util.List;
  */
 @Entity
 @Table(name = "deedpoll_deedpoll")
+// The deletion fence: a case a deletion request names reads as gone to every JPA query (DeletionFenceSql).
+@SQLRestriction(DeletionFenceSql.CASE_RESTRICTION)
 @Getter
 @Setter
 // The reference names three multiselect fields iShall, iHaveSubscribed and andAlsoMyOld, and

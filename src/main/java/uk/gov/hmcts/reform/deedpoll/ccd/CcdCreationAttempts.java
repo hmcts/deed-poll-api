@@ -4,9 +4,9 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFence;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
-import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdAttemptRow;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdCreationAttemptRepository;
@@ -38,10 +38,13 @@ public class CcdCreationAttempts {
 
     private final CcdCreationAttemptRepository attempts;
     private final DeedPollRepository deedPolls;
+    private final DeletionFence fence;
 
-    public CcdCreationAttempts(CcdCreationAttemptRepository attempts, DeedPollRepository deedPolls) {
+    public CcdCreationAttempts(CcdCreationAttemptRepository attempts, DeedPollRepository deedPolls,
+                               DeletionFence fence) {
         this.attempts = attempts;
         this.deedPolls = deedPolls;
+        this.fence = fence;
     }
 
     /**
@@ -107,14 +110,21 @@ public class CcdCreationAttempts {
      * that read may be stale -- another worker's claim released since, or an admin's retry from scratch, moves it --
      * and every later move of this claim is keyed on the try.
      *
+     * <p><strong>The deletion fence is asked here, under the record's lock</strong>, because a claim is the last step
+     * before CCD is called: a record a deletion request names is never claimed, whatever the sweep read before the
+     * request committed, so no CCD case is created for an application being deleted.
+     *
      * @param worker who holds it, for attribution and diagnosis -- a worker name, never a user's
      * @return the try this claim made it, if this worker now holds it; empty if another took it, it was no longer
-     *     {@code Pending}, or its {@code notBefore} has not yet passed
+     *     {@code Pending}, its {@code notBefore} has not yet passed, or a deletion request names the record
      */
     @Transactional
     public OptionalInt claim(UUID attemptId, String worker, Duration lease) {
         if (lease.isNegative() || lease.isZero()) {
             throw new IllegalArgumentException("A claim's lease must be positive");
+        }
+        if (!attempts.findDeedPollIdById(attemptId).map(fence::admits).orElse(false)) {
+            return OptionalInt.empty();
         }
         LocalDateTime now = AuditClock.now();
         if (attempts.claim(attemptId, worker, now, now.plus(lease)) != 1) {
@@ -265,9 +275,10 @@ public class CcdCreationAttempts {
      */
     @Transactional
     public boolean repairIfUnbound(CcdCreationAttempt waiting, String failureDetail) {
-        boolean bound = deedPolls.findByIdForUpdate(waiting.getDeedPollId())
-            .map(DeedPoll::getCcdCaseReference)
-            .isPresent();
+        // Native lock and read, past the deletion fence's entity restriction: a fenced record that is bound is still
+        // bound, and reading it as absent would call a real case unbound.
+        deedPolls.lockForDeletion(waiting.getDeedPollId());
+        boolean bound = deedPolls.findCcdCaseReference(waiting.getDeedPollId()).isPresent();
         return !bound && move(waiting.getId(), CcdCreationAttemptStatus.AwaitingConfirmation,
             CcdCreationAttemptStatus.NeedsRepair, failureDetail);
     }

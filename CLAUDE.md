@@ -264,6 +264,15 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `Idempotency-Key` is still 200 with `enqueued: false`. Reordering that turns a caseworker's retry into a refusal.
   No limit may refuse inside `outbox.drain()` or the linking sweep. A counter failure admits the request. Switch
   the mode per environment in flux and never in the chart default. See `docs/RATE-LIMITS.md`.
+- **A deletion request (V48) is a fence, and a new reader or writer has to honour it.** `DeletionFenceSql`'s
+  `@SQLRestriction` on `DeedPoll`, `Referral`, notes, witnesses, documents, notifications and CCD attempts makes every
+  JPA read treat a fenced case as gone; a **native** statement that reads cases or referrals for display, work or a
+  figure must add `DeletionFenceSql`'s predicate or read `LIVE_CASES` itself, or it exposes the case. A write that locks
+  the case must ask after the lock (`DeletionFence.admits`, `findUnfencedByIdForUpdate`,
+  `lockUnfencedForDeedPreparation`): a check in the statement that waited cannot see a request committed meanwhile.
+  V49's deferred triggers refuse at commit any INSERT/UPDATE of a fenced case or child row (DELETE never), so a bulk
+  statement that forgets the predicate fails for every case it touches. CCD's view and binding reads are native on
+  purpose. See `docs/APPLICATION-DELETION.md`.
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks
   wrong, stop and report it — do not "fix" it.

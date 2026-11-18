@@ -369,8 +369,10 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
             .isInstanceOfSatisfying(DeletionConflictError.class,
                                     error -> assertThat(error.refusal()).isEqualTo(DeletionRefusal.CONFLICTING_REASON));
 
-        // The case changes after admission: a replay never compares the confirmation with it.
-        jdbc.update("UPDATE deedpoll_deedpoll SET \"modifiedOn\" = now() WHERE id = ?", id);
+        // The case can no longer change after admission (V49's fence refuses it), and a replay never compares the
+        // confirmation with it anyway.
+        assertThatThrownBy(() -> jdbc.update("UPDATE deedpoll_deedpoll SET \"modifiedOn\" = now() WHERE id = ?", id))
+            .hasMessageContaining("The application is being deleted");
         assertThat(admit(id, key).request().id()).isEqualTo(first.id());
 
         // And it is physically deleted: the tombstone still answers.

@@ -212,6 +212,15 @@ public interface CcdCreationAttemptRepository extends JpaRepository<CcdCreationA
               @Param("leaseUntil") LocalDateTime leaseUntil);
 
     /**
+     * The record an attempt belongs to, past the deletion fence's entity restriction, so a claim can ask the fence
+     * about it under the record's lock.
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT "deedPollId" FROM "deedpoll_ccdcreationattempt" WHERE "id" = :id
+        """)
+    Optional<String> findDeedPollIdById(@Param("id") UUID id);
+
+    /**
      * The try one claim made the attempt, read back by {@link #claim}'s caller in the same transaction, whose UPDATE
      * still holds the row. The count the caller read before claiming may be stale: a claim released since, or an
      * admin's retry from scratch, moves it.

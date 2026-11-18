@@ -195,6 +195,66 @@ caller with the reason, note and request id and no values, in one transaction. A
 answers the first request with its first Delivery Manager and note. `DeedPollService.removeDeedPoll` refuses a case
 with a request, and `RemoveDeedPollCallersTest` holds that no production class calls it.
 
+## The fence (Task 4)
+
+From the moment admission commits, a deletion request is a fence: the case and everything it owns read as gone to
+every caller but the deletion itself, and nothing may write to them. Three layers, so that no single forgotten writer
+is enough to escape it:
+
+1. **Entity restrictions** (`entity/DeletionFenceSql`). `DeedPoll`, `Referral`, `DeedPollNote`, `DeedPollWitness`,
+   `DeedPollSupportingDocument`, `Notification` and `CcdCreationAttempt` carry a Hibernate `@SQLRestriction` that
+   excludes a row whose case a request names. Every JPA read (by id, `findByIdForUpdate`, entity graphs,
+   specifications, counts, joins and the referral and judicial lists) therefore answers as for an unknown id: the case
+   view, the list and its counts, saved queries, notes, witnesses, documents and their downloads and previews, the
+   referral queue, the judicial lists and views, Master email referral lists, the outbox candidates and the CCD repair
+   view. A 404 in an unknown case's words, so nothing is disclosed.
+2. **Native statements say it themselves.** Management information reads `DeletionFenceSql.LIVE_CASES` in place of
+   the case table, so a pending application is in no figure (and the figures do not move again on completion). The
+   linking sweep's due list, the Master reminder claim and outstanding list, the overdue-assignment release and the
+   Master linking/unlinking statements carry the predicate, so a background job neither selects nor writes a fenced
+   row. A bulk statement that wrote one would be refused at commit by layer 3 and fail for every other case too.
+3. **V49's deferred constraint triggers** refuse, at commit, any `INSERT` or `UPDATE` of the case row and of its notes,
+   witnesses, documents, referrals, CCD creation attempts, deed preparation, owned stages and Gazette membership, and
+   any `INSERT` of a notification, for a fenced case. `DELETE` is never refused: removing the case is the deletion's
+   own work.
+
+**Lock, then look.** A check in the statement that waits for admission's `FOR UPDATE` lock uses a snapshot taken
+before the wait, so it cannot see the request; neither can an entity restriction. Every place that matters asks after
+the lock is held, in a statement of its own: `DeletionFence.admits` (a `FOR KEY SHARE` on the case, then the request),
+`DeedPollRepository.findUnfencedByIdForUpdate` (the patch path) and `lockUnfencedForDeedPreparation` (email send, deed
+preparation and storage, owned staging admission and promotion). The triggers lock the case `FOR KEY SHARE` before they
+look, for the same reason. Either the request committed before the writer held the lock, and the writer is refused, or
+admission started later and waits, and then reads what the writer committed (an unsettled send or a document in flight
+is then one of its own refusals).
+
+### The last irreversible boundaries
+
+| Boundary | Fence |
+|---|---|
+| A CCD case is created | `CcdCreationAttempts.claim` asks the fence under the record's lock, so no claim, no submission; `LinkDeedPollHandler` asks again under its lock, so a submission already in flight binds nothing and data-store's transaction rolls back. `CcdLinkingService.link` answers a fenced record `NO_SUCH_RECORD` before opening an attempt. A late callback after completion finds no record. |
+| A CDAM upload or attach | The document row is inserted and committed before CDAM is called; V49 refuses that commit for a fenced case. A row committed first is `UploadPending`, which admission refuses. `SupportingDocumentsHandler` attaches nothing on a fenced record. |
+| A Notify send | `NotificationDeliveryTransactions.claim` and `startSend` ask the fence under the case's lock, so a claim taken while admission was reading grants no send. A fenced row stays `Pending`, owned by nobody, and is neither settled nor noted (a settlement writes a case note, which the fence refuses); the deletion removes it. Admission refuses a send already started, so the service's unknown-send handling is untouched and nothing is ever resent. An email Notify already accepted is not recalled. |
+| A Master email | Its content names no applicant. At send time the referral list is re-read through the restricted `Referral` entity, and the reminder claim and outstanding list carry the predicate, so a fenced referral drops out and an email with none left is `Skipped`. Other cases' referrals on the same email are unaffected. |
+| A Gazette request | Admission refuses any case with Gazette evidence; a new admission reads cases through the restriction and V49 refuses the membership rows. |
+
+### The deliberate exceptions
+
+- **CCD's own view** (`DeedPollCaseView`, through the native `findCcdCaseProjection`). The SDK's Retain and Dispose
+  reads a fenced case through data-store to mark and confirm it, so the view must still answer. It shows the record
+  id and display reference, and no documents (the supporting document entity is restricted). Staff reach documents
+  only through this service, which is fenced; data-store access is CCD's own (`DEED_POLL_READER`). Task 5's definition
+  should give `DEED_POLL_READER` nothing on `PendingDisposal`.
+- **CCD binding reads** (`findCcdCaseReference`, `findCcdCaseProjectionById`, `repairIfUnbound`) are native: a
+  binding is a fact about CCD, and through the restriction a fenced, linked record would read as unbound.
+- **The deletion's own reads and writes**: the request, its inventory and status, and (Tasks 5 and 6) the worker and
+  finalisation. These must read the case natively and remove it with `DELETE` only; an `UPDATE` of the case or a child
+  is refused by V49. The SDK events Task 5 adds must not write the case row.
+
+### Disabling and resuming
+
+The fence has no switch. With every worker disabled a fenced case stays stored, invisible and unwritable until the
+deletion completes; there is no unfencing, by design.
+
 ## Definition change (designed here, built in Task 5)
 
 Add to `DeedPollCaseType`, following the SDK's own e2e `SimpleCaseConfiguration` and its `retain-and-dispose.md`:
@@ -206,9 +266,8 @@ Add to `DeedPollCaseType`, following the SDK's own e2e `SimpleCaseConfiguration`
   `TTL_profile`/`idam:cft-ttl-manager` mapping, because nothing here suspends or overrides.
 - **State `PendingDisposal`** (`DeedPollCaseState`), with `builder.grant(PendingDisposal, CRU, DEED_POLL_SYSTEM)`
   stated explicitly for the reason the existing `Registered` grant is: the SDK derives no grant for a destination
-  state, and without R the SDK's visibility check aborts every run. `DEED_POLL_READER` gets R so a staff document
-  read during the wait answers as CCD does for `Registered`; whether it should instead get nothing is a Task 4
-  fencing decision.
+  state, and without R the SDK's visibility check aborts every run. Task 4 decided `DEED_POLL_READER` gets nothing on
+  it: a fenced case is not for staff to read, through this service or through CCD.
 - **Event `MarkForDisposal`**: `Registered → PendingDisposal`, CRU to `DEED_POLL_SYSTEM`, no fields. Its decentralised
   submit handler (`MANDATORY`, like `LinkDeedPollHandler`) locks the record and refuses unless the record has an
   admitted deletion request ready for CCD disposal, so a stray policy result or a hand-fired event cannot start a

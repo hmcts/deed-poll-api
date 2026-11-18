@@ -5,6 +5,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterEmailKind;
 import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterEmailState;
+import uk.gov.hmcts.reform.deedpoll.entity.DeletionFenceSql;
 
 import java.sql.Array;
 import java.sql.SQLException;
@@ -168,7 +169,8 @@ public class MasterEmailRepository {
      * {@code Claimed} by a Masters-list entry, with no decision, is due reminder
      * {@code k = floor((now - assignedAt) / interval)} once {@code k > remindersSent}, and the statement sets
      * {@code remindersSent} to {@code k}. A second pod's statement waits on the first's row locks, re-reads the
-     * count and claims nothing.
+     * count and claims nothing. A referral whose case a deletion request names is never claimed (the deletion
+     * fence), here or in {@link #outstandingFor}: its case is about to go, and its row may no longer be written.
      *
      * @param now UTC wall time, as {@code assignedAt} is stored
      * @return the Masters-list entry of each referral claimed, once per referral
@@ -181,6 +183,8 @@ public class MasterEmailRepository {
              WHERE "state" = 'Claimed' AND "assignedMasterId" IS NOT NULL AND "decision" IS NULL
                AND "assignedAt" IS NOT NULL
                AND floor(extract(epoch FROM (CAST(? AS timestamp) - "assignedAt")) / ?) > "remindersSent"
+               AND\s""" + DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID + """
+
             RETURNING "assignedMasterId"
             """, (row, index) -> row.getObject("assignedMasterId", UUID.class), now, seconds, now, seconds);
     }
@@ -192,6 +196,8 @@ public class MasterEmailRepository {
         return jdbc.queryForList("""
             SELECT "id" FROM "deedpoll_referral"
              WHERE "state" = 'Claimed' AND "assignedMasterId" = ? AND "decision" IS NULL
+               AND\s""" + DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID + """
+
              ORDER BY CASE WHEN "urgency" = 'Urgent' THEN 0 ELSE 1 END, "createdOn", "id"
             """, UUID.class, masterId);
     }

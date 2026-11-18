@@ -121,7 +121,7 @@ public class DeedDocumentService {
      */
     @Transactional
     public DeedPollSupportingDocument storeDeed(String deedPollId, DeedTemplate template) {
-        deedPolls.lockForDeedPreparation(deedPollId);
+        deedPolls.lockUnfencedForDeedPreparation(deedPollId);
         DeedPoll deedPoll = deedPolls.findById(deedPollId)
             .orElseThrow(() -> new NotFoundError("DeedPoll " + deedPollId + " not found"));
 

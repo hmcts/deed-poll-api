@@ -184,8 +184,8 @@ class DeedPollDefinitionTest {
     void identifiersComeFromConfiguration() throws IOException {
         CcdProperties confirmed = new CcdProperties("CONFIRMED_TYPE", "CONFIRMED_JURISDICTION", "confirmed-role");
         // The generator reads the event and never invokes its handler, so the handler needs no repositories.
-        DeedPollCaseType definition = new DeedPollCaseType(confirmed, new LinkDeedPollHandler(null, null),
-            new SupportingDocumentsHandler(null, null));
+        DeedPollCaseType definition = new DeedPollCaseType(confirmed, new LinkDeedPollHandler(null, null, null),
+            new SupportingDocumentsHandler(null, null, null));
         new CCDDefinitionGenerator(List.<CCDConfig<?, ?, ?>>of(definition), writer)
             .generateAllCaseTypesToJSON(output.toFile());
 

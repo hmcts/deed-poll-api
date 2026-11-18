@@ -16,6 +16,7 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.SQLRestriction;
 import org.hibernate.type.SqlTypes;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ConfirmationOutcome;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.MasterDecision;
@@ -65,6 +66,8 @@ import java.util.UUID;
  * and the general referral note. {@code urgency} is the referral's own and may differ from the case's.
  */
 @Entity
+// The deletion fence, by the referral's case (DeletionFenceSql).
+@SQLRestriction(DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID)
 @Table(name = "deedpoll_referral")
 @Getter
 @Setter

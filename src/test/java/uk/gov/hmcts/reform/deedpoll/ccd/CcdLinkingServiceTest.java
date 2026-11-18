@@ -15,6 +15,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdCaseProjection;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeletionFenceRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -62,11 +63,13 @@ class CcdLinkingServiceTest {
     private CoreCaseDataApi ccd;
     private SystemUserTokens systemUser;
     private CcdLinkingService linking;
+    private DeletionFenceRepository deletionRequests;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
         attempts = new InMemoryAttempts();
+        deletionRequests = mock(DeletionFenceRepository.class);
         deedPolls = mock(DeedPollRepository.class);
         when(deedPolls.findCcdCaseProjectionById(RECORD))
             .thenReturn(Optional.of(new CcdCaseProjection(RECORD, "KBDP2026-000001")));
@@ -82,7 +85,7 @@ class CcdLinkingServiceTest {
         linking = new CcdLinkingService(attempts, deedPolls, ccd, systemUser, serviceTokens,
             new CcdProperties(CASE_TYPE, "DEED_POLL_PLACEHOLDER", "system-role"),
             new CcdLinkingProperties("worker-1", Duration.ofMinutes(5), Duration.ofMinutes(10), 3,
-                Duration.ofMinutes(5)));
+                Duration.ofMinutes(5)), deletionRequests);
     }
 
     @Test
@@ -638,7 +641,7 @@ class CcdLinkingServiceTest {
         private Runnable beforeNextClaim;
 
         InMemoryAttempts() {
-            super(null, null);
+            super(null, null, null);
         }
 
         @Override

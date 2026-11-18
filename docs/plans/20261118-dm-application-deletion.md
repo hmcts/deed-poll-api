@@ -221,11 +221,11 @@ the current migrations and the pinned platform contract fixtures.
 **Files:** read/write services under `domain/`, list/query/MI repositories, `ccd/`, `notify/`,
 `domain/masters/`, `domain/staging/`, document services and their focused tests.
 
-- [ ] Apply the request fence consistently to case/child writes, reads/downloads, worklists/counts/MI, judicial
+- [x] Apply the request fence consistently to case/child writes, reads/downloads, worklists/counts/MI, judicial
   reads and mutations, Gazette admission, document promotion and CCD linking/repair/callback paths.
-- [ ] Quiesce pending jobs and coordinate the in-flight claim/delivery boundary; account for Master emails
+- [x] Quiesce pending jobs and coordinate the in-flight claim/delivery boundary; account for Master emails
   spanning deleted and surviving cases. Preserve the service's unknown-send handling and do not resend.
-- [ ] Add deterministic concurrency tests for admission versus update/upload/Gazette/send/link, workers holding
+- [x] Add deterministic concurrency tests for admission versus update/upload/Gazette/send/link, workers holding
   copied data, and a late CCD callback after completion. Prove no new external work escapes the fence.
 
 ### Task 5: Implement permanent external and binary cleanup with recovery
@@ -359,6 +359,35 @@ confirmation, audit-failure rollback by trigger, replays including after deletio
 alone, short form refused, two simultaneous admissions held on the lock), `RemoveDeedPollCallersTest` 1. Gates:
 `./gradlew build` (init script) exit 0 in 5m20s; `test` 5,528 across 595 suites (0 failures, 1 skipped); `integration`
 30 across 5 (0 failures); `checkstyle.sh` OK; `git diff --check` clean.
+
+Task 4 (2026-11-18): the fence has three layers, described in `docs/APPLICATION-DELETION.md` ("The fence").
+(1) `entity/DeletionFenceSql` `@SQLRestriction`s on `DeedPoll`, `Referral`, notes, witnesses, documents,
+notifications and CCD attempts, so every JPA read (case view, list/counts/saved queries, notes, documents and their
+downloads/previews, referral queue, judicial lists/views, Master email referral lists, outbox candidates, CCD repair
+view) answers as for an unknown id. (2) Native statements carry the predicate: MI reads `LIVE_CASES`; the linking
+sweep's due list, the Master reminder claim and outstanding list, the overdue-assignment release and Master
+linking/unlinking exclude fenced rows. (3) `V49__application_deletion_fence.sql`: deferred constraint triggers refuse at
+commit any INSERT/UPDATE of a fenced case, its children, CCD attempts, deed preparation, owned stages and Gazette
+membership, and any notification INSERT; they lock the case `FOR KEY SHARE` before looking; DELETE is never refused.
+Writes ask after the lock (`DeletionFence.admits`, `DeedPollRepository.findUnfencedByIdForUpdate`,
+`lockUnfencedForDeedPreparation`): patch, email send, deed preparation/storage, owned staging, CCD claim
+(`CcdCreationAttempts.claim`), `LinkDeedPollHandler`, `SupportingDocumentsHandler`, and the outbox `claim`/`startSend`
+(a fenced row stays `Pending`, is never settled or noted, never resent). Deliberate exceptions: CCD's view and binding
+reads are native (Retain and Dispose reads through data-store; a fenced linked record must not read as unbound), and
+the view shows no documents for a fenced case; decided that `DEED_POLL_READER` gets nothing on `PendingDisposal`.
+**Tasks 5 and 6 must** read the fenced case natively and remove it by DELETE only (V49 refuses UPDATE), and the SDK
+events must not write the case row. Existing test change: `ApplicationDeletionServiceTest.replays` now asserts a case
+update after admission is refused instead of making one. Focused suite: `DeletionFenceTest` 8 (Postgres: reads as gone
+including judicial view and MI, CCD view still answers; writes 404 and linking neither offers nor claims; V49 refuses
+note/case/notification/attempt writes at commit and allows DELETE; the outbox refuses a send start on a claim taken
+before the fence; Master reminders/outstanding/linking skip a fenced referral and still serve the kept one; a patch, a
+note and a CCD claim waiting on admission's lock are refused once it commits; admission waiting on a note sees it and
+waiting on a send start refuses `EMAIL_SEND_UNRESOLVED`; a CCD callback for a fenced record, and a late one after
+deletion, binds nothing). Updated: `CcdCreationAttemptsTest`, `CcdLinkingServiceTest`, `LinkDeedPollHandlerTest`,
+`SupportingDocumentsHandlerTest`, `NotificationOutboxTest`, `OwnedStagingTest`, `DeedPollDefinitionTest`,
+`SdkMigrationOrderTest` (V1–V49). Gates: `./gradlew build` (init script) exit 0 in 5m51s; `test` 5,536 across 596 suites
+(0 failures, 1 skipped); `integration` 30 across 5 (0 failures); `compileCftlibTestJava` OK; `checkstyle.sh` OK;
+`git diff --check` clean.
 
 ## Post-Completion
 

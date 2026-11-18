@@ -5,6 +5,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFence;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
@@ -25,10 +26,13 @@ import java.util.UUID;
 public class NotificationDeliveryTransactions {
     private final NotificationRepository notifications;
     private final NoteService notes;
+    private final DeletionFence fence;
 
-    public NotificationDeliveryTransactions(NotificationRepository notifications, NoteService notes) {
+    public NotificationDeliveryTransactions(NotificationRepository notifications, NoteService notes,
+                                            DeletionFence fence) {
         this.notifications = notifications;
         this.notes = notes;
+        this.fence = fence;
     }
 
     @Transactional(readOnly = true)
@@ -41,6 +45,13 @@ public class NotificationDeliveryTransactions {
         Notification row = notifications.lockForDelivery(id).orElse(null);
         LocalDateTime now = AuditClock.now();
         if (row == null || row.getState() != NotificationState.Pending || row.getNextAttemptAt().isAfter(cutoff)) {
+            return Optional.empty();
+        }
+        // The deletion fence, under the case's lock: an email about an application being deleted is never claimed,
+        // nor settled from here (a settlement writes a case note, which the fence refuses). It stays Pending, owed to
+        // nobody, until the deletion removes it. Candidates already exclude it; this answers one read before the
+        // request committed.
+        if (!fence.admits(row.getDeedPollId())) {
             return Optional.empty();
         }
         if (row.getSendStartedAt() != null) {
@@ -61,12 +72,18 @@ public class NotificationDeliveryTransactions {
         return notifications.findById(id).map(NotificationClaim::from);
     }
 
-    /** A locked, committed compare-and-set grants send authority once for this generation. */
+    /**
+     * A locked, committed compare-and-set grants send authority once for this generation.
+     *
+     * <p>The last step before Notify is called, so the deletion fence is asked again here, under the case's lock: a
+     * claim taken before a deletion request committed grants no send once it has. Admission refuses a case with a live
+     * claim, so this answers the claim that committed while admission was reading.
+     */
     @Transactional
     public boolean startSend(NotificationClaim claim) {
         Notification row = notifications.lockForDelivery(claim.id()).orElse(null);
         LocalDateTime now = AuditClock.now();
-        if (!owns(row, claim, now) || row.getSendStartedAt() != null) {
+        if (!owns(row, claim, now) || row.getSendStartedAt() != null || !fence.admits(row.getDeedPollId())) {
             return false;
         }
         row.setSendStartedAt(now);

@@ -615,7 +615,7 @@ public class DeedPollService {
      * As {@link #requireDeedPoll}, but locking the row for the caller's transaction.
      */
     private DeedPoll requireDeedPollForUpdate(String id) {
-        return deedPolls.findByIdForUpdate(id)
+        return deedPolls.findUnfencedByIdForUpdate(id)
             .orElseThrow(() -> new NotFoundError("DeedPoll " + id + " not found"));
     }
 

@@ -66,7 +66,7 @@ public class DeedPreparations {
     }
 
     private PreparedDeed reserve(String caseId, DeedTemplate template) {
-        cases.lockForDeedPreparation(caseId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+        cases.lockUnfencedForDeedPreparation(caseId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
         List<PreparedDeed> reservations = jdbc.query("""
             SELECT "documentId", template, "originalName", "mimeType", "sizeBytes", checksum
               FROM deedpoll_deedpreparation WHERE "deedPollId" = ?
