@@ -57,6 +57,8 @@ class DeedPollCaseViewTest {
 
         assertThat(data.getDeedPollId()).isEqualTo(RECORD);
         assertThat(data.getDeedPollReference()).isEqualTo("KBDP2026-000001");
+        assertThat(data.getTimeToLive())
+            .as("TTL is data-store's to create on ConfirmDisposal; the view never projects one").isNull();
     }
 
     @Test

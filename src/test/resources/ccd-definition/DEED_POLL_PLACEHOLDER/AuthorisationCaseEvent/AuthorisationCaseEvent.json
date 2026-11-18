@@ -1,5 +1,19 @@
 [
   {
+    "CRUD": "CRU",
+    "CaseEventID": "ConfirmDisposal",
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "LiveFrom": "01/01/2017",
+    "UserRole": "DEED_POLL_SYSTEM"
+  },
+  {
+    "CRUD": "CRU",
+    "CaseEventID": "MarkForDisposal",
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "LiveFrom": "01/01/2017",
+    "UserRole": "DEED_POLL_SYSTEM"
+  },
+  {
     "CRUD": "CR",
     "CaseEventID": "linkDeedPoll",
     "CaseTypeID": "DEED_POLL_PLACEHOLDER",

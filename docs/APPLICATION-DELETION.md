@@ -1,8 +1,9 @@
 # Application deletion — ownership, contracts and cleanup order
 
-Status: Task 1 of [the plan](plans/20261118-dm-application-deletion.md), 2026-11-18. This records what an
-application owns, what the platform deletes for us and how it signals it, and the order cleanup must take. Nothing
-here is implemented yet beyond the stubbed contract proof; nothing here authorises deletion in any environment.
+Status: Tasks 1 to 5 of [the plan](plans/20261118-dm-application-deletion.md), 2026-11-18. This records what an
+application owns, what the platform deletes for us and how it signals it, and the order cleanup must take, and
+describes admission, the fence and the external and binary cleanup as built. Finalisation, the HTTP routes and the
+rollout are later tasks; nothing here authorises deletion in any environment.
 
 ## Provenance
 
@@ -164,9 +165,11 @@ row's `storageState` says which store holds it.
    (`AwaitingDisposal` once `resolved_ttl` is set); the disposer deletes the pointer and soft-deletes CDAM documents;
    the SDK sees 404 and calls `dispose`.
 5. **Finalise** (one transaction): remaining local rows, `deedpoll_audit_dispose_case_values`, `CASE_DELETED` with the
-   original Delivery Manager, reason and request id, request `Completed`. For a linked case this is `policy.dispose`,
-   inside the SDK's transaction, so the `ccd.case_data` delete and the completion commit or fail together. An unlinked
-   case is finalised by this service's own worker after step 3.
+   original Delivery Manager, reason and request id, request `Completed`. As built in Task 5, `policy.dispose` does
+   not finalise: inside the SDK's transaction it records the CCD step (and the CDAM documents the disposer removed
+   with it) `Done` and makes the request due, so the `ccd.case_data` delete and that record commit or fail together.
+   Finalisation is then the worker's, for linked and unlinked cases alike, once every external step is `Done`
+   (Task 6).
 
 ## Admission (Task 3)
 
@@ -300,6 +303,73 @@ agreed number of runs becomes `NeedsAttention`, because the SDK only logs a fail
 tripped circuit breaker. **Until onboarding, every linked request correctly stays `InProgress` or
 `AwaitingDisposal`**: with the mode `off` nothing is marked, and with the disposer not configured nothing is
 removed, so nothing reaches 404.
+
+## External and binary cleanup (Task 5)
+
+Built as designed above, with one change: finalisation is not inside `dispose` (see the cleanup order).
+
+**Definition.** `DeedPollCaseData.timeToLive` is the platform `TTL` field (`TtlAccess`: CRU to `DEED_POLL_SYSTEM`
+only); `DeedPollCaseState.PendingDisposal` is granted CRU to `DEED_POLL_SYSTEM` and nothing to `DEED_POLL_READER`;
+`MarkForDisposal` (`Registered → PendingDisposal`) and `ConfirmDisposal` (`PendingDisposal → PendingDisposal`,
+`TTLIncrement` 0) are CRU to `DEED_POLL_SYSTEM` and carry no fields. `updateSupportingDocuments` now pins its
+pre-state as `Registered` (it was `*` while there was one state). All of it is in the pinned JSON and named in
+`DeedPollDefinitionTest`.
+
+**`DisposalEventsHandler`** (both events, `MANDATORY`) admits an event only when the case's request is ready for CCD,
+under the request's lock: status `InProgress`/`AwaitingDisposal`, its CCD step `Pending`, and every `LOCAL_DOCUMENT`
+line `Done` (`DeletionWorkRepository.READY_FOR_CCD`). Anything else is a submit error. Neither writes the record.
+
+**`DeedPollRetainAndDisposePolicy`**: `caseTypes()` is the configured case type; `findCandidatesForDisposal()` is the
+same predicate; `dispose(reference)` records `CCD_DISPOSAL` and `CDAM_DOCUMENT` lines `Done` with outcome
+`DISPOSED_BY_CCD`, sets the request `InProgress` and due now, and throws (rolling the SDK's delete back) for a case no
+request is waiting on. Configuration: `ccd.decentralised-runtime.retain-and-dispose.mode` (default `off`), `.cron`
+(default `0 0 2 * * *`) and `.system-user` (the existing `DEED_POLL_SYSTEM_USERNAME`/`_PASSWORD`).
+`RetainAndDisposeDeletionTest` builds the SDK's task from its own auto-configuration over this application's beans
+(`mode=live` in a child context), so the bean inputs are proven to exist.
+
+**`DeletionCleanup`**, the worker (`deedpoll.deletion.cleanup.*`, `enabled` default false; `DeletionCleanupTimer`
+exists only when it is true). A run claims up to `batch-size` due requests one at a time (`FOR UPDATE SKIP LOCKED`,
+a fresh owner and a `lease` each; a lapsed lease is taken over), moving `Pending` to `InProgress`. Every later write
+is its own short transaction that first locks the request while the claim is still the worker's, so a worker that
+lost its lease writes and removes nothing. No transaction is open during a file removal, and the worker never calls
+CCD, CDAM or IDAM. For each `LOCAL_DOCUMENT` line it calls `LocalFilesystemDocumentStore.remove`, which deletes and
+then checks the file is gone, and treats a missing **root** as unavailable, never as already gone. The status then
+comes from `DeletionProgress.decide`, which has no database in it:
+
+| Situation | Status | Failure code |
+|---|---|---|
+| a filesystem document not yet verified removed, tries left | `InProgress`, retried after `retry-base` doubled per try, capped at `poll-interval` | |
+| … after `max-attempts` tries | `NeedsAttention` | `LOCAL_DOCUMENT_UNREMOVED` |
+| no filesystem store in this deployment (`DOCUMENT_STORE=cdam`) | `NeedsAttention` | `LOCAL_STORE_UNAVAILABLE` |
+| a storage key outside the store's root (line `Failed`, nothing touched) | `NeedsAttention` | `LOCAL_DOCUMENT_INVALID_KEY` |
+| linked, files done, case not yet marked and confirmed | `InProgress` (offered to the SDK) | |
+| linked, `PendingDisposal` with `resolved_ttl` set | `AwaitingDisposal` | |
+| linked, CCD step `Pending` but the local `ccd.case_data` row is gone | `NeedsAttention` | `CCD_CASE_MISSING` |
+| CDAM lines with no CCD step | `NeedsAttention` | `CDAM_WITHOUT_CCD_CASE` |
+| any other `Failed` line | `NeedsAttention` | `CLEANUP_STEP_FAILED` |
+| every external line `Done` | `InProgress`, `externalCleanupDone` (finalisation is Task 6) | |
+
+Step outcomes are `DELETED`, `ALREADY_ABSENT` (the store was there and the file was not: an earlier, unrecorded try),
+`DISPOSED_BY_CCD`, `REMOVAL_FAILED`, `STORE_UNAVAILABLE` and `INVALID_STORAGE_KEY`. A `NeedsAttention` request leaves
+the worker's due set with every unverified locator still held; putting it back is an operator step (Task 9). Logs
+carry the request id and fixed prose, never a locator. Ordinary caseworker document deletion is unchanged and still
+soft in CDAM.
+
+**Not in the chart.** The worker and the SDK task are both off in `application.yaml`, and no chart value sets either,
+so the chart is unchanged. Turning either on is a per-environment flux change after Task 9's evidence. With both off,
+an admitted request stays `Pending`: fenced, stored and recoverable.
+
+**Proof.** `DeletionCleanupTest` (Postgres, 14): unlinked files removed and verified, already-absent files, an unmounted
+root retried then `NeedsAttention` with the key held, no filesystem store, an escaping key, two workers claiming at
+once, a lapsed lease taken over (the first worker then writes nothing), a restart after an unrecorded removal, a done
+line never redone, the linked journey to `AwaitingDisposal` and `dispose`, a stranger's `dispose` rolled back, a
+vanished CCD copy, a stuck file keeping a linked case from CCD, run bounds and the timer's default.
+`RetainAndDisposeDeletionTest` (Postgres, 11): the SDK's real task marks, confirms, retains while data-store still
+answers, and on 404 deletes its copy and calls `dispose`; 401, 403, 500, 502, 503 and a timeout on that read keep
+everything; a 404 on the confirmation's visibility check aborts the run; a mark whose answer is lost before
+data-store commits is marked again, and one lost after is confirmed and never marked twice; a request whose files are
+not removed is never offered, and a stray event is refused. Plus `DeletionProgressTest`, `DisposalEventsHandlerTest`
+and `LocalFilesystemDocumentStoreTest`'s removal cases.
 
 ## Audit-value disposal permissions
 

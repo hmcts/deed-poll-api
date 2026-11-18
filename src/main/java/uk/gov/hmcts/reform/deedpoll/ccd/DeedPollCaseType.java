@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.ccd;
 
 import org.springframework.stereotype.Component;
+import uk.gov.hmcts.ccd.sdk.RetainAndDisposePolicy;
 import uk.gov.hmcts.ccd.sdk.api.CCDConfig;
 import uk.gov.hmcts.ccd.sdk.api.ConfigBuilder;
 import uk.gov.hmcts.ccd.sdk.api.DecentralisedConfigBuilder;
@@ -11,11 +12,14 @@ import java.util.Set;
 
 import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile.DEED_POLL_READER;
 import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollAccessProfile.DEED_POLL_SYSTEM;
+import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollCaseState.PendingDisposal;
 import static uk.gov.hmcts.reform.deedpoll.ccd.DeedPollCaseState.Registered;
 
 /**
- * The minimal deed poll case type: one state, one event that links an existing record and one that sets its documents
- * (plan 03a), three fields, a system profile for mutations and a staff profile for document reads.
+ * The minimal deed poll case type: one working state, one event that links an existing record and one that sets its
+ * documents (plan 03a), three fields, a system profile for mutations and a staff profile for document reads; and
+ * Retain and Dispose's state, two events and {@code TTL} field, by which an application deletion has CCD dispose of the
+ * case (plan 20261118-dm-application-deletion).
  *
  * <p>The ids come from {@link CcdProperties} and are never written here (plan 02, decision 5). The display names are
  * text, not identifiers, and carry no onboarding weight. Everything the definition contains is pinned by
@@ -31,13 +35,16 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
     private final CcdProperties properties;
     private final LinkDeedPollHandler linkDeedPoll;
     private final SupportingDocumentsHandler supportingDocuments;
+    private final DisposalEventsHandler disposal;
 
     public DeedPollCaseType(CcdProperties properties,
                             LinkDeedPollHandler linkDeedPoll,
-                            SupportingDocumentsHandler supportingDocuments) {
+                            SupportingDocumentsHandler supportingDocuments,
+                            DisposalEventsHandler disposal) {
         this.properties = properties;
         this.linkDeedPoll = linkDeedPoll;
         this.supportingDocuments = supportingDocuments;
+        this.disposal = disposal;
     }
 
     @Override
@@ -89,6 +96,25 @@ public class DeedPollCaseType implements CCDConfig<DeedPollCaseData, DeedPollCas
             .grant(Permission.CRU, DEED_POLL_SYSTEM)
             .fields()
             .optional(DeedPollCaseData::getSupportingDocuments);
+
+        // Retain and Dispose (plan 20261118-dm-application-deletion, Task 5): the SDK's task fires these two as the
+        // system user, and its visibility check needs R on PendingDisposal, which the SDK would not derive for a state
+        // nothing leaves. Staff get nothing on it: a case being deleted is not for anybody to read. No event follows
+        // in PendingDisposal -- the document event is Registered-only -- and neither event carries a field.
+        builder.grant(PendingDisposal, Permission.CRU, DEED_POLL_SYSTEM);
+
+        builder.decentralisedEvent(RetainAndDisposePolicy.DISPOSAL_EVENT_ID, disposal::markForDisposal)
+            .forStateTransition(Registered, PendingDisposal)
+            .name("Mark for disposal")
+            .description("Ask CCD to dispose of a deed poll case whose application is being deleted")
+            .grant(Permission.CRU, DEED_POLL_SYSTEM);
+
+        builder.decentralisedEvent(RetainAndDisposePolicy.CONFIRM_DISPOSAL_EVENT_ID, disposal::confirmDisposal)
+            .forStateTransition(PendingDisposal, PendingDisposal)
+            .ttlIncrement(0)
+            .name("Confirm disposal")
+            .description("Set the disposal date once the case is readable in its disposal state")
+            .grant(Permission.CRU, DEED_POLL_SYSTEM);
     }
 
     /**

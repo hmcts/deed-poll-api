@@ -1,6 +1,14 @@
 [
   {
     "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "Description": "Pending disposal",
+    "DisplayOrder": 2,
+    "ID": "PendingDisposal",
+    "LiveFrom": "01/01/2017",
+    "Name": "Pending disposal"
+  },
+  {
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
     "Description": "Registered",
     "DisplayOrder": 1,
     "ID": "Registered",
