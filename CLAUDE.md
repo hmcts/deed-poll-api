@@ -40,6 +40,9 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 35 operations 
                                   VIEW_MANAGEMENT_INFORMATION; counted apart as MI_PATHS)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
                                   plus GET …/documents/{documentId}/preview (counted apart as PREVIEW_PATHS)
+                                  plus POST /caseworker/cases/{id}/deletion-requests and GET
+                                  /caseworker/application-deletions/{requestId} (DELETE_APPLICATION, Delivery
+                                  Manager only; counted apart as DELETION_PATHS)
 api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case,
                                   plus its own document preview (counted apart with the caseworker one)
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web, behind the S2S-only citizenFilterChain

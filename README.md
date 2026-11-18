@@ -545,6 +545,13 @@ binding: the next case-list sweep does the rest.
 
 An unknown id is a 404, and an attempt that is not `NeedsRepair` a 409.
 
+### Deleting an application
+
+Two Delivery Manager-only (`DELETE_APPLICATION`) operations, counted apart from the caseworker surface as
+`DELETION_PATHS`: `POST /caseworker/cases/{id}/deletion-requests` (required UUID `Idempotency-Key`; closed body
+`reason`, `note`, `expectedModifiedOn`; 202 with a `Location`) and `GET /caseworker/application-deletions/{requestId}`.
+202 is not deletion: only the status `Completed` is. See `docs/APPLICATION-DELETION.md`.
+
 ## Documents and uploads
 
 Files go through the `DocumentStore` interface. `LocalFilesystemDocumentStore` remains the default, with blobs

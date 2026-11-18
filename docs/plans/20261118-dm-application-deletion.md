@@ -261,11 +261,11 @@ new migration only if required for permissions, and Postgres integration tests.
 **Files:** new caseworker controller/DTOs, `api/DomainErrorHandler.java` only as required, OpenAPI/security tests,
 `api/WriteEndpointAuditCoverageTest.java`, `auth/` capability response tests and publisher test.
 
-- [ ] Add the proposed admission and status routes with capability-first checks, closed reason body, required
+- [x] Add the proposed admission and status routes with capability-first checks, closed reason body, required
   idempotency header, typed statuses/errors, Location and no-store responses. Classify request writes with `@AuditedAs`.
-- [ ] Test real HTTP validation/authentication, every non-DM role, header/body mismatch, 202 replay after deletion,
+- [x] Test real HTTP validation/authentication, every non-DM role, header/body mismatch, 202 replay after deletion,
   status visibility across authorised Delivery Managers, and no content/locators in responses or logs.
-- [ ] Generate/publish the complete OpenAPI artifact and record source SHA/hash/full delta for Admin. Run the
+- [x] Generate/publish the complete OpenAPI artifact and record source SHA/hash/full delta for Admin. Run the
   existing write-body, forbidden-response and endpoint-audit conformance tests.
 
 ### Task 8: Complete regression proof and implementation documentation
@@ -430,6 +430,40 @@ uses a linked request still waiting on CCD), `RetainAndDisposeDeletionTest.fullJ
 DM's `CASE_DELETED`). Gates: `./gradlew build` (init script) exit 0 in 6m2s; `test` 5,586 across 601 suites (0 failures,
 1 skipped); `integration` 30 across 5 (0 failures); `compileCftlibTestJava` OK; `checkstyle.sh` OK; `git diff --check`
 clean.
+
+Task 7 (2026-11-18): `api/caseworker/controller/CaseworkerApplicationDeletionController` publishes
+`POST /caseworker/cases/{id}/deletion-requests` (`@AuditedAs(CASE_DELETION_REQUESTED)`; 202 `{requestId, status}`,
+`Location: /caseworker/application-deletions/{requestId}`, `no-store`, for fresh admissions and replays alike) and
+`GET /caseworker/application-deletions/{requestId}` (200 `{requestId, caseId, reason, status, requestedAt,
+completedAt, failure}`, `no-store`). `DELETE_APPLICATION` is checked before the path id, header or body is read, so the
+header and status id are bound as text: a malformed key is the service's 400 on `Idempotency-Key`, a non-UUID status id
+the same 404 as an unknown one. `domain/deletion/DeletionBodies` makes the body closed (any other key a 400 that does
+not echo it; a wrong JSON type is refused as missing, field named). `DomainErrorHandler.deletion` answers
+`DeletionConflictError` as 409 `DeletionError {error, code}` (`no-store`). `OpenAPIWriteBodies.describeDeletionBody`
+publishes the closed body (bounds from `DeletionNote`, enum from `DeletionReason`, `additionalProperties: false`,
+request body required). **Deliberate test change:** `NotificationSecurityTest`'s rule that no `api` field is named
+`requestId` (the email send's key) now exempts exactly `DeletionAdmissionResponse` and `DeletionRequestResponse`, whose
+`requestId` is the resource id the plan's contract names; the controller test asserts the key is never echoed.
+`WriteEndpointAuditCoverageTest` now counts 37 writes, 33 audited. Docs: `docs/APPLICATION-DELETION.md` ("HTTP
+contract"), README, CLAUDE.md layout. Focused suites: `CaseworkerApplicationDeletionControllerTest` 13 (full context,
+Postgres: 401 on both routes; five non-DM roles 403 on both routes with valid, forged, keyless and malformed input and
+nothing written; 202 with Location, no-store and exactly two fields, `modifiedOn` round-tripped from the case detail;
+the status field set without note, subject or key; each 400; the 404s; typed `STALE_CONFIRMATION`; replays,
+`KEY_REUSED`, `CONFLICTING_REASON` and a 202 replay after the case row is deleted; a second Delivery Manager reads the
+first's request; the note in no captured log), `OpenAPIPublisherTest` 27 (new `documentsTheApplicationDeletion`;
+`DELETION_PATHS` counted apart, the caseworker count still 35), `WriteEndpointAuditCoverageTest` 4,
+`NotificationSecurityTest`. The existing write-body, forbidden-response (403 added on both by `StaffArea`) and
+endpoint-audit conformance tests pass. **Spec artifact for Admin:** generated from this task's commit (parent
+`49239c1`) by `TESTCONTAINERS_RYUK_DISABLED=true JAVA_TOOL_OPTIONS=-XX:UseSVE=0
+OPENAPI_OUTPUT_PATH=/tmp/deletion-task7/openapi-task7.json ./gradlew integration --tests '*OpenAPIPublisherTest'
+--rerun`, raw SHA-256 `4bf5ae7cbb1d2aaf0cfe814d272da40cb0d8d19de50c81e71c7caa503485e91f` (copy in
+`build/evidence/task7/`). Baseline at `49239c1` by the same command: `aeea44df884d29605660dfc56854ad767e403b58d9bc3f647a146f7fd4242512`.
+Full delta: paths 53 → 55, operations 72 → 74, schemas 98 → 102; added paths `/caseworker/cases/{id}/deletion-requests`
+(post) and `/caseworker/application-deletions/{requestId}` (get); added schemas `CreateDeletionRequest`,
+`DeletionAdmissionResponse`, `DeletionError`, `DeletionRequestResponse`; no path, schema, component or top-level key
+changed or removed. Admin refreshes its vendored copy by its own `SPEC-PROVENANCE.md` recipe; this repo does not edit it.
+Gates: `./gradlew build` (init script) exit 0 in 6m25s; `test` 5,599 across 602 suites (0 failures, 1 skipped);
+`integration` 31 across 5 (0 failures); `checkstyle.sh` OK; `git diff --check` clean. No cftlib test touched.
 
 ## Post-Completion
 

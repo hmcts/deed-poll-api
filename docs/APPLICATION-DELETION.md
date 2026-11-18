@@ -1,9 +1,9 @@
 # Application deletion — ownership, contracts and cleanup order
 
-Status: Tasks 1 to 6 of [the plan](plans/20261118-dm-application-deletion.md), 2026-11-18. This records what an
+Status: Tasks 1 to 7 of [the plan](plans/20261118-dm-application-deletion.md), 2026-11-18. This records what an
 application owns, what the platform deletes for us and how it signals it, and the order cleanup must take, and
-describes admission, the fence, the external and binary cleanup and local finalisation as built. The HTTP routes and
-the rollout are later tasks; nothing here authorises deletion in any environment.
+describes admission, the fence, the external and binary cleanup, local finalisation and the HTTP routes as built. The
+rollout is a later task; nothing here authorises deletion in any environment.
 
 ## Provenance
 
@@ -411,6 +411,42 @@ untouched, counters unchanged and the tombstone holding outcome codes only; a li
 retried to one completion without redoing a removal; a database refusal `NeedsAttention`; a lapsed lease finalising
 nothing; and a replay after completion. `DeletionCleanupTest` and `RetainAndDisposeDeletionTest`'s journeys now end
 `Completed`.
+
+## HTTP contract (Task 7)
+
+`CaseworkerApplicationDeletionController`, two operations counted apart from the caseworker surface
+(`OpenAPIPublisherTest.DELETION_PATHS`). Both check `DELETE_APPLICATION` (Delivery Manager only, IDAM- or AM-derived)
+**before** the path id, the header or the body is read, so every other role is 403 whatever it sent; the header and
+the status id are bound as text for that reason. Every success and every typed 409 is `Cache-Control: no-store`.
+
+| Method | Path | Answer |
+|---|---|---|
+| POST | `/caseworker/cases/{id}/deletion-requests` | 202 `{requestId, status}` with `Location: /caseworker/application-deletions/{requestId}`, for a fresh admission and for every replay. `@AuditedAs(CASE_DELETION_REQUESTED)` |
+| GET | `/caseworker/application-deletions/{requestId}` | 200 `{requestId, caseId, reason, status, requestedAt, completedAt, failure}`, for any Delivery Manager, whether or not the case still exists |
+
+- **Body**: closed, exactly `reason` (`CREATED_IN_ERROR` or `DUPLICATE`), `note` (10–500 after trimming, no control
+  characters) and `expectedModifiedOn` (the case detail's `modifiedOn` as published, ISO-8601 local date-time, to the
+  millisecond). Any other key is a 400 that does not echo it (`DeletionBodies`); a value of the wrong JSON type is
+  refused as missing, with the field named. No body is three field errors.
+- **`Idempotency-Key`**: required canonical UUID; missing or malformed is a 400 on that header. The same key and body
+  is the same request (202, also after the case is gone); the same key with another body is 409 `KEY_REUSED`; another
+  key for the same reason answers the first request, keeping its Delivery Manager and note; for the other reason it is
+  409 `CONFLICTING_REASON`.
+- **409** is `DeletionError {error, code}`, `code` a `DeletionRefusal` member, and writes nothing.
+- **404**: an unknown case with no request; an unknown or non-UUID request id, in the same words.
+- **Nothing private reaches the wire.** The status publishes no note, requester, key, fingerprint, claim, CCD
+  reference or locator, and `failure` is a `DeletionFailure` member only when `NeedsAttention`. The note is in no log
+  line (`CreateDeletionRequest.toString` prints keys only). 202 is never "deleted": only `Completed` is, and polling
+  starts no work.
+- The deletion DTOs' `requestId` is the request's resource id, so `NotificationSecurityTest`'s rule against publishing a
+  `requestId` (the email send's key) names those two classes as its only exception.
+
+**Proof.** `CaseworkerApplicationDeletionControllerTest` (full context, Postgres, 13): 401 on both routes; each of
+five non-DM roles 403 on both routes with valid, forged, keyless and malformed input, before lookup; 202 with
+`Location`, `no-store` and exactly two fields, round-tripping `modifiedOn` from the case detail; the status field set,
+with no note, subject or key; every 400; the 404s; the typed stale 409; replays, `KEY_REUSED`, `CONFLICTING_REASON`
+and a 202 replay after the case row is deleted; a second Delivery Manager reading the first's request; and the note in
+no log output. `OpenAPIPublisherTest.documentsTheApplicationDeletion` pins the published contract.
 
 ## Audit-value disposal permissions
 

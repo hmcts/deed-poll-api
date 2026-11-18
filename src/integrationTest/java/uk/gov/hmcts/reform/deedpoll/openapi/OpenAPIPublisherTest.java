@@ -23,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.QueryOperator;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRefusal;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFailure;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFormat;
@@ -162,6 +163,16 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     private static final List<String> PREVIEW_PATHS = List.of(
         "/caseworker/cases/{id}/documents/{documentId}/preview",
         "/judicial/referrals/{referralId}/documents/{documentId}/preview"
+    );
+
+    /**
+     * The Delivery Manager's permanent application deletion (plan 20261118-dm-application-deletion), counted apart
+     * from {@link #CASEWORKER_PATHS} for the reason the CCD attempts are: the caseworker count is a number the README
+     * states, and these two operations require {@code DELETE_APPLICATION}.
+     */
+    private static final List<String> DELETION_PATHS = List.of(
+        "/caseworker/cases/{id}/deletion-requests",
+        "/caseworker/application-deletions/{requestId}"
     );
 
     /** Delivery Manager-only publication history, whose single GET is asserted separately. */
@@ -706,6 +717,69 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
     }
 
     /**
+     * The deletion contract Admin generates its confirmation and progress pages from: the closed body, the required
+     * UUID header, the 202 with its Location, the typed 409, and a status read that publishes no note, actor, key,
+     * locator or CCD reference.
+     */
+    @DisplayName("Documents application deletion: closed body, required key, 202, typed 409, narrow status")
+    @Test
+    void documentsTheApplicationDeletion() throws Exception {
+        JsonNode spec = JSON.readTree(mvc.perform(get("/v3/api-docs"))
+                                          .andExpect(status().isOk())
+                                          .andReturn()
+                                          .getResponse()
+                                          .getContentAsByteArray());
+        JsonNode paths = spec.get("paths");
+
+        assertThat(paths.get(DELETION_PATHS.get(0)).fieldNames()).toIterable().containsExactly("post");
+        assertThat(paths.get(DELETION_PATHS.get(1)).fieldNames()).toIterable().containsExactly("get");
+        assertThat(CASEWORKER_PATHS).doesNotContainAnyElementsOf(DELETION_PATHS);
+
+        JsonNode admission = paths.get(DELETION_PATHS.get(0)).get("post");
+        assertThat(admission.get("operationId").asText()).isEqualTo("requestApplicationDeletion");
+        assertThat(admission.get("description").asText()).contains("DELETE_APPLICATION").contains("Completed");
+        JsonNode key = parameterNamed(admission.get("parameters"), "Idempotency-Key");
+        assertThat(key.at("/in").asText()).isEqualTo("header");
+        assertThat(key.at("/required").asBoolean()).isTrue();
+        assertThat(key.at("/schema/format").asText()).isEqualTo("uuid");
+        assertThat(admission.at("/requestBody/required").asBoolean()).isTrue();
+        assertThat(admission.at("/responses").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("202", "400", "403", "404", "409");
+        assertThat(admission.at("/responses/202/headers/Location").isMissingNode()).isFalse();
+        JsonNode accepted = resolve(spec, admission.at("/responses/202/content/*~1*/schema"));
+        assertThat(accepted.get("properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("requestId", "status");
+        JsonNode conflict = resolve(spec, admission.at("/responses/409/content/*~1*/schema"));
+        assertThat(conflict.get("properties").fieldNames()).toIterable().containsExactlyInAnyOrder("error", "code");
+        List<String> codes = new ArrayList<>();
+        resolve(spec, conflict.at("/properties/code")).get("enum").forEach(code -> codes.add(code.asText()));
+        assertThat(codes).containsExactlyInAnyOrderElementsOf(
+            Arrays.stream(DeletionRefusal.values()).map(Enum::name).toList());
+
+        JsonNode body = spec.at("/components/schemas/CreateDeletionRequest");
+        assertThat(body.get("properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("reason", "note", "expectedModifiedOn");
+        assertThat(body.get("required")).hasSize(3);
+        assertThat(body.get("additionalProperties").asBoolean()).isFalse();
+        assertThat(body.at("/properties/note/minLength").asInt()).isEqualTo(10);
+        assertThat(body.at("/properties/note/maxLength").asInt()).isEqualTo(500);
+        List<String> reasons = new ArrayList<>();
+        body.at("/properties/reason/enum").forEach(reason -> reasons.add(reason.asText()));
+        assertThat(reasons).containsExactlyInAnyOrder("CREATED_IN_ERROR", "DUPLICATE");
+
+        JsonNode read = paths.get(DELETION_PATHS.get(1)).get("get");
+        assertThat(read.get("operationId").asText()).isEqualTo("getApplicationDeletion");
+        assertThat(read.at("/responses").fieldNames()).toIterable().containsExactlyInAnyOrder("200", "403", "404");
+        JsonNode detail = resolve(spec, read.at("/responses/200/content/*~1*/schema"));
+        assertThat(detail.get("properties").fieldNames()).toIterable().containsExactlyInAnyOrder(
+            "requestId", "caseId", "reason", "status", "requestedAt", "completedAt", "failure");
+        List<String> statuses = new ArrayList<>();
+        resolve(spec, detail.at("/properties/status")).get("enum").forEach(state -> statuses.add(state.asText()));
+        assertThat(statuses).containsExactly("Pending", "InProgress", "AwaitingDisposal", "NeedsAttention",
+                                             "Completed");
+    }
+
+    /**
      * Every documented path belongs to a list this class names -- so a route added outside both fails here.
      *
      * <p><strong>Added because the two counts above cannot see an addition.</strong> Each sums the operations of
@@ -738,6 +812,7 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         known.addAll(CCD_ATTEMPT_PATHS);
         known.addAll(PREVIEW_PATHS);
         known.addAll(MI_PATHS);
+        known.addAll(DELETION_PATHS);
         known.add(GAZETTE_HISTORY_PATH);
         known.add("/caseworker/gazette-settings");
         known.add("/caseworker/process-settings");

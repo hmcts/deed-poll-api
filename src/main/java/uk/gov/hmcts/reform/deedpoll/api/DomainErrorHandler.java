@@ -22,6 +22,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewError;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteRefusal;
@@ -151,6 +152,17 @@ public class DomainErrorHandler {
     private static String wholeSeconds(Duration wait) {
         long seconds = wait.getSeconds() + (wait.getNano() > 0 ? 1 : 0);
         return Long.toString(Math.max(1, seconds));
+    }
+
+    /**
+     * A refused deletion request: a 409 carrying the typed {@code code} as well as the words, so Admin can say what
+     * to resolve without parsing prose. More specific than {@link ConflictError}, so Spring picks this one.
+     * {@code no-store}, as the deletion routes' other answers are.
+     */
+    @ExceptionHandler(DeletionConflictError.class)
+    public ResponseEntity<DeletionError> deletion(DeletionConflictError error) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).contentType(MediaType.APPLICATION_JSON)
+            .cacheControl(CacheControl.noStore()).body(DeletionError.from(error));
     }
 
     @ExceptionHandler(ConflictError.class)
