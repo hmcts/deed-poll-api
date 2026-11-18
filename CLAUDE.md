@@ -283,7 +283,10 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   statement that forgets the predicate fails for every case it touches. CCD's view and binding reads are native on
   purpose. Only `DeletionFinalisation` completes a request, in the worker's owned transaction after every external line
   is `Done`: `DELETE` only, audit values through `deedpoll_audit_dispose_case_values`, one `CASE_DELETED` under the
-  request's own Delivery Manager. See `docs/APPLICATION-DELETION.md`.
+  request's own Delivery Manager. A document removal leaves a V50 tombstone (`deedpoll_removed_document`) in its own
+  transaction, so its best-effort unlink or CDAM soft delete is still inventoried; a new path that deletes a document
+  row must write one too. A removed CDAM document holds its request at `CDAM_REMOVED_DOCUMENT_UNPURGED` until the
+  dm-store team purges it. See `docs/APPLICATION-DELETION.md`.
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks
   wrong, stop and report it — do not "fix" it.
@@ -752,10 +755,13 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `SavedCaseResponse`, and the shared `CaseResponseFields` test fixture. `DeedPollColumnsTest` checks the reverse: every
   stored column has a reader or a written-down exemption, which is where a column that must never be published
   (`ccdCaseReference`) goes.
-  The case detail's `lastChangedOn` is not a column: it is derived (`repository/CaseLastChanged`, the later of
-  `modifiedOn` and the case's newest audited non-read write), detail-only by design, and what application deletion's
-  `STALE_CONFIRMATION` compares, so a child write path that records no `AuditTrail` event on its case lets a deletion
-  through over a change nobody reviewed.
+  The case detail's `lastChangedOn` is not an entity field: it is derived (`repository/CaseLastChanged`, the later of
+  `modifiedOn` and V50's unmapped `"lastChangedOn"` column, which a trigger deferred to commit moves under the case row's
+  lock on every audited non-read write, so it strictly increases in commit order), detail-only by design, and what
+  application deletion's `STALE_CONFIRMATION` compares, so a child write path that records no `AuditTrail` event on its
+  case lets a deletion through over a change nobody reviewed. Never write the column from application code, and keep
+  V50's read-action list with `AuditAction.isRead` (`CaseChangeMarkerTest`); a new read action needs a migration that
+  replaces the function.
 - **A controller test must boot the whole context.** A `@WebMvcTest` slice does not get
   `SecurityConfiguration` — its include list covers `SecurityFilterChain` beans, and a
   `@Configuration` that merely *declares* one is not itself one — so a slice asserts Boot's defaults

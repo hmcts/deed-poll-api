@@ -341,6 +341,7 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
     void childWriteSinceTheReviewIsStale() {
         String id = fixture();
         auditEvent(id, "NOTE_CREATED", MODIFIED.plusMinutes(5));
+        final LocalDateTime written = lastChanged.of(id).orElseThrow();
         auditEvent(id, "CASE_VIEWED", MODIFIED.plusMinutes(9));
         String before = caseRow(id);
 
@@ -350,9 +351,40 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
                                     error -> assertThat(error.refusal()).isEqualTo(DeletionRefusal.STALE_CONFIRMATION));
         assertNothingWritten(id, before);
 
-        assertThat(lastChanged.of(id)).as("the newest write, not the later view").contains(MODIFIED.plusMinutes(5));
-        DeletionCommand reviewed = new DeletionCommand(UUID.randomUUID(), "DUPLICATE", NOTE, MODIFIED.plusMinutes(5));
+        assertThat(written).as("moved past modifiedOn by the write").isAfter(MODIFIED);
+        assertThat(lastChanged.of(id)).as("the write, not the later view").contains(written);
+        DeletionCommand reviewed = new DeletionCommand(UUID.randomUUID(), "DUPLICATE", NOTE, written);
         assertThat(deletions.request(DELIVERY_MANAGER, id, reviewed).admitted()).isTrue();
+    }
+
+    @Test
+    @DisplayName("a write stamped before the reviewed one but committed after it still makes the review stale")
+    void lateCommitOfAnEarlierStampIsStale() {
+        String id = fixture();
+        auditEvent(id, "NOTE_CREATED", MODIFIED.plusMinutes(5));
+        LocalDateTime reviewed = lastChanged.of(id).orElseThrow();
+
+        // Stamped earlier than what the Delivery Manager was shown, by a slow transaction or a pod's slow clock.
+        auditEvent(id, "WITNESS_CREATED", MODIFIED.minusDays(1));
+
+        assertThat(lastChanged.of(id)).hasValueSatisfying(changed -> assertThat(changed).isAfter(reviewed));
+        DeletionCommand stale = new DeletionCommand(UUID.randomUUID(), "DUPLICATE", NOTE, reviewed);
+        assertThatThrownBy(() -> deletions.request(DELIVERY_MANAGER, id, stale))
+            .isInstanceOfSatisfying(DeletionConflictError.class,
+                                    error -> assertThat(error.refusal()).isEqualTo(DeletionRefusal.STALE_CONFIRMATION));
+    }
+
+    @Test
+    @DisplayName("every audited commit moves lastChangedOn on by at least a millisecond, even within one clock tick")
+    void everyCommitMovesItOn() {
+        String id = fixture();
+        LocalDateTime previous = lastChanged.of(id).orElseThrow();
+        for (int i = 0; i < 5; i++) {
+            auditEvent(id, "NOTE_UPDATED", MODIFIED);
+            LocalDateTime next = lastChanged.of(id).orElseThrow();
+            assertThat(next).isAfterOrEqualTo(previous.plusNanos(1_000_000));
+            previous = next;
+        }
     }
 
     @Test
@@ -360,18 +392,53 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
     void lastChangedFallsBackToModifiedOn() {
         String id = fixture();
         auditEvent(id, "DOCUMENT_DOWNLOADED", MODIFIED.plusDays(1));
+        auditEvent(id, "DOCUMENT_PREVIEWED", MODIFIED.plusDays(1));
 
         assertThat(lastChanged.of(id)).contains(MODIFIED);
         assertThat(lastChanged.of(UUID.randomUUID().toString())).isEmpty();
     }
 
     @Test
-    @DisplayName("a case row written after its newest audited write last changed at its own modifiedOn")
+    @DisplayName("a case row written after its last audited write last changed at its own modifiedOn")
     void lastChangedIsTheLaterOfTheTwo() {
         String id = fixture();
-        auditEvent(id, "NOTE_CREATED", MODIFIED.minusMinutes(5));
+        jdbc.update("UPDATE deedpoll_deedpoll SET \"lastChangedOn\" = ? WHERE id = ?",
+                    Timestamp.valueOf(MODIFIED.minusMinutes(5)), id);
 
         assertThat(lastChanged.of(id)).contains(MODIFIED);
+    }
+
+    @Test
+    @DisplayName("an event on a case with a deletion request does not move its lastChangedOn")
+    void fencedCaseIsNotMoved() {
+        String id = fixture();
+        assertThat(admit(id, UUID.randomUUID()).admitted()).isTrue();
+        assertThat(lastChanged.of(id)).as("admission's own event").contains(MODIFIED);
+    }
+
+    @Test
+    @DisplayName("documents a caseworker already removed are inventoried from their tombstones")
+    void removedDocumentsAreInventoried() {
+        String id = fixture();
+        link(id, reference());
+        String cdam = UUID.randomUUID().toString();
+        tombstone(id, "removed-local-" + id, "Local", "files/removed-" + id);
+        tombstone(id, "removed-cdam-" + id, "Attached", cdam);
+
+        DeletionRequest request = admit(id, UUID.randomUUID()).request();
+
+        assertThat(requests.stepsOf(request.id()))
+            .filteredOn(step -> step.itemId() != null && step.itemId().startsWith("removed-"))
+            .extracting(step -> step.kind() + ":" + step.itemId() + ":" + step.locator())
+            .containsExactlyInAnyOrder("LOCAL_DOCUMENT:removed-local-" + id + ":files/removed-" + id,
+                                       "CDAM_REMOVED_DOCUMENT:removed-cdam-" + id + ":" + cdam);
+    }
+
+    private void tombstone(String caseId, String documentId, String state, String locator) {
+        jdbc.update("""
+            INSERT INTO deedpoll_removed_document (id, case_id, storage_state, locator, removed_at)
+            VALUES (?, ?, ?, ?, now())
+            """, documentId, caseId, state, locator);
     }
 
     private void auditEvent(String caseId, String action, LocalDateTime at) {

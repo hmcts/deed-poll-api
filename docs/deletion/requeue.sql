@@ -6,7 +6,8 @@
 -- Expect requests_requeued = 1. Zero means the request is not NeedsAttention with a requeueable code: stop.
 --
 -- Requeueable codes only. LOCAL_DOCUMENT_INVALID_KEY, CCD_CASE_MISSING, CDAM_WITHOUT_CCD_CASE, CCD_COPY_PRESENT,
--- UNLISTED_OWNED_STAGE and CLEANUP_STEP_FAILED are escalations, never requeued by this statement.
+-- UNLISTED_OWNED_STAGE and CLEANUP_STEP_FAILED are escalations, never requeued by this statement;
+-- CDAM_REMOVED_DOCUMENT_UNPURGED is resumed only by docs/deletion/confirm-cdam-purge.sql.
 -- One statement, so the request and its document tries change together or not at all. It touches no admission field
 -- (V48's trigger would refuse it) and cannot reopen a Completed request. next_attempt_at = requested_at is in the past
 -- on the worker's own (UTC) clock, so the next run claims it.

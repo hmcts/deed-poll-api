@@ -544,4 +544,61 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
         assertThat(documents.resolve(key)).exists();
         assertThat(step(request, DeletionStepKind.LOCAL_DOCUMENT)).containsEntry("locator", key);
     }
+
+    private void tombstone(String caseId, String state, String locator) {
+        jdbc.update("""
+            INSERT INTO deedpoll_removed_document (id, case_id, storage_state, locator, removed_at)
+            VALUES (?, ?, ?, ?, now())
+            """, UUID.randomUUID().toString(), caseId, state, locator);
+    }
+
+    private Map<String, Object> recordCdamPurge(DeletionRequest request) throws IOException {
+        String statement = Files.readString(Path.of("docs/deletion/confirm-cdam-purge.sql"))
+            .replace(":'request_id'", "'" + request.id() + "'");
+        return jdbc.queryForMap(statement);
+    }
+
+    @Test
+    @DisplayName("a file whose removal by a caseworker left it on disk is removed and verified from its tombstone")
+    void removedDocumentLeftOnDisk() throws IOException {
+        String id = fixture();
+        String key = UUID.randomUUID().toString();
+        Files.writeString(documents.resolve(key), "applicant evidence a failed unlink left behind");
+        tombstone(id, "Local", key);
+        DeletionRequest request = admit(id);
+
+        assertThat(claimAndProcess(cleanup)).hasValueSatisfying(made ->
+            assertThat(made.status()).isEqualTo(DeletionStatus.Completed));
+        assertThat(documents.resolve(key)).doesNotExist();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_removed_document WHERE case_id = ?",
+                                       Integer.class, id)).as("cascaded with the case").isZero();
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.Completed);
+    }
+
+    @Test
+    @DisplayName("a soft-deleted CDAM document holds the request in NeedsAttention until its purge is recorded")
+    void confirmCdamPurge() throws IOException {
+        String id = fixture();
+        tombstone(id, "Attached", UUID.randomUUID().toString());
+        DeletionRequest request = admit(id);
+
+        assertThat(claimAndProcess(cleanup)).hasValueSatisfying(made -> {
+            assertThat(made.status()).isEqualTo(DeletionStatus.NeedsAttention);
+            assertThat(made.failure()).isEqualTo(DeletionFailure.CDAM_REMOVED_DOCUMENT_UNPURGED);
+        });
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_deedpoll WHERE id = ?", Integer.class, id))
+            .as("never finalised over the residue").isOne();
+        assertThat(requeue(request)).as("not a requeueable code").containsEntry("requests_requeued", 0L);
+
+        assertThat(recordCdamPurge(request)).containsEntry("requests_requeued", 1L)
+            .containsEntry("steps_confirmed", 1L);
+        assertThat(step(request, DeletionStepKind.CDAM_REMOVED_DOCUMENT)).containsEntry("state", "Done")
+            .containsEntry("outcome", "PURGED_BY_DM_STORE");
+        assertThat(recordCdamPurge(request)).as("only once").containsEntry("requests_requeued", 0L);
+
+        assertThat(claimAndProcess(cleanup)).hasValueSatisfying(made ->
+            assertThat(made.status()).isEqualTo(DeletionStatus.Completed));
+        assertThat(recordCdamPurge(request)).as("a completed request is never reopened")
+            .containsEntry("requests_requeued", 0L);
+    }
 }

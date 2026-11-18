@@ -103,6 +103,9 @@ class AuditTrailMigrationTest extends AbstractPostgresContainerTest {
     @DisplayName("a TRUNCATE of either table is refused, even with the disposal setting on")
     void refusesTruncate(String table) {
         event("case-a", RECENT);
+        // Fires V50's change marker now: Postgres refuses any TRUNCATE of a table with trigger events still pending,
+        // which would refuse this one before the append-only trigger was asked.
+        jdbc.execute("SET CONSTRAINTS ALL IMMEDIATE");
         jdbc.queryForObject("SELECT set_config('deedpoll.audit_disposal', 'on', true)", String.class);
 
         assertThatThrownBy(() -> jdbc.execute("TRUNCATE " + table + " CASCADE"))

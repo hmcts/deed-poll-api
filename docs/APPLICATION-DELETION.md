@@ -32,8 +32,9 @@ environment.
   nothing (table under *Admission*).
 - **What it does not do.** The reference counter is never decremented, and no application id or reference is reused.
   Email GOV.UK Notify already accepted is not recalled (new sends stop at the fence). Backups, Log and Audit's own
-  record, the legacy Power App source and CDAM documents a caseworker had already soft-deleted are outside it (see
-  *Separately retained data*). Financial records governed separately are not touched; the case's refusal rules decide.
+  record and the legacy Power App source are outside it (see *Separately retained data*). CDAM documents a caseworker
+  had already soft-deleted are not removed by it, and hold the request in `NeedsAttention` until the dm-store team has
+  purged them (*Removed CDAM documents*). Financial records governed separately are not touched; the case's refusal rules decide.
 - **History.** This supersedes the September 2026 planning restriction that reserved manual hard deletion for
   data-protection erasure requests (Steve, 2026-11-18); that decision is kept as history in the plans that record it.
   It introduces no routine retention disposal and does not change the unpaid-online seven-day policy.
@@ -214,7 +215,7 @@ refusals. Each refusal is a `DeletionConflictError` carrying a `DeletionRefusal`
 
 | Code | When |
 |---|---|
-| `STALE_CONFIRMATION` | the case's `lastChangedOn`, to the millisecond, is not the one the Delivery Manager reviewed: the later of its `modifiedOn` and its newest audited write (a note, witness, document, referral or email; reads excluded), read in its own statement after the case lock (`repository/CaseLastChanged`). A child write that commits after that read and before admission commits is not seen, because child writes do not lock the case. Nor is one in flight when the case was reviewed: its time is stamped before it commits, so if a newer write was already shown the maximum does not move (pods' clock skew does the same). Both windows are one child write's transaction; closing them needs a value every commit moves (a count of audited writes) or child writes that lock the case, and neither is done |
+| `STALE_CONFIRMATION` | the case's `lastChangedOn`, to the millisecond, is not the one the Delivery Manager reviewed: the later of its `modifiedOn` and its V50 `lastChangedOn` marker, read in its own statement after the case lock (`repository/CaseLastChanged`). V50's trigger, deferred to the commit of every audited write on the case (a note, witness, document, referral or email; reads excluded), moves the marker under the case row's lock to at least a millisecond past both its last value and `modifiedOn`, so it strictly increases in commit order: a write committed after the review changes it however early its own times were stamped and whatever the pods' clocks say, and one committing after admission's read waits for the case lock and is then refused by V49's fence. `CaseChangeMarkerTest` holds V50's read list to `AuditAction.isRead` |
 | `RETAINED_PERMANENTLY` | `retainPermanently` is set |
 | `GAZETTE_EVIDENCE` | Gazette notice batch membership or request evidence |
 | `RETAINED_DEED_PAYLOAD`, `RETAINED_STAGED_UPLOADS` | the existing retained-bytes guards |
@@ -225,8 +226,9 @@ refusals. Each refusal is a `DeletionConflictError` carrying a `DeletionRefusal`
 
 An uncertain upload that has used both sends is settled (nothing resends it, and an unattached copy expires on CDAM's
 upload TTL), as are `Local`, `Attached` and `Failed`. Admission then writes the request, its inventory
-(`LOCAL_DOCUMENT` per filesystem document with its storage key, `CDAM_DOCUMENT` per attached document, `OWNED_STAGE`
-per owned stage naming the case, `CCD_DISPOSAL` with the linked reference) and `CASE_DELETION_REQUESTED` under the
+(`LOCAL_DOCUMENT` per filesystem document with its storage key, `CDAM_DOCUMENT` per attached document, from V50's
+tombstones a `LOCAL_DOCUMENT` per filesystem document and a `CDAM_REMOVED_DOCUMENT` per CDAM document a caseworker had
+already removed, `OWNED_STAGE` per owned stage naming the case, `CCD_DISPOSAL` with the linked reference) and `CASE_DELETION_REQUESTED` under the
 caller with the reason, note and request id and no values, in one transaction. A second key for the same reason
 answers the first request with its first Delivery Manager and note. `DeedPollService.removeDeedPoll` refuses a case
 with a request, and `RemoveDeedPollCallersTest` holds that no production class calls it.
@@ -379,6 +381,7 @@ comes from `DeletionProgress.decide`, which has no database in it:
 | linked, `PendingDisposal` with `resolved_ttl` set | `AwaitingDisposal` | |
 | linked, CCD step `Pending` but the local `ccd.case_data` row is gone | `NeedsAttention` | `CCD_CASE_MISSING` |
 | CDAM lines with no CCD step | `NeedsAttention` | `CDAM_WITHOUT_CCD_CASE` |
+| CCD step done (or none), a `CDAM_REMOVED_DOCUMENT` line still `Pending` | `NeedsAttention`, never finalised | `CDAM_REMOVED_DOCUMENT_UNPURGED` |
 | any other `Failed` line | `NeedsAttention` | `CLEANUP_STEP_FAILED` |
 | every external line `Done` | finalised in the same pass: `Completed` (below) | |
 
@@ -498,6 +501,7 @@ an auth failure or an ambiguous answer is never read as absence. What an operato
 | `NeedsAttention` `LOCAL_DOCUMENT_INVALID_KEY` | A stored key escapes the store's root; nothing was touched | Investigate the row; this is a data fault, not something to requeue blindly |
 | `NeedsAttention` `CCD_CASE_MISSING`, `CDAM_WITHOUT_CCD_CASE`, `CCD_COPY_PRESENT` | The SDK's copy and the request's inventory disagree | Establish from data-store whether the CCD case exists; escalate before any action |
 | `NeedsAttention` `RETAINED_PAYLOAD`, `LOCAL_FINALISATION_REFUSED` | Finalisation was refused and rolled back, external steps kept `Done` | Resolve the named obstacle, then requeue; finalisation resumes without repeating a removal |
+| `NeedsAttention` `CDAM_REMOVED_DOCUMENT_UNPURGED` | CCD has disposed of the case, but documents a caseworker removed while they were in CDAM are still soft-deleted in dm-store | Ask the dm-store team to purge the listed CDAM ids; once they confirm in writing, run [`docs/deletion/confirm-cdam-purge.sql`](deletion/confirm-cdam-purge.sql) (*Removed CDAM documents*) |
 | `NeedsAttention` `UNLISTED_OWNED_STAGE`, `CLEANUP_STEP_FAILED` | Something reached the case that the fence or the inventory did not account for, or a line failed for a reason the worker does not retry | Escalate to the service team; not requeueable by the standard statement |
 
 **Requeueing** is a reviewed operator statement, not an endpoint: there is deliberately no browser retry. The
@@ -663,7 +667,8 @@ None of these is done, and automated tests keep completion impossible without th
 - Outstanding: dm-store `ENABLE_TTL` confirmed per environment (onboarding step 4).
 - Outstanding: the disposer's removal of a CDAM document observed once against a `DOCUMENT_STORE=cdam` deployment
   with a disposable fixture, before prod activation (AAT runs the filesystem store).
-- Outstanding: Steve's answer on CDAM documents already soft-deleted by a caseworker ("Separately retained data").
+- Outstanding: the dm-store team's agreement to purge soft-deleted CDAM documents on request, and a named contact
+  (*Removed CDAM documents*); until then a linked case with one cannot complete.
 - Outstanding: An alert on the worker's needs-attention WARN, or on the monitoring query, and a named owner.
 - Outstanding: DPIA and Operational Working Agreement updates (onboarding step 6), before prod activation.
 - Outstanding: Production quotas: worker interval, batch size and lease agreed for prod (defaults `PT5M`, 10, `PT5M`).
@@ -674,7 +679,9 @@ The API's contract was first fixed at commit `0c67924` (Task 7) and changed by t
 refuses a `multipart/*` or urlencoded form body with 415 before the stream is read, and `0aaec7a` renames the body's
 `expectedModifiedOn` to `expectedLastChangedOn` and adds `lastChangedOn` to `CaseDetailResponse`. The spec generated by
 `OPENAPI_OUTPUT_PATH=<file> ./gradlew integration --tests '*OpenAPIPublisherTest' --rerun` after them has raw SHA-256
-`e07f28fac62a194020c8a78c7f5bd30d4ecc90dda1f028cc28041ac1c44fb57c` (the earlier `4bf5ae7c…e91f` is superseded); the
+`ad882f1fd793f558a38f9619b38796c70730fdee25f70d9afabb0958430e8ca5` after the external-review follow-up, which adds
+`CDAM_REMOVED_DOCUMENT_UNPURGED` to `DeletionRequestResponse.failure` (the earlier `e07f28fa…b57c` and `4bf5ae7c…e91f`
+are superseded); the
 delta against `49239c1` adds the two routes and the schemas `CreateDeletionRequest`, `DeletionAdmissionResponse`,
 `DeletionError` and `DeletionRequestResponse`, adds `lastChangedOn` to `CaseDetailResponse`, and removes nothing. Admin's plan
 (`deed-poll-admin:docs/plans/20261118-dm-application-deletion.md`) refreshes its vendored copy by its own
@@ -714,13 +721,29 @@ an unknown case rather than its own completed request. Nothing disposes of it ye
 - Email already accepted by GOV.UK Notify (Notify's own retention, and document download links until their
   `notify.document-retention-weeks` expiry). New sends are stopped; delivered mail is not recalled.
 - Gazette publication evidence: such a case is refused, not deleted.
-- **CDAM documents a caseworker had already deleted.** `CdamDocumentStore.delete` is a soft delete
-  (`permanent=false`), and dm-store's `/documents/delete` sweep skips `deleted = true` documents, so the disposer
-  never sets their TTL. They stay soft-deleted in dm-store, recoverable only by the dm-store team, and this service
-  no longer holds their ids (the local row is deleted with the document). **Open question for Steve:** accept
-  this residue, ask the dm-store team for a case-scoped purge, or keep CDAM ids for soft-deleted documents so the
-  worker can purge them; the plan forbids sending `permanent=true` ourselves.
+- Documents a caseworker removed before V50 left no tombstone, so a file whose unlink failed then, or a CDAM document
+  soft-deleted then, is not in any inventory. AAT is on the filesystem store; prod has removed nothing through CDAM.
 - Logs (fixed prose, no applicant content), Log and Audit's own deletion record, and the legacy Power App source.
+
+## Removed CDAM documents
+
+A caseworker's document removal deletes the row and then, best effort after the commit, unlinks the file or sends CDAM
+a soft delete (`permanent=false`, which the plan keeps). Since V50 the removal also writes a tombstone,
+`deedpoll_removed_document` (document id, case, `Local` or `Attached`, storage key or CDAM id), in its own transaction
+(`DocumentService.removeDocument`, `RemovedDocumentRepository`). It cascades with the case and is fenced as the
+case's other children are. Admission inventories each one:
+
+- **A removed filesystem document** is a `LOCAL_DOCUMENT` line like any other: the worker removes it and verifies
+  absence (`ALREADY_ABSENT` when the original unlink worked), so a failed unlink no longer leaves bytes behind.
+- **A removed CDAM document** is a `CDAM_REMOVED_DOCUMENT` line. dm-store's `/documents/delete` sweep skips
+  `deleted = true` documents, so CCD's disposer never reaches it, and this service never sends `permanent=true`. Once
+  CCD has disposed of the case the request is `NeedsAttention` `CDAM_REMOVED_DOCUMENT_UNPURGED` and is **not**
+  finalised: partial cleanup never reads as complete. The operator lists the ids
+  (`SELECT locator FROM deedpoll_deletion_step WHERE request_id = … AND kind = 'CDAM_REMOVED_DOCUMENT' AND state =
+  'Pending'`) and asks the dm-store team to purge them. Once they confirm in writing,
+  [`docs/deletion/confirm-cdam-purge.sql`](deletion/confirm-cdam-purge.sql) records each line `Done` with
+  `PURGED_BY_DM_STORE` and requeues the request in one statement, and the next run finalises it.
+  `DeletionCleanupTest.confirmCdamPurge` runs that file verbatim. The standard requeue leaves this code alone.
 
 ## External onboarding checklist (not done here; owners in brackets)
 

@@ -23,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.RemovedDocumentRepository;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -76,6 +77,7 @@ public class DocumentService {
     private final ObjectProvider<RemoteDocumentUploads> remoteUploads;
     private final DocumentUploadAudit uploadAudit;
     private final ReadAudit readAudit;
+    private final RemovedDocumentRepository removedDocuments;
     private final TransactionTemplate inTransaction;
     private final TransactionTemplate readOnly;
 
@@ -89,6 +91,7 @@ public class DocumentService {
                            ObjectProvider<RemoteDocumentUploads> remoteUploads,
                            DocumentUploadAudit uploadAudit,
                            ReadAudit readAudit,
+                           RemovedDocumentRepository removedDocuments,
                            PlatformTransactionManager transactions) {
         this.deedPolls = deedPolls;
         this.documents = documents;
@@ -97,6 +100,7 @@ public class DocumentService {
         this.remoteUploads = remoteUploads;
         this.uploadAudit = uploadAudit;
         this.readAudit = readAudit;
+        this.removedDocuments = removedDocuments;
         // PROPAGATION_REQUIRED, the @Transactional default: a filesystem upload joins a caller's transaction, as
         // DeedDocumentService.storeDeed's, exactly as it did when the method carried the annotation.
         this.inTransaction = new TransactionTemplate(transactions);
@@ -247,11 +251,16 @@ public class DocumentService {
      * after the commit ahead of the unlink. It is best effort on the same reasoning, and makes no remote call before
      * the commit.
      *
+     * <p><strong>Either way, the row leaves a tombstone</strong> ({@link RemovedDocumentRepository}), in this
+     * transaction: where the bytes were stays known until the case is deleted, because an orphaned file and a CDAM
+     * soft-deleted document are both copies an application deletion must account for.
+     *
      * @throws NotFoundError if there is no such document, or it belongs to another case
      */
     @Transactional
     public void removeDocument(String deedPollId, String id) {
         DeedPollSupportingDocument document = findDocument(deedPollId, id);
+        leaveTombstone(deedPollId, document);
         String storageKey = cleanupLocator(document);
         RemoteDocumentUploads remote = remoteUploads.getIfAvailable();
         Runnable removal = remote == null ? () -> {
@@ -259,6 +268,25 @@ public class DocumentService {
         uploadAudit.deleted(document);
         documents.delete(document);
         removeBlobOnceTheDeleteCommits(id, storageKey, removal);
+    }
+
+    /**
+     * Records where a removed document's bytes were, in the removal's transaction, so an application deletion can
+     * still list them (V50). Taken from the row, not from this deployment's store: a filesystem file a CDAM
+     * deployment cannot unlink is exactly what it must not forget. A row with no copy (metadata only, failed or
+     * never attached) leaves none, as admission's inventory lists none for it.
+     */
+    private void leaveTombstone(String deedPollId, DeedPollSupportingDocument document) {
+        if (document.getStorageState() == DocumentStorageState.Local) {
+            if (document.getStorageKey() != null && !document.getStorageKey().isBlank()) {
+                removedDocuments.record(document.getId(), deedPollId, DocumentStorageState.Local.name(),
+                                        document.getStorageKey(), AuditClock.now());
+            }
+        } else if (document.getStorageState() == DocumentStorageState.Attached
+            && document.getCdamDocumentId() != null) {
+            removedDocuments.record(document.getId(), deedPollId, DocumentStorageState.Attached.name(),
+                                    document.getCdamDocumentId().toString(), AuditClock.now());
+        }
     }
 
     /**

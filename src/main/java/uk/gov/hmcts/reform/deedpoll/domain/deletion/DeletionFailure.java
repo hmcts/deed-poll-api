@@ -22,6 +22,12 @@ public enum DeletionFailure {
     CCD_CASE_MISSING,
     /** CDAM documents are in the inventory of a case with no CCD case, which an upload cannot produce. */
     CDAM_WITHOUT_CCD_CASE,
+    /**
+     * CCD has disposed of the case, but documents a caseworker had removed while they were in CDAM are still
+     * soft-deleted in dm-store, which neither the disposer nor this service removes: the dm-store team has to purge
+     * them before the request can complete.
+     */
+    CDAM_REMOVED_DOCUMENT_UNPURGED,
     /** An inventory line was recorded as failed for a reason no other code covers. */
     CLEANUP_STEP_FAILED,
     /**

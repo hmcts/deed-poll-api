@@ -120,6 +120,26 @@ class DeletionProgressTest {
     }
 
     @Test
+    @DisplayName("a soft-deleted CDAM document waits for CCD's disposal, then holds the request from completing")
+    void removedCdamDocument() {
+        DeletionStep removed = step(DeletionStepKind.CDAM_REMOVED_DOCUMENT, DeletionStepState.Pending, 0);
+        DeletionStep ccd = step(DeletionStepKind.CCD_DISPOSAL, DeletionStepState.Pending, 0);
+        var waiting = progress.decide(List.of(removed, ccd), Optional.of(new CcdCaseState("PendingDisposal", true)),
+                                      NOTHING);
+        assertThat(waiting.status()).as("CCD first").isEqualTo(DeletionStatus.AwaitingDisposal);
+
+        var held = progress.decide(List.of(removed, step(DeletionStepKind.CCD_DISPOSAL, DeletionStepState.Done, 0)),
+                                   NO_CASE, NOTHING);
+        assertThat(held.status()).isEqualTo(DeletionStatus.NeedsAttention);
+        assertThat(held.failure()).isEqualTo(DeletionFailure.CDAM_REMOVED_DOCUMENT_UNPURGED);
+        assertThat(held.externalCleanupDone()).isFalse();
+
+        var purged = progress.decide(List.of(step(DeletionStepKind.CDAM_REMOVED_DOCUMENT, DeletionStepState.Done, 0),
+            step(DeletionStepKind.CCD_DISPOSAL, DeletionStepState.Done, 0)), NO_CASE, NOTHING);
+        assertThat(purged.externalCleanupDone()).isTrue();
+    }
+
+    @Test
     @DisplayName("CDAM documents with no CCD case, a failed line and a found problem all need attention")
     void attention() {
         assertThat(progress.decide(List.of(step(DeletionStepKind.CDAM_DOCUMENT, DeletionStepState.Pending, 0)),

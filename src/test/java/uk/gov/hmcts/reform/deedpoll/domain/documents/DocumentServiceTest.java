@@ -28,6 +28,8 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollSupportingDocumentTypeRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.ReferenceCounterRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.RemovedDocumentRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.RemovedDocumentRepository.RemovedDocument;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -110,6 +112,9 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private ReferenceCounterRepository referenceCounters;
+
+    @Autowired
+    private RemovedDocumentRepository removedDocuments;
 
     @MockitoSpyBean
     private DocumentStore store;
@@ -329,6 +334,9 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
         // The blob really went, which is what the reference's `expect(storage.delete).toHaveBeenCalledWith`
         // stands for.
         assertThat(STORE_ROOT.resolve(storageKey)).doesNotExist();
+        // Where the bytes were stays known, in case the unlink had failed: an application deletion lists it.
+        assertThat(removedDocuments.ofCase(caseId))
+            .containsExactly(new RemovedDocument(uploaded.getId(), "Local", storageKey));
     }
 
     @Test
@@ -352,6 +360,9 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
         assertThat(documents.findById(remote.getId())).isEmpty();
         verify(store, never()).delete(cdamId.toString());
         assertThat(Files.readAllBytes(localBlob)).isEqualTo(FILE.content());
+        // The CDAM copy is recorded from the row, whatever this deployment's store, as the CDAM id.
+        assertThat(removedDocuments.ofCase(caseId))
+            .containsExactly(new RemovedDocument(remote.getId(), "Attached", cdamId.toString()));
     }
 
     @Test
@@ -405,6 +416,7 @@ class DocumentServiceTest extends AbstractPostgresContainerTest {
         assertThat(documents.findById(uploaded.getId())).isPresent();
         verify(store, never()).delete(any());
         assertThat(STORE_ROOT.resolve(uploaded.getStorageKey())).exists();
+        assertThat(removedDocuments.ofCase(caseId)).as("the tombstone rolls back with the delete").isEmpty();
     }
 
     @Test

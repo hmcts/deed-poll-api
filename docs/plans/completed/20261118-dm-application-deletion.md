@@ -512,6 +512,15 @@ across 603 suites (0 failures, 1 skipped); `integration` 31 across 5 (0 failures
 warnings in the new test, whose suite was then rerun: 16, 0 failures); `git diff --check` clean. No deployment,
 rehearsal or live deletion has been performed.
 
+External review follow-up (2026-11-18): V50 closes two gaps. `lastChangedOn` is now the later of `modifiedOn` and a
+per-case marker that a trigger deferred to commit moves strictly forward under the case row's lock on every audited
+non-read write, so a write stamped early but committed after the review is stale (`CaseLastChanged`,
+`CaseChangeMarkerTest`, `ApplicationDeletionServiceTest.lateCommitOfAnEarlierStampIsStale`). A document removal now
+leaves a `deedpoll_removed_document` tombstone. Admission inventories a removed filesystem file as `LOCAL_DOCUMENT` and
+a removed CDAM document as `CDAM_REMOVED_DOCUMENT`. The second holds the request at `CDAM_REMOVED_DOCUMENT_UNPURGED`
+until the dm-store team purges it and `docs/deletion/confirm-cdam-purge.sql` records that, so the soft-deleted residue
+no longer reads as `Completed` (`DeletionCleanupTest.removedDocumentLeftOnDisk`, `confirmCdamPurge`).
+
 ## Post-Completion
 
 API deployed and compatible on every replica before Admin activation. Rehearsal/activation results are operator

@@ -20,6 +20,8 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeletionAdmissionRepository.Docum
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionAdmissionRepository.LockedCase;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionRequestRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionRequestRepository.NewDeletionRequest;
+import uk.gov.hmcts.reform.deedpoll.repository.RemovedDocumentRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.RemovedDocumentRepository.RemovedDocument;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -62,14 +64,17 @@ public class ApplicationDeletionService {
     private final DeedPollRepository deedPolls;
     private final AuditTrail audit;
     private final CaseLastChanged lastChanged;
+    private final RemovedDocumentRepository removedDocuments;
 
     public ApplicationDeletionService(DeletionRequestRepository requests, DeletionAdmissionRepository admission,
-                                      DeedPollRepository deedPolls, AuditTrail audit, CaseLastChanged lastChanged) {
+                                      DeedPollRepository deedPolls, AuditTrail audit, CaseLastChanged lastChanged,
+                                      RemovedDocumentRepository removedDocuments) {
         this.requests = requests;
         this.admission = admission;
         this.deedPolls = deedPolls;
         this.audit = audit;
         this.lastChanged = lastChanged;
+        this.removedDocuments = removedDocuments;
     }
 
     /**
@@ -206,10 +211,10 @@ public class ApplicationDeletionService {
     /** Each refusal reads; none writes, so a refused request leaves the case and its children as they were. */
     private void refuseIfIneligible(LockedCase target, Body body) {
         String id = target.id();
-        // Its own statement after the lock, so a change committed while admission waited is counted. Child writes do
-        // not lock the case, and their times are stamped before they commit, so two races are left: one committing
-        // after this read and before admission commits, and one in flight when the case was reviewed whose stamp is
-        // older than a newer write already shown (the maximum does not move). See CaseLastChanged.
+        // Its own statement after the lock, so a change committed while admission waited is counted. V50 moves the
+        // value at every audited commit under the case row's lock, so a write committed after the review changes it
+        // however its own times were stamped, and one committing after this read waits for admission and is then
+        // refused by V49's fence. See CaseLastChanged.
         LocalDateTime changed = lastChanged.of(id).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
         if (!DeletionFingerprint.truncate(changed)
             .equals(DeletionFingerprint.truncate(body.expectedLastChangedOn()))) {
@@ -244,6 +249,11 @@ public class ApplicationDeletionService {
      * <p>A filesystem document is the worker's to remove; an attached CDAM document is listed so the tombstone can say
      * it was covered, and the disposer removes it by case reference. A {@code Failed} or settled uncertain upload has
      * no copy against the case. Retained payloads were refused above, so the payload rows have nothing to list.
+     *
+     * <p>A document a caseworker already removed is listed from its V50 tombstone: a filesystem one as a
+     * {@link DeletionStepKind#LOCAL_DOCUMENT} (its unlink was best effort, so the worker removes and verifies it
+     * again), a CDAM one as a {@link DeletionStepKind#CDAM_REMOVED_DOCUMENT}, which keeps the request from completing
+     * until the dm-store team has purged it.
      */
     private void inventory(UUID requestId, LockedCase target) {
         for (DocumentLocation document : admission.documents(target.id())) {
@@ -253,6 +263,15 @@ public class ApplicationDeletionService {
             } else if ("Attached".equals(document.storageState())) {
                 requests.insertStep(UUID.randomUUID(), requestId, DeletionStepKind.CDAM_DOCUMENT, document.id(),
                                     document.cdamDocumentId());
+            }
+        }
+        for (RemovedDocument removed : removedDocuments.ofCase(target.id())) {
+            if ("Local".equals(removed.storageState())) {
+                requests.insertStep(UUID.randomUUID(), requestId, DeletionStepKind.LOCAL_DOCUMENT, removed.id(),
+                                    removed.locator());
+            } else {
+                requests.insertStep(UUID.randomUUID(), requestId, DeletionStepKind.CDAM_REMOVED_DOCUMENT,
+                                    removed.id(), removed.locator());
             }
         }
         for (String stage : admission.ownedStages(target.id())) {

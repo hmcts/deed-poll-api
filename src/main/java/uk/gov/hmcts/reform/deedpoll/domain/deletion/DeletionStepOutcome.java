@@ -14,6 +14,11 @@ public enum DeletionStepOutcome {
     ALREADY_ABSENT,
     /** Retain and Dispose removed it: data-store answered 404 for the case, and the SDK called the policy. */
     DISPOSED_BY_CCD,
+    /**
+     * The dm-store team purged a soft-deleted CDAM document, and an operator recorded it
+     * ({@code docs/deletion/confirm-cdam-purge.sql}).
+     */
+    PURGED_BY_DM_STORE,
     /** The last try could not remove the file or verify its absence; another try follows. */
     REMOVAL_FAILED,
     /** No filesystem store is configured in this deployment. */

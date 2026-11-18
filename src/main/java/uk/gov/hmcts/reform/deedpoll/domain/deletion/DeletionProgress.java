@@ -75,6 +75,11 @@ public final class DeletionProgress {
                 ? DeletionStatus.AwaitingDisposal : DeletionStatus.InProgress;
             return new Decision(status, null, pollInterval, false);
         }
+        // Asked only once CCD has disposed of the case, so the rest of the cleanup is done first and the residue named
+        // is the last thing between the request and finalisation. Partial cleanup never reads as complete.
+        if (!pending(steps, DeletionStepKind.CDAM_REMOVED_DOCUMENT).isEmpty()) {
+            return attention(DeletionFailure.CDAM_REMOVED_DOCUMENT_UNPURGED);
+        }
         return new Decision(DeletionStatus.InProgress, null, pollInterval, true);
     }
 
