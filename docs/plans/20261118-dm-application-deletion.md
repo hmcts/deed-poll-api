@@ -284,11 +284,11 @@ new migration only if required for permissions, and Postgres integration tests.
 
 **Files:** `docs/APPLICATION-DELETION.md`, chart configuration/tests if required, execution notes below.
 
-- [ ] Produce a non-production rehearsal script/checklist using disposable fixtures for linked/unlinked cases,
+- [x] Produce a non-production rehearsal script/checklist using disposable fixtures for linked/unlinked cases,
   documents, failure/restart and audit verification; use no real applicant data and include restoration safeguards.
-- [ ] Produce the API-before-Admin rollout order, worker activation prerequisites, pause/resume procedure,
+- [x] Produce the API-before-Admin rollout order, worker activation prerequisites, pause/resume procedure,
   incomplete-request monitoring and owner handoff. No cancellation/unfencing after irreversible cleanup begins.
-- [ ] Record which external checks remain outstanding; automated tests must keep completion/activation impossible
+- [x] Record which external checks remain outstanding; automated tests must keep completion/activation impossible
   without the required configuration. This task prepares reviewable artifacts, not live deletion or deployment.
 
 ## Success criteria
@@ -486,6 +486,25 @@ tree by the Task 7 command: SHA-256 `4bf5ae7cbb1d2aaf0cfe814d272da40cb0d8d19de50
 Task 7's, so Admin's handoff is the Task 7 artifact. No deployment evidence exists; the plan stays in `docs/plans/`
 until review. Gates after the change: `./gradlew build` (init script) exit 0 in 5m47s; `test` 5,602 across 603 suites
 (0 failures, 1 skipped); `integration` 31 across 5 (0 failures); `checkstyle.sh` OK; `git diff --check` clean.
+
+Task 9 (2026-11-18, on `57200e5`): prepared, not run. `docs/APPLICATION-DELETION.md` gains "Rehearsal, rollout and
+monitoring": the two activation switches and what each alone allows; the rollout order (API on every replica with both
+off, definition import, AAT unlinked rehearsal, LAU simulation then deletion, Admin only after the API, then per
+environment worker → SDK `dry-run` → `live` as separate flux PRs); an AAT rehearsal checklist R1–R7 with disposable
+synthetic fixtures only, ids recorded and read back before each POST, short-lived test users, a confirmed
+point-in-time restore window and the restore re-check; read-only verification queries; pause/resume (no
+cancellation or unfencing); a monitoring query for incomplete requests; owners; and the outstanding external checks
+(deploy and import, R1–R7, LAU ticket/simulation/sign-off, dm-store `ENABLE_TTL`, a CDAM-store disposal observed once
+because AAT is on the filesystem store, Steve's CDAM soft-deleted residue answer, an alert and named owner, DPIA/OWA,
+prod worker quotas). Requeue is now one reviewed file, `docs/deletion/requeue.sql` (four requeueable codes; every
+other code an escalation; `UNLISTED_OWNED_STAGE` moved from requeue to escalation in the recovery table). New tests:
+`DeletionCleanupTest.requeue` and `requeueRefusesEscalations` run that file verbatim (Postgres; resumes to `Completed`
+once the store is back, no-op on a second requeue and after completion, admission fields unchanged, escalation left
+alone); `DeploymentChartConformanceTest.noValuesFileActivatesApplicationDeletion` (×3 values files) and
+`applicationDeletionDefaultsOff`. No chart change. Gates: `./gradlew build` (init script) exit 0 in 5m22s; `test` 5,608
+across 603 suites (0 failures, 1 skipped); `integration` 31 across 5 (0 failures); `checkstyle.sh` OK (after fixing two
+warnings in the new test, whose suite was then rerun: 16, 0 failures); `git diff --check` clean. No deployment,
+rehearsal or live deletion has been performed.
 
 ## Post-Completion
 

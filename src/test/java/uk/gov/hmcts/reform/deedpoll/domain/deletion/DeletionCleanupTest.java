@@ -479,6 +479,60 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
         assertThat(context.getBeanNamesForType(DeletionCleanupTimer.class)).isEmpty();
     }
 
+    /**
+     * Runs the operator's requeue file exactly as psql would, with {@code :'request_id'} bound.
+     */
+    private Map<String, Object> requeue(DeletionRequest request) throws IOException {
+        String statement = Files.readString(Path.of("docs/deletion/requeue.sql"))
+            .replace(":'request_id'", "'" + request.id() + "'");
+        return jdbc.queryForMap(statement);
+    }
+
+    @Test
+    @DisplayName("the documented requeue resumes a NeedsAttention request once its cause is fixed, and nothing else")
+    void requeue() throws IOException {
+        String id = fixture();
+        final String key = localDocument(id, UUID.randomUUID().toString(), true);
+        DeletionRequest request = admit(id);
+        DeletionCleanup unmounted = worker(store(root.resolve("not-mounted")));
+        claimAndProcess(unmounted);
+        due(request);
+        claimAndProcess(unmounted);
+        assertThat(reread(request).failure()).isEqualTo("LOCAL_DOCUMENT_UNREMOVED");
+
+        assertThat(requeue(request)).containsEntry("requests_requeued", 1L).containsEntry("steps_reset", 1L);
+        DeletionRequest requeued = reread(request);
+        assertThat(requeued.status()).isEqualTo(DeletionStatus.InProgress);
+        assertThat(requeued.failure()).isNull();
+        assertThat(requeued.reason()).isEqualTo(request.reason());
+        assertThat(requeued.requestedBySubject()).isEqualTo(request.requestedBySubject());
+        assertThat(step(request, DeletionStepKind.LOCAL_DOCUMENT)).containsEntry("attempts", 0)
+            .containsEntry("locator", key);
+        assertThat(requeue(request)).as("only a NeedsAttention request is requeued")
+            .containsEntry("requests_requeued", 0L);
+
+        // The volume is mounted again: the next run takes it to completion with nothing else done by hand.
+        assertThat(claimAndProcess(cleanup)).hasValueSatisfying(made ->
+            assertThat(made.status()).isEqualTo(DeletionStatus.Completed));
+        assertThat(documents.resolve(key)).doesNotExist();
+        assertThat(requeue(request)).as("a completed request is never reopened")
+            .containsEntry("requests_requeued", 0L);
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.Completed);
+    }
+
+    @Test
+    @DisplayName("the documented requeue leaves an escalation code alone")
+    void requeueRefusesEscalations() throws IOException {
+        String id = fixture();
+        localDocument(id, "../escape", false);
+        DeletionRequest request = admit(id);
+        claimAndProcess(cleanup);
+        assertThat(reread(request).failure()).isEqualTo("LOCAL_DOCUMENT_INVALID_KEY");
+
+        assertThat(requeue(request)).containsEntry("requests_requeued", 0L).containsEntry("steps_reset", 0L);
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.NeedsAttention);
+    }
+
     @Test
     @DisplayName("with the worker off a request stays Pending, fenced and stored")
     void disabledLeavesItPending() throws IOException {

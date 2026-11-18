@@ -1,9 +1,10 @@
 # Application deletion — ownership, contracts and cleanup order
 
-Status: Tasks 1 to 8 of [the plan](plans/20261118-dm-application-deletion.md), 2026-11-18. This records what an
+Status: Tasks 1 to 9 of [the plan](plans/20261118-dm-application-deletion.md), 2026-11-18. This records what an
 application owns, what the platform deletes for us and how it signals it, and the order cleanup must take, and
-describes admission, the fence, the external and binary cleanup, local finalisation and the HTTP routes as built. The
-rollout is a later task; nothing here authorises deletion in any environment.
+describes admission, the fence, the external and binary cleanup, local finalisation and the HTTP routes as built, and
+the rehearsal, rollout and monitoring procedure (prepared, not run). Nothing here authorises deletion in any
+environment.
 
 ## At a glance
 
@@ -493,16 +494,162 @@ an auth failure or an ambiguous answer is never read as absence. What an operato
 | `NeedsAttention` `LOCAL_STORE_UNAVAILABLE`, `LOCAL_DOCUMENT_UNREMOVED` | The filesystem store is absent from this deployment or the file would not go after `max-attempts` tries | Restore the volume or remove the file, then requeue (below) |
 | `NeedsAttention` `LOCAL_DOCUMENT_INVALID_KEY` | A stored key escapes the store's root; nothing was touched | Investigate the row; this is a data fault, not something to requeue blindly |
 | `NeedsAttention` `CCD_CASE_MISSING`, `CDAM_WITHOUT_CCD_CASE`, `CCD_COPY_PRESENT` | The SDK's copy and the request's inventory disagree | Establish from data-store whether the CCD case exists; escalate before any action |
-| `NeedsAttention` `RETAINED_PAYLOAD`, `UNLISTED_OWNED_STAGE`, `LOCAL_FINALISATION_REFUSED`, `CLEANUP_STEP_FAILED` | Finalisation was refused and rolled back, external steps kept `Done` | Resolve the named obstacle, then requeue; finalisation resumes without repeating a removal |
+| `NeedsAttention` `RETAINED_PAYLOAD`, `LOCAL_FINALISATION_REFUSED` | Finalisation was refused and rolled back, external steps kept `Done` | Resolve the named obstacle, then requeue; finalisation resumes without repeating a removal |
+| `NeedsAttention` `UNLISTED_OWNED_STAGE`, `CLEANUP_STEP_FAILED` | Something reached the case that the fence or the inventory did not account for, or a line failed for a reason the worker does not retry | Escalate to the service team; not requeueable by the standard statement |
 
-**Requeueing** is a reviewed operator statement, not an endpoint: there is deliberately no browser retry. It moves one
-`NeedsAttention` request back to `InProgress` with `failure` null and `next_attempt_at` now, and (for a document that
-used its tries) the affected `Pending` step's `attempts` back to 0; a `Failed` step goes back to `Pending` only once its
-cause is understood. V48's trigger refuses any change to the admission half (case, key, reason, note, actor,
-fingerprint, confirmation) and any change to a `Completed` request, so a requeue cannot rewrite who asked or why, or
-reopen a completed deletion. The exact statements are rehearsed and recorded with the rollout (plan Task 9). Pausing is
+**Requeueing** is a reviewed operator statement, not an endpoint: there is deliberately no browser retry. The
+statement is [`docs/deletion/requeue.sql`](deletion/requeue.sql), one atomic statement run with psql's
+`\set request_id '…'` and `\i`: it moves one `NeedsAttention` request whose code is `LOCAL_STORE_UNAVAILABLE`,
+`LOCAL_DOCUMENT_UNREMOVED`, `RETAINED_PAYLOAD` or `LOCAL_FINALISATION_REFUSED` back to `InProgress`, due at once, with
+`failure` null, and its `Pending` filesystem lines' `attempts` back to 0, and answers `requests_requeued` (expect 1;
+0 means stop). Every other code is an escalation and the statement leaves it alone. A `Failed` step goes back to
+`Pending` only by a separately reviewed statement once its cause is understood. V48's trigger refuses any change to the
+admission half (case, key, reason, note, actor, fingerprint, confirmation) and any change to a `Completed` request, so
+a requeue cannot rewrite who asked or why, or reopen a completed deletion. `DeletionCleanupTest.requeue` and
+`requeueRefusesEscalations` run that file verbatim against Postgres: a request stuck on an unmounted store is requeued,
+then completed by the next run once the store is back; a second requeue, and one after completion, change nothing; an
+invalid-key escalation is untouched. Pausing is
 switching the worker and the SDK task off: every admitted request stays fenced, stored and resumable, and a lapsed claim
 is taken over when the worker is on again.
+
+## Rehearsal, rollout and monitoring (Task 9)
+
+Prepared for review, **not run**. No environment has admitted, cleaned or completed a deletion. Every result below is
+operator evidence, recorded when it happens beside the plan's execution notes, and a step that was not run is
+recorded as not run, never ticked.
+
+### What keeps deletion switched off
+
+Two switches, both off unless an environment's flux sets them, and no chart values file may set either
+(`DeploymentChartConformanceTest.noValuesFileActivatesApplicationDeletion` over `values.yaml`, the AAT and the preview
+templates, and `applicationDeletionDefaultsOff` over `application.yaml`'s defaults):
+
+| Switch | Default | What it alone allows |
+|---|---|---|
+| `APPLICATION_DELETION_WORKER_ENABLED` | `false` (`DeletionCleanupTimer` is not created: `DeletionCleanupTimerTest`) | Filesystem removal and local finalisation. With it off nothing is removed and no request completes. |
+| `CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_MODE` | `off` | The SDK's mark/confirm/dispose for linked cases. With it off a linked request never leaves `InProgress`, because only `dispose` can record the CCD line `Done`. |
+
+So an unlinked request needs the worker on to complete, and a linked one needs the worker on, the SDK task `live`,
+**and** the disposer deleting DEEDPOLL (its `DELETE_CASE_TYPES`, which this repository does not control). `dry-run`
+marks nothing and simulation deletes nothing, so in either a linked request stays `InProgress`/`AwaitingDisposal`.
+Admission itself has no switch: the routes exist once deployed, gated by `DELETE_APPLICATION`, and Admin's control is
+what exposes them to a user. A preview pod runs against AAT's database, which is a further reason neither switch may
+be in a chart file.
+
+### Rollout order
+
+1. **API merge and deploy** to every environment with both switches off. Check every replica runs the release (V48
+   and V49 applied; readiness lists `deedpoll_deletion_request` and `deedpoll_deletion_step`). From here a Delivery
+   Manager could admit a request through the API, and it would wait `Pending`, fenced; nothing is removed.
+2. **Definition import** (onboarding step 1) to AAT, then to each environment ahead of its step 5.
+3. **AAT rehearsal**, unlinked first, below (R1–R6), with the worker switched on for AAT only.
+4. **LAU onboarding and simulation** (onboarding steps 2–4); the linked rehearsal (R7) in simulation, then after the
+   recorded move to `DELETE_CASE_TYPES`.
+5. **Admin** merges and deploys its control only after step 1 is on every replica in the target environment, by its
+   own plan. Admin must never be ahead of the API: its client would meet a 404 route.
+6. **Per-environment activation**, AAT, then demo/ithc as wanted, then prod: in cnp-flux-config set
+   `APPLICATION_DELETION_WORKER_ENABLED=true`, then `CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_MODE=dry-run`, read one
+   run's log, then `live` — each a separate PR, each only after the previous one's evidence is recorded. Prod
+   additionally needs DEEDPOLL in prod's disposer `DELETE_CASE_TYPES` and the DPIA/OWA update (onboarding step 6).
+
+Prerequisites for switching the worker on in an environment: step 1 deployed there; the system user's secrets mounted
+(they already are, for linking); for `DOCUMENT_STORE=filesystem` environments the volume mounted on every replica the
+worker can run on; and somebody named to watch the monitoring below for the first week.
+
+### Rehearsal checklist (AAT, disposable fixtures only)
+
+Safeguards, before anything else:
+- **No real applicant data.** Every fixture is created for the rehearsal through the caseworker API by the rehearser,
+  with an obviously synthetic name (forename `Rehearsal`, surname `Deletion-<date>-<n>`) and synthetic documents (a
+  one-page PDF that says "rehearsal fixture"). Record each fixture's case id **before** admission. Never admit a
+  deletion for an id not on that list; a second person reads the id back before each POST.
+- **Users.** A Delivery Manager and one user for each refused role, created by `/cft-create-test-user` with AAT's
+  usual 3-hour lifetime. No personal account.
+- **Restoration.** Note the time and confirm AAT's database has a point-in-time restore window covering it before R2.
+  A restore would resurrect deleted fixtures (see "Separately retained data"); after any restore, re-check every
+  `Completed` request's case id is absent and delete by the same procedure if not. Nothing in the rehearsal edits a
+  table by hand except the requeue statement in R5.
+
+| Step | Do | Expect and record |
+|---|---|---|
+| R1 fixtures | Create: **U** unlinked with two filesystem documents; **D1/D2** a duplicate pair; **K** with `retainPermanently` set; **L** linked (linking sweep as `docs/CCD-SMOKE.md`) with one document | Case ids, `modifiedOn`, U's two `storageKey`s and L's CCD reference |
+| R2 refusals | POST for U as each non-DM role; as DM with a stale `expectedModifiedOn`; as DM for K | 403 ×N with nothing written; 409 `STALE_CONFIRMATION`; 409 `RETAINED_PERMANENTLY`; no `deedpoll_deletion_request` row for U or K |
+| R3 admission, worker off | POST for U and D2 (`DUPLICATE`) as DM; repeat U's POST with the same key; same key with a different note; GET both statuses | 202 with Location; replay 202 with the same `requestId`; 409 `KEY_REUSED`; both `Pending` after more than one worker interval; U and D2 404 on the case routes and absent from the list and MI; D1 untouched |
+| R4 unlinked completion | flux: `APPLICATION_DELETION_WORKER_ENABLED=true` for AAT; wait one interval | U and D2 `Completed`; U's two files absent on the volume; queries below show the case gone, two events with the DM's subject, zero value rows; D1 still served |
+| R5 pause and restart | Admit a fresh unlinked fixture with the worker off; switch on and `kubectl rollout restart` the deployment during its first interval | One `Completed`, exactly one `CASE_DELETED` (a lapsed lease is taken over, never doubled). Requeue (`docs/deletion/requeue.sql`) is rehearsed live only if a request genuinely reaches a requeueable `NeedsAttention`; it is not induced on shared AAT storage. Its proof otherwise is `DeletionCleanupTest.requeue`, recorded as local-only |
+| R6 audit | The audit queries below for U and D2 | `CASE_DELETION_REQUESTED` then `CASE_DELETED`, actor the DM, `detail` with `deletionReason`/`deletionRequestId` (and the note on the request event only); no `deedpoll_audit_event_value` rows for either case |
+| R7 linked, after onboarding steps 1–4 | Admit L; SDK mode `dry-run` for one run, then `live`; with DEEDPOLL in `SIMULATED_CASE_TYPES` wait two nights; after the recorded move to `DELETE_CASE_TYPES` wait for the next disposer run and the next SDK run | `dry-run`: still `InProgress`, nothing marked. `live` + simulation: `AwaitingDisposal`, CCD still answers L (**never completed**). L's filesystem document removed before the case is offered to the SDK (files before CCD). After deletion: data-store answers 404 for L's reference, LAU shows the deletion, then `Completed` with the same audit shape. AAT stores documents on the filesystem, so the disposer's CDAM document removal is not rehearsed here; locally it is proven only against WireMock (`RetainAndDisposeDeletionTest`), and it is an outstanding check |
+
+Queries for R4–R6 (read-only, run as the api's database login; substitute the fixture's case id):
+
+```sql
+SELECT count(*) FROM deedpoll_deedpoll WHERE id = :'case_id';                         -- 0
+SELECT status, failure, completed_at FROM deedpoll_deletion_request WHERE case_id = :'case_id';
+SELECT kind, state, outcome, locator IS NULL AS locator_erased FROM deedpoll_deletion_step s
+  JOIN deedpoll_deletion_request r ON r.id = s.request_id WHERE r.case_id = :'case_id';   -- all Done, erased
+SELECT action, actor_id, detail ? 'deletionNote' AS has_note, detail->>'deletionReason' AS reason
+  FROM deedpoll_audit_event WHERE case_id = :'case_id' AND action LIKE 'CASE_DELET%' ORDER BY id;
+SELECT count(*) FROM deedpoll_audit_event_value v JOIN deedpoll_audit_event e ON e.id = v.event_id
+ WHERE e.case_id = :'case_id';                                                          -- 0
+```
+
+### Pause and resume
+
+**Pause** is switching the worker off, and for linked cases the SDK task to `off` (two flux PRs or one). Admission keeps
+working; every admitted request stays fenced, stored and resumable. A request that was mid-run keeps its claim until
+its lease lapses and is taken over on resume; a removal already made is recognised as `ALREADY_ABSENT` and never
+counted as a failure. The disposer is LAU's: pausing it is a request to LAU (remove DEEDPOLL from `DELETE_CASE_TYPES`),
+and a case it has already deleted cannot be brought back. **Resume** is switching them on again, in the order of
+rollout step 6. **There is no cancellation and no unfencing**, paused or not: once admitted a request only moves
+forward, and a mistaken admission is handled as a data-protection incident with the restore safeguards above, not by
+editing the request.
+
+### Monitoring incomplete requests
+
+Run daily for the first week after activation in an environment, then weekly; any row is followed up by the
+"Failure and recovery" table:
+
+```sql
+SELECT id, status, failure, requested_at, next_attempt_at, attempts
+  FROM deedpoll_deletion_request
+ WHERE status <> 'Completed'
+   AND (status = 'NeedsAttention'
+        OR (status = 'Pending' AND requested_at < (now() AT TIME ZONE 'UTC') - interval '1 hour')
+        OR (status = 'InProgress' AND requested_at < (now() AT TIME ZONE 'UTC') - interval '1 day')
+        OR (status = 'AwaitingDisposal' AND requested_at < (now() AT TIME ZONE 'UTC') - interval '3 days'))
+ ORDER BY requested_at;
+```
+
+Times are UTC (`AuditClock`). The worker logs a fixed WARN with the request id and its failure code when a request
+needs attention; there is no alert wired to it yet, which is an outstanding check below.
+
+### Owners and handoff
+
+| Area | Owner |
+|---|---|
+| The API, the switches in flux, monitoring and requeue | Deed poll service team (Steve to name the on-call engineer) |
+| The definition import, the SDK task | Deed poll service team |
+| The disposer, its type lists, LAU's deletion record | LAU / CCD platform, via the LAU PET ticket |
+| dm-store `ENABLE_TTL`, CDAM residue | dm-store team |
+| Database backups and restore | Platform operations |
+| The Admin control and its copy | Deed poll Admin, by `deed-poll-admin:docs/plans/20261118-dm-application-deletion.md` |
+| A mistaken admission | Delivery Manager raises it; handled as a data-protection incident |
+
+### Outstanding external checks
+
+None of these is done, and automated tests keep completion impossible without the configuration they need:
+
+- Outstanding: API deployed on every replica in AAT (rollout step 1) and the definition imported (onboarding step 1).
+- Outstanding: AAT rehearsal R1–R6 run and recorded.
+- Outstanding: LAU PET ticket raised and accepted; DEEDPOLL in AAT's `SIMULATED_CASE_TYPES`; R7 in simulation; recorded
+  sign-off; DEEDPOLL in `DELETE_CASE_TYPES`; R7 to completion.
+- Outstanding: dm-store `ENABLE_TTL` confirmed per environment (onboarding step 4).
+- Outstanding: the disposer's removal of a CDAM document observed once against a `DOCUMENT_STORE=cdam` deployment
+  with a disposable fixture, before prod activation (AAT runs the filesystem store).
+- Outstanding: Steve's answer on CDAM documents already soft-deleted by a caseworker ("Separately retained data").
+- Outstanding: An alert on the worker's needs-attention WARN, or on the monitoring query, and a named owner.
+- Outstanding: DPIA and Operational Working Agreement updates (onboarding step 6), before prod activation.
+- Outstanding: Production quotas: worker interval, batch size and lease agreed for prod (defaults `PT5M`, 10, `PT5M`).
 
 ## Provenance of the published contract, and the Admin handoff
 
