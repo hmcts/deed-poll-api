@@ -78,9 +78,17 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
         for (String id : fixtures) {
             jdbc.update("DELETE FROM deedpoll_deletion_request WHERE case_id = ?", id);
             jdbc.update("DELETE FROM deedpoll_gazette_notice_batch_case WHERE deed_poll_id = ?", id);
+            jdbc.update("DELETE FROM deedpoll_gazette_request_case WHERE deed_poll_id = ?", id);
+            jdbc.update("DELETE FROM deedpoll_stagedpayload WHERE id IN (SELECT \"documentId\" "
+                            + "FROM deedpoll_deedpreparation WHERE \"deedPollId\" = ?)", id);
+            jdbc.update("DELETE FROM deedpoll_stagedpayload WHERE id IN (SELECT id FROM deedpoll_ownedstage "
+                            + "WHERE \"ownerKind\" = 'RECORD' AND \"ownerId\" = ?)", id);
+            jdbc.update("DELETE FROM deedpoll_ownedstage WHERE \"ownerKind\" = 'RECORD' AND \"ownerId\" = ?", id);
+            jdbc.update("DELETE FROM deedpoll_deedpreparation WHERE \"deedPollId\" = ?", id);
             jdbc.update("DELETE FROM deedpoll_deedpoll WHERE id = ?", id);
         }
         jdbc.update("DELETE FROM deedpoll_gazette_notice_batch WHERE sent_by_id = ?", SUBJECT);
+        jdbc.update("DELETE FROM deedpoll_gazette_request WHERE submitted_by_id = ?", SUBJECT);
     }
 
     private String fixture() {
@@ -162,6 +170,7 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
         insertDocument(id, "Local", "files/" + id, null, null, 0);
         insertDocument(id, "Attached", null, UUID.randomUUID(), null, 1);
         insertDocument(id, "Failed", null, null, null, 1);
+        String stage = ownedStage(id, "Removed");
         UUID key = UUID.randomUUID();
 
         Admission result = admit(id, key);
@@ -180,7 +189,10 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
         assertThat(request.fingerprint())
             .isEqualTo(DeletionFingerprint.of(DeletionReason.DUPLICATE, DeletionNote.parse(NOTE), MODIFIED));
         assertThat(requests.stepsOf(request.id())).extracting(DeletionStep::kind).containsExactlyInAnyOrder(
-            DeletionStepKind.LOCAL_DOCUMENT, DeletionStepKind.CDAM_DOCUMENT, DeletionStepKind.CCD_DISPOSAL);
+            DeletionStepKind.LOCAL_DOCUMENT, DeletionStepKind.CDAM_DOCUMENT, DeletionStepKind.OWNED_STAGE,
+            DeletionStepKind.CCD_DISPOSAL);
+        assertThat(requests.stepsOf(request.id())).filteredOn(step -> step.kind() == DeletionStepKind.OWNED_STAGE)
+            .singleElement().satisfies(step -> assertThat(step.locator()).isEqualTo(stage));
         assertThat(requests.stepsOf(request.id())).allSatisfy(step -> {
             assertThat(step.state()).isEqualTo(DeletionStepState.Pending);
             assertThat(step.locator()).isNotBlank();
@@ -276,6 +288,14 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
                 id -> insertDocument(id, "AttachUncertain", null, UUID.randomUUID(), "hash", 1));
         refuses(DeletionRefusal.DOCUMENT_STORAGE_UNRESOLVED,
                 id -> insertDocument(id, "UploadUncertain", null, null, null, 1));
+        refuses(DeletionRefusal.GAZETTE_EVIDENCE, this::gazetteRequestMember);
+        refuses(DeletionRefusal.RETAINED_DEED_PAYLOAD, this::retainedDeedPayload);
+        refuses(DeletionRefusal.RETAINED_STAGED_UPLOADS, id -> payload(ownedStage(id, "Staged")));
+        refuses(DeletionRefusal.CCD_CREATION_UNRESOLVED, id -> {
+            attempt(id, "Pending", false, false);
+            jdbc.update("UPDATE deedpoll_ccdcreationattempt SET status = 'Claimed', \"claimedBy\" = 'w', "
+                            + "\"leaseExpiresAt\" = now() + interval '5 minutes' WHERE \"deedPollId\" = ?", id);
+        });
         refuses(DeletionRefusal.CCD_CREATION_UNRESOLVED, id -> attempt(id, "AwaitingConfirmation", false, false));
         refuses(DeletionRefusal.CCD_CREATION_UNRESOLVED, id -> attempt(id, "NeedsRepair", true, false));
         refuses(DeletionRefusal.EMAIL_SEND_UNRESOLVED, id -> notification(id, null, true));
@@ -297,6 +317,11 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
         String neverSubmitted = fixture();
         attempt(neverSubmitted, "Pending", false, false);
         assertThat(admit(neverSubmitted, UUID.randomUUID()).admitted()).isTrue();
+
+        String linked = fixture();
+        link(linked, reference());
+        attempt(linked, "NeedsRepair", true, false);
+        assertThat(admit(linked, UUID.randomUUID()).admitted()).as("a linked case's binding is the answer").isTrue();
 
         String expiredClaim = fixture();
         notification(expiredClaim, LocalDateTime.now(ZoneOffset.UTC).minusMinutes(5), false);
@@ -491,6 +516,57 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
                 assertThat(error.getMessage()).isEqualTo(expected.message()).doesNotContain(id);
             });
         assertNothingWritten(id, before);
+    }
+
+    /**
+     * An owned stage held by the case as its RECORD owner; {@code Staged} with a payload is retained bytes.
+     */
+    private String ownedStage(String caseId, String state) {
+        String id = UUID.randomUUID().toString();
+        jdbc.update("""
+            INSERT INTO deedpoll_ownedstage
+              (id, "ownerKind", "ownerId", subject, "operationId", "originalName", "mimeType", "sizeBytes",
+               checksum, "createdOn", "expiresOn", state)
+            VALUES (?, 'RECORD', ?, 'synthetic-subject', ?, 'synthetic.pdf', 'application/pdf', 3,
+                    encode(sha256(decode('010203', 'hex')), 'hex'),
+                    CURRENT_TIMESTAMP - interval '2 hours', CURRENT_TIMESTAMP + interval '1 hour', ?)
+            """, id, caseId, UUID.randomUUID(), state);
+        return id;
+    }
+
+    private void payload(String id) {
+        jdbc.update("""
+            INSERT INTO deedpoll_stagedpayload (id, content, "sizeBytes", checksum)
+            VALUES (?, decode('010203', 'hex'), 3, encode(sha256(decode('010203', 'hex')), 'hex'))
+            """, id);
+    }
+
+    /** A deed reserved for the case whose bytes are still retained: recovery evidence admission must not lose. */
+    private void retainedDeedPayload(String caseId) {
+        String document = UUID.randomUUID().toString();
+        jdbc.update("""
+            INSERT INTO deedpoll_deedpreparation
+                ("deedPollId", "documentId", template, "originalName", "mimeType", "sizeBytes", checksum)
+            VALUES (?, ?, 'ADULT', 'deed.docx', 'application/test', 3, encode(sha256(decode('010203', 'hex')), 'hex'))
+            """, caseId, document);
+        payload(document);
+    }
+
+    /** The case is a member of a Gazette publication request (V34), whatever that request's state. */
+    private void gazetteRequestMember(String caseId) {
+        UUID request = UUID.randomUUID();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        jdbc.update("""
+            INSERT INTO deedpoll_gazette_request (id, request_id, payload_hash, selection_fingerprint,
+                submitted_by_id, submitted_by_name, submitted_at, recipient_email, recipient_revision,
+                adult_count, minor_count, template_id, reply_to_id, retention_weeks, confirm_email, owner,
+                lease_until, state, send_started_at, settled_at, failure_code, provider_notification_id)
+            VALUES (?, ?, repeat('a', 64), 'fingerprint', ?, 'Dee Manager', ?, 'gazette@example.com', 1,
+                1, 0, ?, ?, 4, true, ?, ?, 'NotSent', null, ?, 'PREPARATION_FAILED', null)
+            """, request, UUID.randomUUID(), SUBJECT, Timestamp.valueOf(now), UUID.randomUUID(), UUID.randomUUID(),
+            UUID.randomUUID(), Timestamp.valueOf(now.plusMinutes(5)), Timestamp.valueOf(now.plusMinutes(1)));
+        jdbc.update("INSERT INTO deedpoll_gazette_request_case (batch_id, deed_poll_id, reference_number, kind) "
+                        + "VALUES (?, ?, 'reference', 'adult')", request, caseId);
     }
 
     private void attempt(String caseId, String status, boolean reached, boolean provenNothing) {

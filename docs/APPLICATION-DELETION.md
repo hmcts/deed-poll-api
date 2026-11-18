@@ -536,6 +536,20 @@ Admission itself has no switch: the routes exist once deployed, gated by `DELETE
 what exposes them to a user. A preview pod runs against AAT's database, which is a further reason neither switch may
 be in a chart file.
 
+The worker's other settings, under `deedpoll.deletion.cleanup` (`DeletionCleanupProperties` refuses a duration that
+is not positive, a batch size outside 1–100 and fewer than one attempt at start-up). Production values need release
+agreement:
+
+| Variable | Default | What it is |
+|---|---|---|
+| `APPLICATION_DELETION_WORKER_INTERVAL` | `PT5M` | The timer's delay between runs |
+| `APPLICATION_DELETION_WORKER_BATCH_SIZE` | `10` | The most requests one run claims |
+| `APPLICATION_DELETION_WORKER_LEASE` | `PT5M` | How long a claim lasts before another pod may take the request over |
+| `APPLICATION_DELETION_WORKER_MAX_ATTEMPTS` | `8` | Tries a filesystem document gets before the request needs attention |
+| `APPLICATION_DELETION_WORKER_RETRY_BASE` | `PT1M` | The first retry's delay, doubled per try |
+| `APPLICATION_DELETION_WORKER_POLL_INTERVAL` | `PT1H` | How often a request waiting on CCD or finalisation is looked at; also the retry cap |
+| `CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_CRON` | `0 0 2 * * *` (UTC) | When the SDK's Retain and Dispose task runs |
+
 ### Rollout order
 
 1. **API merge and deploy** to every environment with both switches off. Check every replica runs the release (V48
@@ -678,6 +692,14 @@ case, leaving the events (names of fields, actor, time). `deedpoll_audit_dispose
 The new events must be value-free: `CASE_DELETION_REQUESTED`/`CASE_DELETED` carry typed `deletionReason`,
 `deletionNote` and `deletionRequestId` detail and no before/after values, so disposal has nothing to remove from them.
 The note survives with the event for its 7 years, which is why it must not hold applicant details.
+
+**The tombstone's retention.** A `Completed` `deedpoll_deletion_request` row is the tombstone: case id, idempotency
+key, fingerprint, reason, note, requesting Delivery Manager, timestamps, CCD reference and the steps' outcome codes,
+with every document locator and the temporary inventory erased at completion (`eraseInventory`). V48's trigger keeps
+it immutable, and it is what answers a replay of the same key with the same request. It follows the audit events'
+rule: kept for seven years after `completed_at`, and never disposed of sooner, because without it a replay would be
+an unknown case rather than its own completed request. Nothing disposes of it yet; when the seven-year disposal of
+`deedpoll_audit_dispose_events_before` is scheduled, the tombstones go by the same reviewed path, at the same cutoff.
 
 ## Separately retained data (not erased by this operation)
 

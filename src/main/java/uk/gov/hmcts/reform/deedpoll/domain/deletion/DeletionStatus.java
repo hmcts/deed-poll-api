@@ -18,10 +18,5 @@ public enum DeletionStatus {
     /**
      * Every in-scope copy is removed and {@code CASE_DELETED} is recorded. Terminal.
      */
-    Completed;
-
-    /** Whether the request is finished, so nothing about it changes again. */
-    public boolean isTerminal() {
-        return this == Completed;
-    }
+    Completed
 }

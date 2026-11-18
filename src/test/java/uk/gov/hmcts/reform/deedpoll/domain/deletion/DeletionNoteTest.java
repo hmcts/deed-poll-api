@@ -110,13 +110,10 @@ class DeletionNoteTest {
     }
 
     @Test
-    @DisplayName("only Completed is terminal")
+    @DisplayName("the stored statuses, by name")
     void statuses() {
         assertThat(DeletionStatus.values()).extracting(Enum::name)
             .containsExactly("Pending", "InProgress", "AwaitingDisposal", "NeedsAttention", "Completed");
-        for (DeletionStatus status : DeletionStatus.values()) {
-            assertThat(status.isTerminal()).as(status.name()).isEqualTo(status == DeletionStatus.Completed);
-        }
     }
 
     private static void assertRefused(String raw) {

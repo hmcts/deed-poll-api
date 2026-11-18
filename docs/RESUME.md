@@ -1,5 +1,13 @@
 # Resume state — where the next session picks up
 
+**Plan 20261118-dm-application-deletion, 2026-11-18:** on `feat/dm-application-deletion`. V48/V49,
+`DELETE_APPLICATION` (Delivery Manager only), `POST /caseworker/cases/{id}/deletion-requests` and
+`GET /caseworker/application-deletions/{requestId}`, the deletion fence, the cleanup worker and the Retain and Dispose
+policy, implemented and proven locally, with both switches off by default (`APPLICATION_DELETION_WORKER_ENABLED`,
+`CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_MODE`). Next: review and merge, deploy to every replica with both off, the
+definition import, the AAT rehearsal R1–R7, LAU onboarding, then Admin. See
+[docs/APPLICATION-DELETION.md](APPLICATION-DELETION.md).
+
 **OWASP plan 01 Task 12, 2026-11-17:** on `chore/h1-delete-staff-gate-report-mode`. The `/caseworker/**` staff rule is
 now a plain `hasAnyAuthority`, as `/judicial/**` is: `StaffGate`, its report mode, its `staff-gate report` log line and
 `STAFF_GATE_MODE` are gone. Due no earlier than 2026-11-24 (two weeks after Task 5 went live with no rollback).

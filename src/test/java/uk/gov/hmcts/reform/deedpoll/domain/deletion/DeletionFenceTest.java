@@ -23,6 +23,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollPatch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollService;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedPreparations;
+import uk.gov.hmcts.reform.deedpoll.domain.deeds.DeedTemplate;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.DeletionCommand;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentService;
 import uk.gov.hmcts.reform.deedpoll.domain.mi.MiGranularity;
@@ -30,6 +32,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.mi.MiParameters;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteService;
 import uk.gov.hmcts.reform.deedpoll.domain.referrals.JudicialReferralService;
+import uk.gov.hmcts.reform.deedpoll.domain.referrals.ReferralService;
 import uk.gov.hmcts.reform.deedpoll.notify.NotificationClaim;
 import uk.gov.hmcts.reform.deedpoll.notify.NotificationDeliveryTransactions;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
@@ -101,6 +104,12 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
 
     @Autowired
     private JudicialReferralService judicial;
+
+    @Autowired
+    private ReferralService referralService;
+
+    @Autowired
+    private DeedPreparations deedPreparations;
 
     @Autowired
     private ManagementInformationRepository mi;
@@ -187,6 +196,18 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
         return id;
     }
 
+    /** An owned stage held by the case as its RECORD owner, with no "caseId": the trigger's other branch. */
+    private void recordStage(String caseId) {
+        jdbc.update("""
+            INSERT INTO deedpoll_ownedstage
+              (id, "ownerKind", "ownerId", subject, "operationId", "originalName", "mimeType", "sizeBytes",
+               checksum, "createdOn", "expiresOn", state)
+            VALUES (?, 'RECORD', ?, 'synthetic-subject', ?, 'synthetic.pdf', 'application/pdf', 3,
+                    encode(sha256(decode('010203', 'hex')), 'hex'),
+                    CURRENT_TIMESTAMP - interval '2 hours', CURRENT_TIMESTAMP + interval '1 hour', 'Removed')
+            """, UUID.randomUUID().toString(), caseId, UUID.randomUUID());
+    }
+
     private UUID master() {
         UUID id = UUID.randomUUID();
         masters.add(id);
@@ -201,8 +222,12 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
      * A referral sent to {@code master} long ago, held by the judge, waiting for a direction.
      */
     private UUID referral(String caseId, UUID master, String owner) {
+        return referral(caseId, master, owner, 3);
+    }
+
+    private UUID referral(String caseId, UUID master, String owner, int daysAgo) {
         UUID id = UUID.randomUUID();
-        LocalDateTime assigned = LocalDateTime.now(ZoneOffset.UTC).minusDays(3);
+        LocalDateTime assigned = LocalDateTime.now(ZoneOffset.UTC).minusDays(daysAgo);
         jdbc.update("""
             INSERT INTO deedpoll_referral (id, "deedPollId", "state", "urgency", "claimedBy", "claimedById",
                 "claimedAt", "assignedMasterId", "assignedAt", "modifiedOn")
@@ -289,8 +314,8 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
         assertThat(linking.link(id)).isEqualTo(CcdLinkingService.Result.NO_SUCH_RECORD);
         assertThat(count("SELECT count(*) FROM deedpoll_ccdcreationattempt WHERE \"deedPollId\" = ?", id)).isZero();
         assertThat(count("SELECT count(*) FROM deedpoll_notes WHERE \"deedPollId\" = ?", id)).isZero();
-        assertThatThrownBy(() -> transaction().executeWithoutResult(status -> fence.require(id)))
-            .isInstanceOf(NotFoundError.class).hasMessage(DeletionFence.NOT_FOUND);
+        Boolean admitted = transaction().execute(status -> fence.admits(id));
+        assertThat(admitted).isFalse();
     }
 
     @Test
@@ -301,7 +326,10 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
         fenceDirectly(id);
 
         assertThatThrownBy(() -> transaction().executeWithoutResult(status -> note(id)))
-            .hasStackTraceContaining("The application is being deleted");
+            .hasStackTraceContaining("The application is being deleted")
+            .satisfies(refused -> assertThat(DeletionFence.refusedByTrigger(refused)).isTrue());
+        assertThat(DeletionFence.refusedByTrigger(new IllegalStateException("The application is being deleted")))
+            .isFalse();
         assertThatThrownBy(() -> transaction().executeWithoutResult(status -> jdbc.update(
             "UPDATE deedpoll_notes SET note = 'Changed' WHERE id = ?", note)))
             .hasStackTraceContaining("The application is being deleted");
@@ -311,6 +339,10 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
         assertThatThrownBy(() -> transaction().executeWithoutResult(status -> notification(id)))
             .hasStackTraceContaining("The application is being deleted");
         assertThatThrownBy(() -> transaction().executeWithoutResult(status -> pendingAttempt(id)))
+            .hasStackTraceContaining("The application is being deleted");
+        assertThatThrownBy(() -> transaction().executeWithoutResult(status -> document(id)))
+            .hasStackTraceContaining("The application is being deleted");
+        assertThatThrownBy(() -> transaction().executeWithoutResult(status -> recordStage(id)))
             .hasStackTraceContaining("The application is being deleted");
         assertThat(count("SELECT count(*) FROM deedpoll_notes WHERE \"deedPollId\" = ?", id)).isOne();
 
@@ -322,6 +354,28 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
         // DELETE is never refused: removing the case is the deletion's own work.
         transaction().executeWithoutResult(status -> jdbc.update("DELETE FROM deedpoll_deedpoll WHERE id = ?", id));
         assertThat(count("SELECT count(*) FROM deedpoll_deedpoll WHERE id = ?", id)).isZero();
+    }
+
+    @Test
+    @DisplayName("every V49 trigger names a column its table has, so none resolves a null target and lets a write by")
+    void everyFenceTriggerNamesARealColumn() {
+        List<Map<String, Object>> triggers = jdbc.queryForList("""
+            SELECT c.relname AS "table", encode(t.tgargs, 'escape') AS args
+              FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+             WHERE t.tgname = 'deedpoll_deletion_fence'
+            """);
+        assertThat(triggers).hasSize(12);
+        for (Map<String, Object> trigger : triggers) {
+            String table = (String) trigger.get("table");
+            String column = ((String) trigger.get("args")).split("\\\\000", -1)[0];
+            if (table.equals("deedpoll_ownedstage")) {
+                // The one trigger with no argument: the function reads "caseId" and a RECORD owner's "ownerId".
+                assertThat(column).as(table).isEmpty();
+                continue;
+            }
+            assertThat(count("SELECT count(*) FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
+                             table, column)).as(table + "." + column).isOne();
+        }
     }
 
     // --- background work --------------------------------------------------------------------------------------
@@ -370,14 +424,73 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
                                        fencedReferral)).isNull();
     }
 
+    @Test
+    @DisplayName("the overdue sweep returns an unfenced assignment to the queue and leaves a fenced one, and commits")
+    void unassignmentSkipsAFencedReferral() {
+        UUID master = master();
+        String fenced = fixture();
+        String kept = fixture();
+        final UUID fencedReferral = referral(fenced, master, JUDGE_SUBJECT, 30);
+        UUID keptReferral = referral(kept, master, JUDGE_SUBJECT, 30);
+        admit(fenced);
+
+        referralService.unassignOverdue();
+
+        assertThat(jdbc.queryForObject("SELECT state::text FROM deedpoll_referral WHERE id = ?", String.class,
+                                       keptReferral)).isEqualTo("Open");
+        assertThat(jdbc.queryForObject("SELECT state::text FROM deedpoll_referral WHERE id = ?", String.class,
+                                       fencedReferral)).isEqualTo("Claimed");
+        assertThat(count("SELECT count(*) FROM deedpoll_notes WHERE \"deedPollId\" = ?", fenced)).isZero();
+    }
+
+    @Test
+    @DisplayName("linking a Master's legacy claims and unlinking a Master leave a fenced referral alone")
+    void masterLinkingSkipsAFencedReferral() {
+        final UUID master = master();
+        String fenced = fixture();
+        String kept = fixture();
+        final UUID fencedLegacy = referral(fenced, null, JUDGE_SUBJECT);
+        UUID keptLegacy = referral(kept, null, JUDGE_SUBJECT);
+        admit(fenced);
+
+        Integer attached = transaction().execute(status -> referrals.attachLegacyClaims(master, JUDGE_SUBJECT));
+        assertThat(attached).isOne();
+        assertThat(jdbc.queryForObject("SELECT \"assignedMasterId\" FROM deedpoll_referral WHERE id = ?", UUID.class,
+                                       keptLegacy)).isEqualTo(master);
+        assertThat(jdbc.queryForObject("SELECT \"assignedMasterId\" FROM deedpoll_referral WHERE id = ?", UUID.class,
+                                       fencedLegacy)).isNull();
+
+        String fencedHeld = fixture();
+        final UUID heldReferral = referral(fencedHeld, master, JUDGE_SUBJECT);
+        admit(fencedHeld);
+        Integer detached = transaction().execute(status -> referrals.detachFromUnlinkedMaster(master));
+        assertThat(detached).isOne();
+        assertThat(jdbc.queryForObject("SELECT \"claimedById\" FROM deedpoll_referral WHERE id = ?", String.class,
+                                       keptLegacy)).isNull();
+        assertThat(jdbc.queryForObject("SELECT \"claimedById\" FROM deedpoll_referral WHERE id = ?", String.class,
+                                       heldReferral)).isEqualTo(JUDGE_SUBJECT);
+    }
+
+    @Test
+    @DisplayName("deed preparation, and every path sharing its lock, refuses a fenced case before reserving anything")
+    void deedPreparationRefusesAFencedCase() {
+        String id = fixture();
+        admit(id);
+
+        Optional<String> locked = transaction().execute(status -> deedPolls.lockUnfencedForDeedPreparation(id));
+        assertThat(locked).isEmpty();
+        assertThatThrownBy(() -> deedPreparations.prepare(id, DeedTemplate.ADULT)).isInstanceOf(NotFoundError.class);
+        assertThat(count("SELECT count(*) FROM deedpoll_deedpreparation WHERE \"deedPollId\" = ?", id)).isZero();
+    }
+
     // --- races ------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("a patch, a note and a CCD claim that wait on admission's lock are refused once it commits")
+    @DisplayName("a patch, a note, a CCD claim and a deed lock waiting on admission's lock are refused once it commits")
     void writersWaitingOnAdmissionAreRefused() throws Exception {
         String id = fixture();
         UUID attempt = pendingAttempt(id);
-        ExecutorService pool = Executors.newFixedThreadPool(4);
+        ExecutorService pool = Executors.newFixedThreadPool(5);
         try {
             CountDownLatch admitted = new CountDownLatch(1);
             CountDownLatch release = new CountDownLatch(1);
@@ -394,13 +507,19 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
                 () -> notes.createNote(id, new CreateNoteInput("Written during admission"))));
             final Future<Object> claim = pool.submit(() -> outcome(
                 () -> attempts.claim(attempt, "fence-worker", Duration.ofMinutes(5))));
-            awaitLockWaiters(3);
+            final Future<Object> preparation = pool.submit(() -> outcome(
+                () -> transaction().execute(status -> deedPolls.lockUnfencedForDeedPreparation(id))));
+            awaitLockWaiters(4);
             release.countDown();
             admission.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
             assertThat(patch.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isInstanceOf(NotFoundError.class);
-            assertThat(note.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isInstanceOf(RuntimeException.class);
+            // The note asked nothing under the lock, so V49 refused it at commit, and that is recognised as the
+            // fence's refusal, which the error handler answers with the same 404 the patch gets.
+            assertThat(note.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isInstanceOfSatisfying(
+                RuntimeException.class, refused -> assertThat(DeletionFence.refusedByTrigger(refused)).isTrue());
             assertThat(claim.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isEqualTo(OptionalInt.empty());
+            assertThat(preparation.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isEqualTo(Optional.empty());
         } finally {
             pool.shutdownNow();
         }

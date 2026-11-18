@@ -165,7 +165,7 @@ public class DeletionCleanup {
             owned(requestId, owner, () -> 0);
             DeletionStepOutcome outcome;
             try {
-                outcome = store.remove(step.locator()) == LocalFilesystemDocumentStore.Removal.DELETED
+                outcome = store.remove(step.locator())
                     ? DeletionStepOutcome.DELETED : DeletionStepOutcome.ALREADY_ABSENT;
             } catch (NotFoundError invalidKey) {
                 owned(requestId, owner, () -> work.stepFailed(step.id(), DeletionStepOutcome.INVALID_STORAGE_KEY));
@@ -192,9 +192,7 @@ public class DeletionCleanup {
                 // Held, not released: finalisation runs next under the same claim.
                 return decision;
             }
-            work.release(requestId, owner, decision.status(),
-                         decision.failure() == null ? null : decision.failure().name(),
-                         clock.get().plus(decision.delay()));
+            releaseHeld(requestId, owner, decision);
             if (decision.status() == DeletionStatus.NeedsAttention) {
                 log.warn("Application deletion request {} needs attention: {}", requestId, decision.failure());
             }
@@ -234,8 +232,15 @@ public class DeletionCleanup {
     }
 
     private void release(UUID requestId, UUID owner, DeletionProgress.Decision decision) {
-        owned(requestId, owner, () -> work.release(requestId, owner, decision.status(),
-            decision.failure() == null ? null : decision.failure().name(), clock.get().plus(decision.delay())));
+        owned(requestId, owner, () -> releaseHeld(requestId, owner, decision));
+    }
+
+    /**
+     * {@link #release} for a caller already inside {@link #owned}.
+     */
+    private int releaseHeld(UUID requestId, UUID owner, DeletionProgress.Decision decision) {
+        return work.release(requestId, owner, decision.status(), decision.failure(),
+                            clock.get().plus(decision.delay()));
     }
 
     /**

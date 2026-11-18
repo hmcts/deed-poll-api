@@ -2,10 +2,13 @@ package uk.gov.hmcts.reform.deedpoll.api;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.transaction.TransactionSystemException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.FieldError;
@@ -13,14 +16,17 @@ import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFence;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewError;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewFailure;
 
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The status code and body each domain error maps to.
@@ -190,5 +196,23 @@ class DomainErrorHandlerTest {
                        .getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
         assertThat(handler.preview(new PreviewError(PreviewFailure.LIMIT_EXCEEDED)).getHeaders()
                        .containsKey(HttpHeaders.RETRY_AFTER)).isFalse();
+    }
+
+    @Test
+    @DisplayName("V49 refusing a raced write at commit is the fence's 404; any other data failure is left alone")
+    void fencedWriteAtCommitIsNotFound() {
+        SQLException trigger = new SQLException("ERROR: The application is being deleted", "P0001");
+        ResponseEntity<ApiError> response =
+            handler.fencedAtCommit(new TransactionSystemException("commit failed", new RuntimeException(trigger)));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().error()).isEqualTo(DeletionFence.NOT_FOUND);
+
+        UncategorizedSQLException other = new UncategorizedSQLException("insert", "INSERT",
+            new SQLException("ERROR: something else", "P0001"));
+        assertThatThrownBy(() -> handler.fencedAtCommit(other)).isSameAs(other);
+        DataIntegrityViolationException integrity = new DataIntegrityViolationException("duplicate");
+        assertThatThrownBy(() -> handler.fencedAtCommit(integrity)).isSameAs(integrity);
     }
 }

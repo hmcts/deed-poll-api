@@ -115,6 +115,8 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
         jdbc.execute("DROP FUNCTION IF EXISTS finalisation_test_refusal()");
         for (String id : fixtures) {
             jdbc.update("DELETE FROM deedpoll_deletion_request WHERE case_id = ?", id);
+            jdbc.update("DELETE FROM deedpoll_stagedpayload WHERE id IN (SELECT \"documentId\" "
+                            + "FROM deedpoll_deedpreparation WHERE \"deedPollId\" = ?)", id);
             jdbc.update("DELETE FROM deedpoll_ownedstage WHERE \"ownerId\" = ? OR \"caseId\" = ?", id, id);
             jdbc.update("DELETE FROM deedpoll_deedpoll WHERE id = ?", id);
         }
@@ -251,6 +253,52 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("retained deed bytes that appeared after admission refuse finalisation: nothing local is removed")
+    void retainedPayloadRefuses() {
+        String id = populated(false);
+        final DeletionRequest request = admit(id, "CREATED_IN_ERROR");
+        String document = UUID.randomUUID().toString();
+        pastTheFence("deedpoll_deedpreparation", () -> jdbc.update("""
+            INSERT INTO deedpoll_deedpreparation
+                ("deedPollId", "documentId", template, "originalName", "mimeType", "sizeBytes", checksum)
+            VALUES (?, ?, 'ADULT', 'deed.docx', 'application/test', 3, encode(sha256(decode('010203', 'hex')), 'hex'))
+            """, id, document));
+        jdbc.update("""
+            INSERT INTO deedpoll_stagedpayload (id, content, "sizeBytes", checksum)
+            VALUES (?, decode('010203', 'hex'), 3, encode(sha256(decode('010203', 'hex')), 'hex'))
+            """, document);
+
+        assertThat(process()).hasValueSatisfying(made ->
+            assertThat(made.failure()).isEqualTo(DeletionFailure.RETAINED_PAYLOAD));
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.NeedsAttention);
+        assertThat(count("SELECT count(*) FROM deedpoll_deedpoll WHERE id = ?", id)).isOne();
+        assertNoCompletion(id);
+    }
+
+    @Test
+    @DisplayName("an owned stage the inventory never listed refuses finalisation, and the listed work rolls back")
+    void unlistedOwnedStageRefuses() {
+        String id = populated(false);
+        DeletionRequest request = admit(id, "CREATED_IN_ERROR");
+        final String unlisted = UUID.randomUUID().toString();
+        pastTheFence("deedpoll_ownedstage", () -> jdbc.update("""
+            INSERT INTO deedpoll_ownedstage
+              (id, "ownerKind", "ownerId", subject, "operationId", "originalName", "mimeType", "sizeBytes",
+               checksum, "createdOn", "expiresOn", state)
+            VALUES (?, 'RECORD', ?, 'synthetic-subject', ?, 'synthetic.pdf', 'application/pdf', 3,
+                    encode(sha256(decode('010203', 'hex')), 'hex'),
+                    CURRENT_TIMESTAMP - interval '2 hours', CURRENT_TIMESTAMP + interval '1 hour', 'Removed')
+            """, unlisted, id, UUID.randomUUID()));
+
+        assertThat(process()).hasValueSatisfying(made ->
+            assertThat(made.failure()).isEqualTo(DeletionFailure.UNLISTED_OWNED_STAGE));
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.NeedsAttention);
+        assertThat(count("SELECT count(*) FROM deedpoll_deedpoll WHERE id = ?", id)).isOne();
+        assertThat(count("SELECT count(*) FROM deedpoll_ownedstage WHERE id = ?", unlisted)).isOne();
+        assertNoCompletion(id);
+    }
+
+    @Test
     @DisplayName("an audit failure rolls finalisation back; a retry after external completion records one completion")
     void auditFailureThenRetry() throws IOException {
         String id = populated(false);
@@ -382,6 +430,16 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
     private void due(DeletionRequest request) {
         jdbc.update("UPDATE deedpoll_deletion_request SET next_attempt_at = ? WHERE id = ?",
                     Timestamp.valueOf(AuditClock.now().minusSeconds(1)), request.id());
+    }
+
+    /** A write V49 would refuse, made anyway: the state only a fence bug or a hand edit could leave behind. */
+    private void pastTheFence(String table, Runnable write) {
+        jdbc.execute("ALTER TABLE " + table + " DISABLE TRIGGER deedpoll_deletion_fence");
+        try {
+            write.run();
+        } finally {
+            jdbc.execute("ALTER TABLE " + table + " ENABLE TRIGGER deedpoll_deletion_fence");
+        }
     }
 
     private int count(String sql, Object... arguments) {

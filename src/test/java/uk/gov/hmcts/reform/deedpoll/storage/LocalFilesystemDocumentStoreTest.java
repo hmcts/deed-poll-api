@@ -167,9 +167,9 @@ class LocalFilesystemDocumentStoreTest {
         String key = save(CONTENT);
         LocalFilesystemDocumentStore local = (LocalFilesystemDocumentStore) store;
 
-        assertThat(local.remove(key)).isEqualTo(LocalFilesystemDocumentStore.Removal.DELETED);
+        assertThat(local.remove(key)).as("deleted").isTrue();
         assertThat(root.resolve("documents").resolve(key)).doesNotExist();
-        assertThat(local.remove(key)).isEqualTo(LocalFilesystemDocumentStore.Removal.ALREADY_ABSENT);
+        assertThat(local.remove(key)).as("already absent").isFalse();
     }
 
     @Test

@@ -2,7 +2,8 @@
 
 ## Overview
 
-Status: planned, 2026-11-18. Planning only; no implementation or environment deletion authorised by this file.
+Status: implemented locally, Tasks 1–9 (2026-11-18); in review, not deployed or rehearsed. No environment deletion
+is authorised by this file; the rehearsal and activation in Post-Completion are operator evidence still to come.
 
 Steve's requirement, confirmed 2026-11-18: a Delivery Manager can **permanently delete an application created in
 error or duplicated**, with an audit entry stating why. This is not a void, archive or withdrawal. It supersedes

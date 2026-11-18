@@ -3,8 +3,9 @@ package uk.gov.hmcts.reform.deedpoll.domain.deletion;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionFenceRepository;
+
+import java.sql.SQLException;
 
 /**
  * The deletion fence for a write (plan 20261118-dm-application-deletion, Task 4): once a deletion request names a
@@ -18,14 +19,20 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeletionFenceRepository;
  * the race Hibernate's entity restriction ({@code DeletionFenceSql}) does not close by itself, and V49's deferred
  * triggers are the backstop for any writer that forgets this.
  *
- * <p>Both methods join the caller's transaction and refuse to run without one, because the lock is worth nothing once
- * the statement that took it has committed.
+ * <p>{@link #admits} joins the caller's transaction and refuses to run without one, because the lock is worth nothing
+ * once the statement that took it has committed.
  */
 @Component
 public class DeletionFence {
 
     /** The same words an unknown case gets, so a fenced case discloses nothing. */
     public static final String NOT_FOUND = "DeedPoll not found";
+
+    /**
+     * V49's {@code deedpoll_refuse_fenced_write}: its SQLSTATE and its message.
+     */
+    private static final String TRIGGER_STATE = "P0001";
+    private static final String TRIGGER_REFUSAL = "The application is being deleted";
 
     private final DeletionFenceRepository fence;
 
@@ -42,14 +49,17 @@ public class DeletionFence {
     }
 
     /**
-     * As {@link #admits}, refusing a fenced or unknown case with a 404 in an unknown case's words.
-     *
-     * @throws NotFoundError when the case is gone or being deleted
+     * Whether a failure is V49's deferred trigger refusing a fenced case's write at commit: a writer that did not ask
+     * {@link #admits} and raced admission. Recognised by the trigger's SQLSTATE and its words anywhere in the cause
+     * chain, because the persistence layer wraps it differently on the JPA and JDBC paths.
      */
-    @Transactional(propagation = Propagation.MANDATORY)
-    public void require(String caseId) {
-        if (!admits(caseId)) {
-            throw new NotFoundError(NOT_FOUND);
+    public static boolean refusedByTrigger(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof SQLException sql && TRIGGER_STATE.equals(sql.getSQLState())
+                && sql.getMessage() != null && sql.getMessage().contains(TRIGGER_REFUSAL)) {
+                return true;
+            }
         }
+        return false;
     }
 }

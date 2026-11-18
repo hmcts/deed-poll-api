@@ -57,6 +57,9 @@ domain/settings                   the Delivery Manager's process settings (V40, 
 domain/masters                    the Masters list (V42) a Delivery Manager keeps, linked to IDAM by email on a
                                   judge's first judicial request (config/MasterLinking), and the Masters' sent and
                                   reminder emails with their ledger (V44) — NOT a port
+domain/deletion                   the Delivery Manager's permanent application deletion: admission, the fence
+                                  (DeletionFence), the cleanup worker (DeletionCleanup, off by default) and
+                                  DeletionFinalisation — NOT a port
 domain/mi                         the management information figures (K1 to K4) from the case's dates, read
                                   by repository/ManagementInformationRepository's constant SQL — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
@@ -73,7 +76,8 @@ auth/                             IDAM resource-server wiring (transport), plus 
 entity/, repository/              JPA over a Flyway-owned schema
 ccd/                             the decentralised CCD case type, its persistence handler and view, the one
                                   linking operation with its attempt ledger, the case-list sweep that calls it, and
-                                  the admin repairs (CcdAttemptRepairs) — NOT a port
+                                  the admin repairs (CcdAttemptRepairs), and the Retain and Dispose policy with its
+                                  disposal events (DeedPollRetainAndDisposePolicy, DisposalEventsHandler) — NOT a port
 health/                          readiness that names the missing tables
 storage/                         filesystem/CDAM stores, remote progress, onboarding guard and state metrics
 src/main/resources/deed-templates/  VENDORED Word templates: LOC020 and LOC022, plus their provenance
@@ -239,7 +243,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   both tables unless the transaction-local `deedpoll.audit_disposal` is `on`, and TRUNCATE always. Only the
   `SECURITY DEFINER` functions `deedpoll_audit_dispose_case_values(case_id)` and
   `deedpoll_audit_dispose_events_before(cutoff)` set it, and each turns it off before returning; `EXECUTE` is revoked
-  from `PUBLIC`. Nothing schedules them yet — retain-and-dispose will. Never set the setting from application code
+  from `PUBLIC`. `DeletionFinalisation` calls `deedpoll_audit_dispose_case_values` for a completed application
+  deletion request; nothing schedules `deedpoll_audit_dispose_events_before` yet. Never set the setting from application code
   to unstick a delete, and a case delete leaves its events (and, until disposal, its values). **Residual risk:**
   until a least-privilege runtime role exists, the api's own login owns the tables and can drop the triggers; they
   stop accidents, not a determined owner.
@@ -361,6 +366,11 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   through `SupportingDocumentsAccess`, because data-store checks D for a removed collection item and a D on the event
   would be carried onto the state. `DEED_POLL_READER` holds R only on the case type, Registered state and
   supportingDocuments, mapped from the five staff roles. It holds no events, history or identifier fields.
+  The one deliberate growth since is Retain and Dispose (plan 20261118): `DEED_POLL_SYSTEM` also holds CRU on the
+  platform `TTL` field (`TtlAccess`), the `PendingDisposal` state and the SDK's two events `MarkForDisposal`
+  (`Registered` to `PendingDisposal`) and `ConfirmDisposal` (both `TTLIncrement` 0, admitted by
+  `DisposalEventsHandler` only for a deletion request ready for CCD), and `updateSupportingDocuments` now starts from
+  `Registered` rather than `*`. `DEED_POLL_READER` gets nothing on `PendingDisposal`.
   The test refuses growth that was not deliberate.
 - **The case's documents are its `Attached` rows, and the document event's handler is what attaches them.**
   `SupportingDocumentsHandler` moves a row to `Attached` inside the event's transaction (`attachedOnTheCase`, only
@@ -688,10 +698,13 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   reuses it for every retry of that POST, a later journey mints another — and it is stored as
   `Notification.requestId`: NOT NULL, bound explicitly by `enqueue`, with V19's `gen_random_uuid()` default there
   only to carry a pre-V19 instance through a rolling deployment and deliberately **no `@PrePersist` fallback**,
-  because a writer that cannot say which request it is should fail rather than invent one. It is the only header
-  bound anywhere in the service, which is why `DomainErrorHandler.missingHeader` handles
-  `MissingRequestHeaderException` and not its parent. The id is published nowhere — no DTO, no note, no log line —
-  asserted by an ArchUnit `noFields()` rule plus its counterpart that the column does exist on the entity. Every
+  because a writer that cannot say which request it is should fail rather than invent one. It is the only *required*
+  header bound anywhere in the service, which is why `DomainErrorHandler.missingHeader` handles
+  `MissingRequestHeaderException` and not its parent. (The application deletion POST also takes an `Idempotency-Key`,
+  bound optional and refused in the body's own words; see `docs/APPLICATION-DELETION.md`.) The id is published
+  nowhere — no DTO, no note, no log line — asserted by an ArchUnit `noFields()` rule plus its counterpart that the
+  column does exist on the entity; the rule exempts exactly `DeletionAdmissionResponse` and `DeletionRequestResponse`,
+  whose `requestId` is the deletion request's own resource id, not an email's key. Every
   lookup is case-scoped (`findByDeedPollIdAndRequestId`): widening it to the request id alone would answer one
   caller with another case's receipt.
 - **A new email template is declared in a handful of places, and two of them fail silently.** The `EmailTemplate`

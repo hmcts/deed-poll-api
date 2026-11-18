@@ -44,8 +44,8 @@ public final class DeletionBodies {
                                    timestamp(fields.get(ApplicationDeletionService.EXPECTED_MODIFIED_ON_FIELD)));
     }
 
-    /** A canonical UUID, or null: a near-miss spelling is not a key. */
-    static UUID key(String header) {
+    /** A canonical UUID, or null: a near-miss spelling is not a key, nor a request id. */
+    public static UUID key(String header) {
         if (header == null) {
             return null;
         }

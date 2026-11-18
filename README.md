@@ -39,6 +39,8 @@ reads any staff role may call and whose writes need `MANAGE_PROCESS_CONFIG` (see
 two referral-queue operations that need `ALLOCATE_REFERRALS` (see [The referral queue](#the-referral-queue)),
 four management-information reads that need `VIEW_MANAGEMENT_INFORMATION` (see
 [Management information](#management-information)),
+two Delivery Manager-only application-deletion operations that need `DELETE_APPLICATION` (see
+[Deleting an application](#deleting-an-application)),
 and two document previews, one per surface (see [Document previews](#document-previews)), counted apart.
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
 `capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
@@ -556,8 +558,9 @@ Two Delivery Manager-only (`DELETE_APPLICATION`) operations, counted apart from 
 mandatory `note` (10–500 characters) says why without the applicant's details: it is kept with the audit event for
 seven years after the case is gone. The outcome is permanent: there is no void, undo or unfencing, the application's
 reference is never reused, and email Notify already accepted is not recalled. The worker and the SDK's Retain and
-Dispose task both ship off; until they are enabled after onboarding, a request stays `Pending`, fenced and
-recoverable. Statuses, refusals and the recovery procedure are in `docs/APPLICATION-DELETION.md`.
+Dispose task both ship off: with the worker off a request stays `Pending`, and with the worker on but Retain and
+Dispose off a linked request stays `InProgress`; either way it is fenced and recoverable. The worker's settings
+(`APPLICATION_DELETION_WORKER_*`) are tabled in `docs/APPLICATION-DELETION.md`. Statuses, refusals and the recovery procedure are in `docs/APPLICATION-DELETION.md`.
 
 ## Documents and uploads
 
@@ -947,7 +950,9 @@ timeout (`LIST_STATEMENT_TIMEOUT`), and management information's (`MI_STATEMENT_
 
 V36 adds `deedpoll_audit_event` (who, when, action, entity, case and field names; kept 7 years) and
 `deedpoll_audit_event_value` (before/after values, disposed with the case). Row triggers make both append-only;
-only the two `SECURITY DEFINER` disposal functions can delete, and nothing schedules them yet. Every
+only the two `SECURITY DEFINER` disposal functions can delete. `deedpoll_audit_dispose_case_values` is called only
+when a Delivery Manager's application deletion is finalised; nothing schedules `deedpoll_audit_dispose_events_before`
+yet. Every
 caseworker and judicial write records an event in its own transaction, so a failed audit insert rolls the change
 back. A case view is audited and fails open; a document download or preview is audited, each under its own action,
 and fails closed. Authentication and

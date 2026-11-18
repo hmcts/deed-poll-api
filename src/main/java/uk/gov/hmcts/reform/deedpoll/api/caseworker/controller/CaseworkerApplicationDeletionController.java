@@ -141,14 +141,10 @@ public class CaseworkerApplicationDeletionController {
 
     /** A canonical UUID; anything else names no request, in the words an unknown one gets. */
     private static UUID requestId(String raw) {
-        try {
-            UUID id = UUID.fromString(raw);
-            if (id.toString().equalsIgnoreCase(raw)) {
-                return id;
-            }
-        } catch (IllegalArgumentException invalid) {
-            // Falls through to the same 404 an unknown id gets.
+        UUID id = DeletionBodies.key(raw);
+        if (id == null) {
+            throw new NotFoundError("Deletion request not found");
         }
-        throw new NotFoundError("Deletion request not found");
+        return id;
     }
 }

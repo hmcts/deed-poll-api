@@ -3,6 +3,7 @@ package uk.gov.hmcts.reform.deedpoll.repository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import uk.gov.hmcts.ccd.sdk.RetainAndDisposePolicy;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFailure;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionStatus;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionStepOutcome;
 
@@ -132,15 +133,16 @@ public class DeletionWorkRepository {
      * @param failure an allowlisted code, required with {@code NeedsAttention} and refused otherwise (V48's check)
      * @return 1, or 0 if the claim was no longer the caller's
      */
-    public int release(UUID requestId, UUID owner, DeletionStatus status, String failure, LocalDateTime nextAttemptAt) {
-        if (status.isTerminal()) {
+    public int release(UUID requestId, UUID owner, DeletionStatus status, DeletionFailure failure,
+                       LocalDateTime nextAttemptAt) {
+        if (status == DeletionStatus.Completed) {
             throw new IllegalArgumentException("A release never completes a request; finalisation does");
         }
         return jdbc.update("""
             update deedpoll_deletion_request
                set status = ?, failure = ?, owner = null, lease_until = null, next_attempt_at = ?
              where id = ? and owner = ?
-            """, status.name(), failure, timestamp(nextAttemptAt), requestId, owner);
+            """, status.name(), failure == null ? null : failure.name(), timestamp(nextAttemptAt), requestId, owner);
     }
 
     /** The SDK's local copy of a linked case, if it still has one. */

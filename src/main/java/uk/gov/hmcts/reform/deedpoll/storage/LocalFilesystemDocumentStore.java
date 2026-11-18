@@ -91,26 +91,17 @@ public class LocalFilesystemDocumentStore implements DocumentStore {
     }
 
     /**
-     * How {@link #remove} verified a file gone.
-     */
-    public enum Removal {
-        /** The file was there, was deleted, and is now absent. */
-        DELETED,
-        /** The root was there and the file was not: nothing to delete. */
-        ALREADY_ABSENT
-    }
-
-    /**
      * Removes a stored file permanently for an application deletion, and verifies that it is gone.
      *
      * <p>Unlike {@link #delete}, absence is only an answer when the store itself is there: a missing root is a volume
      * that is not mounted, or a pod that never had the files, and reads as a failure rather than as "already gone".
      * The caller's inventory is what proves the key was this service's own.
      *
+     * @return true if the file was there and is now deleted, false if the root was there and the file was not
      * @throws NotFoundError        if the key is blank or resolves outside the root; nothing is touched
      * @throws UncheckedIOException if the root is not a directory, or the file could not be deleted or is still there
      */
-    public Removal remove(String storageKey) {
+    public boolean remove(String storageKey) {
         if (storageKey == null || storageKey.isBlank()) {
             throw new NotFoundError("Invalid storage key");
         }
@@ -127,7 +118,7 @@ public class LocalFilesystemDocumentStore implements DocumentStore {
         if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
             throw new UncheckedIOException(new IOException("A deleted document is still present"));
         }
-        return deleted ? Removal.DELETED : Removal.ALREADY_ABSENT;
+        return deleted;
     }
 
     /**
