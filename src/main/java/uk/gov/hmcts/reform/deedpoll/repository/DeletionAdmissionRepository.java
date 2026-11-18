@@ -71,18 +71,23 @@ public class DeletionAdmissionRepository {
     }
 
     /**
-     * Whether an unlinked case's CCD creation may have created a CCD case nobody has bound: an attempt that is claimed
-     * or awaiting confirmation, or any unlinked attempt whose submission may have reached CCD without proof that
-     * nothing was created. A case that is linked answers false: its binding is the answer.
+     * Whether the case's CCD creation is still in flight or may have created a CCD case nobody has bound: an attempt
+     * that is claimed or awaiting confirmation, linked or not, or an unlinked case's attempt whose submission may have
+     * reached CCD without proof that nothing was created.
+     *
+     * <p>A claimed or awaiting attempt blocks even on a linked case, because the binding commits inside data-store's
+     * callback before the worker or reconciliation moves the attempt to {@code Linked}: admitted, that later move
+     * would be refused by V49's fence at commit, and the attempt would stay first in reconciliation's order and stop
+     * every sweep. Otherwise a linked case's binding is the answer.
      */
     public boolean hasUnresolvedCcdCreation(String caseId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
             SELECT EXISTS (SELECT 1 FROM deedpoll_ccdcreationattempt a
                 JOIN deedpoll_deedpoll d ON d.id = a."deedPollId"
-                WHERE a."deedPollId" = ? AND d."ccdCaseReference" IS NULL
+                WHERE a."deedPollId" = ?
                   AND (a.status IN ('Claimed', 'AwaitingConfirmation')
-                       OR (a.status <> 'Linked' AND a."submissionMayHaveReached"
-                           AND NOT a."provenNothingCreated")))
+                       OR (d."ccdCaseReference" IS NULL AND a.status <> 'Linked'
+                           AND a."submissionMayHaveReached" AND NOT a."provenNothingCreated")))
             """, Boolean.class, caseId));
     }
 

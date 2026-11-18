@@ -298,6 +298,10 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
         });
         refuses(DeletionRefusal.CCD_CREATION_UNRESOLVED, id -> attempt(id, "AwaitingConfirmation", false, false));
         refuses(DeletionRefusal.CCD_CREATION_UNRESOLVED, id -> attempt(id, "NeedsRepair", true, false));
+        refuses(DeletionRefusal.CCD_CREATION_UNRESOLVED, id -> {
+            link(id, reference());
+            attempt(id, "AwaitingConfirmation", true, false);
+        });
         refuses(DeletionRefusal.EMAIL_SEND_UNRESOLVED, id -> notification(id, null, true));
         refuses(DeletionRefusal.EMAIL_SEND_UNRESOLVED,
                 id -> notification(id, LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5), false));

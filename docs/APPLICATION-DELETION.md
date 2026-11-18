@@ -219,7 +219,7 @@ refusals. Each refusal is a `DeletionConflictError` carrying a `DeletionRefusal`
 | `GAZETTE_EVIDENCE` | Gazette notice batch membership or request evidence |
 | `RETAINED_DEED_PAYLOAD`, `RETAINED_STAGED_UPLOADS` | the existing retained-bytes guards |
 | `DOCUMENT_STORAGE_UNRESOLVED` | a document `UploadPending`, `Uploaded`, `AttachUncertain`, or `UploadUncertain` with a send left |
-| `CCD_CREATION_UNRESOLVED` | an unlinked case's attempt is `Claimed`/`AwaitingConfirmation`, or may have reached CCD without proof nothing was created |
+| `CCD_CREATION_UNRESOLVED` | an attempt is `Claimed`/`AwaitingConfirmation` (linked or not: the binding commits before the attempt reads `Linked`), or an unlinked case's attempt may have reached CCD without proof nothing was created |
 | `EMAIL_SEND_UNRESOLVED` | a `Pending` email with its send started, or under a live claim |
 | `KEY_REUSED`, `CONFLICTING_REASON` | a replay: the same key with another body, or another key with the other reason |
 
