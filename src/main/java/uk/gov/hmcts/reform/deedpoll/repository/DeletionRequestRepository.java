@@ -1,0 +1,142 @@
+package uk.gov.hmcts.reform.deedpoll.repository;
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.stereotype.Repository;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionNote;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionReason;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRequest;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionStatus;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionStep;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionStepKind;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionStepState;
+
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+/**
+ * V48's {@code deedpoll_deletion_request} and {@code deedpoll_deletion_step}: the durable record of an application
+ * deletion and the inventory its cleanup works through.
+ *
+ * <p>Plain JDBC, as V44's ledger is, because the rows are written in short statements whose counts are the answer.
+ * The request has no foreign key to the case, so it is read by its own id or by the case's id after the case is gone.
+ */
+@Repository
+public class DeletionRequestRepository {
+
+    private static final String COLUMNS = """
+        id, case_id, idempotency_key, reason, note, fingerprint, expected_modified_on, requested_by_subject,
+        requested_by_name, requested_at, ccd_case_reference, status, failure, attempts, owner, lease_until,
+        next_attempt_at, completed_at
+        """;
+
+    private static final RowMapper<DeletionRequest> REQUEST = (row, index) -> new DeletionRequest(
+        row.getObject("id", UUID.class),
+        row.getString("case_id"),
+        row.getObject("idempotency_key", UUID.class),
+        DeletionReason.valueOf(row.getString("reason")),
+        DeletionNote.parse(row.getString("note")),
+        row.getString("fingerprint"),
+        local(row.getTimestamp("expected_modified_on")),
+        row.getString("requested_by_subject"),
+        row.getString("requested_by_name"),
+        local(row.getTimestamp("requested_at")),
+        row.getString("ccd_case_reference"),
+        DeletionStatus.valueOf(row.getString("status")),
+        row.getString("failure"),
+        row.getInt("attempts"),
+        row.getObject("owner", UUID.class),
+        local(row.getTimestamp("lease_until")),
+        local(row.getTimestamp("next_attempt_at")),
+        local(row.getTimestamp("completed_at")));
+
+    private static final RowMapper<DeletionStep> STEP = (row, index) -> new DeletionStep(
+        row.getObject("id", UUID.class),
+        row.getObject("request_id", UUID.class),
+        DeletionStepKind.valueOf(row.getString("kind")),
+        row.getString("item_id"),
+        row.getString("locator"),
+        DeletionStepState.valueOf(row.getString("state")),
+        row.getString("outcome"),
+        row.getInt("attempts"),
+        local(row.getTimestamp("completed_at")));
+
+    private final JdbcTemplate jdbc;
+
+    public DeletionRequestRepository(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /** What admission writes: the fixed half of a request. */
+    public record NewDeletionRequest(UUID id, String caseId, UUID idempotencyKey, DeletionReason reason,
+                                     DeletionNote note, String fingerprint, LocalDateTime expectedModifiedOn,
+                                     String requestedBySubject, String requestedByName, LocalDateTime requestedAt,
+                                     String ccdCaseReference) {
+
+        @Override
+        public String toString() {
+            return "NewDeletionRequest[id=" + id + ", caseId=" + caseId + ", reason=" + reason + "]";
+        }
+    }
+
+    /**
+     * The request, {@link DeletionStatus#Pending} and due at once, unless the case already has one.
+     *
+     * <p>{@code ON CONFLICT (case_id) DO NOTHING} rather than a raised violation, so a racing admission is told by a
+     * count of zero and its transaction stays usable to read the winner.
+     *
+     * @return whether this call wrote it
+     */
+    public boolean insert(NewDeletionRequest request) {
+        return jdbc.update("""
+            insert into deedpoll_deletion_request (id, case_id, idempotency_key, reason, note, fingerprint,
+                expected_modified_on, requested_by_subject, requested_by_name, requested_at, ccd_case_reference,
+                status, next_attempt_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)
+            on conflict (case_id) do nothing
+            """, request.id(), request.caseId(), request.idempotencyKey(), request.reason().name(),
+            request.note().value(), request.fingerprint(), timestamp(request.expectedModifiedOn()),
+            request.requestedBySubject(), request.requestedByName(), timestamp(request.requestedAt()),
+            request.ccdCaseReference(), timestamp(request.requestedAt())) == 1;
+    }
+
+    public Optional<DeletionRequest> findById(UUID id) {
+        return jdbc.query("select " + COLUMNS + " from deedpoll_deletion_request where id = ?", REQUEST, id)
+            .stream().findFirst();
+    }
+
+    /** The case's one request, whether or not the case still exists. */
+    public Optional<DeletionRequest> findByCase(String caseId) {
+        return jdbc.query("select " + COLUMNS + " from deedpoll_deletion_request where case_id = ?", REQUEST, caseId)
+            .stream().findFirst();
+    }
+
+    /**
+     * One inventory line, {@link DeletionStepState#Pending}.
+     */
+    public void insertStep(UUID id, UUID requestId, DeletionStepKind kind, String itemId, String locator) {
+        jdbc.update("""
+            insert into deedpoll_deletion_step (id, request_id, kind, item_id, locator, state)
+            values (?, ?, ?, ?, ?, 'Pending')
+            """, id, requestId, kind.name(), itemId, locator);
+    }
+
+    /** The request's inventory, in a stable order. */
+    public List<DeletionStep> stepsOf(UUID requestId) {
+        return jdbc.query("""
+            select id, request_id, kind, item_id, locator, state, outcome, attempts, completed_at
+              from deedpoll_deletion_step where request_id = ? order by kind, item_id nulls first, id
+            """, STEP, requestId);
+    }
+
+    private static Timestamp timestamp(LocalDateTime value) {
+        return value == null ? null : Timestamp.valueOf(value);
+    }
+
+    private static LocalDateTime local(Timestamp value) {
+        return value == null ? null : value.toLocalDateTime();
+    }
+}

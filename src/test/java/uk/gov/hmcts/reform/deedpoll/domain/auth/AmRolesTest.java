@@ -197,11 +197,12 @@ class AmRolesTest {
     void teamLeaderWithTheSkillHasEveryTeamLeaderCapabilityPlusGazette() {
         Set<Role> roles = roles(assignment("ctsc-team-leader", SKILL));
         Set<Capability> leader = RoleCapabilities.forRoles(List.of(Role.TEAM_LEADER));
-        Set<Capability> granted = RoleCapabilities.forRoles(roles);
-
         EnumSet<Capability> expected = EnumSet.copyOf(leader);
         expected.add(Capability.ACCESS_GAZETTE);
         expected.add(Capability.MANAGE_PROCESS_CONFIG);
+        // The skill makes a Delivery Manager, and deletion follows the role, whichever source granted it.
+        expected.add(Capability.DELETE_APPLICATION);
+        Set<Capability> granted = RoleCapabilities.forRoles(roles);
         assertThat(granted).containsExactlyInAnyOrderElementsOf(expected);
 
         CurrentUser user = CurrentUser.currentUser(List.copyOf(roles), "Team leader", "subject");

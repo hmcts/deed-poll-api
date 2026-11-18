@@ -14,6 +14,10 @@ public enum AuditAction {
     CASE_CREATED,
     CASE_UPDATED,
     CASE_DELETED,
+    /**
+     * A Delivery Manager asked for the case to be deleted permanently; {@code CASE_DELETED} follows on completion.
+     */
+    CASE_DELETION_REQUESTED,
     NOTE_CREATED,
     NOTE_UPDATED,
     NOTE_DELETED,

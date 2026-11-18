@@ -30,7 +30,8 @@ class CallerAccessResponseTest {
     private static final List<Capability> DELIVERY_MANAGER = List.of(
         Capability.OVERRIDE_PRIVACY, Capability.DELETE_NOTE, Capability.DELETE_WITNESS,
         Capability.MANAGE_SHARED_QUERIES, Capability.REPAIR_CCD, Capability.ACCESS_GAZETTE,
-        Capability.MANAGE_PROCESS_CONFIG, Capability.ALLOCATE_REFERRALS, Capability.VIEW_MANAGEMENT_INFORMATION);
+        Capability.MANAGE_PROCESS_CONFIG, Capability.ALLOCATE_REFERRALS, Capability.VIEW_MANAGEMENT_INFORMATION,
+        Capability.DELETE_APPLICATION);
 
     @Test
     @DisplayName("a caseworker is staff with no capabilities")

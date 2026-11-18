@@ -33,7 +33,8 @@
         "ACCESS_GAZETTE",
         "MANAGE_PROCESS_CONFIG",
         "ALLOCATE_REFERRALS",
-        "VIEW_MANAGEMENT_INFORMATION"
+        "VIEW_MANAGEMENT_INFORMATION",
+        "DELETE_APPLICATION"
       ],
       "judicial": false,
       "ccdReader": true,
@@ -128,7 +129,8 @@
         "ACCESS_GAZETTE",
         "MANAGE_PROCESS_CONFIG",
         "ALLOCATE_REFERRALS",
-        "VIEW_MANAGEMENT_INFORMATION"
+        "VIEW_MANAGEMENT_INFORMATION",
+        "DELETE_APPLICATION"
       ],
       "judicial": true,
       "ccdReader": true,
@@ -187,7 +189,8 @@
         "ACCESS_GAZETTE",
         "MANAGE_PROCESS_CONFIG",
         "ALLOCATE_REFERRALS",
-        "VIEW_MANAGEMENT_INFORMATION"
+        "VIEW_MANAGEMENT_INFORMATION",
+        "DELETE_APPLICATION"
       ],
       "judicial": false,
       "ccdReader": true,

@@ -197,10 +197,10 @@ the current migrations and the pinned platform contract fixtures.
 **Files:** new `domain/deletion/` types/repository, next free Flyway migration, `health/DeedPollSchema.java`,
 `domain/auth/{Capability,RoleCapabilities}.java`, `domain/audit/{AuditEntry,AuditAction}.java` and matching tests.
 
-- [ ] Add reason/status types, durable request/step inventory and claim fields; enforce case/key uniqueness and
+- [x] Add reason/status types, durable request/step inventory and claim fields; enforce case/key uniqueness and
   retain the request across case deletion. No applicant snapshots or cascading request FK.
-- [ ] Grant `DELETE_APPLICATION` only to Delivery Managers and add typed audit metadata plus request action.
-- [ ] Test migration constraints, role unions/negative roles, invalid reason/detail rejection and persistence
+- [x] Grant `DELETE_APPLICATION` only to Delivery Managers and add typed audit metadata plus request action.
+- [x] Test migration constraints, role unions/negative roles, invalid reason/detail rejection and persistence
   across a parent deletion. Check schema/migration-order health tests as well as the task's focused suite.
 
 ### Task 3: Admit, deduplicate and audit deletion requests
@@ -324,6 +324,23 @@ over a real Feign `CoreCaseDataApi` against WireMock (both events land in `Pendi
 404 is gone; 400/401/403/409/500/502/503 and a dropped connection are failures). Gates after Task 1: `./gradlew build`
 (init script) exit 0 in 5m23s; `test` 5,466 across 590 suites (0 failures, 1 skipped); `integration` 30 across 5 (0
 failures); `checkstyle.sh` OK; `git diff --check` clean. The definition change is designed, not built; Task 5 builds it.
+
+Task 2 (2026-11-18): `V48__application_deletion_requests.sql` adds `deedpoll_deletion_request` (no foreign key to the
+case; `UNIQUE (case_id)`, so one deletion per case and case/key unique; closed reason and status checks; the note rule
+restated as a check; SHA-256 body fingerprint; claim, completion and failure-only-in-`NeedsAttention` checks; a trigger
+refusing any change to admission's half and any change at all once `Completed`) and `deedpoll_deletion_step` (the
+inventory: kind, item id, locator held until `Done`, cascading from the request only). Types in `domain/deletion/`
+(`DeletionReason`, `DeletionStatus`, `DeletionNote` with the 10–500 code-point, no-control rule and a redacting
+`toString`, `DeletionFingerprint`, `DeletionRequest`, `DeletionStep`, the step kinds/states) and
+`repository/DeletionRequestRepository` (insert `ON CONFLICT (case_id) DO NOTHING`, reads by id and by case, steps).
+`DELETE_APPLICATION` is appended to `Capability` and granted to `DELIVERY_MANAGER` only; that includes an AM-derived
+Delivery Manager (`ctsc-team-leader` with the Gazette skill), because the grant follows the role. `AuditAction` gains
+`CASE_DELETION_REQUESTED`; `AuditEntry` allowlists typed `deletionReason`/`deletionNote`/`deletionRequestId`, refuses
+an untyped value without echoing it, offers `withDeletion`, and its `toString` prints detail keys only. Readiness lists
+both tables. Focused suites: `DeletionRequestMigrationTest` 7, `DeletionNoteTest` 37, `AuditEntryDeletionDetailTest` 3,
+`RoleCapabilitiesTest` 18, plus updated `AmRolesTest`, `CallerAccess*`, `DeedPollSchemaHealthTest`, `SdkMigrationOrderTest`
+(V1–V48). Gates: `./gradlew build` (init script) exit 0 in 5m41s; `test` 5,514 across 593 suites (0 failures, 1 skipped);
+`integration` 30 across 5 (0 failures); `checkstyle.sh` OK; `git diff --check` clean.
 
 ## Post-Completion
 
