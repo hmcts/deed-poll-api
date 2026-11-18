@@ -72,6 +72,9 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
     private DeedPollRetainAndDisposePolicy policy;
 
     @Autowired
+    private DeletionFinalisation finalisation;
+
+    @Autowired
     private CcdProperties ccd;
 
     @Autowired
@@ -124,7 +127,7 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
     private DeletionCleanup worker(ObjectProvider<LocalFilesystemDocumentStore> files) {
         return new DeletionCleanup(work, requests, files, transactions,
             new DeletionCleanupProperties(false, Duration.ofMinutes(5), 10, Duration.ofMinutes(5), MAX_ATTEMPTS,
-                                          Duration.ofMinutes(1), POLL), AuditClock::now);
+                                          Duration.ofMinutes(1), POLL), finalisation, AuditClock::now);
     }
 
     private String fixture() {
@@ -197,7 +200,7 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("an unlinked case's files are removed and verified, and only finalisation is left: never Completed")
+    @DisplayName("an unlinked case's files are removed and verified, then it is finalised in the same pass")
     void removesUnlinkedFiles() throws IOException {
         String id = fixture();
         String present = localDocument(id, UUID.randomUUID().toString(), true);
@@ -206,21 +209,23 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
 
         Optional<DeletionProgress.Decision> decision = claimAndProcess(cleanup);
 
-        assertThat(decision).hasValueSatisfying(made -> assertThat(made.externalCleanupDone()).isTrue());
+        assertThat(decision).hasValueSatisfying(made -> {
+            assertThat(made.externalCleanupDone()).isTrue();
+            assertThat(made.status()).isEqualTo(DeletionStatus.Completed);
+        });
         assertThat(documents.resolve(present)).doesNotExist();
         assertThat(jdbc.queryForList("""
             SELECT outcome FROM deedpoll_deletion_step WHERE request_id = ? AND state = 'Done'
             """, String.class, request.id())).containsExactlyInAnyOrder("DELETED", "ALREADY_ABSENT");
         DeletionRequest after = reread(request);
-        assertThat(after.status()).isEqualTo(DeletionStatus.InProgress);
+        assertThat(after.status()).isEqualTo(DeletionStatus.Completed);
         assertThat(after.owner()).isNull();
         assertThat(after.leaseUntil()).isNull();
         assertThat(after.attempts()).isEqualTo(1);
-        assertThat(after.nextAttemptAt()).isAfter(AuditClock.now().plus(POLL).minusMinutes(1));
-        assertThat(after.completedAt()).isNull();
+        assertThat(after.completedAt()).isNotNull();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_deedpoll WHERE id = ?", Integer.class, id))
-            .as("the local record is finalisation's to remove").isOne();
-        assertThat(claimAndProcess(cleanup)).as("not due again until the poll interval").isEmpty();
+            .isZero();
+        assertThat(claimAndProcess(cleanup)).as("a completed request is never claimed again").isEmpty();
     }
 
     @Test
@@ -356,13 +361,15 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
     @DisplayName("a line already done is never redone: a later file under the same key is left alone")
     void doneIsDone() throws IOException {
         String id = fixture();
+        link(id);
         String key = localDocument(id, UUID.randomUUID().toString(), true);
         DeletionRequest request = admit(id);
         claimAndProcess(cleanup);
         Files.writeString(documents.resolve(key), "written later by something else");
 
         due(request);
-        assertThat(claimAndProcess(cleanup)).isPresent();
+        assertThat(claimAndProcess(cleanup)).hasValueSatisfying(made ->
+            assertThat(made.externalCleanupDone()).as("still waiting on CCD").isFalse());
         assertThat(documents.resolve(key)).exists();
         assertThat(step(request, DeletionStepKind.LOCAL_DOCUMENT)).containsEntry("outcome", "DELETED");
     }
@@ -401,7 +408,7 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
         assertThat(reread(request).status()).isEqualTo(DeletionStatus.InProgress);
         assertThat(policy.findCandidatesForDisposal()).doesNotContain(reference);
         assertThat(claimAndProcess(cleanup)).as("due at once for finalisation").hasValueSatisfying(made ->
-            assertThat(made.externalCleanupDone()).isTrue());
+            assertThat(made.status()).isEqualTo(DeletionStatus.Completed));
     }
 
     @Test
@@ -462,7 +469,7 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
         admit(second);
         DeletionCleanup one = new DeletionCleanup(work, requests, store(documents), transactions,
             new DeletionCleanupProperties(false, Duration.ofMinutes(5), 1, Duration.ofMinutes(5), MAX_ATTEMPTS,
-                                          Duration.ofMinutes(1), POLL), AuditClock::now);
+                                          Duration.ofMinutes(1), POLL), finalisation, AuditClock::now);
 
         assertThat(one.run()).isOne();
         assertThat(one.run()).isOne();

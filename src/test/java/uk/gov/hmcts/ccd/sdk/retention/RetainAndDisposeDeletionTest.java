@@ -42,6 +42,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.DeletionCommand;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionCleanup;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionCleanupProperties;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFinalisation;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRequest;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionStatus;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionRequestRepository;
@@ -113,6 +114,9 @@ class RetainAndDisposeDeletionTest extends AbstractPostgresContainerTest {
     private DisposalEventsHandler handler;
 
     @Autowired
+    private DeletionFinalisation finalisation;
+
+    @Autowired
     private CcdProperties ccd;
 
     @Autowired
@@ -141,7 +145,7 @@ class RetainAndDisposeDeletionTest extends AbstractPostgresContainerTest {
         store.addBean("store", new LocalFilesystemDocumentStore(documents.toString()));
         cleanup = new DeletionCleanup(work, requests, store.getBeanProvider(LocalFilesystemDocumentStore.class),
             transactions, new DeletionCleanupProperties(false, Duration.ofMinutes(5), 10, Duration.ofMinutes(5), 8,
-                                                        Duration.ofMinutes(1), Duration.ofHours(1)));
+                                                        Duration.ofMinutes(1), Duration.ofHours(1)), finalisation);
         // Nothing another test left is due or in disposal.
         jdbc.update("""
             update deedpoll_deletion_request set next_attempt_at = next_attempt_at + interval '100 years'
@@ -364,6 +368,14 @@ class RetainAndDisposeDeletionTest extends AbstractPostgresContainerTest {
         assertThat(statusOf(request)).as("finalisation's, not yet Completed").isEqualTo(DeletionStatus.InProgress);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_deedpoll WHERE id = ?", Integer.class,
                                        request.caseId())).isOne();
+
+        assertThat(cleanup.run()).as("due at once, and finalised").isOne();
+        assertThat(statusOf(request)).isEqualTo(DeletionStatus.Completed);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM deedpoll_deedpoll WHERE id = ?", Integer.class,
+                                       request.caseId())).isZero();
+        assertThat(jdbc.queryForObject("""
+            SELECT actor_id FROM deedpoll_audit_event WHERE case_id = ? AND action = 'CASE_DELETED'
+            """, String.class, request.caseId())).isEqualTo(DELIVERY_MANAGER.userId());
     }
 
     @ParameterizedTest(name = "a {0} reading the disposed case is never absence")

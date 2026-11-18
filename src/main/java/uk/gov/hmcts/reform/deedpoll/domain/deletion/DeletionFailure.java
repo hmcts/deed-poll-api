@@ -23,5 +23,19 @@ public enum DeletionFailure {
     /** CDAM documents are in the inventory of a case with no CCD case, which an upload cannot produce. */
     CDAM_WITHOUT_CCD_CASE,
     /** An inventory line was recorded as failed for a reason no other code covers. */
-    CLEANUP_STEP_FAILED
+    CLEANUP_STEP_FAILED,
+    /**
+     * Every external step is recorded done, but the SDK still holds its local copy of the CCD case, which only
+     * Retain and Dispose's own delete removes: finalisation is refused, so nothing local is removed.
+     */
+    CCD_COPY_PRESENT,
+    /** The case still has retained deed preparation or staged bytes, which finalisation never removes. */
+    RETAINED_PAYLOAD,
+    /** An owned stage names the case that the inventory did not list, so the fence did not hold for it. */
+    UNLISTED_OWNED_STAGE,
+    /**
+     * The database refused local finalisation (a restricting key or a protecting trigger), and the transaction rolled
+     * back: nothing local was removed and no completion was recorded.
+     */
+    LOCAL_FINALISATION_REFUSED
 }

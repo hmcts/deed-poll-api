@@ -249,11 +249,11 @@ the current migrations and the pinned platform contract fixtures.
 **Files:** `domain/deletion/` finalisation, `DeedPollService.java`, audit disposal adapter, local/SDK repositories,
 new migration only if required for permissions, and Postgres integration tests.
 
-- [ ] Implement atomic local finalisation only after verified external steps. Remove applicant-bearing values
+- [x] Implement atomic local finalisation only after verified external steps. Remove applicant-bearing values
   through the existing controlled function, preserve event history and record one correctly attributed completion.
-- [ ] Retain the minimal idempotency tombstone and remove no-longer-needed cleanup inventory; leave
+- [x] Retain the minimal idempotency tombstone and remove no-longer-needed cleanup inventory; leave
   sequence counters unchanged. Shared records for other applications survive.
-- [ ] Test complete populated applications, unlinked/linked/migrated cases, retained audit rows/reason/actor,
+- [x] Test complete populated applications, unlinked/linked/migrated cases, retained audit rows/reason/actor,
   deleted audit values, binary and SDK absence, audit failure rollback and safe retry after external completion.
 
 ### Task 7: Expose and publish the deletion contract
@@ -410,6 +410,26 @@ context, data-store scripted), `DeletionProgressTest` 9, `DisposalEventsHandlerT
 clause) is caught by `DeletionCleanupTest.linkedFileStuck`. Gates: `./gradlew build` (init script) exit 0 in 6m0s;
 `test` 5,579 across 600 suites (0 failures, 1 skipped); `integration` 30 across 5 (0 failures); `compileCftlibTestJava`
 OK; `checkstyle.sh` OK; `git diff --check` clean.
+
+Task 6 (2026-11-18): `domain/deletion/DeletionFinalisation` (statements in `repository/DeletionFinalisationRepository`,
+plain JDBC, `DELETE` only) runs in the worker's same pass once every external line is `Done`, in one owned
+`MANDATORY` transaction: re-checks the lines and that the SDK's `ccd.case_data` copy is gone (`CCD_COPY_PRESENT`),
+locks the case, refuses retained bytes (`RETAINED_PAYLOAD`), deletes the listed owned stages (an unlisted one is
+`UNLISTED_OWNED_STAGE`), deletes the case (children by cascade), calls `deedpoll_audit_dispose_case_values`, records one
+`CASE_DELETED` under the request's own Delivery Manager with `deletionReason`/`deletionRequestId` and no note or
+values, erases every line's locator and item id (kind, outcome and time kept) and sets `Completed`. A named refusal or
+a `DataIntegrityViolationException` rolls back to `NeedsAttention` (`LOCAL_FINALISATION_REFUSED` for the latter); any
+other failure rolls back to `InProgress` after the poll interval, external lines kept `Done`. No migration (the api
+login owns the function). Reference counters, the Master email ledger and other cases are untouched. Focused suites:
+`DeletionFinalisationTest` 7 (Postgres: populated migrated unlinked case removed whole with events kept and one
+correctly attributed completion, other case and shared Master email untouched, counters unchanged, tombstone codes
+only; linked case only after `dispose`, SDK copy absent; SDK copy present refused; audit failure rolled back then
+retried to one completion without redoing a removal; database refusal `NeedsAttention`; lapsed lease finalises
+nothing; replay after completion). Updated: `DeletionCleanupTest` (journeys now end `Completed`; the done-line case
+uses a linked request still waiting on CCD), `RetainAndDisposeDeletionTest.fullJourney` (ends `Completed` with the
+DM's `CASE_DELETED`). Gates: `./gradlew build` (init script) exit 0 in 6m2s; `test` 5,586 across 601 suites (0 failures,
+1 skipped); `integration` 30 across 5 (0 failures); `compileCftlibTestJava` OK; `checkstyle.sh` OK; `git diff --check`
+clean.
 
 ## Post-Completion
 

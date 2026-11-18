@@ -272,7 +272,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `lockUnfencedForDeedPreparation`): a check in the statement that waited cannot see a request committed meanwhile.
   V49's deferred triggers refuse at commit any INSERT/UPDATE of a fenced case or child row (DELETE never), so a bulk
   statement that forgets the predicate fails for every case it touches. CCD's view and binding reads are native on
-  purpose. See `docs/APPLICATION-DELETION.md`.
+  purpose. Only `DeletionFinalisation` completes a request, in the worker's owned transaction after every external line
+  is `Done`: `DELETE` only, audit values through `deedpoll_audit_dispose_case_values`, one `CASE_DELETED` under the
+  request's own Delivery Manager. See `docs/APPLICATION-DELETION.md`.
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks
   wrong, stop and report it — do not "fix" it.

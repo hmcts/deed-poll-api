@@ -1,9 +1,9 @@
 # Application deletion — ownership, contracts and cleanup order
 
-Status: Tasks 1 to 5 of [the plan](plans/20261118-dm-application-deletion.md), 2026-11-18. This records what an
+Status: Tasks 1 to 6 of [the plan](plans/20261118-dm-application-deletion.md), 2026-11-18. This records what an
 application owns, what the platform deletes for us and how it signals it, and the order cleanup must take, and
-describes admission, the fence and the external and binary cleanup as built. Finalisation, the HTTP routes and the
-rollout are later tasks; nothing here authorises deletion in any environment.
+describes admission, the fence, the external and binary cleanup and local finalisation as built. The HTTP routes and
+the rollout are later tasks; nothing here authorises deletion in any environment.
 
 ## Provenance
 
@@ -347,7 +347,7 @@ comes from `DeletionProgress.decide`, which has no database in it:
 | linked, CCD step `Pending` but the local `ccd.case_data` row is gone | `NeedsAttention` | `CCD_CASE_MISSING` |
 | CDAM lines with no CCD step | `NeedsAttention` | `CDAM_WITHOUT_CCD_CASE` |
 | any other `Failed` line | `NeedsAttention` | `CLEANUP_STEP_FAILED` |
-| every external line `Done` | `InProgress`, `externalCleanupDone` (finalisation is Task 6) | |
+| every external line `Done` | finalised in the same pass: `Completed` (below) | |
 
 Step outcomes are `DELETED`, `ALREADY_ABSENT` (the store was there and the file was not: an earlier, unrecorded try),
 `DISPOSED_BY_CCD`, `REMOVAL_FAILED`, `STORE_UNAVAILABLE` and `INVALID_STORAGE_KEY`. A `NeedsAttention` request leaves
@@ -370,6 +370,47 @@ everything; a 404 on the confirmation's visibility check aborts the run; a mark 
 data-store commits is marked again, and one lost after is confirmed and never marked twice; a request whose files are
 not removed is never offered, and a stray event is refused. Plus `DeletionProgressTest`, `DisposalEventsHandlerTest`
 and `LocalFilesystemDocumentStoreTest`'s removal cases.
+
+## Local finalisation (Task 6)
+
+`domain/deletion/DeletionFinalisation`, called by the worker in the same pass once `DeletionProgress` says every
+external line is `Done`, in **one owned transaction** (the claim's lock is held and the lease checked first, and it is
+`MANDATORY`). Its statements are `repository/DeletionFinalisationRepository`'s, plain JDBC by `DELETE` only. In order:
+
+1. Asks again under the lock: every non-owned-stage line `Done` (else `CLEANUP_STEP_FAILED`), and for a linked case no
+   `ccd.case_data` row for the reference (else `CCD_COPY_PRESENT`: the CCD step can only be `Done` through the SDK's
+   own delete, so a copy still there means a hand edit or a bug).
+2. Locks the case `FOR UPDATE` and refuses retained deed or staged bytes (`RETAINED_PAYLOAD`; admission refused them
+   and V49 refuses new ones, but it is asked, not assumed).
+3. Deletes each listed owned stage (V29 guards only `UPDATE`) and records its line `DELETED` or `ALREADY_ABSENT`; an
+   owned stage naming the case that the inventory did not list is `UNLISTED_OWNED_STAGE`.
+4. Deletes the case row; notes, witnesses, documents, referrals, notifications, CCD creation attempts and the deed
+   preparation go by their cascades. Gazette evidence restricts and a retained deed payload's trigger refuses, either
+   of which is `LOCAL_FINALISATION_REFUSED`.
+5. `deedpoll_audit_dispose_case_values(case_id)`: every value row of the case's events, and no other case's.
+6. `CASE_DELETED` under the **original Delivery Manager** (the request's subject and name, never the worker), with
+   `deletionReason` and `deletionRequestId`, no note (it is on `CASE_DELETION_REQUESTED`) and no values.
+7. The tombstone: every line keeps kind, state, outcome and completion time and loses its locator and item id; the
+   request becomes `Completed` with `completed_at`, no claim and no failure, after which V48's trigger refuses any
+   change to it.
+
+A named refusal, or the database refusing a statement (`DataIntegrityViolationException`), rolls all of it back and
+releases the request `NeedsAttention` with that code. Any other failure (an outage, the audit insert failing) rolls it
+back and leaves the request `InProgress`, due again after `poll-interval`. The external lines stay `Done` either way,
+so a retry resumes at finalisation without repeating a removal. A worker whose lease lapsed fails its lease check and
+writes nothing; a `Completed` request is outside the set a claim can hold, so there is exactly one `CASE_DELETED`.
+A replay of the admission's key afterwards answers the tombstone. Untouched: every audit event, the Master email ledger
+(ids only, shared across cases; a pending row drops a referral that no longer exists), the reference counter, and
+other cases. There is no migration: the function's `EXECUTE` is the api login's as owner.
+
+**Proof.** `DeletionFinalisationTest` (Postgres, 7): a populated, migrated, unlinked case (note, witness, document and
+file, referral, email, creation attempt, owned stage, audit value) removed whole with its events kept, one
+`CASE_DELETED` attributed to the Delivery Manager, another case's values, note, referral and the shared Master email
+untouched, counters unchanged and the tombstone holding outcome codes only; a linked case completing only after
+`dispose`, with the SDK's copy gone; a present SDK copy refused with nothing removed; an audit failure rolled back and
+retried to one completion without redoing a removal; a database refusal `NeedsAttention`; a lapsed lease finalising
+nothing; and a replay after completion. `DeletionCleanupTest` and `RetainAndDisposeDeletionTest`'s journeys now end
+`Completed`.
 
 ## Audit-value disposal permissions
 

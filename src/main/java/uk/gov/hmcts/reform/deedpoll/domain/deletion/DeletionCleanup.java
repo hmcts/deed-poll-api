@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -15,6 +16,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.DeletionWorkRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionWorkRepository.CcdCaseState;
 import uk.gov.hmcts.reform.deedpoll.storage.LocalFilesystemDocumentStore;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -37,8 +39,13 @@ import java.util.function.Supplier;
  * there and the file is not ({@link LocalFilesystemDocumentStore#remove}); a missing root, an I/O failure or no
  * filesystem store at all leaves the line {@code Pending} with its storage key. A request whose tries run out, or
  * whose inventory cannot be honoured, is {@link DeletionStatus#NeedsAttention} with an allowlisted
- * {@link DeletionFailure}, and the worker stops claiming it. Nothing here completes a request: finalisation (Task 6)
- * does, after {@link DeletionProgress.Decision#externalCleanupDone}.
+ * {@link DeletionFailure}, and the worker stops claiming it.
+ *
+ * <p><strong>Then finalisation, in the same pass.</strong> Once {@link DeletionProgress.Decision#externalCleanupDone},
+ * {@link DeletionFinalisation} runs in one owned transaction and is the only thing that completes a request. A
+ * refusal it names, or the database refusing a delete (a restricting key, a protecting trigger), rolls it back and is
+ * {@link DeletionStatus#NeedsAttention}; any other failure rolls it back and leaves the request {@code InProgress},
+ * due again after the poll interval. Either way the external steps stay recorded, so nothing is repeated.
  *
  * <p>Ordinary document removal is untouched: a caseworker's delete is still a soft delete in CDAM, and this worker
  * sends CDAM nothing.
@@ -54,18 +61,21 @@ public class DeletionCleanup {
     private final TransactionTemplate transactions;
     private final DeletionCleanupProperties properties;
     private final DeletionProgress progress;
+    private final DeletionFinalisation finalisation;
     private final Supplier<LocalDateTime> clock;
 
     @Autowired
     public DeletionCleanup(DeletionWorkRepository work, DeletionRequestRepository requests,
                            ObjectProvider<LocalFilesystemDocumentStore> files, PlatformTransactionManager transactions,
-                           DeletionCleanupProperties properties) {
-        this(work, requests, files, transactions, properties, AuditClock::now);
+                           DeletionCleanupProperties properties, DeletionFinalisation finalisation) {
+        this(work, requests, files, transactions, properties, finalisation, AuditClock::now);
     }
 
     DeletionCleanup(DeletionWorkRepository work, DeletionRequestRepository requests,
                     ObjectProvider<LocalFilesystemDocumentStore> files, PlatformTransactionManager transactions,
-                    DeletionCleanupProperties properties, Supplier<LocalDateTime> clock) {
+                    DeletionCleanupProperties properties, DeletionFinalisation finalisation,
+                    Supplier<LocalDateTime> clock) {
+        this.finalisation = finalisation;
         this.work = work;
         this.requests = requests;
         this.files = files;
@@ -123,14 +133,16 @@ public class DeletionCleanup {
     }
 
     /**
-     * Works one claimed request: its filesystem documents, then its status, then gives the claim up.
+     * Works one claimed request: its filesystem documents, then its status, then, if every external step is verified,
+     * its finalisation; and gives the claim up.
      *
-     * @return what was decided, or empty if the claim was lost on the way
+     * @return what was decided ({@link DeletionStatus#Completed} once finalised), or empty if the claim was lost
      */
     Optional<DeletionProgress.Decision> process(UUID requestId, UUID owner) {
         try {
             Optional<DeletionFailure> found = removeLocalDocuments(requestId, owner);
-            return Optional.of(settle(requestId, owner, found));
+            DeletionProgress.Decision decision = settle(requestId, owner, found);
+            return Optional.of(decision.externalCleanupDone() ? finalise(requestId, owner) : decision);
         } catch (LeaseLost lost) {
             log.info("Application deletion request {} was taken over by another worker; stopping", requestId);
             return Optional.empty();
@@ -176,6 +188,10 @@ public class DeletionCleanup {
             Optional<CcdCaseState> ccdCase = request.ccdCaseReference() == null
                 ? Optional.empty() : work.ccdCase(request.ccdCaseReference());
             DeletionProgress.Decision decision = progress.decide(requests.stepsOf(requestId), ccdCase, found);
+            if (decision.externalCleanupDone()) {
+                // Held, not released: finalisation runs next under the same claim.
+                return decision;
+            }
             work.release(requestId, owner, decision.status(),
                          decision.failure() == null ? null : decision.failure().name(),
                          clock.get().plus(decision.delay()));
@@ -184,6 +200,42 @@ public class DeletionCleanup {
             }
             return decision;
         });
+    }
+
+    private DeletionProgress.Decision finalise(UUID requestId, UUID owner) {
+        DeletionFailure refused;
+        try {
+            owned(requestId, owner, () -> {
+                DeletionRequest request = requests.findById(requestId).orElseThrow(LeaseLost::new);
+                finalisation.finalise(request, owner, clock.get());
+                return 0;
+            });
+            log.info("Application deletion request {} completed", requestId);
+            return new DeletionProgress.Decision(DeletionStatus.Completed, null, Duration.ZERO, true);
+        } catch (DeletionFinalisation.Refused named) {
+            refused = named.failure();
+        } catch (DataIntegrityViolationException integrity) {
+            refused = DeletionFailure.LOCAL_FINALISATION_REFUSED;
+        } catch (LeaseLost lost) {
+            throw lost;
+        } catch (RuntimeException failed) {
+            log.warn("Application deletion request {} could not be finalised; it will try again ({})",
+                     requestId, failed.getClass().getName());
+            DeletionProgress.Decision retry = new DeletionProgress.Decision(DeletionStatus.InProgress, null,
+                                                                            properties.pollInterval(), true);
+            release(requestId, owner, retry);
+            return retry;
+        }
+        DeletionProgress.Decision attention = new DeletionProgress.Decision(DeletionStatus.NeedsAttention, refused,
+                                                                            properties.pollInterval(), true);
+        release(requestId, owner, attention);
+        log.warn("Application deletion request {} needs attention: {}", requestId, refused);
+        return attention;
+    }
+
+    private void release(UUID requestId, UUID owner, DeletionProgress.Decision decision) {
+        owned(requestId, owner, () -> work.release(requestId, owner, decision.status(),
+            decision.failure() == null ? null : decision.failure().name(), clock.get().plus(decision.delay())));
     }
 
     /**
