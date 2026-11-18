@@ -752,6 +752,10 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `SavedCaseResponse`, and the shared `CaseResponseFields` test fixture. `DeedPollColumnsTest` checks the reverse: every
   stored column has a reader or a written-down exemption, which is where a column that must never be published
   (`ccdCaseReference`) goes.
+  The case detail's `lastChangedOn` is not a column: it is derived (`repository/CaseLastChanged`, the later of
+  `modifiedOn` and the case's newest audited non-read write), detail-only by design, and what application deletion's
+  `STALE_CONFIRMATION` compares, so a child write path that records no `AuditTrail` event on its case lets a deletion
+  through over a change nobody reviewed.
 - **A controller test must boot the whole context.** A `@WebMvcTest` slice does not get
   `SecurityConfiguration` — its include list covers `SecurityFilterChain` beans, and a
   `@Configuration` that merely *declares* one is not itself one — so a slice asserts Boot's defaults

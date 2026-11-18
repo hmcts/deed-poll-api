@@ -20,7 +20,8 @@ CREATE TABLE deedpoll_deletion_request (
     -- SHA-256 of the admitted body (reason, note, expectedLastChangedOn), lower-case hex: a replay with the same key
     -- and a different body is a 409, decided by comparing this and nothing else.
     fingerprint varchar(64) NOT NULL CHECK (fingerprint ~ '^[0-9a-f]{64}$'),
-    -- The case's "modifiedOn" the Delivery Manager confirmed against, as admitted.
+    -- The case's lastChangedOn (CaseLastChanged: the later of "modifiedOn" and its newest audited write) the
+    -- Delivery Manager confirmed against, as admitted.
     expected_last_changed_on timestamp(3) NOT NULL,
     -- The original Delivery Manager: CASE_DELETED is recorded under these, whichever worker finishes the job.
     requested_by_subject varchar(255) NOT NULL CHECK (btrim(requested_by_subject) <> ''),

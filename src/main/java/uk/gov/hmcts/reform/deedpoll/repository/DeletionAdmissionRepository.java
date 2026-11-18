@@ -25,8 +25,7 @@ public class DeletionAdmissionRepository {
     }
 
     /** The case facts admission decides on, read with the case row locked FOR UPDATE. */
-    public record LockedCase(String id, LocalDateTime modifiedOn, boolean retainPermanently,
-                             String ccdCaseReference) {
+    public record LockedCase(String id, boolean retainPermanently, String ccdCaseReference) {
     }
 
     /** One supporting document, reduced to where its bytes are. Never logged: the key is a way back to them. */
@@ -46,10 +45,9 @@ public class DeletionAdmissionRepository {
      */
     public Optional<LockedCase> lock(String caseId) {
         return jdbc.query("""
-            SELECT id, "modifiedOn", "retainPermanently", "ccdCaseReference"
+            SELECT id, "retainPermanently", "ccdCaseReference"
               FROM deedpoll_deedpoll WHERE id = ? FOR UPDATE
             """, (row, index) -> new LockedCase(row.getString("id"),
-                                                row.getTimestamp("modifiedOn").toLocalDateTime(),
                                                 row.getBoolean("retainPermanently"),
                                                 row.getString("ccdCaseReference")), caseId)
             .stream().findFirst();

@@ -553,7 +553,7 @@ An unknown id is a 404, and an attempt that is not `NeedsRepair` a 409.
 
 Two Delivery Manager-only (`DELETE_APPLICATION`) operations, counted apart from the caseworker surface as
 `DELETION_PATHS`: `POST /caseworker/cases/{id}/deletion-requests` (required UUID `Idempotency-Key`; closed body
-`reason`, `note`, `expectedModifiedOn`; 202 with a `Location`) and `GET /caseworker/application-deletions/{requestId}`.
+`reason`, `note`, `expectedLastChangedOn`, the case detail's `lastChangedOn` as published, so any change since is 409 `STALE_CONFIRMATION`; 202 with a `Location`) and `GET /caseworker/application-deletions/{requestId}`.
 202 is not deletion: only the status `Completed` is. The reason is `CREATED_IN_ERROR` or `DUPLICATE`, and the
 mandatory `note` (10–500 characters) says why without the applicant's details: it is kept with the audit event for
 seven years after the case is gone. The outcome is permanent: there is no void, undo or unfencing, the application's

@@ -337,7 +337,7 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("a note, witness, document or referral written after the review makes it stale; a read does not")
+    @DisplayName("an audited write on the case after the review makes it stale; a read does not")
     void childWriteSinceTheReviewIsStale() {
         String id = fixture();
         auditEvent(id, "NOTE_CREATED", MODIFIED.plusMinutes(5));
@@ -363,6 +363,15 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
 
         assertThat(lastChanged.of(id)).contains(MODIFIED);
         assertThat(lastChanged.of(UUID.randomUUID().toString())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a case row written after its newest audited write last changed at its own modifiedOn")
+    void lastChangedIsTheLaterOfTheTwo() {
+        String id = fixture();
+        auditEvent(id, "NOTE_CREATED", MODIFIED.minusMinutes(5));
+
+        assertThat(lastChanged.of(id)).contains(MODIFIED);
     }
 
     private void auditEvent(String caseId, String action, LocalDateTime at) {

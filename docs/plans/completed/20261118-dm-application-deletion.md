@@ -5,6 +5,11 @@
 Status: implemented locally, Tasks 1–9 (2026-11-18); in review, not deployed or rehearsed. No environment deletion
 is authorised by this file; the rehearsal and activation in Post-Completion are operator evidence still to come.
 
+Review follow-ups after Task 9 supersede two contract details below: `79d88cc` refuses a form body with 415, and
+`0aaec7a` renames `expectedModifiedOn` to `expectedLastChangedOn`, the case detail's new `lastChangedOn` (the later of
+`modifiedOn` and the case's newest audited write), so a child write since the review is also stale. The spec hash
+`4bf5ae7c…` quoted in the task logs is superseded; `docs/APPLICATION-DELETION.md` carries the current one.
+
 Steve's requirement, confirmed 2026-11-18: a Delivery Manager can **permanently delete an application created in
 error or duplicated**, with an audit entry stating why. This is not a void, archive or withdrawal. It supersedes
 the September planning restriction that reserved manual hard deletion for data-protection erasure requests.

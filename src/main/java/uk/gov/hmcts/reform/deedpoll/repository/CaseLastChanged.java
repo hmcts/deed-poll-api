@@ -17,9 +17,11 @@ import java.util.stream.Collectors;
  * own transaction, so the newest non-read event is when one of them last happened. Reads ({@link AuditAction#isRead})
  * are left out: opening the case to review it must not make the review stale.
  *
- * <p>Published as the case detail's {@code lastChangedOn} and compared by application deletion under the case lock
- * ({@code DeletionAdmissionRepository.lock} reads {@link #sqlFor} in its own statement), so a change made after the
- * Delivery Manager opened the case refuses the deletion. Both sides use this one expression, so they cannot disagree.
+ * <p>Published as the case detail's {@code lastChangedOn} ({@code DeedPollService.findDeedPollForReview}) and compared
+ * by application deletion ({@code ApplicationDeletionService.refuseIfIneligible}, which calls {@link #of} in its own
+ * statement after {@code DeletionAdmissionRepository.lock} has taken the case lock, so a change committed while it
+ * waited is counted). A change made after the Delivery Manager opened the case therefore refuses the deletion. Both
+ * sides call {@link #of}, so they cannot disagree.
  */
 @Repository
 public class CaseLastChanged {
@@ -30,19 +32,17 @@ public class CaseLastChanged {
         .map(action -> "'" + action.name() + "'")
         .collect(Collectors.joining(", "));
 
+    /**
+     * The case's last change; {@code greatest} ignores the null of a case with no audited write yet.
+     */
+    private static final String SQL = "SELECT greatest(d.\"modifiedOn\", (SELECT max(e.occurred_at)"
+        + " FROM deedpoll_audit_event e WHERE e.case_id = d.id AND e.action NOT IN (" + READ_ACTIONS + ")))"
+        + " AS last_changed FROM deedpoll_deedpoll d WHERE d.id = ?";
+
     private final JdbcTemplate jdbc;
 
     public CaseLastChanged(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
-    }
-
-    /**
-     * The expression over a {@code deedpoll_deedpoll} row aliased {@code alias}; {@code greatest} ignores a case with
-     * no audited write yet.
-     */
-    static String sqlFor(String alias) {
-        return "greatest(" + alias + ".\"modifiedOn\", (SELECT max(e.occurred_at) FROM deedpoll_audit_event e"
-            + " WHERE e.case_id = " + alias + ".id AND e.action NOT IN (" + READ_ACTIONS + ")))";
     }
 
     /**
@@ -51,8 +51,7 @@ public class CaseLastChanged {
      * than admitting one over a change nobody saw.
      */
     public Optional<LocalDateTime> of(String caseId) {
-        return jdbc.query("SELECT " + sqlFor("d") + " AS last_changed FROM deedpoll_deedpoll d WHERE d.id = ?",
-                          (row, index) -> row.getTimestamp("last_changed").toLocalDateTime(), caseId)
+        return jdbc.query(SQL, (row, index) -> row.getTimestamp("last_changed").toLocalDateTime(), caseId)
             .stream().findFirst();
     }
 }

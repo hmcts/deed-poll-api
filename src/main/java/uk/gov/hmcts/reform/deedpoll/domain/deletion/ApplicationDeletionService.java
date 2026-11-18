@@ -181,7 +181,7 @@ public class ApplicationDeletionService {
         }
         if (command.expectedLastChangedOn() == null) {
             errors.add(new FieldError(EXPECTED_LAST_CHANGED_ON_FIELD,
-                                      "Send the time the application was last modified, as you reviewed it"));
+                                      "Send the case's lastChangedOn, as you reviewed it"));
         }
         if (!errors.isEmpty()) {
             throw new InvalidInputError("The deletion request is not valid", errors);

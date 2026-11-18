@@ -143,13 +143,26 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
     }
 
     @Test
-    @DisplayName("a Delivery Manager's admission is 202 with a Location, no-store, the id and Pending only")
+    @DisplayName("a Delivery Manager's admission of the published lastChangedOn is 202 with a Location, no-store,"
+                 + " the id and Pending only; the case's own modifiedOn is stale once a child write is newer")
     void admits() throws Exception {
         String id = fixture();
-        String modifiedOn = publishedModifiedOn(id);
+        jdbc.update("""
+            INSERT INTO deedpoll_audit_event
+                (occurred_at, actor_id, actor_name, action, entity_type, entity_id, case_id)
+            VALUES (?, ?, 'A Caseworker', 'NOTE_CREATED', 'DeedPoll', ?, ?)
+            """, Timestamp.valueOf(MODIFIED.plusMinutes(5)), StubIdam.SUBJECT, id, id);
+        JsonNode published = publishedDetail(id);
+        String lastChangedOn = published.get("lastChangedOn").asText();
+        assertThat(lastChangedOn).isNotEqualTo(published.get("modifiedOn").asText());
+        keyed(post(admissionPath(id)), UUID.randomUUID().toString(),
+              body("DUPLICATE", NOTE, published.get("modifiedOn").asText()))
+            .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("STALE_CONFIRMATION"));
+        assertThat(publishedDetail(id).get("lastChangedOn").asText())
+            .as("opening the case to review it does not move it").isEqualTo(lastChangedOn);
         UUID key = UUID.randomUUID();
 
-        MvcResult result = keyed(post(admissionPath(id)), key.toString(), body("DUPLICATE", NOTE, modifiedOn))
+        MvcResult result = keyed(post(admissionPath(id)), key.toString(), body("DUPLICATE", NOTE, lastChangedOn))
             .andExpect(status().isAccepted())
             .andExpect(jsonPath("$.status").value("Pending"))
             .andReturn();
@@ -227,6 +240,16 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
         authorised(post(admissionPath(id)).header(CaseworkerApplicationDeletionController.IDEMPOTENCY_KEY,
                                                   UUID.randomUUID().toString())
                        .contentType("application/x-www-form-urlencoded").content("reason=DUPLICATE"))
+            .andExpect(status().isUnsupportedMediaType());
+        authorised(post(admissionPath(id)).header(CaseworkerApplicationDeletionController.IDEMPOTENCY_KEY,
+                                                  UUID.randomUUID().toString())
+                       .header(HttpHeaders.CONTENT_TYPE, "Multipart/Form-Data; boundary=xyz")
+                       .content("--xyz--"))
+            .andExpect(status().isUnsupportedMediaType());
+        authorised(post(admissionPath(id)).header(CaseworkerApplicationDeletionController.IDEMPOTENCY_KEY,
+                                                  UUID.randomUUID().toString())
+                       .header(HttpHeaders.CONTENT_TYPE, "Application/X-WWW-Form-Urlencoded; charset=UTF-8")
+                       .content("reason=DUPLICATE"))
             .andExpect(status().isUnsupportedMediaType());
         keyed(post(admissionPath(id)), UUID.randomUUID().toString(),
               "{\"note\":\"" + "x".repeat(CaseworkerApplicationDeletionController.MAX_BODY_BYTES) + "\"}")
@@ -333,12 +356,12 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
     }
 
     /**
-     * {@code modifiedOn} exactly as the case detail publishes it, which is what Admin sends back.
+     * The case detail exactly as published: its {@code lastChangedOn} is what Admin sends back.
      */
-    private String publishedModifiedOn(String id) throws Exception {
+    private JsonNode publishedDetail(String id) throws Exception {
         String detail = authorised(get("/caseworker/cases/" + id)).andExpect(status().isOk()).andReturn()
             .getResponse().getContentAsString();
-        return json.readTree(detail).get("modifiedOn").asText();
+        return json.readTree(detail);
     }
 
     private JsonNode admit(String id, UUID key, String body) throws Exception {

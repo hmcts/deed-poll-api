@@ -34,7 +34,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -367,7 +366,11 @@ public class DeedPollService {
      */
     @Transactional(readOnly = true)
     public DeedPollWithComputed findDeedPoll(String id) {
-        return load(id);
+        DeedPoll record = deedPolls.findWithDocumentsById(id)
+            .orElseThrow(() -> new NotFoundError("DeedPoll " + id + " not found"));
+        Hibernate.initialize(record.getNotes());
+        Hibernate.initialize(record.getWitnesses());
+        return Computed.withComputed(record);
     }
 
     /**
@@ -381,23 +384,15 @@ public class DeedPollService {
      */
     @Transactional(readOnly = true)
     public CaseForReview findDeedPollForReview(String id) {
-        Optional<LocalDateTime> changed = lastChanged.of(id);
-        DeedPollWithComputed found = load(id);
-        return new CaseForReview(found, changed.orElse(found.deedPoll().getModifiedOn()));
+        LocalDateTime changed = lastChanged.of(id)
+            .orElseThrow(() -> new NotFoundError("DeedPoll " + id + " not found"));
+        return new CaseForReview(findDeedPoll(id), changed);
     }
 
     /**
      * A case and its {@link CaseLastChanged} value, read in that order.
      */
     public record CaseForReview(DeedPollWithComputed found, LocalDateTime lastChangedOn) {
-    }
-
-    private DeedPollWithComputed load(String id) {
-        DeedPoll record = deedPolls.findWithDocumentsById(id)
-            .orElseThrow(() -> new NotFoundError("DeedPoll " + id + " not found"));
-        Hibernate.initialize(record.getNotes());
-        Hibernate.initialize(record.getWitnesses());
-        return Computed.withComputed(record);
     }
 
     /** Updates a case as the service account, non-admin. */
