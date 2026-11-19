@@ -298,9 +298,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   Delivery Manager may restore (`POST /caseworker/application-deletions/{requestId}/restore`): only `Pending`,
   unclaimed, never attempted and before `restorable_until` (`DeletionRestoreRule`, repeated in
   `deleteRestorable`'s SQL), else 409 `CLEANUP_STARTED`/`RESTORE_WINDOW_CLOSED`. It refuses on an unlocked
-  read first, then locks the **case, then the request** (admission's order; reversing it deadlocks with admission,
-  and the early refusal keeps it from waiting on a case the worker's finalisation, which locks request then case, may
-  hold), deletes the request, which lifts the fence, and records
+  read first, then locks the **case, then the request** (admission's order; reversing it deadlocks with admission), the
+  request `SKIP LOCKED`: the worker's finalisation locks request then case, and the window can close while a restore
+  waits for the case, so a request somebody else holds is refused `CLEANUP_STARTED` and never waited for. It deletes the request, which lifts the fence, and records
   `CASE_DELETION_RESTORED` without the note. See `docs/APPLICATION-DELETION.md`.
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks

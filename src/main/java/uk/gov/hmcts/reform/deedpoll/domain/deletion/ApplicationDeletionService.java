@@ -179,15 +179,19 @@ public class ApplicationDeletionService {
      * then the request, unlocked, and the rule ({@link DeletionRestoreRule}) against that read, so a request already
      * claimed or past its window is refused <strong>before any lock is taken</strong>; then the <strong>case row's
      * lock, then the request's</strong>, which is admission's order, so a restore and an admission of the same case
-     * cannot deadlock; then the rule again under both locks, which a worker that claimed the request meanwhile fails;
+     * cannot deadlock, the request's taken {@code SKIP LOCKED} and a held one refused rather than waited for; then
+     * the rule again under both locks, which a worker that claimed the request meanwhile fails;
      * then the delete, its SQL repeating the rule; then {@code CASE_DELETION_RESTORED} under the caller, with the
      * request's id and reason and never its note, in the same transaction, so a failed audit restores nothing.
      *
      * <p>The worker's claim skips a locked request, and claims only once {@code restorable_until} has passed, which
      * the rule refuses, so whichever commits first wins and the other answers as if it had come second. The worker's
-     * finalisation takes the opposite order (the request under its claim, then the case), which is why the first
-     * refusal comes before the case lock: a restore that reaches the locks read a request nobody had claimed, inside
-     * its window, and a worker can reach finalisation only after claiming it once that window has closed.
+     * finalisation takes the opposite order (the request under its claim, then the case). The first refusal, before
+     * the case lock, turns most of those races away unlocked, but the window can close while a restore waits for the
+     * case, and a worker can then claim and finalise; so the request's lock is never waited for. Only the worker
+     * holds a request's lock apart from a restore, which holds the case first, so a request locked by somebody else is
+     * {@link DeletionRefusal#CLEANUP_STARTED} (or the rule's own refusal on a fresh read), and the finalisation then
+     * gets the case once this transaction ends.
      *
      * @return the id of the application that is visible again
      *
@@ -205,8 +209,7 @@ public class ApplicationDeletionService {
         DeletionRequest seen = requests.findById(requestId).orElseThrow(ApplicationDeletionService::noSuchRequest);
         refuseUnlessRestorable(seen);
         admission.lock(seen.caseId());
-        DeletionRequest locked = requests.lockById(requestId)
-            .orElseThrow(ApplicationDeletionService::noSuchRequest);
+        DeletionRequest locked = requests.lockByIdUnlessHeld(requestId).orElseGet(() -> refuseHeld(requestId));
         LocalDateTime now = refuseUnlessRestorable(locked);
         if (!requests.deleteRestorable(requestId, now)) {
             // Unreachable while the request's lock is held and the rule has just admitted it; refused, not assumed.
@@ -217,6 +220,17 @@ public class ApplicationDeletionService {
                          .withRestoration(locked.reason(), locked.id()),
                      List.of());
         return locked.caseId();
+    }
+
+    /**
+     * The request was not locked: either it is gone (a restore that held the case before this one committed), or the
+     * worker holds it, which it does only once the window has closed. Never waited for, because the worker's
+     * finalisation holds the request and then waits for the case this restore already holds.
+     */
+    private DeletionRequest refuseHeld(UUID requestId) {
+        DeletionRequest current = requests.findById(requestId).orElseThrow(ApplicationDeletionService::noSuchRequest);
+        refuseUnlessRestorable(current);
+        throw new DeletionConflictError(DeletionRefusal.CLEANUP_STARTED);
     }
 
     private static LocalDateTime refuseUnlessRestorable(DeletionRequest request) {

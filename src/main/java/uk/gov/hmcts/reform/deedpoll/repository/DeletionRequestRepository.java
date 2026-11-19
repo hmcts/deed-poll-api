@@ -118,13 +118,15 @@ public class DeletionRequestRepository {
     }
 
     /**
-     * The request, locked {@code FOR UPDATE} until the caller's transaction ends. A restore takes it after the case's
-     * own lock, in admission's order, so the two never wait on each other the other way round; the worker's claim
+     * The request, locked {@code FOR UPDATE SKIP LOCKED} until the caller's transaction ends, or empty when it is gone
+     * <em>or another transaction holds it</em>. A restore takes it after the case's own lock, in admission's order,
+     * and never waits for it: the only other holder is the worker, whose finalisation locks the request and then the
+     * case, so a restore that waited here while holding the case would deadlock with it. The worker's claim likewise
      * skips a locked request rather than waiting.
      */
-    public Optional<DeletionRequest> lockById(UUID id) {
-        return jdbc.query("select " + COLUMNS + " from deedpoll_deletion_request where id = ? for update", REQUEST,
-                          id).stream().findFirst();
+    public Optional<DeletionRequest> lockByIdUnlessHeld(UUID id) {
+        return jdbc.query("select " + COLUMNS + " from deedpoll_deletion_request where id = ? for update skip locked",
+                          REQUEST, id).stream().findFirst();
     }
 
     /**

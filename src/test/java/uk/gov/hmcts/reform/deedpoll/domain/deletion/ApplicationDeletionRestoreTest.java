@@ -399,6 +399,43 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("a restore never waits for a request the worker holds, so finalisation's order cannot deadlock it")
+    void restoreDoesNotWaitForAHeldRequest() throws Exception {
+        String id = fixture();
+        UUID request = admit(id);
+        ExecutorService pool = Executors.newFixedThreadPool(1);
+        try {
+            new TransactionTemplate(transactions).executeWithoutResult(status -> {
+                // Finalisation's order: the request first, then the case. The restore runs in between; were it to
+                // wait for the request while holding the case, the case lock below would deadlock with it.
+                jdbc.queryForList("SELECT id FROM deedpoll_deletion_request WHERE id = ? FOR UPDATE", request);
+                Future<Object> restore = pool.submit(() -> {
+                    try {
+                        return deletions.restore(DELIVERY_MANAGER, request);
+                    } catch (RuntimeException refused) {
+                        return refused;
+                    }
+                });
+                Object restored;
+                try {
+                    restored = restore.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                } catch (Exception failed) {
+                    throw new IllegalStateException(failed);
+                }
+                assertThat(restored).isInstanceOfSatisfying(DeletionConflictError.class, error ->
+                    assertThat(error.refusal()).isEqualTo(DeletionRefusal.CLEANUP_STARTED));
+                assertThat(jdbc.queryForList("SELECT id FROM deedpoll_deedpoll WHERE id = ? FOR UPDATE NOWAIT",
+                                             String.class, id)).containsExactly(id);
+            });
+            assertThat(requestCount(id)).isOne();
+            assertThat(restoredEvents(id)).isEmpty();
+            assertThat(deletions.restore(DELIVERY_MANAGER, request)).as("once released").isEqualTo(id);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     @DisplayName("a restore waiting on the case lock behind an admission's replay: one answer each, no deadlock")
     void restoreRacesAnAdmission() throws Exception {
         String id = fixture();

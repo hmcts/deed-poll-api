@@ -527,7 +527,9 @@ Decided by Steve on 2026-11-19 (addendum plan `20261119-deletion-grace-period-an
   (`ApplicationDeletionService.restore`): check the rule on an unlocked read first, so a request already claimed or past
   its window is refused before any lock (the worker's finalisation locks the request, then the case, so a restore must
   not wait on the case for a request the worker could hold); then lock the **case row, then the request** (admission's
-  order, so the two cannot deadlock), re-check the rule under both locks, `DELETE` the request (its steps cascade; V48's trigger guards
+  order, so the two cannot deadlock), the request `FOR UPDATE SKIP LOCKED`: the window can close while a restore waits
+  for the case, and a worker can then claim and finalise, so a request another transaction holds (only ever the
+  worker) is refused, by the rule on a fresh read or else `CLEANUP_STARTED`, rather than waited for; re-check the rule under both locks, `DELETE` the request (its steps cascade; V48's trigger guards
   `UPDATE` only, pinned by a migration test), and record `CASE_DELETION_RESTORED` under the restoring Delivery Manager
   with `deletionReason` and `deletionRequestId` in `detail` and never the note. A failed audit insert restores
   nothing. The answer is 200 `{caseId, status: "Restored"}`, `no-store`.
