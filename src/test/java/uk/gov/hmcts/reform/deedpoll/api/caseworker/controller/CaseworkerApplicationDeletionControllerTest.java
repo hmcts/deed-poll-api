@@ -373,6 +373,22 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
     }
 
     @Test
+    @DisplayName("a restore once the worker has attempted the request is 409 CLEANUP_STARTED, even inside the window")
+    void restoreAfterCleanupStartedIsRefused() throws Exception {
+        String id = fixture();
+        String requestId = admit(id, UUID.randomUUID(), body("DUPLICATE", NOTE, MODIFIED.toString()))
+            .get("requestId").asText();
+        jdbc.update("UPDATE deedpoll_deletion_request SET attempts = 1 WHERE id = ?", UUID.fromString(requestId));
+
+        authorised(post(restorePath(requestId)))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code").value("CLEANUP_STARTED"))
+            .andExpect(jsonPath("$.error").value(DeletionRefusal.CLEANUP_STARTED.message()));
+        assertThat(requestCount(id)).isOne();
+        authorised(get("/caseworker/cases/" + id)).andExpect(status().isNotFound());
+    }
+
+    @Test
     @DisplayName("any Delivery Manager may read another's request, which still names the first")
     void anotherDeliveryManagerReads() throws Exception {
         String id = fixture();

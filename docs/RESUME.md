@@ -1,5 +1,14 @@
 # Resume state — where the next session picks up
 
+**Plan 20261119-deletion-grace-period-and-restore, 2026-11-19:** same branch. A confirmed deletion stays fenced until
+`restorable_until` (admission plus the `deletionGraceDays` process setting, 1–90, default 14, frozen at admission); the
+worker claims nothing before it, and a Delivery Manager may restore with
+`POST /caseworker/application-deletions/{requestId}/restore`. The stale check is a time comparison again (the
+commit-time change marker is gone), and `confirm-cdam-purge.sql` writes only on an exact id match and audits
+`DELETION_CDAM_PURGE_CONFIRMED`. Next: as below, plus rehearsal step R2a and Admin's settings field, `restorableUntil`
+display and Restore button. See the
+[completed plan](plans/completed/20261119-deletion-grace-period-and-restore.md).
+
 **Plan 20261118-dm-application-deletion, 2026-11-18:** on `feat/dm-application-deletion`. V48/V49,
 `DELETE_APPLICATION` (Delivery Manager only), `POST /caseworker/cases/{id}/deletion-requests` and
 `GET /caseworker/application-deletions/{requestId}`, the deletion fence, the cleanup worker and the Retain and Dispose

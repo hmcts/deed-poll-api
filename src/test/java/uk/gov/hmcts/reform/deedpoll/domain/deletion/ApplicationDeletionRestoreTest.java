@@ -1,6 +1,7 @@
 package uk.gov.hmcts.reform.deedpoll.domain.deletion;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,11 +13,11 @@ import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.ConflictError;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
+import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.Admission;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.DeletionCommand;
-import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.Restoration;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.repository.CaseLastChanged;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionRequestRepository;
@@ -78,6 +79,15 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
     private PlatformTransactionManager transactions;
 
     private final List<String> fixtures = new ArrayList<>();
+
+    @BeforeEach
+    void nothingElseIsDue() {
+        // Nothing another test left behind is due: every claim below must be one of this test's requests.
+        jdbc.update("""
+            update deedpoll_deletion_request set next_attempt_at = next_attempt_at + interval '100 years'
+             where status in ('Pending', 'InProgress', 'AwaitingDisposal')
+            """);
+    }
 
     @AfterEach
     void cleanUp() {
@@ -153,9 +163,9 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
         UUID request = admit(id);
         assertThat(stepCount(request)).isOne();
 
-        Restoration restored = deletions.restore(SECOND_DELIVERY_MANAGER, request);
+        String restored = deletions.restore(SECOND_DELIVERY_MANAGER, request);
 
-        assertThat(restored.caseId()).isEqualTo(id);
+        assertThat(restored).isEqualTo(id);
         assertThat(requestCount(id)).isZero();
         assertThat(stepCount(request)).as("the inventory goes with its request").isZero();
         assertThat(count("SELECT count(*) FROM deedpoll_supportingdocument WHERE \"deedPollId\" = ?", id))
@@ -189,6 +199,18 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
                 .isInstanceOf(ForbiddenError.class);
         }
         assertThat(requestCount(id)).isOne();
+    }
+
+    @Test
+    @DisplayName("a Delivery Manager with no subject is refused, and nothing is restored")
+    void noSubjectIsRefused() {
+        String id = fixture();
+        UUID request = admit(id);
+        CurrentUser anonymous = CurrentUser.currentUser(List.of(Role.DELIVERY_MANAGER), "Dee Manager", null);
+
+        assertThatThrownBy(() -> deletions.restore(anonymous, request)).isInstanceOf(UnauthorizedError.class);
+        assertThat(requestCount(id)).isOne();
+        assertThat(restoredEvents(id)).isEmpty();
     }
 
     @Test
@@ -240,8 +262,23 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
         UUID request = admit(id);
         LocalDateTime until = requests.findById(request).orElseThrow().restorableUntil();
 
+        LocalDateTime inside = until.minusNanos(1_000_000);
         assertThat(requests.deleteRestorable(request, until)).isFalse();
-        assertThat(requests.deleteRestorable(request, until.minusNanos(1_000_000))).isTrue();
+
+        // Each of the rule's other conditions, alone, inside the window.
+        jdbc.update("UPDATE deedpoll_deletion_request SET status = 'InProgress' WHERE id = ?", request);
+        assertThat(requests.deleteRestorable(request, inside)).as("not Pending").isFalse();
+        jdbc.update("""
+            UPDATE deedpoll_deletion_request SET status = 'Pending', owner = ?, lease_until = ? WHERE id = ?
+            """, UUID.randomUUID(), Timestamp.valueOf(until), request);
+        assertThat(requests.deleteRestorable(request, inside)).as("claimed").isFalse();
+        jdbc.update("""
+            UPDATE deedpoll_deletion_request SET owner = NULL, lease_until = NULL, attempts = 1 WHERE id = ?
+            """, request);
+        assertThat(requests.deleteRestorable(request, inside)).as("attempted").isFalse();
+        jdbc.update("UPDATE deedpoll_deletion_request SET attempts = 0 WHERE id = ?", request);
+
+        assertThat(requests.deleteRestorable(request, inside)).isTrue();
         assertThat(requestCount(id)).isZero();
     }
 
@@ -267,7 +304,8 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
             """);
 
         assertThatThrownBy(() -> deletions.restore(DELIVERY_MANAGER, request))
-            .isNotInstanceOf(ConflictError.class);
+            .isNotInstanceOf(ConflictError.class)
+            .rootCause().hasMessageContaining("synthetic audit failure");
         assertThat(requestCount(id)).isOne();
         assertThat(stepCount(request)).isOne();
     }
@@ -340,8 +378,10 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
                 Object restored = restore.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 Optional<UUID> claimed = claim.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-                boolean restoreWon = restored instanceof Restoration;
-                boolean claimWon = claimed.filter(request::equals).isPresent();
+                assertThat(claimed).as("round %d: only this test's request is due", round)
+                    .satisfiesAnyOf(none -> assertThat(none).isEmpty(), mine -> assertThat(mine).contains(request));
+                boolean restoreWon = restored instanceof String;
+                boolean claimWon = claimed.isPresent();
                 assertThat(restoreWon ^ claimWon).as("round %d: %s / %s", round, restored, claimed).isTrue();
                 if (claimWon) {
                     assertThat(restored).isInstanceOfSatisfying(DeletionConflictError.class, error ->
@@ -390,7 +430,7 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
             Object restored = futures.get(0).get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             Object admitted = futures.get(1).get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-            assertThat(restored).isInstanceOf(Restoration.class);
+            assertThat(restored).isEqualTo(id);
             if (admitted instanceof Admission replay) {
                 assertThat(replay.admitted()).as("a replay of the request the restore then removed").isFalse();
                 assertThat(replay.request().id()).isEqualTo(request);

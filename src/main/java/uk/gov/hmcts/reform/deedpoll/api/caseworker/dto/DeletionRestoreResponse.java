@@ -1,7 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
-import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.Restoration;
 
 /**
  * A restored application deletion: the application is visible again, and the request no longer exists, so its status
@@ -16,7 +15,7 @@ public record DeletionRestoreResponse(String caseId,
 
     public static final String RESTORED = "Restored";
 
-    public static DeletionRestoreResponse from(Restoration restoration) {
-        return new DeletionRestoreResponse(restoration.caseId(), RESTORED);
+    public static DeletionRestoreResponse of(String caseId) {
+        return new DeletionRestoreResponse(caseId, RESTORED);
     }
 }

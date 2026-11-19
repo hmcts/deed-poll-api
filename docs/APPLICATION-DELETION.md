@@ -27,7 +27,7 @@ time comparison. Nothing here authorises deletion in any environment.
   (the fence), and the worker claims nothing until `restorableUntil`, which admission fixes as the confirmation time
   plus the Delivery Manager's process setting `deletionGraceDays` (1–90, default 14). Until then a Delivery Manager
   can restore the application whole (`POST /caseworker/application-deletions/{requestId}/restore`). After it the hard
-  delete runs as before, and there is no undo once cleanup has started.
+  delete runs as before, and there is no undo after `restorableUntil`, whether or not cleanup has started.
 - **Statuses.** `Pending` (admitted and fenced; nothing removed yet; restorable until `restorableUntil`), `InProgress` (the worker holds or has held it:
   files being removed, or a linked case being offered to Retain and Dispose, or finalisation due), `AwaitingDisposal`
   (CCD has the case in `PendingDisposal` with its TTL set; CCD's disposer, nightly at 22:00, has not yet removed it),
@@ -494,9 +494,9 @@ the status id are bound as text for that reason. Every success and every typed 4
 - The deletion DTOs' `requestId` is the request's resource id, so `NotificationSecurityTest`'s rule against publishing a
   `requestId` (the email send's key) names those two classes as its only exception.
 
-**Proof.** `CaseworkerApplicationDeletionControllerTest` (full context, Postgres): 401 on both routes; each of
-five non-DM roles 403 on both routes with valid, forged, keyless and malformed input, before lookup; 202 with
-`Location`, `no-store` and exactly two fields, round-tripping `lastChangedOn` from the case detail; the status field set,
+**Proof.** `CaseworkerApplicationDeletionControllerTest` (full context, Postgres): 401 on all three routes; each of
+five non-DM roles 403 on all three routes with valid, forged, keyless and malformed input, before lookup; 202 with
+`Location`, `no-store` and exactly three fields (`requestId`, `status`, `restorableUntil`), round-tripping `lastChangedOn` from the case detail; the status field set,
 with no note, subject or key; every 400; the 404s; the typed stale 409; replays, `KEY_REUSED`, `CONFLICTING_REASON`
 and a 202 replay after the case row is deleted; a second Delivery Manager reading the first's request; and the note in
 no log output; and the restore route's 403s before the id is read, 404s, 409s and fence lifting (below).
@@ -524,8 +524,10 @@ Decided by Steve on 2026-11-19 (addendum plan `20261119-deletion-grace-period-an
   (`DeletionRestoreRule`, repeated in `DeletionRequestRepository.deleteRestorable`'s SQL). Otherwise it is 409
   `CLEANUP_STARTED` (checked first: the worker has claimed or attempted it, or it has moved on from `Pending`) or
   `RESTORE_WINDOW_CLOSED`. An unknown, non-UUID or already restored id is 404. In one transaction
-  (`ApplicationDeletionService.restore`): lock the **case row, then the request** (admission's order, so the two
-  cannot deadlock), re-check the rule under both locks, `DELETE` the request (its steps cascade; V48's trigger guards
+  (`ApplicationDeletionService.restore`): check the rule on an unlocked read first, so a request already claimed or past
+  its window is refused before any lock (the worker's finalisation locks the request, then the case, so a restore must
+  not wait on the case for a request the worker could hold); then lock the **case row, then the request** (admission's
+  order, so the two cannot deadlock), re-check the rule under both locks, `DELETE` the request (its steps cascade; V48's trigger guards
   `UPDATE` only, pinned by a migration test), and record `CASE_DELETION_RESTORED` under the restoring Delivery Manager
   with `deletionReason` and `deletionRequestId` in `detail` and never the note. A failed audit insert restores
   nothing. The answer is 200 `{caseId, status: "Restored"}`, `no-store`.
@@ -548,8 +550,8 @@ an auth failure or an ambiguous answer is never read as absence. What an operato
 | Situation | Meaning | Operator action |
 |---|---|---|
 | `Pending` for longer than one worker interval after `restorable_until` (before it, `Pending` is the grace period) | The worker is off (`APPLICATION_DELETION_WORKER_ENABLED`, default false) or failing to claim | Check the switch and the worker's WARN lines; the case stays fenced meanwhile |
-| `InProgress` on a linked case for more than a day | The SDK's task is off (`CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_MODE`), its mark or confirm failed, or its circuit breaker tripped (it only logs) | Read the SDK task's log for the reference's run; fix the cause; the next run retries from the database's state |
-| `AwaitingDisposal` for more than two nights | DEEDPOLL not in the disposer's `DELETE_CASE_TYPES`, the disposer failed, or CCD still answers the case | Check the disposer's run and its type lists (onboarding step 3); never complete the request by hand |
+| `InProgress` on a linked case for more than a day after `restorable_until` | The SDK's task is off (`CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_MODE`), its mark or confirm failed, or its circuit breaker tripped (it only logs) | Read the SDK task's log for the reference's run; fix the cause; the next run retries from the database's state |
+| `AwaitingDisposal` for more than two nights after `restorable_until` | DEEDPOLL not in the disposer's `DELETE_CASE_TYPES`, the disposer failed, or CCD still answers the case | Check the disposer's run and its type lists (onboarding step 3); never complete the request by hand |
 | `NeedsAttention` `LOCAL_STORE_UNAVAILABLE`, `LOCAL_DOCUMENT_UNREMOVED` | The filesystem store is absent from this deployment or the file would not go after `max-attempts` tries | Restore the volume or remove the file, then requeue (below) |
 | `NeedsAttention` `LOCAL_DOCUMENT_INVALID_KEY` | A stored key escapes the store's root; nothing was touched | Investigate the row; this is a data fault, not something to requeue blindly |
 | `NeedsAttention` `CCD_CASE_MISSING`, `CDAM_WITHOUT_CCD_CASE`, `CCD_COPY_PRESENT` | The SDK's copy and the request's inventory disagree | Establish from data-store whether the CCD case exists; escalate before any action |
@@ -691,8 +693,8 @@ SELECT id, status, failure, requested_at, restorable_until, next_attempt_at, att
  WHERE status <> 'Completed'
    AND (status = 'NeedsAttention'
         OR (status = 'Pending' AND restorable_until < (now() AT TIME ZONE 'UTC') - interval '1 hour')
-        OR (status = 'InProgress' AND requested_at < (now() AT TIME ZONE 'UTC') - interval '1 day')
-        OR (status = 'AwaitingDisposal' AND requested_at < (now() AT TIME ZONE 'UTC') - interval '3 days'))
+        OR (status = 'InProgress' AND restorable_until < (now() AT TIME ZONE 'UTC') - interval '1 day')
+        OR (status = 'AwaitingDisposal' AND restorable_until < (now() AT TIME ZONE 'UTC') - interval '3 days'))
  ORDER BY requested_at;
 ```
 

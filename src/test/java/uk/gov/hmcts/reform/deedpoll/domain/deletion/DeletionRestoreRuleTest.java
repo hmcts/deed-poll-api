@@ -38,7 +38,8 @@ class DeletionRestoreRuleTest {
     @EnumSource(value = DeletionStatus.class, names = "Pending", mode = EnumSource.Mode.EXCLUDE)
     @DisplayName("any status but Pending is cleanup started, inside the window or after it")
     void otherStatusesHaveStarted(DeletionStatus status) {
-        DeletionRequest started = request(status, null, 1);
+        // Unclaimed and unattempted, so only the status can refuse it.
+        DeletionRequest started = request(status, null, 0);
 
         assertThat(DeletionRestoreRule.refusal(started, INSIDE)).contains(DeletionRefusal.CLEANUP_STARTED);
         assertThat(DeletionRestoreRule.refusal(started, UNTIL.plusDays(1))).contains(DeletionRefusal.CLEANUP_STARTED);

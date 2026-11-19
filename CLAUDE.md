@@ -231,7 +231,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   an entity with no case (saved queries, Gazette settings, process settings, the Masters list, bank holidays and batches record names only; process settings keep
   their values in V40's `deedpoll_process_settings_change`). `record` is
   `MANDATORY`: it joins the change's transaction, so a change whose audit insert fails rolls back, and it refuses a
-  user write with no subject — only an explicitly system write uses `AuditActor.system()`. Reads (`CASE_VIEWED`,
+  user write with no subject — only an explicitly system write uses `AuditActor.system()`. The one audit row not
+  written through `AuditTrail` is `docs/deletion/confirm-cdam-purge.sql`'s `DELETION_CDAM_PURGE_CONFIRMED`: an
+  operator's SQL, with no actor id and the operator's own name, field names only. Application code must not imitate it. Reads (`CASE_VIEWED`,
   `DOCUMENT_DOWNLOADED`, `DOCUMENT_PREVIEWED`; never lists or searches) go through `ReadAudit` in their own
   transaction: a case view fails open, a download or a preview fails closed. `AuditAction` is the vocabulary and has no DB check constraint; renaming one leaves
   seven years of rows under the old name. Every `POST`/`PUT`/`PATCH`/`DELETE` handler under `api.caseworker` and
@@ -295,8 +297,10 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   drop that condition, and never let a worker step touch anything outside the database before it. Until then a
   Delivery Manager may restore (`POST /caseworker/application-deletions/{requestId}/restore`): only `Pending`,
   unclaimed, never attempted and before `restorable_until` (`DeletionRestoreRule`, repeated in
-  `deleteRestorable`'s SQL), else 409 `CLEANUP_STARTED`/`RESTORE_WINDOW_CLOSED`. It locks the **case, then the
-  request** (admission's order; reversing it deadlocks), deletes the request, which lifts the fence, and records
+  `deleteRestorable`'s SQL), else 409 `CLEANUP_STARTED`/`RESTORE_WINDOW_CLOSED`. It refuses on an unlocked
+  read first, then locks the **case, then the request** (admission's order; reversing it deadlocks with admission,
+  and the early refusal keeps it from waiting on a case the worker's finalisation, which locks request then case, may
+  hold), deletes the request, which lifts the fence, and records
   `CASE_DELETION_RESTORED` without the note. See `docs/APPLICATION-DELETION.md`.
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks

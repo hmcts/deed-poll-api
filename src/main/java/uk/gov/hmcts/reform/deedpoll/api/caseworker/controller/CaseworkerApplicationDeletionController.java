@@ -36,7 +36,6 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.Admission;
-import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.Restoration;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionBodies;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRequest;
 
@@ -191,8 +190,8 @@ public class CaseworkerApplicationDeletionController {
         @Parameter(schema = @Schema(type = "string", format = "uuid")) @PathVariable("requestId") String requestId) {
 
         CurrentUser caller = deletionCaller();
-        Restoration restoration = deletions.restore(caller, requestId(requestId));
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(DeletionRestoreResponse.from(restoration));
+        String caseId = deletions.restore(caller, requestId(requestId));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(DeletionRestoreResponse.of(caseId));
     }
 
     /**

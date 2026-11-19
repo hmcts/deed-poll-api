@@ -171,27 +171,25 @@ public class ApplicationDeletionService {
     }
 
     /**
-     * What a restore answered.
-     *
-     * @param caseId the application that is visible again
-     */
-    public record Restoration(String caseId) {
-    }
-
-    /**
      * Restores an application during its deletion's grace period, by deleting its request: the fence is an
      * {@code EXISTS} over the request, so the case is visible and writable again at commit. Nothing outside this
      * database is touched before the grace period ends, so nothing remote needs undoing.
      *
      * <p><strong>The order is fixed.</strong> The capability, before the id is looked up; then the caller's subject;
-     * then the request, unlocked, only to learn its case; then the <strong>case row's lock, then the
-     * request's</strong>, which is admission's order, so a restore and an admission of the same case cannot deadlock;
-     * then the rule ({@link DeletionRestoreRule}) under both locks, which a worker that claimed the request meanwhile
-     * fails; then the delete, its SQL repeating the rule; then {@code CASE_DELETION_RESTORED} under the caller, with
-     * the request's id and reason and never its note, in the same transaction, so a failed audit restores nothing.
+     * then the request, unlocked, and the rule ({@link DeletionRestoreRule}) against that read, so a request already
+     * claimed or past its window is refused <strong>before any lock is taken</strong>; then the <strong>case row's
+     * lock, then the request's</strong>, which is admission's order, so a restore and an admission of the same case
+     * cannot deadlock; then the rule again under both locks, which a worker that claimed the request meanwhile fails;
+     * then the delete, its SQL repeating the rule; then {@code CASE_DELETION_RESTORED} under the caller, with the
+     * request's id and reason and never its note, in the same transaction, so a failed audit restores nothing.
      *
      * <p>The worker's claim skips a locked request, and claims only once {@code restorable_until} has passed, which
-     * the rule refuses, so whichever commits first wins and the other answers as if it had come second.
+     * the rule refuses, so whichever commits first wins and the other answers as if it had come second. The worker's
+     * finalisation takes the opposite order (the request under its claim, then the case), which is why the first
+     * refusal comes before the case lock: a restore that reaches the locks read a request nobody had claimed, inside
+     * its window, and a worker can reach finalisation only after claiming it once that window has closed.
+     *
+     * @return the id of the application that is visible again
      *
      * @throws uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError without {@link Capability#DELETE_APPLICATION},
      *     before the id is looked up
@@ -201,18 +199,15 @@ public class ApplicationDeletionService {
      *     {@link DeletionRefusal#RESTORE_WINDOW_CLOSED}, writing nothing
      */
     @Transactional
-    public Restoration restore(CurrentUser caller, UUID requestId) {
+    public String restore(CurrentUser caller, UUID requestId) {
         caller.require(Capability.DELETE_APPLICATION);
         caller.requireUserId();
         DeletionRequest seen = requests.findById(requestId).orElseThrow(ApplicationDeletionService::noSuchRequest);
+        refuseUnlessRestorable(seen);
         admission.lock(seen.caseId());
         DeletionRequest locked = requests.lockById(requestId)
             .orElseThrow(ApplicationDeletionService::noSuchRequest);
-        LocalDateTime now = AuditClock.now();
-        Optional<DeletionRefusal> refusal = DeletionRestoreRule.refusal(locked, now);
-        if (refusal.isPresent()) {
-            throw new DeletionConflictError(refusal.get());
-        }
+        LocalDateTime now = refuseUnlessRestorable(locked);
         if (!requests.deleteRestorable(requestId, now)) {
             // Unreachable while the request's lock is held and the rule has just admitted it; refused, not assumed.
             throw new IllegalStateException("A restorable deletion request was not deleted");
@@ -221,7 +216,16 @@ public class ApplicationDeletionService {
                                    locked.caseId(), locked.caseId())
                          .withRestoration(locked.reason(), locked.id()),
                      List.of());
-        return new Restoration(locked.caseId());
+        return locked.caseId();
+    }
+
+    private static LocalDateTime refuseUnlessRestorable(DeletionRequest request) {
+        LocalDateTime now = AuditClock.now();
+        Optional<DeletionRefusal> refusal = DeletionRestoreRule.refusal(request, now);
+        if (refusal.isPresent()) {
+            throw new DeletionConflictError(refusal.get());
+        }
+        return now;
     }
 
     private static NotFoundError noSuchRequest() {
