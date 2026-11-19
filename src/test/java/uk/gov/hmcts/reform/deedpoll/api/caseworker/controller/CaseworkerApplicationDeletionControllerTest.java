@@ -28,6 +28,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -168,8 +169,12 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
             .andReturn();
 
         JsonNode answer = json.readTree(result.getResponse().getContentAsString());
-        assertThat(answer.fieldNames()).toIterable().containsExactlyInAnyOrder("requestId", "status");
+        assertThat(answer.fieldNames()).toIterable().containsExactlyInAnyOrder("requestId", "status",
+                                                                                 "restorableUntil");
         String requestId = answer.get("requestId").asText();
+        LocalDateTime restorableUntil = LocalDateTime.parse(answer.get("restorableUntil").asText());
+        assertThat(restorableUntil).as("14 days by default, from now")
+            .isBetween(AuditClock.now().plusDays(14).minusMinutes(1), AuditClock.now().plusDays(14));
         assertThat(result.getResponse().getHeader(HttpHeaders.LOCATION))
             .isEqualTo("/caseworker/application-deletions/" + requestId);
         assertThat(result.getResponse().getHeader(HttpHeaders.CACHE_CONTROL)).contains("no-store");
@@ -182,7 +187,8 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
         MvcResult read = authorised(get(statusPath(requestId))).andExpect(status().isOk()).andReturn();
         JsonNode detail = json.readTree(read.getResponse().getContentAsString());
         assertThat(detail.fieldNames()).toIterable().containsExactlyInAnyOrder(
-            "requestId", "caseId", "reason", "status", "requestedAt", "completedAt", "failure");
+            "requestId", "caseId", "reason", "status", "requestedAt", "restorableUntil", "completedAt", "failure");
+        assertThat(LocalDateTime.parse(detail.get("restorableUntil").asText())).isEqualTo(restorableUntil);
         assertThat(detail.get("requestId").asText()).isEqualTo(requestId);
         assertThat(detail.get("caseId").asText()).isEqualTo(id);
         assertThat(detail.get("reason").asText()).isEqualTo("DUPLICATE");

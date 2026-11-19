@@ -111,11 +111,11 @@ and records counts from the XML in `build/test-results/{test,integration}`.
 
 ### Task 3: Freeze the grace period at admission and make the worker wait
 
-- [ ] V50: `restorable_until timestamp(3) NOT NULL` on `deedpoll_deletion_request`, added to V48's immutable-fields
+- [x] V50: `restorable_until timestamp(3) NOT NULL` on `deedpoll_deletion_request`, added to V48's immutable-fields
   trigger (V48 may be edited; see Overview). Admission sets it and `next_attempt_at`.
-- [ ] `claimNext` requires `restorable_until <= now`. Tests: nothing is claimed one millisecond before; a requeue
+- [x] `claimNext` requires `restorable_until <= now`. Tests: nothing is claimed one millisecond before; a requeue
   before the time claims nothing; a setting change after admission leaves the request's date alone.
-- [ ] Publish `restorableUntil` on the admission and status responses; OpenAPI and contract tests.
+- [x] Publish `restorableUntil` on the admission and status responses; OpenAPI and contract tests.
 
 ### Task 4: Restore
 

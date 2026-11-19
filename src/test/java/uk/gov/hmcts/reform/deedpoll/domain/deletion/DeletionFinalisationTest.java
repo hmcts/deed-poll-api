@@ -399,6 +399,7 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
         UUID key = UUID.randomUUID();
         DeletionRequest request = deletions.request(DELIVERY_MANAGER, id,
             new DeletionCommand(key, "CREATED_IN_ERROR", NOTE, reviewed(id))).request();
+        DeletionGracePeriods.elapse(jdbc, request.id());
         assertThat(process()).isPresent();
 
         Admission replay = deletions.request(DELIVERY_MANAGER, id,
@@ -427,9 +428,12 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
         return lastChanged.of(caseId).orElseThrow();
     }
 
+    /** Admitted, and its grace period already over: the worker may claim it now. */
     private DeletionRequest admit(String caseId, String reason) {
-        return deletions.request(DELIVERY_MANAGER, caseId,
-                                 new DeletionCommand(UUID.randomUUID(), reason, NOTE, reviewed(caseId))).request();
+        DeletionRequest request = deletions.request(DELIVERY_MANAGER, caseId,
+            new DeletionCommand(UUID.randomUUID(), reason, NOTE, reviewed(caseId))).request();
+        DeletionGracePeriods.elapse(jdbc, request.id());
+        return reread(request);
     }
 
     private DeletionRequest reread(DeletionRequest request) {

@@ -29,8 +29,8 @@ public class DeletionRequestRepository {
 
     private static final String COLUMNS = """
         id, case_id, idempotency_key, reason, note, fingerprint, expected_last_changed_on, requested_by_subject,
-        requested_by_name, requested_at, ccd_case_reference, status, failure, attempts, owner, lease_until,
-        next_attempt_at, completed_at
+        requested_by_name, requested_at, ccd_case_reference, restorable_until, status, failure, attempts, owner,
+        lease_until, next_attempt_at, completed_at
         """;
 
     private static final RowMapper<DeletionRequest> REQUEST = (row, index) -> new DeletionRequest(
@@ -45,6 +45,7 @@ public class DeletionRequestRepository {
         row.getString("requested_by_name"),
         local(row.getTimestamp("requested_at")),
         row.getString("ccd_case_reference"),
+        local(row.getTimestamp("restorable_until")),
         DeletionStatus.valueOf(row.getString("status")),
         row.getString("failure"),
         row.getInt("attempts"),
@@ -74,7 +75,7 @@ public class DeletionRequestRepository {
     public record NewDeletionRequest(UUID id, String caseId, UUID idempotencyKey, DeletionReason reason,
                                      DeletionNote note, String fingerprint, LocalDateTime expectedLastChangedOn,
                                      String requestedBySubject, String requestedByName, LocalDateTime requestedAt,
-                                     String ccdCaseReference) {
+                                     String ccdCaseReference, LocalDateTime restorableUntil) {
 
         @Override
         public String toString() {
@@ -83,7 +84,8 @@ public class DeletionRequestRepository {
     }
 
     /**
-     * The request, {@link DeletionStatus#Pending} and due at once, unless the case already has one.
+     * The request, {@link DeletionStatus#Pending} and due when its grace period ends, unless the case already has
+     * one.
      *
      * <p>{@code ON CONFLICT (case_id) DO NOTHING} rather than a raised violation, so a racing admission is told by a
      * count of zero and its transaction stays usable to read the winner.
@@ -94,13 +96,14 @@ public class DeletionRequestRepository {
         return jdbc.update("""
             insert into deedpoll_deletion_request (id, case_id, idempotency_key, reason, note, fingerprint,
                 expected_last_changed_on, requested_by_subject, requested_by_name, requested_at, ccd_case_reference,
-                status, next_attempt_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)
+                restorable_until, status, next_attempt_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)
             on conflict (case_id) do nothing
             """, request.id(), request.caseId(), request.idempotencyKey(), request.reason().name(),
             request.note().value(), request.fingerprint(), timestamp(request.expectedLastChangedOn()),
             request.requestedBySubject(), request.requestedByName(), timestamp(request.requestedAt()),
-            request.ccdCaseReference(), timestamp(request.requestedAt())) == 1;
+            request.ccdCaseReference(), timestamp(request.restorableUntil()),
+            timestamp(request.restorableUntil())) == 1;
     }
 
     public Optional<DeletionRequest> findById(UUID id) {

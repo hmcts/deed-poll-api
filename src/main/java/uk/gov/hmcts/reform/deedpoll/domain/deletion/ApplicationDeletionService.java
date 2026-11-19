@@ -12,6 +12,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditEntry;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettingsService;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 import uk.gov.hmcts.reform.deedpoll.repository.CaseLastChanged;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
@@ -24,6 +25,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.RemovedDocumentRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.RemovedDocumentRepository.RemovedDocument;
 
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -38,6 +40,11 @@ import java.util.UUID;
  * inventory, and {@code CASE_DELETION_REQUESTED} under the verified caller with the reason, note and request id. The
  * audit trail's insert joins that transaction, so a failed audit leaves no request and no fence. Nothing remote is
  * called and nothing is removed here; the case stays stored until the worker's verified cleanup finalises it.
+ *
+ * <p><strong>The grace period is frozen here.</strong> {@code restorable_until} is the admission time plus the
+ * Delivery Manager's {@link ProcessSettingsService#deletionGracePeriod()}, read once, now, and never again: a later
+ * change to the setting moves no admitted request's date. The request is first due then, and the worker's claim
+ * refuses it before then whatever else says it is due.
  *
  * <p><strong>The order is fixed.</strong> The capability, before any lookup or payload check, so a caller without it
  * learns nothing about the case or the body; then the caller's subject; then the body; then an existing request for
@@ -65,16 +72,18 @@ public class ApplicationDeletionService {
     private final AuditTrail audit;
     private final CaseLastChanged lastChanged;
     private final RemovedDocumentRepository removedDocuments;
+    private final ProcessSettingsService settings;
 
     public ApplicationDeletionService(DeletionRequestRepository requests, DeletionAdmissionRepository admission,
                                       DeedPollRepository deedPolls, AuditTrail audit, CaseLastChanged lastChanged,
-                                      RemovedDocumentRepository removedDocuments) {
+                                      RemovedDocumentRepository removedDocuments, ProcessSettingsService settings) {
         this.requests = requests;
         this.admission = admission;
         this.deedPolls = deedPolls;
         this.audit = audit;
         this.lastChanged = lastChanged;
         this.removedDocuments = removedDocuments;
+        this.settings = settings;
     }
 
     /**
@@ -131,10 +140,11 @@ public class ApplicationDeletionService {
         refuseIfIneligible(target, body);
 
         LocalDateTime now = AuditClock.now();
+        LocalDateTime restorableUntil = now.plus(settings.deletionGracePeriod()).truncatedTo(ChronoUnit.MILLIS);
         NewDeletionRequest row = new NewDeletionRequest(
             UUID.randomUUID(), caseId, body.key(), body.reason(), body.note(), body.fingerprint(),
             DeletionFingerprint.truncate(body.expectedLastChangedOn()), subject, caller.name(), now,
-            target.ccdCaseReference());
+            target.ccdCaseReference(), restorableUntil);
         if (!requests.insert(row)) {
             // Unreachable while the lock is held, since every admission takes it; answered rather than assumed.
             return replay(requests.findByCase(caseId).orElseThrow(), body);

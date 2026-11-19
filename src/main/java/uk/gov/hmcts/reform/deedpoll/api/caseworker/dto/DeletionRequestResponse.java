@@ -1,5 +1,6 @@
 package uk.gov.hmcts.reform.deedpoll.api.caseworker.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFailure;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionReason;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRequest;
@@ -17,16 +18,21 @@ import java.util.UUID;
  * no CCD case reference and no inventory or document locator. {@code ApplicationDeletionHttpTest} pins the field set.
  *
  * @param caseId the application's internal id; the case itself may already be gone
+ * @param restorableUntil the end of the grace period fixed at admission; see {@link
+ *     DeletionAdmissionResponse#RESTORABLE_UNTIL}
  * @param completedAt when the deletion finished, null until {@link DeletionStatus#Completed}
  * @param failure why cleanup needs attention, only when {@link DeletionStatus#NeedsAttention}, else null
  */
 public record DeletionRequestResponse(UUID requestId, String caseId, DeletionReason reason, DeletionStatus status,
-                                      LocalDateTime requestedAt, LocalDateTime completedAt,
+                                      LocalDateTime requestedAt,
+                                      @Schema(description = DeletionAdmissionResponse.RESTORABLE_UNTIL)
+                                      LocalDateTime restorableUntil, LocalDateTime completedAt,
                                       DeletionFailure failure) {
 
     public static DeletionRequestResponse from(DeletionRequest request) {
         return new DeletionRequestResponse(request.id(), request.caseId(), request.reason(), request.status(),
-                                           request.requestedAt(), request.completedAt(), failure(request));
+                                           request.requestedAt(), request.restorableUntil(), request.completedAt(),
+                                           failure(request));
     }
 
     /**

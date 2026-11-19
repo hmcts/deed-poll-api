@@ -43,6 +43,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.D
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionCleanup;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionCleanupProperties;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFinalisation;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionGracePeriods;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRequest;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionStatus;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionRequestRepository;
@@ -302,9 +303,12 @@ class RetainAndDisposeDeletionTest extends AbstractPostgresContainerTest {
             """, UUID.randomUUID().toString(), caseId, UUID.randomUUID());
     }
 
+    /** Admitted, and its grace period already over: the worker may claim it now. */
     private DeletionRequest admit(String caseId) {
-        return deletions.request(DELIVERY_MANAGER, caseId, new DeletionCommand(UUID.randomUUID(), "DUPLICATE",
-            "Second copy of a postal application logged twice", MODIFIED)).request();
+        DeletionRequest request = deletions.request(DELIVERY_MANAGER, caseId, new DeletionCommand(UUID.randomUUID(),
+            "DUPLICATE", "Second copy of a postal application logged twice", MODIFIED)).request();
+        DeletionGracePeriods.elapse(jdbc, request.id());
+        return requests.findById(request.id()).orElseThrow();
     }
 
     private long referenceOf(DeletionRequest request) {

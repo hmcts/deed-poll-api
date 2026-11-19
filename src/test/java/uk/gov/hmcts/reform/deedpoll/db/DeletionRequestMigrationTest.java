@@ -38,6 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class DeletionRequestMigrationTest extends AbstractPostgresContainerTest {
 
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 11, 18, 10, 15, 30, 123_000_000);
+    private static final LocalDateTime RESTORABLE_UNTIL = NOW.plusDays(14);
     private static final DeletionNote NOTE = DeletionNote.parse("Duplicate of an application made the same day");
 
     @Autowired
@@ -52,7 +53,7 @@ class DeletionRequestMigrationTest extends AbstractPostgresContainerTest {
     private static NewDeletionRequest request(String caseId, UUID key, String ccdReference) {
         return new NewDeletionRequest(UUID.randomUUID(), caseId, key, DeletionReason.DUPLICATE, NOTE,
                                       DeletionFingerprint.of(DeletionReason.DUPLICATE, NOTE, NOW), NOW,
-                                      "dm-subject", "Dee Manager", NOW, ccdReference);
+                                      "dm-subject", "Dee Manager", NOW, ccdReference, RESTORABLE_UNTIL);
     }
 
     private static String caseId() {
@@ -62,13 +63,15 @@ class DeletionRequestMigrationTest extends AbstractPostgresContainerTest {
     private int insertRaw(String caseId, String reason, String note, String status) {
         return jdbc.update("""
             insert into deedpoll_deletion_request (id, case_id, idempotency_key, reason, note, fingerprint,
-                expected_last_changed_on, requested_by_subject, requested_by_name, requested_at, status)
-            values (?, ?, ?, ?, ?, ?, ?, 'dm-subject', 'Dee Manager', ?, ?)
-            """, UUID.randomUUID(), caseId, UUID.randomUUID(), reason, note, "0".repeat(64), NOW, NOW, status);
+                expected_last_changed_on, requested_by_subject, requested_by_name, requested_at, restorable_until,
+                status)
+            values (?, ?, ?, ?, ?, ?, ?, 'dm-subject', 'Dee Manager', ?, ?, ?)
+            """, UUID.randomUUID(), caseId, UUID.randomUUID(), reason, note, "0".repeat(64), NOW, NOW,
+            RESTORABLE_UNTIL, status);
     }
 
     @Test
-    @DisplayName("a request round-trips Pending, due at once, unclaimed, with its fixed half as admitted")
+    @DisplayName("a request round-trips Pending, due when its grace period ends, unclaimed, with its fixed half")
     void roundTrips() {
         NewDeletionRequest admitted = request(caseId(), UUID.randomUUID(), "1234567890123456");
         assertThat(requests.insert(admitted)).isTrue();
@@ -87,7 +90,8 @@ class DeletionRequestMigrationTest extends AbstractPostgresContainerTest {
         assertThat(stored.attempts()).isZero();
         assertThat(stored.owner()).isNull();
         assertThat(stored.leaseUntil()).isNull();
-        assertThat(stored.nextAttemptAt()).isEqualTo(NOW);
+        assertThat(stored.restorableUntil()).isEqualTo(RESTORABLE_UNTIL);
+        assertThat(stored.nextAttemptAt()).isEqualTo(RESTORABLE_UNTIL);
         assertThat(stored.completedAt()).isNull();
         assertThat(stored.failure()).isNull();
         assertThat(stored.toString()).doesNotContain("same day");
@@ -168,6 +172,28 @@ class DeletionRequestMigrationTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("every request has a grace period's end, and it is after the request was made")
+    void restorableUntilConstraint() {
+        assertThatThrownBy(() -> jdbc.update("""
+            insert into deedpoll_deletion_request (id, case_id, idempotency_key, reason, note, fingerprint,
+                expected_last_changed_on, requested_by_subject, requested_by_name, requested_at, status)
+            values (?, ?, ?, 'DUPLICATE', ?, ?, ?, 'dm-subject', 'Dee Manager', ?, 'Pending')
+            """, UUID.randomUUID(), caseId(), UUID.randomUUID(), NOTE.value(), "0".repeat(64), NOW, NOW))
+            .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("restorable_until");
+        for (LocalDateTime refused : new LocalDateTime[] {NOW, NOW.minusDays(1)}) {
+            assertThatThrownBy(() -> jdbc.update("""
+                insert into deedpoll_deletion_request (id, case_id, idempotency_key, reason, note, fingerprint,
+                    expected_last_changed_on, requested_by_subject, requested_by_name, requested_at,
+                    restorable_until, status)
+                values (?, ?, ?, 'DUPLICATE', ?, ?, ?, 'dm-subject', 'Dee Manager', ?, ?, 'Pending')
+                """, UUID.randomUUID(), caseId(), UUID.randomUUID(), NOTE.value(), "0".repeat(64), NOW, NOW,
+                refused))
+                .as(refused.toString()).isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("deedpoll_deletion_request_restorable_until_check");
+        }
+    }
+
+    @Test
     @DisplayName("admission's half is immutable, the worker's half is not, and a Completed request is frozen")
     void immutability() {
         NewDeletionRequest admitted = request(caseId(), UUID.randomUUID(), "1234567890123456");
@@ -177,7 +203,9 @@ class DeletionRequestMigrationTest extends AbstractPostgresContainerTest {
         for (String change : new String[] {"case_id = 'other'", "idempotency_key = gen_random_uuid()",
             "reason = 'CREATED_IN_ERROR'", "note = 'A different reason entirely'", "fingerprint = repeat('1', 64)",
             "expected_last_changed_on = now()", "requested_by_subject = 'someone-else'",
-            "requested_by_name = 'Someone Else'", "requested_at = now()", "ccd_case_reference = null"}) {
+            "requested_by_name = 'Someone Else'", "requested_at = now()", "ccd_case_reference = null",
+            "restorable_until = restorable_until + interval '1 day'",
+            "restorable_until = restorable_until - interval '1 millisecond'"}) {
             assertThatThrownBy(() -> jdbc.update("update deedpoll_deletion_request set " + change + " where id = ?",
                                                  id))
                 .as(change).isInstanceOf(DataAccessException.class)

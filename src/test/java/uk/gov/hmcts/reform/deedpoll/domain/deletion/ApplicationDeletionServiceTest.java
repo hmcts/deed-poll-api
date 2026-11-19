@@ -23,6 +23,7 @@ import uk.gov.hmcts.reform.deedpoll.repository.CaseLastChanged;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionRequestRepository;
 
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -210,6 +211,33 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
         });
         assertThat(caseRow(id)).isNotNull();
         assertThat(deletions.read(DELIVERY_MANAGER, request.id())).isEqualTo(request);
+    }
+
+    @Test
+    @DisplayName("admission freezes the grace period onto the request, and a later change to the setting moves only "
+        + "new requests")
+    void gracePeriodIsFrozenAtAdmission() {
+        DeletionRequest first = admit(fixture(), UUID.randomUUID()).request();
+        assertThat(Duration.between(first.requestedAt(), first.restorableUntil()))
+            .as("the seeded 14 days, to the millisecond").isBetween(Duration.ofDays(14).minusMillis(1),
+                                                                     Duration.ofDays(14));
+        assertThat(first.nextAttemptAt()).as("first due when the period ends").isEqualTo(first.restorableUntil());
+
+        try {
+            jdbc.update("UPDATE deedpoll_process_settings SET deletion_grace_days = 3");
+            assertThat(requests.findById(first.id()).orElseThrow().restorableUntil())
+                .as("the date the Delivery Manager was shown never moves").isEqualTo(first.restorableUntil());
+
+            DeletionRequest second = admit(fixture(), UUID.randomUUID()).request();
+            assertThat(Duration.between(second.requestedAt(), second.restorableUntil()))
+                .isBetween(Duration.ofDays(3).minusMillis(1), Duration.ofDays(3));
+            assertThatThrownBy(() -> jdbc.update(
+                "UPDATE deedpoll_deletion_request SET restorable_until = restorable_until + interval '11 days' "
+                    + "WHERE id = ?", second.id()))
+                .as("nor can a statement move it").hasMessageContaining("A deletion request cannot be rewritten");
+        } finally {
+            jdbc.update("UPDATE deedpoll_process_settings SET deletion_grace_days = 14");
+        }
     }
 
     @Test

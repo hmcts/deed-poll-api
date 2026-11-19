@@ -10,7 +10,8 @@
 -- CDAM_REMOVED_DOCUMENT_UNPURGED is resumed only by docs/deletion/confirm-cdam-purge.sql.
 -- One statement, so the request and its document tries change together or not at all. It touches no admission field
 -- (V48's trigger would refuse it) and cannot reopen a Completed request. next_attempt_at = requested_at is in the past
--- on the worker's own (UTC) clock, so the next run claims it.
+-- on the worker's own (UTC) clock, so the next run claims it, but never before the request's restorable_until: the
+-- worker's claim checks that too, so a requeue cannot end the grace period early.
 WITH requeued AS (
     UPDATE deedpoll_deletion_request
        SET status = 'InProgress', failure = NULL, next_attempt_at = requested_at

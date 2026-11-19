@@ -752,7 +752,11 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(admission.at("/responses/202/headers/Location").isMissingNode()).isFalse();
         JsonNode accepted = resolve(spec, admission.at("/responses/202/content/*~1*/schema"));
         assertThat(accepted.get("properties").fieldNames()).toIterable()
-            .containsExactlyInAnyOrder("requestId", "status");
+            .containsExactlyInAnyOrder("requestId", "status", "restorableUntil");
+        assertThat(accepted.at("/properties/restorableUntil/format").asText()).isEqualTo("date-time");
+        assertThat(accepted.at("/properties/restorableUntil/description").asText()).contains("grace period")
+            .contains("restore");
+        assertThat(admission.get("description").asText()).contains("restorableUntil");
         JsonNode conflict = resolve(spec, admission.at("/responses/409/content/*~1*/schema"));
         assertThat(conflict.get("properties").fieldNames()).toIterable().containsExactlyInAnyOrder("error", "code");
         List<String> codes = new ArrayList<>();
@@ -776,7 +780,9 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(read.at("/responses").fieldNames()).toIterable().containsExactlyInAnyOrder("200", "403", "404");
         JsonNode detail = resolve(spec, read.at("/responses/200/content/*~1*/schema"));
         assertThat(detail.get("properties").fieldNames()).toIterable().containsExactlyInAnyOrder(
-            "requestId", "caseId", "reason", "status", "requestedAt", "completedAt", "failure");
+            "requestId", "caseId", "reason", "status", "requestedAt", "restorableUntil", "completedAt", "failure");
+        assertThat(detail.at("/properties/restorableUntil/description").asText()).contains("grace period");
+        assertThat(read.get("description").asText()).contains("restorableUntil").contains("restored");
         List<String> statuses = new ArrayList<>();
         resolve(spec, detail.at("/properties/status")).get("enum").forEach(state -> statuses.add(state.asText()));
         assertThat(statuses).containsExactly("Pending", "InProgress", "AwaitingDisposal", "NeedsAttention",

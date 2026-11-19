@@ -175,7 +175,15 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
         return reference;
     }
 
+    /** Admitted, and its grace period already over: the worker may claim it now. */
     private DeletionRequest admit(String caseId) {
+        DeletionRequest request = admitted(caseId);
+        DeletionGracePeriods.elapse(jdbc, request.id());
+        return reread(request);
+    }
+
+    /** Admitted, and inside its grace period. */
+    private DeletionRequest admitted(String caseId) {
         return deletions.request(DELIVERY_MANAGER, caseId, new DeletionCommand(UUID.randomUUID(), "CREATED_IN_ERROR",
             "Opened against the wrong application by mistake", MODIFIED)).request();
     }
@@ -483,6 +491,41 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
         assertThatThrownBy(() -> new TransactionTemplate(transactions).executeWithoutResult(status -> one.run()))
             .isInstanceOf(IllegalStateException.class);
         assertThat(context.getBeanNamesForType(DeletionCleanupTimer.class)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("nothing is claimed before the grace period ends, not even one millisecond before")
+    void nothingIsClaimedInsideTheGracePeriod() throws IOException {
+        String id = fixture();
+        String key = localDocument(id, UUID.randomUUID().toString(), true);
+        DeletionRequest request = admitted(id);
+        LocalDateTime until = request.restorableUntil();
+
+        assertThat(claimAndProcess(cleanup)).as("admitted now, due in 14 days").isEmpty();
+        LocalDateTime early = until.minusNanos(1_000_000);
+        assertThat(work.claimNext(UUID.randomUUID(), early, early.plusMinutes(5))).isEmpty();
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.Pending);
+        assertThat(reread(request).attempts()).isZero();
+        assertThat(documents.resolve(key)).exists();
+
+        assertThat(work.claimNext(UUID.randomUUID(), until, until.plusMinutes(5))).contains(request.id());
+    }
+
+    @Test
+    @DisplayName("a requeue inside the grace period makes the request due, but the worker still claims nothing")
+    void requeueCannotShortenTheGracePeriod() throws IOException {
+        String id = fixture();
+        DeletionRequest request = admitted(id);
+        // A state the worker cannot reach in the period, set by hand: the requeue's own guard is the status.
+        jdbc.update("UPDATE deedpoll_deletion_request SET status = 'NeedsAttention', failure = "
+                        + "'LOCAL_STORE_UNAVAILABLE' WHERE id = ?", request.id());
+
+        assertThat(requeue(request)).containsEntry("requests_requeued", 1L);
+        assertThat(reread(request).nextAttemptAt()).isBefore(AuditClock.now());
+
+        assertThat(claimAndProcess(cleanup)).isEmpty();
+        assertThat(reread(request).attempts()).isZero();
+        assertThat(reread(request).restorableUntil()).isEqualTo(request.restorableUntil());
     }
 
     /**

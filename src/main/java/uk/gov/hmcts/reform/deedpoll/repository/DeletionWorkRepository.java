@@ -63,6 +63,11 @@ public class DeletionWorkRepository {
      * Claims the soonest due request with work left that nobody holds, or whose holder's lease has lapsed, moving a
      * {@code Pending} one to {@code InProgress}. {@code SKIP LOCKED}, so two pods never wait on, or take, one row.
      *
+     * <p><strong>Never inside a grace period.</strong> A request is claimable only once {@code restorable_until} has
+     * passed, whatever its {@code next_attempt_at} says: admission sets the two equal, but an operator's requeue
+     * ({@code docs/deletion/requeue.sql}) moves {@code next_attempt_at} to the past, and must not end the period
+     * during which a Delivery Manager may still restore the application.
+     *
      * @return the claimed request's id, if any was due
      */
     public Optional<UUID> claimNext(UUID owner, LocalDateTime now, LocalDateTime leaseUntil) {
@@ -71,6 +76,7 @@ public class DeletionWorkRepository {
                 select id from deedpoll_deletion_request
                  where status in %s
                    and next_attempt_at <= ?
+                   and restorable_until <= ?
                    and (owner is null or lease_until < ?)
                  order by next_attempt_at, id
                  limit 1
@@ -82,7 +88,7 @@ public class DeletionWorkRepository {
              where r.id = due.id
             returning r.id
             """.formatted(WORKING), (row, index) -> row.getObject("id", UUID.class),
-            timestamp(now), timestamp(now), owner, timestamp(leaseUntil)).stream().findFirst();
+            timestamp(now), timestamp(now), timestamp(now), owner, timestamp(leaseUntil)).stream().findFirst();
     }
 
     /**

@@ -37,6 +37,33 @@ ALTER TABLE deedpoll_process_settings
     ADD COLUMN deletion_grace_days integer NOT NULL DEFAULT 14
         CONSTRAINT deedpoll_process_settings_deletion_grace_days_check CHECK (deletion_grace_days BETWEEN 1 AND 90);
 
+-- The end of a request's grace period (addendum 20261119): requested_at plus the grace period read at admission,
+-- frozen there so the date a Delivery Manager was shown never moves. Until then the request is a soft delete that a
+-- Delivery Manager may restore, and the worker claims nothing (its claim checks this column as well as
+-- next_attempt_at, so an operator's requeue cannot shorten the period). No request has been admitted in any
+-- environment before this version, so the column needs no backfill.
+ALTER TABLE deedpoll_deletion_request
+    ADD COLUMN restorable_until timestamp(3) NOT NULL
+        CONSTRAINT deedpoll_deletion_request_restorable_until_check CHECK (restorable_until > requested_at);
+
+-- V48's immutable fields, with restorable_until among them.
+CREATE OR REPLACE FUNCTION deedpoll_preserve_deletion_request() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF (NEW.id, NEW.case_id, NEW.idempotency_key, NEW.reason, NEW.note, NEW.fingerprint, NEW.expected_last_changed_on,
+        NEW.requested_by_subject, NEW.requested_by_name, NEW.requested_at, NEW.ccd_case_reference,
+        NEW.restorable_until) IS DISTINCT FROM
+       (OLD.id, OLD.case_id, OLD.idempotency_key, OLD.reason, OLD.note, OLD.fingerprint, OLD.expected_last_changed_on,
+        OLD.requested_by_subject, OLD.requested_by_name, OLD.requested_at, OLD.ccd_case_reference,
+        OLD.restorable_until)
+       OR (OLD.status = 'Completed' AND NEW IS DISTINCT FROM OLD) THEN
+        RAISE EXCEPTION 'A deletion request cannot be rewritten';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
 -- Rolling back the application below this version: older code never writes the tombstones and ignores them, so the
 -- table may stay. Documents removed while older code runs leave no tombstone. Older code never reads
--- deletion_grace_days, and its default keeps older writes of the singleton valid.
+-- deletion_grace_days, and its default keeps older writes of the singleton valid. Older code does not write
+-- restorable_until, so its admissions would fail, and it ignores the column, so its worker would claim a request still
+-- inside its grace period: restore first any request that should survive, then drop the column before rolling back.

@@ -98,7 +98,9 @@ public class CaseworkerApplicationDeletionController {
         description = "Requires caseworker-deedpoll-delivery-manager (DELETE_APPLICATION), checked before the case, "
             + "the header or the body is read. Permanently deletes an application created in error or duplicated; "
             + "this is not a void, archive or withdrawal. 202 means the request is admitted and the application is "
-            + "fenced, not that it is deleted: read the Location until its status is Completed. A linked case waits "
+            + "fenced, not that it is deleted: read the Location until its status is Completed. Nothing is removed "
+            + "before restorableUntil, the end of the grace period set by the Delivery Manager's process setting "
+            + "when the request is admitted. A linked case waits "
             + "for CCD Retain and Dispose (AwaitingDisposal). Send one UUID Idempotency-Key per confirmation journey "
             + "and reuse it, with the same body, on every retry: the same key and body answers the same request with "
             + "202, even after the application is gone; the same key with a different body is 409 KEY_REUSED. A "
@@ -147,7 +149,9 @@ public class CaseworkerApplicationDeletionController {
     @Operation(operationId = "getApplicationDeletion", summary = "Read a deletion request's status",
         description = "Requires caseworker-deedpoll-delivery-manager (DELETE_APPLICATION), checked before the id is "
             + "read; any Delivery Manager may read any request. Answers whether or not the application still exists. "
-            + "Only Completed means the application is deleted; Pending, InProgress, AwaitingDisposal and "
+            + "Only Completed means the application is deleted. While the request is Pending and restorableUntil "
+            + "has not passed, nothing has been removed and the application can be restored. Pending, InProgress, "
+            + "AwaitingDisposal and "
             + "NeedsAttention are a request still being carried out or one that needs somebody, with failure set "
             + "only for NeedsAttention. Reading never starts or retries work. An id that is not a UUID is a 404.")
     @ApiResponse(responseCode = "200",

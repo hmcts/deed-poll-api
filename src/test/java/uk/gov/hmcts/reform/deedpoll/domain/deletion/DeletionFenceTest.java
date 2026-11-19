@@ -171,9 +171,10 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
     private void fenceDirectly(String caseId) {
         jdbc.update("""
             INSERT INTO deedpoll_deletion_request (id, case_id, idempotency_key, reason, note, fingerprint,
-                expected_last_changed_on, requested_by_subject, requested_by_name, requested_at, status)
+                expected_last_changed_on, requested_by_subject, requested_by_name, requested_at, restorable_until,
+                status)
             VALUES (gen_random_uuid(), ?, gen_random_uuid(), 'DUPLICATE', 'Fixture fence for a race', repeat('a', 64),
-                    now(), ?, 'Dee Manager', now(), 'Pending')
+                    now(), ?, 'Dee Manager', now(), now() + interval '14 days', 'Pending')
             """, caseId, SUBJECT);
     }
 
