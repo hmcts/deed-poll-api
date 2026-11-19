@@ -67,7 +67,7 @@ class UploadContentPolicyTest {
         byte[] ole = {(byte) 0xd0, (byte) 0xcf, 0x11, (byte) 0xe0, (byte) 0xa1, (byte) 0xb1, 0x1a, (byte) 0xe1};
         assertThatThrownBy(() -> verify(ole, "application/msword")).isInstanceOf(InvalidInputError.class);
         assertThatThrownBy(() -> verify(ole, DocumentFixtures.DOCX)).isInstanceOf(InvalidInputError.class)
-            .hasMessage("Upload an unencrypted Word document saved in .docx format");
+            .hasMessage(UploadContentPolicy.WORD_FORMAT);
     }
 
     @ParameterizedTest

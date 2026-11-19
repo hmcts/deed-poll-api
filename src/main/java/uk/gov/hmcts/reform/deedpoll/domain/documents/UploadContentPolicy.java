@@ -13,11 +13,15 @@ import java.util.Set;
 
 /** Interim content checks shared by upload and staging; not antivirus or a complete PDF parser. */
 public final class UploadContentPolicy {
-    public static final String MISMATCH = "The file's contents don't match a PDF, image or Word document";
-    public static final String ENCRYPTED = "Upload a file that is not encrypted or password-protected";
-    public static final String WORD_FORMAT = "Upload an unencrypted Word document saved in .docx format";
-    public static final String ACTIVE_PDF = "Upload a PDF without scripts, embedded files or active content";
-    public static final String UNSAFE_WORD = "Upload a DOCX without macros, embedded objects or external templates";
+    public static final String MISMATCH =
+        "The selected file's contents do not match its type. Upload a PDF, JPG, PNG, TIFF or DOCX file";
+    public static final String ENCRYPTED = "The selected file is password-protected, so it cannot be uploaded";
+    public static final String WORD_FORMAT = "The selected Word document is password-protected or in the old .doc "
+        + "format. Remove the password or save it as .docx, then upload it again";
+    public static final String ACTIVE_PDF =
+        "The selected PDF contains scripts or attached files, so it cannot be uploaded";
+    public static final String UNSAFE_WORD = "The selected Word document contains macros, embedded objects or links to "
+        + "templates, so it cannot be uploaded";
     private static final Logger LOG = LoggerFactory.getLogger(UploadContentPolicy.class);
     private static final Set<String> ACTIVE_NAMES = Set.of("JavaScript", "JS", "Launch", "EmbeddedFile",
         "RichMedia", "XFA");
