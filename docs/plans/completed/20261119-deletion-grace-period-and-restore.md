@@ -2,7 +2,7 @@
 
 ## Overview
 
-Status: planned, 2026-11-19, by Aspen with Steve. An addendum to
+Status: complete locally, 2026-11-19 (planned by Aspen with Steve). An addendum to
 `docs/plans/completed/20261118-dm-application-deletion.md`, on the same unmerged branch `feat/dm-application-deletion`
 (PR #175).
 
@@ -129,10 +129,17 @@ and records counts from the XML in `build/test-results/{test,integration}`.
 
 ### Task 5: Document and hand off
 
-- [ ] `docs/APPLICATION-DELETION.md`, `CLAUDE.md`, README: the grace period, the setting, restore, the time-based
+- [x] `docs/APPLICATION-DELETION.md`, `CLAUDE.md`, README: the grace period, the setting, restore, the time-based
   stale check and its window. Note for the admin plan: process settings screen field, `restorableUntil` on the
   status page, a Restore button for Delivery Managers while restorable.
-- [ ] Full forced validation with counts from the XML; record them here. Move this plan to `completed/`.
+- [x] Full forced validation with counts from the XML; record them here. Move this plan to `completed/`.
+
+### Execution notes
+
+Final gate (2026-11-19, on 5ca4b53 plus Task 5's docs): `./gradlew build test --rerun integration --rerun` with the
+no-checkstyle init script, BUILD SUCCESSFUL. From `build/test-results`: `test` 5,670 tests across 606 suites, 0
+failures, 0 errors, 1 skipped; `integration` 31 tests across 5 suites, 0 failures. `checkstyle.sh` OK and
+`git diff --check` clean. Local proof only: nothing has been deployed or rehearsed.
 
 ## Success criteria
 

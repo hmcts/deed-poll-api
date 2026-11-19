@@ -40,9 +40,9 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 35 operations 
                                   VIEW_MANAGEMENT_INFORMATION; counted apart as MI_PATHS)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
                                   plus GET …/documents/{documentId}/preview (counted apart as PREVIEW_PATHS)
-                                  plus POST /caseworker/cases/{id}/deletion-requests and GET
-                                  /caseworker/application-deletions/{requestId} (DELETE_APPLICATION, Delivery
-                                  Manager only; counted apart as DELETION_PATHS)
+                                  plus POST /caseworker/cases/{id}/deletion-requests, GET
+                                  /caseworker/application-deletions/{requestId} and POST …/{requestId}/restore
+                                  (DELETE_APPLICATION, Delivery Manager only; counted apart as DELETION_PATHS)
 api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case,
                                   plus its own document preview (counted apart with the caseworker one)
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web, behind the S2S-only citizenFilterChain
@@ -58,8 +58,8 @@ domain/masters                    the Masters list (V42) a Delivery Manager keep
                                   judge's first judicial request (config/MasterLinking), and the Masters' sent and
                                   reminder emails with their ledger (V44) — NOT a port
 domain/deletion                   the Delivery Manager's permanent application deletion: admission, the fence
-                                  (DeletionFence), the cleanup worker (DeletionCleanup, off by default) and
-                                  DeletionFinalisation — NOT a port
+                                  (DeletionFence), restore in the grace period (DeletionRestoreRule), the cleanup
+                                  worker (DeletionCleanup, off by default) and DeletionFinalisation — NOT a port
 domain/mi                         the management information figures (K1 to K4) from the case's dates, read
                                   by repository/ManagementInformationRepository's constant SQL — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
@@ -93,7 +93,8 @@ MANAGE_SHARED_QUERIES, REPAIR_CCD and ALLOCATE_REFERRALS (the referral queue, se
 plan F1) and VIEW_MANAGEMENT_INFORMATION (the aggregate MI figures; plan 20261103-mi-dashboard).
 `caseworker-deedpoll-delivery-manager` inherits all seven and alone grants ACCESS_GAZETTE, MANAGE_PROCESS_CONFIG (the process settings, the bank holidays and the
 Masters list's writes; any staff role reads the Masters list and the bank holidays) and DELETE_APPLICATION (permanent
-application deletion, `docs/APPLICATION-DELETION.md`; there is no other way to delete a case). The deprecated
+application deletion, `docs/APPLICATION-DELETION.md`; there is no other way to delete a case; it also restores an
+application during its deletion's grace period). The deprecated
 `caseworker-deedpoll-admin` temporarily grants only the Team leader's first six: never VIEW_MANAGEMENT_INFORMATION. Resolve capabilities from verified roles; the retained privacy boolean is derived.
 Every Gazette operation and the named `readyForPublication` worklist/count (including saved-query
 links) requires ACCESS_GAZETTE, with 403 before reads or side effects. Ordinary field conditions
@@ -287,8 +288,16 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   transaction, so its best-effort unlink or CDAM soft delete is still inventoried; a new path that deletes a document
   row must write one too. A removed CDAM document holds its request at `CDAM_REMOVED_DOCUMENT_UNPURGED` until the
   dm-store team purges it and an operator runs `docs/deletion/confirm-cdam-purge.sql`, which writes (and audits
-  `DELETION_CDAM_PURGE_CONFIRMED`) only when the ids it is given are exactly the request's pending ones. See
-  `docs/APPLICATION-DELETION.md`.
+  `DELETION_CDAM_PURGE_CONFIRMED`) only when the ids it is given are exactly the request's pending ones.
+  **Nothing permanent happens before `restorable_until`**, which admission freezes as the request time plus the
+  `deletionGraceDays` process setting (1–90, default 14; V48's trigger refuses a change to it). `claimNext` repeats
+  `restorable_until <= now` in its SQL, so a requeue or an edited `next_attempt_at` cannot start cleanup early; never
+  drop that condition, and never let a worker step touch anything outside the database before it. Until then a
+  Delivery Manager may restore (`POST /caseworker/application-deletions/{requestId}/restore`): only `Pending`,
+  unclaimed, never attempted and before `restorable_until` (`DeletionRestoreRule`, repeated in
+  `deleteRestorable`'s SQL), else 409 `CLEANUP_STARTED`/`RESTORE_WINDOW_CLOSED`. It locks the **case, then the
+  request** (admission's order; reversing it deadlocks), deletes the request, which lifts the fence, and records
+  `CASE_DELETION_RESTORED` without the note. See `docs/APPLICATION-DELETION.md`.
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks
   wrong, stop and report it — do not "fix" it.
@@ -576,7 +585,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   the processing window (`referralClaimExpiryMinutes` on the wire, a name kept for admin: how long a Master has to
   give a direction, 1–30 days, seeded 7), the reminder interval (1–168 hours, 48), the window cap (`windowCap`, V46's rename
   of `masterWindowCap` with no alias: the most referrals sent in one window across every Master, 1–100, 10) and the morning and afternoon windows (`HH:mm` on the quarter hour, `Europe/London`, 07:00–10:30 and
-  14:00–14:30, each start before its end and the morning end before the afternoon start). `ProcessSettingsService`
+  14:00–14:30, each start before its end and the morning end before the afternoon start), and V50's
+  `deletionGraceDays` (1–90, default 14, optional on the PUT; read through `deletionGracePeriod()` at each deletion
+  admission and frozen onto the request, so a change affects only new requests). `ProcessSettingsService`
   reads them through `processingWindow()`, `reminderInterval()`, `windowCap()` and `referralWindows()` with no
   capability check and no cache; `ReferralService` asks `processingWindow()` once per `unassignOverdue`, so a
   Delivery Manager's `PUT` applies at once. Never cache them or reintroduce a property default, and a missing row

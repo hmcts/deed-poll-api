@@ -39,7 +39,7 @@ reads any staff role may call and whose writes need `MANAGE_PROCESS_CONFIG` (see
 two referral-queue operations that need `ALLOCATE_REFERRALS` (see [The referral queue](#the-referral-queue)),
 four management-information reads that need `VIEW_MANAGEMENT_INFORMATION` (see
 [Management information](#management-information)),
-two Delivery Manager-only application-deletion operations that need `DELETE_APPLICATION` (see
+three Delivery Manager-only application-deletion operations that need `DELETE_APPLICATION` (see
 [Deleting an application](#deleting-an-application)),
 and two document previews, one per surface (see [Document previews](#document-previews)), counted apart.
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
@@ -551,13 +551,21 @@ An unknown id is a 404, and an attempt that is not `NeedsRepair` a 409.
 
 ### Deleting an application
 
-Two Delivery Manager-only (`DELETE_APPLICATION`) operations, counted apart from the caseworker surface as
+Three Delivery Manager-only (`DELETE_APPLICATION`) operations, counted apart from the caseworker surface as
 `DELETION_PATHS`: `POST /caseworker/cases/{id}/deletion-requests` (required UUID `Idempotency-Key`; closed body
-`reason`, `note`, `expectedLastChangedOn`, the case detail's `lastChangedOn` as published, so any change since is 409 `STALE_CONFIRMATION`; 202 with a `Location`) and `GET /caseworker/application-deletions/{requestId}`.
+`reason`, `note`, `expectedLastChangedOn`, the case detail's `lastChangedOn` as published, so any change since is 409 `STALE_CONFIRMATION`; 202 with a `Location` and `restorableUntil`),
+`GET /caseworker/application-deletions/{requestId}` (with `restorableUntil`) and
+`POST /caseworker/application-deletions/{requestId}/restore` (no body; 200 `{caseId, status: "Restored"}`).
+A confirmed deletion hides the application at once and changes nothing permanent until `restorableUntil`, the
+confirmation time plus the Delivery Manager's `deletionGraceDays` process setting (default 14 days), frozen at
+admission. Until then a Delivery Manager can restore it whole: only while it is `Pending` and cleanup has not
+started, else 409 `CLEANUP_STARTED` or `RESTORE_WINDOW_CLOSED`. The stale check compares times (the later of
+`modifiedOn` and the newest audited write), so a child write committing in the few milliseconds of admission can
+slip past it; restore is the remedy.
 202 is not deletion: only the status `Completed` is. The reason is `CREATED_IN_ERROR` or `DUPLICATE`, and the
 mandatory `note` (10–500 characters) says why without the applicant's details: it is kept with the audit event for
-seven years after the case is gone. The outcome is permanent: there is no void, undo or unfencing, the application's
-reference is never reused, and email Notify already accepted is not recalled. The worker and the SDK's Retain and
+seven years after the case is gone. After the grace period the outcome is permanent: there is no void, undo or
+unfencing, the application's reference is never reused, and email Notify already accepted is not recalled. The worker and the SDK's Retain and
 Dispose task both ship off: with the worker off a request stays `Pending`, and with the worker on but Retain and
 Dispose off a linked request stays `InProgress`; either way it is fenced and recoverable. The worker's settings
 (`APPLICATION_DELETION_WORKER_*`) are tabled in `docs/APPLICATION-DELETION.md`. Statuses, refusals and the recovery procedure are in `docs/APPLICATION-DELETION.md`.
@@ -1160,7 +1168,7 @@ and renamed it `windowCap`. The [referral queue](#the-referral-queue) and its se
 | Method | Path | Access and response |
 |---|---|---|
 | GET | `/caseworker/process-settings` (`getProcessSettings`) | `MANAGE_PROCESS_CONFIG` (Delivery Manager only): every value below, `revision` and the last change's attribution |
-| PUT | `/caseworker/process-settings` (`updateProcessSettings`) | The same capability; requires `referralClaimExpiryMinutes` and `revision`, and takes the six V42 keys optionally |
+| PUT | `/caseworker/process-settings` (`updateProcessSettings`) | The same capability; requires `referralClaimExpiryMinutes` and `revision`, and takes the six V42 keys and `deletionGraceDays` optionally |
 | GET | `/caseworker/process-settings/bank-holidays` (`listBankHolidays`) | Any staff role: `date` and `name`, ordered by date |
 | POST | `/caseworker/process-settings/bank-holidays` (`addBankHoliday`) | `MANAGE_PROCESS_CONFIG`; `{date, name}`, 409 on a listed date |
 | DELETE | `/caseworker/process-settings/bank-holidays/{date}` (`removeBankHoliday`) | `MANAGE_PROCESS_CONFIG`; 204, or 404 on an unlisted date |
@@ -1175,8 +1183,11 @@ and renamed it `windowCap`. The [referral queue](#the-referral-queue) and its se
 | Cap per window, across every Master | `windowCap` | 1–100 | 10 |
 | Morning window | `morningWindowStart`, `morningWindowEnd` | `HH:mm` on the quarter hour, `Europe/London` | 07:00–10:30 |
 | Afternoon window | `afternoonWindowStart`, `afternoonWindowEnd` | the same | 14:00–14:30 |
+| Application deletion grace period | `deletionGraceDays` | 1–90 days | 14 |
 
-Each window's start must be before its end, and the morning end before the afternoon start. The six V42 keys are
+Each window's start must be before its end, and the morning end before the afternoon start. V50's
+`deletionGraceDays` is read at each [application deletion](#deleting-an-application)'s admission and frozen onto the
+request, so a change applies only to deletions confirmed after it; it is optional on the PUT. The six V42 keys are
 optional for one release, so an admin that sends only the window and `revision` keeps working; an absent key leaves
 its value alone. V42 re-seeded the window to 7 days only where the row was still at revision 0; a value a Delivery
 Manager had chosen below a day was raised to 1,440 minutes with a history row attributed to the service account, and

@@ -1,10 +1,12 @@
 # Application deletion — ownership, contracts and cleanup order
 
-Status: Tasks 1 to 9 of [the plan](plans/20261118-dm-application-deletion.md), 2026-11-18. This records what an
+Status: Tasks 1 to 9 of [the plan](plans/completed/20261118-dm-application-deletion.md), 2026-11-18. This records what an
 application owns, what the platform deletes for us and how it signals it, and the order cleanup must take, and
 describes admission, the fence, the external and binary cleanup, local finalisation and the HTTP routes as built, and
-the rehearsal, rollout and monitoring procedure (prepared, not run). Nothing here authorises deletion in any
-environment.
+the rehearsal, rollout and monitoring procedure (prepared, not run). The addendum
+[`20261119-deletion-grace-period-and-restore`](plans/completed/20261119-deletion-grace-period-and-restore.md)
+(2026-11-19) adds the grace period and restore (*Grace period and restore*, below) and returns the stale check to a
+time comparison. Nothing here authorises deletion in any environment.
 
 ## At a glance
 
@@ -20,8 +22,13 @@ environment.
   children and outboxes, its filesystem binaries and owned staging, its CCD case and CDAM documents (through CCD
   Retain and Dispose for a linked case), the SDK's copy, and its audit *values* (through
   `deedpoll_audit_dispose_case_values`). The audit *events* stay, with `CASE_DELETED` recorded under the requesting
-  Delivery Manager. There is no undo, no cancellation and no unfencing once a request is admitted.
-- **Statuses.** `Pending` (admitted and fenced; nothing removed yet), `InProgress` (the worker holds or has held it:
+  Delivery Manager. Nothing permanent happens until the request's **grace period** has ended.
+- **Grace period and restore.** A confirmed deletion is a soft delete first: the case is hidden and unwritable at once
+  (the fence), and the worker claims nothing until `restorableUntil`, which admission fixes as the confirmation time
+  plus the Delivery Manager's process setting `deletionGraceDays` (1–90, default 14). Until then a Delivery Manager
+  can restore the application whole (`POST /caseworker/application-deletions/{requestId}/restore`). After it the hard
+  delete runs as before, and there is no undo once cleanup has started.
+- **Statuses.** `Pending` (admitted and fenced; nothing removed yet; restorable until `restorableUntil`), `InProgress` (the worker holds or has held it:
   files being removed, or a linked case being offered to Retain and Dispose, or finalisation due), `AwaitingDisposal`
   (CCD has the case in `PendingDisposal` with its TTL set; CCD's disposer, nightly at 22:00, has not yet removed it),
   `NeedsAttention` (stopped with an allowlisted `failure` code; see *Failure and recovery*) and `Completed` (every
@@ -189,7 +196,9 @@ row's `storageState` says which store holds it.
 ## Cleanup order
 
 1. **Admit** (one short transaction under the case lock): capability, eligibility guards, the request and its fence,
-   the immutable inventory (document ids, storage keys, CDAM ids, the CCD reference), and `CASE_DELETION_REQUESTED`.
+   the immutable inventory (document ids, storage keys, CDAM ids, the CCD reference), `restorable_until`, and
+   `CASE_DELETION_REQUESTED`. Then the **grace period**: the case stays fenced and nothing else happens until
+   `restorable_until`; a Delivery Manager may restore it meanwhile, which deletes the request and lifts the fence.
 2. **Quiesce**: no new writes, sends, uploads, Gazette admission or linking for the fenced case; wait out any
    in-flight claim or lease (outbox, Master emails, uploads, creation attempts) or refuse admission with a typed 409.
    An unknown CCD creation outcome (`Claimed`/`AwaitingConfirmation`, or `submissionMayHaveReached`) is resolved by
@@ -229,7 +238,10 @@ upload TTL), as are `Local`, `Attached` and `Failed`. Admission then writes the 
 (`LOCAL_DOCUMENT` per filesystem document with its storage key, `CDAM_DOCUMENT` per attached document, from V50's
 tombstones a `LOCAL_DOCUMENT` per filesystem document and a `CDAM_REMOVED_DOCUMENT` per CDAM document a caseworker had
 already removed, `OWNED_STAGE` per owned stage naming the case, `CCD_DISPOSAL` with the linked reference) and `CASE_DELETION_REQUESTED` under the
-caller with the reason, note and request id and no values, in one transaction. A second key for the same reason
+caller with the reason, note and request id and no values, in one transaction. The request's `restorable_until`
+(and its first `next_attempt_at`) is the admission time plus `ProcessSettingsService.deletionGracePeriod()`, read at
+admission with no cache and frozen: V48's trigger refuses a change to it, so a later change to the setting moves no
+date a Delivery Manager has already been shown. A second key for the same reason
 answers the first request with its first Delivery Manager and note. `DeedPollService.removeDeedPoll` refuses a case
 with a request, and `RemoveDeedPollCallersTest` holds that no production class calls it.
 
@@ -291,7 +303,8 @@ is then one of its own refusals).
 ### Disabling and resuming
 
 The fence has no switch. With every worker disabled a fenced case stays stored, invisible and unwritable until the
-deletion completes; there is no unfencing, by design.
+deletion completes. The one way to lift it is a restore during the grace period, which deletes the request (the fence
+is an `EXISTS` over it); after that there is no unfencing, by design.
 
 ## Definition change (designed here, built in Task 5)
 
@@ -450,15 +463,16 @@ nothing; and a replay after completion. `DeletionCleanupTest` and `RetainAndDisp
 
 ## HTTP contract (Task 7)
 
-`CaseworkerApplicationDeletionController`, two operations counted apart from the caseworker surface
-(`OpenAPIPublisherTest.DELETION_PATHS`). Both check `DELETE_APPLICATION` (Delivery Manager only, IDAM- or AM-derived)
+`CaseworkerApplicationDeletionController`, three operations counted apart from the caseworker surface
+(`OpenAPIPublisherTest.DELETION_PATHS`). All check `DELETE_APPLICATION` (Delivery Manager only, IDAM- or AM-derived)
 **before** the path id, the header or the body is read, so every other role is 403 whatever it sent; the header and
 the status id are bound as text for that reason. Every success and every typed 409 is `Cache-Control: no-store`.
 
 | Method | Path | Answer |
 |---|---|---|
-| POST | `/caseworker/cases/{id}/deletion-requests` | 202 `{requestId, status}` with `Location: /caseworker/application-deletions/{requestId}`, for a fresh admission and for every replay. `@AuditedAs(CASE_DELETION_REQUESTED)` |
-| GET | `/caseworker/application-deletions/{requestId}` | 200 `{requestId, caseId, reason, status, requestedAt, completedAt, failure}`, for any Delivery Manager, whether or not the case still exists |
+| POST | `/caseworker/cases/{id}/deletion-requests` | 202 `{requestId, status, restorableUntil}` with `Location: /caseworker/application-deletions/{requestId}`, for a fresh admission and for every replay. `@AuditedAs(CASE_DELETION_REQUESTED)` |
+| GET | `/caseworker/application-deletions/{requestId}` | 200 `{requestId, caseId, reason, status, requestedAt, restorableUntil, completedAt, failure}`, for any Delivery Manager, whether or not the case still exists |
+| POST | `/caseworker/application-deletions/{requestId}/restore` | 200 `{caseId, status: "Restored"}`, no body, for any Delivery Manager while restorable (*Grace period and restore*); 404 for an unknown or already restored request; 409 `RESTORE_WINDOW_CLOSED` or `CLEANUP_STARTED`. `@AuditedAs(CASE_DELETION_RESTORED)` |
 
 - **Body**: closed, exactly `reason` (`CREATED_IN_ERROR` or `DUPLICATE`), `note` (10–500 after trimming, no control
   characters) and `expectedLastChangedOn` (the case detail's `lastChangedOn` as published, ISO-8601 local date-time, to the
@@ -480,12 +494,51 @@ the status id are bound as text for that reason. Every success and every typed 4
 - The deletion DTOs' `requestId` is the request's resource id, so `NotificationSecurityTest`'s rule against publishing a
   `requestId` (the email send's key) names those two classes as its only exception.
 
-**Proof.** `CaseworkerApplicationDeletionControllerTest` (full context, Postgres, 13): 401 on both routes; each of
+**Proof.** `CaseworkerApplicationDeletionControllerTest` (full context, Postgres): 401 on both routes; each of
 five non-DM roles 403 on both routes with valid, forged, keyless and malformed input, before lookup; 202 with
 `Location`, `no-store` and exactly two fields, round-tripping `lastChangedOn` from the case detail; the status field set,
 with no note, subject or key; every 400; the 404s; the typed stale 409; replays, `KEY_REUSED`, `CONFLICTING_REASON`
 and a 202 replay after the case row is deleted; a second Delivery Manager reading the first's request; and the note in
-no log output. `OpenAPIPublisherTest.documentsTheApplicationDeletion` pins the published contract.
+no log output; and the restore route's 403s before the id is read, 404s, 409s and fence lifting (below).
+`OpenAPIPublisherTest.documentsTheApplicationDeletion` pins the published contract.
+
+## Grace period and restore
+
+Decided by Steve on 2026-11-19 (addendum plan `20261119-deletion-grace-period-and-restore`).
+
+- **The setting.** `deletionGraceDays` on the process settings singleton (V50: integer, `CHECK` 1–90, `NOT NULL
+  DEFAULT 14`). `GET /caseworker/process-settings` returns it; `PUT` takes it as an optional key (absent leaves it
+  alone, as V42's keys), under `MANAGE_PROCESS_CONFIG`, writing one `deedpoll_process_settings_change` row when it
+  changes. `ProcessSettingsService.deletionGracePeriod()` returns it as a `Duration`, uncached; a missing row fails
+  the admission rather than guessing.
+- **Frozen at admission.** Admission stores `restorable_until = requested_at + grace` and sets the first
+  `next_attempt_at` to it. V48's trigger refuses any change to `restorable_until`, so a later change to the setting
+  affects only new requests.
+- **The worker waits.** `DeletionWorkRepository.claimNext` requires `restorable_until <= now` in its SQL as well as a
+  due `next_attempt_at`, so neither an operator's `requeue.sql` nor an edited `next_attempt_at` can start cleanup
+  early. Nothing outside this database (filesystem, CDAM, CCD, Notify) is touched before then, so a restore has
+  nothing remote to undo.
+- **Restore.** `POST /caseworker/application-deletions/{requestId}/restore`, no body, `DELETE_APPLICATION` checked
+  before the id is read; any Delivery Manager may restore any request. It is allowed only while the request is
+  `Pending`, unclaimed (`owner` null), never attempted (`attempts` 0) and `now < restorable_until`
+  (`DeletionRestoreRule`, repeated in `DeletionRequestRepository.deleteRestorable`'s SQL). Otherwise it is 409
+  `CLEANUP_STARTED` (checked first: the worker has claimed or attempted it, or it has moved on from `Pending`) or
+  `RESTORE_WINDOW_CLOSED`. An unknown, non-UUID or already restored id is 404. In one transaction
+  (`ApplicationDeletionService.restore`): lock the **case row, then the request** (admission's order, so the two
+  cannot deadlock), re-check the rule under both locks, `DELETE` the request (its steps cascade; V48's trigger guards
+  `UPDATE` only, pinned by a migration test), and record `CASE_DELETION_RESTORED` under the restoring Delivery Manager
+  with `deletionReason` and `deletionRequestId` in `detail` and never the note. A failed audit insert restores
+  nothing. The answer is 200 `{caseId, status: "Restored"}`, `no-store`.
+- **After a restore** the case is visible and writable at once (list, detail, JPA reads and child writes), and the
+  request's status route is 404. The restore's audit event moves the case's `lastChangedOn`, so deleting it again
+  needs a fresh review and a new request, which is admitted with a fresh grace period. The first request's admission
+  and restore events stay in the audit trail.
+- **Races.** A restore and the worker's claim cannot both win: the claim skips a locked request and takes nothing
+  before `restorable_until`, which the restore refuses from. A restore racing a second admission of the same case
+  serialises on the case lock. Both are proven against Postgres (`ApplicationDeletionRestoreTest`).
+- **Published dates.** The admission and status responses carry `restorableUntil` (UTC local date-time, as
+  `requestedAt`). There is no new status member: a `Pending` request before `restorableUntil` is restorable, and the
+  status description says so.
 
 ## Failure and recovery
 
@@ -494,7 +547,7 @@ an auth failure or an ambiguous answer is never read as absence. What an operato
 
 | Situation | Meaning | Operator action |
 |---|---|---|
-| `Pending` for longer than one worker interval | The worker is off (`APPLICATION_DELETION_WORKER_ENABLED`, default false) or failing to claim | Check the switch and the worker's WARN lines; the case stays fenced meanwhile |
+| `Pending` for longer than one worker interval after `restorable_until` (before it, `Pending` is the grace period) | The worker is off (`APPLICATION_DELETION_WORKER_ENABLED`, default false) or failing to claim | Check the switch and the worker's WARN lines; the case stays fenced meanwhile |
 | `InProgress` on a linked case for more than a day | The SDK's task is off (`CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_MODE`), its mark or confirm failed, or its circuit breaker tripped (it only logs) | Read the SDK task's log for the reference's run; fix the cause; the next run retries from the database's state |
 | `AwaitingDisposal` for more than two nights | DEEDPOLL not in the disposer's `DELETE_CASE_TYPES`, the disposer failed, or CCD still answers the case | Check the disposer's run and its type lists (onboarding step 3); never complete the request by hand |
 | `NeedsAttention` `LOCAL_STORE_UNAVAILABLE`, `LOCAL_DOCUMENT_UNREMOVED` | The filesystem store is absent from this deployment or the file would not go after `max-attempts` tries | Restore the volume or remove the file, then requeue (below) |
@@ -595,8 +648,9 @@ Safeguards, before anything else:
 |---|---|---|
 | R1 fixtures | Create: **U** unlinked with two filesystem documents; **D1/D2** a duplicate pair; **K** with `retainPermanently` set; **L** linked (linking sweep as `docs/CCD-SMOKE.md`) with one document | Case ids, `lastChangedOn`, U's two `storageKey`s and L's CCD reference |
 | R2 refusals | POST for U as each non-DM role; as DM with a stale `expectedLastChangedOn`; as DM for K | 403 ×N with nothing written; 409 `STALE_CONFIRMATION`; 409 `RETAINED_PERMANENTLY`; no `deedpoll_deletion_request` row for U or K |
+| R2a grace period | As DM, set `deletionGraceDays` to 1 on the process settings for the rehearsal (record the old value; restore it after R7). Admit a fresh unlinked fixture **G**; GET its status; restore it; GET again; read G's case detail | 202 with `restorableUntil` one day on; `Pending`; restore 200 `Restored`; status 404; G visible and editable again, with one `CASE_DELETION_REQUESTED` and one `CASE_DELETION_RESTORED` event |
 | R3 admission, worker off | POST for U and D2 (`DUPLICATE`) as DM; repeat U's POST with the same key; same key with a different note; GET both statuses | 202 with Location; replay 202 with the same `requestId`; 409 `KEY_REUSED`; both `Pending` after more than one worker interval; U and D2 404 on the case routes and absent from the list and MI; D1 untouched |
-| R4 unlinked completion | flux: `APPLICATION_DELETION_WORKER_ENABLED=true` for AAT; wait one interval | U and D2 `Completed`; U's two files absent on the volume; queries below show the case gone, two events with the DM's subject, zero value rows; D1 still served |
+| R4 unlinked completion | flux: `APPLICATION_DELETION_WORKER_ENABLED=true` for AAT; wait until U's `restorableUntil` and one interval more; then try to restore U | Restore 409 (`CLEANUP_STARTED` or `RESTORE_WINDOW_CLOSED`); U and D2 `Completed`; U's two files absent on the volume; queries below show the case gone, two events with the DM's subject, zero value rows; D1 still served |
 | R5 pause and restart | Admit a fresh unlinked fixture with the worker off; switch on and `kubectl rollout restart` the deployment during its first interval | One `Completed`, exactly one `CASE_DELETED` (a lapsed lease is taken over, never doubled). Requeue (`docs/deletion/requeue.sql`) is rehearsed live only if a request genuinely reaches a requeueable `NeedsAttention`; it is not induced on shared AAT storage. Its proof otherwise is `DeletionCleanupTest.requeue`, recorded as local-only |
 | R6 audit | The audit queries below for U and D2 | `CASE_DELETION_REQUESTED` then `CASE_DELETED`, actor the DM, `detail` with `deletionReason`/`deletionRequestId` (and the note on the request event only); no `deedpoll_audit_event_value` rows for either case |
 | R7 linked, after onboarding steps 1–4 | Admit L; SDK mode `dry-run` for one run, then `live`; with DEEDPOLL in `SIMULATED_CASE_TYPES` wait two nights; after the recorded move to `DELETE_CASE_TYPES` wait for the next disposer run and the next SDK run | `dry-run`: still `InProgress`, nothing marked. `live` + simulation: `AwaitingDisposal`, CCD still answers L (**never completed**). L's filesystem document removed before the case is offered to the SDK (files before CCD). After deletion: data-store answers 404 for L's reference, LAU shows the deletion, then `Completed` with the same audit shape. AAT stores documents on the filesystem, so the disposer's CDAM document removal is not rehearsed here; locally it is proven only against WireMock (`RetainAndDisposeDeletionTest`), and it is an outstanding check |
@@ -617,13 +671,14 @@ SELECT count(*) FROM deedpoll_audit_event_value v JOIN deedpoll_audit_event e ON
 ### Pause and resume
 
 **Pause** is switching the worker off, and for linked cases the SDK task to `off` (two flux PRs or one). Admission keeps
-working; every admitted request stays fenced, stored and resumable. A request that was mid-run keeps its claim until
+working; every admitted request stays fenced, stored and resumable, and restorable until its `restorable_until`. A request that was mid-run keeps its claim until
 its lease lapses and is taken over on resume; a removal already made is recognised as `ALREADY_ABSENT` and never
 counted as a failure. The disposer is LAU's: pausing it is a request to LAU (remove DEEDPOLL from `DELETE_CASE_TYPES`),
 and a case it has already deleted cannot be brought back. **Resume** is switching them on again, in the order of
-rollout step 6. **There is no cancellation and no unfencing**, paused or not: once admitted a request only moves
-forward, and a mistaken admission is handled as a data-protection incident with the restore safeguards above, not by
-editing the request.
+rollout step 6. **A mistaken admission is restored** through the API during its grace period, paused or not. After
+`restorable_until` there is no cancellation and no unfencing: the request only moves forward, and a mistaken admission
+found later is handled as a data-protection incident with the database-restore safeguards above, not by editing the
+request.
 
 ### Monitoring incomplete requests
 
@@ -631,11 +686,11 @@ Run daily for the first week after activation in an environment, then weekly; an
 "Failure and recovery" table:
 
 ```sql
-SELECT id, status, failure, requested_at, next_attempt_at, attempts
+SELECT id, status, failure, requested_at, restorable_until, next_attempt_at, attempts
   FROM deedpoll_deletion_request
  WHERE status <> 'Completed'
    AND (status = 'NeedsAttention'
-        OR (status = 'Pending' AND requested_at < (now() AT TIME ZONE 'UTC') - interval '1 hour')
+        OR (status = 'Pending' AND restorable_until < (now() AT TIME ZONE 'UTC') - interval '1 hour')
         OR (status = 'InProgress' AND requested_at < (now() AT TIME ZONE 'UTC') - interval '1 day')
         OR (status = 'AwaitingDisposal' AND requested_at < (now() AT TIME ZONE 'UTC') - interval '3 days'))
  ORDER BY requested_at;
@@ -654,7 +709,7 @@ needs attention; there is no alert wired to it yet, which is an outstanding chec
 | dm-store `ENABLE_TTL`, CDAM residue | dm-store team |
 | Database backups and restore | Platform operations |
 | The Admin control and its copy | Deed poll Admin, by `deed-poll-admin:docs/plans/20261118-dm-application-deletion.md` |
-| A mistaken admission | Delivery Manager raises it; handled as a data-protection incident |
+| A mistaken admission | A Delivery Manager restores it during the grace period; after it, raised as a data-protection incident |
 
 ### Outstanding external checks
 
@@ -691,6 +746,14 @@ What Admin has to honour: send `expectedLastChangedOn` exactly as the case detai
 `Idempotency-Key` per confirmation journey and reuse it for every retry of it, show `Completed` as deleted and nothing
 else, show `NeedsAttention` with its code and no retry button, and tell the user the note is kept and must not hold the
 applicant's details. API merges and deploys on every replica before Admin shows the control.
+
+**For the Admin plan, from the grace-period addendum** (the contract above changes again; refresh the vendored spec
+from the merged commit): add `deletionGraceDays` (whole days, 1–90, default 14) to the process settings screen,
+sent as an optional key on the existing PUT; show `restorableUntil` on the deletion status page and in the
+confirmation's success message, as the date until which the application can be restored; and give a Delivery Manager
+a Restore button while the request is `Pending` and `restorableUntil` is in the future, calling
+`POST /caseworker/application-deletions/{requestId}/restore` and showing its 409 codes (`RESTORE_WINDOW_CLOSED`,
+`CLEANUP_STARTED`) in their own words. After a restore the status route is 404, so Admin should go to the case.
 
 **Local completion is not deployment evidence.** The gates in the plan's execution notes prove the code locally against
 Postgres and WireMock; no environment has run a deletion, and none can complete one until the onboarding below and the
