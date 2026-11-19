@@ -247,6 +247,23 @@ class DeletionRequestMigrationTest extends AbstractPostgresContainerTest {
     }
 
     @Test
+    @DisplayName("the immutability trigger guards UPDATE only: a restore may delete a request, and its inventory goes")
+    void requestMayBeDeleted() {
+        NewDeletionRequest admitted = request(caseId(), UUID.randomUUID(), null);
+        requests.insert(admitted);
+        requests.insertStep(UUID.randomUUID(), admitted.id(), DeletionStepKind.LOCAL_DOCUMENT, "doc-1", "key/doc-1");
+
+        assertThat(jdbc.queryForList("""
+            select event_manipulation from information_schema.triggers
+             where event_object_table = 'deedpoll_deletion_request'
+               and trigger_name = 'deedpoll_deletion_request_immutable'
+            """, String.class)).containsExactly("UPDATE");
+        assertThat(requests.deleteRestorable(admitted.id(), NOW)).isTrue();
+        assertThat(requests.findById(admitted.id())).isEmpty();
+        assertThat(requests.stepsOf(admitted.id())).isEmpty();
+    }
+
+    @Test
     @DisplayName("an inventory line keeps its locator until Done, is unique per item, and goes with its request")
     void steps() {
         NewDeletionRequest admitted = request(caseId(), UUID.randomUUID(), "1234567890123456");

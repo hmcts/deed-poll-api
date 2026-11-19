@@ -28,6 +28,7 @@ import uk.gov.hmcts.reform.deedpoll.api.DeletionError;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.CreateDeletionRequest;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DeletionAdmissionResponse;
 import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DeletionRequestResponse;
+import uk.gov.hmcts.reform.deedpoll.api.caseworker.dto.DeletionRestoreResponse;
 import uk.gov.hmcts.reform.deedpoll.auth.CurrentUsers;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
@@ -35,6 +36,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.Admission;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.Restoration;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionBodies;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRequest;
 
@@ -50,9 +52,10 @@ import java.util.UUID;
 
 /**
  * A Delivery Manager's permanent deletion of an application created in error or duplicated (plan
- * 20261118-dm-application-deletion, Task 7): admitting the request, and reading where it has got to.
+ * 20261118-dm-application-deletion, Task 7): admitting the request, reading where it has got to, and restoring the
+ * application during the request's grace period (addendum 20261119-deletion-grace-period-and-restore).
  *
- * <p><strong>Capability first, on both routes.</strong> {@code DELETE_APPLICATION} is checked before the path id,
+ * <p><strong>Capability first, on every route.</strong> {@code DELETE_APPLICATION} is checked before the path id,
  * the header or the body is read, so a caller without it is a 403 whatever they sent and learns nothing about the
  * case or the request. That is why the header and the status id are bound as text and parsed here rather than by
  * Spring, which would answer a malformed one 400 before the check could run. The body is not bound at all for the
@@ -165,6 +168,31 @@ public class CaseworkerApplicationDeletionController {
         CurrentUser caller = deletionCaller();
         DeletionRequest request = deletions.read(caller, requestId(requestId));
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(DeletionRequestResponse.from(request));
+    }
+
+    @Operation(operationId = "restoreApplicationDeletion", summary = "Restore an application during its grace period",
+        description = "Requires caseworker-deedpoll-delivery-manager (DELETE_APPLICATION), checked before the id is "
+            + "read; any Delivery Manager may restore any request. Allowed only while the request is Pending, cleanup "
+            + "has not started and restorableUntil has not passed. Restoring deletes the deletion request, so the "
+            + "application is visible and can be changed again at once, and the request's status resource is a 404 "
+            + "from then on. Nothing outside the service is removed before restorableUntil, so nothing remote is "
+            + "undone. Deleting the application again needs a new review and a new request. Takes no body. An id "
+            + "that is not a UUID, or a request already restored, is a 404.")
+    @ApiResponse(responseCode = "200", description = "Restored.",
+        content = @Content(schema = @Schema(implementation = DeletionRestoreResponse.class)))
+    @ApiResponse(responseCode = "404", description = "There is no such deletion request, or it was already restored.",
+        content = @Content(schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "409", description = "Refused, with a code and fixed words, and nothing written: "
+        + "RESTORE_WINDOW_CLOSED (restorableUntil has passed) or CLEANUP_STARTED (the deletion is under way or done).",
+        content = @Content(schema = @Schema(implementation = DeletionError.class)))
+    @AuditedAs(AuditAction.CASE_DELETION_RESTORED)
+    @PostMapping(STATUS_PATH + "{requestId}/restore")
+    public ResponseEntity<DeletionRestoreResponse> restore(
+        @Parameter(schema = @Schema(type = "string", format = "uuid")) @PathVariable("requestId") String requestId) {
+
+        CurrentUser caller = deletionCaller();
+        Restoration restoration = deletions.restore(caller, requestId(requestId));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(DeletionRestoreResponse.from(restoration));
     }
 
     /**

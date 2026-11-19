@@ -172,7 +172,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
      */
     private static final List<String> DELETION_PATHS = List.of(
         "/caseworker/cases/{id}/deletion-requests",
-        "/caseworker/application-deletions/{requestId}"
+        "/caseworker/application-deletions/{requestId}",
+        "/caseworker/application-deletions/{requestId}/restore"
     );
 
     /** Delivery Manager-only publication history, whose single GET is asserted separately. */
@@ -787,6 +788,23 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         resolve(spec, detail.at("/properties/status")).get("enum").forEach(state -> statuses.add(state.asText()));
         assertThat(statuses).containsExactly("Pending", "InProgress", "AwaitingDisposal", "NeedsAttention",
                                              "Completed");
+
+        assertThat(paths.get(DELETION_PATHS.get(2)).fieldNames()).toIterable().containsExactly("post");
+        JsonNode restore = paths.get(DELETION_PATHS.get(2)).get("post");
+        assertThat(restore.get("operationId").asText()).isEqualTo("restoreApplicationDeletion");
+        assertThat(restore.get("description").asText()).contains("DELETE_APPLICATION").contains("restorableUntil");
+        assertThat(restore.at("/requestBody").isMissingNode()).as("a restore takes no body").isTrue();
+        assertThat(restore.at("/responses").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("200", "403", "404", "409");
+        JsonNode restored = resolve(spec, restore.at("/responses/200/content/*~1*/schema"));
+        assertThat(restored.get("properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("caseId", "status");
+        assertThat(restored.at("/properties/status/enum/0").asText()).isEqualTo("Restored");
+        JsonNode restoreConflict = resolve(spec, restore.at("/responses/409/content/*~1*/schema"));
+        assertThat(restoreConflict.get("properties").fieldNames()).toIterable()
+            .containsExactlyInAnyOrder("error", "code");
+        assertThat(restore.at("/responses/409/description").asText())
+            .contains("RESTORE_WINDOW_CLOSED").contains("CLEANUP_STARTED");
     }
 
     /**

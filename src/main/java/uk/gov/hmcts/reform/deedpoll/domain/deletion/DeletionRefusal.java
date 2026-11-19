@@ -3,7 +3,9 @@ package uk.gov.hmcts.reform.deedpoll.domain.deletion;
 /**
  * Why a deletion request was refused with a 409: a fixed code a client can branch on, and fixed words it can show.
  *
- * <p>Every refusal leaves the case exactly as it was, with no request, no inventory and no audit event. None of the
+ * <p>Every refusal leaves the case exactly as it was, with no request, no inventory and no audit event. The last two
+ * are a restore's ({@code POST /caseworker/application-deletions/{requestId}/restore}), which leave the request as it
+ * was; admission never answers them. None of the
  * words name the applicant, echo the note or say which document, email or attempt is unresolved: a Delivery Manager
  * who needs that opens the case.
  */
@@ -31,7 +33,14 @@ public enum DeletionRefusal {
     /** The same key was sent with a different body. */
     KEY_REUSED("This Idempotency-Key was already used for a different deletion request on this application."),
     /** The application already has a deletion request, for the other reason. */
-    CONFLICTING_REASON("This application already has a deletion request for a different reason.");
+    CONFLICTING_REASON("This application already has a deletion request for a different reason."),
+    /**
+     * Restore only: the request's grace period has ended, so the application can no longer be restored, though
+     * cleanup has not yet started.
+     */
+    RESTORE_WINDOW_CLOSED("The time to restore this application has passed. It can no longer be restored."),
+    /** Restore only: the deletion worker has started, or finished, removing the application. */
+    CLEANUP_STARTED("This application is already being deleted. It can no longer be restored.");
 
     private final String message;
 

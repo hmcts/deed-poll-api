@@ -299,6 +299,40 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
         assertThat(count("SELECT count(*) FROM deedpoll_deedpoll WHERE id = ?", id)).isOne();
     }
 
+    @Test
+    @DisplayName("a restore lifts the fence: the case, its children and its referral read again, and writes commit")
+    void restoreLiftsTheFence() {
+        String id = fixture();
+        final String document = document(id);
+        note(id);
+        final UUID referral = referral(id, master(), JUDGE_SUBJECT);
+        final long before = received();
+        UUID request = deletions.request(DELIVERY_MANAGER, id,
+                                         new DeletionCommand(UUID.randomUUID(), "CREATED_IN_ERROR",
+                                                             "Logged against the wrong form", MODIFIED))
+            .request().id();
+        assertThatThrownBy(() -> cases.findDeedPoll(id)).isInstanceOf(NotFoundError.class);
+
+        deletions.restore(DELIVERY_MANAGER, request);
+
+        assertThat(cases.findDeedPoll(id)).isNotNull();
+        assertThat(deedPolls.existsById(id)).isTrue();
+        assertThat(cases.findDeedPolls()).anyMatch(found -> id.equals(found.deedPoll().getId()));
+        assertThat(notes.findNotes(id)).hasSize(1);
+        assertThat(documents.findDocument(id, document)).isNotNull();
+        assertThat(referrals.findById(referral)).isPresent();
+        assertThat(judicial.referral(referral.toString(), JUDGE)).isNotNull();
+        assertThat(received()).isEqualTo(before);
+        Boolean admitted = transaction().execute(status -> fence.admits(id));
+        assertThat(admitted).isTrue();
+
+        cases.updateDeedPoll(id, DeedPollPatch.of(Map.of("newForename", "Alex")));
+        notes.createNote(id, new CreateNoteInput("Restored and carrying on"));
+        assertThat(count("SELECT count(*) FROM deedpoll_notes WHERE \"deedPollId\" = ?", id)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT \"newForename\" FROM deedpoll_deedpoll WHERE id = ?", String.class, id))
+            .isEqualTo("Alex");
+    }
+
     // --- writes -----------------------------------------------------------------------------------------------
 
     @Test

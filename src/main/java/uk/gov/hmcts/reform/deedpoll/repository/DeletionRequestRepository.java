@@ -118,6 +118,30 @@ public class DeletionRequestRepository {
     }
 
     /**
+     * The request, locked {@code FOR UPDATE} until the caller's transaction ends. A restore takes it after the case's
+     * own lock, in admission's order, so the two never wait on each other the other way round; the worker's claim
+     * skips a locked request rather than waiting.
+     */
+    public Optional<DeletionRequest> lockById(UUID id) {
+        return jdbc.query("select " + COLUMNS + " from deedpoll_deletion_request where id = ? for update", REQUEST,
+                          id).stream().findFirst();
+    }
+
+    /**
+     * Deletes the request, and with it its inventory (V48's cascade), only while it is still restorable at
+     * {@code now}: the conditions {@code DeletionRestoreRule} states, repeated here so a stale read cannot pass them.
+     * Deleting the request is what lifts the fence, which is an {@code EXISTS} over this table.
+     *
+     * @return whether this call deleted it
+     */
+    public boolean deleteRestorable(UUID id, LocalDateTime now) {
+        return jdbc.update("""
+            delete from deedpoll_deletion_request
+             where id = ? and status = 'Pending' and owner is null and attempts = 0 and restorable_until > ?
+            """, id, timestamp(now)) == 1;
+    }
+
+    /**
      * One inventory line, {@link DeletionStepState#Pending}.
      */
     public void insertStep(UUID id, UUID requestId, DeletionStepKind kind, String itemId, String locator) {

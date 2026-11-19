@@ -98,6 +98,12 @@ public record AuditEntry(AuditAction action, AuditActor actor, String entityType
             .withDetail(DELETION_REQUEST_ID, requestId.toString());
     }
 
+    /** This event with a restored deletion request's reason and id; never its note. */
+    public AuditEntry withRestoration(DeletionReason reason, UUID requestId) {
+        return withDetail(DELETION_REASON, reason.name())
+            .withDetail(DELETION_REQUEST_ID, requestId.toString());
+    }
+
     /** The deletion keys are typed: a value that is not one of theirs is refused, and never echoed. */
     private static void requireTyped(String key, String value) {
         boolean valid = switch (key) {

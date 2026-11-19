@@ -28,6 +28,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionGracePeriods;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRefusal;
 import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 
 import java.sql.Timestamp;
@@ -109,13 +111,14 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
                         .contentType("application/json").content(body("DUPLICATE", NOTE, MODIFIED.toString())))
             .andExpect(status().isUnauthorized());
         mvc.perform(get(statusPath(UUID.randomUUID().toString()))).andExpect(status().isUnauthorized());
+        mvc.perform(post(restorePath(UUID.randomUUID().toString()))).andExpect(status().isUnauthorized());
         assertThat(requestCount(id)).isZero();
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"caseworker-deedpoll", "caseworker-deedpoll-team-leader", "caseworker-deedpoll-admin",
         "caseworker-deedpoll-judicial", "caseworker-civil"})
-    @DisplayName("every role but Delivery Manager is 403 on both routes, before the id, header or body is parsed")
+    @DisplayName("every role but Delivery Manager is 403 on every route, before the id, header or body is parsed")
     void refusedBeforeAnythingIsRead(String role) throws Exception {
         String id = fixture();
         final String admitted = admit(id, UUID.randomUUID(), body("DUPLICATE", NOTE, MODIFIED.toString()))
@@ -139,6 +142,9 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
         authorised(get(statusPath(admitted))).andExpect(status().isForbidden());
         authorised(get(statusPath("not-a-uuid"))).andExpect(status().isForbidden());
         authorised(get(statusPath(UUID.randomUUID().toString()))).andExpect(status().isForbidden());
+        authorised(post(restorePath(admitted))).andExpect(status().isForbidden());
+        authorised(post(restorePath("not-a-uuid"))).andExpect(status().isForbidden());
+        authorised(post(restorePath(UUID.randomUUID().toString()))).andExpect(status().isForbidden());
 
         assertThat(requestCount(id)).isOne();
     }
@@ -321,6 +327,52 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
     }
 
     @Test
+    @DisplayName("a restore inside the window is 200 Restored, no-store, and the case detail reads again")
+    void restores() throws Exception {
+        String id = fixture();
+        String requestId = admit(id, UUID.randomUUID(), body("DUPLICATE", NOTE, MODIFIED.toString()))
+            .get("requestId").asText();
+        authorised(get("/caseworker/cases/" + id)).andExpect(status().isNotFound());
+
+        MvcResult result = authorised(post(restorePath(requestId))).andExpect(status().isOk()).andReturn();
+
+        JsonNode answer = json.readTree(result.getResponse().getContentAsString());
+        assertThat(answer.fieldNames()).toIterable().containsExactlyInAnyOrder("caseId", "status");
+        assertThat(answer.get("caseId").asText()).isEqualTo(id);
+        assertThat(answer.get("status").asText()).isEqualTo("Restored");
+        assertThat(result.getResponse().getHeader(HttpHeaders.CACHE_CONTROL)).contains("no-store");
+        assertThat(result.getResponse().getContentAsString()).doesNotContain("7Q4ZX").doesNotContain(requestId);
+        assertThat(publishedDetail(id).get("id").asText()).isEqualTo(id);
+        authorised(get(statusPath(requestId))).andExpect(status().isNotFound());
+        authorised(post(restorePath(requestId))).andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.error").value("Deletion request not found"));
+        authorised(post(restorePath("not-a-uuid"))).andExpect(status().isNotFound());
+        authorised(post(restorePath(UUID.randomUUID().toString()))).andExpect(status().isNotFound());
+        assertThat(jdbc.queryForObject("""
+            SELECT count(*) FROM deedpoll_audit_event
+             WHERE case_id = ? AND action = 'CASE_DELETION_RESTORED' AND actor_id = ?
+            """, Integer.class, id, StubIdam.SUBJECT)).isOne();
+    }
+
+    @Test
+    @DisplayName("a restore after restorableUntil is 409 RESTORE_WINDOW_CLOSED, and the case stays hidden")
+    void restoreAfterTheWindowIsRefused() throws Exception {
+        String id = fixture();
+        String requestId = admit(id, UUID.randomUUID(), body("DUPLICATE", NOTE, MODIFIED.toString()))
+            .get("requestId").asText();
+        DeletionGracePeriods.elapse(jdbc, UUID.fromString(requestId));
+
+        MvcResult result = authorised(post(restorePath(requestId)))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code").value("RESTORE_WINDOW_CLOSED"))
+            .andExpect(jsonPath("$.error").value(DeletionRefusal.RESTORE_WINDOW_CLOSED.message()))
+            .andReturn();
+        assertThat(result.getResponse().getHeader(HttpHeaders.CACHE_CONTROL)).contains("no-store");
+        assertThat(requestCount(id)).isOne();
+        authorised(get("/caseworker/cases/" + id)).andExpect(status().isNotFound());
+    }
+
+    @Test
     @DisplayName("any Delivery Manager may read another's request, which still names the first")
     void anotherDeliveryManagerReads() throws Exception {
         String id = fixture();
@@ -387,6 +439,10 @@ class CaseworkerApplicationDeletionControllerTest extends AbstractPostgresContai
 
     private static String admissionPath(String id) {
         return "/caseworker/cases/" + id + "/deletion-requests";
+    }
+
+    private static String restorePath(String requestId) {
+        return CaseworkerApplicationDeletionController.STATUS_PATH + requestId + "/restore";
     }
 
     private static String statusPath(String requestId) {

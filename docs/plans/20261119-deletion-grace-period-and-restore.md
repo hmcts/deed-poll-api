@@ -119,9 +119,9 @@ and records counts from the XML in `build/test-results/{test,integration}`.
 
 ### Task 4: Restore
 
-- [ ] The endpoint, service and repository as above, with `CASE_DELETION_RESTORED`, `@AuditedAs`, OpenAPI,
+- [x] The endpoint, service and repository as above, with `CASE_DELETION_RESTORED`, `@AuditedAs`, OpenAPI,
   path counts and `WriteEndpointAuditCoverageTest`.
-- [ ] Tests over HTTP and Postgres: each non-DM role 403 before reading the id; unknown/after-restore 404; restore
+- [x] Tests over HTTP and Postgres: each non-DM role 403 before reading the id; unknown/after-restore 404; restore
   inside the window lifts the fence (case visible in the list, detail and JPA reads again, child writes allowed);
   after `restorable_until` 409; once claimed 409; concurrent restore vs worker claim (exactly one wins, with no
   deadlock); concurrent restore vs a second admission; no external call between admission and restore; deleting the
