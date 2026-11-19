@@ -110,7 +110,8 @@ public class CaseworkerApplicationDeletionController {
             + "CONFLICTING_REASON. Never retry with a new key to get past a refusal.",
         requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(
             mediaType = "application/json", schema = @Schema(implementation = CreateDeletionRequest.class))))
-    @ApiResponse(responseCode = "202", description = "Admitted, or the same request replayed. Not deleted yet.",
+    @ApiResponse(responseCode = "202", description = "Admitted, or the same request replayed. Not deleted yet. After a "
+        + "restore, repeating the original request is 409 STALE_CONFIRMATION, not a replay.",
         headers = @Header(name = "Location", description = "The request's status resource.",
             schema = @Schema(type = "string")),
         content = @Content(schema = @Schema(implementation = DeletionAdmissionResponse.class)))

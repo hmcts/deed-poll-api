@@ -8,7 +8,8 @@
 --
 -- psql:  \set request_id '<the request id from GET /caseworker/application-deletions/{requestId}>'
 --        \set cdam_ids '<every CDAM id the dm-store team confirmed purged, comma-separated>'
---        \set operator '<your name, as the audit trail should attribute this>'
+--        \set operator '<your own name only, as the audit trail should attribute this: never an email address,
+--                        a case reference or anything about the applicant>'
 --        \i docs/deletion/confirm-cdam-purge.sql
 --
 -- It writes only if the ids listed are exactly the request's Pending CDAM_REMOVED_DOCUMENT ids (order, spaces and

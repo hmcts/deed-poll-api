@@ -6,6 +6,7 @@ import uk.gov.hmcts.ccd.sdk.RetainAndDisposePolicy;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFailure;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionStatus;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionStepOutcome;
+import uk.gov.hmcts.reform.deedpoll.entity.AuditClock;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -32,11 +33,14 @@ public class DeletionWorkRepository {
     private static final String WORKING = "('Pending', 'InProgress', 'AwaitingDisposal')";
 
     /**
-     * A request whose own cleanup is done and whose CCD case is still to be disposed: every filesystem document
+     * A request past its grace period ({@code restorable_until}, bound as the statement's first parameter after any
+     * before it, so an operator's requeue inside the period never makes its case a Retain and Dispose candidate)
+     * whose own cleanup is done and whose CCD case is still to be disposed: every filesystem document
      * verified removed first, so nothing the platform does not know about is left once CCD's copy has gone.
      */
     private static final String READY_FOR_CCD = """
         r.status in ('InProgress', 'AwaitingDisposal')
+        and r.restorable_until <= ?
         and r.ccd_case_reference is not null
         and exists (select 1 from deedpoll_deletion_step s
                      where s.request_id = r.id and s.kind = 'CCD_DISPOSAL' and s.state = 'Pending')
@@ -166,7 +170,7 @@ public class DeletionWorkRepository {
         return jdbc.queryForList("""
             select r.ccd_case_reference::bigint from deedpoll_deletion_request r where %s
              order by r.ccd_case_reference
-            """.formatted(READY_FOR_CCD), Long.class);
+            """.formatted(READY_FOR_CCD), Long.class, Timestamp.valueOf(AuditClock.now()));
     }
 
     /**
@@ -176,7 +180,7 @@ public class DeletionWorkRepository {
     public boolean lockReadyForCcdDisposal(String reference) {
         return !jdbc.queryForList("""
             select r.id from deedpoll_deletion_request r where r.ccd_case_reference = ? and %s for update of r
-            """.formatted(READY_FOR_CCD), UUID.class, reference).isEmpty();
+            """.formatted(READY_FOR_CCD), UUID.class, reference, Timestamp.valueOf(AuditClock.now())).isEmpty();
     }
 
     /**
@@ -189,7 +193,7 @@ public class DeletionWorkRepository {
     public int recordDisposed(String reference, LocalDateTime now) {
         List<UUID> request = jdbc.queryForList("""
             select r.id from deedpoll_deletion_request r where r.ccd_case_reference = ? and %s for update of r
-            """.formatted(READY_FOR_CCD), UUID.class, reference);
+            """.formatted(READY_FOR_CCD), UUID.class, reference, Timestamp.valueOf(now));
         if (request.isEmpty()) {
             return 0;
         }

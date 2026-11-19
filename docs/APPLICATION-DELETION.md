@@ -539,7 +539,21 @@ Decided by Steve on 2026-11-19 (addendum plan `20261119-deletion-grace-period-an
   and restore events stay in the audit trail.
 - **Races.** A restore and the worker's claim cannot both win: the claim skips a locked request and takes nothing
   before `restorable_until`, which the restore refuses from. A restore racing a second admission of the same case
-  serialises on the case lock. Both are proven against Postgres (`ApplicationDeletionRestoreTest`).
+  serialises on the case lock, and admission takes that lock **before** it looks for an existing request, so a retry
+  of the original POST that races a restore waits for it and is then 409 `STALE_CONFIRMATION`, never a 202 for the
+  request the restore removed. Both are proven against Postgres (`ApplicationDeletionRestoreTest`).
+- **Retrying after a restore.** Repeating the original POST, with its key, after a restore is 409
+  `STALE_CONFIRMATION`, not a replay and not "restored": the request is gone and the restore was an audited change.
+  Admin should read the outcome from the restore's own answer.
+- **Retain and Dispose waits too.** `READY_FOR_CCD` (`disposalCandidates`, `lockReadyForCcdDisposal`,
+  `recordDisposed`) also requires `restorable_until <= now`, so a request an operator requeued to `InProgress` inside
+  the period is not a Retain and Dispose candidate before it ends.
+- **Clocks.** `restorable_until` comes from the admitting pod's clock and the worker compares it with its own, so the
+  period can end early or late by the pods' clock skew. The claim, not the clock, keeps restore and cleanup apart.
+- **What the grace period does not hold back.** Emails queued for the case before admission are fenced while the
+  request exists; after a restore they are delivered, possibly days late, so check the case's Email tab after
+  restoring. Owned staging that expires during the period (`Staged` rows only) expires exactly as it would have
+  without the deletion, so a restored case lacks only what would have expired anyway.
 - **Published dates.** The admission and status responses carry `restorableUntil` (UTC local date-time, as
   `requestedAt`). There is no new status member: a `Pending` request before `restorableUntil` is restorable, and the
   status description says so.

@@ -126,13 +126,13 @@ public class ApplicationDeletionService {
         final String subject = caller.requireUserId();
         Body body = validate(command);
 
-        Optional<DeletionRequest> existing = requests.findByCase(caseId);
-        if (existing.isPresent()) {
-            return replay(existing.get(), body);
-        }
+        // The case lock first, then the request: a restore holds the case while it deletes the request, so a replay
+        // read before the lock could answer 202 for a request a restore was deleting, whose Location would then be a
+        // 404. Under the lock, a request a restore removed is gone, and the retry meets the case as it now is (its
+        // restore is an audited change, so STALE_CONFIRMATION). A concurrent admission that held the lock first has
+        // committed by now. A case already deleted has no row to lock, and its request is the replay's answer.
         Optional<LockedCase> locked = admission.lock(caseId);
-        // Read again under the lock: a concurrent admission that held it first has committed by now.
-        existing = requests.findByCase(caseId);
+        Optional<DeletionRequest> existing = requests.findByCase(caseId);
         if (existing.isPresent()) {
             return replay(existing.get(), body);
         }

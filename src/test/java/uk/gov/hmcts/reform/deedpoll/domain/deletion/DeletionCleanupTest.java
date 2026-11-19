@@ -528,6 +528,29 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
         assertThat(reread(request).restorableUntil()).isEqualTo(request.restorableUntil());
     }
 
+    @Test
+    @DisplayName("a linked case requeued inside its grace period is not offered to Retain and Dispose until it ends")
+    void requeueCannotOfferTheCaseToCcdInsideTheGracePeriod() throws IOException {
+        String id = fixture();
+        final long reference = link(id);
+        DeletionRequest request = admitted(id);
+        jdbc.update("UPDATE deedpoll_deletion_request SET status = 'NeedsAttention', failure = "
+                        + "'LOCAL_STORE_UNAVAILABLE' WHERE id = ?", request.id());
+        assertThat(requeue(request)).containsEntry("requests_requeued", 1L);
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.InProgress);
+
+        assertThat(policy.findCandidatesForDisposal()).doesNotContain(reference);
+        Boolean ready = new TransactionTemplate(transactions).execute(status ->
+            work.lockReadyForCcdDisposal(String.valueOf(reference)));
+        Integer recorded = new TransactionTemplate(transactions).execute(status ->
+            work.recordDisposed(String.valueOf(reference), AuditClock.now()));
+        assertThat(ready).isFalse();
+        assertThat(recorded).isZero();
+
+        DeletionGracePeriods.elapse(jdbc, request.id());
+        assertThat(policy.findCandidatesForDisposal()).contains(reference);
+    }
+
     /**
      * Runs the operator's requeue file exactly as psql would, with {@code :'request_id'} bound.
      */

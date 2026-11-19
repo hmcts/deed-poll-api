@@ -436,7 +436,7 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
     }
 
     @Test
-    @DisplayName("a restore waiting on the case lock behind an admission's replay: one answer each, no deadlock")
+    @DisplayName("a retry racing a restore waits for the case lock and is stale, never a 202 for a removed request")
     void restoreRacesAnAdmission() throws Exception {
         String id = fixture();
         UUID request = admit(id);
@@ -461,37 +461,21 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
                         return refused;
                     }
                 }));
-                // The admission either replays the request without the lock, or waits behind the restore for it.
-                awaitDoneOrWaiting(futures.get(1));
+                // The retry takes the case lock before reading the request, so it queues behind the restore.
+                awaitLockWaiters(2);
             });
             Object restored = futures.get(0).get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             Object admitted = futures.get(1).get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
             assertThat(restored).isEqualTo(id);
-            if (admitted instanceof Admission replay) {
-                assertThat(replay.admitted()).as("a replay of the request the restore then removed").isFalse();
-                assertThat(replay.request().id()).isEqualTo(request);
-            } else {
-                assertThat(admitted).as("after the restore, the old review is stale")
-                    .isInstanceOfSatisfying(DeletionConflictError.class, error ->
-                        assertThat(error.refusal()).isEqualTo(DeletionRefusal.STALE_CONFIRMATION));
-            }
+            assertThat(admitted).as("after the restore, the old review is stale; never a replay of the removed request")
+                .isInstanceOfSatisfying(DeletionConflictError.class, error ->
+                    assertThat(error.refusal()).isEqualTo(DeletionRefusal.STALE_CONFIRMATION));
             assertThat(requestCount(id)).isZero();
             assertThat(restoredEvents(id)).hasSize(1);
         } finally {
             pool.shutdownNow();
         }
-    }
-
-    private void awaitDoneOrWaiting(Future<Object> future) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
-        while (System.nanoTime() < deadline) {
-            if (future.isDone() || waiters() >= 2) {
-                return;
-            }
-            pause();
-        }
-        throw new IllegalStateException("the admission neither finished nor waited");
     }
 
     private void awaitLockWaiters(int count) {
