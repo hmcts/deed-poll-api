@@ -211,10 +211,11 @@ public class ApplicationDeletionService {
     /** Each refusal reads; none writes, so a refused request leaves the case and its children as they were. */
     private void refuseIfIneligible(LockedCase target, Body body) {
         String id = target.id();
-        // Its own statement after the lock, so a change committed while admission waited is counted. V50 moves the
-        // value at every audited commit under the case row's lock, so a write committed after the review changes it
-        // however its own times were stamped, and one committing after this read waits for admission and is then
-        // refused by V49's fence. See CaseLastChanged.
+        // Its own statement after the lock, so a change committed while admission waited is counted. Child writes do
+        // not lock the case, and their times are stamped before they commit, so two races are left: one committing
+        // after this read and before admission commits, and one in flight when the case was reviewed whose stamp is
+        // older than a newer write already shown (the maximum does not move). Both are accepted because the deletion
+        // can be restored during its grace period. See CaseLastChanged.
         LocalDateTime changed = lastChanged.of(id).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
         if (!DeletionFingerprint.truncate(changed)
             .equals(DeletionFingerprint.truncate(body.expectedLastChangedOn()))) {

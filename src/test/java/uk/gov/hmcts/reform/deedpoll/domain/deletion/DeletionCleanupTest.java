@@ -16,6 +16,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.hmcts.reform.deedpoll.ccd.CcdProperties;
 import uk.gov.hmcts.reform.deedpoll.ccd.DeedPollRetainAndDisposePolicy;
 import uk.gov.hmcts.reform.deedpoll.config.AbstractPostgresContainerTest;
+import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService.DeletionCommand;
@@ -58,6 +59,11 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
     private static final LocalDateTime MODIFIED = LocalDateTime.of(2026, 11, 18, 9, 30, 15, 250_000_000);
     private static final Duration POLL = Duration.ofHours(1);
     private static final int MAX_ATTEMPTS = 2;
+    /** The operator's name the CDAM purge script is given; the apostrophe proves psql's quoting. */
+    private static final String OPERATOR = "Pat O'Neill";
+    /** What the CDAM purge script answers when it refuses: it wrote nothing. */
+    private static final Map<String, Object> NOTHING =
+        Map.of("requests_requeued", 0L, "steps_confirmed", 0L, "audit_events", 0L);
 
     @Autowired
     private ApplicationDeletionService deletions;
@@ -552,10 +558,51 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
             """, UUID.randomUUID().toString(), caseId, state, locator);
     }
 
-    private Map<String, Object> recordCdamPurge(DeletionRequest request) throws IOException {
+    private Map<String, Object> recordCdamPurge(DeletionRequest request, String cdamIds, String operator)
+        throws IOException {
         String statement = Files.readString(Path.of("docs/deletion/confirm-cdam-purge.sql"))
-            .replace(":'request_id'", "'" + request.id() + "'");
+            .replace(":'request_id'", literal(request.id().toString()))
+            .replace(":'cdam_ids'", literal(cdamIds))
+            .replace(":'operator'", literal(operator));
         return jdbc.queryForMap(statement);
+    }
+
+    private Map<String, Object> recordCdamPurge(DeletionRequest request, List<String> cdamIds) throws IOException {
+        return recordCdamPurge(request, String.join(",", cdamIds), OPERATOR);
+    }
+
+    // As psql's :'name' quotes a variable.
+    private static String literal(String value) {
+        return "'" + value.replace("'", "''") + "'";
+    }
+
+    /** A request held in NeedsAttention by the given number of soft-deleted CDAM documents, whose ids are returned. */
+    private List<String> unpurged(String id, int count) {
+        List<String> cdamIds = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            String cdamId = UUID.randomUUID().toString();
+            tombstone(id, "Attached", cdamId);
+            cdamIds.add(cdamId);
+        }
+        return cdamIds;
+    }
+
+    private void assertHeldUnpurged(DeletionRequest request) {
+        DeletionRequest now = reread(request);
+        assertThat(now.status()).isEqualTo(DeletionStatus.NeedsAttention);
+        assertThat(now.failure()).isEqualTo(DeletionFailure.CDAM_REMOVED_DOCUMENT_UNPURGED.name());
+        assertThat(jdbc.queryForObject("""
+            SELECT count(*) FROM deedpoll_deletion_step
+             WHERE request_id = ? AND kind = 'CDAM_REMOVED_DOCUMENT' AND state <> 'Pending'
+            """, Integer.class, request.id())).as("no line confirmed").isZero();
+        assertThat(purgeEvents(request)).as("nothing audited").isZero();
+    }
+
+    private int purgeEvents(DeletionRequest request) {
+        return jdbc.queryForObject("""
+            SELECT count(*) FROM deedpoll_audit_event
+             WHERE action = 'DELETION_CDAM_PURGE_CONFIRMED' AND detail ->> 'deletionRequestId' = ?
+            """, Integer.class, request.id().toString());
     }
 
     @Test
@@ -579,7 +626,7 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
     @DisplayName("a soft-deleted CDAM document holds the request in NeedsAttention until its purge is recorded")
     void confirmCdamPurge() throws IOException {
         String id = fixture();
-        tombstone(id, "Attached", UUID.randomUUID().toString());
+        List<String> cdamIds = unpurged(id, 2);
         DeletionRequest request = admit(id);
 
         assertThat(claimAndProcess(cleanup)).hasValueSatisfying(made -> {
@@ -590,15 +637,69 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
             .as("never finalised over the residue").isOne();
         assertThat(requeue(request)).as("not a requeueable code").containsEntry("requests_requeued", 0L);
 
-        assertThat(recordCdamPurge(request)).containsEntry("requests_requeued", 1L)
-            .containsEntry("steps_confirmed", 1L);
-        assertThat(step(request, DeletionStepKind.CDAM_REMOVED_DOCUMENT)).containsEntry("state", "Done")
-            .containsEntry("outcome", "PURGED_BY_DM_STORE");
-        assertThat(recordCdamPurge(request)).as("only once").containsEntry("requests_requeued", 0L);
+        // In another order, with spaces and a repeat: the same set.
+        String listed = " " + cdamIds.get(1) + " , " + cdamIds.get(0) + "," + cdamIds.get(1);
+        assertThat(recordCdamPurge(request, listed, OPERATOR)).isEqualTo(
+            Map.of("requests_requeued", 1L, "steps_confirmed", 2L, "audit_events", 1L));
+        assertThat(jdbc.queryForList("""
+            SELECT state, outcome FROM deedpoll_deletion_step WHERE request_id = ? AND kind = 'CDAM_REMOVED_DOCUMENT'
+            """, request.id())).hasSize(2).allSatisfy(line -> assertThat(line)
+                .containsEntry("state", "Done").containsEntry("outcome", "PURGED_BY_DM_STORE"));
+        Map<String, Object> event = jdbc.queryForMap("""
+            SELECT actor_id, actor_name, entity_type, entity_id, case_id, array_to_string(fields, ',') AS fields,
+                   detail::text AS detail
+              FROM deedpoll_audit_event WHERE action = 'DELETION_CDAM_PURGE_CONFIRMED' AND case_id = ?
+            """, id);
+        assertThat(AuditAction.valueOf("DELETION_CDAM_PURGE_CONFIRMED").isRead()).isFalse();
+        assertThat(event).containsEntry("actor_name", OPERATOR).containsEntry("entity_type", "DeedPoll")
+            .containsEntry("entity_id", id).containsEntry("fields", "status,failure,steps");
+        assertThat(event.get("actor_id")).isNull();
+        assertThat((String) event.get("detail")).contains(request.id().toString())
+            .doesNotContain(cdamIds.get(0)).doesNotContain(cdamIds.get(1));
+
+        assertThat(recordCdamPurge(request, cdamIds)).as("a second run writes nothing").isEqualTo(NOTHING);
+        assertThat(purgeEvents(request)).isOne();
 
         assertThat(claimAndProcess(cleanup)).hasValueSatisfying(made ->
             assertThat(made.status()).isEqualTo(DeletionStatus.Completed));
-        assertThat(recordCdamPurge(request)).as("a completed request is never reopened")
-            .containsEntry("requests_requeued", 0L);
+        assertThat(recordCdamPurge(request, cdamIds)).as("a completed request is never reopened").isEqualTo(NOTHING);
+        assertThat(purgeEvents(request)).isOne();
+    }
+
+    @Test
+    @DisplayName("a CDAM purge listing too few or too many ids, or naming no operator, writes nothing")
+    void confirmCdamPurgeRefusesAnotherList() throws IOException {
+        String id = fixture();
+        List<String> cdamIds = unpurged(id, 2);
+        DeletionRequest request = admit(id);
+        claimAndProcess(cleanup);
+        assertHeldUnpurged(request);
+
+        assertThat(recordCdamPurge(request, List.of(cdamIds.get(0)))).as("one missing").isEqualTo(NOTHING);
+        assertHeldUnpurged(request);
+        List<String> extra = new ArrayList<>(cdamIds);
+        extra.add(UUID.randomUUID().toString());
+        assertThat(recordCdamPurge(request, extra)).as("one extra").isEqualTo(NOTHING);
+        assertHeldUnpurged(request);
+        assertThat(recordCdamPurge(request, List.of())).as("none").isEqualTo(NOTHING);
+        assertHeldUnpurged(request);
+        assertThat(recordCdamPurge(request, String.join(",", cdamIds), "  ")).as("no operator").isEqualTo(NOTHING);
+        assertHeldUnpurged(request);
+
+        assertThat(recordCdamPurge(request, cdamIds)).containsEntry("requests_requeued", 1L);
+    }
+
+    @Test
+    @DisplayName("a CDAM purge for a request that is not NeedsAttention for unpurged documents writes nothing")
+    void confirmCdamPurgeRefusesAnotherState() throws IOException {
+        String id = fixture();
+        List<String> cdamIds = unpurged(id, 1);
+        DeletionRequest request = admit(id);
+
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.Pending);
+        assertThat(recordCdamPurge(request, cdamIds)).isEqualTo(NOTHING);
+        assertThat(reread(request).status()).isEqualTo(DeletionStatus.Pending);
+        assertThat(step(request, DeletionStepKind.CDAM_REMOVED_DOCUMENT)).containsEntry("state", "Pending");
+        assertThat(purgeEvents(request)).isZero();
     }
 }

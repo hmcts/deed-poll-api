@@ -215,7 +215,7 @@ refusals. Each refusal is a `DeletionConflictError` carrying a `DeletionRefusal`
 
 | Code | When |
 |---|---|
-| `STALE_CONFIRMATION` | the case's `lastChangedOn`, to the millisecond, is not the one the Delivery Manager reviewed: the later of its `modifiedOn` and its V50 `lastChangedOn` marker, read in its own statement after the case lock (`repository/CaseLastChanged`). V50's trigger, deferred to the commit of every audited write on the case (a note, witness, document, referral or email; reads excluded), moves the marker under the case row's lock to at least a millisecond past both its last value and `modifiedOn`, so it strictly increases in commit order: a write committed after the review changes it however early its own times were stamped and whatever the pods' clocks say, and one committing after admission's read waits for the case lock and is then refused by V49's fence. `CaseChangeMarkerTest` holds V50's read list to `AuditAction.isRead` |
+| `STALE_CONFIRMATION` | the case's `lastChangedOn`, to the millisecond, is not the one the Delivery Manager reviewed: the later of its `modifiedOn` and its newest audited write (a note, witness, document, referral or email; reads excluded), read in its own statement after the case lock (`repository/CaseLastChanged`). It is a time comparison, and two windows are left open on purpose (*The stale check's window*, below) |
 | `RETAINED_PERMANENTLY` | `retainPermanently` is set |
 | `GAZETTE_EVIDENCE` | Gazette notice batch membership or request evidence |
 | `RETAINED_DEED_PAYLOAD`, `RETAINED_STAGED_UPLOADS` | the existing retained-bytes guards |
@@ -742,8 +742,37 @@ case's other children are. Admission inventories each one:
   (`SELECT locator FROM deedpoll_deletion_step WHERE request_id = … AND kind = 'CDAM_REMOVED_DOCUMENT' AND state =
   'Pending'`) and asks the dm-store team to purge them. Once they confirm in writing,
   [`docs/deletion/confirm-cdam-purge.sql`](deletion/confirm-cdam-purge.sql) records each line `Done` with
-  `PURGED_BY_DM_STORE` and requeues the request in one statement, and the next run finalises it.
-  `DeletionCleanupTest.confirmCdamPurge` runs that file verbatim. The standard requeue leaves this code alone.
+  `PURGED_BY_DM_STORE`, requeues the request and records `DELETION_CDAM_PURGE_CONFIRMED` in one statement, and the
+  next run finalises it. The operator sets three psql variables: `request_id`, `cdam_ids` (every id the dm-store team
+  confirmed, comma-separated) and `operator` (their own name, which the audit event carries as its actor name, with
+  no actor id; the event's detail is the request id only, and its fields are `status`, `failure` and `steps`). **It
+  writes only if the listed ids are exactly the request's `Pending` `CDAM_REMOVED_DOCUMENT` ids** (order, spaces and
+  repeats aside), the request is unclaimed `NeedsAttention` `CDAM_REMOVED_DOCUMENT_UNPURGED` and the operator is
+  named; otherwise it writes nothing and answers `0, 0, 0`, so a missing id, an extra id, a second run or a request in
+  another state changes nothing. `DeletionCleanupTest` runs that file verbatim for each of those. The standard
+  requeue leaves this code alone.
+
+## The stale check's window
+
+`STALE_CONFIRMATION` compares times, not a version. `modifiedOn` and each audit event's `occurred_at` are stamped
+from a pod's clock while the write runs, not when it commits, and child writes (notes, witnesses, documents,
+referrals, emails) do not lock the case row. So two races are left, each one child write's transaction wide (or the
+pods' clock skew):
+
+- a child write that commits after admission has read `lastChangedOn` and before admission commits, and
+- a child write in flight when the case was reviewed, whose time is older than a newer write already shown, so the
+  maximum does not move.
+
+V49's fence refuses a child write that commits after admission, so neither race can change the case once the request
+exists; the risk is a deletion admitted over a change the Delivery Manager did not see. That is accepted (Steve,
+2026-11-19) because a deletion is recoverable: nothing permanent happens during its grace period, and a Delivery
+Manager can restore the application whole (plan `20261119-deletion-grace-period-and-restore`). A value moved at every
+commit was built (a constraint trigger on `deedpoll_audit_event` locking the case row) and removed before any
+environment ran it: it deadlocked against Gazette settlement and the referral queue's send and `unassignOverdue`.
+
+Some writes to the case row are deliberately not changes, because they follow from something else and record no
+audit event: the CCD binding (`bindCcdCaseReference`) and the read-model recomputes (`currentReferralState`,
+`awaitingConfirmationSince`). These are bulk updates that do not move `modifiedOn`.
 
 ## External onboarding checklist (not done here; owners in brackets)
 

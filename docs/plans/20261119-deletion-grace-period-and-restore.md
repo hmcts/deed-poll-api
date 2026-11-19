@@ -96,12 +96,12 @@ and records counts from the XML in `build/test-results/{test,integration}`.
 
 ### Task 1: Remove the commit-time marker and fix the purge script
 
-- [ ] Restore `CaseLastChanged` to the time comparison (ac90738), remove V50 part 1 and `CaseChangeMarkerTest`,
+- [x] Restore `CaseLastChanged` to the time comparison (ac90738), remove V50 part 1 and `CaseChangeMarkerTest`,
   and update every test that relied on the marker. Keep the tests proving a child write after review is stale and a
   read is not.
-- [ ] Rewrite `confirm-cdam-purge.sql` as above, with tests: listed ids match (confirms and audits), a missing or
+- [x] Rewrite `confirm-cdam-purge.sql` as above, with tests: listed ids match (confirms and audits), a missing or
   extra id (writes nothing), a second run (writes nothing), a non-NeedsAttention request (writes nothing).
-- [ ] Update `docs/APPLICATION-DELETION.md` and `CLAUDE.md` for both.
+- [x] Update `docs/APPLICATION-DELETION.md` and `CLAUDE.md` for both.
 
 ### Task 2: Add the grace period setting
 
