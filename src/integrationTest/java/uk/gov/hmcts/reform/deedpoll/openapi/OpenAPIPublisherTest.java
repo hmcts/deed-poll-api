@@ -318,8 +318,8 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
             .contains("409", "processing window", "optional for one release");
         assertThat(spec.at("/components/schemas/ProcessSettingsResponse/properties").fieldNames()).toIterable()
             .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "reminderIntervalHours", "windowCap",
-                "morningWindowStart", "morningWindowEnd", "afternoonWindowStart", "afternoonWindowEnd", "revision",
-                "updatedAt", "updatedBy");
+                "morningWindowStart", "morningWindowEnd", "afternoonWindowStart", "afternoonWindowEnd",
+                "deletionGraceDays", "revision", "updatedAt", "updatedBy");
         JsonNode body = spec.at("/components/schemas/UpdateProcessSettingsRequest");
         assertThat(body.get("required")).extracting(JsonNode::asText)
             .containsExactlyInAnyOrder("referralClaimExpiryMinutes", "revision");
@@ -333,6 +333,10 @@ class OpenAPIPublisherTest extends AbstractPostgresContainerTest {
         assertThat(body.at("/properties/reminderIntervalHours/maximum").asInt()).isEqualTo(168);
         assertThat(body.at("/properties/windowCap/minimum").asInt()).isEqualTo(1);
         assertThat(body.at("/properties/windowCap/maximum").asInt()).isEqualTo(100);
+        assertThat(body.at("/properties/deletionGraceDays/minimum").asInt()).isEqualTo(1);
+        assertThat(body.at("/properties/deletionGraceDays/maximum").asInt()).isEqualTo(90);
+        assertThat(spec.at("/components/schemas/ProcessSettingsResponse/properties/deletionGraceDays/maximum")
+            .asInt()).isEqualTo(90);
         for (String time : List.of("morningWindowStart", "morningWindowEnd", "afternoonWindowStart",
                                    "afternoonWindowEnd")) {
             assertThat(body.at("/properties/" + time + "/pattern").asText()).as(time)

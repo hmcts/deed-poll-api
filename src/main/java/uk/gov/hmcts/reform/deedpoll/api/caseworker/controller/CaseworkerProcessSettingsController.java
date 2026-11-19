@@ -27,7 +27,7 @@ public class CaseworkerProcessSettingsController {
         description = "Requires caseworker-deedpoll-delivery-manager (MANAGE_PROCESS_CONFIG). "
             + "Seeded with a processing window of 10080 minutes (7 days), a 48-hour reminder interval, a cap of 10 "
             + "referrals sent per window across all Masters, and referral windows of 07:00-10:30 and 14:00-14:30 "
-            + "Europe/London, at revision 0 with null attribution.")
+            + "Europe/London, and a 14-day application deletion grace period, at revision 0 with null attribution.")
     @GetMapping
     public ProcessSettingsResponse get() {
         return ProcessSettingsResponse.from(service.get(CurrentUsers.required()));
@@ -43,7 +43,8 @@ public class CaseworkerProcessSettingsController {
             + "each changed setting writes its own history row. Window times are HH:mm on the quarter hour, each "
             + "window starting before it ends and the morning window ending before the afternoon one starts. A new "
             + "processing window applies from the next sweep; saving it releases nothing itself, and raising it "
-            + "never restores a referral already released.")
+            + "never restores a referral already released. A new deletionGraceDays applies only to application "
+            + "deletions confirmed after it; a request already confirmed keeps the date it was given.")
     @AuditedAs(AuditAction.PROCESS_SETTINGS_CHANGED)
     @PutMapping
     public ProcessSettingsResponse update(@RequestBody UpdateProcessSettingsRequest request) {

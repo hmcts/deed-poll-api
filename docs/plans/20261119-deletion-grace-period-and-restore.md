@@ -105,7 +105,7 @@ and records counts from the XML in `build/test-results/{test,integration}`.
 
 ### Task 2: Add the grace period setting
 
-- [ ] V50: `deletionGraceDays` on the process settings table, with its CHECK and default; entity, service getter,
+- [x] V50: `deletionGraceDays` on the process settings table, with its CHECK and default; entity, service getter,
   GET/PUT DTOs, OpenAPI body, history row, tests (range edges, absent key, history, 403 without
   `MANAGE_PROCESS_CONFIG`).
 

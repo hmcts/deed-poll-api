@@ -30,5 +30,13 @@ ALTER TABLE deedpoll_deletion_step DROP CONSTRAINT deedpoll_deletion_step_kind_c
 ALTER TABLE deedpoll_deletion_step ADD CONSTRAINT deedpoll_deletion_step_kind_check
     CHECK (kind IN ('LOCAL_DOCUMENT', 'CDAM_DOCUMENT', 'CDAM_REMOVED_DOCUMENT', 'OWNED_STAGE', 'CCD_DISPOSAL'));
 
+-- The deletion grace period (addendum 20261119): how long a confirmed application deletion stays a soft delete, in
+-- whole days, during which a Delivery Manager may restore it. A Delivery Manager process setting, 1 to 90 days,
+-- seeded 14. Admission freezes it onto the request, so a later change affects only new requests.
+ALTER TABLE deedpoll_process_settings
+    ADD COLUMN deletion_grace_days integer NOT NULL DEFAULT 14
+        CONSTRAINT deedpoll_process_settings_deletion_grace_days_check CHECK (deletion_grace_days BETWEEN 1 AND 90);
+
 -- Rolling back the application below this version: older code never writes the tombstones and ignores them, so the
--- table may stay. Documents removed while older code runs leave no tombstone.
+-- table may stay. Documents removed while older code runs leave no tombstone. Older code never reads
+-- deletion_grace_days, and its default keeps older writes of the singleton valid.

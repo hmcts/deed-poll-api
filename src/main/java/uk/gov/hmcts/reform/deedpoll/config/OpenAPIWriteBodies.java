@@ -230,6 +230,11 @@ public class OpenAPIWriteBodies {
                     + " before it ends, and the morning window ends before the afternoon one starts. Optional for"
                     + " one release; absent leaves it unchanged, null is refused."));
         }
+        settings.addProperty(ProcessSettings.DELETION_GRACE_DAYS, wholeNumber(
+            ProcessSettingsService.MIN_DELETION_GRACE_DAYS, ProcessSettingsService.MAX_DELETION_GRACE_DAYS,
+            "How long a confirmed application deletion can still be restored by a Delivery Manager, in whole days,"
+                + " from 1 to 90. A change applies only to deletions confirmed after it. Optional; absent leaves it"
+                + " unchanged, null is refused."));
         settings.addProperty(REVISION_PROPERTY, new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
             .description("The revision returned by the settings read; stale values return 409."));
         settings.setRequired(java.util.List.of(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, REVISION_PROPERTY));
