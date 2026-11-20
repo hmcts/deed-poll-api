@@ -1,14 +1,10 @@
 package uk.gov.hmcts.reform.deedpoll.config;
 
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.slf4j.LoggerFactory;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -18,26 +14,25 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import uk.gov.hmcts.reform.deedpoll.auth.StubIdam;
-import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 
 import java.util.List;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The shipped default, with no override: the caseworker gate enforces (OWASP plan 01 Task 5, 2026-11-09).
+ * The {@code /caseworker/**} rule: only the caseworker area's staff roles get through (OWASP plan 01, H1).
  *
- * <p>Sets no {@code deedpoll.security.staff-gate} property on purpose, so this class is what proves
- * {@code application.yaml}'s default is {@code enforce}. Report mode, a rollback setting only, is
- * {@link StaffGateReportModeTest}.
+ * <p>Since Task 12 (2026-11-17) this is a plain {@code hasAnyAuthority} rule, as {@code /judicial/**} is, with no
+ * report mode and no setting. These cases are the role table the deleted {@code StaffGateTest} pinned, now over HTTP
+ * through the real chain, so the refusal's status and body are what a caller sees. {@link StaffAccessRulesTest} pins
+ * which roles each area admits; {@link CaseworkerStaffRuleIgnoresReportTest} that the retired setting opens nothing.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles({"config-gen", "test"})
-class StaffGateDefaultModeTest {
+class CaseworkerStaffRuleTest {
 
     private static final StubIdam IDAM = new StubIdam();
 
@@ -59,42 +54,31 @@ class StaffGateDefaultModeTest {
     @Autowired
     private MockMvc mockMvc;
 
-    private ListAppender<ILoggingEvent> logs;
-    private Logger logger;
-
     @BeforeEach
     void setUp() {
         IDAM.stubDefaults();
-        logs = new ListAppender<>();
-        logs.start();
-        logger = (Logger) LoggerFactory.getLogger(StaffGate.class);
-        logger.addAppender(logs);
     }
 
-    @AfterEach
-    void releaseLogs() {
-        logger.detachAppender(logs);
-    }
-
-    @Test
-    @DisplayName("refuses a role-less caller on the caseworker surface by default, and reports nothing")
-    void enforcesByDefault() throws Exception {
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "Someone Else", List.of("caseworker-divorce"));
-
-        mockMvc.perform(get("/caseworker/no-such-route").headers(bearer())).andExpect(status().isForbidden())
-            .andExpect(jsonPath("$.error").value(StaffArea.CASEWORKER.refusal()));
-
-        assertThat(logs.list).isEmpty();
-    }
-
-    @Test
-    @DisplayName("lets a staff caller through by default, to the route's own answer")
-    void admitsStaffByDefault() throws Exception {
-        IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of(Role.CASEWORKER.claimValue()));
+    @ParameterizedTest
+    @ValueSource(strings = {"caseworker-deedpoll", "caseworker-deedpoll-team-leader",
+        "caseworker-deedpoll-delivery-manager", "caseworker-deedpoll-admin"})
+    @DisplayName("lets each caseworker-area staff role through, to the route's own answer")
+    void admitsEachStaffRole(String role) throws Exception {
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "A Caseworker", List.of(role));
 
         mockMvc.perform(get("/caseworker/no-such-route").headers(bearer())).andExpect(status().isNotFound());
+    }
 
-        assertThat(logs.list).isEmpty();
+    @ParameterizedTest
+    @ValueSource(strings = {"caseworker-divorce", "caseworker-deedpoll-judicial", "caseworker", "CASEWORKER-DEEDPOLL",
+        "caseworker-deedpoll-judiciary"})
+    @DisplayName("refuses anyone else with 403 and the area's refusal: no role, a judge alone, and near misses")
+    void refusesEveryOtherRole(String role) throws Exception {
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Someone Else", List.of(role));
+
+        mockMvc.perform(get("/caseworker/no-such-route").headers(bearer()))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.error").value(StaffArea.CASEWORKER.refusal()));
     }
 
     private static HttpHeaders bearer() {

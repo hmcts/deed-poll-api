@@ -1,5 +1,10 @@
 # Resume state — where the next session picks up
 
+**OWASP plan 01 Task 12, 2026-11-17:** on `chore/h1-delete-staff-gate-report-mode`. The `/caseworker/**` staff rule is
+now a plain `hasAnyAuthority`, as `/judicial/**` is: `StaffGate`, its report mode, its `staff-gate report` log line and
+`STAFF_GATE_MODE` are gone. Due no earlier than 2026-11-24 (two weeks after Task 5 went live with no rollback).
+Rollback is a revert. Tests: `CaseworkerStaffRuleTest`, `CaseworkerStaffRuleIgnoresReportTest`.
+
 **Plan 20261109-h1-staff-gate-enforce-default, 2026-11-09:** on `fix/h1-staff-gate-enforce-default`.
 `STAFF_GATE_MODE` defaults to `enforce` and the chart no longer sets it (0.0.34), so every environment refuses a
 caller with no staff role on `/caseworker/**` with 403. Rollback is a flux PR setting `STAFF_GATE_MODE: report`.

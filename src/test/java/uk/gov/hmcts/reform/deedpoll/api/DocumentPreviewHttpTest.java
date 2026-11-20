@@ -108,7 +108,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>Not {@code @Transactional}: the read audit commits in its own transaction, and a preview refuses to run inside
  * one. Audit rows stay, as V36 requires, under case ids no other test uses.
  */
-@SpringBootTest(properties = "deedpoll.security.staff-gate=enforce")
+@SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class DocumentPreviewHttpTest extends AbstractPostgresContainerTest {

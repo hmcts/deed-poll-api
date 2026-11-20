@@ -3,7 +3,6 @@ package uk.gov.hmcts.reform.deedpoll.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -336,8 +335,8 @@ public class SecurityConfiguration {
      *
      * <p>Authentication alone was the rule for every staff route until the {@link StaffArea} rules, so any token IDAM
      * issued could reach the caseworker surface (OWASP finding H1). The judicial area is enforced outright, because
-     * its services already refuse a non-judge and the rule changes no outcome. The caseworker area goes through
-     * {@link StaffGate}, which reports before it enforces: see {@code deedpoll.security.staff-gate}.
+     * its services already refuse a non-judge and the rule changes no outcome. The caseworker area is enforced the same
+     * way (OWASP plan 01 Task 12, 2026-11-17, which removed the report-first {@code StaffGate} and its setting).
      * {@link #ANY_AUTHENTICATED_PATHS} are authenticated by name. {@code anyRequest().authenticated()} stays as the
      * fallback for unknown paths; {@code /citizen/**} never reaches it. A new top-level prefix is caught by
      * {@code StaffAccessRulesTest} rather than by a {@code denyAll()}.
@@ -354,12 +353,9 @@ public class SecurityConfiguration {
                                                   IdamAuthenticationConverter authenticationConverter,
                                                   ObjectMapper objectMapper,
                                                   RateLimitProperties rateLimits,
-                                                  RequestBudgetRepository requestBudget,
-                                                  @Value("${deedpoll.security.staff-gate:enforce}")
-                                                  String staffGateMode)
+                                                  RequestBudgetRepository requestBudget)
         throws Exception {
 
-        StaffGate caseworkerGate = new StaffGate(StaffArea.CASEWORKER, StaffGate.Mode.of(staffGateMode));
         AuthenticationEntryPoint entryPoint = loggingEntryPoint();
 
         return http
@@ -373,7 +369,7 @@ public class SecurityConfiguration {
                 .requestMatchers(PUBLIC_PATHS).permitAll()
                 .requestMatchers(CCD_SDK_PATHS).denyAll()
                 .requestMatchers(StaffArea.JUDICIAL.pattern()).hasAnyAuthority(StaffArea.JUDICIAL.authorities())
-                .requestMatchers(StaffArea.CASEWORKER.pattern()).access(caseworkerGate.manager())
+                .requestMatchers(StaffArea.CASEWORKER.pattern()).hasAnyAuthority(StaffArea.CASEWORKER.authorities())
                 .requestMatchers(HttpMethod.GET, ANY_AUTHENTICATED_PATHS).authenticated()
                 .anyRequest().authenticated())
             .exceptionHandling(errors -> errors
