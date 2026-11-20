@@ -218,7 +218,8 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
         + "new requests")
     void gracePeriodIsFrozenAtAdmission() {
         DeletionRequest first = admit(fixture(), UUID.randomUUID()).request();
-        assertThat(Duration.between(first.requestedAt(), first.restorableUntil()))
+        assertThat(Duration.between(first.requestedAt().toInstant(ZoneOffset.UTC),
+                                     first.restorableUntil().toInstant(ZoneOffset.UTC)))
             .as("the seeded 14 days, to the millisecond").isBetween(Duration.ofDays(14).minusMillis(1),
                                                                      Duration.ofDays(14));
         assertThat(first.nextAttemptAt()).as("first due when the period ends").isEqualTo(first.restorableUntil());
@@ -229,7 +230,8 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
                 .as("the date the Delivery Manager was shown never moves").isEqualTo(first.restorableUntil());
 
             DeletionRequest second = admit(fixture(), UUID.randomUUID()).request();
-            assertThat(Duration.between(second.requestedAt(), second.restorableUntil()))
+            assertThat(Duration.between(second.requestedAt().toInstant(ZoneOffset.UTC),
+                                         second.restorableUntil().toInstant(ZoneOffset.UTC)))
                 .isBetween(Duration.ofDays(3).minusMillis(1), Duration.ofDays(3));
             assertThatThrownBy(() -> jdbc.update(
                 "UPDATE deedpoll_deletion_request SET restorable_until = restorable_until + interval '11 days' "

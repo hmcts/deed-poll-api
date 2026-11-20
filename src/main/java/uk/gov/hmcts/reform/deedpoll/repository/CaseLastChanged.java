@@ -5,9 +5,8 @@ import org.springframework.stereotype.Repository;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditAction;
 
 import java.time.LocalDateTime;
-import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 /**
  * When anything about a case last changed: the later of its own {@code modifiedOn} and its newest audited write.
@@ -26,18 +25,29 @@ import java.util.stream.Collectors;
 @Repository
 public class CaseLastChanged {
 
-    /** The read actions, as a constant SQL list built from the enum: names only, never caller input. */
-    private static final String READ_ACTIONS = Arrays.stream(AuditAction.values())
-        .filter(AuditAction::isRead)
-        .map(action -> "'" + action.name() + "'")
-        .collect(Collectors.joining(", "));
+    /**
+     * The read actions, written out so the statement is a constant: {@link AuditAction}'s {@code isRead} members.
+     * {@code CaseLastChangedTest} fails if the two ever differ, so a new read action is added here too.
+     */
+    static final List<String> READ_ACTIONS = List.of("CASE_VIEWED", "DOCUMENT_DOWNLOADED", "DOCUMENT_PREVIEWED");
 
     /**
      * The case's last change; {@code greatest} ignores the null of a case with no audited write yet.
      */
-    private static final String SQL = "SELECT greatest(d.\"modifiedOn\", (SELECT max(e.occurred_at)"
-        + " FROM deedpoll_audit_event e WHERE e.case_id = d.id AND e.action NOT IN (" + READ_ACTIONS + ")))"
-        + " AS last_changed FROM deedpoll_deedpoll d WHERE d.id = ?";
+    private static final String SQL = """
+        SELECT greatest(d."modifiedOn", (SELECT max(e.occurred_at) FROM deedpoll_audit_event e
+                                          WHERE e.case_id = d.id
+                                            AND e.action NOT IN ('CASE_VIEWED', 'DOCUMENT_DOWNLOADED',
+                                                                 'DOCUMENT_PREVIEWED'))) AS last_changed
+          FROM deedpoll_deedpoll d WHERE d.id = ?
+        """;
+
+    /**
+     * The statement, for the test that holds its read actions to {@link #READ_ACTIONS}.
+     */
+    static String sql() {
+        return SQL;
+    }
 
     private final JdbcTemplate jdbc;
 
