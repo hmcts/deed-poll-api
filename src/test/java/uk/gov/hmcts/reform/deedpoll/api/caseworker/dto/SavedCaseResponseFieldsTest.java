@@ -42,7 +42,7 @@ class SavedCaseResponseFieldsTest {
     }
 
     @Test
-    @DisplayName("is the detail response minus the three child collections, exactly")
+    @DisplayName("is the detail response minus the three child collections and lastChangedOn, exactly")
     void isTheDetailResponseMinusTheChildren() {
         List<String> detail = CaseResponseFields.componentNames(CaseDetailResponse.class);
         List<String> saved = CaseResponseFields.componentNames(SavedCaseResponse.class);
@@ -50,7 +50,8 @@ class SavedCaseResponseFieldsTest {
         // Order too, not just membership: both records are read positionally by their own from() methods, and a
         // reordering that a set comparison would accept is exactly the kind of edit that transposes two fields.
         assertThat(saved).containsExactlyElementsOf(
-            detail.stream().filter(name -> !CaseResponseFields.CHILDREN.contains(name)).toList());
+            detail.stream().filter(name -> !CaseResponseFields.CHILDREN.contains(name)
+                && !CaseResponseFields.DETAIL_ONLY.contains(name)).toList());
         assertThat(saved).doesNotContainAnyElementsOf(CaseResponseFields.CHILDREN);
     }
 

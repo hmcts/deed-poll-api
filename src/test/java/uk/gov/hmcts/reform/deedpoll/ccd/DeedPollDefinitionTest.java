@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import uk.gov.hmcts.ccd.sdk.CCDDefinitionGenerator;
+import uk.gov.hmcts.ccd.sdk.RetainAndDisposePolicy;
 import uk.gov.hmcts.ccd.sdk.api.CCDConfig;
 import uk.gov.hmcts.ccd.sdk.generator.JSONConfigGenerator;
 
@@ -81,12 +82,12 @@ class DeedPollDefinitionTest {
     }
 
     @Test
-    @DisplayName("one state, Registered; linkDeedPoll creates a case into it, and the document event runs on it")
-    void oneStateAndTwoEvents() throws IOException {
+    @DisplayName("Registered, which linkDeedPoll creates into and the document event runs on, and PendingDisposal")
+    void statesAndEvents() throws IOException {
         Path caseType = generate();
 
         assertThat(rows(caseType, "State.json")).extracting(row -> row.get("ID").asText())
-            .containsExactly("Registered");
+            .containsExactlyInAnyOrder("Registered", RetainAndDisposePolicy.DISPOSAL_STATE_ID);
         assertThat(rows(caseType, "CaseEvent/linkDeedPoll.json")).singleElement().satisfies(row -> {
             assertThat(row.get("ID").asText()).isEqualTo(DeedPollCaseType.LINK_DEED_POLL);
             assertThat(row.has("PreConditionStates")).as("a create event has no pre-condition state").isFalse();
@@ -94,20 +95,55 @@ class DeedPollDefinitionTest {
         });
         try (Stream<Path> events = Files.list(caseType.resolve("CaseEvent"))) {
             assertThat(events).extracting(path -> path.getFileName().toString())
-                .containsExactlyInAnyOrder("linkDeedPoll.json", CaseDocumentsEvent.EVENT_ID + ".json");
+                .containsExactlyInAnyOrder("linkDeedPoll.json", CaseDocumentsEvent.EVENT_ID + ".json",
+                    RetainAndDisposePolicy.DISPOSAL_EVENT_ID + ".json",
+                    RetainAndDisposePolicy.CONFIRM_DISPOSAL_EVENT_ID + ".json");
         }
         assertThat(rows(caseType, "CaseEvent/" + CaseDocumentsEvent.EVENT_ID + ".json")).singleElement()
-            .satisfies(row -> assertThat(row.get("PostConditionState").asText()).isEqualTo("Registered"));
+            .satisfies(row -> {
+                assertThat(row.get("PreConditionState(s)").asText())
+                    .as("no document event can follow MarkForDisposal").isEqualTo("Registered");
+                assertThat(row.get("PostConditionState").asText()).isEqualTo("Registered");
+            });
     }
 
     @Test
-    @DisplayName("three fields: the link and the display reference, which linking requires, and the documents")
-    void threeFields() throws IOException {
+    @DisplayName("Retain and Dispose: Mark moves Registered to PendingDisposal, Confirm stays with an increment of 0")
+    void disposalEvents() throws IOException {
+        Path caseType = generate();
+
+        assertThat(rows(caseType, "CaseEvent/" + RetainAndDisposePolicy.DISPOSAL_EVENT_ID + ".json")).singleElement()
+            .satisfies(row -> {
+                assertThat(row.get("PreConditionState(s)").asText()).isEqualTo("Registered");
+                assertThat(row.get("PostConditionState").asText()).isEqualTo(RetainAndDisposePolicy.DISPOSAL_STATE_ID);
+                assertThat(row.has("TTLIncrement")).as("only ConfirmDisposal sets the date").isFalse();
+            });
+        assertThat(rows(caseType, "CaseEvent/" + RetainAndDisposePolicy.CONFIRM_DISPOSAL_EVENT_ID + ".json"))
+            .singleElement().satisfies(row -> {
+                assertThat(row.get("PreConditionState(s)").asText())
+                    .isEqualTo(RetainAndDisposePolicy.DISPOSAL_STATE_ID);
+                assertThat(row.get("PostConditionState").asText()).isEqualTo(RetainAndDisposePolicy.DISPOSAL_STATE_ID);
+                assertThat(row.get("TTLIncrement").asInt()).isZero();
+            });
+        try (Stream<Path> fields = Files.list(caseType.resolve("CaseEventToFields"))) {
+            assertThat(fields).extracting(path -> path.getFileName().toString())
+                .as("neither disposal event carries a field")
+                .containsExactlyInAnyOrder("linkDeedPoll.json", CaseDocumentsEvent.EVENT_ID + ".json");
+        }
+    }
+
+    @Test
+    @DisplayName("four fields: the link and display reference linking requires, the documents, and the platform TTL")
+    void fourFields() throws IOException {
         Path caseType = generate();
 
         assertThat(rows(caseType, "CaseField.json")).extracting(row -> row.get("ID").asText())
             // caseHistory is the SDK's own viewer field, which it adds to every case type; nobody is granted it.
-            .containsExactly("caseHistory", "deedPollId", "deedPollReference", CaseDocumentsEvent.FIELD);
+            .containsExactly("TTL", "caseHistory", "deedPollId", "deedPollReference", CaseDocumentsEvent.FIELD);
+        assertThat(rows(caseType, "CaseField.json"))
+            .filteredOn(row -> row.get("ID").asText().equals("TTL")).singleElement()
+            .satisfies(row -> assertThat(row.get("FieldType").asText())
+                .as("data-store applies a TTL increment only to a field with this id and type").isEqualTo("TTL"));
         assertThat(rows(caseType, "CaseEventToFields/linkDeedPoll.json"))
             .extracting(row -> row.get("CaseFieldID").asText() + ":" + row.get("DisplayContext").asText())
             .containsExactly("deedPollId:MANDATORY", "deedPollReference:MANDATORY");
@@ -129,17 +165,21 @@ class DeedPollDefinitionTest {
 
         assertThat(crud(caseType, "AuthorisationCaseType.json", "UserRole"))
             .containsOnly(Map.entry("DEED_POLL_SYSTEM", "CRU"), Map.entry("DEED_POLL_READER", "R"));
-        assertThat(crud(caseType, "AuthorisationCaseState.json", "UserRole"))
-            .containsOnly(Map.entry("DEED_POLL_SYSTEM", "CRU"), Map.entry("DEED_POLL_READER", "R"));
         assertThat(rows(caseType, "AuthorisationCaseState.json"))
-            .allSatisfy(row -> assertThat(row.get("CaseStateID").asText()).isEqualTo("Registered"));
+            .extracting(row -> row.get("CaseStateID").asText() + ":" + row.get("UserRole").asText() + ":"
+                + row.get("CRUD").asText())
+            .as("the system user must read PendingDisposal, or Retain and Dispose aborts; staff read nothing there")
+            .containsExactlyInAnyOrder("Registered:DEED_POLL_SYSTEM:CRU", "Registered:DEED_POLL_READER:R",
+                RetainAndDisposePolicy.DISPOSAL_STATE_ID + ":DEED_POLL_SYSTEM:CRU");
         assertThat(rows(caseType, "AuthorisationCaseEvent/AuthorisationCaseEvent.json"))
             .allSatisfy(row -> assertThat(row.get("UserRole").asText()).isEqualTo("DEED_POLL_SYSTEM"));
         assertThat(crud(caseType, "AuthorisationCaseEvent/AuthorisationCaseEvent.json", "CaseEventID")).containsOnly(
-            Map.entry(DeedPollCaseType.LINK_DEED_POLL, "CR"), Map.entry(CaseDocumentsEvent.EVENT_ID, "CRU"));
+            Map.entry(DeedPollCaseType.LINK_DEED_POLL, "CR"), Map.entry(CaseDocumentsEvent.EVENT_ID, "CRU"),
+            Map.entry(RetainAndDisposePolicy.DISPOSAL_EVENT_ID, "CRU"),
+            Map.entry(RetainAndDisposePolicy.CONFIRM_DISPOSAL_EVENT_ID, "CRU"));
         assertThat(crud(caseType, "AuthorisationCaseField/DEED_POLL_SYSTEM.json", "CaseFieldID")).containsOnly(
             Map.entry("deedPollId", "CR"), Map.entry("deedPollReference", "CR"),
-            Map.entry(CaseDocumentsEvent.FIELD, "CRUD"));
+            Map.entry(CaseDocumentsEvent.FIELD, "CRUD"), Map.entry("TTL", "CRU"));
         assertThat(crud(caseType, "AuthorisationCaseField/DEED_POLL_READER.json", "CaseFieldID"))
             .containsOnly(Map.entry(CaseDocumentsEvent.FIELD, "R"));
         try (Stream<Path> fieldGrants = Files.list(caseType.resolve("AuthorisationCaseField"))) {
@@ -184,8 +224,8 @@ class DeedPollDefinitionTest {
     void identifiersComeFromConfiguration() throws IOException {
         CcdProperties confirmed = new CcdProperties("CONFIRMED_TYPE", "CONFIRMED_JURISDICTION", "confirmed-role");
         // The generator reads the event and never invokes its handler, so the handler needs no repositories.
-        DeedPollCaseType definition = new DeedPollCaseType(confirmed, new LinkDeedPollHandler(null, null),
-            new SupportingDocumentsHandler(null, null));
+        DeedPollCaseType definition = new DeedPollCaseType(confirmed, new LinkDeedPollHandler(null, null, null),
+            new SupportingDocumentsHandler(null, null, null), new DisposalEventsHandler(null));
         new CCDDefinitionGenerator(List.<CCDConfig<?, ?, ?>>of(definition), writer)
             .generateAllCaseTypesToJSON(output.toFile());
 

@@ -103,11 +103,14 @@ ls build/definitions/"$CCD_CASE_TYPE_ID"
 ```
 
 Expect one directory named for the case type. Its contents must match `src/test/resources/ccd-definition/` except
-for the three identifiers — one state (`Registered`), two events (`linkDeedPoll`,
-`updateSupportingDocuments`) and three data fields (`deedPollId`, `deedPollReference`, `supportingDocuments`),
-plus the generated `caseHistory` presentation field.
+for the three identifiers — two states (`Registered`, and Retain and Dispose's `PendingDisposal`), four events
+(`linkDeedPoll`, `updateSupportingDocuments` from `Registered`, and the SDK's `MarkForDisposal` and `ConfirmDisposal`,
+both `TTLIncrement` 0) and four data fields (`deedPollId`, `deedPollReference`, `supportingDocuments` and the
+platform `TTL`), plus the generated `caseHistory` presentation field.
 `DEED_POLL_SYSTEM` retains its existing grants: CR on the linking event and its two fields, CRU on the case type,
-state and document event, and CRUD on `supportingDocuments` (D permits collection-item removal).
+`Registered` and the document event, and CRUD on `supportingDocuments` (D permits collection-item removal); plan
+20261118 adds CRU on `PendingDisposal`, `TTL` and the two disposal events. `DEED_POLL_READER` has nothing on
+`PendingDisposal`.
 The role mapping must map `idam:deed-poll-system-update` to that profile. The three staff roles
 `caseworker-deedpoll`, `caseworker-deedpoll-admin`, and `caseworker-deedpoll-judicial` map to
 `DEED_POLL_READER`: R only on the case type, Registered state and supportingDocuments. No staff event,

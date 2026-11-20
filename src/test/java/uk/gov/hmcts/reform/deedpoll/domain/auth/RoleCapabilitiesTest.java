@@ -59,12 +59,13 @@ class RoleCapabilitiesTest {
     }
 
     @Test
-    void deliveryManagerInheritsExactlyTeamLeaderPlusGazetteAndProcessConfig() {
+    void deliveryManagerInheritsExactlyTeamLeaderPlusGazetteProcessConfigAndDeletion() {
         Set<Capability> leader = RoleCapabilities.forRoles(List.of(Role.TEAM_LEADER));
         Set<Capability> manager = RoleCapabilities.forRoles(List.of(Role.DELIVERY_MANAGER));
         assertThat(manager).containsAll(leader);
         assertThat(manager.stream().filter(capability -> !leader.contains(capability)))
-            .containsExactlyInAnyOrder(Capability.ACCESS_GAZETTE, Capability.MANAGE_PROCESS_CONFIG);
+            .containsExactlyInAnyOrder(Capability.ACCESS_GAZETTE, Capability.MANAGE_PROCESS_CONFIG,
+                                       Capability.DELETE_APPLICATION);
         assertThat(leader).doesNotContain(Capability.MANAGE_PROCESS_CONFIG);
         Set<Capability> legacy = RoleCapabilities.forRoles(List.of(Role.DEEDPOLL_ADMIN));
         assertThat(leader.stream().filter(capability -> !legacy.contains(capability)))
@@ -90,10 +91,29 @@ class RoleCapabilitiesTest {
                 .as(role.name())
                 .isEqualTo(role == Role.TEAM_LEADER || role == Role.DELIVERY_MANAGER);
         }
-        assertThat(Capability.values()[Capability.values().length - 1])
-            .isEqualTo(Capability.VIEW_MANAGEMENT_INFORMATION);
         assertThat(Capability.VIEW_MANAGEMENT_INFORMATION.ordinal())
             .isEqualTo(Capability.ALLOCATE_REFERRALS.ordinal() + 1);
+    }
+
+    @Test
+    void onlyDeliveryManagersDeleteApplications() {
+        for (Role role : Role.values()) {
+            assertThat(RoleCapabilities.forRoles(List.of(role)).contains(Capability.DELETE_APPLICATION))
+                .as(role.name())
+                .isEqualTo(role == Role.DELIVERY_MANAGER);
+        }
+        // Unions: every role but the Delivery Manager together still cannot delete, and adding it can.
+        List<Role> others = Arrays.stream(Role.values()).filter(role -> role != Role.DELIVERY_MANAGER).toList();
+        assertThat(RoleCapabilities.forRoles(others)).doesNotContain(Capability.DELETE_APPLICATION);
+        List<Role> withManager = new ArrayList<>(others);
+        withManager.add(Role.DELIVERY_MANAGER);
+        assertThat(RoleCapabilities.forRoles(withManager)).contains(Capability.DELETE_APPLICATION);
+        CurrentUser leader = CurrentUser.currentUser(List.of(Role.TEAM_LEADER, Role.JUDICIAL), "Lead", "subject");
+        assertThatThrownBy(() -> leader.require(Capability.DELETE_APPLICATION)).isInstanceOf(ForbiddenError.class);
+        // Appended, so /me's published order and every earlier capability keep their place.
+        assertThat(Capability.values()[Capability.values().length - 1]).isEqualTo(Capability.DELETE_APPLICATION);
+        assertThat(Capability.DELETE_APPLICATION.ordinal())
+            .isEqualTo(Capability.VIEW_MANAGEMENT_INFORMATION.ordinal() + 1);
     }
 
     @Test

@@ -18,6 +18,7 @@ import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdCaseProjection;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
+import uk.gov.hmcts.reform.deedpoll.repository.DeletionFenceRepository;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -105,6 +106,7 @@ public class CcdLinkingService {
     private final ObjectProvider<AuthTokenGenerator> serviceTokens;
     private final CcdProperties identifiers;
     private final CcdLinkingProperties linking;
+    private final DeletionFenceRepository deletionRequests;
 
     public CcdLinkingService(CcdCreationAttempts attempts,
                              DeedPollRepository deedPolls,
@@ -112,7 +114,8 @@ public class CcdLinkingService {
                              SystemUserTokens systemUser,
                              ObjectProvider<AuthTokenGenerator> serviceTokens,
                              CcdProperties identifiers,
-                             CcdLinkingProperties linking) {
+                             CcdLinkingProperties linking,
+                             DeletionFenceRepository deletionRequests) {
         this.attempts = attempts;
         this.deedPolls = deedPolls;
         this.ccd = ccd;
@@ -120,6 +123,7 @@ public class CcdLinkingService {
         this.serviceTokens = serviceTokens;
         this.identifiers = identifiers;
         this.linking = linking;
+        this.deletionRequests = deletionRequests;
     }
 
     /**
@@ -130,7 +134,8 @@ public class CcdLinkingService {
      */
     public Result link(String deedPollId) {
         Optional<CcdCaseProjection> record = deedPolls.findCcdCaseProjectionById(deedPollId);
-        if (record.isEmpty()) {
+        // A record a deletion request names reads as gone (the deletion fence); the claim asks again under its lock.
+        if (record.isEmpty() || deletionRequests.hasRequest(deedPollId)) {
             return Result.NO_SUCH_RECORD;
         }
         Optional<CcdCreationAttempt> live = attempts.live(deedPollId);

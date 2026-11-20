@@ -1,6 +1,14 @@
 [
   {
     "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "FieldType": "TTL",
+    "ID": "TTL",
+    "Label": "Time to live",
+    "LiveFrom": "01/01/2017",
+    "SecurityClassification": "Public"
+  },
+  {
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
     "FieldType": "CaseHistoryViewer",
     "ID": "caseHistory",
     "Label": " ",

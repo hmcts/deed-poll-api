@@ -7,6 +7,7 @@ import uk.gov.hmcts.ccd.sdk.api.EventPayload;
 import uk.gov.hmcts.ccd.sdk.api.callback.SubmitResponse;
 import uk.gov.hmcts.ccd.sdk.type.Document;
 import uk.gov.hmcts.ccd.sdk.type.ListValue;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFence;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdCaseProjection;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageStates;
@@ -40,7 +41,11 @@ public class SupportingDocumentsHandler {
     private final DeedPollRepository deedPolls;
     private final DocumentStorageStates states;
 
-    public SupportingDocumentsHandler(DeedPollRepository deedPolls, DocumentStorageStates states) {
+    private final DeletionFence fence;
+
+    public SupportingDocumentsHandler(DeedPollRepository deedPolls, DocumentStorageStates states,
+                                      DeletionFence fence) {
+        this.fence = fence;
         this.deedPolls = deedPolls;
         this.states = states;
     }
@@ -49,7 +54,9 @@ public class SupportingDocumentsHandler {
     public SubmitResponse<DeedPollCaseState> submit(EventPayload<DeedPollCaseData, DeedPollCaseState> payload) {
         Optional<String> deedPollId = CcdCaseReference.of(payload.caseReference())
             .flatMap(deedPolls::findCcdCaseProjection)
-            .map(CcdCaseProjection::deedPollId);
+            .map(CcdCaseProjection::deedPollId)
+            // A record a deletion request names attaches nothing (the deletion fence).
+            .filter(fence::admits);
         if (deedPollId.isEmpty()) {
             return SubmitResponse.<DeedPollCaseState>builder().errors(List.of(NO_RECORD)).build();
         }

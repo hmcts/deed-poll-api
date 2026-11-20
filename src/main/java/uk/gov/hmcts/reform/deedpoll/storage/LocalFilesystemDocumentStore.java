@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.UUID;
@@ -87,6 +88,37 @@ public class LocalFilesystemDocumentStore implements DocumentStore {
         } catch (IOException failed) {
             throw new UncheckedIOException("Could not delete document " + storageKey, failed);
         }
+    }
+
+    /**
+     * Removes a stored file permanently for an application deletion, and verifies that it is gone.
+     *
+     * <p>Unlike {@link #delete}, absence is only an answer when the store itself is there: a missing root is a volume
+     * that is not mounted, or a pod that never had the files, and reads as a failure rather than as "already gone".
+     * The caller's inventory is what proves the key was this service's own.
+     *
+     * @return true if the file was there and is now deleted, false if the root was there and the file was not
+     * @throws NotFoundError        if the key is blank or resolves outside the root; nothing is touched
+     * @throws UncheckedIOException if the root is not a directory, or the file could not be deleted or is still there
+     */
+    public boolean remove(String storageKey) {
+        if (storageKey == null || storageKey.isBlank()) {
+            throw new NotFoundError("Invalid storage key");
+        }
+        Path path = pathForKey(storageKey);
+        if (!Files.isDirectory(root)) {
+            throw new UncheckedIOException(new IOException("The document store's root is not available"));
+        }
+        boolean deleted;
+        try {
+            deleted = Files.deleteIfExists(path);
+        } catch (IOException failed) {
+            throw new UncheckedIOException("Could not delete a stored document", failed);
+        }
+        if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            throw new UncheckedIOException(new IOException("A deleted document is still present"));
+        }
+        return deleted;
     }
 
     /**

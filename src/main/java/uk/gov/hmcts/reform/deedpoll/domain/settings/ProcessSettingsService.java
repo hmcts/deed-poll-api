@@ -26,6 +26,7 @@ import java.util.Set;
 
 import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.AFTERNOON_WINDOW_END;
 import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.AFTERNOON_WINDOW_START;
+import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.DELETION_GRACE_DAYS;
 import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.WINDOW_CAP;
 import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.MORNING_WINDOW_END;
 import static uk.gov.hmcts.reform.deedpoll.domain.settings.ProcessSettings.MORNING_WINDOW_START;
@@ -58,6 +59,12 @@ public class ProcessSettingsService {
     public static final int MIN_WINDOW_CAP = 1;
 
     public static final int MAX_WINDOW_CAP = 100;
+
+    /** The shortest deletion grace period, in days. V50's check states it too. */
+    public static final int MIN_DELETION_GRACE_DAYS = 1;
+
+    /** The longest deletion grace period, in days. V50's check states it too. */
+    public static final int MAX_DELETION_GRACE_DAYS = 90;
 
     private static final String REVISION = "revision";
 
@@ -111,6 +118,9 @@ public class ProcessSettingsService {
         final Optional<Integer> cap = optionalWhole(fields, WINDOW_CAP, MIN_WINDOW_CAP,
             MAX_WINDOW_CAP, "Enter a cap from " + MIN_WINDOW_CAP + " to " + MAX_WINDOW_CAP
                 + " referrals per window, across all Masters.");
+        final Optional<Integer> graceDays = optionalWhole(fields, DELETION_GRACE_DAYS, MIN_DELETION_GRACE_DAYS,
+            MAX_DELETION_GRACE_DAYS, "Enter a deletion grace period from " + MIN_DELETION_GRACE_DAYS + " to "
+                + MAX_DELETION_GRACE_DAYS + " days, in whole days.");
         Map<String, LocalTime> times = new HashMap<>();
         for (String field : ProcessSettings.WINDOW_FIELDS) {
             if (fields.containsKey(field)) {
@@ -134,6 +144,7 @@ public class ProcessSettingsService {
             times.getOrDefault(MORNING_WINDOW_END, previous.morningWindowEnd()),
             times.getOrDefault(AFTERNOON_WINDOW_START, previous.afternoonWindowStart()),
             times.getOrDefault(AFTERNOON_WINDOW_END, previous.afternoonWindowEnd()),
+            graceDays.map(Duration::ofDays).orElse(previous.deletionGracePeriod()),
             previous.revision(), previous.updatedAt(), previous.updatedBy());
         requireOrdered(candidate);
         List<String> changed = ProcessSettings.FIELDS.stream()
@@ -189,6 +200,16 @@ public class ProcessSettingsService {
      */
     public ReferralWindowTimes referralWindows() {
         return read(false).referralWindows();
+    }
+
+    /**
+     * How long a confirmed application deletion stays restorable before anything permanent happens. Read on every
+     * admission, which freezes it onto the request. No capability check, no cache.
+     *
+     * @throws IllegalStateException if the seeded row is missing; there is no default to fall back to
+     */
+    public Duration deletionGracePeriod() {
+        return read(false).deletionGracePeriod();
     }
 
     /** Each window starts before it ends, and the morning one ends before the afternoon one starts. */

@@ -13,6 +13,7 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.SQLRestriction;
 import org.hibernate.type.SqlTypes;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationFailureVerdict;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.NotificationState;
@@ -56,6 +57,8 @@ import java.util.UUID;
  */
 @Entity
 @Table(name = "deedpoll_notification")
+// The deletion fence, by the row's case (DeletionFenceSql): no JPA read offers a fenced case's email to the drain.
+@SQLRestriction(DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID)
 @Getter
 @Setter
 public class Notification {

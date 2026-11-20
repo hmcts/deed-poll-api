@@ -24,6 +24,9 @@ public record ProcessSettingsResponse(
         pattern = ProcessSettingsTimes.PATTERN) String afternoonWindowStart,
     @Schema(description = "The afternoon referral window's end, Europe/London, HH:mm.",
         pattern = ProcessSettingsTimes.PATTERN) String afternoonWindowEnd,
+    @Schema(description = "How long a confirmed application deletion can still be restored by a Delivery Manager"
+        + " before it is made permanent, in days. A change applies only to deletions confirmed after it.",
+        minimum = "1", maximum = "90", format = "int32") int deletionGraceDays,
     int revision,
     @Schema(nullable = true) LocalDateTime updatedAt,
     @Schema(nullable = true) String updatedBy) {
@@ -33,7 +36,8 @@ public record ProcessSettingsResponse(
             settings.windowCap(), ProcessSettingsTimes.format(settings.morningWindowStart()),
             ProcessSettingsTimes.format(settings.morningWindowEnd()),
             ProcessSettingsTimes.format(settings.afternoonWindowStart()),
-            ProcessSettingsTimes.format(settings.afternoonWindowEnd()), settings.revision(), settings.updatedAt(),
+            ProcessSettingsTimes.format(settings.afternoonWindowEnd()), settings.deletionGraceDays(),
+            settings.revision(), settings.updatedAt(),
             settings.updatedBy());
     }
 }

@@ -8,6 +8,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFence;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.CreateNoteInput;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteAuthor;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
@@ -60,7 +61,9 @@ class NotificationOutboxTest {
         notifications = mock(NotificationRepository.class);
         sender = mock(NotificationSender.class);
         notes = mock(NoteService.class);
-        outbox = new NotificationDeliveryTransactions(notifications, notes);
+        DeletionFence fence = mock(DeletionFence.class);
+        when(fence.admits(any())).thenReturn(true);
+        outbox = new NotificationDeliveryTransactions(notifications, notes, fence);
         when(notifications.save(any(Notification.class))).thenAnswer(call -> call.getArgument(0));
     }
 

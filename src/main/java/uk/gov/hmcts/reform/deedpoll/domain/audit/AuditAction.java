@@ -14,6 +14,20 @@ public enum AuditAction {
     CASE_CREATED,
     CASE_UPDATED,
     CASE_DELETED,
+    /**
+     * A Delivery Manager asked for the case to be deleted permanently; {@code CASE_DELETED} follows on completion.
+     */
+    CASE_DELETION_REQUESTED,
+    /**
+     * A Delivery Manager restored an application during its deletion's grace period: the request is gone, and the case
+     * is visible again. Carries the request's id and reason, never its note.
+     */
+    CASE_DELETION_RESTORED,
+    /**
+     * An operator recorded that the dm-store team purged a deletion request's soft-deleted CDAM documents. Written
+     * only by {@code docs/deletion/confirm-cdam-purge.sql}, under the operator's name with no actor id.
+     */
+    DELETION_CDAM_PURGE_CONFIRMED,
     NOTE_CREATED,
     NOTE_UPDATED,
     NOTE_DELETED,

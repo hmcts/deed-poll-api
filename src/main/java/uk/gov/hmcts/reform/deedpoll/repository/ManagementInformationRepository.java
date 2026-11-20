@@ -5,6 +5,7 @@ import org.springframework.stereotype.Repository;
 import uk.gov.hmcts.reform.deedpoll.domain.mi.DurationFigures;
 import uk.gov.hmcts.reform.deedpoll.domain.mi.MiParameters;
 import uk.gov.hmcts.reform.deedpoll.domain.mi.StageInterval;
+import uk.gov.hmcts.reform.deedpoll.entity.DeletionFenceSql;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -21,16 +22,22 @@ import java.util.stream.Collectors;
  * as {@code value >= from AND value < to + 1} on the uncast column, which is the same set of days.
  *
  * <p>The rows hold counts and figures only: no case id, reference or text ever leaves here (plan D5).
+ *
+ * <p>A case a deletion request names is in no figure (the deletion fence, plan 20261118-dm-application-deletion):
+ * every statement reads {@code DeletionFenceSql.LIVE_CASES} where it names {@code deedpoll_deedpoll d}, through
+ * {@link #live}, so the figures do not move a second time when the deletion completes.
  */
 @Repository
 public class ManagementInformationRepository {
+
+    private static final String CASE_TABLE = "deedpoll_deedpoll d";
 
     private static final String PARAMETERS = """
         WITH p AS (SELECT CAST(? AS text) AS field, CAST(? AS date) AS from_day, CAST(? AS date) + 1 AS end_day,
                           CAST(? AS boolean) AS include_migrated)
         """;
 
-    private static final String RECEIVED = PARAMETERS + """
+    private static final String RECEIVED = live(PARAMETERS + """
         SELECT date_trunc(p.field, d."dateReceived")::date AS period_start,
                coalesce(d."type"::text, 'Unknown') AS type,
                count(*) AS received
@@ -38,10 +45,10 @@ public class ManagementInformationRepository {
          WHERE d."dateReceived" >= p.from_day AND d."dateReceived" < p.end_day
            AND (p.include_migrated OR NOT d."migratedRecord")
          GROUP BY 1, 2
-        """;
+        """);
 
     // The ends are bound as one array literal, '{2026-01-31,2026-02-28}', because they are dates the service made.
-    private static final String OPEN_AT_END = """
+    private static final String OPEN_AT_END = live("""
         WITH p AS (SELECT CAST(? AS boolean) AS include_migrated)
         SELECT e.period_end, count(d.id) AS open_at_end
           FROM unnest(CAST(? AS date[])) AS e(period_end)
@@ -52,33 +59,33 @@ public class ManagementInformationRepository {
            AND (d."dateReturned" IS NULL OR d."dateReturned" >= e.period_end + 1)
            AND (p.include_migrated OR NOT d."migratedRecord")
          GROUP BY e.period_end
-        """;
+        """);
 
     // The migrated cases includeMigrated=false takes out of openAtEnd but CASES_EXCLUDED does not count, because they
     // were received before the range: those still open at the first period's end. A case open at a later end is open
     // at the first one too, since a closing date is the same at every end, so the first end alone decides.
-    private static final String MIGRATED_CARRIED_IN = """
+    private static final String MIGRATED_CARRIED_IN = live("""
         SELECT count(*) FROM deedpoll_deedpoll d
          WHERE d."migratedRecord" AND d."dateReceived" < CAST(? AS date)
            AND (d."dateEnroled" IS NULL OR d."dateEnroled" >= CAST(? AS date) + 1)
            AND (d."dateReturned" IS NULL OR d."dateReturned" >= CAST(? AS date) + 1)
-        """;
+        """);
 
     // A case with no dateReceived is counted here whether or not it is migrated: migrated counts only cases inside
     // the range, and a case with no date is inside none, so filtering it here would leave it counted nowhere.
-    private static final String CASES_EXCLUDED = PARAMETERS + """
+    private static final String CASES_EXCLUDED = live(PARAMETERS + """
         SELECT count(*) FILTER (WHERE d."dateReceived" IS NULL) AS no_date_received,
                count(*) FILTER (WHERE NOT p.include_migrated AND d."migratedRecord"
                                   AND d."dateReceived" >= p.from_day AND d."dateReceived" < p.end_day) AS migrated
           FROM deedpoll_deedpoll d CROSS JOIN p
-        """;
+        """);
 
     // A case's decision (plan K2) is its latest decided referral's decisionDate on or after its dateReferred. A case
     // re-referred to a Master keeps the earlier referral's decision, which predates the new dateReferred: that is a
     // referral not yet decided, so the case has no interval, rather than a negative one counted as a data problem.
     // Only a case with no decided referral at all falls back to its own masterDateOfDecision, which may still be
     // negative: then nothing explains it, and it is reported.
-    private static final String STAGE_DURATIONS = PARAMETERS + """
+    private static final String STAGE_DURATIONS = live(PARAMETERS + """
         , spans AS (
             SELECT v.name, date_trunc(p.field, v.end_at)::date AS period_start,
                    (p.include_migrated OR NOT d."migratedRecord") AS included,
@@ -111,9 +118,9 @@ public class ManagementInformationRepository {
                count(*) FILTER (WHERE NOT included) AS migrated
           FROM spans
          GROUP BY name, period_start
-        """;
+        """);
 
-    private static final String DECISIONS = PARAMETERS + """
+    private static final String DECISIONS = live(PARAMETERS + """
         SELECT date_trunc(p.field, r."decisionDate")::date AS period_start,
                count(*) FILTER (WHERE x.included AND r."decision" = 'Approved') AS approved,
                count(*) FILTER (WHERE x.included AND r."decision" = 'Approved' AND r."urgency" = 'Urgent')
@@ -129,9 +136,9 @@ public class ManagementInformationRepository {
          CROSS JOIN LATERAL (SELECT p.include_migrated OR NOT d."migratedRecord" AS included) x
          WHERE r."decisionDate" >= p.from_day AND r."decisionDate" < p.end_day
          GROUP BY 1
-        """;
+        """);
 
-    private static final String CONFIRMATIONS = PARAMETERS + """
+    private static final String CONFIRMATIONS = live(PARAMETERS + """
         SELECT date_trunc(p.field, r."confirmationReceivedAt")::date AS period_start,
                count(*) FILTER (WHERE x.included AND r."confirmationOutcome" = 'Confirmed') AS confirmed,
                count(*) FILTER (WHERE x.included AND r."confirmationOutcome" = 'Withdrawn') AS withdrawn,
@@ -143,10 +150,10 @@ public class ManagementInformationRepository {
          CROSS JOIN LATERAL (SELECT p.include_migrated OR NOT d."migratedRecord" AS included) x
          WHERE r."confirmationReceivedAt" >= p.from_day AND r."confirmationReceivedAt" < p.end_day
          GROUP BY 1
-        """;
+        """);
 
     // least() ignores a null, so days is the one completion date's, or the earlier of a contradiction's two.
-    private static final String COMPLETION = PARAMETERS + """
+    private static final String COMPLETION = live(PARAMETERS + """
         , received AS (
             SELECT date_trunc(p.field, d."dateReceived")::date AS period_start,
                    (p.include_migrated OR NOT d."migratedRecord") AS included,
@@ -170,7 +177,7 @@ public class ManagementInformationRepository {
                    FILTER (WHERE included AND enroled <> returned AND days >= 0) AS p95_days
           FROM received
          GROUP BY period_start
-        """;
+        """);
 
     private final JdbcTemplate jdbc;
 
@@ -271,5 +278,15 @@ public class ManagementInformationRepository {
         return counted == 0 ? DurationFigures.NONE
             : new DurationFigures(counted, row.getObject("median_days", Double.class),
                 row.getObject("p95_days", Double.class));
+    }
+
+    /**
+     * Reads the live cases wherever a statement names the case table as {@code d}: the deletion fence.
+     */
+    private static String live(String sql) {
+        if (!sql.contains(CASE_TABLE)) {
+            throw new IllegalStateException("A management information statement does not read the cases as d");
+        }
+        return sql.replace(CASE_TABLE, DeletionFenceSql.LIVE_CASES + " d");
     }
 }

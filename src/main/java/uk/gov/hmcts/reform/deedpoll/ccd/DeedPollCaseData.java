@@ -1,10 +1,13 @@
 package uk.gov.hmcts.reform.deedpoll.ccd;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import uk.gov.hmcts.ccd.sdk.api.CCD;
 import uk.gov.hmcts.ccd.sdk.type.Document;
+import uk.gov.hmcts.ccd.sdk.type.FieldType;
 import uk.gov.hmcts.ccd.sdk.type.ListValue;
+import uk.gov.hmcts.ccd.sdk.type.TTL;
 
 import java.util.List;
 
@@ -39,4 +42,14 @@ public class DeedPollCaseData {
      */
     @CCD(label = "Supporting documents", access = SupportingDocumentsAccess.class)
     private List<ListValue<Document>> supportingDocuments;
+
+    /**
+     * The platform's time-to-live, which Retain and Dispose needs: data-store applies {@code ConfirmDisposal}'s TTL
+     * increment only to a case type with a field whose id is exactly {@code TTL}, and creates the value itself if the
+     * case has none. Nothing here sets or reads it -- the view leaves it null -- and only the system profile holds it
+     * ({@link TtlAccess}); no human role may suspend or override a deletion.
+     */
+    @JsonProperty("TTL")
+    @CCD(label = "Time to live", typeOverride = FieldType.TTL, access = TtlAccess.class)
+    private TTL timeToLive;
 }

@@ -162,8 +162,10 @@ test {
 
   // Gradle's default of 512m no longer fits one worker's cached Spring contexts plus ArchUnit's class
   // import: V24's tests tipped it into "Java heap space" in NotificationSecurityTest on two consecutive
-  // runs (2026-09-28), with 3,290 tests passing on the commit before.
-  maxHeapSize = '1g'
+  // runs (2026-09-28), with 3,290 tests passing on the commit before. Raised to 2g when application deletion
+  // (plan 20261118) took it past 1g on Jenkins: "Java heap space" in CorrespondenceReaderAuthorityTest's ArchUnit
+  // import on PR-175 (2026-11-19), with about 5,600 tests, while the same suite still passed locally at 1g.
+  maxHeapSize = '2g'
 }
 
 tasks.register('functional', Test) {

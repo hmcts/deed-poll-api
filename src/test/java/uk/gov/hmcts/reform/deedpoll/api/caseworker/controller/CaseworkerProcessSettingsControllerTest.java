@@ -52,7 +52,7 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
     private static final String ALL_SEEDED = """
         {"referralClaimExpiryMinutes":10080,"reminderIntervalHours":48,"windowCap":10,
          "morningWindowStart":"07:00","morningWindowEnd":"10:30","afternoonWindowStart":"14:00",
-         "afternoonWindowEnd":"14:30","revision":0}
+         "afternoonWindowEnd":"14:30","deletionGraceDays":14,"revision":0}
         """;
     private static final StubIdam IDAM = new StubIdam();
 
@@ -93,7 +93,8 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
             INSERT INTO deedpoll_process_settings (id, referral_claim_expiry_minutes, revision) VALUES (1, 10080, 0)
             ON CONFLICT (id) DO UPDATE SET referral_claim_expiry_minutes = 10080, reminder_interval_hours = 48,
                 window_cap = 10, morning_window_start = '07:00', morning_window_end = '10:30',
-                afternoon_window_start = '14:00', afternoon_window_end = '14:30', revision = 0, updated_at = NULL,
+                afternoon_window_start = '14:00', afternoon_window_end = '14:30', deletion_grace_days = 14,
+                revision = 0, updated_at = NULL,
                 updated_by_id = NULL, updated_by_name = NULL
             """);
     }
@@ -111,6 +112,7 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
             .andExpect(jsonPath("$.morningWindowEnd").value("10:30"))
             .andExpect(jsonPath("$.afternoonWindowStart").value("14:00"))
             .andExpect(jsonPath("$.afternoonWindowEnd").value("14:30"))
+            .andExpect(jsonPath("$.deletionGraceDays").value(14))
             .andExpect(jsonPath("$.revision").value(0))
             .andExpect(jsonPath("$.updatedAt").isEmpty())
             .andExpect(jsonPath("$.updatedBy").isEmpty());
@@ -125,6 +127,7 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
         authorised(get(PATH)).andExpect(status().isForbidden());
         save("{\"" + MINUTES + "\":2880,\"revision\":0}").andExpect(status().isForbidden());
         save("{\"" + MINUTES + "\":1439,\"forged\":true}").andExpect(status().isForbidden());
+        save("{\"" + MINUTES + "\":10080,\"deletionGraceDays\":30,\"revision\":0}").andExpect(status().isForbidden());
         assertUnchanged();
     }
 
@@ -192,6 +195,11 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
         "{\"referralClaimExpiryMinutes\":10080,\"windowCap\":0,\"revision\":0}|windowCap",
         "{\"referralClaimExpiryMinutes\":10080,\"windowCap\":101,\"revision\":0}|windowCap",
         "{\"referralClaimExpiryMinutes\":10080,\"windowCap\":1.5,\"revision\":0}|windowCap",
+        "{\"referralClaimExpiryMinutes\":10080,\"deletionGraceDays\":0,\"revision\":0}|deletionGraceDays",
+        "{\"referralClaimExpiryMinutes\":10080,\"deletionGraceDays\":91,\"revision\":0}|deletionGraceDays",
+        "{\"referralClaimExpiryMinutes\":10080,\"deletionGraceDays\":null,\"revision\":0}|deletionGraceDays",
+        "{\"referralClaimExpiryMinutes\":10080,\"deletionGraceDays\":\"14\",\"revision\":0}|deletionGraceDays",
+        "{\"referralClaimExpiryMinutes\":10080,\"deletionGraceDays\":14.5,\"revision\":0}|deletionGraceDays",
         "{\"referralClaimExpiryMinutes\":10080,\"morningWindowStart\":\"07:10\",\"revision\":0}|morningWindowStart",
         "{\"referralClaimExpiryMinutes\":10080,\"morningWindowStart\":\"7:00\",\"revision\":0}|morningWindowStart",
         "{\"referralClaimExpiryMinutes\":10080,\"morningWindowEnd\":\"24:00\",\"revision\":0}|morningWindowEnd",
@@ -218,6 +226,9 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
         save("{\"" + MINUTES + "\":10080,\"windowCap\":101,\"revision\":0}")
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.errors[0].message").value(allOf(containsString("1"), containsString("100"))));
+        save("{\"" + MINUTES + "\":10080,\"deletionGraceDays\":91,\"revision\":0}")
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errors[0].message").value(containsString("1 to 90")));
     }
 
     @Test
@@ -250,7 +261,7 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
     @ParameterizedTest
     @CsvSource(delimiter = '|', value = {
         "reminderIntervalHours|1|1", "reminderIntervalHours|168|168",
-        "windowCap|1|1", "windowCap|100|100",
+        "windowCap|1|1", "windowCap|100|100", "deletionGraceDays|1|1", "deletionGraceDays|90|90",
         "morningWindowStart|\"00:00\"|00:00", "morningWindowEnd|\"13:45\"|13:45",
         "afternoonWindowStart|\"10:45\"|10:45", "afternoonWindowEnd|\"23:45\"|23:45"})
     @DisplayName("each new setting is accepted at its bounds, alone beside the two required keys")
@@ -258,6 +269,7 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
         save("{\"" + MINUTES + "\":10080,\"" + field + "\":" + json + ",\"revision\":0}")
             .andExpect(status().isOk())
             .andExpect(jsonPath("$." + field).value(field.endsWith("Hours") || field.endsWith("Cap")
+                || field.endsWith("Days")
                 ? (Object) Integer.valueOf(stored) : stored))
             .andExpect(jsonPath("$.revision").value(1));
         assertThat(jdbc.queryForList("SELECT field, new_value FROM deedpoll_process_settings_change"))
@@ -290,6 +302,7 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
             .andExpect(jsonPath("$.morningWindowEnd").value("10:30"))
             .andExpect(jsonPath("$.afternoonWindowStart").value("14:00"))
             .andExpect(jsonPath("$.afternoonWindowEnd").value("14:30"))
+            .andExpect(jsonPath("$.deletionGraceDays").value(14))
             .andExpect(jsonPath("$.revision").value(2));
         assertThat(jdbc.queryForList("SELECT field FROM deedpoll_process_settings_change WHERE revision = 2"))
             .extracting(row -> row.get("field")).containsExactly(MINUTES);
@@ -301,13 +314,14 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
         save("""
             {"referralClaimExpiryMinutes":4320,"reminderIntervalHours":24,"windowCap":5,
              "morningWindowStart":"08:00","morningWindowEnd":"11:00","afternoonWindowStart":"13:00",
-             "afternoonWindowEnd":"15:15","revision":0}
+             "afternoonWindowEnd":"15:15","deletionGraceDays":30,"revision":0}
             """).andExpect(status().isOk()).andExpect(jsonPath("$.revision").value(1));
 
         assertThat(jdbc.queryForList(
             "SELECT field, previous_value, new_value FROM deedpoll_process_settings_change ORDER BY field"))
             .extracting(row -> row.get("field") + "=" + row.get("previous_value") + ">" + row.get("new_value"))
             .containsExactly("afternoonWindowEnd=14:30>15:15", "afternoonWindowStart=14:00>13:00",
+                             "deletionGraceDays=14>30",
                              "morningWindowEnd=10:30>11:00", "morningWindowStart=07:00>08:00",
                              "referralClaimExpiryMinutes=10080>4320", "reminderIntervalHours=48>24", "windowCap=10>5");
         assertThat(auditEvents() - auditBefore).isEqualTo(1);
@@ -315,7 +329,7 @@ class CaseworkerProcessSettingsControllerTest extends AbstractPostgresContainerT
             SELECT array_to_string(fields, ',') FROM deedpoll_audit_event
             WHERE entity_type = 'ProcessSettings' ORDER BY id DESC LIMIT 1
             """, String.class)).isEqualTo("referralClaimExpiryMinutes,reminderIntervalHours,windowCap,"
-                + "morningWindowStart,morningWindowEnd,afternoonWindowStart,afternoonWindowEnd");
+                + "morningWindowStart,morningWindowEnd,afternoonWindowStart,afternoonWindowEnd,deletionGraceDays");
         assertThat(jdbc.queryForObject("""
             SELECT count(*) FROM deedpoll_audit_event_value v JOIN deedpoll_audit_event e ON e.id = v.event_id
             WHERE e.entity_type = 'ProcessSettings'

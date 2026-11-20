@@ -36,6 +36,12 @@ final class CaseResponseFields {
     /** Derived on read, so not among the stored fields a coverage assertion compares against. */
     static final Set<String> DERIVED = Set.of("daysReceivedToEnroled", "daysReceivedToReturned");
 
+    /**
+     * Read alongside the case for the detail page only (repository/CaseLastChanged), so not a stored field, and not on
+     * the saved response, which does not read the case's audit trail.
+     */
+    static final Set<String> DETAIL_ONLY = Set.of("lastChangedOn");
+
     /** Fetched with the case, and mapped from the child entities rather than from a case column. */
     static final Set<String> CHILDREN = Set.of("notes", "witnesses", "documents");
 
@@ -87,7 +93,7 @@ final class CaseResponseFields {
         int ordinal = 0;
         for (RecordComponent component : responseType.getRecordComponents()) {
             String name = component.getName();
-            if (DERIVED.contains(name) || CHILDREN.contains(name)) {
+            if (DERIVED.contains(name) || DETAIL_ONLY.contains(name) || CHILDREN.contains(name)) {
                 continue;
             }
             ordinal++;

@@ -264,6 +264,22 @@ notify:
     master-referral-sent: ${NOTIFY_TEMPLATE_MASTER_REFERRAL_SENT:DEED_POLL_PLACEHOLDER}
     master-referral-reminder: ${NOTIFY_TEMPLATE_MASTER_REFERRAL_REMINDER:DEED_POLL_PLACEHOLDER}
 
+ccd:
+  decentralised-runtime:
+    # The SDK's Retain and Dispose task (RetainAndDisposeTask), which disposes of a deleted application's CCD case
+    # through DeedPollRetainAndDisposePolicy: it marks and confirms the case as the system user, and once CCD's disposer
+    # has removed it (data-store answers 404) records the CCD step done. `off` loads nothing; `dry-run` only logs;
+    # `live` acts. Off until onboarding (the LAU ticket, the disposer's case-type lists and the TTL definition
+    # import) and the rollout evidence in docs/APPLICATION-DELETION.md. Leave the 5%/10 circuit breaker at its
+    # defaults: ten or more deletions in one run should stop and be looked at.
+    retain-and-dispose:
+      mode: ${CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_MODE:off}
+      cron: ${CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_CRON:0 0 2 * * *}
+      # The same system user linking signs in as; read only when the mode is not off, when an empty one fails start-up.
+      system-user:
+        username: ${DEED_POLL_SYSTEM_USERNAME:}
+        password: ${DEED_POLL_SYSTEM_PASSWORD:}
+
 core_case_data:
   api:
     # CCD data-store, which the linking operation starts and submits linkDeedPoll through (CoreCaseDataApi). The key
@@ -280,6 +296,20 @@ case_document_am:
 deedpoll:
   # Empty is local only when CLUSTER_NAME is absent. Deployed filesystem storage uses a strict allowlist.
   environment-name: ${ENVIRONMENT_NAME:}
+  deletion:
+    # The application deletion worker (DeletionCleanup, plan 20261118-dm-application-deletion): it removes a deleted
+    # application's filesystem documents and follows its CCD case's disposal. Off until the rollout evidence is
+    # recorded; with it off an admitted request stays Pending, fenced and stored, with nothing removed.
+    cleanup:
+      enabled: ${APPLICATION_DELETION_WORKER_ENABLED:false}
+      interval: ${APPLICATION_DELETION_WORKER_INTERVAL:PT5M}
+      batch-size: ${APPLICATION_DELETION_WORKER_BATCH_SIZE:10}
+      lease: ${APPLICATION_DELETION_WORKER_LEASE:PT5M}
+      # A filesystem document's tries before its request needs attention, and the first retry's delay (doubled per try).
+      max-attempts: ${APPLICATION_DELETION_WORKER_MAX_ATTEMPTS:8}
+      retry-base: ${APPLICATION_DELETION_WORKER_RETRY_BASE:PT1M}
+      # How often a request waiting on CCD's disposal, or on finalisation, is looked at again; also the retry cap.
+      poll-interval: ${APPLICATION_DELETION_WORKER_POLL_INTERVAL:PT1H}
   roles:
     # A second source of the caller's roles: their organisational role assignments in AM (RoleAssignmentProperties).
     # Off until CRD/JRD profiles exist and RAS admits deed_poll_api's S2S name. A RAS failure falls back to the IDAM

@@ -11,6 +11,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.documents.DocumentToStore;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -158,6 +159,40 @@ class LocalFilesystemDocumentStoreTest {
         try (InputStream stream = store.open(key)) {
             assertThat(stream.readAllBytes()).isEqualTo(CONTENT);
         }
+    }
+
+    @Test
+    @DisplayName("an application deletion removes the file and verifies it gone, and a repeat finds it absent")
+    void removeDeletesAndVerifies() {
+        String key = save(CONTENT);
+        LocalFilesystemDocumentStore local = (LocalFilesystemDocumentStore) store;
+
+        assertThat(local.remove(key)).as("deleted").isTrue();
+        assertThat(root.resolve("documents").resolve(key)).doesNotExist();
+        assertThat(local.remove(key)).as("already absent").isFalse();
+    }
+
+    @Test
+    @DisplayName("a missing root is an unavailable store, never a file already gone")
+    void removeRefusesAMissingRoot() {
+        LocalFilesystemDocumentStore unmounted =
+            new LocalFilesystemDocumentStore(root.resolve("not-mounted").toString());
+
+        assertThatThrownBy(() -> unmounted.remove("6f1c5f2e-0000-4000-8000-00000000000b"))
+            .isInstanceOf(UncheckedIOException.class)
+            .hasMessageNotContaining("6f1c5f2e");
+    }
+
+    @Test
+    @DisplayName("a blank or escaping key removes nothing")
+    void removeRefusesAnInvalidKey() throws IOException {
+        Files.createDirectories(root.resolve("documents"));
+        Path outside = Files.writeString(root.resolve("outside.txt"), "keep me");
+        LocalFilesystemDocumentStore local = (LocalFilesystemDocumentStore) store;
+
+        assertThatThrownBy(() -> local.remove("../outside.txt")).isInstanceOf(NotFoundError.class);
+        assertThatThrownBy(() -> local.remove(" ")).isInstanceOf(NotFoundError.class);
+        assertThat(outside).exists();
     }
 
     /** Saves bytes for an owner this store has no use for, and answers the key. */

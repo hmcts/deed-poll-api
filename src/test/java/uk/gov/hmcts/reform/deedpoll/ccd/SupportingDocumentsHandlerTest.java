@@ -8,6 +8,7 @@ import org.springframework.util.LinkedMultiValueMap;
 import uk.gov.hmcts.ccd.sdk.api.EventPayload;
 import uk.gov.hmcts.ccd.sdk.type.Document;
 import uk.gov.hmcts.ccd.sdk.type.ListValue;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFence;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdCaseProjection;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 import uk.gov.hmcts.reform.deedpoll.storage.DocumentStorageStates;
@@ -39,7 +40,14 @@ class SupportingDocumentsHandlerTest {
 
     private final DeedPollRepository deedPolls = mock(DeedPollRepository.class);
     private final DocumentStorageStates states = mock(DocumentStorageStates.class);
-    private final SupportingDocumentsHandler handler = new SupportingDocumentsHandler(deedPolls, states);
+    private final DeletionFence fence = admitting();
+    private final SupportingDocumentsHandler handler = new SupportingDocumentsHandler(deedPolls, states, fence);
+
+    private static DeletionFence admitting() {
+        DeletionFence admitting = mock(DeletionFence.class);
+        when(admitting.admits(anyString())).thenReturn(true);
+        return admitting;
+    }
 
     @Test
     @DisplayName("each item naming a row and a CDAM id asks for that row's move, on this case's record")

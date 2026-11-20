@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
+import uk.gov.hmcts.reform.deedpoll.entity.DeletionFenceSql;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.ReferralState;
 
@@ -77,6 +78,34 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
     @Query(value = "SELECT EXISTS (SELECT 1 FROM deedpoll_gazette_request_case WHERE deed_poll_id = :id)",
         nativeQuery = true)
     boolean hasGazetteRequestEvidence(@Param("id") String id);
+
+    /**
+     * Whether a Delivery Manager's deletion request (V48) names the case. Once one does, only that request's own
+     * finalisation may delete it, so {@code DeedPollService.removeDeedPoll} refuses.
+     */
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM deedpoll_deletion_request WHERE case_id = :id)", nativeQuery = true)
+    boolean hasDeletionRequest(@Param("id") String id);
+
+    /**
+     * {@link #findByIdForUpdate}, then the deletion fence in a statement of its own: the locking read's snapshot was
+     * taken before it waited for the lock, so a deletion request admitted while it waited is not in it, and only a
+     * fresh statement after the lock is granted sees one (plan 20261118-dm-application-deletion, Task 4). Every write
+     * path that locks the case this way asks through here.
+     *
+     * @return the locked case, or empty if there is none or a deletion request names it
+     */
+    default Optional<DeedPoll> findUnfencedByIdForUpdate(String id) {
+        return findByIdForUpdate(id).filter(found -> !hasDeletionRequest(found.getId()));
+    }
+
+    /**
+     * {@link #lockForDeedPreparation}, then the deletion fence, for {@link #findUnfencedByIdForUpdate}'s reason.
+     *
+     * @return the case's id, or empty if there is no such case or a deletion request names it
+     */
+    default Optional<String> lockUnfencedForDeedPreparation(String id) {
+        return lockForDeedPreparation(id).filter(found -> !hasDeletionRequest(found));
+    }
 
     /** Every case, newest first. */
     List<DeedPoll> findAllByOrderByCreatedOnDesc();
@@ -308,13 +337,19 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
      * The record a CCD case reference is bound to, reduced to what the case shows of it.
      *
      * <p>The {@code CaseView}'s one read, and the submit handler's answer to "does another record already hold
-     * this reference?". At most one row, because V21 makes the column unique. JPQL reads a column the entity maps
-     * read-only as readily as any other; only writing it needs {@link #bindCcdCaseReference}.
+     * this reference?". At most one row, because V21 makes the column unique.
+     *
+     * <p><strong>Native, so the deletion fence's entity restriction does not apply</strong>, and the same for the two
+     * reads below. CCD's own access control governs what CCD shows, and the SDK's Retain and Dispose has to read a
+     * fenced case through data-store to mark and confirm its disposal, so the view must not turn a case being deleted
+     * into "no record bound". And a binding is a fact about CCD that linking and its reconciliation must read as it
+     * is: through the restriction a fenced, linked record would read as unbound. Linking refuses a fenced record
+     * itself ({@code CcdLinkingService.link}, {@code LinkDeedPollHandler}).
      */
-    @Query("""
-        select new uk.gov.hmcts.reform.deedpoll.repository.CcdCaseProjection(d.id, d.displayReference)
-          from DeedPoll d
-         where d.ccdCaseReference = :reference
+    @Query(nativeQuery = true, value = """
+        SELECT d.id AS "deedPollId", d."displayReference" AS "displayReference"
+          FROM deedpoll_deedpoll d
+         WHERE d."ccdCaseReference" = :reference
         """)
     Optional<CcdCaseProjection> findCcdCaseProjection(@Param("reference") String reference);
 
@@ -322,10 +357,10 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
      * The same projection, by the record's id: what the linking operation submits to CCD, and whether the record
      * exists at all.
      */
-    @Query("""
-        select new uk.gov.hmcts.reform.deedpoll.repository.CcdCaseProjection(d.id, d.displayReference)
-          from DeedPoll d
-         where d.id = :id
+    @Query(nativeQuery = true, value = """
+        SELECT d.id AS "deedPollId", d."displayReference" AS "displayReference"
+          FROM deedpoll_deedpoll d
+         WHERE d.id = :id
         """)
     Optional<CcdCaseProjection> findCcdCaseProjectionById(@Param("id") String id);
 
@@ -336,7 +371,9 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
      * the handler writes it in the same transaction as the case itself. A fresh statement every time, never a copy
      * held from before CCD was called.
      */
-    @Query("select d.ccdCaseReference from DeedPoll d where d.id = :id and d.ccdCaseReference is not null")
+    @Query(nativeQuery = true, value = """
+        SELECT d."ccdCaseReference" FROM deedpoll_deedpoll d WHERE d.id = :id AND d."ccdCaseReference" IS NOT NULL
+        """)
     Optional<String> findCcdCaseReference(@Param("id") String id);
 
     /**
@@ -351,7 +388,7 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
      * at the head and hold back everything behind it; reconciliation, or an admin, is what moves those.
      *
      * <p>The due predicate is {@code CcdLinkingRule.isDue}'s, as the claim repeats it. The live-attempt predicate
-     * is V22's partial index's.
+     * is V22's partial index's. A record a deletion request names is never offered (the deletion fence).
      */
     @Query(nativeQuery = true, value = """
         SELECT d."id"
@@ -362,6 +399,8 @@ public interface DeedPollRepository extends JpaRepository<DeedPoll, String>, Jpa
          WHERE d."ccdCaseReference" IS NULL
            AND (a."id" IS NULL
                 OR (a."status" = 'Pending' AND (a."notBefore" IS NULL OR a."notBefore" <= :now)))
+           AND\s""" + DeletionFenceSql.UNFENCED_CASE + """
+
          ORDER BY d."createdOn", d."id"
          LIMIT :limit
         """)

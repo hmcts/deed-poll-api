@@ -1,12 +1,14 @@
 package uk.gov.hmcts.reform.deedpoll.api;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.transaction.TransactionException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -22,6 +24,8 @@ import uk.gov.hmcts.reform.deedpoll.domain.InvalidInputError;
 import uk.gov.hmcts.reform.deedpoll.domain.NotFoundError;
 import uk.gov.hmcts.reform.deedpoll.domain.UnauthorizedError;
 import uk.gov.hmcts.reform.deedpoll.domain.UpstreamFailureError;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionConflictError;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFence;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.UploadPolicy;
 import uk.gov.hmcts.reform.deedpoll.domain.documents.preview.PreviewError;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteRefusal;
@@ -151,6 +155,30 @@ public class DomainErrorHandler {
     private static String wholeSeconds(Duration wait) {
         long seconds = wait.getSeconds() + (wait.getNano() > 0 ? 1 : 0);
         return Long.toString(Math.max(1, seconds));
+    }
+
+    /**
+     * A refused deletion request: a 409 carrying the typed {@code code} as well as the words, so Admin can say what
+     * to resolve without parsing prose. More specific than {@link ConflictError}, so Spring picks this one.
+     * {@code no-store}, as the deletion routes' other answers are.
+     */
+    @ExceptionHandler(DeletionConflictError.class)
+    public ResponseEntity<DeletionError> deletion(DeletionConflictError error) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).contentType(MediaType.APPLICATION_JSON)
+            .cacheControl(CacheControl.noStore()).body(DeletionError.from(error));
+    }
+
+    /**
+     * A write that raced a deletion request's admission and was refused by V49's trigger at commit: the same 404, in
+     * the same words, that the fence gives a writer that asked first. Anything else is rethrown unchanged, so it keeps
+     * the framework's own 500.
+     */
+    @ExceptionHandler({DataAccessException.class, TransactionException.class})
+    public ResponseEntity<ApiError> fencedAtCommit(RuntimeException failure) {
+        if (!DeletionFence.refusedByTrigger(failure)) {
+            throw failure;
+        }
+        return notFound(new NotFoundError(DeletionFence.NOT_FOUND));
     }
 
     @ExceptionHandler(ConflictError.class)

@@ -11,8 +11,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The singleton is seeded by Flyway (V40, extended by V42), so the first editor has the same lock and revision as
- * every later one, and a missing row is an error rather than a default.
+ * The singleton is seeded by Flyway (V40, extended by V42 and V50), so the first editor has the same lock and
+ * revision as every later one, and a missing row is an error rather than a default.
  */
 @Repository
 public class ProcessSettingsRepository {
@@ -20,7 +20,7 @@ public class ProcessSettingsRepository {
     // Compile-time constants, one per variant, so no statement is assembled at runtime.
     private static final String READ = "SELECT referral_claim_expiry_minutes, reminder_interval_hours, "
         + "window_cap, morning_window_start, morning_window_end, afternoon_window_start, afternoon_window_end, "
-        + "revision, updated_at, updated_by_name FROM deedpoll_process_settings WHERE id = 1";
+        + "deletion_grace_days, revision, updated_at, updated_by_name FROM deedpoll_process_settings WHERE id = 1";
     private static final String READ_FOR_UPDATE = READ + " FOR UPDATE";
 
     private final JdbcTemplate jdbc;
@@ -38,6 +38,7 @@ public class ProcessSettingsRepository {
                 row.getObject("morning_window_end", LocalTime.class),
                 row.getObject("afternoon_window_start", LocalTime.class),
                 row.getObject("afternoon_window_end", LocalTime.class),
+                Duration.ofDays(row.getInt("deletion_grace_days")),
                 row.getInt("revision"), row.getObject("updated_at", LocalDateTime.class),
                 row.getString("updated_by_name")));
         return rows.stream().findFirst();
@@ -59,10 +60,12 @@ public class ProcessSettingsRepository {
         jdbc.update("""
             UPDATE deedpoll_process_settings SET referral_claim_expiry_minutes = ?, reminder_interval_hours = ?,
                 window_cap = ?, morning_window_start = ?, morning_window_end = ?, afternoon_window_start = ?,
-                afternoon_window_end = ?, revision = ?, updated_at = ?, updated_by_id = ?, updated_by_name = ?
+                afternoon_window_end = ?, deletion_grace_days = ?, revision = ?, updated_at = ?, updated_by_id = ?,
+                updated_by_name = ?
             WHERE id = 1
             """, next.referralClaimExpiryMinutes(), next.reminderIntervalHours(), next.windowCap(),
             next.morningWindowStart(), next.morningWindowEnd(), next.afternoonWindowStart(),
-            next.afternoonWindowEnd(), next.revision(), next.updatedAt(), subject, next.updatedBy());
+            next.afternoonWindowEnd(), next.deletionGraceDays(), next.revision(), next.updatedAt(), subject,
+            next.updatedBy());
     }
 }

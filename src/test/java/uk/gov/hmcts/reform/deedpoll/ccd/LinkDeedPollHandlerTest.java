@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.LinkedMultiValueMap;
 import uk.gov.hmcts.ccd.sdk.api.EventPayload;
 import uk.gov.hmcts.ccd.sdk.api.callback.SubmitResponse;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFence;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
@@ -41,12 +42,15 @@ class LinkDeedPollHandlerTest {
     private DeedPollRepository deedPolls;
     private CcdCreationAttemptRepository attempts;
     private LinkDeedPollHandler handler;
+    private DeletionFence fence;
 
     @BeforeEach
     void setUp() {
         deedPolls = mock(DeedPollRepository.class);
         attempts = mock(CcdCreationAttemptRepository.class);
-        handler = new LinkDeedPollHandler(deedPolls, attempts);
+        fence = mock(DeletionFence.class);
+        when(fence.admits(anyString())).thenReturn(true);
+        handler = new LinkDeedPollHandler(deedPolls, attempts, fence);
         when(deedPolls.findCcdCaseProjection(anyString())).thenReturn(Optional.empty());
     }
 
