@@ -24,8 +24,8 @@ class CallerAccessResponseTest {
 
     private static final List<Capability> TEAM_LEADER = List.of(
         Capability.OVERRIDE_PRIVACY, Capability.DELETE_NOTE, Capability.DELETE_WITNESS,
-        Capability.MANAGE_SHARED_QUERIES, Capability.REPAIR_CCD, Capability.ALLOCATE_REFERRALS,
-        Capability.VIEW_MANAGEMENT_INFORMATION);
+        Capability.MANAGE_SHARED_QUERIES, Capability.REPAIR_CCD, Capability.ACCESS_GAZETTE,
+        Capability.ALLOCATE_REFERRALS, Capability.VIEW_MANAGEMENT_INFORMATION);
 
     private static final List<Capability> DELIVERY_MANAGER = List.of(
         Capability.OVERRIDE_PRIVACY, Capability.DELETE_NOTE, Capability.DELETE_WITNESS,
@@ -46,7 +46,8 @@ class CallerAccessResponseTest {
     }
 
     @Test
-    @DisplayName("a Delivery Manager is staff with the Team leader set plus ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG")
+    @DisplayName("a Delivery Manager is staff with the Team leader set plus MANAGE_PROCESS_CONFIG and "
+        + "DELETE_APPLICATION")
     void deliveryManager() {
         assertThat(accessFor(Role.DELIVERY_MANAGER))
             .isEqualTo(new CallerAccessResponse(true, false, DELIVERY_MANAGER));

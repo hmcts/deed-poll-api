@@ -26,12 +26,12 @@ public final class RoleCapabilities {
     private static Set<Capability> teamLeader() {
         EnumSet<Capability> inherited = EnumSet.copyOf(LEGACY_ADMIN);
         inherited.add(Capability.VIEW_MANAGEMENT_INFORMATION);
+        inherited.add(Capability.ACCESS_GAZETTE);
         return Set.copyOf(inherited);
     }
 
     private static Set<Capability> deliveryManager() {
         EnumSet<Capability> inherited = EnumSet.copyOf(TEAM_LEADER);
-        inherited.add(Capability.ACCESS_GAZETTE);
         inherited.add(Capability.MANAGE_PROCESS_CONFIG);
         inherited.add(Capability.DELETE_APPLICATION);
         return Set.copyOf(inherited);

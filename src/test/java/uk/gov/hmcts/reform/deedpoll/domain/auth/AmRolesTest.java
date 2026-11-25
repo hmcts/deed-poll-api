@@ -194,11 +194,10 @@ class AmRolesTest {
     }
 
     @Test
-    void teamLeaderWithTheSkillHasEveryTeamLeaderCapabilityPlusGazette() {
+    void teamLeaderWithTheSkillHasEveryTeamLeaderCapabilityPlusProcessConfig() {
         Set<Role> roles = roles(assignment("ctsc-team-leader", SKILL));
         Set<Capability> leader = RoleCapabilities.forRoles(List.of(Role.TEAM_LEADER));
         EnumSet<Capability> expected = EnumSet.copyOf(leader);
-        expected.add(Capability.ACCESS_GAZETTE);
         expected.add(Capability.MANAGE_PROCESS_CONFIG);
         // The skill makes a Delivery Manager, and deletion follows the role, whichever source granted it.
         expected.add(Capability.DELETE_APPLICATION);
@@ -210,7 +209,8 @@ class AmRolesTest {
         for (Capability capability : leader) {
             assertThat(user.can(capability)).as(capability.name()).isTrue();
         }
-        assertThat(RoleCapabilities.forRoles(roles(assignment("ctsc-team-leader"))))
-            .doesNotContain(Capability.ACCESS_GAZETTE, Capability.MANAGE_PROCESS_CONFIG);
+        assertThat(user.can(Capability.MANAGE_PROCESS_CONFIG)).isTrue();
+        Set<Capability> withoutSkill = RoleCapabilities.forRoles(roles(assignment("ctsc-team-leader")));
+        assertThat(withoutSkill).contains(Capability.ACCESS_GAZETTE).doesNotContain(Capability.MANAGE_PROCESS_CONFIG);
     }
 }

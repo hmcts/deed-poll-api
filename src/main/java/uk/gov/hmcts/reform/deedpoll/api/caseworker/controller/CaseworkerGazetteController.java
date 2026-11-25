@@ -23,7 +23,8 @@ public class CaseworkerGazetteController {
     }
 
     @Operation(summary = "Read Gazette notice history",
-        description = "Requires caseworker-deedpoll-delivery-manager. "
+        description = "Requires caseworker-deedpoll-team-leader or caseworker-deedpoll-delivery-manager "
+            + "(ACCESS_GAZETTE). "
             + "Batches are newest first, with frozen case references "
             + "and display-name attribution. At most 100 references per batch, in lexical display order, with "
             + "referencesTruncated indicating omitted members. This is not send order. No custom filtering or sorting.")

@@ -37,7 +37,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>What the converter test cannot show is that the union reaches the two places a role is enforced, the staff gate
  * in front of {@code /caseworker/**} and the capability check inside a Gazette operation, and that a RAS failure
- * withdraws only what AM added. {@code GET /caseworker/gazette-settings} needs {@code ACCESS_GAZETTE}, and
+ * withdraws only what AM added. {@code GET /caseworker/gazette-settings} needs {@code ACCESS_GAZETTE} and
+ * {@code MANAGE_PROCESS_CONFIG}, the Delivery Manager's (a Team leader holds only the first), and
  * {@code GET /caseworker/document-types} needs no more than the staff gate, so the pair tells the two apart.
  */
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)

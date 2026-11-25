@@ -28,7 +28,7 @@ require 03c. Local proof is not onboarding or rollout approval. See
 api/caseworker/{controller,dto}   the caseworker HTTP surface — 35 operations across 22 paths, plus the REPAIR_CCD-protected
                                   /caseworker/ccd-attempts (3 operations, counted apart as CCD_ATTEMPT_PATHS)
                                   and /caseworker/gazette-notices (1 history GET, counted apart)
-                                  and /caseworker/gazette-settings (Delivery Manager-only GET/PUT)
+                                  and /caseworker/gazette-settings (ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG GET/PUT: Delivery Manager only)
                                   and /caseworker/process-settings (MANAGE_PROCESS_CONFIG GET/PUT, counted apart)
                                   and /caseworker/process-settings/bank-holidays (any staff GET; POST and
                                   DELETE …/{date} need MANAGE_PROCESS_CONFIG; counted apart)
@@ -38,7 +38,7 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 35 operations 
                                   counted apart)
                                   and /caseworker/management-information (4 aggregate GETs,
                                   VIEW_MANAGEMENT_INFORMATION; counted apart as MI_PATHS)
-                                  plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
+                                  plus 5 Gazette preview/request/status/member operations (ACCESS_GAZETTE: Team leader or Delivery Manager)
                                   plus GET …/documents/{documentId}/preview (counted apart as PREVIEW_PATHS)
                                   plus POST /caseworker/cases/{id}/deletion-requests, GET
                                   /caseworker/application-deletions/{requestId} and POST …/{requestId}/restore
@@ -90,12 +90,15 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
 
 `caseworker-deedpoll-team-leader` grants OVERRIDE_PRIVACY, DELETE_NOTE, DELETE_WITNESS,
 MANAGE_SHARED_QUERIES, REPAIR_CCD and ALLOCATE_REFERRALS (the referral queue, sending to Masters and reassigning;
-plan F1) and VIEW_MANAGEMENT_INFORMATION (the aggregate MI figures; plan 20261103-mi-dashboard).
-`caseworker-deedpoll-delivery-manager` inherits all seven and alone grants ACCESS_GAZETTE, MANAGE_PROCESS_CONFIG (the process settings, the bank holidays and the
-Masters list's writes; any staff role reads the Masters list and the bank holidays) and DELETE_APPLICATION (permanent
-application deletion, `docs/APPLICATION-DELETION.md`; there is no other way to delete a case; it also restores an
-application during its deletion's grace period). The deprecated
-`caseworker-deedpoll-admin` temporarily grants only the Team leader's first six: never VIEW_MANAGEMENT_INFORMATION. Resolve capabilities from verified roles; the retained privacy boolean is derived.
+plan F1), VIEW_MANAGEMENT_INFORMATION (the aggregate MI figures; plan 20261103-mi-dashboard) and ACCESS_GAZETTE (reviewing
+and sending Gazette batches, and their history; the business, 2026-11-25).
+`caseworker-deedpoll-delivery-manager` inherits all eight and alone grants MANAGE_PROCESS_CONFIG (the process settings, the
+bank holidays, the Masters list's writes and the Gazette recipient; any staff role reads the Masters list and the bank
+holidays) and DELETE_APPLICATION (permanent application deletion, `docs/APPLICATION-DELETION.md`; there is no other way
+to delete a case; it also restores an application during its deletion's grace period). The Gazette recipient's GET and
+PUT need both ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG, so a Team leader sends batches to a recipient only a Delivery
+Manager sets. The deprecated
+`caseworker-deedpoll-admin` temporarily grants only the Team leader's first six: never VIEW_MANAGEMENT_INFORMATION or ACCESS_GAZETTE. Resolve capabilities from verified roles; the retained privacy boolean is derived.
 Every Gazette operation and the named `readyForPublication` worklist/count (including saved-query
 links) requires ACCESS_GAZETTE, with 403 before reads or side effects. Ordinary field conditions
 and case visibility remain unchanged. Neither new role grants judicial or system authority.

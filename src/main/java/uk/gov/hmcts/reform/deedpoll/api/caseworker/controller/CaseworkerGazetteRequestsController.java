@@ -51,7 +51,8 @@ public class CaseworkerGazetteRequestsController {
     }
 
     @Operation(operationId = "previewGazetteNotice", summary = "Check Gazette selection for confirmation",
-        description = "Requires caseworker-deedpoll-delivery-manager. "
+        description = "Requires caseworker-deedpoll-team-leader or caseworker-deedpoll-delivery-manager "
+            + "(ACCESS_GAZETTE). "
             + "Checks recipient, readiness, reservations "
             + "and configuration. "
             + "Returns a 30-minute comparison token. No reservations, uploads or notes are written.")
@@ -66,7 +67,8 @@ public class CaseworkerGazetteRequestsController {
     }
 
     @Operation(operationId = "submitGazetteNotice", summary = "Submit or resolve a Gazette request",
-        description = "Requires caseworker-deedpoll-delivery-manager. "
+        description = "Requires caseworker-deedpoll-team-leader or caseworker-deedpoll-delivery-manager "
+            + "(ACCESS_GAZETTE). "
             + "Sending is disabled by default. "
             + "When configured and enabled, "
             + "a fresh confirmed request makes at most one email attempt. Repeats resolve recorded status only. "
@@ -96,7 +98,8 @@ public class CaseworkerGazetteRequestsController {
     }
 
     @Operation(operationId = "getGazetteRequests", summary = "Read Gazette request statuses",
-        description = "Requires caseworker-deedpoll-delivery-manager. "
+        description = "Requires caseworker-deedpoll-team-leader or caseworker-deedpoll-delivery-manager "
+            + "(ACCESS_GAZETTE). "
             + "Newest submission first, then descending batch ID. "
             + "Legacy sent batches remain in sent history. Page defaults to 1; size defaults to 25, capped at 100.")
     @GetMapping("/gazette-notice-requests")
@@ -107,7 +110,8 @@ public class CaseworkerGazetteRequestsController {
     }
 
     @Operation(operationId = "getGazetteNotice", summary = "Read one Gazette batch status",
-        description = "Requires caseworker-deedpoll-delivery-manager. "
+        description = "Requires caseworker-deedpoll-team-leader or caseworker-deedpoll-delivery-manager "
+            + "(ACCESS_GAZETTE). "
             + "Includes legacy sent batches, with unknown submission, "
             + "recipient and group facts null. Sent means accepted by Notify, not delivered or published.")
     @GetMapping("/gazette-notices/{batchId}")
@@ -116,7 +120,8 @@ public class CaseworkerGazetteRequestsController {
     }
 
     @Operation(operationId = "getGazetteNoticeCases", summary = "Read all frozen Gazette batch references",
-        description = "Requires caseworker-deedpoll-delivery-manager. "
+        description = "Requires caseworker-deedpoll-team-leader or caseworker-deedpoll-delivery-manager "
+            + "(ACCESS_GAZETTE). "
             + "Reference then case ID ordering, independent of live cases. "
             + "Page defaults to 1; size defaults to 25, capped at 100. Includes legacy batches.")
     @GetMapping("/gazette-notices/{batchId}/cases")

@@ -68,12 +68,14 @@ public class GazetteSettingsService {
     @Transactional(readOnly = true)
     public GazetteSettings get(CurrentUser caller) {
         caller.require(Capability.ACCESS_GAZETTE);
+        caller.require(Capability.MANAGE_PROCESS_CONFIG);
         return repository.read(false);
     }
 
     @Transactional
     public GazetteSettings update(CurrentUser caller, Map<String, Object> fields) {
         caller.require(Capability.ACCESS_GAZETTE);
+        caller.require(Capability.MANAGE_PROCESS_CONFIG);
         final String subject = caller.requireUserId();
         if (!Set.of("recipientEmail", "revision").containsAll(fields.keySet())) {
             throw new InvalidInputError("Only recipientEmail and revision may be supplied.");

@@ -5,6 +5,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import uk.gov.hmcts.reform.deedpoll.domain.ForbiddenError;
 import uk.gov.hmcts.reform.deedpoll.domain.audit.AuditTrail;
+import uk.gov.hmcts.reform.deedpoll.domain.auth.Capability;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.CurrentUser;
 import uk.gov.hmcts.reform.deedpoll.domain.auth.Role;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseListStatementTimeout;
@@ -26,7 +27,9 @@ import uk.gov.hmcts.reform.deedpoll.repository.GazetteSettingsRepository;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -63,6 +66,26 @@ class GazettePermissionsTest {
             Map.of("recipientEmail", "gazette@example.com", "revision", 1))).isInstanceOf(ForbiddenError.class);
         assertThatThrownBy(() -> history.history(caller, CasePaging.FIRST)).isInstanceOf(ForbiddenError.class);
         verifyNoInteractions(requests, cases, notes, transactions, configuration, settings, batches, members);
+    }
+
+    @ParameterizedTest
+    @MethodSource("teamLeaders")
+    void theRecipientRefusesATeamLeaderBeforeAnyRepositoryAccess(List<Role> roles) {
+        CurrentUser caller = CurrentUser.currentUser(roles, "Team leader", "subject");
+        GazetteSettingsRepository settings = mock(GazetteSettingsRepository.class);
+        GazetteSettingsService settingsService = new GazetteSettingsService(settings, mock(AuditTrail.class));
+
+        assertThat(caller.can(Capability.ACCESS_GAZETTE)).isTrue();
+        assertThatThrownBy(() -> settingsService.get(caller)).isInstanceOf(ForbiddenError.class)
+            .hasMessageContaining("MANAGE_PROCESS_CONFIG");
+        assertThatThrownBy(() -> settingsService.update(caller,
+            Map.of("recipientEmail", "gazette@example.com", "revision", 1))).isInstanceOf(ForbiddenError.class)
+            .hasMessageContaining("MANAGE_PROCESS_CONFIG");
+        verifyNoInteractions(settings);
+    }
+
+    static Stream<List<Role>> teamLeaders() {
+        return Stream.of(List.of(Role.TEAM_LEADER), List.of(Role.TEAM_LEADER, Role.JUDICIAL));
     }
 
     @ParameterizedTest

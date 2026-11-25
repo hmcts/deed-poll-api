@@ -143,8 +143,7 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
     static java.util.stream.Stream<List<String>> refusedClaims() {
         return java.util.stream.Stream.of(List.of(), List.of("caseworker-civil"),
             List.of(Role.CASEWORKER.claimValue()), List.of(Role.JUDICIAL.claimValue()),
-            List.of(Role.DEEDPOLL_ADMIN.claimValue()), List.of(Role.TEAM_LEADER.claimValue()),
-            List.of(Role.TEAM_LEADER.claimValue(), Role.JUDICIAL.claimValue()));
+            List.of(Role.DEEDPOLL_ADMIN.claimValue()));
     }
 
     /**
@@ -207,6 +206,37 @@ class GazettePreviewApiTest extends AbstractPostgresContainerTest {
         authorised(get(ROOT + "/" + admitted.request().id() + "/cases")).andExpect(status().isOk());
         authorised(get("/caseworker/cases").param("filter", "readyForPublication").param("size", "1"))
             .andExpect(status().isOk()).andExpect(jsonPath("$.total").isNumber());
+    }
+
+    /** A Team leader reviews and sends batches, but the recipient they send to is the Delivery Manager's setting. */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void teamLeaderAloneOrWithJudicialSendsButIsRefusedTheRecipient(boolean judicial) throws Exception {
+        String id = ready("Adult");
+        GazettePreview preview = previews.preview(DELIVERY_MANAGER, List.of(id));
+        UUID key = UUID.randomUUID();
+        final var admitted = admit(
+            CurrentUser.currentUser(List.of(Role.TEAM_LEADER), "Team leader", StubIdam.SUBJECT),
+            key, preview, id);
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Team leader", judicial
+            ? List.of(Role.TEAM_LEADER.claimValue(), Role.JUDICIAL.claimValue())
+            : List.of(Role.TEAM_LEADER.claimValue()));
+        authorised(get(ROOT)).andExpect(status().isOk());
+        authorised(get("/caseworker/gazette-settings")).andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.recipientEmail").doesNotExist());
+        authorised(put("/caseworker/gazette-settings").contentType("application/json")
+            .content("{\"recipientEmail\":\"leader@example.com\",\"revision\":1}"))
+            .andExpect(status().isForbidden());
+        previewHttp(ready("Minor")).andExpect(status().isOk());
+        submit(key, preview, id).andExpect(status().isAccepted());
+        authorised(get(REQUESTS)).andExpect(status().isOk());
+        authorised(get(ROOT + "/" + admitted.request().id())).andExpect(status().isOk());
+        authorised(get(ROOT + "/" + admitted.request().id() + "/cases")).andExpect(status().isOk());
+        authorised(get("/caseworker/cases").param("filter", "readyForPublication").param("size", "1"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.total").isNumber());
+        IDAM.stubUserInfo(StubIdam.SUBJECT, "Manager", List.of(Role.DELIVERY_MANAGER.claimValue()));
+        authorised(get("/caseworker/gazette-settings")).andExpect(status().isOk())
+            .andExpect(jsonPath("$.recipientEmail").value(org.hamcrest.Matchers.not("leader@example.com")));
     }
 
     @ParameterizedTest
