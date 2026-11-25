@@ -40,6 +40,15 @@ class DeploymentChartConformanceTest {
     private static final Path APPLICATION_YAML = Path.of("src/main/resources/application.yaml");
     private static final Path AGENT_CONFIG = Path.of("lib/applicationinsights.json");
     private static final Path JENKINSFILE = Path.of("Jenkinsfile_CNP");
+    private static final String RETENTION = "NOTIFY_DOCUMENT_RETENTION_WEEKS";
+
+    /**
+     * A Notify value with prod's own id in the {@code prod} branch and the non-prod one in the other (2026-11-11).
+     */
+    private static final Pattern PROD_OWN_ID = Pattern.compile(
+        "\\{\\{ if eq \\.Values\\.global\\.environment `prod` }}"
+            + "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\{\\{ else }}"
+            + "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\{\\{ end }}");
 
     /**
      * {@code spring.config.import: "optional:configtree:/mnt/secrets/<segment>/"}.
@@ -153,20 +162,29 @@ class DeploymentChartConformanceTest {
     }
 
     @Test
-    @DisplayName("prod inherits no non-prod Notify identifier: each renders a placeholder or nothing there")
+    @DisplayName("prod inherits no non-prod Notify identifier: each renders a placeholder, nothing, or its own id")
     void prodInheritsNoNonProdNotifyIdentifier() throws IOException {
         Map<String, Object> notify = new TreeMap<>(environment());
         notify.keySet().removeIf(name -> !name.startsWith("NOTIFY_"));
+        notify.remove(RETENTION);   // a number of weeks, not an identifier: retentionIsOneNumberEverywhere
 
-        // A plain DEED_POLL_PLACEHOLDER is a template no environment has yet (the Master emails), so prod's too.
+        // A plain DEED_POLL_PLACEHOLDER is a template no environment has yet, so prod's too. Since 2026-11-11 prod's
+        // own Notify service exists, and a template may carry a prod id of its own: it must differ from the non-prod
+        // one, because a prod Live key cannot use another service's template.
         assertThat(notify).isNotEmpty().allSatisfy((name, value) -> assertThat(String.valueOf(value))
-            .as("%s is a non-prod value; prod must render it as DEED_POLL_PLACEHOLDER or empty", name)
+            .as("%s is a non-prod value; prod must render it as DEED_POLL_PLACEHOLDER, empty or its own id", name)
             .satisfiesAnyOf(
                 v -> assertThat(v).isEqualTo("DEED_POLL_PLACEHOLDER"),
                 v -> assertThat(v).startsWith("{{ if eq .Values.global.environment `prod` }}DEED_POLL_PLACEHOLDER"
                     + "{{ else }}"),
                 v -> assertThat(v).startsWith("{{ if ne .Values.global.environment `prod` }}")
-                    .doesNotContain("{{ else }}")));
+                    .doesNotContain("{{ else }}"),
+                v -> {
+                    Matcher own = PROD_OWN_ID.matcher(v);
+                    assertThat(own.matches()).as("prod's own id, then the non-prod one").isTrue();
+                    assertThat(own.group(1)).as("prod's id differs from the non-prod one")
+                        .isNotEqualTo(own.group(2));
+                }));
     }
 
     @Test
@@ -174,6 +192,13 @@ class DeploymentChartConformanceTest {
     void prodUsesTheCdamStore() throws IOException {
         assertThat(environment()).containsEntry("DOCUMENT_STORE",
             "{{ if eq .Values.global.environment `prod` }}cdam{{ else }}filesystem{{ end }}");
+    }
+
+    @Test
+    @DisplayName("the document retention is one whole number of weeks Notify accepts, prod included")
+    void retentionIsOneNumberEverywhere() throws IOException {
+        // Steve, 2026-11-11: 26 weeks in every environment until the Delivery Manager's settings own the number.
+        assertThat(String.valueOf(environment().get(RETENTION))).isEqualTo("26");
     }
 
     @ParameterizedTest
