@@ -97,6 +97,7 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
             jdbc.update("DELETE FROM deedpoll_deletion_request WHERE case_id = ?", id);
             jdbc.update("DELETE FROM deedpoll_deedpoll WHERE id = ?", id);
         }
+        DeletionTestDocumentType.removeIfUnused(jdbc);
     }
 
     private String fixture() {
@@ -110,10 +111,11 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
     }
 
     private void localDocument(String caseId) {
+        DeletionTestDocumentType.ensure(jdbc);
         jdbc.update("""
             INSERT INTO deedpoll_supportingdocument (id, "deedPollId", direction, name, "documentTypeId",
                 "storageKey", "modifiedOn", "storageState", "storageUploadAttempts")
-            VALUES (?, ?, 'Incoming', 'Evidence', (SELECT id FROM deedpoll_supportingdocumenttype ORDER BY id LIMIT 1),
+            VALUES (?, ?, 'Incoming', 'Evidence', 'deletion-test-evidence',
                     ?, now(), 'Local', 0)
             """, UUID.randomUUID().toString(), caseId, "files/" + UUID.randomUUID());
     }
@@ -489,9 +491,20 @@ class ApplicationDeletionRestoreTest extends AbstractPostgresContainerTest {
         throw new IllegalStateException("the restore never waited on the case lock");
     }
 
+    /**
+     * Backends blocked, directly or behind another waiter, by this connection's own locks: the restore waits on
+     * the case row this test holds, and the retry queues on the same row behind the restore. Called on the
+     * transaction's own connection, so {@code pg_backend_pid()} is the lock holder. Counting every lock wait in the
+     * database instead let an unrelated waiter count, and matching the lock statement's text missed a waiter whose
+     * {@code query} had not been updated yet.
+     */
     private int waiters() {
         Integer waiting = jdbc.queryForObject("""
-            SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()
+            WITH RECURSIVE blocked(pid) AS (
+                SELECT pid FROM pg_stat_activity WHERE pg_backend_pid() = ANY (pg_blocking_pids(pid))
+                UNION
+                SELECT a.pid FROM pg_stat_activity a JOIN blocked b ON b.pid = ANY (pg_blocking_pids(a.pid)))
+            SELECT count(*) FROM blocked
             """, Integer.class);
         return waiting == null ? 0 : waiting;
     }

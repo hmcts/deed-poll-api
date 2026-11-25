@@ -131,6 +131,7 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
             jdbc.update("DELETE FROM deedpoll_master_email WHERE master_id = ?", master);
             jdbc.update("DELETE FROM deedpoll_master WHERE id = ?", master);
         }
+        DeletionTestDocumentType.removeIfUnused(jdbc);
     }
 
     // --- the journeys -----------------------------------------------------------------------------------------------
@@ -498,10 +499,11 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
 
     private String localDocument(String caseId) throws IOException {
         String key = UUID.randomUUID().toString();
+        DeletionTestDocumentType.ensure(jdbc);
         jdbc.update("""
             INSERT INTO deedpoll_supportingdocument (id, "deedPollId", direction, name, "documentTypeId",
                 "storageKey", "modifiedOn", "storageState")
-            VALUES (?, ?, 'Incoming', 'Evidence', (SELECT id FROM deedpoll_supportingdocumenttype ORDER BY id LIMIT 1),
+            VALUES (?, ?, 'Incoming', 'Evidence', 'deletion-test-evidence',
                     ?, now(), 'Local')
             """, UUID.randomUUID().toString(), caseId, key);
         Files.writeString(documents.resolve(key), "applicant evidence");
@@ -509,10 +511,11 @@ class DeletionFinalisationTest extends AbstractPostgresContainerTest {
     }
 
     private void cdamDocument(String caseId) {
+        DeletionTestDocumentType.ensure(jdbc);
         jdbc.update("""
             INSERT INTO deedpoll_supportingdocument (id, "deedPollId", direction, name, "documentTypeId",
                 "modifiedOn", "storageState", "cdamDocumentId")
-            VALUES (?, ?, 'Incoming', 'Evidence', (SELECT id FROM deedpoll_supportingdocumenttype ORDER BY id LIMIT 1),
+            VALUES (?, ?, 'Incoming', 'Evidence', 'deletion-test-evidence',
                     now(), 'Attached', ?)
             """, UUID.randomUUID().toString(), caseId, UUID.randomUUID());
     }

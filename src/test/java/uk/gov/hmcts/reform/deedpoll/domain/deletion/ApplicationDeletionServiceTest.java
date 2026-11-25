@@ -94,6 +94,7 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
         }
         jdbc.update("DELETE FROM deedpoll_gazette_notice_batch WHERE sent_by_id = ?", SUBJECT);
         jdbc.update("DELETE FROM deedpoll_gazette_request WHERE submitted_by_id = ?", SUBJECT);
+        DeletionTestDocumentType.removeIfUnused(jdbc);
     }
 
     private String fixture() {
@@ -149,10 +150,11 @@ class ApplicationDeletionServiceTest extends AbstractPostgresContainerTest {
 
     private void insertDocument(String caseId, String state, String storageKey, UUID cdamId, String hashToken,
                                 int uploads) {
+        DeletionTestDocumentType.ensure(jdbc);
         jdbc.update("""
             INSERT INTO deedpoll_supportingdocument (id, "deedPollId", direction, name, "documentTypeId",
                 "storageKey", "modifiedOn", "storageState", "cdamDocumentId", "cdamHashToken", "storageUploadAttempts")
-            VALUES (?, ?, 'Incoming', 'Evidence', (SELECT id FROM deedpoll_supportingdocumenttype ORDER BY id LIMIT 1),
+            VALUES (?, ?, 'Incoming', 'Evidence', 'deletion-test-evidence',
                     ?, now(), ?, ?, ?, ?)
             """, UUID.randomUUID().toString(), caseId, storageKey, state, cdamId, hashToken, uploads);
     }

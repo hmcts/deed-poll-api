@@ -147,6 +147,7 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
         for (UUID master : masters) {
             jdbc.update("DELETE FROM deedpoll_master WHERE id = ?", master);
         }
+        DeletionTestDocumentType.removeIfUnused(jdbc);
     }
 
     // --- fixtures ---------------------------------------------------------------------------------------------
@@ -188,10 +189,11 @@ class DeletionFenceTest extends AbstractPostgresContainerTest {
 
     private String document(String caseId) {
         String id = UUID.randomUUID().toString();
+        DeletionTestDocumentType.ensure(jdbc);
         jdbc.update("""
             INSERT INTO deedpoll_supportingdocument (id, "deedPollId", direction, name, "documentTypeId",
                 "storageKey", "modifiedOn", "storageState", "storageUploadAttempts")
-            VALUES (?, ?, 'Incoming', 'Evidence', (SELECT id FROM deedpoll_supportingdocumenttype ORDER BY id LIMIT 1),
+            VALUES (?, ?, 'Incoming', 'Evidence', 'deletion-test-evidence',
                     ?, now(), 'Local', 0)
             """, id, caseId, "files/" + id);
         return id;
