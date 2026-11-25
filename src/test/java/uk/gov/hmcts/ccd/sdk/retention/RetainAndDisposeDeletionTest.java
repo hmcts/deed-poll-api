@@ -46,6 +46,7 @@ import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFinalisation;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionGracePeriods;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionRequest;
 import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionStatus;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionTestDocumentType;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionRequestRepository;
 import uk.gov.hmcts.reform.deedpoll.repository.DeletionWorkRepository;
 import uk.gov.hmcts.reform.deedpoll.storage.LocalFilesystemDocumentStore;
@@ -168,6 +169,7 @@ class RetainAndDisposeDeletionTest extends AbstractPostgresContainerTest {
         for (Long reference : ccdCases) {
             jdbc.update("DELETE FROM ccd.case_data WHERE reference = ?", reference);
         }
+        DeletionTestDocumentType.removeIfUnused(jdbc);
     }
 
     // ---- data-store, scripted --------------------------------------------------------------------------------------
@@ -284,10 +286,11 @@ class RetainAndDisposeDeletionTest extends AbstractPostgresContainerTest {
 
     private String fileOn(String caseId) throws IOException {
         String key = UUID.randomUUID().toString();
+        DeletionTestDocumentType.ensure(jdbc);
         jdbc.update("""
             INSERT INTO deedpoll_supportingdocument (id, "deedPollId", direction, name, "documentTypeId",
                 "storageKey", "modifiedOn", "storageState")
-            VALUES (?, ?, 'Incoming', 'Evidence', (SELECT id FROM deedpoll_supportingdocumenttype ORDER BY id LIMIT 1),
+            VALUES (?, ?, 'Incoming', 'Evidence', 'deletion-test-evidence',
                     ?, now(), 'Local')
             """, UUID.randomUUID().toString(), caseId, key);
         Files.writeString(documents.resolve(key), "applicant evidence");
@@ -295,10 +298,11 @@ class RetainAndDisposeDeletionTest extends AbstractPostgresContainerTest {
     }
 
     private void cdamDocumentOn(String caseId) {
+        DeletionTestDocumentType.ensure(jdbc);
         jdbc.update("""
             INSERT INTO deedpoll_supportingdocument (id, "deedPollId", direction, name, "documentTypeId",
                 "modifiedOn", "storageState", "cdamDocumentId", "storageUploadAttempts")
-            VALUES (?, ?, 'Incoming', 'Evidence', (SELECT id FROM deedpoll_supportingdocumenttype ORDER BY id LIMIT 1),
+            VALUES (?, ?, 'Incoming', 'Evidence', 'deletion-test-evidence',
                     now(), 'Attached', ?, 1)
             """, UUID.randomUUID().toString(), caseId, UUID.randomUUID());
     }

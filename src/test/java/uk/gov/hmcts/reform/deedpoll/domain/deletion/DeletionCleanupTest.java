@@ -120,6 +120,7 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
         for (Long reference : ccdCases) {
             jdbc.update("DELETE FROM ccd.case_data WHERE reference = ?", reference);
         }
+        DeletionTestDocumentType.removeIfUnused(jdbc);
     }
 
     private ObjectProvider<LocalFilesystemDocumentStore> store(Path at) {
@@ -150,10 +151,11 @@ class DeletionCleanupTest extends AbstractPostgresContainerTest {
      * A filesystem document: its row, and its bytes under the key unless {@code stored} is false.
      */
     private String localDocument(String caseId, String key, boolean stored) throws IOException {
+        DeletionTestDocumentType.ensure(jdbc);
         jdbc.update("""
             INSERT INTO deedpoll_supportingdocument (id, "deedPollId", direction, name, "documentTypeId",
                 "storageKey", "modifiedOn", "storageState")
-            VALUES (?, ?, 'Incoming', 'Evidence', (SELECT id FROM deedpoll_supportingdocumenttype ORDER BY id LIMIT 1),
+            VALUES (?, ?, 'Incoming', 'Evidence', 'deletion-test-evidence',
                     ?, now(), 'Local')
             """, UUID.randomUUID().toString(), caseId, key);
         if (stored) {
