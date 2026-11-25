@@ -6,12 +6,19 @@ Status: planned, 2026-11-25. Planning only; implementation and live deletion hav
 
 Steve confirmed the outcome in this conversation:
 
-1. Anyone already authorised to access an application's document can delete it; no Delivery Manager restriction.
+1. Office staff who can already access an application's documents (caseworkers, Team leaders and Delivery Managers)
+   can delete one; no Delivery Manager restriction. **Masters are read-only** and get no deletion (Steve, 2026-11-25).
 2. Document deletion is permanent.
 3. The user must enter a reason in their own words, for example "Uploaded in error".
 4. Record the deletion in the audit table **and as a case note**, identifying the document, actor, time and reason.
 5. Refuse deletion while the document is actively in use and explain that refusal in user-friendly language.
 6. Show a confirmation page identifying the document and warning that deletion cannot be undone.
+
+**Review by Aspen, Steve's answers 2026-11-25:** (a) staff only, as above; (b) "in use" means **queued or unsettled
+work** already recorded in the database, not a lease on every read; (c) deletion runs **while the user waits**, with
+a durable request so a crash or timeout is recoverable, not through a switched-off background worker; (d) the CDAM
+hard delete is proved by a prod smoke with a disposable application (AAT uses the filesystem store); (e) CLAUDE.md's
+"Never send `permanent=true`" rule is rewritten for this one path (Task 7).
 
 This plan implements API ownership and cleanup. The companion is
 `deed-poll-admin:docs/plans/20261125-permanent-document-deletion.md`. Run each plan in its own repository/worktree;
@@ -42,8 +49,8 @@ Read first (Java paths relative to `src/main/java/uk/gov/hmcts/reform/deedpoll/`
   "Grace period and restore"; both completed application-deletion/grace-period plans. The grace-period
   timestamp race accepted there is **not** evidence that an irreversible document operation has the same protection.
 - `api/caseworker/controller/CaseworkerDocumentController.java`, `domain/auth/CurrentUser.java`,
-  `api/judicial/controller/JudicialReferralController.java`, `domain/referrals/JudicialReferralService.java`.
-  Judicial access is referral-scoped; do not expose the staff case surface to judges to implement "anyone".
+  `api/judicial/controller/JudicialReferralController.java` and `domain/referrals/JudicialReferralService.java`, only
+  to confirm the judicial surface gains no deletion route (Masters are read-only).
 - `domain/notes/{NoteService,NoteAuthor,CreateNoteInput}.java`, `domain/audit/{AuditTrail,AuditEntry,AuditAction}.java`,
   `api/WriteEndpointAuditCoverageTest.java` in the mirrored test package. Audit detail's existing `deletionNote`
   uses application-specific validation. Do not silently weaken it to accept a document reason.
@@ -67,10 +74,10 @@ this operation erases platform audit/metadata, delivered emails, backups or ever
 
 Implement these requirements; do not reintroduce the earlier Delivery Manager-only capability or fixed reasons.
 
-- Every existing staff role admitted to ordinary casework can delete a document of an application it may access.
-  A judicial caller who may access a document through their referral can do the same through that referral's scope.
-  Anonymous, citizen-only, unrelated judicial and service-only identities do not gain a new permission. Re-evaluate
-  access on confirmation, admission, replay and status; possession of an ID or old signed page is not permission.
+- Every staff role admitted to `/caseworker/**` (`StaffArea.CASEWORKER`: caseworker, Team leader, Delivery Manager and
+  the legacy admin role) can delete a document of an application it may access. **No judicial route**: Masters are
+  read-only, and the judicial surface gains nothing. Anonymous, citizen-only, judicial-only and service-only identities
+  gain no permission. Re-evaluate access on admission, replay and status; an ID or an old signed page is not permission.
 - No new `DELETE_DOCUMENT` privileged capability and no ownership-by-uploader restriction. Include uploaded,
   scanned and generated supporting-document rows already exposed by the document lists. Do not silently limit
   this to uploaded documents; do not expose documents the existing access rules hide.
@@ -88,14 +95,16 @@ assertion that they exist today; align naming with current request resources dur
 
 | Operation | Behaviour |
 |---|---|
-| `POST /caseworker/cases/{id}/documents/{documentId}/deletion-requests` | Closed JSON `{ reason, expectedDocumentVersion }`; required UUID `Idempotency-Key`; 202 `{ requestId, status }` and Location |
-| `GET /caseworker/cases/{id}/document-deletions/{requestId}` | Read only, authorised and case-scoped; Pending/InProgress/NeedsAttention/Completed plus typed outcome/failure, timestamps and document ID; no storage locator or free-text reason |
-| Referral-scoped admission/status equivalents under `/judicial/referrals/{referralId}/...` | Same deletion service and request, after the existing referral visibility check; do not disclose the case ID or case notes |
+| `POST /caseworker/cases/{id}/documents/{documentId}/deletion-requests` | Closed JSON `{ reason, expectedDocumentVersion }`; required UUID `Idempotency-Key`. Runs the deletion **in the request** (below): 200 `{ requestId, status: "Completed" }` when every step is confirmed; 202 `{ requestId, status }` (`InProgress` or `NeedsAttention`) with Location when a step is uncertain or failed and recovery will finish it |
+| `GET /caseworker/cases/{id}/document-deletions/{requestId}` | Read only, authorised and case-scoped; `InProgress`/`NeedsAttention`/`Completed` plus typed failure, timestamps and document ID; no storage locator or free-text reason. Needed only after a 202 or an unknown outcome |
 
 Use typed 409 codes, including `DOCUMENT_IN_USE`, `DOCUMENT_CHANGED`, `DOCUMENT_STORAGE_UNRESOLVED`,
 `DOCUMENT_SHARED`, `APPLICATION_DELETION_PENDING`, `KEY_REUSED`; 400 reason/version/key errors; existing 401/403/404
 conventions and bounded JSON requests. Never distinguish inaccessible and absent documents more widely than today.
 Status resources remain available after the document row disappears, provided the caller still has parent access.
+The whole request must answer inside a budget well under the 30 s Application Gateway timeout (target 20 s,
+`DOCUMENT_DELETION_REQUEST_BUDGET`): every remote call carries a bounded timeout, and a step not finished within the
+budget returns 202 `InProgress` for recovery rather than letting the gateway answer.
 Whole-application deletion may later remove its document status resource; 404 then is not proof of document completion.
 
 Mint the idempotency key when the confirmation renders. Persist a unique request per document with a fingerprint
@@ -106,25 +115,28 @@ Timeout, 5xx or unreadable admission response is an unknown outcome, recoverable
 
 ### Active use and stale confirmation
 
-"In use" means an in-flight server operation, a queued operation already bound to those bytes, or an uncertain
-external operation that may still read them. Opening an idle browser tab must not lock a document forever. A browser
-that already downloaded bytes cannot have them recalled; say nothing suggesting otherwise.
+"In use" means **queued or unsettled work that is already recorded in the database and will read the document's
+bytes** (Steve, 2026-11-25). Task 1 inventories the actual sources against the code; the expected set is:
 
-Inventory actual use paths: preview/conversion, binary streaming, Notify document delivery, deed generation or
-storage recovery where they reference the target, uploads/promotions, CCD document synchronisation and Gazette
-work if it consumes the same bytes. Do not block unrelated application work by guessing every job uses every document.
+- an email notification in `Pending`, `Claimed` or `Sending` whose frozen personalisation carries this document's id
+  (`EmailTemplate.documentKeys()`), including an uncertain send not yet settled;
+- a deed preparation or owned-staging promotion that references the document and has not settled;
+- the document's own unsettled storage states (`Uploaded`, `AttachUncertain`, an uncertain upload), which already
+  refuse as `DOCUMENT_STORAGE_UNRESOLVED`;
+- Gazette request membership or evidence that copies this document's bytes, only if Task 1 finds Gazette does so.
 
-Use a durable per-document coordination point shared across pods, with bounded leases where necessary and a
-document deletion fence. Acquiring use and admitting deletion must be mutually exclusive under one documented lock
-order. Existing users hold authority until streaming/conversion/remote use truly ends, not merely until HTTP headers
-are sent. Lease expiry alone does not prove an uncertain Notify operation is over. A new use after admission refuses.
-Do not hold a database transaction open around streaming or external calls. Check row-lock and lease ordering against
-the application-deletion code; its previous case-row audit trigger deadlocked and must not be reintroduced.
+**No lease system and no lock around reads.** A preview, download or stream in progress does not block deletion:
+once admission commits, the document is fenced, so new reads, previews, downloads and new email sends naming it are
+refused; a read already streaming may finish, and a browser that already has the bytes cannot have them recalled (say
+nothing suggesting otherwise). Admission checks the in-use sources **under the case and document row locks**, in the
+same lock order application deletion uses (case, then the document's rows), so a new queued use either commits first
+(and deletion is refused) or meets the fence. No commit-time trigger that locks the case row: one was built for
+application deletion and deadlocked against Gazette settlement and the referral queue.
 
-Admission checks a document-specific monotonic version/content identity published in the list/projection for the
+Admission checks a document-specific monotonic version published in the document list/projection for the
 confirmation, not the application's grace-period `lastChangedOn` timestamp. Increment it atomically for metadata,
-binary and storage-identity changes that affect the reviewed item. Concurrent use/replacement wins or deletion wins;
-both cannot commit permission. A refusal creates no deletion request, completion audit or case note.
+binary and storage-identity changes that affect the reviewed item (`DOCUMENT_CHANGED`). A refusal creates no deletion
+request, completion audit or case note.
 
 For `DOCUMENT_IN_USE`, Admin displays exactly:
 "This document is currently being used and cannot be deleted. Try again once the operation has finished."
@@ -132,14 +144,21 @@ API provides a stable code, never a provider exception or guessed duration.
 
 ### Cleanup, audit and case note
 
-1. Admission locks/checks parent and document, verifies version, active-use/ref-sharing and whole-application fence,
-   and persists a durable request plus cleanup identifiers/fence. Record a request audit under the verified actor.
-   The document becomes unavailable for new reads/uses. The UI must call this pending, not deleted.
-2. A dedicated bounded recoverable worker removes the document from the **current** case/CCD collection, permanently
-   deletes its owned binary versions through CDAM (`true`) or the correct filesystem store, and verifies each result
-   under the pinned contract. The document list comes from fresh authoritative rows excluding deletion-fenced rows;
+1. **Admission** (its own short transaction, committed before any remote call): lock the case, then the document;
+   check access, version, in-use, shared references and the application-deletion fence; persist a durable request
+   (`InProgress`) with its cleanup identifiers and the document fence, and record a request audit under the verified
+   actor. From this commit the document is unavailable for new reads and uses.
+2. **Remote steps, in the same HTTP request, outside any transaction:** remove the document from the **current**
+   case/CCD collection if the case is linked, then delete its owned binary permanently through CDAM
+   (`permanent=true`, **never a soft delete first**: a permanent delete after a soft delete may not remove the blob,
+   `docs/CDAM-RECOVERY.md`) or the filesystem store, recording each step's outcome in its own short commit. A step
+   that fails or is uncertain, or the request budget running out, leaves the request `InProgress` (retryable) or
+   `NeedsAttention` (needs a person) and answers 202. A **recovery sweep** (bounded, multi-pod-safe claims with owned
+   leases on the request row only, **enabled by default**, independent of application deletion's cleanup flag) resumes
+   `InProgress` requests whose owner went away; it starts no new deletion. The document list comes from fresh authoritative rows excluding deletion-fenced rows;
    two concurrent document removals must not reattach one another using an old remaining-documents snapshot.
-3. Complete only after all required external steps are confirmed. In one local transaction delete remaining local
+3. **Finalise** in the same request when the remote steps confirmed (or in the sweep later): complete only after all
+   required external steps are confirmed. In one local transaction delete remaining local
    document data, reconcile V50 evidence, insert one `DOCUMENT_DELETED` event and create one case note under the
    **original requesting user**, then mark Completed. Reason and document ID survive in the event and case note.
    A suggested note: `Document [display name] ([document ID]) permanently deleted. Reason: [reason]`.
@@ -150,7 +169,7 @@ API provides a stable code, never a provider exception or guessed duration.
    erase why. Case-note deletion/edit policies remain as today; the audit is the durable original record.
 5. A note/audit insert failure rolls back local completion, leaving durable work to resume after already-finished
    remote steps. Request creation, audit and note must not be best effort. Exactly one completion/note across
-   retries, worker races, crashes and lost responses. A request-audit or NOTE_CREATED event is not a duplicate
+   retries, request/sweep races, crashes and lost responses. A request-audit or NOTE_CREATED event is not a duplicate
    DOCUMENT_DELETED event. No network call is part of the final DB transaction.
 6. New requests use the permanent cleanup path; ordinary internal `removeDocument` must not accidentally soft-delete
    the binary first. Remove/bound any bypass and retain needed internal compatibility without exposing an unguarded
@@ -179,20 +198,24 @@ Historical V50 soft-deleted documents are not retroactively bulk-purged by this 
 
 ## Validation Commands
 
-Baseline and final gate from this repository root: `./gradlew build --no-watch-fs` (force test/integration execution
-at the final gate). After each task run its focused test classes, compile affected source sets, applicable Checkstyle
-tasks and `git diff --check`. New suite names are proposals until introduced; do not use an empty selector as proof.
+Run from this repository root, **in the foreground** (never background a Gradle command). They must be green after
+every task. Gradle's Checkstyle worker crashes with SIGILL in this devcontainer, so it is disabled locally by the init
+script and the same pinned Checkstyle runs directly (`checkstyle.sh`, which fails on any WARN); Jenkins runs the
+normal Checkstyle tasks. If `build/config/checkstyle/checkstyle.xml` is missing in a fresh worktree, copy it from
+another deed-poll-api worktree before the first run. Baseline at the plan commit: green (Aspen, 2026-11-25).
 
 ```bash
-./gradlew test --tests '*DocumentDeletion*' --no-watch-fs
-./gradlew compileJava compileTestJava compileIntegrationTestJava checkstyleMain checkstyleTest --no-watch-fs
+export TESTCONTAINERS_RYUK_DISABLED=true JAVA_TOOL_OPTIONS=-XX:UseSVE=0
+./gradlew build -I /Users/steve.newman/Documents/GitHub/deed-poll-admin-workspace/cft-workspace/.context/scripts/no-checkstyle.gradle --console=plain --no-watch-fs
+/Users/steve.newman/Documents/GitHub/deed-poll-admin-workspace/cft-workspace/.context/scripts/checkstyle.sh .
 git diff --check
 ```
 
-Use Postgres/Testcontainers for locks, constraints, fence/finalisation and exactly-once tests; stub all remote work.
-Run commands in the foreground and record actual counts, failures and skips. Follow the repository's documented
-JVM/direct-Checkstyle workaround if required, running the equivalent check, not copying historic `/tmp` scripts.
-Generate the full OpenAPI artifact using OpenAPIPublisherTest and OPENAPI_OUTPUT_PATH after contract tests pass.
+Each task also runs its own focused suites (once they exist; never an empty `--tests` selector as a gate). Use
+Postgres/Testcontainers for locks, constraints, fences, finalisation and exactly-once tests; stub all remote work
+(WireMock for CDAM and CCD). The final gate forces the tests (`./gradlew test --rerun integration --rerun`, each task
+named immediately before its `--rerun`) and records counts from the XML in `build/test-results/{test,integration}`.
+Generate the full OpenAPI artifact using OpenAPIPublisherTest and OPENAPI_OUTPUT_PATH after the contract tests pass.
 
 ## Implementation Steps
 
@@ -202,7 +225,8 @@ Generate the full OpenAPI artifact using OpenAPIPublisherTest and OPENAPI_OUTPUT
 
 - [ ] Record execution SHAs and baseline gates; write `docs/DOCUMENT-DELETION.md` with every reader, queued consumer,
   reference owner and writer of a document, including preview streaming lifetime and already-copied provider bytes.
-- [ ] Specify shared lock order, the version token, role/access matrix (including referral-scoped judiciary), binary
+- [ ] Specify shared lock order, the version token, the staff-only access matrix (no judicial route), the exact
+  in-use sources found in the code, the request budget and per-call timeouts, binary
   ownership, permanent CDAM success/replay/404 semantics and native-SQL/JPA fence points against actual code.
 - [ ] Add/locate a stubbed proof of permanent CDAM deletion and safe retry. Document external permissions/modes and
   unsupported outcomes as activation blockers. Do not replace permanent deletion with soft deletion or a guessed API.
@@ -219,32 +243,34 @@ Generate the full OpenAPI artifact using OpenAPIPublisherTest and OPENAPI_OUTPUT
 - [ ] Test schema constraints, rejected reason forms/Unicode, version changes, redaction, migration compatibility
   and uniqueness using real Postgres. Include the schema/SDK migration-order health gates.
 
-### Task 3: Coordinate active readers/writers and authorised admission
+### Task 3: Authorised admission with in-use and version checks
 
-**Files:** new deletion service, DocumentService/storage states/preview readers, notification/deed/Gazette consumers
-identified in Task 1, JudicialReferralService and document/referral tests.
+**Files:** new deletion service, DocumentService/storage states, the notification, deed-preparation and staging
+repositories identified in Task 1, and document tests.
 
-- [ ] Enforce ordinary staff access and existing judicial visibility, parent/document ownership and deletion fences
-  in the domain; implement admission/replay/version/body conflicts. No privileged DELETE_DOCUMENT grant.
-- [ ] Wire durable use coordination at actual consumption/claim boundaries, release on success/error/disconnect,
-  and prevent expiry granting deletion while uncertain use continues. Block unresolved promotion/storage.
-- [ ] Prove races deterministically across two transactions/workers: delete versus stream, preview, queued/send
-  claim, upload/replace/attach and new read; no external operation starts on a fenced document. Another document on
-  the same application remains usable. Rejected active use causes no side effects and returns DOCUMENT_IN_USE.
+- [ ] Enforce staff access (no judicial route), parent/document ownership and deletion fences in the domain;
+  implement admission, replay, version and body conflicts. No privileged DELETE_DOCUMENT grant.
+- [ ] Check the Task 1 in-use sources under the case and document locks; fence reads, previews, downloads and new email
+  sends naming the document from admission. No leases on readers.
+- [ ] Prove the races deterministically across two transactions: admission versus a new email enqueue naming the
+  document, versus an upload/replace/attach, and versus a read; a queued send refuses as `DOCUMENT_IN_USE` with no side
+  effects; a read after admission is refused; another document on the same application stays usable.
 
 ### Task 4: Permanently clean up, recover and atomically record completion
 
-**Files:** new document deletion worker/step/finalisation, CdamDocumentStore/permanent seam, CCD document projection,
+**Files:** new document deletion steps, recovery sweep and finalisation, CdamDocumentStore/permanent seam, CCD document projection,
 NoteService/DocumentUploadAudit adapters, scheduler/config and their tests.
 
-- [ ] Implement permanent CDAM and verified filesystem cleanup, metadata-only deletion, current CCD reference
-  removal, and bounded multi-pod recovery with owned leases. No best-effort success and no new Restore action.
+- [ ] Implement the in-request remote steps within the budget, permanent CDAM and verified filesystem cleanup,
+  metadata-only deletion, current CCD reference removal, and the recovery sweep for interrupted requests. No
+  best-effort success and no Restore action.
 - [ ] Implement atomic local completion with correctly attributed DOCUMENT_DELETED and one case note containing
   document identity and the entered reason. Audit/note failures leave a recoverable incomplete request.
 - [ ] Test 204 success, all ambiguous replay/404 cases, 401/403/outage/5xx, crashes after remote success, lease loss,
-  duplicate worker finalisation, forced note/audit failure, and concurrent document removals not reattaching each other.
-- [ ] Add configuration/health/monitoring and chart tests/version bump if values change. Keep activation explicit;
-  a disabled worker leaves Pending, never a false Completed. Do not tie it to application's cleanup-enabled flag.
+  duplicate finalisation by the request and the sweep, forced note/audit failure, and concurrent document removals not reattaching each other.
+- [ ] Add configuration, health and monitoring, and chart tests plus a version bump if values change. The recovery
+  sweep is on by default (it only resumes admitted requests); a disabled sweep leaves `InProgress`, never a false
+  `Completed`. Do not tie it to application deletion's cleanup flag.
 
 ### Task 5: Integrate removed-document evidence and application deletion
 
@@ -258,17 +284,18 @@ new migrations as needed and existing application deletion/grace/restore/concurr
 - [ ] Test complete/partial/unknown document deletion then application delete, historical soft-removal tombstones,
   application fence/restore, mixed filesystem/CDAM history, and both operations racing. Grace-period rules remain intact.
 
-### Task 6: Publish staff and judicial HTTP operations
+### Task 6: Publish the staff HTTP operations
 
-**Files:** caseworker document controller/DTOs, judicial referral controller/DTOs, status services,
+**Files:** caseworker document controller/DTOs, status service,
 WriteEndpointAuditCoverageTest, security/OpenAPI tests and publisher test.
 
-- [ ] Implement the proposed scoped admission/status routes, bounded closed JSON/key/version validation, typed
-  conflicts, no-store headers and audit classification; do not leak case IDs/reasons/locators into judicial status.
-- [ ] Test all permitted staff roles, authorised judiciary, unauthenticated/citizen/service-only/unrelated judge,
+- [ ] Implement the admission (200/202) and status routes, bounded closed JSON/key/version validation, typed
+  conflicts, no-store headers and audit classification; no reason or locator in the status.
+- [ ] Test all permitted staff roles and refusals for a judge, unauthenticated, citizen and service-only callers,
   cross-case/referral guesses, lost-response replay after row removal and access revocation. Scope/auth precedes replay.
-- [ ] Publish the complete spec and record SHA/hash/full delta, including documentVersion in staff/judicial
-  document projections. Ensure no note-author/audit identity is accepted from the client.
+- [ ] Publish the complete spec and record SHA/hash/full delta, including documentVersion in the staff document
+  projection (the judicial projection gains nothing). Ensure no note-author/audit identity is accepted
+  from the client.
 
 ### Task 7: Complete regression evidence, runbook and Admin handoff
 
@@ -278,12 +305,19 @@ WriteEndpointAuditCoverageTest, security/OpenAPI tests and publisher test.
   failure/race tests. Preserve current audit and Sonar gates; do not equate skipped checks with passed checks.
 - [ ] Document access, permanent outcome, reason/audit/note retention, active-use meaning and user wording,
   statuses, retry/investigation, metadata/backups limits, historical soft-removal handling and application interaction.
-- [ ] Prepare disposable-fixture rehearsal steps for both storage modes, alert/owner handoff, API-before-Admin
-  deployment and activation prerequisites. Prepare artifacts only; no live deletion/deployment in this plan run.
+- [ ] Rewrite CLAUDE.md's "Never send `permanent=true`" rule (and `docs/CDAM-RECOVERY.md`'s line): only document
+  deletion sends it, directly (never after a soft delete), and only after its request is recorded, by Steve's
+  decision of 2026-11-25; the internal `removeDocument`, upload clean-up and application deletion stay soft deletes.
+- [ ] Prepare the rehearsal: filesystem in AAT with a disposable fixture, and the **prod CDAM smoke** with a disposable
+  application (a Delivery Manager creates a test application, uploads a test document, deletes it with a reason,
+  confirms the note, audit and CDAM 404, then deletes the application with application deletion). CDAM already grants
+  `deed_poll_api` `UPDATE` on `DEEDPOLL` (its `service_config.json`), which a permanent delete needs; dm-store has no
+  further gate. Prepare artifacts only; no live deletion or deployment in this plan run.
 
 ## Success criteria
 
-An authorised user can confirm permanent deletion with a mandatory reason. The original identity/time/reason and
+An authorised member of staff (not a Master) can confirm permanent deletion with a mandatory reason, and usually sees
+it completed in the same request. The original identity/time/reason and
 document are recorded in the audit event and case note exactly once. In-use documents receive a typed, friendly
 refusal without changes; no new reader races admitted deletion. Completed proves the owned binary and current
 application/CCD references are removed, not merely hidden. Unknown/partial outcomes remain recoverable. Other
