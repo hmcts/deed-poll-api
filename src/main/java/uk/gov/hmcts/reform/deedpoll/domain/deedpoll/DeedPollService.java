@@ -25,8 +25,10 @@ import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollState;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DeedPollType;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.Privacy;
+import uk.gov.hmcts.reform.deedpoll.repository.CaseLastChanged;
 import uk.gov.hmcts.reform.deedpoll.repository.DeedPollRepository;
 
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -104,6 +106,7 @@ public class DeedPollService {
         "New cases cannot be created in this service yet. Create the case in the existing system.";
 
     private final DeedPollRepository deedPolls;
+    private final CaseLastChanged lastChanged;
     private final ReferenceNumberService referenceNumbers;
     private final AuditTrail audit;
     private final CaseListStatementTimeout listTimeout;
@@ -115,8 +118,9 @@ public class DeedPollService {
      */
     @Autowired
     public DeedPollService(DeedPollRepository deedPolls, ReferenceNumberService referenceNumbers,
-                           AuditTrail audit, CaseListStatementTimeout listTimeout,
+                           AuditTrail audit, CaseListStatementTimeout listTimeout, CaseLastChanged lastChanged,
                            @Value("${deedpoll.cases.creation-enabled:true}") boolean creationEnabled) {
+        this.lastChanged = lastChanged;
         this.deedPolls = deedPolls;
         this.referenceNumbers = referenceNumbers;
         this.audit = audit;
@@ -369,6 +373,28 @@ public class DeedPollService {
         return Computed.withComputed(record);
     }
 
+    /**
+     * One case for its detail page, with when anything about it last changed ({@link CaseLastChanged}).
+     *
+     * <p>The last change is read first, in its own statement, so a write landing between the two reads makes it
+     * older than what the page shows: a deletion confirmed from that page is then refused as stale, never admitted
+     * over a change the Delivery Manager did not see.
+     *
+     * @throws NotFoundError if there is no such case
+     */
+    @Transactional(readOnly = true)
+    public CaseForReview findDeedPollForReview(String id) {
+        LocalDateTime changed = lastChanged.of(id)
+            .orElseThrow(() -> new NotFoundError("DeedPoll " + id + " not found"));
+        return new CaseForReview(findDeedPoll(id), changed);
+    }
+
+    /**
+     * A case and its {@link CaseLastChanged} value, read in that order.
+     */
+    public record CaseForReview(DeedPollWithComputed found, LocalDateTime lastChangedOn) {
+    }
+
     /** Updates a case as the service account, non-admin. */
     @Transactional
     public DeedPollWithComputed updateDeedPoll(String id, DeedPollPatch dto) {
@@ -479,12 +505,23 @@ public class DeedPollService {
      * Gazette audit membership also prevents deletion permanently. Otherwise the database cascades to the children.
      * V30 also guards retained preparation ownership in the database, including deletion outside this service.
      *
-     * @throws ConflictError if the case owns retained preparation or staging bytes, or Gazette audit membership
+     * <p><strong>Not the Delivery Manager's deletion, and no production code calls it.</strong> It names no caller,
+     * audits as the service account and removes no binary, CCD case or SDK snapshot, so it is not a way to delete an
+     * application: that is {@code ApplicationDeletionService}, whose request fences the case until its own verified
+     * cleanup finalises it. A case with such a request is therefore refused here, so this cannot pre-empt the cleanup
+     * or erase the case the request still has to account for. {@code RemoveDeedPollCallersTest} holds that nothing in
+     * the main source set calls this.
+     *
+     * @throws ConflictError if the case owns retained preparation or staging bytes, Gazette audit membership, or a
+     *     deletion request
      * @throws NotFoundError if there is no such case
      */
     @Transactional
     public void removeDeedPoll(String id) {
         deedPolls.lockForDeletion(id).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+        if (deedPolls.hasDeletionRequest(id)) {
+            throw new ConflictError("This case has a deletion request, and only that request can delete it.");
+        }
         if (deedPolls.hasRetainedDeedPayload(id)) {
             throw new ConflictError("This case has retained deed preparation bytes. "
                 + "Resolve its document storage outcome before deleting the case.");
@@ -604,7 +641,7 @@ public class DeedPollService {
      * As {@link #requireDeedPoll}, but locking the row for the caller's transaction.
      */
     private DeedPoll requireDeedPollForUpdate(String id) {
-        return deedPolls.findByIdForUpdate(id)
+        return deedPolls.findUnfencedByIdForUpdate(id)
             .orElseThrow(() -> new NotFoundError("DeedPoll " + id + " not found"));
     }
 

@@ -171,18 +171,24 @@ public record CaseDetailResponse(
     Integer daysReceivedToEnroled,
     Integer daysReceivedToReturned,
 
+    // --- Detail only: not on the saved response, because a write does not read the case's audit trail ---
+    // When anything about the case last changed: modifiedOn, or the newest audited write to a child (a note, a
+    // witness, a document, a referral, an email), whichever is later (repository/CaseLastChanged). Application
+    // deletion sends it back as expectedLastChangedOn, and any change since refuses the deletion as stale.
+    LocalDateTime lastChangedOn,
+
     // --- Children, from the same read ---
     List<NoteResponse> notes,
     List<WitnessResponse> witnesses,
     List<DocumentResponse> documents) {
 
     /**
-     * One case, its derived counts and its three child collections.
+     * One case, its derived counts, when it last changed and its three child collections.
      *
      * <p>The collections must already be initialised: the domain fetches them inside its own transaction,
      * because {@code open-in-view} is off and there is no session left by the time a response is being built.
      */
-    public static CaseDetailResponse from(DeedPollWithComputed found) {
+    public static CaseDetailResponse from(DeedPollWithComputed found, LocalDateTime lastChangedOn) {
         DeedPoll record = found.deedPoll();
         ComputedFields computed = found.computed();
 
@@ -279,6 +285,8 @@ public record CaseDetailResponse(
 
             computed.daysReceivedToEnroled(),
             computed.daysReceivedToReturned(),
+
+            lastChangedOn,
 
             NoteResponse.from(record.getNotes()),
             WitnessResponse.from(record.getWitnesses()),

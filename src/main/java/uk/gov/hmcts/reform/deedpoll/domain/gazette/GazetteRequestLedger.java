@@ -91,7 +91,9 @@ public class GazetteRequestLedger {
                 if (!requests.lockCase(id)) {
                     GazetteSelection.ready(id, null, false);
                 }
-                DeedPoll record = cases.findById(id).orElseThrow();
+                // Null when a deletion request fenced the case since the preview: the lock is native and sees the
+                // row, the JPA read does not, and ready refuses it as not ready rather than as a 500.
+                DeedPoll record = cases.findById(id).orElse(null);
                 GazetteSelection.ready(id, record, requests.reserved(id));
                 members.add(record);
             }

@@ -62,7 +62,8 @@ class CallerAccessOpenApiTest extends AbstractPostgresContainerTest {
         assertThat(texts(item.path("enum")))
             .containsExactlyElementsOf(Arrays.stream(Capability.values()).map(Enum::name).toList());
         assertThat(texts(item.path("enum")))
-            .endsWith("MANAGE_PROCESS_CONFIG", "ALLOCATE_REFERRALS", "VIEW_MANAGEMENT_INFORMATION");
+            .endsWith("MANAGE_PROCESS_CONFIG", "ALLOCATE_REFERRALS", "VIEW_MANAGEMENT_INFORMATION",
+                      "DELETE_APPLICATION");
     }
 
     private static JsonNode resolve(JsonNode document, JsonNode schema) {

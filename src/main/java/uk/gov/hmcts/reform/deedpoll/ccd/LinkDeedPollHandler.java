@@ -5,6 +5,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import uk.gov.hmcts.ccd.sdk.api.EventPayload;
 import uk.gov.hmcts.ccd.sdk.api.callback.SubmitResponse;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionFence;
 import uk.gov.hmcts.reform.deedpoll.entity.CcdCreationAttempt;
 import uk.gov.hmcts.reform.deedpoll.entity.DeedPoll;
 import uk.gov.hmcts.reform.deedpoll.repository.CcdCaseProjection;
@@ -39,9 +40,13 @@ public class LinkDeedPollHandler {
     private final DeedPollRepository deedPolls;
     private final CcdCreationAttemptRepository attempts;
 
-    public LinkDeedPollHandler(DeedPollRepository deedPolls, CcdCreationAttemptRepository attempts) {
+    private final DeletionFence fence;
+
+    public LinkDeedPollHandler(DeedPollRepository deedPolls, CcdCreationAttemptRepository attempts,
+                               DeletionFence fence) {
         this.deedPolls = deedPolls;
         this.attempts = attempts;
+        this.fence = fence;
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -54,7 +59,10 @@ public class LinkDeedPollHandler {
 
         Optional<DeedPoll> record = reference.isEmpty() || deedPollId == null
             ? Optional.empty()
-            : deedPolls.findByIdForUpdate(deedPollId);
+            : deedPolls.findByIdForUpdate(deedPollId)
+                // The deletion fence, asked again once the lock is held: a request committed while this waited for
+                // the lock is not in the snapshot the locking read took, and a record being deleted binds nothing.
+                .filter(found -> fence.admits(found.getId()));
 
         CcdLinkRule.Facts facts = new CcdLinkRule.Facts(
             reference,

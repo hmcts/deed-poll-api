@@ -13,6 +13,7 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.SQLRestriction;
 
 import java.time.LocalDateTime;
 
@@ -25,6 +26,8 @@ import java.time.LocalDateTime;
  */
 @Entity
 @Table(name = "deedpoll_witness")
+// The deletion fence, by the row's case (DeletionFenceSql): a fenced case's children read as gone.
+@SQLRestriction(DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID)
 @Getter
 @Setter
 public class DeedPollWitness {

@@ -12,5 +12,10 @@ public enum Capability {
     /** The referral queue: seeing it, sending referrals to Masters in a window, and reassigning a sent one. */
     ALLOCATE_REFERRALS,
     /** The management information figures: aggregate counts and durations only, never a case. */
-    VIEW_MANAGEMENT_INFORMATION
+    VIEW_MANAGEMENT_INFORMATION,
+    /**
+     * Permanently deleting an application created in error or duplicated, with a reason; Delivery Managers only
+     * (plan 20261118-dm-application-deletion).
+     */
+    DELETE_APPLICATION
 }

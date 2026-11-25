@@ -34,7 +34,8 @@ public class DeedPollSchema {
      * Every table the deed-poll domain reads or writes: the six named by the {@code @@map}s in
      * {@code src/test/resources/reference/deed-poll.prisma}, plus the two saved-query tables,
      * referrals, notifications, CCD creation attempts, deed preparations, retained payloads, owned stages
-     * Gazette audit batches, the audit trail's events and values, and the abuse limits' request budgets.
+     * Gazette audit batches, the audit trail's events and values, the abuse limits' request budgets, and
+     * application deletion requests with their cleanup steps.
      * These have no reference model because they are new behaviour rather than a port.
      *
      * <p>Listed explicitly rather than derived, and the reference's reason for that survives the port even
@@ -81,7 +82,10 @@ public class DeedPollSchema {
         "deedpoll_gazette_request_file",
         "deedpoll_audit_event",
         "deedpoll_audit_event_value",
-        "deedpoll_request_budget"
+        "deedpoll_request_budget",
+        "deedpoll_deletion_request",
+        "deedpoll_deletion_step",
+        "deedpoll_removed_document"
     );
 
     /**

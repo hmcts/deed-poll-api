@@ -212,6 +212,26 @@ class DeploymentChartConformanceTest {
             .doesNotContain("STAFF_GATE_MODE");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"values.yaml", "values.aat.template.yaml", "values.preview.template.yaml"})
+    @DisplayName("no values file activates application deletion: the worker and the SDK's Retain and Dispose task are "
+        + "switched on per environment in flux, after the rollout evidence, never in the chart")
+    void noValuesFileActivatesApplicationDeletion(String file) throws IOException {
+        assertThat(read(CHART_DIR.resolve(file)))
+            .as("%s must not set the application deletion switches: activation is a per-environment flux change "
+                + "after docs/APPLICATION-DELETION.md's rehearsal, and a preview would act on AAT's database", file)
+            .doesNotContain("APPLICATION_DELETION_WORKER_ENABLED")
+            .doesNotContain("CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_MODE");
+    }
+
+    @Test
+    @DisplayName("application deletion is off unless configured: the worker defaults false and the SDK task off")
+    void applicationDeletionDefaultsOff() throws IOException {
+        assertThat(read(APPLICATION_YAML))
+            .contains("enabled: ${APPLICATION_DELETION_WORKER_ENABLED:false}")
+            .contains("mode: ${CCD_DECENTRALISEDRUNTIME_RETAINANDDISPOSE_MODE:off}");
+    }
+
     @Test
     @DisplayName("case creation is enabled in every environment, including prod")
     void everyEnvironmentCreatesCases() throws IOException {

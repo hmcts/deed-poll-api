@@ -605,7 +605,8 @@ public class CaseEmailService {
         }
         preparations.verifyAndRelease(deedPollId, prepared);
         return transaction.execute(status -> {
-            deedPolls.lockForDeedPreparation(deedPollId).orElseThrow(() -> new NotFoundError("DeedPoll not found"));
+            deedPolls.lockUnfencedForDeedPreparation(deedPollId)
+                .orElseThrow(() -> new NotFoundError("DeedPoll not found"));
             FormsSnapshot after = inspectForms(deedPollId, template, slots, requestId);
             if (after.receipt() != null) {
                 return after.receipt();

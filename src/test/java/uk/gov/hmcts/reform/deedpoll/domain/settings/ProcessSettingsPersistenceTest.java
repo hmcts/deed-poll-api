@@ -72,7 +72,8 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
             INSERT INTO deedpoll_process_settings (id, referral_claim_expiry_minutes, revision) VALUES (1, 10080, 0)
             ON CONFLICT (id) DO UPDATE SET referral_claim_expiry_minutes = 10080, reminder_interval_hours = 48,
                 window_cap = 10, morning_window_start = '07:00', morning_window_end = '10:30',
-                afternoon_window_start = '14:00', afternoon_window_end = '14:30', revision = 0, updated_at = NULL,
+                afternoon_window_start = '14:00', afternoon_window_end = '14:30', deletion_grace_days = 14,
+                revision = 0, updated_at = NULL,
                 updated_by_id = NULL, updated_by_name = NULL
             """);
         subject = "process-settings-" + UUID.randomUUID();
@@ -84,11 +85,13 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
         ProcessSettings settings = service.get(deliveryManager(subject));
 
         assertThat(settings).isEqualTo(new ProcessSettings(Duration.ofDays(7), Duration.ofHours(48), 10,
-            LocalTime.of(7, 0), LocalTime.of(10, 30), LocalTime.of(14, 0), LocalTime.of(14, 30), 0, null, null));
+            LocalTime.of(7, 0), LocalTime.of(10, 30), LocalTime.of(14, 0), LocalTime.of(14, 30), Duration.ofDays(14),
+            0, null, null));
         assertThat(service.processingWindow()).isEqualTo(Duration.ofMinutes(10080));
         assertThat(service.reminderInterval()).isEqualTo(Duration.ofHours(48));
         assertThat(service.windowCap()).isEqualTo(10);
         assertThat(service.referralWindows()).isEqualTo(settings.referralWindows());
+        assertThat(service.deletionGracePeriod()).isEqualTo(Duration.ofDays(14));
     }
 
     @Test
@@ -100,12 +103,14 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
                                          "window_cap = 0", "window_cap = 101",
                                          "morning_window_start = '07:10'", "afternoon_window_end = '14:30:30'",
                                          "morning_window_end = '07:00'", "morning_window_end = '14:00'",
-                                         "afternoon_window_end = '14:00'")) {
+                                         "afternoon_window_end = '14:00'", "deletion_grace_days = 0",
+                                         "deletion_grace_days = 91", "deletion_grace_days = NULL")) {
             assertThatThrownBy(() -> jdbc.update("UPDATE deedpoll_process_settings SET " + assignment
                 + " WHERE id = 1")).as(assignment).isInstanceOf(DataIntegrityViolationException.class);
         }
         assertThat(jdbc.update("UPDATE deedpoll_process_settings SET referral_claim_expiry_minutes = 43200, "
-            + "reminder_interval_hours = 1, window_cap = 100, morning_window_end = '13:45' WHERE id = 1"))
+            + "reminder_interval_hours = 1, window_cap = 100, morning_window_end = '13:45', deletion_grace_days = 90"
+            + " WHERE id = 1"))
             .isOne();
         assertThatThrownBy(() -> jdbc.update("UPDATE deedpoll_process_settings SET revision = 1 WHERE id = 1"))
             .isInstanceOf(DataIntegrityViolationException.class);
@@ -243,6 +248,25 @@ class ProcessSettingsPersistenceTest extends AbstractPostgresContainerTest {
         jdbc.update("DELETE FROM deedpoll_process_settings");
 
         assertThatThrownBy(service::processingWindow).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(service::deletionGracePeriod).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    @DisplayName("a deletion grace period change commits the column and one history row with both values")
+    void graceChange() {
+        Map<String, Object> fields = body(10080, 0);
+        fields.put("deletionGraceDays", 1);
+
+        service.update(deliveryManager(subject), fields);
+
+        assertThat(row()).containsEntry("deletion_grace_days", 1).containsEntry("revision", 1);
+        assertThat(history()).singleElement().satisfies(change -> assertThat(change)
+            .containsEntry("field", "deletionGraceDays")
+            .containsEntry("previous_value", "14")
+            .containsEntry("new_value", "1"));
+        assertThat(events()).singleElement().satisfies(event -> assertThat(event)
+            .containsEntry("fields", "deletionGraceDays").containsEntry("value_rows", 0L));
+        assertThat(service.deletionGracePeriod()).isEqualTo(Duration.ofDays(1));
     }
 
     /**

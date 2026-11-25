@@ -339,6 +339,10 @@ class NotificationDeliveryCrashTest extends AbstractPostgresContainerTest {
     void laterNoteRollbackNeverUnsetsEarlierCommittedSend() {
         Notification accepted = owed();
         Notification failing = owed();
+        // Drained strictly after the accepted row: two rows made within one millisecond tie on both claim-order
+        // columns, and the drain would then take either first.
+        failing.setNextAttemptAt(accepted.getNextAttemptAt().plusSeconds(1));
+        failing = notifications.saveAndFlush(failing);
         when(sender.prepare(any())).thenAnswer(call -> {
             Notification row = call.getArgument(0);
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();

@@ -16,6 +16,7 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.SQLRestriction;
 import org.hibernate.type.SqlTypes;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentDirection;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.DocumentStorageState;
@@ -33,6 +34,8 @@ import java.util.UUID;
  */
 @Entity
 @Table(name = "deedpoll_supportingdocument")
+// The deletion fence, by the row's case (DeletionFenceSql): a fenced case's children read as gone.
+@SQLRestriction(DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID)
 @Getter
 @Setter
 public class DeedPollSupportingDocument {

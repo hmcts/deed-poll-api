@@ -297,7 +297,8 @@ public class CaseworkerReadController {
      */
     @GetMapping("/cases/{id}")
     public CaseDetailResponse caseDetail(@PathVariable("id") String id) {
-        CaseDetailResponse detail = CaseDetailResponse.from(deedPolls.findDeedPoll(id));
+        DeedPollService.CaseForReview review = deedPolls.findDeedPollForReview(id);
+        CaseDetailResponse detail = CaseDetailResponse.from(review.found(), review.lastChangedOn());
         readAudit.caseViewed(detail.id(), CurrentUsers.required());
         return detail;
     }

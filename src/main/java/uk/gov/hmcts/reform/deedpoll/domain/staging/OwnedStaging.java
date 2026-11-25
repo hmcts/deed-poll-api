@@ -109,7 +109,7 @@ public class OwnedStaging {
         return transaction.execute(status -> {
             // Lock order everywhere: case (when present), quota, then stage.
             if (owner.kind() == StageOwner.Kind.RECORD) {
-                cases.lockForDeedPreparation(owner.id()).orElseThrow(OwnedStaging::missing);
+                cases.lockUnfencedForDeedPreparation(owner.id()).orElseThrow(OwnedStaging::missing);
             }
             payloads.lockQuota();
             List<String> existing = jdbc.query("""
@@ -178,7 +178,7 @@ public class OwnedStaging {
     }
 
     private Stage reserve(StageOwner owner, String id, String caseId, String typeId) {
-        cases.lockForDeedPreparation(caseId).orElseThrow(OwnedStaging::missing);
+        cases.lockUnfencedForDeedPreparation(caseId).orElseThrow(OwnedStaging::missing);
         Stage stage = lock(owner, id);
         if (!stage.state().equals("Staged")) {
             if ((stage.state().equals("Promoting") || stage.state().equals("Consumed"))

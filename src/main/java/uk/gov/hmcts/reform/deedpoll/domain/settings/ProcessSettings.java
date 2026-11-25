@@ -9,12 +9,12 @@ import java.util.List;
  * The Delivery Manager's process settings; attribution excludes the private authenticated subject.
  *
  * <p>One component per live value, each its own typed column in V40 or V42, so a later value is a later migration
- * with its own check rather than a key in a bag.
+ * with its own check rather than a key in a bag. The deletion grace period is V50's.
  */
 public record ProcessSettings(Duration processingWindow, Duration reminderInterval, int windowCap,
                               LocalTime morningWindowStart, LocalTime morningWindowEnd,
                               LocalTime afternoonWindowStart, LocalTime afternoonWindowEnd,
-                              int revision, LocalDateTime updatedAt, String updatedBy) {
+                              Duration deletionGracePeriod, int revision, LocalDateTime updatedAt, String updatedBy) {
 
     /**
      * The processing window's name in a request, a response, the history table and the audit event. It was the claim
@@ -34,9 +34,13 @@ public record ProcessSettings(Duration processingWindow, Duration reminderInterv
 
     public static final String AFTERNOON_WINDOW_END = "afternoonWindowEnd";
 
+    /** How long a confirmed application deletion can still be restored, in whole days. */
+    public static final String DELETION_GRACE_DAYS = "deletionGraceDays";
+
     /** Every setting's name, in the order a change lists them. */
     public static final List<String> FIELDS = List.of(REFERRAL_CLAIM_EXPIRY_MINUTES, REMINDER_INTERVAL_HOURS,
-        WINDOW_CAP, MORNING_WINDOW_START, MORNING_WINDOW_END, AFTERNOON_WINDOW_START, AFTERNOON_WINDOW_END);
+        WINDOW_CAP, MORNING_WINDOW_START, MORNING_WINDOW_END, AFTERNOON_WINDOW_START, AFTERNOON_WINDOW_END,
+        DELETION_GRACE_DAYS);
 
     /** The four window times, without the zone they are read in. */
     public static final List<String> WINDOW_FIELDS =
@@ -52,10 +56,16 @@ public record ProcessSettings(Duration processingWindow, Duration reminderInterv
         return Math.toIntExact(reminderInterval.toHours());
     }
 
+    /** The deletion grace period as stored and published: whole days. */
+    public int deletionGraceDays() {
+        return Math.toIntExact(deletionGracePeriod.toDays());
+    }
+
     /** These values under a new revision and attribution. */
     public ProcessSettings revised(int nextRevision, LocalDateTime at, String by) {
         return new ProcessSettings(processingWindow, reminderInterval, windowCap, morningWindowStart,
-                                   morningWindowEnd, afternoonWindowStart, afternoonWindowEnd, nextRevision, at, by);
+                                   morningWindowEnd, afternoonWindowStart, afternoonWindowEnd, deletionGracePeriod,
+                                   nextRevision, at, by);
     }
 
     public ReferralWindowTimes referralWindows() {
@@ -74,6 +84,7 @@ public record ProcessSettings(Duration processingWindow, Duration reminderInterv
             case MORNING_WINDOW_END -> ProcessSettingsTimes.format(morningWindowEnd);
             case AFTERNOON_WINDOW_START -> ProcessSettingsTimes.format(afternoonWindowStart);
             case AFTERNOON_WINDOW_END -> ProcessSettingsTimes.format(afternoonWindowEnd);
+            case DELETION_GRACE_DAYS -> String.valueOf(deletionGraceDays());
             default -> throw new IllegalArgumentException("Not a process setting: " + field);
         };
     }

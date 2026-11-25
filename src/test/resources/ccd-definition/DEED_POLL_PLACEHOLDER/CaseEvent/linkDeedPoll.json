@@ -2,7 +2,7 @@
   {
     "CaseTypeID": "DEED_POLL_PLACEHOLDER",
     "Description": "Create the CCD case for an existing deed poll record",
-    "DisplayOrder": 1,
+    "DisplayOrder": 2,
     "EndButtonLabel": "Save and continue",
     "ID": "linkDeedPoll",
     "LiveFrom": "01/01/2017",

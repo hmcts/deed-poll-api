@@ -40,6 +40,9 @@ api/caseworker/{controller,dto}   the caseworker HTTP surface — 35 operations 
                                   VIEW_MANAGEMENT_INFORMATION; counted apart as MI_PATHS)
                                   plus 5 Gazette preview/request/status/member operations (Delivery Manager-only)
                                   plus GET …/documents/{documentId}/preview (counted apart as PREVIEW_PATHS)
+                                  plus POST /caseworker/cases/{id}/deletion-requests, GET
+                                  /caseworker/application-deletions/{requestId} and POST …/{requestId}/restore
+                                  (DELETE_APPLICATION, Delivery Manager only; counted apart as DELETION_PATHS)
 api/judicial/{controller,dto}     the judicial surface — 8 operations, keyed on the referral, never on the case,
                                   plus its own document preview (counted apart with the caseworker one)
 api/citizen/{controller,dto}      deliberately EMPTY, reserved for deed-poll-web, behind the S2S-only citizenFilterChain
@@ -54,6 +57,9 @@ domain/settings                   the Delivery Manager's process settings (V40, 
 domain/masters                    the Masters list (V42) a Delivery Manager keeps, linked to IDAM by email on a
                                   judge's first judicial request (config/MasterLinking), and the Masters' sent and
                                   reminder emails with their ledger (V44) — NOT a port
+domain/deletion                   the Delivery Manager's permanent application deletion: admission, the fence
+                                  (DeletionFence), restore in the grace period (DeletionRestoreRule), the cleanup
+                                  worker (DeletionCleanup, off by default) and DeletionFinalisation — NOT a port
 domain/mi                         the management information figures (K1 to K4) from the case's dates, read
                                   by repository/ManagementInformationRepository's constant SQL — NOT a port
 domain/deeds                      fills the court's two Word deed templates from a case — NOT a port
@@ -70,7 +76,8 @@ auth/                             IDAM resource-server wiring (transport), plus 
 entity/, repository/              JPA over a Flyway-owned schema
 ccd/                             the decentralised CCD case type, its persistence handler and view, the one
                                   linking operation with its attempt ledger, the case-list sweep that calls it, and
-                                  the admin repairs (CcdAttemptRepairs) — NOT a port
+                                  the admin repairs (CcdAttemptRepairs), and the Retain and Dispose policy with its
+                                  disposal events (DeedPollRetainAndDisposePolicy, DisposalEventsHandler) — NOT a port
 health/                          readiness that names the missing tables
 storage/                         filesystem/CDAM stores, remote progress, onboarding guard and state metrics
 src/main/resources/deed-templates/  VENDORED Word templates: LOC020 and LOC022, plus their provenance
@@ -84,8 +91,10 @@ src/cftlib/, src/cftlibTest/     the in-process CCD/CDAM stack and linking/docum
 `caseworker-deedpoll-team-leader` grants OVERRIDE_PRIVACY, DELETE_NOTE, DELETE_WITNESS,
 MANAGE_SHARED_QUERIES, REPAIR_CCD and ALLOCATE_REFERRALS (the referral queue, sending to Masters and reassigning;
 plan F1) and VIEW_MANAGEMENT_INFORMATION (the aggregate MI figures; plan 20261103-mi-dashboard).
-`caseworker-deedpoll-delivery-manager` inherits all seven and alone grants ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG (the process settings, the bank holidays and the
-Masters list's writes; any staff role reads the Masters list and the bank holidays). The deprecated
+`caseworker-deedpoll-delivery-manager` inherits all seven and alone grants ACCESS_GAZETTE, MANAGE_PROCESS_CONFIG (the process settings, the bank holidays and the
+Masters list's writes; any staff role reads the Masters list and the bank holidays) and DELETE_APPLICATION (permanent
+application deletion, `docs/APPLICATION-DELETION.md`; there is no other way to delete a case; it also restores an
+application during its deletion's grace period). The deprecated
 `caseworker-deedpoll-admin` temporarily grants only the Team leader's first six: never VIEW_MANAGEMENT_INFORMATION. Resolve capabilities from verified roles; the retained privacy boolean is derived.
 Every Gazette operation and the named `readyForPublication` worklist/count (including saved-query
 links) requires ACCESS_GAZETTE, with 403 before reads or side effects. Ordinary field conditions
@@ -222,7 +231,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   an entity with no case (saved queries, Gazette settings, process settings, the Masters list, bank holidays and batches record names only; process settings keep
   their values in V40's `deedpoll_process_settings_change`). `record` is
   `MANDATORY`: it joins the change's transaction, so a change whose audit insert fails rolls back, and it refuses a
-  user write with no subject — only an explicitly system write uses `AuditActor.system()`. Reads (`CASE_VIEWED`,
+  user write with no subject — only an explicitly system write uses `AuditActor.system()`. The one audit row not
+  written through `AuditTrail` is `docs/deletion/confirm-cdam-purge.sql`'s `DELETION_CDAM_PURGE_CONFIRMED`: an
+  operator's SQL, with no actor id and the operator's own name, field names only. Application code must not imitate it. Reads (`CASE_VIEWED`,
   `DOCUMENT_DOWNLOADED`, `DOCUMENT_PREVIEWED`; never lists or searches) go through `ReadAudit` in their own
   transaction: a case view fails open, a download or a preview fails closed. `AuditAction` is the vocabulary and has no DB check constraint; renaming one leaves
   seven years of rows under the old name. Every `POST`/`PUT`/`PATCH`/`DELETE` handler under `api.caseworker` and
@@ -235,7 +246,8 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   both tables unless the transaction-local `deedpoll.audit_disposal` is `on`, and TRUNCATE always. Only the
   `SECURITY DEFINER` functions `deedpoll_audit_dispose_case_values(case_id)` and
   `deedpoll_audit_dispose_events_before(cutoff)` set it, and each turns it off before returning; `EXECUTE` is revoked
-  from `PUBLIC`. Nothing schedules them yet — retain-and-dispose will. Never set the setting from application code
+  from `PUBLIC`. `DeletionFinalisation` calls `deedpoll_audit_dispose_case_values` for a completed application
+  deletion request; nothing schedules `deedpoll_audit_dispose_events_before` yet. Never set the setting from application code
   to unstick a delete, and a case delete leaves its events (and, until disposal, its values). **Residual risk:**
   until a least-privilege runtime role exists, the api's own login owns the tables and can drop the triggers; they
   stop accidents, not a determined owner.
@@ -264,6 +276,32 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `Idempotency-Key` is still 200 with `enqueued: false`. Reordering that turns a caseworker's retry into a refusal.
   No limit may refuse inside `outbox.drain()` or the linking sweep. A counter failure admits the request. Switch
   the mode per environment in flux and never in the chart default. See `docs/RATE-LIMITS.md`.
+- **A deletion request (V48) is a fence, and a new reader or writer has to honour it.** `DeletionFenceSql`'s
+  `@SQLRestriction` on `DeedPoll`, `Referral`, notes, witnesses, documents, notifications and CCD attempts makes every
+  JPA read treat a fenced case as gone; a **native** statement that reads cases or referrals for display, work or a
+  figure must add `DeletionFenceSql`'s predicate or read `LIVE_CASES` itself, or it exposes the case. A write that locks
+  the case must ask after the lock (`DeletionFence.admits`, `findUnfencedByIdForUpdate`,
+  `lockUnfencedForDeedPreparation`): a check in the statement that waited cannot see a request committed meanwhile.
+  V49's deferred triggers refuse at commit any INSERT/UPDATE of a fenced case or child row (DELETE never), so a bulk
+  statement that forgets the predicate fails for every case it touches. CCD's view and binding reads are native on
+  purpose. Only `DeletionFinalisation` completes a request, in the worker's owned transaction after every external line
+  is `Done`: `DELETE` only, audit values through `deedpoll_audit_dispose_case_values`, one `CASE_DELETED` under the
+  request's own Delivery Manager. A document removal leaves a V50 tombstone (`deedpoll_removed_document`) in its own
+  transaction, so its best-effort unlink or CDAM soft delete is still inventoried; a new path that deletes a document
+  row must write one too. A removed CDAM document holds its request at `CDAM_REMOVED_DOCUMENT_UNPURGED` until the
+  dm-store team purges it and an operator runs `docs/deletion/confirm-cdam-purge.sql`, which writes (and audits
+  `DELETION_CDAM_PURGE_CONFIRMED`) only when the ids it is given are exactly the request's pending ones.
+  **Nothing permanent happens before `restorable_until`**, which admission freezes as the request time plus the
+  `deletionGraceDays` process setting (1–90, default 14; V48's trigger refuses a change to it). `claimNext` repeats
+  `restorable_until <= now` in its SQL, so a requeue or an edited `next_attempt_at` cannot start cleanup early; never
+  drop that condition, and never let a worker step touch anything outside the database before it. Until then a
+  Delivery Manager may restore (`POST /caseworker/application-deletions/{requestId}/restore`): only `Pending`,
+  unclaimed, never attempted and before `restorable_until` (`DeletionRestoreRule`, repeated in
+  `deleteRestorable`'s SQL), else 409 `CLEANUP_STARTED`/`RESTORE_WINDOW_CLOSED`. It refuses on an unlocked
+  read first, then locks the **case, then the request** (admission's order; reversing it deadlocks with admission), the
+  request `SKIP LOCKED`: the worker's finalisation locks request then case, and the window can close while a restore
+  waits for the case, so a request somebody else holds is refused `CLEANUP_STARTED` and never waited for. It deletes the request, which lifts the fence, and records
+  `CASE_DELETION_RESTORED` without the note. See `docs/APPLICATION-DELETION.md`.
 - **Never edit `src/test/resources/reference/`.** It is a verbatim vendored copy of the
   specification, and the conformance tests read it as ground truth. If one of those files looks
   wrong, stop and report it — do not "fix" it.
@@ -346,6 +384,11 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   through `SupportingDocumentsAccess`, because data-store checks D for a removed collection item and a D on the event
   would be carried onto the state. `DEED_POLL_READER` holds R only on the case type, Registered state and
   supportingDocuments, mapped from the five staff roles. It holds no events, history or identifier fields.
+  The one deliberate growth since is Retain and Dispose (plan 20261118): `DEED_POLL_SYSTEM` also holds CRU on the
+  platform `TTL` field (`TtlAccess`), the `PendingDisposal` state and the SDK's two events `MarkForDisposal`
+  (`Registered` to `PendingDisposal`) and `ConfirmDisposal` (both `TTLIncrement` 0, admitted by
+  `DisposalEventsHandler` only for a deletion request ready for CCD), and `updateSupportingDocuments` now starts from
+  `Registered` rather than `*`. `DEED_POLL_READER` gets nothing on `PendingDisposal`.
   The test refuses growth that was not deliberate.
 - **The case's documents are its `Attached` rows, and the document event's handler is what attaches them.**
   `SupportingDocumentsHandler` moves a row to `Attached` inside the event's transaction (`attachedOnTheCase`, only
@@ -546,7 +589,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   the processing window (`referralClaimExpiryMinutes` on the wire, a name kept for admin: how long a Master has to
   give a direction, 1–30 days, seeded 7), the reminder interval (1–168 hours, 48), the window cap (`windowCap`, V46's rename
   of `masterWindowCap` with no alias: the most referrals sent in one window across every Master, 1–100, 10) and the morning and afternoon windows (`HH:mm` on the quarter hour, `Europe/London`, 07:00–10:30 and
-  14:00–14:30, each start before its end and the morning end before the afternoon start). `ProcessSettingsService`
+  14:00–14:30, each start before its end and the morning end before the afternoon start), and V50's
+  `deletionGraceDays` (1–90, default 14, optional on the PUT; read through `deletionGracePeriod()` at each deletion
+  admission and frozen onto the request, so a change affects only new requests). `ProcessSettingsService`
   reads them through `processingWindow()`, `reminderInterval()`, `windowCap()` and `referralWindows()` with no
   capability check and no cache; `ReferralService` asks `processingWindow()` once per `unassignOverdue`, so a
   Delivery Manager's `PUT` applies at once. Never cache them or reintroduce a property default, and a missing row
@@ -673,10 +718,13 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   reuses it for every retry of that POST, a later journey mints another — and it is stored as
   `Notification.requestId`: NOT NULL, bound explicitly by `enqueue`, with V19's `gen_random_uuid()` default there
   only to carry a pre-V19 instance through a rolling deployment and deliberately **no `@PrePersist` fallback**,
-  because a writer that cannot say which request it is should fail rather than invent one. It is the only header
-  bound anywhere in the service, which is why `DomainErrorHandler.missingHeader` handles
-  `MissingRequestHeaderException` and not its parent. The id is published nowhere — no DTO, no note, no log line —
-  asserted by an ArchUnit `noFields()` rule plus its counterpart that the column does exist on the entity. Every
+  because a writer that cannot say which request it is should fail rather than invent one. It is the only *required*
+  header bound anywhere in the service, which is why `DomainErrorHandler.missingHeader` handles
+  `MissingRequestHeaderException` and not its parent. (The application deletion POST also takes an `Idempotency-Key`,
+  bound optional and refused in the body's own words; see `docs/APPLICATION-DELETION.md`.) The id is published
+  nowhere — no DTO, no note, no log line — asserted by an ArchUnit `noFields()` rule plus its counterpart that the
+  column does exist on the entity; the rule exempts exactly `DeletionAdmissionResponse` and `DeletionRequestResponse`,
+  whose `requestId` is the deletion request's own resource id, not an email's key. Every
   lookup is case-scoped (`findByDeedPollIdAndRequestId`): widening it to the request id alone would answer one
   caller with another case's receipt.
 - **A new email template is declared in a handful of places, and two of them fail silently.** The `EmailTemplate`
@@ -724,6 +772,13 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   `SavedCaseResponse`, and the shared `CaseResponseFields` test fixture. `DeedPollColumnsTest` checks the reverse: every
   stored column has a reader or a written-down exemption, which is where a column that must never be published
   (`ccdCaseReference`) goes.
+  The case detail's `lastChangedOn` is not a column: it is derived (`repository/CaseLastChanged`, the later of
+  `modifiedOn` and the case's newest audited non-read write), detail-only by design, and what application deletion's
+  `STALE_CONFIRMATION` compares, so a child write path that records no `AuditTrail` event on its case lets a deletion
+  through over a change nobody reviewed. It is a time, not a version: a child write in flight across the review or
+  admission can slip past it, which is accepted because a deletion can be restored during its grace period
+  (`docs/APPLICATION-DELETION.md`, *The stale check's window*). Never reintroduce a commit-time trigger that locks the
+  case row to close that window: one was built and deadlocked against Gazette settlement and the referral queue.
 - **A controller test must boot the whole context.** A `@WebMvcTest` slice does not get
   `SecurityConfiguration` — its include list covers `SecurityFilterChain` beans, and a
   `@Configuration` that merely *declares* one is not itself one — so a slice asserts Boot's defaults

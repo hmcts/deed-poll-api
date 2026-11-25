@@ -96,6 +96,12 @@ class ProcessSettingsServiceTest {
             Arguments.of(withMinutes("windowCap", 0), "windowCap"),
             Arguments.of(withMinutes("windowCap", 101), "windowCap"),
             Arguments.of(withMinutes("windowCap", "10"), "windowCap"),
+            Arguments.of(withMinutes("deletionGraceDays", 0), "deletionGraceDays"),
+            Arguments.of(withMinutes("deletionGraceDays", 91), "deletionGraceDays"),
+            Arguments.of(withMinutes("deletionGraceDays", null), "deletionGraceDays"),
+            Arguments.of(withMinutes("deletionGraceDays", 14L), "deletionGraceDays"),
+            Arguments.of(withMinutes("deletionGraceDays", "14"), "deletionGraceDays"),
+            Arguments.of(withMinutes("deletionGraceDays", 14.5), "deletionGraceDays"),
             Arguments.of(withMinutes("morningWindowStart", "07:05"), "morningWindowStart"),
             Arguments.of(withMinutes("morningWindowStart", "7:00"), "morningWindowStart"),
             Arguments.of(withMinutes("morningWindowEnd", "10:30:00"), "morningWindowEnd"),
@@ -135,6 +141,36 @@ class ProcessSettingsServiceTest {
             .hasMessageContaining("1 to 168");
         assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, withMinutes("windowCap", 101)))
             .hasMessageContaining("1 to 100");
+        assertThatThrownBy(() -> service.update(DELIVERY_MANAGER, withMinutes("deletionGraceDays", 91)))
+            .hasMessageContaining("1 to 90");
+    }
+
+    @ParameterizedTest
+    @MethodSource("graceBoundaries")
+    @DisplayName("a deletion grace period of 1 and of 90 days is accepted, history names it alone")
+    void graceBoundariesAccepted(int days) {
+        given(repository.read(true)).willReturn(Optional.of(SEEDED));
+
+        ProcessSettings next = service.update(DELIVERY_MANAGER, withMinutes("deletionGraceDays", days));
+
+        assertThat(next.deletionGracePeriod()).isEqualTo(Duration.ofDays(days));
+        assertThat(next.deletionGraceDays()).isEqualTo(days);
+        assertThat(next.valueOf("deletionGraceDays")).isEqualTo(String.valueOf(days));
+        verify(repository).change(SEEDED, next, "dm-subject", List.of("deletionGraceDays"));
+    }
+
+    static Stream<Integer> graceBoundaries() {
+        return Stream.of(1, 90);
+    }
+
+    @Test
+    @DisplayName("the stored deletion grace period, unchanged, is a no-op")
+    void unchangedGraceIsANoOp() {
+        given(repository.read(true)).willReturn(Optional.of(SEEDED));
+
+        assertThat(service.update(DELIVERY_MANAGER, withMinutes("deletionGraceDays", 14))).isSameAs(SEEDED);
+        verify(repository, never()).change(any(), any(), any(), anyList());
+        verifyNoInteractions(audit);
     }
 
     @ParameterizedTest
@@ -210,6 +246,7 @@ class ProcessSettingsServiceTest {
         assertThat(service.processingWindow()).isEqualTo(Duration.ofDays(7));
         assertThat(service.reminderInterval()).isEqualTo(Duration.ofHours(48));
         assertThat(service.windowCap()).isEqualTo(10);
+        assertThat(service.deletionGracePeriod()).isEqualTo(Duration.ofDays(14));
         assertThat(service.referralWindows()).isEqualTo(new ReferralWindowTimes(
             LocalTime.of(7, 0), LocalTime.of(10, 30), LocalTime.of(14, 0), LocalTime.of(14, 30)));
         verify(repository, never()).read(true);
@@ -224,6 +261,7 @@ class ProcessSettingsServiceTest {
         assertThatThrownBy(service::reminderInterval).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(service::windowCap).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(service::referralWindows).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(service::deletionGracePeriod).isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -236,6 +274,7 @@ class ProcessSettingsServiceTest {
         assertThat(next.reminderInterval()).isEqualTo(SEEDED.reminderInterval());
         assertThat(next.windowCap()).isEqualTo(10);
         assertThat(next.referralWindows()).isEqualTo(SEEDED.referralWindows());
+        assertThat(next.deletionGracePeriod()).isEqualTo(Duration.ofDays(14));
         verify(repository).change(SEEDED, next, "dm-subject", List.of("referralClaimExpiryMinutes"));
     }
 
@@ -247,14 +286,16 @@ class ProcessSettingsServiceTest {
         fields.put("afternoonWindowEnd", "15:00");
         fields.put("windowCap", 12);
         fields.put("reminderIntervalHours", 48);
+        fields.put("deletionGraceDays", 30);
 
         ProcessSettings next = service.update(DELIVERY_MANAGER, fields);
 
         assertThat(next.afternoonWindowEnd()).isEqualTo(LocalTime.of(15, 0));
-        verify(repository).change(SEEDED, next, "dm-subject", List.of("windowCap", "afternoonWindowEnd"));
+        verify(repository).change(SEEDED, next, "dm-subject",
+                                  List.of("windowCap", "afternoonWindowEnd", "deletionGraceDays"));
         verify(audit).record(eq(AuditEntry.of(AuditAction.PROCESS_SETTINGS_CHANGED, AuditActor.of(DELIVERY_MANAGER),
                                               AuditEntities.PROCESS_SETTINGS, "1", null)
-                                      .withFields(List.of("windowCap", "afternoonWindowEnd"))),
+                                      .withFields(List.of("windowCap", "afternoonWindowEnd", "deletionGraceDays"))),
                              eq(List.of()));
     }
 
@@ -292,7 +333,7 @@ class ProcessSettingsServiceTest {
 
     private static ProcessSettings seeded(Duration window, int revision, LocalDateTime at, String by) {
         return new ProcessSettings(window, Duration.ofHours(48), 10, LocalTime.of(7, 0), LocalTime.of(10, 30),
-                                   LocalTime.of(14, 0), LocalTime.of(14, 30), revision, at, by);
+                                   LocalTime.of(14, 0), LocalTime.of(14, 30), Duration.ofDays(14), revision, at, by);
     }
 
     /** The seeded window at revision 0, beside one other key. */

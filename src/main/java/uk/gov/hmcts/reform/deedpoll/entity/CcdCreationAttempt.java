@@ -11,6 +11,7 @@ import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.SQLRestriction;
 import org.hibernate.type.SqlTypes;
 import uk.gov.hmcts.reform.deedpoll.entity.enums.CcdCreationAttemptStatus;
 
@@ -29,6 +30,8 @@ import java.util.UUID;
  */
 @Entity
 @Table(name = "deedpoll_ccdcreationattempt")
+// The deletion fence, by the attempt's record (DeletionFenceSql): the repair view neither lists nor repairs it.
+@SQLRestriction(DeletionFenceSql.UNFENCED_BY_DEED_POLL_ID)
 @Getter
 @Setter
 public class CcdCreationAttempt {

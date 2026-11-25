@@ -23,6 +23,9 @@ import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSearch;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.CaseSort;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.DeedPollSchemas;
 import uk.gov.hmcts.reform.deedpoll.domain.deedpoll.ListFilters;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.ApplicationDeletionService;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionNote;
+import uk.gov.hmcts.reform.deedpoll.domain.deletion.DeletionReason;
 import uk.gov.hmcts.reform.deedpoll.domain.gazette.GazetteSettingsService;
 import uk.gov.hmcts.reform.deedpoll.domain.masters.MasterService;
 import uk.gov.hmcts.reform.deedpoll.domain.notes.NoteForm;
@@ -158,6 +161,7 @@ public class OpenAPIWriteBodies {
             describeProcessSettingsBody(openApi);
             describeMasterBodies(openApi);
             describeBankHolidayBody(openApi);
+            describeDeletionBody(openApi);
         };
     }
 
@@ -226,6 +230,11 @@ public class OpenAPIWriteBodies {
                     + " before it ends, and the morning window ends before the afternoon one starts. Optional for"
                     + " one release; absent leaves it unchanged, null is refused."));
         }
+        settings.addProperty(ProcessSettings.DELETION_GRACE_DAYS, wholeNumber(
+            ProcessSettingsService.MIN_DELETION_GRACE_DAYS, ProcessSettingsService.MAX_DELETION_GRACE_DAYS,
+            "How long a confirmed application deletion can still be restored by a Delivery Manager, in whole days,"
+                + " from 1 to 90. A change applies only to deletions confirmed after it. Optional; absent leaves it"
+                + " unchanged, null is refused."));
         settings.addProperty(REVISION_PROPERTY, new IntegerSchema().minimum(java.math.BigDecimal.ZERO)
             .description("The revision returned by the settings read; stale values return 409."));
         settings.setRequired(java.util.List.of(ProcessSettings.REFERRAL_CLAIM_EXPIRY_MINUTES, REVISION_PROPERTY));
@@ -275,6 +284,46 @@ public class OpenAPIWriteBodies {
             .description("Trimmed first: the bounds hold for the trimmed value, so a blank is refused."));
         body.setRequired(java.util.List.of(BankHolidays.DATE, BankHolidays.NAME));
         body.setAdditionalProperties(false);
+    }
+
+    /**
+     * The deletion request's closed body (plan 20261118-dm-application-deletion): the bounds are
+     * {@code DeletionNote}'s and the reasons {@code DeletionReason}'s, so the document says what the service enforces.
+     */
+    private void describeDeletionBody(OpenAPI openApi) {
+        Schema<?> body = schema(openApi, "CreateDeletionRequest");
+        if (body == null) {
+            return;
+        }
+        body.setType("object");
+        body.setProperties(null);
+        StringSchema reason = new StringSchema();
+        reason.setDescription("Why the application is being deleted. Matched exactly.");
+        Arrays.stream(DeletionReason.values()).map(Enum::name).forEach(reason::addEnumItemObject);
+        body.addProperty(ApplicationDeletionService.REASON_FIELD, reason);
+        body.addProperty(DeletionNote.FIELD, new StringSchema().minLength(DeletionNote.MIN_LENGTH)
+            .maxLength(DeletionNote.MAX_LENGTH)
+            .description("Why, in the Delivery Manager's own words. Trimmed first, then " + DeletionNote.MIN_LENGTH
+                + " to " + DeletionNote.MAX_LENGTH + " characters, with no control characters but ordinary spaces."
+                + " Kept in the audit trail for its seven-year retention after the application is gone, so it must"
+                + " say why and must not include the applicant's personal details."));
+        body.addProperty(ApplicationDeletionService.EXPECTED_LAST_CHANGED_ON_FIELD, new StringSchema()
+            .format("date-time")
+            .description("The application's lastChangedOn exactly as the case detail published it when the Delivery"
+                + " Manager reviewed it: the later of the case's modifiedOn and its newest audited write to a note,"
+                + " witness, document, referral or email (ISO-8601 local date-time, compared to the millisecond)."
+                + " A different value is 409 STALE_CONFIRMATION on a first request; a replay is never compared"
+                + " with the case."));
+        body.setRequired(java.util.List.of(ApplicationDeletionService.REASON_FIELD, DeletionNote.FIELD,
+                                           ApplicationDeletionService.EXPECTED_LAST_CHANGED_ON_FIELD));
+        body.setAdditionalProperties(false);
+        body.setDescription("A permanent deletion of the application in the path. No other key is accepted.");
+        PathItem path = openApi.getPaths() == null ? null
+            : openApi.getPaths().get("/caseworker/cases/{id}/deletion-requests");
+        if (path != null && path.getPost() != null && path.getPost().getRequestBody() != null) {
+            // Bound optional so a missing body is refused after the capability check, not before it.
+            path.getPost().getRequestBody().setRequired(true);
+        }
     }
 
     private static IntegerSchema wholeNumber(int minimum, int maximum, String description) {

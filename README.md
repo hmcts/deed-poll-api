@@ -39,6 +39,8 @@ reads any staff role may call and whose writes need `MANAGE_PROCESS_CONFIG` (see
 two referral-queue operations that need `ALLOCATE_REFERRALS` (see [The referral queue](#the-referral-queue)),
 four management-information reads that need `VIEW_MANAGEMENT_INFORMATION` (see
 [Management information](#management-information)),
+three Delivery Manager-only application-deletion operations that need `DELETE_APPLICATION` (see
+[Deleting an application](#deleting-an-application)),
 and two document previews, one per surface (see [Document previews](#document-previews)), counted apart.
 `GET /me` (`getCallerAccess`) sits outside every namespace: any authenticated caller gets `staff`, `judicial` and
 `capabilities` for themselves, `no-store`, with no identity, so the admin app renders what the api will enforce.
@@ -86,7 +88,9 @@ documented paths outside the counted surfaces; `documentsNoUnlistedPath` allowli
 | POST | `/caseworker/cases/{id}/emails/{template}/preview` | What Notify would render for this case and these slots — writes nothing |
 | POST | `/caseworker/cases/{id}/emails/{template}` | Enqueue one — an outbox row and a case note in one local transaction after any CDAM deed preparation. Requires an **`Idempotency-Key`** UUID header; a repeat of one key answers **200** with `enqueued: false`, the same key used for different content is a **409**, and so is the email of the group that contradicts one already asked for |
 
-There are deliberately **no** case deletes, no document-type *endpoint* and no `validate` endpoint. The one
+There are deliberately **no** case `DELETE` route, no document-type *endpoint* and no `validate` endpoint. A case
+is removed only by a Delivery Manager's deletion request (see *Deleting an application*), never by a short-form
+delete; `DeedPollService.removeDeedPoll` has no production caller. The one
 writer of document types is `DeedDocumentService`, which creates the LOC020 and LOC022 rows the first time each
 deed is generated because no migration seeds them — so `GET /caseworker/document-types` can grow by two without
 anybody calling the API. The domain
@@ -459,7 +463,7 @@ verified roles to explicit capabilities:
 | Role claim | Privileges |
 |---|---|
 | `caseworker-deedpoll-team-leader` | Privacy override, note/witness deletion, shared-query management, CCD repairs, the referral queue (sending to Masters and reassigning, `ALLOCATE_REFERRALS`), management information (`VIEW_MANAGEMENT_INFORMATION`) |
-| `caseworker-deedpoll-delivery-manager` | All Team leader privileges plus the entire Gazette facility and the process settings (`MANAGE_PROCESS_CONFIG`) |
+| `caseworker-deedpoll-delivery-manager` | All Team leader privileges plus the entire Gazette facility, the process settings (`MANAGE_PROCESS_CONFIG`) and permanent application deletion (`DELETE_APPLICATION`) |
 | `caseworker-deedpoll-admin` (deprecated) | Temporary Team leader compatibility, the referral queue included; no Gazette access, process settings or management information |
 
 Each new role works alone. Neither grants judicial or system access. Private saved queries remain
@@ -544,6 +548,27 @@ binding: the next case-list sweep does the rest.
 | POST | `/caseworker/ccd-attempts/{attemptId}/retry` | Try again from scratch: `NeedsRepair -> Pending`, its tries reset — a 409 unless `canRetryFromScratch`, because an attempt that may have reached CCD could create a second case |
 
 An unknown id is a 404, and an attempt that is not `NeedsRepair` a 409.
+
+### Deleting an application
+
+Three Delivery Manager-only (`DELETE_APPLICATION`) operations, counted apart from the caseworker surface as
+`DELETION_PATHS`: `POST /caseworker/cases/{id}/deletion-requests` (required UUID `Idempotency-Key`; closed body
+`reason`, `note`, `expectedLastChangedOn`, the case detail's `lastChangedOn` as published, so any change since is 409 `STALE_CONFIRMATION`; 202 with a `Location` and `restorableUntil`),
+`GET /caseworker/application-deletions/{requestId}` (with `restorableUntil`) and
+`POST /caseworker/application-deletions/{requestId}/restore` (no body; 200 `{caseId, status: "Restored"}`).
+A confirmed deletion hides the application at once and changes nothing permanent until `restorableUntil`, the
+confirmation time plus the Delivery Manager's `deletionGraceDays` process setting (default 14 days), frozen at
+admission. Until then a Delivery Manager can restore it whole: only while it is `Pending` and cleanup has not
+started, else 409 `CLEANUP_STARTED` or `RESTORE_WINDOW_CLOSED`. The stale check compares times (the later of
+`modifiedOn` and the newest audited write), so a child write committing in the few milliseconds of admission can
+slip past it; restore is the remedy.
+202 is not deletion: only the status `Completed` is. The reason is `CREATED_IN_ERROR` or `DUPLICATE`, and the
+mandatory `note` (10–500 characters) says why without the applicant's details: it is kept with the audit event for
+seven years after the case is gone. After the grace period the outcome is permanent: there is no void, undo or
+unfencing, the application's reference is never reused, and email Notify already accepted is not recalled. The worker and the SDK's Retain and
+Dispose task both ship off: with the worker off a request stays `Pending`, and with the worker on but Retain and
+Dispose off a linked request stays `InProgress`; either way it is fenced and recoverable. The worker's settings
+(`APPLICATION_DELETION_WORKER_*`) are tabled in `docs/APPLICATION-DELETION.md`. Statuses, refusals and the recovery procedure are in `docs/APPLICATION-DELETION.md`.
 
 ## Documents and uploads
 
@@ -933,7 +958,9 @@ timeout (`LIST_STATEMENT_TIMEOUT`), and management information's (`MI_STATEMENT_
 
 V36 adds `deedpoll_audit_event` (who, when, action, entity, case and field names; kept 7 years) and
 `deedpoll_audit_event_value` (before/after values, disposed with the case). Row triggers make both append-only;
-only the two `SECURITY DEFINER` disposal functions can delete, and nothing schedules them yet. Every
+only the two `SECURITY DEFINER` disposal functions can delete. `deedpoll_audit_dispose_case_values` is called only
+when a Delivery Manager's application deletion is finalised; nothing schedules `deedpoll_audit_dispose_events_before`
+yet. Every
 caseworker and judicial write records an event in its own transaction, so a failed audit insert rolls the change
 back. A case view is audited and fails open; a document download or preview is audited, each under its own action,
 and fails closed. Authentication and
@@ -1141,7 +1168,7 @@ and renamed it `windowCap`. The [referral queue](#the-referral-queue) and its se
 | Method | Path | Access and response |
 |---|---|---|
 | GET | `/caseworker/process-settings` (`getProcessSettings`) | `MANAGE_PROCESS_CONFIG` (Delivery Manager only): every value below, `revision` and the last change's attribution |
-| PUT | `/caseworker/process-settings` (`updateProcessSettings`) | The same capability; requires `referralClaimExpiryMinutes` and `revision`, and takes the six V42 keys optionally |
+| PUT | `/caseworker/process-settings` (`updateProcessSettings`) | The same capability; requires `referralClaimExpiryMinutes` and `revision`, and takes the six V42 keys and `deletionGraceDays` optionally |
 | GET | `/caseworker/process-settings/bank-holidays` (`listBankHolidays`) | Any staff role: `date` and `name`, ordered by date |
 | POST | `/caseworker/process-settings/bank-holidays` (`addBankHoliday`) | `MANAGE_PROCESS_CONFIG`; `{date, name}`, 409 on a listed date |
 | DELETE | `/caseworker/process-settings/bank-holidays/{date}` (`removeBankHoliday`) | `MANAGE_PROCESS_CONFIG`; 204, or 404 on an unlisted date |
@@ -1156,8 +1183,11 @@ and renamed it `windowCap`. The [referral queue](#the-referral-queue) and its se
 | Cap per window, across every Master | `windowCap` | 1–100 | 10 |
 | Morning window | `morningWindowStart`, `morningWindowEnd` | `HH:mm` on the quarter hour, `Europe/London` | 07:00–10:30 |
 | Afternoon window | `afternoonWindowStart`, `afternoonWindowEnd` | the same | 14:00–14:30 |
+| Application deletion grace period | `deletionGraceDays` | 1–90 days | 14 |
 
-Each window's start must be before its end, and the morning end before the afternoon start. The six V42 keys are
+Each window's start must be before its end, and the morning end before the afternoon start. V50's
+`deletionGraceDays` is read at each [application deletion](#deleting-an-application)'s admission and frozen onto the
+request, so a change applies only to deletions confirmed after it; it is optional on the PUT. The six V42 keys are
 optional for one release, so an admin that sends only the window and `revision` keeps working; an absent key leaves
 its value alone. V42 re-seeded the window to 7 days only where the row was still at revision 0; a value a Delivery
 Manager had chosen below a day was raised to 1,440 minutes with a history row attributed to the service account, and

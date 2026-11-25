@@ -1,5 +1,12 @@
 [
   {
+    "CRUD": "CRU",
+    "CaseStateID": "PendingDisposal",
+    "CaseTypeID": "DEED_POLL_PLACEHOLDER",
+    "LiveFrom": "01/01/2017",
+    "UserRole": "DEED_POLL_SYSTEM"
+  },
+  {
     "CRUD": "R",
     "CaseStateID": "Registered",
     "CaseTypeID": "DEED_POLL_PLACEHOLDER",

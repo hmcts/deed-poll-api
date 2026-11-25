@@ -142,8 +142,8 @@ class OwnedStagingTest extends AbstractPostgresContainerTest {
         var observedCases = mock(DeedPollRepository.class, org.mockito.AdditionalAnswers.delegatesTo(cases));
         doAnswer(call -> {
             waitingForCase.countDown();
-            return cases.lockForDeedPreparation(call.getArgument(0));
-        }).when(observedCases).lockForDeedPreparation(owner.id());
+            return cases.lockUnfencedForDeedPreparation(call.getArgument(0));
+        }).when(observedCases).lockUnfencedForDeedPreparation(owner.id());
         var replica = new OwnedStaging(jdbc, transactions, StagingPolicyTest.policy(2, 6, 2), payloads,
             observedCases, documents, types, Optional.of(remote), reader, uploadAudit, clock);
         try (var executor = Executors.newFixedThreadPool(2)) {
