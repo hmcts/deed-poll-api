@@ -171,7 +171,8 @@ public class CaseworkerReadController {
      */
     @io.swagger.v3.oas.annotations.Operation(
         description = "The named readyForPublication worklist and count require "
-            + "caseworker-deedpoll-delivery-manager, including saved-query links. Other authenticated roles "
+            + "caseworker-deedpoll-team-leader or caseworker-deedpoll-delivery-manager (ACCESS_GAZETTE), "
+            + "including saved-query links. Other authenticated roles "
             + "receive 403 before reads or side effects. Ordinary filters and field conditions are unchanged.")
     @GetMapping("/cases")
     public CaseListResponse cases(

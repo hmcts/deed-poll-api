@@ -59,17 +59,16 @@ class RoleCapabilitiesTest {
     }
 
     @Test
-    void deliveryManagerInheritsExactlyTeamLeaderPlusGazetteProcessConfigAndDeletion() {
+    void deliveryManagerInheritsExactlyTeamLeaderPlusProcessConfigAndDeletion() {
         Set<Capability> leader = RoleCapabilities.forRoles(List.of(Role.TEAM_LEADER));
         Set<Capability> manager = RoleCapabilities.forRoles(List.of(Role.DELIVERY_MANAGER));
         assertThat(manager).containsAll(leader);
         assertThat(manager.stream().filter(capability -> !leader.contains(capability)))
-            .containsExactlyInAnyOrder(Capability.ACCESS_GAZETTE, Capability.MANAGE_PROCESS_CONFIG,
-                                       Capability.DELETE_APPLICATION);
+            .containsExactlyInAnyOrder(Capability.MANAGE_PROCESS_CONFIG, Capability.DELETE_APPLICATION);
         assertThat(leader).doesNotContain(Capability.MANAGE_PROCESS_CONFIG);
         Set<Capability> legacy = RoleCapabilities.forRoles(List.of(Role.DEEDPOLL_ADMIN));
         assertThat(leader.stream().filter(capability -> !legacy.contains(capability)))
-            .containsExactly(Capability.VIEW_MANAGEMENT_INFORMATION);
+            .containsExactlyInAnyOrder(Capability.VIEW_MANAGEMENT_INFORMATION, Capability.ACCESS_GAZETTE);
         assertThat(leader).containsAll(legacy);
         assertThat(Role.fromClaimValue("caseworker-deedpoll-admin")).contains(Role.DEEDPOLL_ADMIN);
     }
@@ -82,6 +81,15 @@ class RoleCapabilitiesTest {
                 .isEqualTo(role == Role.TEAM_LEADER || role == Role.DELIVERY_MANAGER || role == Role.DEEDPOLL_ADMIN);
         }
         assertThat(Capability.ALLOCATE_REFERRALS.ordinal()).isEqualTo(Capability.MANAGE_PROCESS_CONFIG.ordinal() + 1);
+    }
+
+    @Test
+    void teamLeadersAndDeliveryManagersAccessTheGazetteAndNobodyElseDoes() {
+        for (Role role : Role.values()) {
+            assertThat(RoleCapabilities.forRoles(List.of(role)).contains(Capability.ACCESS_GAZETTE))
+                .as(role.name())
+                .isEqualTo(role == Role.TEAM_LEADER || role == Role.DELIVERY_MANAGER);
+        }
     }
 
     @Test

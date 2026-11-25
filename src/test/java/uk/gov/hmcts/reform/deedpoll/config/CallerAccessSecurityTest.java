@@ -66,7 +66,7 @@ class CallerAccessSecurityTest extends AbstractPostgresContainerTest {
             + "\"ALLOCATE_REFERRALS\"]";
     private static final String TEAM_LEADER_SET =
         "[\"OVERRIDE_PRIVACY\",\"DELETE_NOTE\",\"DELETE_WITNESS\",\"MANAGE_SHARED_QUERIES\",\"REPAIR_CCD\","
-            + "\"ALLOCATE_REFERRALS\",\"VIEW_MANAGEMENT_INFORMATION\"]";
+            + "\"ACCESS_GAZETTE\",\"ALLOCATE_REFERRALS\",\"VIEW_MANAGEMENT_INFORMATION\"]";
     private static final String DELIVERY_MANAGER_SET =
         "[\"OVERRIDE_PRIVACY\",\"DELETE_NOTE\",\"DELETE_WITNESS\",\"MANAGE_SHARED_QUERIES\",\"REPAIR_CCD\","
             + "\"ACCESS_GAZETTE\",\"MANAGE_PROCESS_CONFIG\",\"ALLOCATE_REFERRALS\",\"VIEW_MANAGEMENT_INFORMATION\","

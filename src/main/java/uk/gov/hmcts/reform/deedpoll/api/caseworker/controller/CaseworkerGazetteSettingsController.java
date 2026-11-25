@@ -24,7 +24,7 @@ public class CaseworkerGazetteSettingsController {
     }
 
     @Operation(operationId = "getGazetteSettings", summary = "Read London Gazette recipient settings",
-        description = "Requires caseworker-deedpoll-delivery-manager. "
+        description = "Requires caseworker-deedpoll-delivery-manager (ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG). "
             + "Initially recipient and attribution are null, revision 0.")
     @GetMapping
     public GazetteSettingsResponse get() {
@@ -32,7 +32,7 @@ public class CaseworkerGazetteSettingsController {
     }
 
     @Operation(operationId = "updateGazetteSettings", summary = "Update London Gazette recipient settings",
-        description = "Requires caseworker-deedpoll-delivery-manager. "
+        description = "Requires caseworker-deedpoll-delivery-manager (ACCESS_GAZETTE and MANAGE_PROCESS_CONFIG). "
             + "Supply the revision read with the form; stale revisions "
             + "return 409 without changes. Each changed address increments revision and records attribution. "
             + "Saving the current address at the current revision is a no-op. No email is sent.")

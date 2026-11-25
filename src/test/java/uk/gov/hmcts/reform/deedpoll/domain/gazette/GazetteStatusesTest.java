@@ -20,8 +20,7 @@ class GazetteStatusesTest {
 
     static Stream<List<Role>> refusedRoles() {
         return Stream.of(List.of(), List.of(Role.CASEWORKER), List.of(Role.JUDICIAL),
-            List.of(Role.CASEWORKER, Role.JUDICIAL), List.of(Role.DEEDPOLL_ADMIN),
-            List.of(Role.TEAM_LEADER), List.of(Role.TEAM_LEADER, Role.JUDICIAL));
+            List.of(Role.CASEWORKER, Role.JUDICIAL), List.of(Role.DEEDPOLL_ADMIN));
     }
 
     @ParameterizedTest

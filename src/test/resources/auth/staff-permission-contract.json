@@ -12,6 +12,7 @@
         "DELETE_WITNESS",
         "MANAGE_SHARED_QUERIES",
         "REPAIR_CCD",
+        "ACCESS_GAZETTE",
         "ALLOCATE_REFERRALS",
         "VIEW_MANAGEMENT_INFORMATION"
       ],
@@ -107,6 +108,7 @@
         "DELETE_WITNESS",
         "MANAGE_SHARED_QUERIES",
         "REPAIR_CCD",
+        "ACCESS_GAZETTE",
         "ALLOCATE_REFERRALS",
         "VIEW_MANAGEMENT_INFORMATION"
       ],
@@ -166,6 +168,7 @@
         "DELETE_WITNESS",
         "MANAGE_SHARED_QUERIES",
         "REPAIR_CCD",
+        "ACCESS_GAZETTE",
         "ALLOCATE_REFERRALS",
         "VIEW_MANAGEMENT_INFORMATION"
       ],
