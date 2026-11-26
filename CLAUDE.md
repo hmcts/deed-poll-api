@@ -303,7 +303,9 @@ chain) and its OpenAPI security scheme, both in the endpoints' plan. See `docs/p
   statement that forgets the predicate fails for every case it touches. CCD's view and binding reads are native on
   purpose. Only `DeletionFinalisation` completes a request, in the worker's owned transaction after every external line
   is `Done`: `DELETE` only, audit values through `deedpoll_audit_dispose_case_values`, one `CASE_DELETED` under the
-  request's own Delivery Manager. A document removal leaves a V50 tombstone (`deedpoll_removed_document`) in its own
+  request's own Delivery Manager. A finalisation that fails unexpectedly is retried, but each failure is counted
+  (V53's `finalise_attempts`) and the `maxAttempts`th is `NeedsAttention` `LOCAL_FINALISATION_REFUSED`, not another
+  retry for ever; `docs/deletion/requeue.sql` resets the count. A document removal leaves a V50 tombstone (`deedpoll_removed_document`) in its own
   transaction, so its best-effort unlink or CDAM soft delete is still inventoried; a new path that deletes a document
   row must write one too. The one exception is permanent document deletion: its `Completed` request is the evidence,
   and application inventory skips a tombstone whose id has one (`permanentlyDeletedDocuments`). A removed CDAM document holds its request at `CDAM_REMOVED_DOCUMENT_UNPURGED` until the

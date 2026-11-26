@@ -14,7 +14,7 @@
 -- worker's claim checks that too, so a requeue cannot end the grace period early.
 WITH requeued AS (
     UPDATE deedpoll_deletion_request
-       SET status = 'InProgress', failure = NULL, next_attempt_at = requested_at
+       SET status = 'InProgress', failure = NULL, next_attempt_at = requested_at, finalise_attempts = 0
      WHERE id = :'request_id'::uuid
        AND status = 'NeedsAttention'
        AND owner IS NULL

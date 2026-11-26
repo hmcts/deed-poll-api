@@ -45,8 +45,9 @@ public enum DeletionFailure {
      */
     DOCUMENT_DELETION_UNRESOLVED,
     /**
-     * The database refused local finalisation (a restricting key or a protecting trigger), and the transaction rolled
-     * back: nothing local was removed and no completion was recorded.
+     * Local finalisation did not complete, and each attempt rolled back, so nothing local was removed and no completion
+     * was recorded: the database refused it (a restricting key or a protecting trigger), or it failed in some other way
+     * on every one of {@code maxAttempts} passes (V53's {@code finalise_attempts}). The WARN names the exception class.
      */
     LOCAL_FINALISATION_REFUSED
 }

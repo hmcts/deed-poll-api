@@ -217,12 +217,20 @@ public class DeletionCleanup {
         } catch (LeaseLost lost) {
             throw lost;
         } catch (RuntimeException failed) {
-            log.warn("Application deletion request {} could not be finalised; it will try again ({})",
-                     requestId, failed.getClass().getName());
-            DeletionProgress.Decision retry = new DeletionProgress.Decision(DeletionStatus.InProgress, null,
-                                                                            properties.pollInterval(), true);
-            release(requestId, owner, retry);
-            return retry;
+            // Counted in its own transaction, because the failed pass rolled back: a fault that never clears stops at
+            // the steps' maxAttempts as NeedsAttention instead of retrying on every poll for ever.
+            int failures = owned(requestId, owner, () -> work.finaliseFailed(requestId, owner));
+            if (failures < properties.maxAttempts()) {
+                log.warn("Application deletion request {} could not be finalised; it will try again ({})",
+                         requestId, failed.getClass().getName());
+                DeletionProgress.Decision retry = new DeletionProgress.Decision(DeletionStatus.InProgress, null,
+                                                                                properties.pollInterval(), true);
+                release(requestId, owner, retry);
+                return retry;
+            }
+            log.warn("Application deletion request {} could not be finalised in {} attempts ({})",
+                     requestId, failures, failed.getClass().getName());
+            refused = DeletionFailure.LOCAL_FINALISATION_REFUSED;
         }
         DeletionProgress.Decision attention = new DeletionProgress.Decision(DeletionStatus.NeedsAttention, refused,
                                                                             properties.pollInterval(), true);
